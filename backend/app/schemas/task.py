@@ -18,6 +18,17 @@ class TaskCreate(BaseModel):
     is_template: bool = False
 
 
+class TaskUpdate(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+    task_type: Optional[str] = None
+    difficulty: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    starter_code: Optional[str] = None
+    test_code: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
 class TaskResponse(BaseModel):
     id: int
     name: str

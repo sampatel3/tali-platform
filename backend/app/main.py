@@ -2,7 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from .core.config import settings
 from .core.logging_config import setup_logging
-from .core.middleware import RequestLoggingMiddleware
+from .core.middleware import RequestLoggingMiddleware, RateLimitMiddleware
 
 # Set up logging
 logger = setup_logging()
@@ -24,6 +24,9 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Rate limiting (auth and assessment endpoints)
+app.add_middleware(RateLimitMiddleware)
+
 # Request logging
 app.add_middleware(RequestLoggingMiddleware)
 
@@ -44,12 +47,16 @@ from .api.v1.assessments import router as assessments_router
 from .api.v1.organizations import router as organizations_router
 from .api.v1.webhooks import router as webhooks_router
 from .api.v1.tasks import router as tasks_router
+from .api.v1.analytics import router as analytics_router
+from .api.v1.billing import router as billing_router
 
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(assessments_router, prefix="/api/v1")
 app.include_router(organizations_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
+app.include_router(analytics_router, prefix="/api/v1")
+app.include_router(billing_router, prefix="/api/v1")
 
 
 @app.on_event("startup")

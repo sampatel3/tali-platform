@@ -32,9 +32,11 @@ import {
   Menu,
   X,
   Loader2,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
-import { assessments as assessmentsApi, organizations as orgsApi, tasks as tasksApi } from './lib/api';
+import { assessments as assessmentsApi, organizations as orgsApi, tasks as tasksApi, analytics as analyticsApi, billing as billingApi } from './lib/api';
 import AssessmentPage from './components/assessment/AssessmentPage';
 
 // ============================================================
@@ -642,7 +644,12 @@ const LoginPage = ({ onNavigate }) => {
               </button>
             </div>
             <div className="mt-6 text-center space-y-2">
-              <button className="font-mono text-sm hover:underline" style={{ color: '#9D00FF' }}>
+              <button
+                type="button"
+                className="font-mono text-sm hover:underline"
+                style={{ color: '#9D00FF' }}
+                onClick={() => onNavigate('forgot-password')}
+              >
                 Forgot password?
               </button>
               <div>
@@ -789,6 +796,243 @@ const RegisterPage = ({ onNavigate }) => {
               </div>
             </div>
           )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// FORGOT PASSWORD PAGE
+// ============================================================
+
+const ForgotPasswordPage = ({ onNavigate }) => {
+  const [email, setEmail] = useState('');
+  const [sent, setSent] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!email.trim()) {
+      setError('Enter your email address');
+      return;
+    }
+    setLoading(true);
+    try {
+      const { auth } = await import('./lib/api');
+      await auth.forgotPassword(email.trim());
+      setSent(true);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || 'Request failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-white flex flex-col">
+      <nav className="border-b-2 border-black bg-white">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <Logo onClick={() => onNavigate('landing')} />
+        </div>
+      </nav>
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="w-full max-w-md">
+          {sent ? (
+            <div className="border-2 border-black p-8 text-center">
+              <CheckCircle size={48} className="mx-auto mb-4" style={{ color: '#9D00FF' }} />
+              <h2 className="text-2xl font-bold mb-2">Check your email</h2>
+              <p className="font-mono text-sm text-gray-600 mb-6">
+                If an account exists for that email, we sent a link to reset your password.
+              </p>
+              <button
+                className="w-full border-2 border-black py-3 font-bold text-white transition-colors"
+                style={{ backgroundColor: '#9D00FF' }}
+                onClick={() => onNavigate('login')}
+              >
+                Back to Sign In
+              </button>
+            </div>
+          ) : (
+            <div className="border-2 border-black p-8">
+              <h2 className="text-3xl font-bold mb-2">Forgot password?</h2>
+              <p className="font-mono text-sm text-gray-600 mb-6">Enter your email and we&apos;ll send a reset link.</p>
+              {error && (
+                <div className="border-2 border-red-500 bg-red-50 p-3 mb-4 flex items-center gap-2">
+                  <AlertTriangle size={18} className="text-red-500 flex-shrink-0" />
+                  <span className="font-mono text-sm text-red-700">{error}</span>
+                </div>
+              )}
+              <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                  <label className="block font-mono text-sm mb-1">Email</label>
+                  <input
+                    type="email"
+                    className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
+                    placeholder="you@company.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="w-full border-2 border-black py-3 font-bold text-white transition-colors flex items-center justify-center gap-2"
+                  style={{ backgroundColor: '#9D00FF' }}
+                  disabled={loading}
+                >
+                  {loading ? <><Loader2 size={18} className="animate-spin" /> Sending...</> : 'Send reset link'}
+                </button>
+              </form>
+              <div className="mt-6 text-center">
+                <button
+                  type="button"
+                  className="font-mono text-sm hover:underline"
+                  style={{ color: '#9D00FF' }}
+                  onClick={() => onNavigate('login')}
+                >
+                  Back to Sign In
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// RESET PASSWORD PAGE
+// ============================================================
+
+const ResetPasswordPage = ({ onNavigate, token }) => {
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [success, setSuccess] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
+    if (password !== confirm) {
+      setError('Passwords do not match');
+      return;
+    }
+    if (!token) {
+      setError('Invalid reset link. Request a new one.');
+      return;
+    }
+    setLoading(true);
+    try {
+      const { auth } = await import('./lib/api');
+      await auth.resetPassword(token, password);
+      setSuccess(true);
+    } catch (err) {
+      setError(err.response?.data?.detail || err.message || 'Reset failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  if (!token) {
+    return (
+      <div className="min-h-screen bg-white flex flex-col">
+        <nav className="border-b-2 border-black bg-white">
+          <div className="max-w-7xl mx-auto px-6 py-4">
+            <Logo onClick={() => onNavigate('landing')} />
+          </div>
+        </nav>
+        <div className="flex-1 flex items-center justify-center p-6">
+          <div className="border-2 border-black p-8 text-center max-w-md">
+            <AlertTriangle size={48} className="mx-auto mb-4 text-amber-500" />
+            <h2 className="text-2xl font-bold mb-2">Invalid link</h2>
+            <p className="font-mono text-sm text-gray-600 mb-6">This reset link is missing or invalid. Request a new one from the login page.</p>
+            <button className="w-full border-2 border-black py-3 font-bold text-white" style={{ backgroundColor: '#9D00FF' }} onClick={() => onNavigate('forgot-password')}>Request new link</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (success) {
+    return (
+      <div className="min-h-screen bg-white flex flex-col">
+        <nav className="border-b-2 border-black bg-white">
+          <div className="max-w-7xl mx-auto px-6 py-4">
+            <Logo onClick={() => onNavigate('landing')} />
+          </div>
+        </nav>
+        <div className="flex-1 flex items-center justify-center p-6">
+          <div className="border-2 border-black p-8 text-center max-w-md">
+            <CheckCircle size={48} className="mx-auto mb-4" style={{ color: '#9D00FF' }} />
+            <h2 className="text-2xl font-bold mb-2">Password reset</h2>
+            <p className="font-mono text-sm text-gray-600 mb-6">You can now sign in with your new password.</p>
+            <button className="w-full border-2 border-black py-3 font-bold text-white" style={{ backgroundColor: '#9D00FF' }} onClick={() => onNavigate('login')}>Sign In</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen bg-white flex flex-col">
+      <nav className="border-b-2 border-black bg-white">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <Logo onClick={() => onNavigate('landing')} />
+        </div>
+      </nav>
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="w-full max-w-md">
+          <div className="border-2 border-black p-8">
+            <h2 className="text-3xl font-bold mb-2">Set new password</h2>
+            <p className="font-mono text-sm text-gray-600 mb-6">Enter your new password below.</p>
+            {error && (
+              <div className="border-2 border-red-500 bg-red-50 p-3 mb-4 flex items-center gap-2">
+                <AlertTriangle size={18} className="text-red-500 flex-shrink-0" />
+                <span className="font-mono text-sm text-red-700">{error}</span>
+              </div>
+            )}
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <div>
+                <label className="block font-mono text-sm mb-1">New password</label>
+                <input
+                  type="password"
+                  className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
+                  placeholder="••••••••"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+              </div>
+              <div>
+                <label className="block font-mono text-sm mb-1">Confirm password</label>
+                <input
+                  type="password"
+                  className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
+                  placeholder="••••••••"
+                  value={confirm}
+                  onChange={(e) => setConfirm(e.target.value)}
+                />
+              </div>
+              <button
+                type="submit"
+                className="w-full border-2 border-black py-3 font-bold text-white transition-colors flex items-center justify-center gap-2"
+                style={{ backgroundColor: '#9D00FF' }}
+                disabled={loading}
+              >
+                {loading ? <><Loader2 size={18} className="animate-spin" /> Resetting...</> : 'Reset password'}
+              </button>
+            </form>
+            <div className="mt-6 text-center">
+              <button type="button" className="font-mono text-sm hover:underline" style={{ color: '#9D00FF' }} onClick={() => onNavigate('login')}>Back to Sign In</button>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -1007,28 +1251,50 @@ const NewAssessmentModal = ({ onClose, onCreated }) => {
   );
 };
 
+const PAGE_SIZE = 10;
+
 const DashboardPage = ({ onNavigate, onViewCandidate }) => {
   const { user } = useAuth();
   const [assessmentsList, setAssessmentsList] = useState([]);
+  const [totalAssessmentsCount, setTotalAssessmentsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [showNewModal, setShowNewModal] = useState(false);
+  const [loadingViewId, setLoadingViewId] = useState(null);
+  const [statusFilter, setStatusFilter] = useState('');
+  const [taskFilter, setTaskFilter] = useState('');
+  const [tasksForFilter, setTasksForFilter] = useState([]);
+  const [page, setPage] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
-    const fetchAssessments = async () => {
-      try {
-        const res = await assessmentsApi.list();
-        if (!cancelled) setAssessmentsList(res.data || []);
-      } catch (err) {
-        console.warn('Failed to fetch assessments, using mock data:', err.message);
-        if (!cancelled) setAssessmentsList([]);
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    };
-    fetchAssessments();
+    tasksApi.list().then((res) => { if (!cancelled) setTasksForFilter(res.data || []); }).catch(() => {});
     return () => { cancelled = true; };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    const params = { limit: PAGE_SIZE, offset: page * PAGE_SIZE };
+    if (statusFilter) params.status = statusFilter;
+    if (taskFilter) params.task_id = taskFilter;
+    assessmentsApi.list(params)
+      .then((res) => {
+        if (cancelled) return;
+        const data = res.data || {};
+        setAssessmentsList(Array.isArray(data) ? data : (data.items || []));
+        setTotalAssessmentsCount(typeof data.total === 'number' ? data.total : (data.items || []).length);
+      })
+      .catch((err) => {
+        console.warn('Failed to fetch assessments:', err.message);
+        if (!cancelled) setAssessmentsList([]);
+        if (!cancelled) setTotalAssessmentsCount(0);
+      })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [page, statusFilter, taskFilter]);
+
+  const getAssessmentLink = (token) =>
+    `${typeof window !== 'undefined' ? window.location.origin : ''}${typeof window !== 'undefined' ? (window.location.pathname || '/') : ''}#/assess/${token || ''}`;
 
   // Map API assessments to table-friendly shape, falling back to mock data
   const displayCandidates = assessmentsList.length > 0
@@ -1047,16 +1313,20 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
         promptsList: a.prompts_list || [],
         timeline: a.timeline || [],
         results: a.results || [],
-        // Keep raw data for detail view
+        token: a.token,
+        assessmentLink: a.token ? getAssessmentLink(a.token) : '',
         _raw: a,
       }))
     : candidates;
 
   const userName = user?.full_name?.split(' ')[0] || 'Sam';
 
-  // Compute live stats from API data
-  const totalAssessments = displayCandidates.length;
+  // Compute live stats from current page (total count from API)
+  const totalAssessments = totalAssessmentsCount;
   const completedCount = displayCandidates.filter((c) => c.status === 'completed' || c.status === 'submitted' || c.status === 'graded').length;
+  const totalPages = Math.max(1, Math.ceil(totalAssessmentsCount / PAGE_SIZE));
+  const startRow = page * PAGE_SIZE + 1;
+  const endRow = Math.min((page + 1) * PAGE_SIZE, totalAssessmentsCount);
   const completionRate = totalAssessments > 0 ? ((completedCount / totalAssessments) * 100).toFixed(1) : '0';
   const scores = displayCandidates.filter((c) => c.score !== null).map((c) => c.score);
   const avgScore = scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : '—';
@@ -1092,10 +1362,40 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
           <StatsCard icon={DollarSign} label="This Month Cost" value={monthCost} change={`${completedCount} assessments`} />
         </div>
 
+        {/* Filters */}
+        <div className="flex flex-wrap items-center gap-4 mb-4">
+          <span className="font-mono text-sm font-bold">Filters:</span>
+          <select
+            className="border-2 border-black px-3 py-2 font-mono text-sm bg-white"
+            value={statusFilter}
+            onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
+          >
+            <option value="">All statuses</option>
+            <option value="pending">Pending</option>
+            <option value="in_progress">In progress</option>
+            <option value="completed">Completed</option>
+          </select>
+          <select
+            className="border-2 border-black px-3 py-2 font-mono text-sm bg-white"
+            value={taskFilter}
+            onChange={(e) => { setTaskFilter(e.target.value); setPage(0); }}
+          >
+            <option value="">All tasks</option>
+            {tasksForFilter.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
+        </div>
+
         {/* Assessments Table */}
         <div className="border-2 border-black">
-          <div className="border-b-2 border-black px-6 py-4 bg-black text-white">
+          <div className="border-b-2 border-black px-6 py-4 bg-black text-white flex items-center justify-between">
             <h2 className="font-bold text-lg">Recent Assessments</h2>
+            {totalAssessmentsCount > 0 && (
+              <span className="font-mono text-sm text-gray-300">
+                Showing {startRow}–{endRow} of {totalAssessmentsCount}
+              </span>
+            )}
           </div>
           {loading ? (
             <div className="flex items-center justify-center py-16 gap-3">
@@ -1111,13 +1411,14 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
                   <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Status</th>
                   <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Score</th>
                   <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Time</th>
+                  <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Assessment link</th>
                   <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Actions</th>
                 </tr>
               </thead>
               <tbody>
                 {displayCandidates.length === 0 ? (
                   <tr>
-                    <td colSpan={6} className="px-6 py-12 text-center font-mono text-sm text-gray-500">
+                    <td colSpan={7} className="px-6 py-12 text-center font-mono text-sm text-gray-500">
                       No assessments yet. Click &quot;New Assessment&quot; to create one.
                     </td>
                   </tr>
@@ -1133,12 +1434,50 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
                       <td className="px-6 py-4 font-bold">{c.score !== null ? `${c.score}/10` : '—'}</td>
                       <td className="px-6 py-4 font-mono text-sm">{c.time}</td>
                       <td className="px-6 py-4">
+                        {c.token ? (
+                          <button
+                            type="button"
+                            className="border-2 border-black bg-white px-3 py-1.5 font-mono text-xs font-bold hover:bg-black hover:text-white transition-colors flex items-center gap-1"
+                            onClick={() => {
+                              const link = c.assessmentLink || getAssessmentLink(c.token);
+                              navigator.clipboard?.writeText(link).then(() => { /* copied */ }).catch(() => {});
+                            }}
+                            title={c.assessmentLink || getAssessmentLink(c.token)}
+                          >
+                            <Clipboard size={14} /> Copy link
+                          </button>
+                        ) : (
+                          <span className="font-mono text-xs text-gray-400">—</span>
+                        )}
+                      </td>
+                      <td className="px-6 py-4">
                         {c.status === 'completed' || c.status === 'submitted' || c.status === 'graded' ? (
                           <button
-                            className="border-2 border-black bg-white px-4 py-2 font-mono text-sm font-bold hover:bg-black hover:text-white transition-colors flex items-center gap-1"
-                            onClick={() => onViewCandidate(c)}
+                            className="border-2 border-black bg-white px-4 py-2 font-mono text-sm font-bold hover:bg-black hover:text-white transition-colors flex items-center gap-1 disabled:opacity-70"
+                            disabled={loadingViewId === c.id}
+                            onClick={async () => {
+                              setLoadingViewId(c.id);
+                              try {
+                                const res = await assessmentsApi.get(c.id);
+                                const a = res.data;
+                                const merged = {
+                                  ...c,
+                                  promptsList: a.prompts_list || [],
+                                  timeline: a.timeline || [],
+                                  results: a.results || [],
+                                  breakdown: a.breakdown || null,
+                                  prompts: (a.prompts_list || []).length,
+                                };
+                                onViewCandidate(merged);
+                              } catch (err) {
+                                console.warn('Failed to fetch assessment detail, using list data:', err);
+                                onViewCandidate(c);
+                              } finally {
+                                setLoadingViewId(null);
+                              }
+                            }}
                           >
-                            <Eye size={14} /> View
+                            {loadingViewId === c.id ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} View
                           </button>
                         ) : (
                           <button
@@ -1154,6 +1493,27 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
                 )}
               </tbody>
             </table>
+          )}
+          {!loading && totalAssessmentsCount > PAGE_SIZE && (
+            <div className="border-t-2 border-black px-6 py-3 flex items-center justify-between bg-gray-50">
+              <button
+                type="button"
+                className="border-2 border-black px-4 py-2 font-mono text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-black hover:text-white transition-colors"
+                disabled={page === 0}
+                onClick={() => setPage((p) => Math.max(0, p - 1))}
+              >
+                Previous
+              </button>
+              <span className="font-mono text-sm">Page {page + 1} of {totalPages}</span>
+              <button
+                type="button"
+                className="border-2 border-black px-4 py-2 font-mono text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-black hover:text-white transition-colors"
+                disabled={page >= totalPages - 1}
+                onClick={() => setPage((p) => p + 1)}
+              >
+                Next
+              </button>
+            </div>
           )}
         </div>
       </div>
@@ -1344,105 +1704,121 @@ const CandidateDetailPage = ({ candidate, onNavigate }) => {
 // TASKS PAGE
 // ============================================================
 
-const TaskFormFields = ({ form, setForm }) => (
-  <div className="space-y-4">
-    <div>
-      <label className="block font-mono text-sm mb-1 font-bold">Task Name *</label>
-      <input
-        type="text"
-        className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
-        placeholder="e.g. Async Pipeline Debugging"
-        value={form.name}
-        onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-      />
-    </div>
-    <div>
-      <label className="block font-mono text-sm mb-1 font-bold">Description *</label>
-      <p className="font-mono text-xs text-gray-500 mb-1">What the candidate sees as the brief. Be specific about what they need to accomplish.</p>
-      <textarea
-        className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none min-h-[80px]"
-        placeholder="Fix 3 bugs in an async data pipeline that processes streaming JSON events..."
-        value={form.description}
-        onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
-      />
-    </div>
-    <div className="grid grid-cols-3 gap-4">
+const TaskFormFields = ({ form, setForm, readOnly = false }) => {
+  const noop = () => {};
+  const upd = readOnly ? noop : setForm;
+  const inputClass = (base) => `${base} ${readOnly ? 'bg-gray-100 cursor-default' : ''}`;
+  return (
+    <div className="space-y-4">
       <div>
-        <label className="block font-mono text-sm mb-1 font-bold">Type</label>
-        <select
-          className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
-          value={form.task_type}
-          onChange={(e) => setForm((p) => ({ ...p, task_type: e.target.value }))}
-        >
-          <option value="debugging">Debugging</option>
-          <option value="ai_engineering">AI Engineering</option>
-          <option value="optimization">Optimization</option>
-          <option value="build">Build from Scratch</option>
-          <option value="refactor">Refactoring</option>
-        </select>
+        <label className="block font-mono text-sm mb-1 font-bold">Task Name *</label>
+        <input
+          type="text"
+          className={inputClass('w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none')}
+          placeholder="e.g. Async Pipeline Debugging"
+          value={form.name}
+          onChange={(e) => upd((p) => ({ ...p, name: e.target.value }))}
+          readOnly={readOnly}
+          disabled={readOnly}
+        />
       </div>
       <div>
-        <label className="block font-mono text-sm mb-1 font-bold">Difficulty</label>
-        <select
-          className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
-          value={form.difficulty}
-          onChange={(e) => setForm((p) => ({ ...p, difficulty: e.target.value }))}
-        >
-          <option value="junior">Junior</option>
-          <option value="mid">Mid-Level</option>
-          <option value="senior">Senior</option>
-          <option value="staff">Staff+</option>
-        </select>
+        <label className="block font-mono text-sm mb-1 font-bold">Description *</label>
+        <p className="font-mono text-xs text-gray-500 mb-1">What the candidate sees as the brief. Be specific about what they need to accomplish.</p>
+        <textarea
+          className={inputClass('w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none min-h-[80px]')}
+          placeholder="Fix 3 bugs in an async data pipeline that processes streaming JSON events..."
+          value={form.description}
+          onChange={(e) => upd((p) => ({ ...p, description: e.target.value }))}
+          readOnly={readOnly}
+          disabled={readOnly}
+        />
+      </div>
+      <div className="grid grid-cols-3 gap-4">
+        <div>
+          <label className="block font-mono text-sm mb-1 font-bold">Type</label>
+          <select
+            className={inputClass('w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white')}
+            value={form.task_type}
+            onChange={(e) => upd((p) => ({ ...p, task_type: e.target.value }))}
+            disabled={readOnly}
+          >
+            <option value="debugging">Debugging</option>
+            <option value="ai_engineering">AI Engineering</option>
+            <option value="optimization">Optimization</option>
+            <option value="build">Build from Scratch</option>
+            <option value="refactor">Refactoring</option>
+          </select>
+        </div>
+        <div>
+          <label className="block font-mono text-sm mb-1 font-bold">Difficulty</label>
+          <select
+            className={inputClass('w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white')}
+            value={form.difficulty}
+            onChange={(e) => upd((p) => ({ ...p, difficulty: e.target.value }))}
+            disabled={readOnly}
+          >
+            <option value="junior">Junior</option>
+            <option value="mid">Mid-Level</option>
+            <option value="senior">Senior</option>
+            <option value="staff">Staff+</option>
+          </select>
+        </div>
+        <div>
+          <label className="block font-mono text-sm mb-1 font-bold">Duration</label>
+          <select
+            className={inputClass('w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white')}
+            value={form.duration_minutes}
+            onChange={(e) => upd((p) => ({ ...p, duration_minutes: parseInt(e.target.value) }))}
+            disabled={readOnly}
+          >
+            <option value={15}>15 min</option>
+            <option value={30}>30 min</option>
+            <option value={45}>45 min</option>
+            <option value={60}>60 min</option>
+            <option value={90}>90 min</option>
+          </select>
+        </div>
       </div>
       <div>
-        <label className="block font-mono text-sm mb-1 font-bold">Duration</label>
-        <select
-          className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
-          value={form.duration_minutes}
-          onChange={(e) => setForm((p) => ({ ...p, duration_minutes: parseInt(e.target.value) }))}
-        >
-          <option value={15}>15 min</option>
-          <option value={30}>30 min</option>
-          <option value={45}>45 min</option>
-          <option value={60}>60 min</option>
-          <option value={90}>90 min</option>
-        </select>
+        <label className="block font-mono text-sm mb-1 font-bold">Starter Code *</label>
+        <p className="font-mono text-xs text-gray-500 mb-1">The code the candidate starts with. Include bugs, scaffolding, or an incomplete implementation.</p>
+        <textarea
+          className={inputClass('w-full border-2 border-black px-4 py-3 font-mono text-xs focus:outline-none min-h-[180px] bg-gray-50 leading-relaxed')}
+          placeholder={"# Python starter code\n# Include realistic bugs or incomplete sections\n\ndef process_data(items):\n    ..."}
+          value={form.starter_code}
+          onChange={(e) => upd((p) => ({ ...p, starter_code: e.target.value }))}
+          readOnly={readOnly}
+          disabled={readOnly}
+        />
+      </div>
+      <div>
+        <label className="block font-mono text-sm mb-1 font-bold">Test Suite *</label>
+        <p className="font-mono text-xs text-gray-500 mb-1">pytest tests that validate the correct solution. These run automatically when the candidate submits.</p>
+        <textarea
+          className={inputClass('w-full border-2 border-black px-4 py-3 font-mono text-xs focus:outline-none min-h-[120px] bg-gray-50 leading-relaxed')}
+          placeholder={"import pytest\n\ndef test_basic_case():\n    assert process_data([1, 2, 3]) == [2, 4, 6]\n\ndef test_edge_case():\n    assert process_data([]) == []"}
+          value={form.test_code}
+          onChange={(e) => upd((p) => ({ ...p, test_code: e.target.value }))}
+          readOnly={readOnly}
+          disabled={readOnly}
+        />
       </div>
     </div>
-    <div>
-      <label className="block font-mono text-sm mb-1 font-bold">Starter Code *</label>
-      <p className="font-mono text-xs text-gray-500 mb-1">The code the candidate starts with. Include bugs, scaffolding, or an incomplete implementation.</p>
-      <textarea
-        className="w-full border-2 border-black px-4 py-3 font-mono text-xs focus:outline-none min-h-[180px] bg-gray-50 leading-relaxed"
-        placeholder={"# Python starter code\n# Include realistic bugs or incomplete sections\n\ndef process_data(items):\n    ..."}
-        value={form.starter_code}
-        onChange={(e) => setForm((p) => ({ ...p, starter_code: e.target.value }))}
-      />
-    </div>
-    <div>
-      <label className="block font-mono text-sm mb-1 font-bold">Test Suite *</label>
-      <p className="font-mono text-xs text-gray-500 mb-1">pytest tests that validate the correct solution. These run automatically when the candidate submits.</p>
-      <textarea
-        className="w-full border-2 border-black px-4 py-3 font-mono text-xs focus:outline-none min-h-[120px] bg-gray-50 leading-relaxed"
-        placeholder={"import pytest\n\ndef test_basic_case():\n    assert process_data([1, 2, 3]) == [2, 4, 6]\n\ndef test_edge_case():\n    assert process_data([]) == []"}
-        value={form.test_code}
-        onChange={(e) => setForm((p) => ({ ...p, test_code: e.target.value }))}
-      />
-    </div>
-  </div>
-);
+  );
+};
 
-const CreateTaskModal = ({ onClose, onCreated }) => {
-  // Step: 'choose' | 'ai-prompt' | 'ai-review' | 'manual'
-  const [step, setStep] = useState('choose');
+const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly = false }) => {
+  const isEdit = Boolean(initialTask) && !viewOnly;
+  const [step, setStep] = useState(initialTask ? 'manual' : 'choose');
   const [form, setForm] = useState({
-    name: '',
-    description: '',
-    task_type: 'debugging',
-    difficulty: 'mid',
-    duration_minutes: 30,
-    starter_code: '',
-    test_code: '',
+    name: initialTask?.name ?? '',
+    description: initialTask?.description ?? '',
+    task_type: initialTask?.task_type ?? 'debugging',
+    difficulty: initialTask?.difficulty ?? 'mid',
+    duration_minutes: initialTask?.duration_minutes ?? 30,
+    starter_code: initialTask?.starter_code ?? '',
+    test_code: initialTask?.test_code ?? '',
   });
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiDifficulty, setAiDifficulty] = useState('');
@@ -1450,6 +1826,21 @@ const CreateTaskModal = ({ onClose, onCreated }) => {
   const [loading, setLoading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (initialTask) {
+      setForm({
+        name: initialTask.name ?? '',
+        description: initialTask.description ?? '',
+        task_type: initialTask.task_type ?? 'debugging',
+        difficulty: initialTask.difficulty ?? 'mid',
+        duration_minutes: initialTask.duration_minutes ?? 30,
+        starter_code: initialTask.starter_code ?? '',
+        test_code: initialTask.test_code ?? '',
+      });
+      setStep('manual');
+    }
+  }, [initialTask]);
 
   const handleGenerate = async () => {
     setError('');
@@ -1485,17 +1876,22 @@ const CreateTaskModal = ({ onClose, onCreated }) => {
     }
     setLoading(true);
     try {
-      const res = await tasksApi.create({ ...form, is_active: true });
-      onCreated(res.data);
+      if (isEdit && initialTask?.id) {
+        const res = await tasksApi.update(initialTask.id, form);
+        onUpdated?.(initialTask.id, res.data);
+      } else {
+        const res = await tasksApi.create({ ...form, is_active: true });
+        onCreated(res.data);
+      }
       onClose();
     } catch (err) {
-      setError(err.response?.data?.detail || 'Failed to create task');
+      setError(err.response?.data?.detail || (isEdit ? 'Failed to update task' : 'Failed to create task'));
     } finally {
       setLoading(false);
     }
   };
 
-  const modalTitle = {
+  const modalTitle = viewOnly ? 'View Task' : isEdit ? 'Edit Task' : {
     'choose': 'Create New Task',
     'ai-prompt': 'Generate with AI',
     'ai-review': 'Review Generated Task',
@@ -1508,7 +1904,7 @@ const CreateTaskModal = ({ onClose, onCreated }) => {
         {/* Header */}
         <div className="flex items-center justify-between px-8 py-5 border-b-2 border-black">
           <div className="flex items-center gap-3">
-            {step !== 'choose' && (
+            {!viewOnly && !isEdit && step !== 'choose' && (
               <button
                 className="border-2 border-black p-1 hover:bg-black hover:text-white transition-colors"
                 onClick={() => setStep(step === 'ai-review' ? 'ai-prompt' : 'choose')}
@@ -1530,8 +1926,8 @@ const CreateTaskModal = ({ onClose, onCreated }) => {
             </div>
           )}
 
-          {/* Step: Choose Path */}
-          {step === 'choose' && (
+          {/* Step: Choose Path (skip when editing) */}
+          {!isEdit && step === 'choose' && (
             <div className="space-y-4">
               <p className="font-mono text-sm text-gray-600 mb-6">How would you like to create your assessment task?</p>
               <button
@@ -1578,8 +1974,8 @@ const CreateTaskModal = ({ onClose, onCreated }) => {
             </div>
           )}
 
-          {/* Step: AI Prompt */}
-          {step === 'ai-prompt' && (
+          {/* Step: AI Prompt (create only) */}
+          {!isEdit && step === 'ai-prompt' && (
             <div className="space-y-5">
               <div>
                 <label className="block font-mono text-sm mb-1 font-bold">What do you want to assess?</label>
@@ -1641,8 +2037,8 @@ const CreateTaskModal = ({ onClose, onCreated }) => {
             </div>
           )}
 
-          {/* Step: AI Review (editable) */}
-          {step === 'ai-review' && (
+          {/* Step: AI Review (create only) */}
+          {!isEdit && step === 'ai-review' && (
             <div className="space-y-4">
               <div className="border-2 border-black p-3 mb-2 flex items-center gap-2" style={{ backgroundColor: '#f3e8ff' }}>
                 <Bot size={16} style={{ color: '#9D00FF' }} />
@@ -1670,18 +2066,29 @@ const CreateTaskModal = ({ onClose, onCreated }) => {
             </div>
           )}
 
-          {/* Step: Manual */}
+          {/* Step: Manual (create or edit or view) */}
           {step === 'manual' && (
             <div className="space-y-4">
-              <TaskFormFields form={form} setForm={setForm} />
-              <button
-                className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors flex items-center justify-center gap-2"
-                style={{ backgroundColor: '#9D00FF' }}
-                onClick={handleSave}
-                disabled={loading}
-              >
-                {loading ? <><Loader2 size={18} className="animate-spin" /> Creating...</> : 'Create Task'}
-              </button>
+              <TaskFormFields form={form} setForm={setForm} readOnly={viewOnly} />
+              {!viewOnly && (
+                <button
+                  className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors flex items-center justify-center gap-2"
+                  style={{ backgroundColor: '#9D00FF' }}
+                  onClick={handleSave}
+                  disabled={loading}
+                >
+                  {loading ? <><Loader2 size={18} className="animate-spin" /> {isEdit ? 'Saving...' : 'Creating...'}</> : (isEdit ? 'Save changes' : 'Create Task')}
+                </button>
+              )}
+              {viewOnly && (
+                <button
+                  type="button"
+                  className="w-full border-2 border-black py-3 font-bold hover:bg-black hover:text-white transition-colors"
+                  onClick={onClose}
+                >
+                  Close
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -1694,6 +2101,9 @@ const TasksPage = ({ onNavigate }) => {
   const [tasksList, setTasksList] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showCreateModal, setShowCreateModal] = useState(false);
+  const [editingTask, setEditingTask] = useState(null);
+  const [viewingTask, setViewingTask] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -1770,11 +2180,53 @@ const TasksPage = ({ onNavigate }) => {
                 </div>
                 <h3 className="font-bold text-lg mb-2">{task.name}</h3>
                 <p className="font-mono text-sm text-gray-600 mb-4 line-clamp-3">{task.description}</p>
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between flex-wrap gap-2">
                   <span className="font-mono text-xs px-2 py-1 border border-gray-300">{task.task_type?.replace('_', ' ')}</span>
-                  {task.is_template && (
-                    <span className="font-mono text-xs text-gray-400">template</span>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      className="border-2 border-black p-2 hover:bg-black hover:text-white transition-colors"
+                      title="View task"
+                      onClick={() => setViewingTask(task)}
+                    >
+                      <Eye size={14} />
+                    </button>
+                    {task.is_template && (
+                      <span className="font-mono text-xs text-gray-400">template</span>
+                    )}
+                    {!task.is_template && (
+                      <>
+                        <button
+                          type="button"
+                          className="border-2 border-black p-2 hover:bg-black hover:text-white transition-colors"
+                          title="Edit task"
+                          onClick={() => setEditingTask(task)}
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          type="button"
+                          className="border-2 border-red-600 text-red-600 p-2 hover:bg-red-600 hover:text-white transition-colors disabled:opacity-50"
+                          title="Delete task"
+                          disabled={deletingId === task.id}
+                          onClick={async () => {
+                            if (!window.confirm(`Delete "${task.name}"? This cannot be undone.`)) return;
+                            setDeletingId(task.id);
+                            try {
+                              await tasksApi.delete(task.id);
+                              setTasksList((prev) => prev.filter((t) => t.id !== task.id));
+                            } catch (err) {
+                              alert(err.response?.data?.detail || 'Failed to delete task');
+                            } finally {
+                              setDeletingId(null);
+                            }
+                          }}
+                        >
+                          {deletingId === task.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                        </button>
+                      </>
+                    )}
+                  </div>
                 </div>
               </div>
             ))}
@@ -1790,6 +2242,22 @@ const TasksPage = ({ onNavigate }) => {
           }}
         />
       )}
+      {editingTask && (
+        <CreateTaskModal
+          initialTask={editingTask}
+          onClose={() => setEditingTask(null)}
+          onUpdated={(taskId, updatedTask) => {
+            setTasksList((prev) => prev.map((t) => (t.id === taskId ? updatedTask : t)));
+          }}
+        />
+      )}
+      {viewingTask && (
+        <CreateTaskModal
+          initialTask={viewingTask}
+          viewOnly
+          onClose={() => setViewingTask(null)}
+        />
+      )}
     </div>
   );
 };
@@ -1799,7 +2267,35 @@ const TasksPage = ({ onNavigate }) => {
 // ============================================================
 
 const AnalyticsPage = ({ onNavigate }) => {
+  const [data, setData] = useState({
+    weekly_completion: [],
+    total_assessments: 0,
+    completed_count: 0,
+    completion_rate: 0,
+    top_score: null,
+    avg_score: null,
+    avg_time_minutes: null,
+  });
+  const [loading, setLoading] = useState(true);
   const maxRate = 100;
+
+  useEffect(() => {
+    let cancelled = false;
+    analyticsApi.get()
+      .then((res) => { if (!cancelled) setData(res.data); })
+      .catch(() => { if (!cancelled) setData((d) => d); })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  const weekly = data.weekly_completion?.length ? data.weekly_completion : [
+    { week: 'Week 1', rate: 0, count: 0 },
+    { week: 'Week 2', rate: 0, count: 0 },
+    { week: 'Week 3', rate: 0, count: 0 },
+    { week: 'Week 4', rate: 0, count: 0 },
+    { week: 'Week 5', rate: 0, count: 0 },
+  ];
+
   return (
     <div>
       <DemoBanner />
@@ -1808,54 +2304,163 @@ const AnalyticsPage = ({ onNavigate }) => {
         <h1 className="text-3xl font-bold mb-2">Analytics</h1>
         <p className="font-mono text-sm text-gray-600 mb-8">Assessment performance over time</p>
 
-        {/* Completion Rate Chart */}
-        <div className="border-2 border-black p-8 mb-8">
-          <h2 className="font-bold text-xl mb-6">Completion Rate</h2>
-          <div className="flex items-end gap-4 h-64">
-            {weeklyData.map((w, i) => (
-              <div key={i} className="flex-1 flex flex-col items-center justify-end h-full">
-                <div className="font-mono text-xs mb-2 font-bold">{w.rate}%</div>
-                <div
-                  className="w-full border-2 border-black transition-all"
-                  style={{
-                    height: `${(w.rate / maxRate) * 100}%`,
-                    backgroundColor: i === weeklyData.length - 1 ? '#9D00FF' : '#e5e7eb',
-                  }}
-                />
-                <div className="font-mono text-xs mt-2 text-gray-600">{w.week}</div>
+        {loading ? (
+          <div className="flex items-center justify-center py-16 gap-3">
+            <Loader2 size={24} className="animate-spin" style={{ color: '#9D00FF' }} />
+            <span className="font-mono text-sm text-gray-500">Loading analytics...</span>
+          </div>
+        ) : (
+          <>
+            {/* Completion Rate Chart */}
+            <div className="border-2 border-black p-8 mb-8">
+              <h2 className="font-bold text-xl mb-6">Completion Rate</h2>
+              <div className="flex items-end gap-4 h-64">
+                {weekly.map((w, i) => (
+                  <div key={i} className="flex-1 flex flex-col items-center justify-end h-full">
+                    <div className="font-mono text-xs mb-2 font-bold">{w.rate}%</div>
+                    <div
+                      className="w-full border-2 border-black transition-all"
+                      style={{
+                        height: `${(w.rate / maxRate) * 100}%`,
+                        backgroundColor: i === weekly.length - 1 ? '#9D00FF' : '#e5e7eb',
+                      }}
+                    />
+                    <div className="font-mono text-xs mt-2 text-gray-600">{w.week}</div>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div className="flex items-center gap-6 mt-6 font-mono text-xs">
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 border-2 border-black" style={{ backgroundColor: '#9D00FF' }} />
-              <span>Your rate: 87.5%</span>
+              <div className="flex items-center gap-6 mt-6 font-mono text-xs">
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-black" style={{ backgroundColor: '#9D00FF' }} />
+                  <span>Your rate: {data.completion_rate ?? 0}%</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <div className="w-4 h-4 border-2 border-black bg-gray-200" />
+                  <span>Industry avg: 65%</span>
+                </div>
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 border-2 border-black bg-gray-200" />
-              <span>Industry avg: 65%</span>
-            </div>
-          </div>
-        </div>
 
-        {/* Summary Stats */}
-        <div className="grid md:grid-cols-3 gap-6">
-          <div className="border-2 border-black p-6">
-            <div className="font-mono text-sm text-gray-600 mb-2">Total Assessments</div>
-            <div className="text-4xl font-bold">52</div>
-            <div className="font-mono text-xs text-gray-500 mt-1">Last 30 days</div>
-          </div>
-          <div className="border-2 border-black p-6">
-            <div className="font-mono text-sm text-gray-600 mb-2">Top Score</div>
-            <div className="text-4xl font-bold" style={{ color: '#9D00FF' }}>9.2/10</div>
-            <div className="font-mono text-xs text-gray-500 mt-1">Sarah Chen — Debugging</div>
-          </div>
-          <div className="border-2 border-black p-6">
-            <div className="font-mono text-sm text-gray-600 mb-2">Avg Time to Complete</div>
-            <div className="text-4xl font-bold">32m</div>
-            <div className="font-mono text-xs text-gray-500 mt-1">Out of 45m allowed</div>
-          </div>
-        </div>
+            {/* Summary Stats */}
+            <div className="grid md:grid-cols-3 gap-6">
+              <div className="border-2 border-black p-6">
+                <div className="font-mono text-sm text-gray-600 mb-2">Total Assessments</div>
+                <div className="text-4xl font-bold">{data.total_assessments ?? 0}</div>
+                <div className="font-mono text-xs text-gray-500 mt-1">All time</div>
+              </div>
+              <div className="border-2 border-black p-6">
+                <div className="font-mono text-sm text-gray-600 mb-2">Top Score</div>
+                <div className="text-4xl font-bold" style={{ color: '#9D00FF' }}>
+                  {data.top_score != null ? `${data.top_score}/10` : '—'}
+                </div>
+                <div className="font-mono text-xs text-gray-500 mt-1">Best candidate score</div>
+              </div>
+              <div className="border-2 border-black p-6">
+                <div className="font-mono text-sm text-gray-600 mb-2">Avg Time to Complete</div>
+                <div className="text-4xl font-bold">
+                  {data.avg_time_minutes != null ? `${data.avg_time_minutes}m` : '—'}
+                </div>
+                <div className="font-mono text-xs text-gray-500 mt-1">Completed assessments</div>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// WORKABLE CONNECT BUTTON & CALLBACK
+// ============================================================
+
+const ConnectWorkableButton = () => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const handleClick = async () => {
+    setLoading(true);
+    setError('');
+    try {
+      const res = await orgsApi.getWorkableAuthorizeUrl();
+      if (res.data?.url) window.location.href = res.data.url;
+      else setError('Could not get authorization URL');
+    } catch (err) {
+      setError(err?.response?.data?.detail || err.message || 'Failed to connect');
+    } finally {
+      setLoading(false);
+    }
+  };
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={handleClick}
+        disabled={loading}
+        className="flex items-center gap-2 px-4 py-2 font-mono text-sm font-bold border-2 border-black bg-black text-white hover:bg-gray-800 disabled:opacity-60"
+      >
+        {loading ? <Loader2 size={18} className="animate-spin" /> : null}
+        {loading ? 'Redirecting…' : 'Connect Workable'}
+      </button>
+      {error && <p className="font-mono text-sm text-red-600 mt-2">{error}</p>}
+    </div>
+  );
+};
+
+const WorkableCallbackPage = ({ code, onNavigate }) => {
+  const [status, setStatus] = useState('connecting'); // 'connecting' | 'success' | 'error'
+  const [message, setMessage] = useState('');
+  useEffect(() => {
+    if (!code) {
+      setStatus('error');
+      setMessage('Missing authorization code');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        await orgsApi.connectWorkable(code);
+        if (!cancelled) {
+          setStatus('success');
+          window.history.replaceState(null, '', `${window.location.origin}${window.location.pathname || '/'}#/settings`);
+          onNavigate('settings');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setStatus('error');
+          setMessage(err?.response?.data?.detail || err.message || 'Connection failed');
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [code, onNavigate]);
+  return (
+    <div className="min-h-screen flex items-center justify-center p-6">
+      <div className="border-2 border-black p-8 max-w-md text-center">
+        {status === 'connecting' && (
+          <>
+            <Loader2 size={32} className="animate-spin mx-auto mb-4" style={{ color: '#9D00FF' }} />
+            <p className="font-mono text-sm">Connecting Workable…</p>
+          </>
+        )}
+        {status === 'success' && (
+          <>
+            <CheckCircle size={32} className="mx-auto mb-4 text-green-600" />
+            <p className="font-mono text-sm">Workable connected. Taking you to Settings…</p>
+          </>
+        )}
+        {status === 'error' && (
+          <>
+            <AlertTriangle size={32} className="mx-auto mb-4 text-red-600" />
+            <p className="font-mono text-sm text-red-600 mb-4">{message}</p>
+            <button
+              type="button"
+              onClick={() => onNavigate('settings')}
+              className="px-4 py-2 font-mono text-sm font-bold border-2 border-black hover:bg-gray-100"
+            >
+              Back to Settings
+            </button>
+          </>
+        )}
       </div>
     </div>
   );
@@ -1870,6 +2475,8 @@ const SettingsPage = ({ onNavigate }) => {
   const [settingsTab, setSettingsTab] = useState('workable');
   const [orgData, setOrgData] = useState(null);
   const [orgLoading, setOrgLoading] = useState(true);
+  const [billingUsage, setBillingUsage] = useState(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -1887,26 +2494,49 @@ const SettingsPage = ({ onNavigate }) => {
     return () => { cancelled = true; };
   }, []);
 
+  useEffect(() => {
+    if (settingsTab !== 'billing') return;
+    let cancelled = false;
+    const fetchUsage = async () => {
+      try {
+        const res = await billingApi.usage();
+        if (!cancelled) setBillingUsage(res.data);
+      } catch (err) {
+        console.warn('Failed to fetch billing usage:', err.message);
+      }
+    };
+    fetchUsage();
+    return () => { cancelled = true; };
+  }, [settingsTab]);
+
+  const handleAddCredits = async () => {
+    const base = window.location.origin + window.location.pathname + '#/settings';
+    setCheckoutLoading(true);
+    try {
+      const res = await billingApi.createCheckoutSession({
+        success_url: base + '?payment=success',
+        cancel_url: base,
+      });
+      if (res.data?.url) window.location.href = res.data.url;
+      else setCheckoutLoading(false);
+    } catch (err) {
+      console.warn('Checkout failed:', err?.response?.data?.detail || err.message);
+      setCheckoutLoading(false);
+    }
+  };
+
   // Derive display values from API data or fallback
   const orgName = orgData?.name || user?.organization?.name || 'DeepLight AI';
   const adminEmail = user?.email || 'sam@deeplight.ai';
-  const workableConnected = orgData?.workable_connected ?? true;
+  const workableConnected = orgData?.workable_connected ?? false;
   const connectedSince = orgData?.workable_connected_at
     ? new Date(orgData.workable_connected_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
-    : 'January 15, 2026';
-  const billingPlan = orgData?.billing_plan || 'Pay-Per-Use';
-  const costPerAssessment = orgData?.cost_per_assessment ?? 25;
-  const monthlyAssessments = orgData?.monthly_assessment_count ?? 13;
-  const monthlyCost = orgData?.monthly_cost ?? monthlyAssessments * costPerAssessment;
-
-  // Usage history: from API or fallback
-  const usageHistory = orgData?.usage_history || [
-    { date: 'Feb 10, 2026', candidate: 'Sarah Chen', task: 'Debugging', cost: '£25' },
-    { date: 'Feb 9, 2026', candidate: 'Mike Ross', task: 'AI Engineer', cost: '£25' },
-    { date: 'Feb 8, 2026', candidate: 'Amy Wong', task: 'Optimization', cost: '£25' },
-    { date: 'Feb 5, 2026', candidate: 'James Liu', task: 'RAG Pipeline', cost: '£25' },
-    { date: 'Feb 3, 2026', candidate: 'Priya Sharma', task: 'Debugging', cost: '£25' },
-  ];
+    : '—';
+  const billingPlan = orgData?.plan || 'Pay-Per-Use';
+  const costPerAssessment = 25;
+  const usageHistory = billingUsage?.usage ?? [];
+  const monthlyAssessments = usageHistory.length;
+  const monthlyCost = billingUsage?.total_cost ?? 0;
 
   return (
     <div>
@@ -1942,18 +2572,23 @@ const SettingsPage = ({ onNavigate }) => {
             {settingsTab === 'workable' && (
               <div>
                 {/* Connected banner */}
-                <div className={`border-2 border-black p-6 mb-8 flex items-center gap-4 ${workableConnected ? 'bg-green-50' : 'bg-yellow-50'}`}>
-                  {workableConnected ? (
-                    <CheckCircle size={24} className="text-green-600" />
-                  ) : (
-                    <AlertTriangle size={24} className="text-yellow-600" />
-                  )}
-                  <div>
-                    <div className="font-bold text-lg">Status: {workableConnected ? 'Connected' : 'Not Connected'}</div>
-                    <div className="font-mono text-sm text-gray-600">
-                      {workableConnected ? 'Workable integration is active' : 'Connect your Workable account to sync candidates'}
+                <div className={`border-2 border-black p-6 mb-8 flex items-center justify-between gap-4 flex-wrap ${workableConnected ? 'bg-green-50' : 'bg-yellow-50'}`}>
+                  <div className="flex items-center gap-4">
+                    {workableConnected ? (
+                      <CheckCircle size={24} className="text-green-600" />
+                    ) : (
+                      <AlertTriangle size={24} className="text-yellow-600" />
+                    )}
+                    <div>
+                      <div className="font-bold text-lg">Status: {workableConnected ? 'Connected' : 'Not Connected'}</div>
+                      <div className="font-mono text-sm text-gray-600">
+                        {workableConnected ? 'Workable integration is active' : 'Connect your Workable account to sync candidates'}
+                      </div>
                     </div>
                   </div>
+                  {!workableConnected && (
+                    <ConnectWorkableButton />
+                  )}
                 </div>
                 {/* Details */}
                 <div className="border-2 border-black p-6 space-y-4">
@@ -1993,17 +2628,26 @@ const SettingsPage = ({ onNavigate }) => {
               <div>
                 {/* Current Plan */}
                 <div className="border-2 border-black p-6 mb-8">
-                  <div className="flex items-start justify-between">
+                  <div className="flex items-start justify-between flex-wrap gap-4">
                     <div>
                       <div className="font-mono text-xs text-gray-500 mb-1">Current Plan</div>
                       <div className="text-2xl font-bold">{billingPlan}</div>
                       <div className="font-mono text-sm text-gray-600 mt-1">£{costPerAssessment} per assessment</div>
                     </div>
                     <div className="text-right">
-                      <div className="font-mono text-xs text-gray-500 mb-1">This Month</div>
+                      <div className="font-mono text-xs text-gray-500 mb-1">Total usage</div>
                       <div className="text-3xl font-bold" style={{ color: '#9D00FF' }}>£{monthlyCost}</div>
                       <div className="font-mono text-xs text-gray-500">{monthlyAssessments} assessments</div>
                     </div>
+                    <button
+                      type="button"
+                      onClick={handleAddCredits}
+                      disabled={checkoutLoading}
+                      className="flex items-center gap-2 px-6 py-3 font-mono text-sm font-bold border-2 border-black bg-black text-white hover:bg-gray-800 disabled:opacity-60 disabled:cursor-not-allowed"
+                    >
+                      {checkoutLoading ? <Loader2 size={18} className="animate-spin" /> : <CreditCard size={18} />}
+                      {checkoutLoading ? 'Redirecting…' : 'Add credits (£25)'}
+                    </button>
                   </div>
                 </div>
 
@@ -2022,14 +2666,22 @@ const SettingsPage = ({ onNavigate }) => {
                       </tr>
                     </thead>
                     <tbody>
-                      {usageHistory.map((row, i) => (
-                        <tr key={i} className="border-b border-gray-200 hover:bg-gray-50">
-                          <td className="px-6 py-3 font-mono text-sm">{row.date}</td>
-                          <td className="px-6 py-3 text-sm">{row.candidate}</td>
-                          <td className="px-6 py-3 font-mono text-sm">{row.task}</td>
-                          <td className="px-6 py-3 font-mono text-sm text-right font-bold">{row.cost || `£${costPerAssessment}`}</td>
+                      {usageHistory.length === 0 ? (
+                        <tr>
+                          <td colSpan={4} className="px-6 py-8 font-mono text-sm text-gray-500 text-center">
+                            No usage yet. Completed assessments will appear here.
+                          </td>
                         </tr>
-                      ))}
+                      ) : (
+                        usageHistory.map((row, i) => (
+                          <tr key={row.assessment_id ?? i} className="border-b border-gray-200 hover:bg-gray-50">
+                            <td className="px-6 py-3 font-mono text-sm">{row.date}</td>
+                            <td className="px-6 py-3 text-sm">{row.candidate}</td>
+                            <td className="px-6 py-3 font-mono text-sm">{row.task}</td>
+                            <td className="px-6 py-3 font-mono text-sm text-right font-bold">{row.cost || `£${costPerAssessment}`}</td>
+                          </tr>
+                        ))
+                      )}
                     </tbody>
                   </table>
                 </div>
@@ -2046,8 +2698,7 @@ const SettingsPage = ({ onNavigate }) => {
 // CANDIDATE PORTAL — WELCOME PAGE
 // ============================================================
 
-const CandidateWelcomePage = ({ token, onNavigate }) => {
-  const [assessmentData, setAssessmentData] = useState(null);
+const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
   const [loadingStart, setLoadingStart] = useState(false);
   const [startError, setStartError] = useState('');
 
@@ -2060,8 +2711,8 @@ const CandidateWelcomePage = ({ token, onNavigate }) => {
     setStartError('');
     try {
       const res = await assessmentsApi.start(token);
-      // Store the started assessment data for the assessment page
-      setAssessmentData(res.data);
+      // Pass start response to parent so AssessmentPage receives it (no double-start)
+      if (onStarted) onStarted(res.data);
       onNavigate('assessment');
     } catch (err) {
       const msg = err.response?.data?.detail || 'Failed to start assessment';
@@ -2173,37 +2824,55 @@ const CandidateWelcomePage = ({ token, onNavigate }) => {
 function App() {
   const { isAuthenticated, loading: authLoading } = useAuth();
   const [selectedCandidate, setSelectedCandidate] = useState(null);
+  /** Start response from candidate welcome — passed to AssessmentPage so it does not call start() again */
+  const [startedAssessmentData, setStartedAssessmentData] = useState(null);
+
+  // Workable OAuth callback: pathname is /settings/workable/callback?code=...
+  const isWorkableCallback = typeof window !== 'undefined' && window.location.pathname === '/settings/workable/callback';
+  const workableCallbackCode = isWorkableCallback ? new URLSearchParams(window.location.search).get('code') : null;
 
   // Parse hash route on initial load
   const initialHash = window.location.hash;
   const initialAssessMatch = initialHash.match(/^#\/assess\/(.+)$/);
-  const [currentPage, setCurrentPage] = useState(initialAssessMatch ? 'candidate-welcome' : 'landing');
+  const initialResetMatch = initialHash.match(/^#\/reset-password(?:\?(.*))?$/);
+  const getResetToken = () => {
+    const qs = initialHash.split('?')[1] || '';
+    const params = new URLSearchParams(qs);
+    return params.get('token') || '';
+  };
+  const [currentPage, setCurrentPage] = useState(
+    isWorkableCallback ? 'workable-callback' : initialAssessMatch ? 'candidate-welcome' : initialResetMatch ? 'reset-password' : 'landing'
+  );
   const [assessmentToken, setAssessmentToken] = useState(initialAssessMatch ? initialAssessMatch[1] : null);
+  const [resetPasswordToken, setResetPasswordToken] = useState(initialResetMatch ? getResetToken() : '');
 
-  // Handle hash-based routing for candidate assessment links: /#/assess/:token
+  // Handle hash-based routing for candidate assessment and reset-password links
   useEffect(() => {
     const handleHashRoute = () => {
       const hash = window.location.hash;
       const assessMatch = hash.match(/^#\/assess\/(.+)$/);
+      const resetMatch = hash.match(/^#\/reset-password(?:\?(.*))?$/);
       if (assessMatch) {
         setAssessmentToken(assessMatch[1]);
         setCurrentPage('candidate-welcome');
+      } else if (resetMatch) {
+        const qs = (hash.split('?')[1] || '');
+        setResetPasswordToken(new URLSearchParams(qs).get('token') || '');
+        setCurrentPage('reset-password');
       }
     };
-    // Only listen for future hash changes (initial is handled above)
     window.addEventListener('hashchange', handleHashRoute);
     return () => window.removeEventListener('hashchange', handleHashRoute);
   }, []);
 
-  // Auto-redirect: if already authenticated and on landing/login, go to dashboard
-  // But NOT if we're on a candidate assessment page
+  // Auto-redirect: if already authenticated and on landing/login/forgot-password, go to dashboard
   useEffect(() => {
-    if (isAuthenticated && (currentPage === 'landing' || currentPage === 'login')) {
+    if (isAuthenticated && ['landing', 'login', 'forgot-password'].includes(currentPage)) {
       setCurrentPage('dashboard');
     }
   }, [isAuthenticated, currentPage]);
 
-  // When user logs out (isAuthenticated becomes false), redirect to landing
+  // When user logs out, redirect to landing (except on reset-password and workable-callback which may be in progress)
   useEffect(() => {
     if (!authLoading && !isAuthenticated && ['dashboard', 'analytics', 'settings', 'tasks', 'candidate-detail'].includes(currentPage)) {
       setCurrentPage('landing');
@@ -2213,6 +2882,10 @@ function App() {
   const navigateToPage = (page) => {
     setCurrentPage(page);
     window.scrollTo(0, 0);
+  };
+
+  const handleCandidateStarted = (startData) => {
+    setStartedAssessmentData(startData);
   };
 
   const navigateToCandidate = (candidate) => {
@@ -2235,6 +2908,8 @@ function App() {
       {currentPage === 'landing' && <LandingPage onNavigate={navigateToPage} />}
       {currentPage === 'login' && <LoginPage onNavigate={navigateToPage} />}
       {currentPage === 'register' && <RegisterPage onNavigate={navigateToPage} />}
+      {currentPage === 'forgot-password' && <ForgotPasswordPage onNavigate={navigateToPage} />}
+      {currentPage === 'reset-password' && <ResetPasswordPage onNavigate={navigateToPage} token={resetPasswordToken} />}
       {currentPage === 'dashboard' && (
         <DashboardPage onNavigate={navigateToPage} onViewCandidate={navigateToCandidate} />
       )}
@@ -2244,11 +2919,21 @@ function App() {
       {currentPage === 'tasks' && <TasksPage onNavigate={navigateToPage} />}
       {currentPage === 'analytics' && <AnalyticsPage onNavigate={navigateToPage} />}
       {currentPage === 'settings' && <SettingsPage onNavigate={navigateToPage} />}
+      {currentPage === 'workable-callback' && (
+        <WorkableCallbackPage code={workableCallbackCode} onNavigate={navigateToPage} />
+      )}
       {currentPage === 'candidate-welcome' && (
-        <CandidateWelcomePage token={assessmentToken} onNavigate={navigateToPage} />
+        <CandidateWelcomePage
+          token={assessmentToken}
+          onNavigate={navigateToPage}
+          onStarted={handleCandidateStarted}
+        />
       )}
       {currentPage === 'assessment' && (
-        <AssessmentPage token={assessmentToken} />
+        <AssessmentPage
+          token={assessmentToken}
+          startData={startedAssessmentData}
+        />
       )}
     </div>
   );

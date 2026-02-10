@@ -40,6 +40,25 @@ def update_my_org(
     return org
 
 
+@router.get("/workable/authorize-url")
+def get_workable_authorize_url(current_user: User = Depends(get_current_user)):
+    """Return the Workable OAuth authorize URL for the frontend to redirect to."""
+    from ...core.config import settings
+    if not settings.WORKABLE_CLIENT_ID:
+        raise HTTPException(status_code=503, detail="Workable integration is not configured")
+    redirect_uri = f"{settings.FRONTEND_URL}/settings/workable/callback"
+    scope = "r_jobs r_candidates w_candidates"
+    url = (
+        "https://www.workable.com/oauth/authorize"
+        f"?client_id={settings.WORKABLE_CLIENT_ID}"
+        f"&redirect_uri={redirect_uri}"
+        "&resource=user"
+        "&response_type=code"
+        f"&scope={scope.replace(' ', '+')}"
+    )
+    return {"url": url}
+
+
 @router.post("/workable/connect")
 def connect_workable(
     data: WorkableConnect,

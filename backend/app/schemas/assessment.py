@@ -31,6 +31,14 @@ class AssessmentResponse(BaseModel):
     ai_prompts: Optional[List[Dict[str, Any]]] = None
     timeline: Optional[List[Dict[str, Any]]] = None
     created_at: datetime
+    # Computed for candidate detail UI (snake_case for API; frontend maps to camelCase)
+    prompts_list: Optional[List[Dict[str, Any]]] = None
+    results: Optional[List[Dict[str, Any]]] = None
+    breakdown: Optional[Dict[str, Any]] = None
+    # For list/table display (from joined candidate/task)
+    candidate_name: Optional[str] = None
+    candidate_email: Optional[str] = None
+    task_name: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

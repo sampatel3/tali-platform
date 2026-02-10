@@ -4,7 +4,21 @@ import CodeEditor from './CodeEditor';
 import ClaudeChat from './ClaudeChat';
 import { assessments } from '../../lib/api';
 
-export default function AssessmentPage({ assessmentId, token, taskData }) {
+/** Normalize API start response to assessment shape used by this component */
+function normalizeStartData(startData) {
+  const task = startData.task || {};
+  return {
+    id: startData.assessment_id,
+    token: startData.token,
+    starter_code: task.starter_code || '',
+    duration_minutes: task.duration_minutes ?? 30,
+    time_remaining: startData.time_remaining ?? (task.duration_minutes ?? 30) * 60,
+    task_name: task.name || 'Assessment',
+    task,
+  };
+}
+
+export default function AssessmentPage({ assessmentId, token, taskData, startData }) {
   const [assessment, setAssessment] = useState(null);
   const [loading, setLoading] = useState(true);
   const [output, setOutput] = useState('');
@@ -14,36 +28,44 @@ export default function AssessmentPage({ assessmentId, token, taskData }) {
   const codeRef = useRef('');
   const timerRef = useRef(null);
 
-  // Start the assessment on mount
+  // Use startData from welcome page (no double-start), or taskData for demo, or call start() only if token and no startData
   useEffect(() => {
+    if (startData) {
+      const normalized = normalizeStartData(startData);
+      setAssessment(normalized);
+      codeRef.current = normalized.starter_code || '';
+      setTimeLeft(normalized.time_remaining);
+      setLoading(false);
+      return;
+    }
+    if (taskData) {
+      setAssessment(taskData);
+      codeRef.current = taskData.starter_code || '';
+      setTimeLeft((taskData.duration_minutes || 30) * 60);
+      setLoading(false);
+      return;
+    }
+    if (!token) {
+      setLoading(false);
+      setOutput('Error: No assessment token provided.');
+      return;
+    }
     const startAssessment = async () => {
       try {
         const res = await assessments.start(token);
         const data = res.data;
-        setAssessment(data);
-        codeRef.current = data.starter_code || '';
-        // Duration in seconds (API returns minutes)
-        setTimeLeft((data.duration_minutes || 30) * 60);
+        const normalized = normalizeStartData(data);
+        setAssessment(normalized);
+        codeRef.current = normalized.starter_code || '';
+        setTimeLeft(normalized.time_remaining);
       } catch (err) {
         setOutput(`Error starting assessment: ${err.message}`);
       } finally {
         setLoading(false);
       }
     };
-
-    if (taskData) {
-      // If taskData is passed directly (e.g., from demo mode)
-      setAssessment(taskData);
-      codeRef.current = taskData.starter_code || '';
-      setTimeLeft((taskData.duration_minutes || 30) * 60);
-      setLoading(false);
-    } else if (token) {
-      startAssessment();
-    } else {
-      setLoading(false);
-      setOutput('Error: No assessment token provided.');
-    }
-  }, [token, taskData]);
+    startAssessment();
+  }, [token, taskData, startData]);
 
   // Countdown timer
   useEffect(() => {
@@ -69,6 +91,8 @@ export default function AssessmentPage({ assessmentId, token, taskData }) {
     return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
   };
 
+  const assessmentTokenForApi = assessment?.token ?? token;
+
   // Execute code
   const handleExecute = useCallback(
     async (code) => {
@@ -77,7 +101,7 @@ export default function AssessmentPage({ assessmentId, token, taskData }) {
       setOutput('Running...\n');
       try {
         const id = assessment?.id || assessmentId;
-        const res = await assessments.execute(id, code);
+        const res = await assessments.execute(id, code, assessmentTokenForApi);
         const result = res.data;
         setOutput(result.stdout || result.output || 'No output.');
         if (result.stderr) {
@@ -89,7 +113,7 @@ export default function AssessmentPage({ assessmentId, token, taskData }) {
         setExecuting(false);
       }
     },
-    [assessment, assessmentId]
+    [assessment, assessmentId, assessmentTokenForApi]
   );
 
   // Save code (just updates ref, could persist)
@@ -102,10 +126,10 @@ export default function AssessmentPage({ assessmentId, token, taskData }) {
   const handleClaudeMessage = useCallback(
     async (message, history) => {
       const id = assessment?.id || assessmentId;
-      const res = await assessments.claude(id, message, history);
+      const res = await assessments.claude(id, message, history, assessmentTokenForApi);
       return res.data.response || res.data.message || 'No response from Claude.';
     },
-    [assessment, assessmentId]
+    [assessment, assessmentId, assessmentTokenForApi]
   );
 
   // Submit assessment
@@ -125,14 +149,14 @@ export default function AssessmentPage({ assessmentId, token, taskData }) {
 
       try {
         const id = assessment?.id || assessmentId;
-        await assessments.submit(id, codeRef.current);
+        await assessments.submit(id, codeRef.current, assessmentTokenForApi);
         setOutput('Assessment submitted successfully! You may close this window.');
       } catch (err) {
         setOutput(`Submit error: ${err.response?.data?.detail || err.message}`);
         setSubmitted(false);
       }
     },
-    [assessment, assessmentId, submitted]
+    [assessment, assessmentId, assessmentTokenForApi, submitted]
   );
 
   const isTimeLow = timeLeft > 0 && timeLeft < 300; // under 5 minutes

@@ -1,0 +1,106 @@
+"""Billing: usage history and Stripe checkout for pay-per-use assessments."""
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from pydantic import BaseModel
+
+from sqlalchemy.orm import joinedload
+from ...core.database import get_db
+from ...core.security import get_current_user
+from ...core.config import settings
+from ...models.user import User
+from ...models.organization import Organization
+from ...models.assessment import Assessment, AssessmentStatus
+
+router = APIRouter(prefix="/billing", tags=["Billing"])
+
+
+class CheckoutSessionCreate(BaseModel):
+    success_url: str
+    cancel_url: str
+
+
+@router.get("/usage")
+def get_usage(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return usage history for the current org: completed assessments with date, candidate, task, cost."""
+    org_id = current_user.organization_id
+    if not org_id:
+        return {"usage": [], "total_cost": 0}
+    assessments = (
+        db.query(Assessment)
+        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+        .filter(
+            Assessment.organization_id == org_id,
+            Assessment.status == AssessmentStatus.COMPLETED,
+            Assessment.completed_at != None,
+        )
+        .order_by(Assessment.completed_at.desc())
+        .limit(100)
+        .all()
+    )
+    cost_per = 25
+    usage = []
+    for a in assessments:
+        completed_at = a.completed_at
+        date_str = completed_at.strftime("%b %d, %Y") if completed_at else ""
+        candidate_name = (a.candidate.full_name or a.candidate.email) if a.candidate else "—"
+        task_name = a.task.name if a.task else "—"
+        usage.append({
+            "date": date_str,
+            "candidate": candidate_name,
+            "task": task_name,
+            "cost": f"£{cost_per}",
+            "assessment_id": a.id,
+        })
+    return {"usage": usage, "total_cost": len(usage) * cost_per}
+
+
+@router.post("/checkout-session")
+def create_checkout_session(
+    body: CheckoutSessionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a Stripe Checkout Session for one assessment (£25). Returns URL to redirect the user."""
+    import stripe
+    if not settings.STRIPE_API_KEY or not settings.STRIPE_API_KEY.startswith("sk_"):
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    stripe.api_key = settings.STRIPE_API_KEY
+
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    customer_id = org.stripe_customer_id
+    if not customer_id:
+        customer = stripe.Customer.create(
+            email=current_user.email,
+            name=current_user.full_name or current_user.email,
+            metadata={"org_id": str(org.id), "platform": "tali"},
+        )
+        customer_id = customer.id
+        org.stripe_customer_id = customer_id
+        db.commit()
+
+    try:
+        session = stripe.checkout.Session.create(
+            customer=customer_id,
+            payment_method_types=["card"],
+            line_items=[{
+                "price_data": {
+                    "currency": "gbp",
+                    "product_data": {"name": "TALI Assessment", "description": "One technical assessment"},
+                    "unit_amount": 2500,
+                },
+                "quantity": 1,
+            }],
+            mode="payment",
+            success_url=body.success_url,
+            cancel_url=body.cancel_url,
+            metadata={"org_id": str(org.id), "type": "assessment"},
+        )
+        return {"url": session.url}
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")

@@ -44,6 +44,32 @@ class E2BService:
             logger.error("Failed to create E2B sandbox: %s", str(e))
             raise
 
+    def connect_sandbox(self, sandbox_id: str) -> Sandbox:
+        """
+        Connect to an existing E2B sandbox by ID (e.g. from assessment.e2b_session_id).
+
+        Returns:
+            A Sandbox instance connected to the existing sandbox.
+
+        Raises:
+            Exception: If connection fails (e.g. sandbox no longer running).
+        """
+        try:
+            logger.info("Connecting to existing E2B sandbox (id=%s)", sandbox_id)
+            sandbox = Sandbox(api_key=self.api_key, sandbox_id=sandbox_id)
+            logger.info("Connected to E2B sandbox (id=%s)", sandbox_id)
+            return sandbox
+        except TypeError:
+            # SDK may not support sandbox_id in constructor; fall back to create and log
+            logger.warning(
+                "E2B SDK does not support connect by id; creating new sandbox. "
+                "Install a version that supports Sandbox(api_key=..., sandbox_id=...) for reuse."
+            )
+            return self.create_sandbox()
+        except Exception as e:
+            logger.error("Failed to connect to E2B sandbox (id=%s): %s", sandbox_id, str(e))
+            raise
+
     def execute_code(self, sandbox: Sandbox, code: str) -> dict:
         """
         Execute arbitrary code inside an E2B sandbox.

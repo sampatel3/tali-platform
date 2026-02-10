@@ -215,7 +215,7 @@ Both endpoints verify request signatures. Do not call these directly — they ar
 
 ## Interactive Docs
 
-When running locally or in development, Swagger UI is available at:
+Swagger UI is available at:
 
 ```
 GET /api/docs

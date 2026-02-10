@@ -1,5 +1,7 @@
 # TALI Deployment Guide
 
+This guide covers deployment only (Vercel for frontend, Railway for backend). Local run is not required.
+
 ## Prerequisites
 
 You will need accounts on the following services:
@@ -32,7 +34,7 @@ npm install -g @railway/cli
 railway login
 
 # Initialize from the backend directory
-cd tali/backend
+cd backend
 railway init
 ```
 
@@ -75,8 +77,8 @@ See [ENV_SETUP.md](./ENV_SETUP.md) for the full variable reference.
 ### 4. Deploy
 
 ```bash
-# From tali/backend/
-railway up
+# From repo root (backend is the service directory)
+cd backend && railway up
 ```
 
 Railway will detect the `railway.json` configuration and:
@@ -105,7 +107,7 @@ vercel login
 ### 2. Deploy from the frontend directory
 
 ```bash
-cd tali/frontend
+cd frontend
 vercel
 ```
 

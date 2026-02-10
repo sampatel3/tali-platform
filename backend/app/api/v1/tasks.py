@@ -11,7 +11,7 @@ from ...core.security import get_current_user
 from ...core.config import settings
 from ...models.user import User
 from ...models.task import Task
-from ...schemas.task import TaskCreate, TaskResponse
+from ...schemas.task import TaskCreate, TaskResponse, TaskUpdate
 from ...services.claude_service import ClaudeService
 
 logger = logging.getLogger(__name__)
@@ -138,4 +138,50 @@ def get_task(
     task = db.query(Task).filter(Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    if task.organization_id != current_user.organization_id and not task.is_template:
+        raise HTTPException(status_code=404, detail="Task not found")
     return task
+
+
+@router.patch("/{task_id}", response_model=TaskResponse)
+def update_task(
+    task_id: int,
+    data: TaskUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    task = db.query(Task).filter(
+        Task.id == task_id,
+        Task.organization_id == current_user.organization_id,
+    ).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    update_data = data.model_dump(exclude_unset=True)
+    for k, v in update_data.items():
+        setattr(task, k, v)
+    db.commit()
+    db.refresh(task)
+    return task
+
+
+@router.delete("/{task_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_task(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from ...models.assessment import Assessment
+    task = db.query(Task).filter(
+        Task.id == task_id,
+        Task.organization_id == current_user.organization_id,
+    ).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    in_use = db.query(Assessment).filter(Assessment.task_id == task_id).first()
+    if in_use:
+        raise HTTPException(
+            status_code=400,
+            detail="Cannot delete task: it is used by one or more assessments",
+        )
+    db.delete(task)
+    db.commit()

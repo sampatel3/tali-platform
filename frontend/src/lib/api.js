@@ -43,11 +43,13 @@ export const auth = {
   },
   register: (data) => api.post('/auth/register', data),
   me: () => api.get('/auth/me'),
+  forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
+  resetPassword: (token, new_password) => api.post('/auth/reset-password', { token, new_password }),
 };
 
 // ---- Assessments ----
 export const assessments = {
-  list: () => api.get('/assessments/'),
+  list: (params = {}) => api.get('/assessments/', { params }),
   get: (id) => api.get(`/assessments/${id}`),
   create: (data) => api.post('/assessments/', data),
   start: (token) => api.post(`/assessments/token/${token}/start`),
@@ -68,12 +70,24 @@ export const assessments = {
     }),
 };
 
+// ---- Billing ----
+export const billing = {
+  usage: () => api.get('/billing/usage'),
+  createCheckoutSession: (data) => api.post('/billing/checkout-session', data),
+};
+
 // ---- Organizations ----
 export const organizations = {
   get: () => api.get('/organizations/me'),
   update: (data) => api.patch('/organizations/me', data),
+  getWorkableAuthorizeUrl: () => api.get('/organizations/workable/authorize-url'),
   connectWorkable: (code) =>
     api.post('/organizations/workable/connect', { code }),
+};
+
+// ---- Analytics ----
+export const analytics = {
+  get: () => api.get('/analytics/'),
 };
 
 // ---- Tasks ----
@@ -81,6 +95,8 @@ export const tasks = {
   list: () => api.get('/tasks/'),
   get: (id) => api.get(`/tasks/${id}`),
   create: (data) => api.post('/tasks/', data),
+  update: (id, data) => api.patch(`/tasks/${id}`, data),
+  delete: (id) => api.delete(`/tasks/${id}`),
   generate: (data) => api.post('/tasks/generate/', data),
 };
 

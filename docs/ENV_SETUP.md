@@ -10,7 +10,7 @@ Complete reference for all environment variables used by the TALI platform.
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `DATABASE_URL` | **Yes** | `postgresql://tali:tali_dev_password@localhost:5432/tali_db` | PostgreSQL connection string. Auto-injected by Railway when using their Postgres add-on. |
+| `DATABASE_URL` | **Yes** | — | PostgreSQL connection string. Set in Railway when using their Postgres add-on. |
 
 ### Security
 
@@ -81,14 +81,14 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `REDIS_URL` | **Yes** | `redis://localhost:6379` | Redis connection string for Celery task queue. Auto-injected by Railway when using their Redis add-on. |
+| `REDIS_URL` | **Yes** | — | Redis connection string for Celery task queue. Set in Railway when using their Redis add-on. |
 
 ### URLs
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `FRONTEND_URL` | **Yes** | `http://localhost:5173` | Frontend app URL. Used for CORS, OAuth redirects, and email links. |
-| `BACKEND_URL` | **Yes** | `http://localhost:8000` | Backend API URL. Used in email templates and webhook configurations. |
+| `FRONTEND_URL` | **Yes** | — | Frontend app URL (e.g. your Vercel URL). Used for CORS, OAuth redirects, and email links. |
+| `BACKEND_URL` | **Yes** | — | Backend API URL (e.g. your Railway URL). Used in email templates and webhook configurations. |
 
 ### AWS S3 (Optional)
 
@@ -124,28 +124,3 @@ These are compile-time variables injected by Vite. They must be prefixed with `V
 - `VITE_API_URL`: your Railway backend URL
 - `VITE_STRIPE_PUBLISHABLE_KEY`: [Stripe Dashboard](https://dashboard.stripe.com) → Developers → API keys → Publishable key
 
----
-
-## Local Development Quick Start
-
-1. Copy the example env file:
-
-```bash
-cd tali/backend
-cp .env.example .env
-```
-
-2. Start Postgres and Redis:
-
-```bash
-cd tali/
-docker-compose up -d
-```
-
-3. Generate a dev secret key:
-
-```bash
-openssl rand -hex 32
-```
-
-4. Edit `.env` and fill in the values. For local dev, only `DATABASE_URL`, `SECRET_KEY`, and `REDIS_URL` are strictly required. Service integrations (E2B, Anthropic, etc.) are needed only for the features that use them.
