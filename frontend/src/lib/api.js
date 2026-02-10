@@ -47,9 +47,9 @@ export const auth = {
 
 // ---- Assessments ----
 export const assessments = {
-  list: () => api.get('/assessments'),
+  list: () => api.get('/assessments/'),
   get: (id) => api.get(`/assessments/${id}`),
-  create: (data) => api.post('/assessments', data),
+  create: (data) => api.post('/assessments/', data),
   start: (token) => api.post(`/assessments/token/${token}/start`),
   execute: (id, code, assessmentToken) =>
     api.post(`/assessments/${id}/execute`, { code }, {
@@ -78,10 +78,10 @@ export const organizations = {
 
 // ---- Tasks ----
 export const tasks = {
-  list: () => api.get('/tasks'),
+  list: () => api.get('/tasks/'),
   get: (id) => api.get(`/tasks/${id}`),
-  create: (data) => api.post('/tasks', data),
-  generate: (data) => api.post('/tasks/generate', data),
+  create: (data) => api.post('/tasks/', data),
+  generate: (data) => api.post('/tasks/generate/', data),
 };
 
 export default api;
