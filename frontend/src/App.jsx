@@ -2172,9 +2172,13 @@ const CandidateWelcomePage = ({ token, onNavigate }) => {
 
 function App() {
   const { isAuthenticated, loading: authLoading } = useAuth();
-  const [currentPage, setCurrentPage] = useState('landing');
   const [selectedCandidate, setSelectedCandidate] = useState(null);
-  const [assessmentToken, setAssessmentToken] = useState(null);
+
+  // Parse hash route on initial load
+  const initialHash = window.location.hash;
+  const initialAssessMatch = initialHash.match(/^#\/assess\/(.+)$/);
+  const [currentPage, setCurrentPage] = useState(initialAssessMatch ? 'candidate-welcome' : 'landing');
+  const [assessmentToken, setAssessmentToken] = useState(initialAssessMatch ? initialAssessMatch[1] : null);
 
   // Handle hash-based routing for candidate assessment links: /#/assess/:token
   useEffect(() => {
@@ -2186,12 +2190,13 @@ function App() {
         setCurrentPage('candidate-welcome');
       }
     };
-    handleHashRoute();
+    // Only listen for future hash changes (initial is handled above)
     window.addEventListener('hashchange', handleHashRoute);
     return () => window.removeEventListener('hashchange', handleHashRoute);
   }, []);
 
   // Auto-redirect: if already authenticated and on landing/login, go to dashboard
+  // But NOT if we're on a candidate assessment page
   useEffect(() => {
     if (isAuthenticated && (currentPage === 'landing' || currentPage === 'login')) {
       setCurrentPage('dashboard');
