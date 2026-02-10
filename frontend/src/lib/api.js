@@ -81,6 +81,7 @@ export const tasks = {
   list: () => api.get('/tasks'),
   get: (id) => api.get(`/tasks/${id}`),
   create: (data) => api.post('/tasks', data),
+  generate: (data) => api.post('/tasks/generate', data),
 };
 
 export default api;

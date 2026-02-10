@@ -1344,7 +1344,97 @@ const CandidateDetailPage = ({ candidate, onNavigate }) => {
 // TASKS PAGE
 // ============================================================
 
+const TaskFormFields = ({ form, setForm }) => (
+  <div className="space-y-4">
+    <div>
+      <label className="block font-mono text-sm mb-1 font-bold">Task Name *</label>
+      <input
+        type="text"
+        className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
+        placeholder="e.g. Async Pipeline Debugging"
+        value={form.name}
+        onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+      />
+    </div>
+    <div>
+      <label className="block font-mono text-sm mb-1 font-bold">Description *</label>
+      <p className="font-mono text-xs text-gray-500 mb-1">What the candidate sees as the brief. Be specific about what they need to accomplish.</p>
+      <textarea
+        className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none min-h-[80px]"
+        placeholder="Fix 3 bugs in an async data pipeline that processes streaming JSON events..."
+        value={form.description}
+        onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+      />
+    </div>
+    <div className="grid grid-cols-3 gap-4">
+      <div>
+        <label className="block font-mono text-sm mb-1 font-bold">Type</label>
+        <select
+          className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
+          value={form.task_type}
+          onChange={(e) => setForm((p) => ({ ...p, task_type: e.target.value }))}
+        >
+          <option value="debugging">Debugging</option>
+          <option value="ai_engineering">AI Engineering</option>
+          <option value="optimization">Optimization</option>
+          <option value="build">Build from Scratch</option>
+          <option value="refactor">Refactoring</option>
+        </select>
+      </div>
+      <div>
+        <label className="block font-mono text-sm mb-1 font-bold">Difficulty</label>
+        <select
+          className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
+          value={form.difficulty}
+          onChange={(e) => setForm((p) => ({ ...p, difficulty: e.target.value }))}
+        >
+          <option value="junior">Junior</option>
+          <option value="mid">Mid-Level</option>
+          <option value="senior">Senior</option>
+          <option value="staff">Staff+</option>
+        </select>
+      </div>
+      <div>
+        <label className="block font-mono text-sm mb-1 font-bold">Duration</label>
+        <select
+          className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
+          value={form.duration_minutes}
+          onChange={(e) => setForm((p) => ({ ...p, duration_minutes: parseInt(e.target.value) }))}
+        >
+          <option value={15}>15 min</option>
+          <option value={30}>30 min</option>
+          <option value={45}>45 min</option>
+          <option value={60}>60 min</option>
+          <option value={90}>90 min</option>
+        </select>
+      </div>
+    </div>
+    <div>
+      <label className="block font-mono text-sm mb-1 font-bold">Starter Code *</label>
+      <p className="font-mono text-xs text-gray-500 mb-1">The code the candidate starts with. Include bugs, scaffolding, or an incomplete implementation.</p>
+      <textarea
+        className="w-full border-2 border-black px-4 py-3 font-mono text-xs focus:outline-none min-h-[180px] bg-gray-50 leading-relaxed"
+        placeholder={"# Python starter code\n# Include realistic bugs or incomplete sections\n\ndef process_data(items):\n    ..."}
+        value={form.starter_code}
+        onChange={(e) => setForm((p) => ({ ...p, starter_code: e.target.value }))}
+      />
+    </div>
+    <div>
+      <label className="block font-mono text-sm mb-1 font-bold">Test Suite *</label>
+      <p className="font-mono text-xs text-gray-500 mb-1">pytest tests that validate the correct solution. These run automatically when the candidate submits.</p>
+      <textarea
+        className="w-full border-2 border-black px-4 py-3 font-mono text-xs focus:outline-none min-h-[120px] bg-gray-50 leading-relaxed"
+        placeholder={"import pytest\n\ndef test_basic_case():\n    assert process_data([1, 2, 3]) == [2, 4, 6]\n\ndef test_edge_case():\n    assert process_data([]) == []"}
+        value={form.test_code}
+        onChange={(e) => setForm((p) => ({ ...p, test_code: e.target.value }))}
+      />
+    </div>
+  </div>
+);
+
 const CreateTaskModal = ({ onClose, onCreated }) => {
+  // Step: 'choose' | 'ai-prompt' | 'ai-review' | 'manual'
+  const [step, setStep] = useState('choose');
   const [form, setForm] = useState({
     name: '',
     description: '',
@@ -1354,18 +1444,48 @@ const CreateTaskModal = ({ onClose, onCreated }) => {
     starter_code: '',
     test_code: '',
   });
+  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiDifficulty, setAiDifficulty] = useState('');
+  const [aiDuration, setAiDuration] = useState('');
   const [loading, setLoading] = useState(false);
+  const [generating, setGenerating] = useState(false);
   const [error, setError] = useState('');
 
-  const handleCreate = async () => {
+  const handleGenerate = async () => {
+    setError('');
+    if (!aiPrompt.trim()) {
+      setError('Describe what you want to assess');
+      return;
+    }
+    setGenerating(true);
+    try {
+      const res = await tasksApi.generate({
+        prompt: aiPrompt,
+        difficulty: aiDifficulty || undefined,
+        duration_minutes: aiDuration ? parseInt(aiDuration) : undefined,
+      });
+      setForm(res.data);
+      setStep('ai-review');
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to generate task — try again');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  const handleSave = async () => {
     setError('');
     if (!form.name || !form.description) {
       setError('Name and description are required');
       return;
     }
+    if (!form.starter_code) {
+      setError('Starter code is required');
+      return;
+    }
     setLoading(true);
     try {
-      const res = await tasksApi.create(form);
+      const res = await tasksApi.create({ ...form, is_active: true });
       onCreated(res.data);
       onClose();
     } catch (err) {
@@ -1375,104 +1495,195 @@ const CreateTaskModal = ({ onClose, onCreated }) => {
     }
   };
 
+  const modalTitle = {
+    'choose': 'Create New Task',
+    'ai-prompt': 'Generate with AI',
+    'ai-review': 'Review Generated Task',
+    'manual': 'Create Task Manually',
+  }[step];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="bg-white border-2 border-black p-8 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-        <div className="flex items-center justify-between mb-6">
-          <h2 className="text-2xl font-bold">Create Task</h2>
+      <div className="bg-white border-2 border-black w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-8 py-5 border-b-2 border-black">
+          <div className="flex items-center gap-3">
+            {step !== 'choose' && (
+              <button
+                className="border-2 border-black p-1 hover:bg-black hover:text-white transition-colors"
+                onClick={() => setStep(step === 'ai-review' ? 'ai-prompt' : 'choose')}
+              >
+                <ArrowLeft size={16} />
+              </button>
+            )}
+            <h2 className="text-xl font-bold">{modalTitle}</h2>
+          </div>
           <button className="border-2 border-black p-1 hover:bg-black hover:text-white transition-colors" onClick={onClose}>
             <X size={18} />
           </button>
         </div>
-        {error && (
-          <div className="border-2 border-red-500 bg-red-50 p-3 mb-4 font-mono text-sm text-red-700">{error}</div>
-        )}
-        <div className="space-y-4">
-          <div>
-            <label className="block font-mono text-sm mb-1">Task Name *</label>
-            <input
-              type="text"
-              className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
-              placeholder="e.g. API Debugging Challenge"
-              value={form.name}
-              onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="block font-mono text-sm mb-1">Description *</label>
-            <textarea
-              className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none min-h-[80px]"
-              placeholder="Describe what the candidate will need to do..."
-              value={form.description}
-              onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
-            />
-          </div>
-          <div className="grid grid-cols-3 gap-4">
-            <div>
-              <label className="block font-mono text-sm mb-1">Type</label>
-              <select
-                className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
-                value={form.task_type}
-                onChange={(e) => setForm((p) => ({ ...p, task_type: e.target.value }))}
+
+        <div className="px-8 py-6">
+          {error && (
+            <div className="border-2 border-red-500 bg-red-50 p-3 mb-5 font-mono text-sm text-red-700 flex items-center gap-2">
+              <AlertTriangle size={16} /> {error}
+            </div>
+          )}
+
+          {/* Step: Choose Path */}
+          {step === 'choose' && (
+            <div className="space-y-4">
+              <p className="font-mono text-sm text-gray-600 mb-6">How would you like to create your assessment task?</p>
+              <button
+                className="w-full border-2 border-black p-6 text-left hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-shadow group"
+                onClick={() => setStep('ai-prompt')}
               >
-                <option value="debugging">Debugging</option>
-                <option value="ai_engineering">AI Engineering</option>
-                <option value="optimization">Optimization</option>
-                <option value="build">Build from Scratch</option>
-                <option value="refactor">Refactoring</option>
-              </select>
-            </div>
-            <div>
-              <label className="block font-mono text-sm mb-1">Difficulty</label>
-              <select
-                className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
-                value={form.difficulty}
-                onChange={(e) => setForm((p) => ({ ...p, difficulty: e.target.value }))}
+                <div className="flex items-start gap-4">
+                  <div
+                    className="w-12 h-12 border-2 border-black flex items-center justify-center shrink-0"
+                    style={{ backgroundColor: '#9D00FF' }}
+                  >
+                    <Bot size={24} className="text-white" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg mb-1">Generate with AI</h3>
+                    <p className="font-mono text-sm text-gray-600">
+                      Describe what you want to assess in plain English. Claude will generate the full task including starter code, bugs, and test suite.
+                    </p>
+                    <p className="font-mono text-xs mt-2" style={{ color: '#9D00FF' }}>
+                      Recommended for quick setup
+                    </p>
+                  </div>
+                </div>
+              </button>
+              <button
+                className="w-full border-2 border-black p-6 text-left hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-shadow group"
+                onClick={() => setStep('manual')}
               >
-                <option value="junior">Junior</option>
-                <option value="mid">Mid-Level</option>
-                <option value="senior">Senior</option>
-                <option value="staff">Staff+</option>
-              </select>
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 border-2 border-black flex items-center justify-center bg-black shrink-0">
+                    <FileText size={24} className="text-white" />
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-lg mb-1">Create Manually</h3>
+                    <p className="font-mono text-sm text-gray-600">
+                      Write your own task from scratch. Full control over the description, starter code, test suite, and all parameters.
+                    </p>
+                    <p className="font-mono text-xs text-gray-400 mt-2">
+                      Best for specific, custom assessments
+                    </p>
+                  </div>
+                </div>
+              </button>
             </div>
-            <div>
-              <label className="block font-mono text-sm mb-1">Duration (min)</label>
-              <input
-                type="number"
-                className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
-                value={form.duration_minutes}
-                onChange={(e) => setForm((p) => ({ ...p, duration_minutes: parseInt(e.target.value) || 30 }))}
-                min={10}
-                max={120}
-              />
+          )}
+
+          {/* Step: AI Prompt */}
+          {step === 'ai-prompt' && (
+            <div className="space-y-5">
+              <div>
+                <label className="block font-mono text-sm mb-1 font-bold">What do you want to assess?</label>
+                <p className="font-mono text-xs text-gray-500 mb-2">Be specific about the role, skills, and what kind of challenge you want. The more detail, the better the task.</p>
+                <textarea
+                  className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none min-h-[140px]"
+                  placeholder={"Example: Create a debugging task for a senior Python backend engineer.\nThe code should be a REST API handler with 3 bugs:\n- An off-by-one error in pagination\n- A race condition in the cache layer\n- Incorrect error handling that swallows exceptions\nShould test async/await knowledge and production debugging skills."}
+                  value={aiPrompt}
+                  onChange={(e) => setAiPrompt(e.target.value)}
+                  autoFocus
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-mono text-sm mb-1">Difficulty (optional)</label>
+                  <select
+                    className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
+                    value={aiDifficulty}
+                    onChange={(e) => setAiDifficulty(e.target.value)}
+                  >
+                    <option value="">Auto-detect</option>
+                    <option value="junior">Junior</option>
+                    <option value="mid">Mid-Level</option>
+                    <option value="senior">Senior</option>
+                    <option value="staff">Staff+</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="block font-mono text-sm mb-1">Duration (optional)</label>
+                  <select
+                    className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
+                    value={aiDuration}
+                    onChange={(e) => setAiDuration(e.target.value)}
+                  >
+                    <option value="">Auto-detect</option>
+                    <option value="15">15 min</option>
+                    <option value="30">30 min</option>
+                    <option value="45">45 min</option>
+                    <option value="60">60 min</option>
+                    <option value="90">90 min</option>
+                  </select>
+                </div>
+              </div>
+              <button
+                className="w-full border-2 border-black py-3 font-bold text-white transition-colors flex items-center justify-center gap-2"
+                style={{ backgroundColor: generating ? '#6b21a8' : '#9D00FF' }}
+                onClick={handleGenerate}
+                disabled={generating}
+              >
+                {generating ? (
+                  <><Loader2 size={18} className="animate-spin" /> Generating task with Claude...</>
+                ) : (
+                  <><Zap size={18} /> Generate Task</>
+                )}
+              </button>
+              {generating && (
+                <p className="font-mono text-xs text-center text-gray-500">This usually takes 5-10 seconds...</p>
+              )}
             </div>
-          </div>
-          <div>
-            <label className="block font-mono text-sm mb-1">Starter Code</label>
-            <textarea
-              className="w-full border-2 border-black px-4 py-3 font-mono text-xs focus:outline-none min-h-[120px] bg-gray-50"
-              placeholder="# Python starter code the candidate will see..."
-              value={form.starter_code}
-              onChange={(e) => setForm((p) => ({ ...p, starter_code: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="block font-mono text-sm mb-1">Test Code (optional)</label>
-            <textarea
-              className="w-full border-2 border-black px-4 py-3 font-mono text-xs focus:outline-none min-h-[80px] bg-gray-50"
-              placeholder="# pytest tests to validate the solution..."
-              value={form.test_code}
-              onChange={(e) => setForm((p) => ({ ...p, test_code: e.target.value }))}
-            />
-          </div>
-          <button
-            className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors flex items-center justify-center gap-2"
-            style={{ backgroundColor: '#9D00FF' }}
-            onClick={handleCreate}
-            disabled={loading}
-          >
-            {loading ? <><Loader2 size={18} className="animate-spin" /> Creating...</> : 'Create Task'}
-          </button>
+          )}
+
+          {/* Step: AI Review (editable) */}
+          {step === 'ai-review' && (
+            <div className="space-y-4">
+              <div className="border-2 border-black p-3 mb-2 flex items-center gap-2" style={{ backgroundColor: '#f3e8ff' }}>
+                <Bot size={16} style={{ color: '#9D00FF' }} />
+                <span className="font-mono text-xs" style={{ color: '#6b21a8' }}>
+                  AI-generated — review and edit anything below before saving
+                </span>
+              </div>
+              <TaskFormFields form={form} setForm={setForm} />
+              <div className="flex gap-3">
+                <button
+                  className="flex-1 border-2 border-black py-3 font-bold hover:bg-gray-100 transition-colors flex items-center justify-center gap-2"
+                  onClick={() => setStep('ai-prompt')}
+                >
+                  <Zap size={16} /> Regenerate
+                </button>
+                <button
+                  className="flex-1 border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors flex items-center justify-center gap-2"
+                  style={{ backgroundColor: '#9D00FF' }}
+                  onClick={handleSave}
+                  disabled={loading}
+                >
+                  {loading ? <><Loader2 size={18} className="animate-spin" /> Saving...</> : <><Check size={18} /> Save Task</>}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step: Manual */}
+          {step === 'manual' && (
+            <div className="space-y-4">
+              <TaskFormFields form={form} setForm={setForm} />
+              <button
+                className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors flex items-center justify-center gap-2"
+                style={{ backgroundColor: '#9D00FF' }}
+                onClick={handleSave}
+                disabled={loading}
+              >
+                {loading ? <><Loader2 size={18} className="animate-spin" /> Creating...</> : 'Create Task'}
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>
