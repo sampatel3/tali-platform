@@ -28,7 +28,7 @@ app.add_middleware(
 app.add_middleware(RequestLoggingMiddleware)
 
 # Sentry (optional)
-if settings.SENTRY_DSN:
+if settings.SENTRY_DSN and settings.SENTRY_DSN.startswith("https://"):
     import sentry_sdk
     from sentry_sdk.integrations.fastapi import FastApiIntegration
     from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
