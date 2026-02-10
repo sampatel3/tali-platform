@@ -8,7 +8,7 @@ assessment code and test suites via the E2B platform.
 import logging
 import re
 
-from e2b_code_interpreter import Sandbox
+from e2b_code_interpreter import Sandbox  # v1.x
 
 logger = logging.getLogger(__name__)
 
@@ -59,8 +59,11 @@ class E2BService:
             logger.info("Executing code in sandbox (length=%d chars)", len(code))
             execution = sandbox.run_code(code)
 
-            stdout = execution.logs.stdout if execution.logs.stdout else ""
-            stderr = execution.logs.stderr if execution.logs.stderr else ""
+            # v1.x: logs.stdout/stderr may be lists of strings
+            raw_stdout = execution.logs.stdout if execution.logs.stdout else []
+            raw_stderr = execution.logs.stderr if execution.logs.stderr else []
+            stdout = "\n".join(raw_stdout) if isinstance(raw_stdout, list) else str(raw_stdout)
+            stderr = "\n".join(raw_stderr) if isinstance(raw_stderr, list) else str(raw_stderr)
 
             # Collect rich results (charts, dataframes, etc.)
             results = []
@@ -126,8 +129,10 @@ class E2BService:
                 "print(result.stderr)\n"
             )
 
-            stdout = execution.logs.stdout if execution.logs.stdout else ""
-            stderr = execution.logs.stderr if execution.logs.stderr else ""
+            raw_stdout = execution.logs.stdout if execution.logs.stdout else []
+            raw_stderr = execution.logs.stderr if execution.logs.stderr else []
+            stdout = "\n".join(raw_stdout) if isinstance(raw_stdout, list) else str(raw_stdout)
+            stderr = "\n".join(raw_stderr) if isinstance(raw_stderr, list) else str(raw_stderr)
             full_output = stdout + stderr
 
             # Parse test results
@@ -209,7 +214,7 @@ class E2BService:
         try:
             sandbox_id = getattr(sandbox, "id", "unknown")
             logger.info("Closing E2B sandbox (id=%s)", sandbox_id)
-            sandbox.close()
+            sandbox.kill()
             logger.info("E2B sandbox closed successfully (id=%s)", sandbox_id)
         except Exception as e:
             logger.error("Failed to close E2B sandbox: %s", str(e))
