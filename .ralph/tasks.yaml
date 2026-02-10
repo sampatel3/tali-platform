@@ -1,0 +1,2011 @@
+# Ralph Task Cache
+# Auto-generated from RALPH_TASK.md
+# DO NOT EDIT - regenerated on task file change
+
+source_file: RALPH_TASK.md
+source_mtime: 1770746846
+generated_at: 2026-02-10T18:09:17Z
+
+tasks:
+  - id: "line_72"
+    line_number: 72
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/auth/register endpoint accepts email, password, full_name
+    indent_level: 0
+    raw_marker: -
+  - id: "line_73"
+    line_number: 73
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/auth/register validates email format and password strength
+    indent_level: 0
+    raw_marker: -
+  - id: "line_74"
+    line_number: 74
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/auth/register hashes password with bcrypt before storing
+    indent_level: 0
+    raw_marker: -
+  - id: "line_75"
+    line_number: 75
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/auth/register creates user in database and returns user data
+    indent_level: 0
+    raw_marker: -
+  - id: "line_76"
+    line_number: 76
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/auth/login endpoint accepts email and password
+    indent_level: 0
+    raw_marker: -
+  - id: "line_77"
+    line_number: 77
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/auth/login verifies credentials against database
+    indent_level: 0
+    raw_marker: -
+  - id: "line_78"
+    line_number: 78
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/auth/login generates JWT token with 30-minute expiry
+    indent_level: 0
+    raw_marker: -
+  - id: "line_79"
+    line_number: 79
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/auth/login returns access token and user data
+    indent_level: 0
+    raw_marker: -
+  - id: "line_80"
+    line_number: 80
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/auth/me endpoint requires valid JWT token in Authorization header
+    indent_level: 0
+    raw_marker: -
+  - id: "line_81"
+    line_number: 81
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/auth/me returns current user data from decoded token
+    indent_level: 0
+    raw_marker: -
+  - id: "line_82"
+    line_number: 82
+    status: pending
+    parallel_group: 999999
+    description: Auth dependency function get_current_user extracts and validates JWT
+    indent_level: 0
+    raw_marker: -
+  - id: "line_83"
+    line_number: 83
+    status: pending
+    parallel_group: 999999
+    description: Auth dependency function get_current_user returns User object or raises 401
+    indent_level: 0
+    raw_marker: -
+  - id: "line_84"
+    line_number: 84
+    status: pending
+    parallel_group: 999999
+    description: Frontend login page at #/login with email and password inputs
+    indent_level: 0
+    raw_marker: -
+  - id: "line_85"
+    line_number: 85
+    status: pending
+    parallel_group: 999999
+    description: Frontend login page calls /api/v1/auth/login and stores token (AuthContext + localStorage)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_86"
+    line_number: 86
+    status: pending
+    parallel_group: 999999
+    description: Frontend login page redirects to dashboard on success
+    indent_level: 0
+    raw_marker: -
+  - id: "line_87"
+    line_number: 87
+    status: pending
+    parallel_group: 999999
+    description: Frontend register page at #/register with full_name, email, password, confirm_password inputs
+    indent_level: 0
+    raw_marker: -
+  - id: "line_88"
+    line_number: 88
+    status: pending
+    parallel_group: 999999
+    description: Frontend register page validates password confirmation matches
+    indent_level: 0
+    raw_marker: -
+  - id: "line_89"
+    line_number: 89
+    status: pending
+    parallel_group: 999999
+    description: Frontend register page calls /api/v1/auth/register then redirects to #/login
+    indent_level: 0
+    raw_marker: -
+  - id: "line_90"
+    line_number: 90
+    status: pending
+    parallel_group: 999999
+    description: AuthContext provides user, login, logout, and token to all components
+    indent_level: 0
+    raw_marker: -
+  - id: "line_91"
+    line_number: 91
+    status: pending
+    parallel_group: 999999
+    description: Protected routes (dashboard, settings, tasks, analytics) redirect to landing if no valid token
+    indent_level: 0
+    raw_marker: -
+  - id: "line_92"
+    line_number: 92
+    status: pending
+    parallel_group: 999999
+    description: Navigation shows user email when authenticated; forgot-password and reset-password flows exist
+    indent_level: 0
+    raw_marker: -
+  - id: "line_96"
+    line_number: 96
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments endpoint creates assessment with organization_id, candidate_id, task_id
+    indent_level: 0
+    raw_marker: -
+  - id: "line_97"
+    line_number: 97
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments generates unique token (UUID4)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_98"
+    line_number: 98
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments sets expires_at to 7 days from now
+    indent_level: 0
+    raw_marker: -
+  - id: "line_99"
+    line_number: 99
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments sets status to \"pending\"
+    indent_level: 0
+    raw_marker: -
+  - id: "line_100"
+    line_number: 100
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments returns created assessment with token
+    indent_level: 0
+    raw_marker: -
+  - id: "line_101"
+    line_number: 101
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/assessments endpoint lists assessments for current user's organization
+    indent_level: 0
+    raw_marker: -
+  - id: "line_102"
+    line_number: 102
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/assessments supports query params: status, task_id, limit, offset
+    indent_level: 0
+    raw_marker: -
+  - id: "line_103"
+    line_number: 103
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/assessments returns paginated results: { items, total, limit, offset }
+    indent_level: 0
+    raw_marker: -
+  - id: "line_104"
+    line_number: 104
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/assessments/{id} returns single assessment with candidate and task data joined
+    indent_level: 0
+    raw_marker: -
+  - id: "line_105"
+    line_number: 105
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/assessments/{id} checks user belongs to same organization
+    indent_level: 0
+    raw_marker: -
+  - id: "line_106"
+    line_number: 106
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/token/{token}/start verifies token is valid and not expired
+    indent_level: 0
+    raw_marker: -
+  - id: "line_107"
+    line_number: 107
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/token/{token}/start checks status is \"pending\"
+    indent_level: 0
+    raw_marker: -
+  - id: "line_108"
+    line_number: 108
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/token/{token}/start creates E2B sandbox via E2BService
+    indent_level: 0
+    raw_marker: -
+  - id: "line_109"
+    line_number: 109
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/token/{token}/start stores e2b_session_id in assessment
+    indent_level: 0
+    raw_marker: -
+  - id: "line_110"
+    line_number: 110
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/token/{token}/start updates status to \"in_progress\" and sets started_at
+    indent_level: 0
+    raw_marker: -
+  - id: "line_111"
+    line_number: 111
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/token/{token}/start returns task data (description, starter_code, duration_minutes)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_112"
+    line_number: 112
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/execute accepts code string in request body; uses Header X-Assessment-Token
+    indent_level: 0
+    raw_marker: -
+  - id: "line_113"
+    line_number: 113
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/execute reconnects to E2B sandbox using e2b_session_id
+    indent_level: 0
+    raw_marker: -
+  - id: "line_114"
+    line_number: 114
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/execute runs code in sandbox via E2BService.execute_code
+    indent_level: 0
+    raw_marker: -
+  - id: "line_115"
+    line_number: 115
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/execute returns execution result (stdout, stderr, etc.)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_116"
+    line_number: 116
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/claude accepts message and conversation_history; uses Header X-Assessment-Token
+    indent_level: 0
+    raw_marker: -
+  - id: "line_117"
+    line_number: 117
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/claude sends prompt to Claude API via ClaudeService
+    indent_level: 0
+    raw_marker: -
+  - id: "line_118"
+    line_number: 118
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/claude appends prompt to assessment.ai_prompts JSONB array
+    indent_level: 0
+    raw_marker: -
+  - id: "line_119"
+    line_number: 119
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/claude returns Claude response
+    indent_level: 0
+    raw_marker: -
+  - id: "line_120"
+    line_number: 120
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/submit accepts final_code in request body; uses Header X-Assessment-Token
+    indent_level: 0
+    raw_marker: -
+  - id: "line_121"
+    line_number: 121
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/submit runs tests in E2B sandbox
+    indent_level: 0
+    raw_marker: -
+  - id: "line_122"
+    line_number: 122
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/submit calculates score (tests_passed/tests_total, code quality, AI usage)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_123"
+    line_number: 123
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/submit stores test_results, code_quality_score, ai_usage_score, timeline
+    indent_level: 0
+    raw_marker: -
+  - id: "line_124"
+    line_number: 124
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/submit updates status to \"completed\" and sets completed_at
+    indent_level: 0
+    raw_marker: -
+  - id: "line_125"
+    line_number: 125
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/assessments/{assessment_id}/submit returns complete results
+    indent_level: 0
+    raw_marker: -
+  - id: "line_126"
+    line_number: 126
+    status: pending
+    parallel_group: 999999
+    description: PATCH /api/v1/tasks/{id} and DELETE /api/v1/tasks/{id} for tasks (assessments use create/list/get/start/execute/submit only)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_130"
+    line_number: 130
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/candidates endpoint creates candidate with organization_id, email, full_name, position
+    indent_level: 0
+    raw_marker: -
+  - id: "line_131"
+    line_number: 131
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/candidates validates email format
+    indent_level: 0
+    raw_marker: -
+  - id: "line_132"
+    line_number: 132
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/candidates checks for duplicate email within organization
+    indent_level: 0
+    raw_marker: -
+  - id: "line_133"
+    line_number: 133
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/candidates returns created candidate
+    indent_level: 0
+    raw_marker: -
+  - id: "line_134"
+    line_number: 134
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/candidates lists candidates for organization with pagination
+    indent_level: 0
+    raw_marker: -
+  - id: "line_135"
+    line_number: 135
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/candidates supports search by email or name
+    indent_level: 0
+    raw_marker: -
+  - id: "line_136"
+    line_number: 136
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/candidates/{id} returns single candidate with all assessments
+    indent_level: 0
+    raw_marker: -
+  - id: "line_137"
+    line_number: 137
+    status: pending
+    parallel_group: 999999
+    description: PATCH /api/v1/candidates/{id} updates candidate data
+    indent_level: 0
+    raw_marker: -
+  - id: "line_138"
+    line_number: 138
+    status: pending
+    parallel_group: 999999
+    description: DELETE /api/v1/candidates/{id} soft deletes candidate
+    indent_level: 0
+    raw_marker: -
+  - id: "line_142"
+    line_number: 142
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/tasks endpoint creates task with name, description, task_type, difficulty
+    indent_level: 0
+    raw_marker: -
+  - id: "line_143"
+    line_number: 143
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/tasks accepts starter_code, test_code, sample_data, dependencies
+    indent_level: 0
+    raw_marker: -
+  - id: "line_144"
+    line_number: 144
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/tasks validates success_criteria is valid JSON
+    indent_level: 0
+    raw_marker: -
+  - id: "line_145"
+    line_number: 145
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/tasks returns created task
+    indent_level: 0
+    raw_marker: -
+  - id: "line_146"
+    line_number: 146
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/tasks lists all template tasks (is_template=true) plus organization's custom tasks
+    indent_level: 0
+    raw_marker: -
+  - id: "line_147"
+    line_number: 147
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/tasks filters by task_type, difficulty
+    indent_level: 0
+    raw_marker: -
+  - id: "line_148"
+    line_number: 148
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/tasks/{id} returns single task
+    indent_level: 0
+    raw_marker: -
+  - id: "line_149"
+    line_number: 149
+    status: pending
+    parallel_group: 999999
+    description: PATCH /api/v1/tasks/{id} updates task (only if organization owns it; template tasks are read-only)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_150"
+    line_number: 150
+    status: pending
+    parallel_group: 999999
+    description: DELETE /api/v1/tasks/{id} deletes task (only if not template)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_151"
+    line_number: 151
+    status: pending
+    parallel_group: 999999
+    description: Tasks page: every task card has \"View\" button (eye icon); template tasks are view-only, non-template have Edit/Delete
+    indent_level: 0
+    raw_marker: -
+  - id: "line_152"
+    line_number: 152
+    status: pending
+    parallel_group: 999999
+    description: Seed script creates template tasks; templates visible to all orgs
+    indent_level: 0
+    raw_marker: -
+  - id: "line_153"
+    line_number: 153
+    status: pending
+    parallel_group: 999999
+    description: Debugging Challenge task has 3 bugs, Python code, pytest tests
+    indent_level: 0
+    raw_marker: -
+  - id: "line_154"
+    line_number: 154
+    status: pending
+    parallel_group: 999999
+    description: RAG Pipeline task has 4 bugs, document loading, Claude API integration
+    indent_level: 0
+    raw_marker: -
+  - id: "line_158"
+    line_number: 158
+    status: pending
+    parallel_group: 999999
+    description: E2BService class initializes with E2B API key from environment
+    indent_level: 0
+    raw_marker: -
+  - id: "line_159"
+    line_number: 159
+    status: pending
+    parallel_group: 999999
+    description: E2BService.create_sandbox() creates new E2B sandbox instance
+    indent_level: 0
+    raw_marker: -
+  - id: "line_160"
+    line_number: 160
+    status: pending
+    parallel_group: 999999
+    description: E2BService.create_sandbox() returns sandbox object with session_id
+    indent_level: 0
+    raw_marker: -
+  - id: "line_161"
+    line_number: 161
+    status: pending
+    parallel_group: 999999
+    description: E2BService.create_sandbox() logs sandbox creation with timestamp
+    indent_level: 0
+    raw_marker: -
+  - id: "line_162"
+    line_number: 162
+    status: pending
+    parallel_group: 999999
+    description: E2BService.execute_code(sandbox, code) runs Python code in sandbox
+    indent_level: 0
+    raw_marker: -
+  - id: "line_163"
+    line_number: 163
+    status: pending
+    parallel_group: 999999
+    description: E2BService.execute_code() captures stdout and stderr
+    indent_level: 0
+    raw_marker: -
+  - id: "line_164"
+    line_number: 164
+    status: pending
+    parallel_group: 999999
+    description: E2BService.execute_code() handles execution errors gracefully
+    indent_level: 0
+    raw_marker: -
+  - id: "line_165"
+    line_number: 165
+    status: pending
+    parallel_group: 999999
+    description: E2BService.execute_code() returns dict with stdout, stderr, exit_code, execution_time
+    indent_level: 0
+    raw_marker: -
+  - id: "line_166"
+    line_number: 166
+    status: pending
+    parallel_group: 999999
+    description: E2BService.run_tests(sandbox, test_code) writes test file to sandbox
+    indent_level: 0
+    raw_marker: -
+  - id: "line_167"
+    line_number: 167
+    status: pending
+    parallel_group: 999999
+    description: E2BService.run_tests() executes pytest in sandbox
+    indent_level: 0
+    raw_marker: -
+  - id: "line_168"
+    line_number: 168
+    status: pending
+    parallel_group: 999999
+    description: E2BService.run_tests() parses pytest output for passed/failed counts
+    indent_level: 0
+    raw_marker: -
+  - id: "line_169"
+    line_number: 169
+    status: pending
+    parallel_group: 999999
+    description: E2BService.run_tests() returns dict with tests_passed, tests_total, test_details
+    indent_level: 0
+    raw_marker: -
+  - id: "line_170"
+    line_number: 170
+    status: pending
+    parallel_group: 999999
+    description: E2BService.install_dependencies(sandbox, packages) runs pip install in sandbox
+    indent_level: 0
+    raw_marker: -
+  - id: "line_171"
+    line_number: 171
+    status: pending
+    parallel_group: 999999
+    description: E2BService.install_dependencies() handles package installation errors
+    indent_level: 0
+    raw_marker: -
+  - id: "line_172"
+    line_number: 172
+    status: pending
+    parallel_group: 999999
+    description: E2BService.close_sandbox(sandbox) terminates sandbox
+    indent_level: 0
+    raw_marker: -
+  - id: "line_173"
+    line_number: 173
+    status: pending
+    parallel_group: 999999
+    description: E2BService.close_sandbox() logs closure with session_id
+    indent_level: 0
+    raw_marker: -
+  - id: "line_177"
+    line_number: 177
+    status: pending
+    parallel_group: 999999
+    description: ClaudeService class initializes with Anthropic API key from environment
+    indent_level: 0
+    raw_marker: -
+  - id: "line_178"
+    line_number: 178
+    status: pending
+    parallel_group: 999999
+    description: ClaudeService.chat(messages, system) sends messages to Claude API
+    indent_level: 0
+    raw_marker: -
+  - id: "line_179"
+    line_number: 179
+    status: pending
+    parallel_group: 999999
+    description: ClaudeService.chat() uses claude-sonnet-4-20250514 model
+    indent_level: 0
+    raw_marker: -
+  - id: "line_180"
+    line_number: 180
+    status: pending
+    parallel_group: 999999
+    description: ClaudeService.chat() sets max_tokens to 4096
+    indent_level: 0
+    raw_marker: -
+  - id: "line_181"
+    line_number: 181
+    status: pending
+    parallel_group: 999999
+    description: ClaudeService.chat() returns dict with response text and token usage
+    indent_level: 0
+    raw_marker: -
+  - id: "line_182"
+    line_number: 182
+    status: pending
+    parallel_group: 999999
+    description: ClaudeService.chat() handles API errors with retry logic (3 attempts)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_183"
+    line_number: 183
+    status: pending
+    parallel_group: 999999
+    description: ClaudeService.analyze_code_quality(code) prompts Claude to score code 0-10
+    indent_level: 0
+    raw_marker: -
+  - id: "line_184"
+    line_number: 184
+    status: pending
+    parallel_group: 999999
+    description: ClaudeService.analyze_code_quality() extracts scores for readability, efficiency, correctness
+    indent_level: 0
+    raw_marker: -
+  - id: "line_185"
+    line_number: 185
+    status: pending
+    parallel_group: 999999
+    description: ClaudeService.analyze_code_quality() returns dict with overall_score and breakdown
+    indent_level: 0
+    raw_marker: -
+  - id: "line_186"
+    line_number: 186
+    status: pending
+    parallel_group: 999999
+    description: ClaudeService.analyze_prompt_quality(prompt) scores prompt clarity 0-10
+    indent_level: 0
+    raw_marker: -
+  - id: "line_187"
+    line_number: 187
+    status: pending
+    parallel_group: 999999
+    description: ClaudeService.analyze_prompt_quality() returns quality_score
+    indent_level: 0
+    raw_marker: -
+  - id: "line_191"
+    line_number: 191
+    status: pending
+    parallel_group: 999999
+    description: StripeService class initializes with Stripe API key from environment
+    indent_level: 0
+    raw_marker: -
+  - id: "line_192"
+    line_number: 192
+    status: pending
+    parallel_group: 999999
+    description: StripeService.create_customer(email, name) creates Stripe customer
+    indent_level: 0
+    raw_marker: -
+  - id: "line_193"
+    line_number: 193
+    status: pending
+    parallel_group: 999999
+    description: StripeService.create_customer() returns customer_id
+    indent_level: 0
+    raw_marker: -
+  - id: "line_194"
+    line_number: 194
+    status: pending
+    parallel_group: 999999
+    description: StripeService.charge_assessment(customer_id, amount) creates PaymentIntent for £25.00
+    indent_level: 0
+    raw_marker: -
+  - id: "line_195"
+    line_number: 195
+    status: pending
+    parallel_group: 999999
+    description: StripeService.charge_assessment() sets amount to 2500 (pence)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_196"
+    line_number: 196
+    status: pending
+    parallel_group: 999999
+    description: StripeService.charge_assessment() confirms payment immediately
+    indent_level: 0
+    raw_marker: -
+  - id: "line_197"
+    line_number: 197
+    status: pending
+    parallel_group: 999999
+    description: StripeService.charge_assessment() returns payment status
+    indent_level: 0
+    raw_marker: -
+  - id: "line_198"
+    line_number: 198
+    status: pending
+    parallel_group: 999999
+    description: StripeService.create_subscription(customer_id, plan) creates subscription for £300/month
+    indent_level: 0
+    raw_marker: -
+  - id: "line_199"
+    line_number: 199
+    status: pending
+    parallel_group: 999999
+    description: StripeService.create_subscription() returns subscription_id
+    indent_level: 0
+    raw_marker: -
+  - id: "line_200"
+    line_number: 200
+    status: pending
+    parallel_group: 999999
+    description: StripeService.cancel_subscription(subscription_id) cancels subscription
+    indent_level: 0
+    raw_marker: -
+  - id: "line_201"
+    line_number: 201
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/webhooks/stripe endpoint verifies Stripe webhook signature
+    indent_level: 0
+    raw_marker: -
+  - id: "line_202"
+    line_number: 202
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/webhooks/stripe handles payment_intent.succeeded event
+    indent_level: 0
+    raw_marker: -
+  - id: "line_203"
+    line_number: 203
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/webhooks/stripe handles payment_intent.failed event
+    indent_level: 0
+    raw_marker: -
+  - id: "line_204"
+    line_number: 204
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/webhooks/stripe handles customer.subscription.deleted event
+    indent_level: 0
+    raw_marker: -
+  - id: "line_205"
+    line_number: 205
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/webhooks/stripe updates organization billing status on events
+    indent_level: 0
+    raw_marker: -
+  - id: "line_209"
+    line_number: 209
+    status: pending
+    parallel_group: 999999
+    description: WorkableService class initializes with client_id and client_secret from environment
+    indent_level: 0
+    raw_marker: -
+  - id: "line_210"
+    line_number: 210
+    status: pending
+    parallel_group: 999999
+    description: WorkableService.get_authorization_url(redirect_uri) returns OAuth URL
+    indent_level: 0
+    raw_marker: -
+  - id: "line_211"
+    line_number: 211
+    status: pending
+    parallel_group: 999999
+    description: WorkableService.exchange_code_for_token(code) exchanges OAuth code for access/refresh tokens
+    indent_level: 0
+    raw_marker: -
+  - id: "line_212"
+    line_number: 212
+    status: pending
+    parallel_group: 999999
+    description: WorkableService.exchange_code_for_token() returns dict with access_token, refresh_token
+    indent_level: 0
+    raw_marker: -
+  - id: "line_213"
+    line_number: 213
+    status: pending
+    parallel_group: 999999
+    description: WorkableService.refresh_access_token(refresh_token) gets new access_token
+    indent_level: 0
+    raw_marker: -
+  - id: "line_214"
+    line_number: 214
+    status: pending
+    parallel_group: 999999
+    description: WorkableService.get_candidate(candidate_id, access_token) fetches candidate from Workable
+    indent_level: 0
+    raw_marker: -
+  - id: "line_215"
+    line_number: 215
+    status: pending
+    parallel_group: 999999
+    description: WorkableService.post_assessment_result(candidate_id, data, access_token) posts to candidate activity
+    indent_level: 0
+    raw_marker: -
+  - id: "line_216"
+    line_number: 216
+    status: pending
+    parallel_group: 999999
+    description: WorkableService.post_assessment_result() formats data as comment with score and link
+    indent_level: 0
+    raw_marker: -
+  - id: "line_217"
+    line_number: 217
+    status: pending
+    parallel_group: 999999
+    description: WorkableService.update_candidate_stage(candidate_id, stage, access_token) moves candidate to stage
+    indent_level: 0
+    raw_marker: -
+  - id: "line_218"
+    line_number: 218
+    status: pending
+    parallel_group: 999999
+    description: GET /api/v1/organizations/workable/authorize-url returns { url } for Workable OAuth (frontend redirects)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_219"
+    line_number: 219
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/organizations/workable/connect accepts { code }, exchanges for tokens, stores on org
+    indent_level: 0
+    raw_marker: -
+  - id: "line_220"
+    line_number: 220
+    status: pending
+    parallel_group: 999999
+    description: Frontend callback at /settings/workable/callback?code=... sends code to connect, then redirects to #/settings
+    indent_level: 0
+    raw_marker: -
+  - id: "line_221"
+    line_number: 221
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/webhooks/workable verifies webhook signature
+    indent_level: 0
+    raw_marker: -
+  - id: "line_222"
+    line_number: 222
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/webhooks/workable handles candidate_stage_changed event
+    indent_level: 0
+    raw_marker: -
+  - id: "line_223"
+    line_number: 223
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/webhooks/workable checks if auto-send is enabled for stage
+    indent_level: 0
+    raw_marker: -
+  - id: "line_224"
+    line_number: 224
+    status: pending
+    parallel_group: 999999
+    description: POST /api/v1/webhooks/workable creates assessment automatically if stage matches config
+    indent_level: 0
+    raw_marker: -
+  - id: "line_228"
+    line_number: 228
+    status: pending
+    parallel_group: 999999
+    description: EmailService class initializes with Resend API key from environment
+    indent_level: 0
+    raw_marker: -
+  - id: "line_229"
+    line_number: 229
+    status: pending
+    parallel_group: 999999
+    description: EmailService.send_assessment_invitation(candidate_email, token, task_name) sends email
+    indent_level: 0
+    raw_marker: -
+  - id: "line_230"
+    line_number: 230
+    status: pending
+    parallel_group: 999999
+    description: EmailService.send_assessment_invitation() uses HTML template with black/white/purple styling
+    indent_level: 0
+    raw_marker: -
+  - id: "line_231"
+    line_number: 231
+    status: pending
+    parallel_group: 999999
+    description: EmailService.send_assessment_invitation() includes unique assessment link with token
+    indent_level: 0
+    raw_marker: -
+  - id: "line_232"
+    line_number: 232
+    status: pending
+    parallel_group: 999999
+    description: EmailService.send_assessment_invitation() has clear CTA button
+    indent_level: 0
+    raw_marker: -
+  - id: "line_233"
+    line_number: 233
+    status: pending
+    parallel_group: 999999
+    description: EmailService.send_results_notification(recruiter_email, candidate_name, score) sends email
+    indent_level: 0
+    raw_marker: -
+  - id: "line_234"
+    line_number: 234
+    status: pending
+    parallel_group: 999999
+    description: EmailService.send_results_notification() includes score, tests passed, and dashboard link
+    indent_level: 0
+    raw_marker: -
+  - id: "line_235"
+    line_number: 235
+    status: pending
+    parallel_group: 999999
+    description: Celery app configured with Redis as broker
+    indent_level: 0
+    raw_marker: -
+  - id: "line_236"
+    line_number: 236
+    status: pending
+    parallel_group: 999999
+    description: Celery task send_assessment_email_task calls EmailService.send_assessment_invitation
+    indent_level: 0
+    raw_marker: -
+  - id: "line_237"
+    line_number: 237
+    status: pending
+    parallel_group: 999999
+    description: Celery task post_to_workable_task calls WorkableService.post_assessment_result
+    indent_level: 0
+    raw_marker: -
+  - id: "line_238"
+    line_number: 238
+    status: pending
+    parallel_group: 999999
+    description: Assessment creation triggers send_assessment_email_task asynchronously
+    indent_level: 0
+    raw_marker: -
+  - id: "line_239"
+    line_number: 239
+    status: pending
+    parallel_group: 999999
+    description: Assessment completion triggers post_to_workable_task if workable_connected=true
+    indent_level: 0
+    raw_marker: -
+  - id: "line_240"
+    line_number: 240
+    status: pending
+    parallel_group: 999999
+    description: Celery worker can be started with: celery -A app.tasks worker
+    indent_level: 0
+    raw_marker: -
+  - id: "line_244"
+    line_number: 244
+    status: pending
+    parallel_group: 999999
+    description: Landing page at #/ (hash root) with hero section
+    indent_level: 0
+    raw_marker: -
+  - id: "line_245"
+    line_number: 245
+    status: pending
+    parallel_group: 999999
+    description: Hero has headline: \"Screen AI-Era Engineers in 30 Minutes\"
+    indent_level: 0
+    raw_marker: -
+  - id: "line_246"
+    line_number: 246
+    status: pending
+    parallel_group: 999999
+    description: Hero has subheadline explaining TALI's unique approach
+    indent_level: 0
+    raw_marker: -
+  - id: "line_247"
+    line_number: 247
+    status: pending
+    parallel_group: 999999
+    description: Hero has two CTAs: \"Book Demo\" and \"Start Trial\"
+    indent_level: 0
+    raw_marker: -
+  - id: "line_248"
+    line_number: 248
+    status: pending
+    parallel_group: 999999
+    description: Problem section explains AI arms race with visuals
+    indent_level: 0
+    raw_marker: -
+  - id: "line_249"
+    line_number: 249
+    status: pending
+    parallel_group: 999999
+    description: Solution section shows TALI's 10 data points
+    indent_level: 0
+    raw_marker: -
+  - id: "line_250"
+    line_number: 250
+    status: pending
+    parallel_group: 999999
+    description: Features section with 3-4 key features
+    indent_level: 0
+    raw_marker: -
+  - id: "line_251"
+    line_number: 251
+    status: pending
+    parallel_group: 999999
+    description: Pricing section with two cards: Pay-per-use (£25) and Monthly (£300)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_252"
+    line_number: 252
+    status: pending
+    parallel_group: 999999
+    description: Footer with links, contact info, legal
+    indent_level: 0
+    raw_marker: -
+  - id: "line_253"
+    line_number: 253
+    status: pending
+    parallel_group: 999999
+    description: Navigation bar with logo, links, Login/Sign Up buttons
+    indent_level: 0
+    raw_marker: -
+  - id: "line_254"
+    line_number: 254
+    status: pending
+    parallel_group: 999999
+    description: All styling follows black/white/purple theme with 2px borders
+    indent_level: 0
+    raw_marker: -
+  - id: "line_258"
+    line_number: 258
+    status: pending
+    parallel_group: 999999
+    description: Login page at #/login with email and password inputs
+    indent_level: 0
+    raw_marker: -
+  - id: "line_259"
+    line_number: 259
+    status: pending
+    parallel_group: 999999
+    description: Login page styled with black/white/purple theme
+    indent_level: 0
+    raw_marker: -
+  - id: "line_260"
+    line_number: 260
+    status: pending
+    parallel_group: 999999
+    description: Login page has \"Forgot password?\" link to #/forgot-password
+    indent_level: 0
+    raw_marker: -
+  - id: "line_261"
+    line_number: 261
+    status: pending
+    parallel_group: 999999
+    description: Login page has \"Don't have an account? Sign up\" link to #/register
+    indent_level: 0
+    raw_marker: -
+  - id: "line_262"
+    line_number: 262
+    status: pending
+    parallel_group: 999999
+    description: Login form validates email format before submit
+    indent_level: 0
+    raw_marker: -
+  - id: "line_263"
+    line_number: 263
+    status: pending
+    parallel_group: 999999
+    description: Login form shows error message on failed login
+    indent_level: 0
+    raw_marker: -
+  - id: "line_264"
+    line_number: 264
+    status: pending
+    parallel_group: 999999
+    description: Login form redirects to /dashboard on success
+    indent_level: 0
+    raw_marker: -
+  - id: "line_265"
+    line_number: 265
+    status: pending
+    parallel_group: 999999
+    description: Register page at /register with full_name, email, password, confirm_password inputs
+    indent_level: 0
+    raw_marker: -
+  - id: "line_266"
+    line_number: 266
+    status: pending
+    parallel_group: 999999
+    description: Register page validates password length (min 8 chars)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_267"
+    line_number: 267
+    status: pending
+    parallel_group: 999999
+    description: Register page validates passwords match
+    indent_level: 0
+    raw_marker: -
+  - id: "line_268"
+    line_number: 268
+    status: pending
+    parallel_group: 999999
+    description: Register form shows error if email already exists
+    indent_level: 0
+    raw_marker: -
+  - id: "line_269"
+    line_number: 269
+    status: pending
+    parallel_group: 999999
+    description: Register form redirects to /login on success with success message
+    indent_level: 0
+    raw_marker: -
+  - id: "line_270"
+    line_number: 270
+    status: pending
+    parallel_group: 999999
+    description: Both pages use consistent Button and Input components from ui/
+    indent_level: 0
+    raw_marker: -
+  - id: "line_274"
+    line_number: 274
+    status: pending
+    parallel_group: 999999
+    description: Dashboard layout with navigation sidebar or top bar
+    indent_level: 0
+    raw_marker: -
+  - id: "line_275"
+    line_number: 275
+    status: pending
+    parallel_group: 999999
+    description: Navigation shows: Dashboard, Assessments, Candidates, Analytics, Settings
+    indent_level: 0
+    raw_marker: -
+  - id: "line_276"
+    line_number: 276
+    status: pending
+    parallel_group: 999999
+    description: Navigation shows user email with dropdown (Logout option)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_277"
+    line_number: 277
+    status: pending
+    parallel_group: 999999
+    description: Dashboard home at #/dashboard shows 4 stat cards across top
+    indent_level: 0
+    raw_marker: -
+  - id: "line_278"
+    line_number: 278
+    status: pending
+    parallel_group: 999999
+    description: Stat card 1: Active Assessments (count where status=\"in_progress\")
+    indent_level: 0
+    raw_marker: -
+  - id: "line_279"
+    line_number: 279
+    status: pending
+    parallel_group: 999999
+    description: Stat card 2: Completion Rate (completed / total %)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_280"
+    line_number: 280
+    status: pending
+    parallel_group: 999999
+    description: Stat card 3: Average Score (avg of all completed assessments)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_281"
+    line_number: 281
+    status: pending
+    parallel_group: 999999
+    description: Stat card 4: Cost This Month (assessments_used * £25)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_282"
+    line_number: 282
+    status: pending
+    parallel_group: 999999
+    description: Dashboard home shows recent assessments table below stats
+    indent_level: 0
+    raw_marker: -
+  - id: "line_283"
+    line_number: 283
+    status: pending
+    parallel_group: 999999
+    description: Recent assessments table has columns: Candidate, Task, Status, Score, Time, Assessment link, Actions
+    indent_level: 0
+    raw_marker: -
+  - id: "line_284"
+    line_number: 284
+    status: pending
+    parallel_group: 999999
+    description: Candidate name and email from API (candidate_name, candidate_email in list response)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_285"
+    line_number: 285
+    status: pending
+    parallel_group: 999999
+    description: Assessment link column has \"Copy link\" button (copies URL like origin/#/assess/{token})
+    indent_level: 0
+    raw_marker: -
+  - id: "line_286"
+    line_number: 286
+    status: pending
+    parallel_group: 999999
+    description: Status shown as colored badge (pending=gray, in_progress=blue, completed=green)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_287"
+    line_number: 287
+    status: pending
+    parallel_group: 999999
+    description: Score shown as \"8.7/10\" with color (green >8, yellow 6-8, red <6)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_288"
+    line_number: 288
+    status: pending
+    parallel_group: 999999
+    description: Actions column has \"View\" for completed assessments
+    indent_level: 0
+    raw_marker: -
+  - id: "line_289"
+    line_number: 289
+    status: pending
+    parallel_group: 999999
+    description: Table supports pagination (limit/offset from API)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_290"
+    line_number: 290
+    status: pending
+    parallel_group: 999999
+    description: \"Create Assessment\" button in top right opens modal
+    indent_level: 0
+    raw_marker: -
+  - id: "line_294"
+    line_number: 294
+    status: pending
+    parallel_group: 999999
+    description: Modal opens when \"Create Assessment\" clicked
+    indent_level: 0
+    raw_marker: -
+  - id: "line_295"
+    line_number: 295
+    status: pending
+    parallel_group: 999999
+    description: Modal has dropdown to select or create candidate
+    indent_level: 0
+    raw_marker: -
+  - id: "line_296"
+    line_number: 296
+    status: pending
+    parallel_group: 999999
+    description: If \"Create New Candidate\": shows email, full_name, position inputs
+    indent_level: 0
+    raw_marker: -
+  - id: "line_297"
+    line_number: 297
+    status: pending
+    parallel_group: 999999
+    description: Modal has dropdown to select task template
+    indent_level: 0
+    raw_marker: -
+  - id: "line_298"
+    line_number: 298
+    status: pending
+    parallel_group: 999999
+    description: Task dropdown shows task name, difficulty badge, duration
+    indent_level: 0
+    raw_marker: -
+  - id: "line_299"
+    line_number: 299
+    status: pending
+    parallel_group: 999999
+    description: Modal has \"Send Assessment\" button
+    indent_level: 0
+    raw_marker: -
+  - id: "line_300"
+    line_number: 300
+    status: pending
+    parallel_group: 999999
+    description: On submit, calls POST /api/v1/assessments with candidate_email, candidate_name, task_id (candidate created or updated inline)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_301"
+    line_number: 301
+    status: pending
+    parallel_group: 999999
+    description: Shows success message: \"Assessment sent to {candidate_email}\"
+    indent_level: 0
+    raw_marker: -
+  - id: "line_302"
+    line_number: 302
+    status: pending
+    parallel_group: 999999
+    description: Closes modal and refreshes assessments list
+    indent_level: 0
+    raw_marker: -
+  - id: "line_303"
+    line_number: 303
+    status: pending
+    parallel_group: 999999
+    description: Shows error message if API call fails
+    indent_level: 0
+    raw_marker: -
+  - id: "line_307"
+    line_number: 307
+    status: pending
+    parallel_group: 999999
+    description: Assessment detail page: View from dashboard opens candidate detail (fetches GET /api/v1/assessments/{id})
+    indent_level: 0
+    raw_marker: -
+  - id: "line_308"
+    line_number: 308
+    status: pending
+    parallel_group: 999999
+    description: Header shows candidate name, position, assessment created date
+    indent_level: 0
+    raw_marker: -
+  - id: "line_309"
+    line_number: 309
+    status: pending
+    parallel_group: 999999
+    description: Overall score card shows score (large), tests passed (5/5), status badge
+    indent_level: 0
+    raw_marker: -
+  - id: "line_310"
+    line_number: 310
+    status: pending
+    parallel_group: 999999
+    description: Tabs: Test Results, AI Usage, Timeline, Code Review
+    indent_level: 0
+    raw_marker: -
+  - id: "line_311"
+    line_number: 311
+    status: pending
+    parallel_group: 999999
+    description: Test Results tab shows list of tests with pass/fail icons and descriptions
+    indent_level: 0
+    raw_marker: -
+  - id: "line_312"
+    line_number: 312
+    status: pending
+    parallel_group: 999999
+    description: AI Usage tab shows list of prompts with timestamp, prompt text, quality score
+    indent_level: 0
+    raw_marker: -
+  - id: "line_313"
+    line_number: 313
+    status: pending
+    parallel_group: 999999
+    description: AI Usage tab shows avg prompt quality, total prompts, AI efficiency score
+    indent_level: 0
+    raw_marker: -
+  - id: "line_314"
+    line_number: 314
+    status: pending
+    parallel_group: 999999
+    description: Timeline tab shows chronological list of events (started, bug fixed, test passed, submitted)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_315"
+    line_number: 315
+    status: pending
+    parallel_group: 999999
+    description: Timeline events show timestamp, event type, description
+    indent_level: 0
+    raw_marker: -
+  - id: "line_316"
+    line_number: 316
+    status: pending
+    parallel_group: 999999
+    description: Code Review tab shows final code in Monaco editor (read-only)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_317"
+    line_number: 317
+    status: pending
+    parallel_group: 999999
+    description: Code Review tab shows code quality score breakdown
+    indent_level: 0
+    raw_marker: -
+  - id: "line_318"
+    line_number: 318
+    status: pending
+    parallel_group: 999999
+    description: Action buttons: \"Download PDF\", \"Post to Workable\" (if connected), \"Delete\"
+    indent_level: 0
+    raw_marker: -
+  - id: "line_319"
+    line_number: 319
+    status: pending
+    parallel_group: 999999
+    description: \"Post to Workable\" button disabled if already posted
+    indent_level: 0
+    raw_marker: -
+  - id: "line_320"
+    line_number: 320
+    status: pending
+    parallel_group: 999999
+    description: \"Post to Workable\" calls backend API and shows success toast
+    indent_level: 0
+    raw_marker: -
+  - id: "line_324"
+    line_number: 324
+    status: pending
+    parallel_group: 999999
+    description: Assessment interface at #/assess/{token}
+    indent_level: 0
+    raw_marker: -
+  - id: "line_325"
+    line_number: 325
+    status: pending
+    parallel_group: 999999
+    description: On load, calls POST /api/v1/assessments/token/{token}/start (or uses startData passed from welcome page to avoid double-start)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_326"
+    line_number: 326
+    status: pending
+    parallel_group: 999999
+    description: Shows loading screen while sandbox creates
+    indent_level: 0
+    raw_marker: -
+  - id: "line_327"
+    line_number: 327
+    status: pending
+    parallel_group: 999999
+    description: Once started, shows split layout: 65% code editor, 35% right panel
+    indent_level: 0
+    raw_marker: -
+  - id: "line_328"
+    line_number: 328
+    status: pending
+    parallel_group: 999999
+    description: Top bar shows: Task name, Timer (counting down), Submit button
+    indent_level: 0
+    raw_marker: -
+  - id: "line_329"
+    line_number: 329
+    status: pending
+    parallel_group: 999999
+    description: Timer shows time remaining (e.g., \"28:34 remaining\" in MM:SS)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_330"
+    line_number: 330
+    status: pending
+    parallel_group: 999999
+    description: Timer turns red when < 5 minutes
+    indent_level: 0
+    raw_marker: -
+  - id: "line_331"
+    line_number: 331
+    status: pending
+    parallel_group: 999999
+    description: Left panel: Monaco editor with starter code loaded
+    indent_level: 0
+    raw_marker: -
+  - id: "line_332"
+    line_number: 332
+    status: pending
+    parallel_group: 999999
+    description: Monaco editor has Python syntax highlighting
+    indent_level: 0
+    raw_marker: -
+  - id: "line_333"
+    line_number: 333
+    status: pending
+    parallel_group: 999999
+    description: Monaco editor has \"Run Code\" button below
+    indent_level: 0
+    raw_marker: -
+  - id: "line_334"
+    line_number: 334
+    status: pending
+    parallel_group: 999999
+    description: Right panel split: Top 60% = Claude chat, Bottom 40% = Output console
+    indent_level: 0
+    raw_marker: -
+  - id: "line_335"
+    line_number: 335
+    status: pending
+    parallel_group: 999999
+    description: Claude chat has message list (scrollable)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_336"
+    line_number: 336
+    status: pending
+    parallel_group: 999999
+    description: Claude chat has input field at bottom with Send button
+    indent_level: 0
+    raw_marker: -
+  - id: "line_337"
+    line_number: 337
+    status: pending
+    parallel_group: 999999
+    description: Claude chat shows user messages on right (purple bubble)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_338"
+    line_number: 338
+    status: pending
+    parallel_group: 999999
+    description: Claude chat shows Claude responses on left (white bubble)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_339"
+    line_number: 339
+    status: pending
+    parallel_group: 999999
+    description: Claude chat has loading indicator when waiting for response
+    indent_level: 0
+    raw_marker: -
+  - id: "line_340"
+    line_number: 340
+    status: pending
+    parallel_group: 999999
+    description: Output console shows stdout/stderr from last execution
+    indent_level: 0
+    raw_marker: -
+  - id: "line_341"
+    line_number: 341
+    status: pending
+    parallel_group: 999999
+    description: Output console has tabs: Output, Tests (shows test results)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_342"
+    line_number: 342
+    status: pending
+    parallel_group: 999999
+    description: \"Run Code\" button calls POST /api/v1/assessments/{assessment_id}/execute with X-Assessment-Token header
+    indent_level: 0
+    raw_marker: -
+  - id: "line_343"
+    line_number: 343
+    status: pending
+    parallel_group: 999999
+    description: \"Run Code\" button disabled while executing, shows loading spinner
+    indent_level: 0
+    raw_marker: -
+  - id: "line_344"
+    line_number: 344
+    status: pending
+    parallel_group: 999999
+    description: Send message calls POST /api/v1/assessments/{assessment_id}/claude with X-Assessment-Token header
+    indent_level: 0
+    raw_marker: -
+  - id: "line_345"
+    line_number: 345
+    status: pending
+    parallel_group: 999999
+    description: Submit button opens confirmation modal; Submit calls POST /api/v1/assessments/{assessment_id}/submit with final_code and X-Assessment-Token
+    indent_level: 0
+    raw_marker: -
+  - id: "line_346"
+    line_number: 346
+    status: pending
+    parallel_group: 999999
+    description: After submit, redirects to results page showing score and breakdown
+    indent_level: 0
+    raw_marker: -
+  - id: "line_350"
+    line_number: 350
+    status: pending
+    parallel_group: 999999
+    description: Settings page at #/settings with tabs: Workable, Billing
+    indent_level: 0
+    raw_marker: -
+  - id: "line_351"
+    line_number: 351
+    status: pending
+    parallel_group: 999999
+    description: Workable tab shows connection status (Connected/Not Connected)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_352"
+    line_number: 352
+    status: pending
+    parallel_group: 999999
+    description: Workable tab has \"Connect Workable\" button if not connected; button fetches GET /api/v1/organizations/workable/authorize-url then redirects to returned URL
+    indent_level: 0
+    raw_marker: -
+  - id: "line_353"
+    line_number: 353
+    status: pending
+    parallel_group: 999999
+    description: Workable callback page at path /settings/workable/callback?code=... exchanges code via POST /organizations/workable/connect, then redirects to #/settings
+    indent_level: 0
+    raw_marker: -
+  - id: "line_354"
+    line_number: 354
+    status: pending
+    parallel_group: 999999
+    description: Billing tab shows current plan (Pay-per-use) and total usage from GET /api/v1/billing/usage
+    indent_level: 0
+    raw_marker: -
+  - id: "line_355"
+    line_number: 355
+    status: pending
+    parallel_group: 999999
+    description: Billing tab shows usage history table (date, candidate, task, cost) and \"Add credits (£25)\" button
+    indent_level: 0
+    raw_marker: -
+  - id: "line_356"
+    line_number: 356
+    status: pending
+    parallel_group: 999999
+    description: \"Add credits\" calls POST /api/v1/billing/checkout-session and redirects to Stripe Checkout
+    indent_level: 0
+    raw_marker: -
+  - id: "line_360"
+    line_number: 360
+    status: pending
+    parallel_group: 999999
+    description: Test file test_auth.py with test_register_user
+    indent_level: 0
+    raw_marker: -
+  - id: "line_361"
+    line_number: 361
+    status: pending
+    parallel_group: 999999
+    description: Test file test_auth.py with test_login_success
+    indent_level: 0
+    raw_marker: -
+  - id: "line_362"
+    line_number: 362
+    status: pending
+    parallel_group: 999999
+    description: Test file test_auth.py with test_login_invalid_credentials
+    indent_level: 0
+    raw_marker: -
+  - id: "line_363"
+    line_number: 363
+    status: pending
+    parallel_group: 999999
+    description: Test file test_auth.py with test_get_current_user
+    indent_level: 0
+    raw_marker: -
+  - id: "line_364"
+    line_number: 364
+    status: pending
+    parallel_group: 999999
+    description: Test file test_assessments.py with test_create_assessment
+    indent_level: 0
+    raw_marker: -
+  - id: "line_365"
+    line_number: 365
+    status: pending
+    parallel_group: 999999
+    description: Test file test_assessments.py with test_list_assessments
+    indent_level: 0
+    raw_marker: -
+  - id: "line_366"
+    line_number: 366
+    status: pending
+    parallel_group: 999999
+    description: Test file test_assessments.py with test_start_assessment
+    indent_level: 0
+    raw_marker: -
+  - id: "line_367"
+    line_number: 367
+    status: pending
+    parallel_group: 999999
+    description: Test file test_assessments.py with test_execute_code
+    indent_level: 0
+    raw_marker: -
+  - id: "line_368"
+    line_number: 368
+    status: pending
+    parallel_group: 999999
+    description: Test file test_assessments.py with test_submit_assessment
+    indent_level: 0
+    raw_marker: -
+  - id: "line_369"
+    line_number: 369
+    status: pending
+    parallel_group: 999999
+    description: Test file test_e2b_service.py with test_create_sandbox
+    indent_level: 0
+    raw_marker: -
+  - id: "line_370"
+    line_number: 370
+    status: pending
+    parallel_group: 999999
+    description: Test file test_e2b_service.py with test_execute_code
+    indent_level: 0
+    raw_marker: -
+  - id: "line_371"
+    line_number: 371
+    status: pending
+    parallel_group: 999999
+    description: Test file test_e2b_service.py with test_run_tests
+    indent_level: 0
+    raw_marker: -
+  - id: "line_372"
+    line_number: 372
+    status: pending
+    parallel_group: 999999
+    description: All tests use pytest fixtures for db session, test client, test user
+    indent_level: 0
+    raw_marker: -
+  - id: "line_373"
+    line_number: 373
+    status: pending
+    parallel_group: 999999
+    description: Tests run with: cd backend && pytest tests/ -v
+    indent_level: 0
+    raw_marker: -
+  - id: "line_374"
+    line_number: 374
+    status: pending
+    parallel_group: 999999
+    description: Test coverage >70% for core modules
+    indent_level: 0
+    raw_marker: -
+  - id: "line_378"
+    line_number: 378
+    status: pending
+    parallel_group: 999999
+    description: Add npm test script to frontend/package.json (e.g. vitest or React Testing Library)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_379"
+    line_number: 379
+    status: pending
+    parallel_group: 999999
+    description: Test key flows or components as needed; frontend currently has no test script
+    indent_level: 0
+    raw_marker: -
+  - id: "line_383"
+    line_number: 383
+    status: pending
+    parallel_group: 999999
+    description: Procfile created with: web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    indent_level: 0
+    raw_marker: -
+  - id: "line_384"
+    line_number: 384
+    status: pending
+    parallel_group: 999999
+    description: railway.json created with build and deploy config
+    indent_level: 0
+    raw_marker: -
+  - id: "line_385"
+    line_number: 385
+    status: pending
+    parallel_group: 999999
+    description: Environment variables set in Railway: DATABASE_URL, SECRET_KEY, E2B_API_KEY, ANTHROPIC_API_KEY, STRIPE_API_KEY, RESEND_API_KEY, REDIS_URL, FRONTEND_URL
+    indent_level: 0
+    raw_marker: -
+  - id: "line_386"
+    line_number: 386
+    status: pending
+    parallel_group: 999999
+    description: PostgreSQL addon added to Railway project
+    indent_level: 0
+    raw_marker: -
+  - id: "line_387"
+    line_number: 387
+    status: pending
+    parallel_group: 999999
+    description: Redis addon added to Railway project
+    indent_level: 0
+    raw_marker: -
+  - id: "line_388"
+    line_number: 388
+    status: pending
+    parallel_group: 999999
+    description: Railway start command runs: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    indent_level: 0
+    raw_marker: -
+  - id: "line_389"
+    line_number: 389
+    status: pending
+    parallel_group: 999999
+    description: Backend deployed and accessible (e.g. Railway URL)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_390"
+    line_number: 390
+    status: pending
+    parallel_group: 999999
+    description: Health check endpoint /health returns 200
+    indent_level: 0
+    raw_marker: -
+  - id: "line_394"
+    line_number: 394
+    status: pending
+    parallel_group: 999999
+    description: Frontend deployed to Vercel (build: npm run build from frontend/)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_395"
+    line_number: 395
+    status: pending
+    parallel_group: 999999
+    description: Environment variable set: VITE_API_URL (backend API base URL)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_396"
+    line_number: 396
+    status: pending
+    parallel_group: 999999
+    description: Frontend accessible and loads correctly; hash routes work (#/dashboard, #/assess/{token}, etc.)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_397"
+    line_number: 397
+    status: pending
+    parallel_group: 999999
+    description: SPA: ensure /settings/workable/callback serves index.html for OAuth callback
+    indent_level: 0
+    raw_marker: -
+  - id: "line_401"
+    line_number: 401
+    status: pending
+    parallel_group: 999999
+    description: Separate Railway service created for Celery worker
+    indent_level: 0
+    raw_marker: -
+  - id: "line_402"
+    line_number: 402
+    status: pending
+    parallel_group: 999999
+    description: Celery service uses same Redis as main app
+    indent_level: 0
+    raw_marker: -
+  - id: "line_403"
+    line_number: 403
+    status: pending
+    parallel_group: 999999
+    description: Start command: celery -A app.tasks worker --loglevel=info
+    indent_level: 0
+    raw_marker: -
+  - id: "line_404"
+    line_number: 404
+    status: pending
+    parallel_group: 999999
+    description: Celery worker starts successfully and processes tasks
+    indent_level: 0
+    raw_marker: -
+  - id: "line_408"
+    line_number: 408
+    status: pending
+    parallel_group: 999999
+    description: Sentry integrated in backend (app/main.py) if desired
+    indent_level: 0
+    raw_marker: -
+  - id: "line_409"
+    line_number: 409
+    status: pending
+    parallel_group: 999999
+    description: Error tracking in production; frontend has no Next.js (no next.config.js)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_410"
+    line_number: 410
+    status: pending
+    parallel_group: 999999
+    description: Backend logs structured as JSON
+    indent_level: 0
+    raw_marker: -
+  - id: "line_411"
+    line_number: 411
+    status: pending
+    parallel_group: 999999
+    description: Health check endpoint /health checks database and Redis connectivity
+    indent_level: 0
+    raw_marker: -
+  - id: "line_412"
+    line_number: 412
+    status: pending
+    parallel_group: 999999
+    description: Uptime monitoring configured (UptimeRobot or similar)
+    indent_level: 0
+    raw_marker: -
+  - id: "line_413"
+    line_number: 413
+    status: pending
+    parallel_group: 999999
+    description: Database backups automated via Railway
+    indent_level: 0
+    raw_marker: -
+  - id: "line_484"
+    line_number: 484
+    status: pending
+    parallel_group: 999999
+    description: Code is written and follows project structure
+    indent_level: 0
+    raw_marker: -
+  - id: "line_485"
+    line_number: 485
+    status: pending
+    parallel_group: 999999
+    description: API endpoint returns correct response format
+    indent_level: 0
+    raw_marker: -
+  - id: "line_486"
+    line_number: 486
+    status: pending
+    parallel_group: 999999
+    description: Database changes have migrations
+    indent_level: 0
+    raw_marker: -
+  - id: "line_487"
+    line_number: 487
+    status: pending
+    parallel_group: 999999
+    description: Frontend page/component is connected to API
+    indent_level: 0
+    raw_marker: -
+  - id: "line_488"
+    line_number: 488
+    status: pending
+    parallel_group: 999999
+    description: Error handling is implemented
+    indent_level: 0
+    raw_marker: -
+  - id: "line_489"
+    line_number: 489
+    status: pending
+    parallel_group: 999999
+    description: At least one test exists for the feature
+    indent_level: 0
+    raw_marker: -
+  - id: "line_490"
+    line_number: 490
+    status: pending
+    parallel_group: 999999
+    description: Feature works end-to-end in development
+    indent_level: 0
+    raw_marker: -
