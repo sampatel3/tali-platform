@@ -17,3 +17,6 @@ __pycache__/
 venv/
 .venv/
 .vercel
+
+# Ralph config (may contain API key)
+.cursor/ralph-config.json
