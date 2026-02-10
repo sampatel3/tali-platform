@@ -817,6 +817,7 @@ const DashboardNav = ({ currentPage, onNavigate }) => {
           <div className="hidden md:flex items-center gap-1">
             {[
               { id: 'dashboard', label: 'Dashboard' },
+              { id: 'tasks', label: 'Tasks' },
               { id: 'analytics', label: 'Analytics' },
               { id: 'settings', label: 'Settings' },
             ].map((item) => (
@@ -865,10 +866,23 @@ const NewAssessmentModal = ({ onClose, onCreated }) => {
   const [form, setForm] = useState({ candidate_email: '', candidate_name: '', task_id: '' });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [createdAssessment, setCreatedAssessment] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     tasksApi.list().then((res) => setTasksList(res.data || [])).catch(() => {});
   }, []);
+
+  const getCandidateLink = (token) => {
+    const base = window.location.origin;
+    return `${base}/#/assess/${token}`;
+  };
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(getCandidateLink(createdAssessment.token));
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const handleCreate = async () => {
     setError('');
@@ -883,14 +897,54 @@ const NewAssessmentModal = ({ onClose, onCreated }) => {
         candidate_name: form.candidate_name || undefined,
         task_id: form.task_id,
       });
+      setCreatedAssessment(res.data);
       onCreated(res.data);
-      onClose();
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to create assessment');
     } finally {
       setLoading(false);
     }
   };
+
+  // After creation: show the link
+  if (createdAssessment) {
+    const link = getCandidateLink(createdAssessment.token);
+    return (
+      <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+        <div className="bg-white border-2 border-black p-8 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
+          <div className="text-center mb-6">
+            <div
+              className="inline-flex items-center justify-center w-16 h-16 border-2 border-black mb-4"
+              style={{ backgroundColor: '#9D00FF' }}
+            >
+              <CheckCircle size={32} className="text-white" />
+            </div>
+            <h2 className="text-2xl font-bold">Assessment Created</h2>
+            <p className="font-mono text-sm text-gray-600 mt-2">
+              Share this link with <strong>{form.candidate_name || form.candidate_email}</strong>
+            </p>
+          </div>
+          <div className="border-2 border-black p-4 mb-4 bg-gray-50">
+            <label className="block font-mono text-xs text-gray-500 mb-2">CANDIDATE ASSESSMENT LINK</label>
+            <div className="font-mono text-xs break-all text-gray-800">{link}</div>
+          </div>
+          <button
+            className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors flex items-center justify-center gap-2 mb-3"
+            style={{ backgroundColor: copied ? '#22c55e' : '#9D00FF' }}
+            onClick={handleCopy}
+          >
+            {copied ? <><Check size={18} /> Copied!</> : <><Clipboard size={18} /> Copy Link</>}
+          </button>
+          <button
+            className="w-full border-2 border-black py-3 font-bold hover:bg-gray-100 transition-colors"
+            onClick={onClose}
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
@@ -936,7 +990,7 @@ const NewAssessmentModal = ({ onClose, onCreated }) => {
               {tasksList.map((t) => (
                 <option key={t.id} value={t.id}>{t.name || t.title}</option>
               ))}
-              {tasksList.length === 0 && <option disabled>No tasks available</option>}
+              {tasksList.length === 0 && <option disabled>No tasks available — create one in the Tasks page</option>}
             </select>
           </div>
           <button
@@ -945,7 +999,7 @@ const NewAssessmentModal = ({ onClose, onCreated }) => {
             onClick={handleCreate}
             disabled={loading}
           >
-            {loading ? <><Loader2 size={18} className="animate-spin" /> Creating...</> : 'Create & Send Assessment'}
+            {loading ? <><Loader2 size={18} className="animate-spin" /> Creating...</> : 'Create Assessment'}
           </button>
         </div>
       </div>
@@ -1287,6 +1341,249 @@ const CandidateDetailPage = ({ candidate, onNavigate }) => {
 };
 
 // ============================================================
+// TASKS PAGE
+// ============================================================
+
+const CreateTaskModal = ({ onClose, onCreated }) => {
+  const [form, setForm] = useState({
+    name: '',
+    description: '',
+    task_type: 'debugging',
+    difficulty: 'mid',
+    duration_minutes: 30,
+    starter_code: '',
+    test_code: '',
+  });
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleCreate = async () => {
+    setError('');
+    if (!form.name || !form.description) {
+      setError('Name and description are required');
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await tasksApi.create(form);
+      onCreated(res.data);
+      onClose();
+    } catch (err) {
+      setError(err.response?.data?.detail || 'Failed to create task');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
+      <div className="bg-white border-2 border-black p-8 w-full max-w-2xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-6">
+          <h2 className="text-2xl font-bold">Create Task</h2>
+          <button className="border-2 border-black p-1 hover:bg-black hover:text-white transition-colors" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+        {error && (
+          <div className="border-2 border-red-500 bg-red-50 p-3 mb-4 font-mono text-sm text-red-700">{error}</div>
+        )}
+        <div className="space-y-4">
+          <div>
+            <label className="block font-mono text-sm mb-1">Task Name *</label>
+            <input
+              type="text"
+              className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
+              placeholder="e.g. API Debugging Challenge"
+              value={form.name}
+              onChange={(e) => setForm((p) => ({ ...p, name: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="block font-mono text-sm mb-1">Description *</label>
+            <textarea
+              className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none min-h-[80px]"
+              placeholder="Describe what the candidate will need to do..."
+              value={form.description}
+              onChange={(e) => setForm((p) => ({ ...p, description: e.target.value }))}
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <label className="block font-mono text-sm mb-1">Type</label>
+              <select
+                className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
+                value={form.task_type}
+                onChange={(e) => setForm((p) => ({ ...p, task_type: e.target.value }))}
+              >
+                <option value="debugging">Debugging</option>
+                <option value="ai_engineering">AI Engineering</option>
+                <option value="optimization">Optimization</option>
+                <option value="build">Build from Scratch</option>
+                <option value="refactor">Refactoring</option>
+              </select>
+            </div>
+            <div>
+              <label className="block font-mono text-sm mb-1">Difficulty</label>
+              <select
+                className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none bg-white"
+                value={form.difficulty}
+                onChange={(e) => setForm((p) => ({ ...p, difficulty: e.target.value }))}
+              >
+                <option value="junior">Junior</option>
+                <option value="mid">Mid-Level</option>
+                <option value="senior">Senior</option>
+                <option value="staff">Staff+</option>
+              </select>
+            </div>
+            <div>
+              <label className="block font-mono text-sm mb-1">Duration (min)</label>
+              <input
+                type="number"
+                className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
+                value={form.duration_minutes}
+                onChange={(e) => setForm((p) => ({ ...p, duration_minutes: parseInt(e.target.value) || 30 }))}
+                min={10}
+                max={120}
+              />
+            </div>
+          </div>
+          <div>
+            <label className="block font-mono text-sm mb-1">Starter Code</label>
+            <textarea
+              className="w-full border-2 border-black px-4 py-3 font-mono text-xs focus:outline-none min-h-[120px] bg-gray-50"
+              placeholder="# Python starter code the candidate will see..."
+              value={form.starter_code}
+              onChange={(e) => setForm((p) => ({ ...p, starter_code: e.target.value }))}
+            />
+          </div>
+          <div>
+            <label className="block font-mono text-sm mb-1">Test Code (optional)</label>
+            <textarea
+              className="w-full border-2 border-black px-4 py-3 font-mono text-xs focus:outline-none min-h-[80px] bg-gray-50"
+              placeholder="# pytest tests to validate the solution..."
+              value={form.test_code}
+              onChange={(e) => setForm((p) => ({ ...p, test_code: e.target.value }))}
+            />
+          </div>
+          <button
+            className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors flex items-center justify-center gap-2"
+            style={{ backgroundColor: '#9D00FF' }}
+            onClick={handleCreate}
+            disabled={loading}
+          >
+            {loading ? <><Loader2 size={18} className="animate-spin" /> Creating...</> : 'Create Task'}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TasksPage = ({ onNavigate }) => {
+  const [tasksList, setTasksList] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [showCreateModal, setShowCreateModal] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    const fetchTasks = async () => {
+      try {
+        const res = await tasksApi.list();
+        if (!cancelled) setTasksList(res.data || []);
+      } catch (err) {
+        console.warn('Failed to fetch tasks:', err.message);
+      } finally {
+        if (!cancelled) setLoading(false);
+      }
+    };
+    fetchTasks();
+    return () => { cancelled = true; };
+  }, []);
+
+  const difficultyColors = {
+    junior: '#22c55e',
+    mid: '#FFAA00',
+    senior: '#9D00FF',
+    staff: '#FF0033',
+  };
+
+  return (
+    <div>
+      <DemoBanner />
+      <DashboardNav currentPage="tasks" onNavigate={onNavigate} />
+      <div className="hidden md:block max-w-7xl mx-auto px-6 py-8">
+        <div className="flex items-center justify-between mb-8">
+          <div>
+            <h1 className="text-3xl font-bold">Tasks</h1>
+            <p className="font-mono text-sm text-gray-600 mt-1">Manage assessment task templates</p>
+          </div>
+          <button
+            className="border-2 border-black px-6 py-3 font-bold text-white hover:bg-black transition-colors flex items-center gap-2"
+            style={{ backgroundColor: '#9D00FF' }}
+            onClick={() => setShowCreateModal(true)}
+          >
+            <Code size={18} /> New Task
+          </button>
+        </div>
+
+        {loading ? (
+          <div className="flex items-center justify-center py-16 gap-3">
+            <Loader2 size={24} className="animate-spin" style={{ color: '#9D00FF' }} />
+            <span className="font-mono text-sm text-gray-500">Loading tasks...</span>
+          </div>
+        ) : tasksList.length === 0 ? (
+          <div className="border-2 border-black p-16 text-center">
+            <Code size={48} className="mx-auto mb-4 text-gray-300" />
+            <h3 className="text-xl font-bold mb-2">No tasks yet</h3>
+            <p className="font-mono text-sm text-gray-500 mb-6">Create your first task template to start assessing candidates</p>
+            <button
+              className="border-2 border-black px-6 py-3 font-bold text-white hover:bg-black transition-colors"
+              style={{ backgroundColor: '#9D00FF' }}
+              onClick={() => setShowCreateModal(true)}
+            >
+              Create Task
+            </button>
+          </div>
+        ) : (
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {tasksList.map((task) => (
+              <div key={task.id} className="border-2 border-black p-6 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-shadow">
+                <div className="flex items-center justify-between mb-3">
+                  <span
+                    className="px-3 py-1 text-xs font-mono font-bold text-white border-2 border-black"
+                    style={{ backgroundColor: difficultyColors[task.difficulty] || '#9D00FF' }}
+                  >
+                    {task.difficulty?.toUpperCase()}
+                  </span>
+                  <span className="font-mono text-xs text-gray-500">{task.duration_minutes}min</span>
+                </div>
+                <h3 className="font-bold text-lg mb-2">{task.name}</h3>
+                <p className="font-mono text-sm text-gray-600 mb-4 line-clamp-3">{task.description}</p>
+                <div className="flex items-center justify-between">
+                  <span className="font-mono text-xs px-2 py-1 border border-gray-300">{task.task_type?.replace('_', ' ')}</span>
+                  {task.is_template && (
+                    <span className="font-mono text-xs text-gray-400">template</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {showCreateModal && (
+        <CreateTaskModal
+          onClose={() => setShowCreateModal(false)}
+          onCreated={(newTask) => {
+            setTasksList((prev) => [newTask, ...prev]);
+          }}
+        />
+      )}
+    </div>
+  );
+};
+
+// ============================================================
 // ANALYTICS PAGE
 // ============================================================
 
@@ -1538,93 +1835,125 @@ const SettingsPage = ({ onNavigate }) => {
 // CANDIDATE PORTAL — WELCOME PAGE
 // ============================================================
 
-const CandidateWelcomePage = ({ onNavigate }) => (
-  <div className="min-h-screen bg-white">
-    <nav className="border-b-2 border-black bg-white">
-      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-4">
-        <Logo onClick={() => onNavigate('landing')} />
-        <span className="font-mono text-sm text-gray-500">|</span>
-        <span className="font-mono text-sm">Technical Assessment</span>
-      </div>
-    </nav>
-    <div className="max-w-3xl mx-auto px-6 py-16">
-      <div className="text-center mb-8">
-        <div
-          className="inline-block px-4 py-2 text-xs font-mono font-bold text-white border-2 border-black mb-4"
+const CandidateWelcomePage = ({ token, onNavigate }) => {
+  const [assessmentData, setAssessmentData] = useState(null);
+  const [loadingStart, setLoadingStart] = useState(false);
+  const [startError, setStartError] = useState('');
+
+  const handleStart = async () => {
+    if (!token) {
+      onNavigate('assessment');
+      return;
+    }
+    setLoadingStart(true);
+    setStartError('');
+    try {
+      const res = await assessmentsApi.start(token);
+      // Store the started assessment data for the assessment page
+      setAssessmentData(res.data);
+      onNavigate('assessment');
+    } catch (err) {
+      const msg = err.response?.data?.detail || 'Failed to start assessment';
+      setStartError(msg);
+    } finally {
+      setLoadingStart(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-white">
+      <nav className="border-b-2 border-black bg-white">
+        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-4">
+          <Logo onClick={() => {}} />
+          <span className="font-mono text-sm text-gray-500">|</span>
+          <span className="font-mono text-sm">Technical Assessment</span>
+        </div>
+      </nav>
+      <div className="max-w-3xl mx-auto px-6 py-16">
+        <div className="text-center mb-8">
+          <div
+            className="inline-block px-4 py-2 text-xs font-mono font-bold text-white border-2 border-black mb-4"
+            style={{ backgroundColor: '#9D00FF' }}
+          >
+            TALI Assessment
+          </div>
+          <h1 className="text-4xl font-bold mb-2">Technical Assessment</h1>
+          <p className="font-mono text-gray-600">You&apos;ve been invited to complete a coding challenge</p>
+        </div>
+
+        {/* Welcome Message */}
+        <div className="border-2 border-black p-8 mb-8">
+          <p className="text-lg mb-4">Welcome,</p>
+          <p className="font-mono text-sm text-gray-700 mb-4 leading-relaxed">
+            You&apos;ve been invited to complete a technical assessment. This is a real coding environment where you can write, run, and test code with AI assistance.
+          </p>
+          <p className="font-mono text-sm text-gray-700 mb-4">You&apos;ll have access to:</p>
+          <ul className="space-y-2 mb-6">
+            {['Full Python environment (sandboxed)', 'Claude AI assistant for help', 'All the tools you\'d use on the job'].map((item) => (
+              <li key={item} className="flex items-center gap-2 font-mono text-sm">
+                <Check size={16} style={{ color: '#9D00FF' }} /> {item}
+              </li>
+            ))}
+          </ul>
+          <p className="font-mono text-sm text-gray-700 italic">
+            This isn&apos;t a trick. We want to see how you actually work.
+          </p>
+          <p className="font-mono text-sm text-gray-500 mt-4">Ready when you are.</p>
+        </div>
+
+        {/* Info Cards */}
+        <div className="grid md:grid-cols-3 gap-4 mb-8">
+          <div className="border-2 border-black p-6">
+            <Terminal size={24} className="mb-3" />
+            <h3 className="font-bold mb-2">What You&apos;ll Do</h3>
+            <ul className="font-mono text-xs text-gray-600 space-y-1">
+              <li>Complete a coding challenge</li>
+              <li>Use AI tools as you normally would</li>
+              <li>Write and run your solution</li>
+            </ul>
+          </div>
+          <div className="border-2 border-black p-6">
+            <Brain size={24} className="mb-3" />
+            <h3 className="font-bold mb-2">What We&apos;re Testing</h3>
+            <ul className="font-mono text-xs text-gray-600 space-y-1">
+              <li>Problem-solving approach</li>
+              <li>AI collaboration skills</li>
+              <li>Code quality & testing</li>
+            </ul>
+          </div>
+          <div className="border-2 border-black p-6">
+            <Shield size={24} className="mb-3" />
+            <h3 className="font-bold mb-2">What You&apos;ll Need</h3>
+            <ul className="font-mono text-xs text-gray-600 space-y-1">
+              <li>Desktop browser (Chrome/Firefox)</li>
+              <li>Uninterrupted time</li>
+              <li>Stable internet connection</li>
+            </ul>
+          </div>
+        </div>
+
+        {startError && (
+          <div className="border-2 border-red-500 bg-red-50 p-4 mb-4 font-mono text-sm text-red-700">
+            {startError}
+          </div>
+        )}
+
+        <button
+          className="w-full border-2 border-black py-4 font-bold text-lg text-white hover:bg-black transition-colors flex items-center justify-center gap-2"
           style={{ backgroundColor: '#9D00FF' }}
+          onClick={handleStart}
+          disabled={loadingStart}
         >
-          DeepLight AI
-        </div>
-        <h1 className="text-4xl font-bold mb-2">Technical Assessment</h1>
-        <p className="font-mono text-gray-600">Senior Data Engineer Position</p>
+          {loadingStart ? (
+            <><Loader2 size={20} className="animate-spin" /> Starting Assessment...</>
+          ) : (
+            <>Start Assessment <ChevronRight size={20} /></>
+          )}
+        </button>
       </div>
-
-      {/* Welcome Message */}
-      <div className="border-2 border-black p-8 mb-8">
-        <p className="text-lg mb-4">Hi Sarah,</p>
-        <p className="font-mono text-sm text-gray-700 mb-4 leading-relaxed">
-          You&apos;ve been invited to complete a technical assessment for the <strong>Senior Data Engineer</strong> position at <strong>DeepLight AI</strong>.
-        </p>
-        <div className="border-2 border-black p-4 mb-4 font-mono text-sm space-y-2">
-          <div><strong>Assessment:</strong> Debugging Challenge</div>
-          <div><strong>Duration:</strong> 30 minutes</div>
-          <div><strong>Format:</strong> Fix 3 bugs in a data pipeline</div>
-        </div>
-        <p className="font-mono text-sm text-gray-700 mb-4">You&apos;ll have access to:</p>
-        <ul className="space-y-2 mb-6">
-          {['Full Python environment', 'Claude AI assistant', 'All the tools you\'d use on the job'].map((item) => (
-            <li key={item} className="flex items-center gap-2 font-mono text-sm">
-              <Check size={16} style={{ color: '#9D00FF' }} /> {item}
-            </li>
-          ))}
-        </ul>
-        <p className="font-mono text-sm text-gray-700 italic">
-          This isn&apos;t a trick. We want to see how you actually work.
-        </p>
-        <p className="font-mono text-sm text-gray-500 mt-4">Ready when you are.</p>
-      </div>
-
-      {/* Info Cards */}
-      <div className="grid md:grid-cols-3 gap-4 mb-8">
-        <div className="border-2 border-black p-6">
-          <Terminal size={24} className="mb-3" />
-          <h3 className="font-bold mb-2">What You&apos;ll Do</h3>
-          <ul className="font-mono text-xs text-gray-600 space-y-1">
-            <li>Fix 3 bugs in a data pipeline</li>
-            <li>Use AI tools as you normally would</li>
-            <li>Write tests for your fixes</li>
-          </ul>
-        </div>
-        <div className="border-2 border-black p-6">
-          <Brain size={24} className="mb-3" />
-          <h3 className="font-bold mb-2">What We&apos;re Testing</h3>
-          <ul className="font-mono text-xs text-gray-600 space-y-1">
-            <li>Problem-solving approach</li>
-            <li>AI collaboration skills</li>
-            <li>Code quality & testing</li>
-          </ul>
-        </div>
-        <div className="border-2 border-black p-6">
-          <Shield size={24} className="mb-3" />
-          <h3 className="font-bold mb-2">What You&apos;ll Need</h3>
-          <ul className="font-mono text-xs text-gray-600 space-y-1">
-            <li>Desktop browser (Chrome/Firefox)</li>
-            <li>30 minutes of uninterrupted time</li>
-            <li>Stable internet connection</li>
-          </ul>
-        </div>
-      </div>
-
-      <button
-        className="w-full border-2 border-black py-4 font-bold text-lg text-white hover:bg-black transition-colors flex items-center justify-center gap-2"
-        style={{ backgroundColor: '#9D00FF' }}
-        onClick={() => onNavigate('assessment')}
-      >
-        Start Assessment <ChevronRight size={20} />
-      </button>
     </div>
-  </div>
-);
+  );
+};
 
 // ============================================================
 // MAIN APP
@@ -1636,6 +1965,21 @@ function App() {
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [assessmentToken, setAssessmentToken] = useState(null);
 
+  // Handle hash-based routing for candidate assessment links: /#/assess/:token
+  useEffect(() => {
+    const handleHashRoute = () => {
+      const hash = window.location.hash;
+      const assessMatch = hash.match(/^#\/assess\/(.+)$/);
+      if (assessMatch) {
+        setAssessmentToken(assessMatch[1]);
+        setCurrentPage('candidate-welcome');
+      }
+    };
+    handleHashRoute();
+    window.addEventListener('hashchange', handleHashRoute);
+    return () => window.removeEventListener('hashchange', handleHashRoute);
+  }, []);
+
   // Auto-redirect: if already authenticated and on landing/login, go to dashboard
   useEffect(() => {
     if (isAuthenticated && (currentPage === 'landing' || currentPage === 'login')) {
@@ -1645,7 +1989,7 @@ function App() {
 
   // When user logs out (isAuthenticated becomes false), redirect to landing
   useEffect(() => {
-    if (!authLoading && !isAuthenticated && ['dashboard', 'analytics', 'settings', 'candidate-detail'].includes(currentPage)) {
+    if (!authLoading && !isAuthenticated && ['dashboard', 'analytics', 'settings', 'tasks', 'candidate-detail'].includes(currentPage)) {
       setCurrentPage('landing');
     }
   }, [isAuthenticated, authLoading, currentPage]);
@@ -1681,9 +2025,12 @@ function App() {
       {currentPage === 'candidate-detail' && (
         <CandidateDetailPage candidate={selectedCandidate} onNavigate={navigateToPage} />
       )}
+      {currentPage === 'tasks' && <TasksPage onNavigate={navigateToPage} />}
       {currentPage === 'analytics' && <AnalyticsPage onNavigate={navigateToPage} />}
       {currentPage === 'settings' && <SettingsPage onNavigate={navigateToPage} />}
-      {currentPage === 'candidate-welcome' && <CandidateWelcomePage onNavigate={navigateToPage} />}
+      {currentPage === 'candidate-welcome' && (
+        <CandidateWelcomePage token={assessmentToken} onNavigate={navigateToPage} />
+      )}
       {currentPage === 'assessment' && (
         <AssessmentPage token={assessmentToken} />
       )}
