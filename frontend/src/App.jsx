@@ -35,162 +35,14 @@ import {
   Pencil,
   Trash2,
 } from 'lucide-react';
+import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { useAuth } from './context/AuthContext';
-import { assessments as assessmentsApi, organizations as orgsApi, tasks as tasksApi, analytics as analyticsApi, billing as billingApi } from './lib/api';
+import { auth, assessments as assessmentsApi, organizations as orgsApi, tasks as tasksApi, analytics as analyticsApi, billing as billingApi, team as teamApi, candidates as candidatesApi } from './lib/api';
 import AssessmentPage from './components/assessment/AssessmentPage';
 
 // ============================================================
 // DATA
 // ============================================================
-
-const candidates = [
-  {
-    id: 1,
-    name: 'Sarah Chen',
-    email: 'sarah.chen@example.com',
-    task: 'Debugging',
-    status: 'completed',
-    score: 8.7,
-    time: '28m',
-    position: 'Senior Data Engineer',
-    completedDate: '2 hours ago',
-    breakdown: {
-      bugsFixed: '3/3',
-      testsPassed: '5/5',
-      codeQuality: 8.5,
-      timeEfficiency: 9.0,
-      aiUsage: 8.5,
-    },
-    prompts: 7,
-    promptsList: [
-      {
-        text: 'What\'s wrong with the delimiter in line 42?',
-        assessment: 'Good diagnostic approach — targeted the exact issue',
-      },
-      {
-        text: 'How should I handle the edge case for empty CSV rows?',
-        assessment: 'Shows awareness of edge cases before coding',
-      },
-      {
-        text: 'Can you explain the difference between pandas merge and join?',
-        assessment: 'Learning-oriented prompt — positive signal',
-      },
-      {
-        text: 'Write a test for the fixed parse_row function',
-        assessment: 'Good use of AI for test generation',
-      },
-    ],
-    timeline: [
-      { time: '00:00', event: 'Started assessment' },
-      { time: '02:30', event: 'Read through codebase and requirements' },
-      { time: '05:00', event: 'Fixed delimiter bug (Bug 1/3)', prompt: 'What\'s wrong with the delimiter in line 42?' },
-      { time: '12:00', event: 'Fixed empty row handling (Bug 2/3)', prompt: 'How should I handle the edge case for empty CSV rows?' },
-      { time: '18:00', event: 'Identified race condition (Bug 3/3)' },
-      { time: '22:00', event: 'Added test coverage', prompt: 'Write a test for the fixed parse_row function' },
-      { time: '26:00', event: 'Final review and cleanup' },
-      { time: '28:00', event: 'Submitted assessment' },
-    ],
-    results: [
-      { title: 'Fixed delimiter bug', score: '9/10', description: 'Correctly identified tab vs comma delimiter issue in CSV parser' },
-      { title: 'Fixed empty row handling', score: '8/10', description: 'Added proper null checks and empty row filtering' },
-      { title: 'Fixed race condition', score: '9/10', description: 'Resolved async data pipeline race condition with proper awaits' },
-    ],
-  },
-  {
-    id: 2,
-    name: 'Mike Ross',
-    email: 'mike.ross@example.com',
-    task: 'AI Engineer',
-    status: 'completed',
-    score: 7.2,
-    time: '35m',
-    position: 'AI Engineer',
-    completedDate: 'yesterday',
-    breakdown: {
-      bugsFixed: '2/3',
-      testsPassed: '4/5',
-      codeQuality: 7.0,
-      timeEfficiency: 7.5,
-      aiUsage: 7.0,
-    },
-    prompts: 12,
-    promptsList: [
-      {
-        text: 'Write the entire function for me',
-        assessment: 'Over-reliance on AI — did not demonstrate own understanding',
-      },
-      {
-        text: 'Fix the errors in this code',
-        assessment: 'Vague prompt — could be more specific about the issue',
-      },
-    ],
-    timeline: [
-      { time: '00:00', event: 'Started assessment' },
-      { time: '05:00', event: 'Read through codebase' },
-      { time: '15:00', event: 'Fixed first bug' },
-      { time: '25:00', event: 'Fixed second bug' },
-      { time: '35:00', event: 'Submitted (third bug not fixed)' },
-    ],
-    results: [
-      { title: 'Fixed parsing error', score: '7/10', description: 'Resolved JSON parsing issue but solution could be cleaner' },
-      { title: 'Fixed validation bug', score: '7/10', description: 'Added input validation but missed some edge cases' },
-    ],
-  },
-  {
-    id: 3,
-    name: 'Amy Wong',
-    email: 'amy.wong@example.com',
-    task: 'Optimization',
-    status: 'in-progress',
-    score: null,
-    time: '15m',
-    position: 'Full Stack Developer',
-    completedDate: null,
-    breakdown: null,
-    prompts: 4,
-    promptsList: [],
-    timeline: [
-      { time: '00:00', event: 'Started assessment' },
-      { time: '10:00', event: 'Analyzing codebase' },
-    ],
-    results: [],
-  },
-  {
-    id: 4,
-    name: 'James Liu',
-    email: 'james.liu@example.com',
-    task: 'RAG Pipeline',
-    status: 'completed',
-    score: 6.2,
-    time: '40m',
-    position: 'ML Engineer',
-    completedDate: '3 days ago',
-    breakdown: {
-      bugsFixed: '2/3',
-      testsPassed: '3/5',
-      codeQuality: 6.0,
-      timeEfficiency: 6.5,
-      aiUsage: 6.0,
-    },
-    prompts: 18,
-    promptsList: [
-      {
-        text: 'Do everything for me step by step',
-        assessment: 'Heavy AI dependency — limited independent problem-solving',
-      },
-    ],
-    timeline: [
-      { time: '00:00', event: 'Started assessment' },
-      { time: '20:00', event: 'First bug identified' },
-      { time: '35:00', event: 'Partial fix submitted' },
-      { time: '40:00', event: 'Time ran out' },
-    ],
-    results: [
-      { title: 'Partial RAG fix', score: '6/10', description: 'Identified the vector store issue but fix was incomplete' },
-      { title: 'Embedding update', score: '6/10', description: 'Updated embeddings but introduced regression' },
-    ],
-  },
-];
 
 const weeklyData = [
   { week: 'Week 1', rate: 72, count: 8 },
@@ -213,18 +65,10 @@ const Logo = ({ onClick }) => (
   </div>
 );
 
-const DemoBanner = () => (
-  <div className="border-b-2 border-black p-3" style={{ backgroundColor: '#9D00FF' }}>
-    <div className="max-w-7xl mx-auto px-6 text-center">
-      <span className="font-bold text-white text-sm">INTERACTIVE DEMO — Explore all features</span>
-    </div>
-  </div>
-);
-
 const StatsCard = ({ icon: Icon, label, value, change }) => (
   <div
     className="border-2 border-black bg-white p-6 hover:shadow-lg transition-shadow cursor-pointer"
-    onClick={() => console.log(`Stats card clicked: ${label} — ${value}`)}
+    onClick={() => {}}
   >
     <Icon size={32} className="mb-4" />
     <div className="font-mono text-sm text-gray-600 mb-2">{label}</div>
@@ -566,27 +410,44 @@ const LandingPage = ({ onNavigate }) => (
 
 const LoginPage = ({ onNavigate }) => {
   const { login } = useAuth();
-  const [email, setEmail] = useState('sam@deeplight.ai');
-  const [password, setPassword] = useState('demo1234');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [needsVerification, setNeedsVerification] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resent, setResent] = useState(false);
 
   const handleLogin = async () => {
     setError('');
+    setNeedsVerification(false);
     setLoading(true);
     try {
       await login(email, password);
       onNavigate('dashboard');
     } catch (err) {
+      const status = err.response?.status;
       const msg = err.response?.data?.detail || err.message || 'Login failed';
-      setError(typeof msg === 'string' ? msg : 'Invalid credentials');
-      // Fallback: allow demo mode navigation even if API is down
-      if (!err.response) {
-        console.warn('API unreachable — entering demo mode');
-        onNavigate('dashboard');
+      if (status === 403 && typeof msg === 'string' && msg.toLowerCase().includes('verify')) {
+        setNeedsVerification(true);
       }
+      setError(typeof msg === 'string' ? msg : 'Invalid credentials');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleResendVerification = async () => {
+    if (!email) return;
+    setResending(true);
+    try {
+      await auth.resendVerification(email);
+      setResent(true);
+      setTimeout(() => setResent(false), 5000);
+    } catch {
+      // endpoint always returns 200
+    } finally {
+      setResending(false);
     }
   };
 
@@ -599,14 +460,21 @@ const LoginPage = ({ onNavigate }) => {
       </nav>
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
-          <div className="border-2 bg-black text-white p-4 mb-6" style={{ borderColor: '#9D00FF' }}>
-            <div className="font-bold mb-2" style={{ color: '#9D00FF' }}>DEMO MODE</div>
-            <p className="font-mono text-xs">Sign in with credentials or click &quot;Sign In&quot; to explore the dashboard</p>
-          </div>
           {error && (
-            <div className="border-2 border-red-500 bg-red-50 p-4 mb-6 flex items-center gap-2">
-              <AlertTriangle size={18} className="text-red-500 flex-shrink-0" />
-              <span className="font-mono text-sm text-red-700">{error}</span>
+            <div className="border-2 border-red-500 bg-red-50 p-4 mb-6">
+              <div className="flex items-center gap-2">
+                <AlertTriangle size={18} className="text-red-500 flex-shrink-0" />
+                <span className="font-mono text-sm text-red-700">{error}</span>
+              </div>
+              {needsVerification && (
+                <button
+                  className="mt-3 w-full border border-red-300 py-2 font-mono text-sm font-bold text-red-700 hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+                  onClick={handleResendVerification}
+                  disabled={resending}
+                >
+                  {resending ? <><Loader2 size={14} className="animate-spin" /> Sending...</> : resent ? <><CheckCircle size={14} /> Verification email sent!</> : <><Mail size={14} /> Resend verification email</>}
+                </button>
+              )}
             </div>
           )}
           <div className="border-2 border-black p-8">
@@ -680,6 +548,8 @@ const RegisterPage = ({ onNavigate }) => {
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
   const [success, setSuccess] = useState(false);
+  const [resending, setResending] = useState(false);
+  const [resent, setResent] = useState(false);
 
   const updateField = (field) => (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }));
 
@@ -701,6 +571,19 @@ const RegisterPage = ({ onNavigate }) => {
     }
   };
 
+  const handleResend = async () => {
+    setResending(true);
+    try {
+      await auth.resendVerification(form.email);
+      setResent(true);
+      setTimeout(() => setResent(false), 5000);
+    } catch {
+      // silent — endpoint always returns 200
+    } finally {
+      setResending(false);
+    }
+  };
+
   return (
     <div className="min-h-screen bg-white flex flex-col">
       <nav className="border-b-2 border-black bg-white">
@@ -712,15 +595,28 @@ const RegisterPage = ({ onNavigate }) => {
         <div className="w-full max-w-md">
           {success ? (
             <div className="border-2 border-black p-8 text-center">
-              <CheckCircle size={48} className="mx-auto mb-4" style={{ color: '#9D00FF' }} />
-              <h2 className="text-2xl font-bold mb-2">Account Created!</h2>
-              <p className="font-mono text-sm text-gray-600 mb-6">You can now sign in with your credentials.</p>
+              <Mail size={48} className="mx-auto mb-4" style={{ color: '#9D00FF' }} />
+              <h2 className="text-2xl font-bold mb-2">Check your email</h2>
+              <p className="font-mono text-sm text-gray-600 mb-2">
+                We sent a verification link to
+              </p>
+              <p className="font-mono text-sm font-bold mb-6">{form.email}</p>
+              <p className="font-mono text-xs text-gray-500 mb-6">
+                Click the link in the email to activate your account. The link expires in 24 hours.
+              </p>
               <button
-                className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors"
+                className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors mb-3"
                 style={{ backgroundColor: '#9D00FF' }}
                 onClick={() => onNavigate('login')}
               >
                 Go to Sign In
+              </button>
+              <button
+                className="w-full border-2 border-black py-3 font-bold hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+                onClick={handleResend}
+                disabled={resending}
+              >
+                {resending ? <><Loader2 size={16} className="animate-spin" /> Sending...</> : resent ? <><CheckCircle size={16} style={{ color: '#9D00FF' }} /> Sent!</> : 'Resend verification email'}
               </button>
             </div>
           ) : (
@@ -1040,12 +936,94 @@ const ResetPasswordPage = ({ onNavigate, token }) => {
 };
 
 // ============================================================
+// VERIFY EMAIL PAGE
+// ============================================================
+
+const VerifyEmailPage = ({ onNavigate, token }) => {
+  const [status, setStatus] = useState('loading'); // loading | success | error
+  const [message, setMessage] = useState('');
+
+  useEffect(() => {
+    if (!token) {
+      setStatus('error');
+      setMessage('Invalid verification link.');
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await auth.verifyEmail(token);
+        if (!cancelled) {
+          setStatus('success');
+          setMessage(res.data?.detail || 'Email verified successfully.');
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setStatus('error');
+          setMessage(err.response?.data?.detail || 'Verification failed. The link may have expired.');
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [token]);
+
+  return (
+    <div className="min-h-screen bg-white flex flex-col">
+      <nav className="border-b-2 border-black bg-white">
+        <div className="max-w-7xl mx-auto px-6 py-4">
+          <Logo onClick={() => onNavigate('landing')} />
+        </div>
+      </nav>
+      <div className="flex-1 flex items-center justify-center p-6">
+        <div className="border-2 border-black p-8 text-center max-w-md w-full">
+          {status === 'loading' && (
+            <>
+              <Loader2 size={48} className="mx-auto mb-4 animate-spin" style={{ color: '#9D00FF' }} />
+              <h2 className="text-2xl font-bold mb-2">Verifying your email...</h2>
+              <p className="font-mono text-sm text-gray-600">Please wait a moment.</p>
+            </>
+          )}
+          {status === 'success' && (
+            <>
+              <CheckCircle size={48} className="mx-auto mb-4" style={{ color: '#9D00FF' }} />
+              <h2 className="text-2xl font-bold mb-2">Email verified!</h2>
+              <p className="font-mono text-sm text-gray-600 mb-6">{message}</p>
+              <button
+                className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors"
+                style={{ backgroundColor: '#9D00FF' }}
+                onClick={() => onNavigate('login')}
+              >
+                Sign In
+              </button>
+            </>
+          )}
+          {status === 'error' && (
+            <>
+              <AlertTriangle size={48} className="mx-auto mb-4 text-amber-500" />
+              <h2 className="text-2xl font-bold mb-2">Verification failed</h2>
+              <p className="font-mono text-sm text-gray-600 mb-6">{message}</p>
+              <button
+                className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors"
+                style={{ backgroundColor: '#9D00FF' }}
+                onClick={() => onNavigate('login')}
+              >
+                Go to Sign In
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
 // DASHBOARD NAV
 // ============================================================
 
 const DashboardNav = ({ currentPage, onNavigate }) => {
   const { user, logout } = useAuth();
-  const orgName = user?.organization?.name || 'DeepLight AI';
+  const orgName = user?.organization?.name || '--';
   const initials = orgName.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
 
   const handleLogout = () => {
@@ -1061,6 +1039,7 @@ const DashboardNav = ({ currentPage, onNavigate }) => {
           <div className="hidden md:flex items-center gap-1">
             {[
               { id: 'dashboard', label: 'Dashboard' },
+              { id: 'candidates', label: 'Candidates' },
               { id: 'tasks', label: 'Tasks' },
               { id: 'analytics', label: 'Analytics' },
               { id: 'settings', label: 'Settings' },
@@ -1264,6 +1243,7 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
   const [taskFilter, setTaskFilter] = useState('');
   const [tasksForFilter, setTasksForFilter] = useState([]);
   const [page, setPage] = useState(0);
+  const [compareIds, setCompareIds] = useState([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1300,7 +1280,7 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
   const displayCandidates = assessmentsList.length > 0
     ? assessmentsList.map((a) => ({
         id: a.id,
-        name: a.candidate_name || a.candidate?.full_name || a.candidate_email || 'Unknown',
+        name: (a.candidate_name || a.candidate?.full_name || a.candidate_email || '').trim() || 'Unknown',
         email: a.candidate_email || a.candidate?.email || '',
         task: a.task?.name || a.task_name || 'Assessment',
         status: a.status === 'submitted' || a.status === 'graded' ? 'completed' : (a.status || 'in-progress'),
@@ -1317,9 +1297,9 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
         assessmentLink: a.token ? getAssessmentLink(a.token) : '',
         _raw: a,
       }))
-    : candidates;
+    : [];
 
-  const userName = user?.full_name?.split(' ')[0] || 'Sam';
+  const userName = user?.full_name?.split(' ')[0] || 'there';
 
   // Compute live stats from current page (total count from API)
   const totalAssessments = totalAssessmentsCount;
@@ -1331,10 +1311,40 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
   const scores = displayCandidates.filter((c) => c.score !== null).map((c) => c.score);
   const avgScore = scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : '—';
   const monthCost = `£${completedCount * 25}`;
+  const notifications = displayCandidates
+    .filter((c) => c.status === 'completed')
+    .slice(0, 5)
+    .map((c) => ({
+      id: `n-${c.id}`,
+      text: `${c.name} completed ${c.task} (${c.score ?? '—'}/10)`,
+    }));
+  const compareCandidates = displayCandidates.filter((c) => compareIds.includes(c.id)).slice(0, 2);
+
+  const exportJson = () => {
+    const blob = new Blob([JSON.stringify(displayCandidates, null, 2)], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'assessments.json';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+  const exportCsv = () => {
+    const rows = [['Candidate', 'Email', 'Task', 'Status', 'Score']].concat(
+      displayCandidates.map((c) => [c.name, c.email, c.task, c.status, c.score ?? ''])
+    );
+    const csv = rows.map((r) => r.map((v) => `"${String(v).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'assessments.csv';
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   return (
     <div>
-      <DemoBanner />
       <DashboardNav currentPage="dashboard" onNavigate={onNavigate} />
       <div className="md:hidden p-8 text-center border-b-2 border-black">
         <p className="font-mono text-sm">Desktop browser required for dashboard</p>
@@ -1353,6 +1363,35 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
             <Zap size={18} /> New Assessment
           </button>
         </div>
+        <div className="flex flex-wrap items-center gap-3 mb-6">
+          <button className="border-2 border-black px-4 py-2 font-mono text-xs font-bold hover:bg-black hover:text-white" onClick={exportCsv}>Export CSV</button>
+          <button className="border-2 border-black px-4 py-2 font-mono text-xs font-bold hover:bg-black hover:text-white" onClick={exportJson}>Export JSON</button>
+        </div>
+        {notifications.length > 0 && (
+          <div className="border-2 border-black p-4 mb-6">
+            <div className="font-mono text-xs text-gray-500 mb-2">Recent Notifications</div>
+            <div className="space-y-1">
+              {notifications.map((n) => (
+                <div key={n.id} className="font-mono text-sm">• {n.text}</div>
+              ))}
+            </div>
+          </div>
+        )}
+        {compareCandidates.length === 2 && (
+          <div className="border-2 border-black p-4 mb-6">
+            <div className="font-mono text-xs text-gray-500 mb-2">Comparison</div>
+            <div className="grid md:grid-cols-2 gap-4">
+              {compareCandidates.map((c) => (
+                <div key={`cmp-${c.id}`} className="border-2 border-black p-3">
+                  <div className="font-bold">{c.name}</div>
+                  <div className="font-mono text-xs text-gray-500">{c.task}</div>
+                  <div className="font-mono text-sm mt-2">Score: {c.score ?? '—'}/10</div>
+                  <div className="font-mono text-sm">Status: {c.status}</div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Stats Cards */}
         <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
@@ -1406,6 +1445,7 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
             <table className="w-full">
               <thead>
                 <tr className="border-b-2 border-black bg-gray-50">
+                  <th className="text-left px-2 py-3 font-mono text-xs font-bold uppercase">Compare</th>
                   <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Candidate</th>
                   <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Task</th>
                   <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Status</th>
@@ -1418,13 +1458,27 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
               <tbody>
                 {displayCandidates.length === 0 ? (
                   <tr>
-                    <td colSpan={7} className="px-6 py-12 text-center font-mono text-sm text-gray-500">
+                    <td colSpan={8} className="px-6 py-12 text-center font-mono text-sm text-gray-500">
                       No assessments yet. Click &quot;New Assessment&quot; to create one.
                     </td>
                   </tr>
                 ) : (
                   displayCandidates.map((c) => (
                     <tr key={c.id} className="border-b border-gray-200 hover:bg-gray-50 transition-colors">
+                      <td className="px-2 py-4">
+                        <input
+                          type="checkbox"
+                          className="w-4 h-4 accent-purple-600"
+                          checked={compareIds.includes(c.id)}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setCompareIds((prev) => Array.from(new Set([...prev, c.id])).slice(-2));
+                            } else {
+                              setCompareIds((prev) => prev.filter((id) => id !== c.id));
+                            }
+                          }}
+                        />
+                      </td>
                       <td className="px-6 py-4">
                         <div className="font-bold">{c.name}</div>
                         <div className="font-mono text-xs text-gray-500">{c.email}</div>
@@ -1531,25 +1585,501 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
 };
 
 // ============================================================
-// CANDIDATE DETAIL PAGE
+// CANDIDATES PAGE
 // ============================================================
 
-const CandidateDetailPage = ({ candidate, onNavigate }) => {
-  const [activeTab, setActiveTab] = useState('results');
+const CandidatesPage = ({ onNavigate, onViewCandidate }) => {
+  const [items, setItems] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [q, setQ] = useState('');
+  const [expandedCandidateId, setExpandedCandidateId] = useState(null);
+  const [candidateAssessments, setCandidateAssessments] = useState([]);
+  const [loadingAssessments, setLoadingAssessments] = useState(false);
+  const [form, setForm] = useState({ email: '', full_name: '', position: '' });
+  const [editingId, setEditingId] = useState(null);
+  const [uploadingDoc, setUploadingDoc] = useState(null); // { candidateId, type: 'cv'|'job_spec' }
+  const [showDocUpload, setShowDocUpload] = useState(null); // candidateId to show upload panel for
 
-  if (!candidate) return null;
+  const loadCandidates = useCallback(async () => {
+    setLoading(true);
+    try {
+      const res = await candidatesApi.list({ q, limit: 100, offset: 0 });
+      setItems(res.data?.items || []);
+    } catch {
+      setItems([]);
+    } finally {
+      setLoading(false);
+    }
+  }, [q]);
 
-  const getRecommendation = (score) => {
-    if (score >= 8) return { label: 'RECOMMENDED', color: '#9D00FF' };
-    if (score >= 7) return { label: 'CONSIDER', color: '#FFAA00' };
-    return { label: 'NOT RECOMMENDED', color: '#FF0033' };
+  useEffect(() => {
+    loadCandidates();
+  }, [loadCandidates]);
+
+  const loadCandidateAssessments = async (candidateId) => {
+    setLoadingAssessments(true);
+    try {
+      const res = await assessmentsApi.list({ candidate_id: candidateId, limit: 100, offset: 0 });
+      setCandidateAssessments(res.data?.items || []);
+    } catch {
+      setCandidateAssessments([]);
+    } finally {
+      setLoadingAssessments(false);
+    }
   };
 
-  const rec = candidate.score ? getRecommendation(candidate.score) : null;
+  const handleCreateOrUpdate = async () => {
+    if (!form.email.trim() && !editingId) {
+      alert('Email is required');
+      return;
+    }
+    try {
+      if (editingId) {
+        await candidatesApi.update(editingId, {
+          full_name: form.full_name || null,
+          position: form.position || null,
+        });
+        setEditingId(null);
+      } else {
+        const res = await candidatesApi.create({
+          email: form.email.trim(),
+          full_name: form.full_name || null,
+          position: form.position || null,
+        });
+        // After creation, show document upload panel for the new candidate
+        if (res.data?.id) {
+          setShowDocUpload(res.data.id);
+        }
+      }
+      setForm({ email: '', full_name: '', position: '' });
+      await loadCandidates();
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to save candidate');
+    }
+  };
+
+  const handleDocUpload = async (candidateId, docType, file) => {
+    setUploadingDoc({ candidateId, type: docType });
+    try {
+      if (docType === 'cv') {
+        await candidatesApi.uploadCv(candidateId, file);
+      } else {
+        await candidatesApi.uploadJobSpec(candidateId, file);
+      }
+      await loadCandidates();
+    } catch (err) {
+      alert(err?.response?.data?.detail || `Failed to upload ${docType === 'cv' ? 'CV' : 'job spec'}`);
+    } finally {
+      setUploadingDoc(null);
+    }
+  };
+
+  const handleEdit = (candidate) => {
+    setEditingId(candidate.id);
+    setForm({
+      email: candidate.email || '',
+      full_name: candidate.full_name || '',
+      position: candidate.position || '',
+    });
+  };
+
+  const handleDelete = async (candidateId) => {
+    if (!window.confirm('Delete this candidate?')) return;
+    try {
+      await candidatesApi.remove(candidateId);
+      if (expandedCandidateId === candidateId) {
+        setExpandedCandidateId(null);
+        setCandidateAssessments([]);
+      }
+      await loadCandidates();
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to delete candidate');
+    }
+  };
 
   return (
     <div>
-      <DemoBanner />
+      <DashboardNav currentPage="candidates" onNavigate={onNavigate} />
+      <div className="max-w-7xl mx-auto px-6 py-8">
+        <div className="flex items-center justify-between mb-6">
+          <div>
+            <h1 className="text-3xl font-bold">Candidates</h1>
+            <p className="font-mono text-sm text-gray-600 mt-1">Search and manage candidate profiles</p>
+          </div>
+          <div className="font-mono text-sm text-gray-600">{items.length} total</div>
+        </div>
+
+        <div className="border-2 border-black p-4 mb-6">
+          <div className="font-mono text-xs text-gray-500 mb-2">Search</div>
+          <input
+            type="text"
+            className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+            placeholder="Search by name or email"
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+          />
+        </div>
+
+        <div className="border-2 border-black p-4 mb-6">
+          <div className="font-mono text-xs text-gray-500 mb-2">{editingId ? 'Edit Candidate' : 'Create Candidate'}</div>
+          <div className="grid md:grid-cols-3 gap-2">
+            <input
+              type="email"
+              className="border-2 border-black px-3 py-2 font-mono text-sm"
+              placeholder="email@company.com"
+              value={form.email}
+              onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
+              disabled={Boolean(editingId)}
+            />
+            <input
+              type="text"
+              className="border-2 border-black px-3 py-2 font-mono text-sm"
+              placeholder="Full name"
+              value={form.full_name}
+              onChange={(e) => setForm((p) => ({ ...p, full_name: e.target.value }))}
+            />
+            <input
+              type="text"
+              className="border-2 border-black px-3 py-2 font-mono text-sm"
+              placeholder="Position"
+              value={form.position}
+              onChange={(e) => setForm((p) => ({ ...p, position: e.target.value }))}
+            />
+          </div>
+          <div className="flex gap-2 mt-3">
+            <button
+              type="button"
+              className="border-2 border-black px-4 py-2 font-mono text-sm font-bold text-white"
+              style={{ backgroundColor: '#9D00FF' }}
+              onClick={handleCreateOrUpdate}
+            >
+              {editingId ? 'Update Candidate' : 'Create Candidate'}
+            </button>
+            {editingId && (
+              <button
+                type="button"
+                className="border-2 border-black px-4 py-2 font-mono text-sm font-bold hover:bg-black hover:text-white"
+                onClick={() => {
+                  setEditingId(null);
+                  setForm({ email: '', full_name: '', position: '' });
+                }}
+              >
+                Cancel
+              </button>
+            )}
+          </div>
+        </div>
+
+        {/* Document upload panel (shown after creating a new candidate) */}
+        {showDocUpload && (() => {
+          const candidate = items.find(c => c.id === showDocUpload);
+          if (!candidate) return null;
+          return (
+            <div className="border-2 border-black p-4 mb-6" style={{ borderColor: '#9D00FF' }}>
+              <div className="flex items-center justify-between mb-3">
+                <div>
+                  <div className="font-mono text-xs text-gray-500">Upload Documents for {candidate.full_name || candidate.email}</div>
+                  <div className="font-mono text-xs text-gray-400 mt-1">Upload CV and job specification before sending the assessment</div>
+                </div>
+                <button type="button" className="font-mono text-xs text-gray-500 hover:text-black" onClick={() => setShowDocUpload(null)}>Close</button>
+              </div>
+              <div className="grid md:grid-cols-2 gap-4">
+                <div className="border border-gray-300 p-3">
+                  <div className="font-mono text-xs font-bold mb-2">CV Upload {candidate.cv_filename && <span className="text-green-600 font-normal ml-1">Uploaded</span>}</div>
+                  {candidate.cv_filename ? (
+                    <div className="font-mono text-xs text-gray-600">{candidate.cv_filename}</div>
+                  ) : null}
+                  <input
+                    type="file"
+                    accept=".pdf,.docx"
+                    className="font-mono text-xs mt-2"
+                    disabled={uploadingDoc?.candidateId === candidate.id && uploadingDoc?.type === 'cv'}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleDocUpload(candidate.id, 'cv', file);
+                    }}
+                  />
+                  {uploadingDoc?.candidateId === candidate.id && uploadingDoc?.type === 'cv' && (
+                    <div className="font-mono text-xs text-gray-500 mt-1">Uploading...</div>
+                  )}
+                </div>
+                <div className="border border-gray-300 p-3">
+                  <div className="font-mono text-xs font-bold mb-2">Job Spec Upload {candidate.job_spec_filename && <span className="text-green-600 font-normal ml-1">Uploaded</span>}</div>
+                  {candidate.job_spec_filename ? (
+                    <div className="font-mono text-xs text-gray-600">{candidate.job_spec_filename}</div>
+                  ) : null}
+                  <input
+                    type="file"
+                    accept=".pdf,.docx,.txt"
+                    className="font-mono text-xs mt-2"
+                    disabled={uploadingDoc?.candidateId === candidate.id && uploadingDoc?.type === 'job_spec'}
+                    onChange={(e) => {
+                      const file = e.target.files?.[0];
+                      if (file) handleDocUpload(candidate.id, 'job_spec', file);
+                    }}
+                  />
+                  {uploadingDoc?.candidateId === candidate.id && uploadingDoc?.type === 'job_spec' && (
+                    <div className="font-mono text-xs text-gray-500 mt-1">Uploading...</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        })()}
+
+        <div className="border-2 border-black overflow-x-auto">
+          <table className="w-full min-w-[900px]">
+            <thead>
+              <tr className="border-b-2 border-black bg-gray-50">
+                <th className="px-4 py-3 text-left font-mono text-xs font-bold uppercase">Name</th>
+                <th className="px-4 py-3 text-left font-mono text-xs font-bold uppercase">Email</th>
+                <th className="px-4 py-3 text-left font-mono text-xs font-bold uppercase">Position</th>
+                <th className="px-4 py-3 text-left font-mono text-xs font-bold uppercase">Documents</th>
+                <th className="px-4 py-3 text-left font-mono text-xs font-bold uppercase">Created</th>
+                <th className="px-4 py-3 text-left font-mono text-xs font-bold uppercase">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {loading ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center font-mono text-sm text-gray-500">Loading candidates...</td>
+                </tr>
+              ) : items.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="px-4 py-8 text-center font-mono text-sm text-gray-500">No candidates found.</td>
+                </tr>
+              ) : (
+                items.map((c) => (
+                  <React.Fragment key={c.id}>
+                  <tr className="border-b border-gray-200 align-top">
+                    <td className="px-4 py-3 font-bold">{c.full_name || '--'}</td>
+                    <td className="px-4 py-3 font-mono text-sm">{c.email}</td>
+                    <td className="px-4 py-3 font-mono text-sm">{c.position || '--'}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex gap-1">
+                        <span className={`px-1.5 py-0.5 font-mono text-xs border ${c.cv_filename ? 'bg-green-50 border-green-600 text-green-700' : 'bg-gray-50 border-gray-300 text-gray-400'}`}>
+                          CV {c.cv_filename ? '✓' : '—'}
+                        </span>
+                        <span className={`px-1.5 py-0.5 font-mono text-xs border ${c.job_spec_filename ? 'bg-green-50 border-green-600 text-green-700' : 'bg-gray-50 border-gray-300 text-gray-400'}`}>
+                          JD {c.job_spec_filename ? '✓' : '—'}
+                        </span>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 font-mono text-sm">{c.created_at ? new Date(c.created_at).toLocaleDateString() : '--'}</td>
+                    <td className="px-4 py-3">
+                      <div className="flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
+                          onClick={() => handleEdit(c)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
+                          onClick={() => setShowDocUpload(showDocUpload === c.id ? null : c.id)}
+                        >
+                          Upload Docs
+                        </button>
+                        <button
+                          type="button"
+                          className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
+                          onClick={async () => {
+                            if (expandedCandidateId === c.id) {
+                              setExpandedCandidateId(null);
+                              setCandidateAssessments([]);
+                              return;
+                            }
+                            setExpandedCandidateId(c.id);
+                            await loadCandidateAssessments(c.id);
+                          }}
+                        >
+                          {expandedCandidateId === c.id ? 'Hide' : 'Assessments'}
+                        </button>
+                        <button
+                          type="button"
+                          className="border border-red-600 text-red-700 px-2 py-1 font-mono text-xs hover:bg-red-600 hover:text-white"
+                          onClick={() => handleDelete(c.id)}
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                  {expandedCandidateId === c.id && (
+                    <tr className="border-b border-gray-200">
+                      <td colSpan={6} className="px-4 py-3">
+                        <div className="border border-gray-300 p-2">
+                          <div className="font-mono text-xs text-gray-500 mb-2">Assessments</div>
+                          {loadingAssessments ? (
+                            <div className="font-mono text-xs text-gray-500">Loading...</div>
+                          ) : candidateAssessments.length === 0 ? (
+                            <div className="font-mono text-xs text-gray-500">No assessments for this candidate.</div>
+                          ) : (
+                            <div className="space-y-2">
+                              {candidateAssessments.map((a) => (
+                                <div key={a.id} className="flex items-center justify-between border border-gray-200 p-2">
+                                  <div>
+                                    <div className="font-mono text-xs">{a.task_name || 'Assessment'}</div>
+                                    <div className="font-mono text-xs text-gray-500">Status: {a.status} | Score: {a.score ?? '--'}</div>
+                                  </div>
+                                  <button
+                                    type="button"
+                                    className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
+                                    onClick={() =>
+                                      onViewCandidate({
+                                        id: a.id,
+                                        name: a.candidate_name || c.full_name || c.email,
+                                        email: a.candidate_email || c.email,
+                                        task: a.task_name || 'Assessment',
+                                        status: a.status || 'pending',
+                                        score: a.score ?? null,
+                                        time: a.duration_taken ? `${Math.round(a.duration_taken / 60)}m` : '—',
+                                        position: c.position || '',
+                                        completedDate: a.completed_at ? new Date(a.completed_at).toLocaleDateString() : null,
+                                        breakdown: a.breakdown || null,
+                                        prompts: a.prompt_count ?? 0,
+                                        promptsList: a.prompts_list || [],
+                                        timeline: a.timeline || [],
+                                        results: a.results || [],
+                                        token: a.token,
+                                        _raw: a,
+                                      })
+                                    }
+                                  >
+                                    Open Detail
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </React.Fragment>
+                ))
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ============================================================
+// CANDIDATE DETAIL PAGE
+// ============================================================
+
+export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAdded }) => {
+  const [activeTab, setActiveTab] = useState('results');
+  const [busyAction, setBusyAction] = useState('');
+  const [noteText, setNoteText] = useState('');
+  const [avgCalibrationScore, setAvgCalibrationScore] = useState(null);
+
+  const [expandedCategory, setExpandedCategory] = useState(null);
+
+  const getRecommendation = (score100) => {
+    if (score100 >= 80) return { label: 'STRONG HIRE', color: '#16a34a' };
+    if (score100 >= 65) return { label: 'HIRE', color: '#2563eb' };
+    if (score100 >= 50) return { label: 'CONSIDER', color: '#d97706' };
+    return { label: 'NOT RECOMMENDED', color: '#FF0033' };
+  };
+
+  const score100 = candidate._raw?.final_score || (candidate.score ? candidate.score * 10 : null);
+  const rec = score100 != null ? getRecommendation(score100) : null;
+  const assessmentId = candidate?._raw?.id;
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadCalibrationAverage = async () => {
+      try {
+        const res = await analyticsApi.get();
+        if (!cancelled) {
+          setAvgCalibrationScore(res.data?.avg_calibration_score ?? null);
+        }
+      } catch {
+        if (!cancelled) setAvgCalibrationScore(null);
+      }
+    };
+    loadCalibrationAverage();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  if (!candidate) return null;
+
+  const handleDownloadReport = async () => {
+    if (!assessmentId) return;
+    setBusyAction('report');
+    try {
+      const res = await assessmentsApi.downloadReport(assessmentId);
+      const blob = new Blob([res.data], { type: 'application/pdf' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `assessment-${assessmentId}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to download report');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const handlePostToWorkable = async () => {
+    if (!assessmentId) return;
+    setBusyAction('workable');
+    try {
+      await assessmentsApi.postToWorkable(assessmentId);
+      alert('Posted to Workable');
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to post to Workable');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const handleDeleteAssessment = async () => {
+    if (!assessmentId) return;
+    if (!window.confirm('Delete this assessment? This cannot be undone.')) return;
+    setBusyAction('delete');
+    try {
+      await assessmentsApi.remove(assessmentId);
+      if (onDeleted) onDeleted();
+      onNavigate('dashboard');
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to delete assessment');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const handleAddNote = async () => {
+    if (!assessmentId || !noteText.trim()) return;
+    setBusyAction('note');
+    try {
+      const res = await assessmentsApi.addNote(assessmentId, noteText.trim());
+      if (onNoteAdded && Array.isArray(res?.data?.timeline)) {
+        onNoteAdded(res.data.timeline);
+      }
+      setNoteText('');
+      alert('Note added');
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to add note');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  return (
+    <div>
       <DashboardNav currentPage="dashboard" onNavigate={onNavigate} />
       <div className="max-w-7xl mx-auto px-6 py-8">
         {/* Back button */}
@@ -1575,22 +2105,46 @@ const CandidateDetailPage = ({ candidate, onNavigate }) => {
             </div>
           </div>
           {/* Score card */}
-          {candidate.score && (
+          {(score100 != null || candidate.score) && (
             <div className="border-2 bg-black p-6 text-white" style={{ borderColor: '#9D00FF' }}>
-              <div className="text-5xl font-bold mb-2" style={{ color: '#9D00FF' }}>
-                {candidate.score}/10
+              <div className="text-5xl font-bold mb-1" style={{ color: '#9D00FF' }}>
+                {score100 != null ? `${Math.round(score100)}` : candidate.score}<span className="text-lg text-gray-400">/{score100 != null ? '100' : '10'}</span>
               </div>
               {rec && (
                 <div
-                  className="inline-block px-3 py-1 text-xs font-bold font-mono text-white mb-4 border-2 border-black"
+                  className="inline-block px-3 py-1 text-xs font-bold font-mono text-white mb-3"
                   style={{ backgroundColor: rec.color }}
                 >
                   {rec.label}
                 </div>
               )}
-              {candidate.breakdown && (
-                <div className="space-y-2 font-mono text-xs">
-                  <div className="flex justify-between"><span className="text-gray-400">Bugs Fixed</span><span>{candidate.breakdown.bugsFixed}</span></div>
+              {candidate.breakdown?.categoryScores && (
+                <div className="space-y-1.5 font-mono text-xs">
+                  {[
+                    ['Task Completion', 'task_completion'],
+                    ['Prompt Clarity', 'prompt_clarity'],
+                    ['Context', 'context_provision'],
+                    ['Independence', 'independence'],
+                    ['Utilization', 'utilization'],
+                    ['Communication', 'communication'],
+                    ['Approach', 'approach'],
+                    ['CV Match', 'cv_match'],
+                  ].map(([label, key]) => {
+                    const val = candidate.breakdown.categoryScores[key];
+                    return val != null ? (
+                      <div key={key} className="flex items-center gap-2">
+                        <span className="text-gray-400 w-28 truncate">{label}</span>
+                        <div className="flex-1 bg-gray-700 h-1.5 rounded">
+                          <div className="h-full rounded" style={{ width: `${(val / 10) * 100}%`, backgroundColor: val >= 7 ? '#16a34a' : val >= 5 ? '#d97706' : '#dc2626' }} />
+                        </div>
+                        <span className="w-8 text-right">{val}</span>
+                      </div>
+                    ) : null;
+                  })}
+                </div>
+              )}
+              {!candidate.breakdown?.categoryScores && candidate.breakdown && (
+                <div className="space-y-1.5 font-mono text-xs">
                   <div className="flex justify-between"><span className="text-gray-400">Tests Passed</span><span>{candidate.breakdown.testsPassed}</span></div>
                   <div className="flex justify-between"><span className="text-gray-400">Code Quality</span><span>{candidate.breakdown.codeQuality}/10</span></div>
                   <div className="flex justify-between"><span className="text-gray-400">Time Efficiency</span><span>{candidate.breakdown.timeEfficiency}/10</span></div>
@@ -1602,8 +2156,54 @@ const CandidateDetailPage = ({ candidate, onNavigate }) => {
         </div>
 
         {/* Tabs */}
+        <div className="flex flex-wrap gap-3 mb-6">
+          <button
+            type="button"
+            className="border-2 border-black px-4 py-2 font-mono text-sm font-bold hover:bg-black hover:text-white"
+            onClick={handleDownloadReport}
+            disabled={busyAction !== ''}
+          >
+            {busyAction === 'report' ? 'Downloading…' : 'Download PDF'}
+          </button>
+          <button
+            type="button"
+            className="border-2 border-black px-4 py-2 font-mono text-sm font-bold hover:bg-black hover:text-white"
+            onClick={handlePostToWorkable}
+            disabled={busyAction !== ''}
+          >
+            {busyAction === 'workable' ? 'Posting…' : 'Post to Workable'}
+          </button>
+          <button
+            type="button"
+            className="border-2 border-red-600 text-red-700 px-4 py-2 font-mono text-sm font-bold hover:bg-red-600 hover:text-white"
+            onClick={handleDeleteAssessment}
+            disabled={busyAction !== ''}
+          >
+            {busyAction === 'delete' ? 'Deleting…' : 'Delete'}
+          </button>
+        </div>
+        <div className="border-2 border-black p-4 mb-6">
+          <div className="font-mono text-xs text-gray-500 mb-2">Recruiter Notes</div>
+          <div className="flex gap-2">
+            <input
+              type="text"
+              className="flex-1 border-2 border-black px-3 py-2 font-mono text-sm"
+              placeholder="Add note about this candidate"
+              value={noteText}
+              onChange={(e) => setNoteText(e.target.value)}
+            />
+            <button
+              type="button"
+              className="border-2 border-black px-4 py-2 font-mono text-sm font-bold hover:bg-black hover:text-white"
+              onClick={handleAddNote}
+              disabled={busyAction !== ''}
+            >
+              {busyAction === 'note' ? 'Saving…' : 'Save Note'}
+            </button>
+          </div>
+        </div>
         <div className="flex border-2 border-black mb-6">
-          {['results', 'ai-usage', 'timeline'].map((tab) => (
+          {['results', 'ai-usage', 'cv-fit', 'timeline'].map((tab) => (
             <button
               key={tab}
               className={`flex-1 px-6 py-3 font-mono text-sm font-bold border-r-2 border-black last:border-r-0 transition-colors ${
@@ -1614,68 +2214,409 @@ const CandidateDetailPage = ({ candidate, onNavigate }) => {
             >
               {tab === 'results' && 'Results'}
               {tab === 'ai-usage' && 'AI Usage'}
+              {tab === 'cv-fit' && 'CV & Fit'}
               {tab === 'timeline' && 'Timeline'}
             </button>
           ))}
         </div>
 
         {/* Tab Content */}
-        {activeTab === 'results' && (
-          <div className="space-y-4">
-            {candidate.results.length > 0 ? (
-              candidate.results.map((r, i) => (
-                <div key={i} className="border-2 border-black bg-green-50 p-6 flex items-start gap-4">
-                  <CheckCircle size={24} style={{ color: '#9D00FF' }} className="mt-1 flex-shrink-0" />
-                  <div>
-                    <div className="font-bold text-lg">
-                      {r.title} <span className="font-mono text-sm text-gray-500">({r.score})</span>
-                    </div>
-                    <p className="font-mono text-sm text-gray-600 mt-1">{r.description}</p>
-                  </div>
-                </div>
-              ))
-            ) : (
-              <div className="border-2 border-black p-8 text-center font-mono text-gray-500">
-                No results yet — assessment in progress
-              </div>
-            )}
-          </div>
-        )}
+        {activeTab === 'results' && (() => {
+          const assessment = candidate._raw || {};
+          const bd = candidate.breakdown || {};
+          const catScores = bd.categoryScores || bd.detailedScores?.category_scores || {};
+          const detailedScores = bd.detailedScores || assessment.prompt_analytics?.detailed_scores || {};
+          const explanations = bd.explanations || assessment.prompt_analytics?.explanations || {};
 
-        {activeTab === 'ai-usage' && (
-          <div>
-            <div className="border-2 border-black p-6 mb-6" style={{ backgroundColor: '#f3e8ff' }}>
-              <div className="flex gap-8">
-                <div>
-                  <div className="font-mono text-xs text-gray-600 mb-1">Prompts Used</div>
-                  <div className="text-3xl font-bold">{candidate.prompts}</div>
-                </div>
-                <div>
-                  <div className="font-mono text-xs text-gray-600 mb-1">Quality Score</div>
-                  <div className="text-3xl font-bold">{candidate.breakdown?.aiUsage || '—'}/10</div>
-                </div>
-              </div>
-            </div>
-            <div className="space-y-4">
-              {candidate.promptsList.map((p, i) => (
-                <div key={i} className="border-2 border-black p-6">
-                  <div className="flex items-start gap-3">
-                    <Bot size={20} className="mt-1 flex-shrink-0" style={{ color: '#9D00FF' }} />
-                    <div>
-                      <p className="font-mono text-sm mb-2">&quot;{p.text}&quot;</p>
-                      <p className="text-sm italic" style={{ color: '#9D00FF' }}>{p.assessment}</p>
-                    </div>
+          const CATEGORY_CONFIG = [
+            { key: 'task_completion', label: 'Task Completion', icon: '✅', weight: '20%' },
+            { key: 'prompt_clarity', label: 'Prompt Clarity', icon: '🎯', weight: '15%' },
+            { key: 'context_provision', label: 'Context Provision', icon: '📎', weight: '15%' },
+            { key: 'independence', label: 'Independence & Efficiency', icon: '🧠', weight: '20%' },
+            { key: 'utilization', label: 'Response Utilization', icon: '⚡', weight: '10%' },
+            { key: 'communication', label: 'Communication Quality', icon: '✍️', weight: '10%' },
+            { key: 'approach', label: 'Debugging & Design', icon: '🔧', weight: '5%' },
+            { key: 'cv_match', label: 'CV-Job Fit', icon: '📄', weight: '5%' },
+          ];
+
+          const METRIC_LABELS = {
+            tests_passed_ratio: 'Tests Passed', time_compliance: 'Time Compliance', time_efficiency: 'Time Efficiency',
+            prompt_length_quality: 'Prompt Length', question_clarity: 'Clear Questions', prompt_specificity: 'Specificity', vagueness_score: 'Avoids Vagueness',
+            code_context_rate: 'Includes Code', error_context_rate: 'Includes Errors', reference_rate: 'References', attempt_mention_rate: 'Prior Attempts',
+            first_prompt_delay: 'Thinks Before Asking', prompt_spacing: 'Spacing Between', prompt_efficiency: 'Prompts/Test', token_efficiency: 'Token Efficiency', pre_prompt_effort: 'Self-Attempt Rate',
+            post_prompt_changes: 'Uses Responses', wasted_prompts: 'Actionable Prompts', iteration_quality: 'Iterative Refinement',
+            grammar_score: 'Grammar', readability_score: 'Readability', tone_score: 'Professional Tone',
+            debugging_score: 'Debugging Strategy', design_score: 'Design Thinking',
+            cv_job_match_score: 'Overall Match', skills_match: 'Skills Alignment', experience_relevance: 'Experience',
+          };
+
+          const radarData = CATEGORY_CONFIG.filter(c => catScores[c.key] != null).map(c => ({
+            signal: c.label.split(' ')[0],
+            score: catScores[c.key] || 0,
+            fullMark: 10,
+          }));
+
+          return (
+            <div className="space-y-6">
+              {/* Category Radar Chart */}
+              {radarData.length > 0 && (
+                <div className="border-2 border-black p-4">
+                  <div className="font-bold mb-4">Category Breakdown</div>
+                  <div style={{ width: '100%', height: 350 }}>
+                    <ResponsiveContainer>
+                      <RadarChart data={radarData}>
+                        <PolarGrid />
+                        <PolarAngleAxis dataKey="signal" tick={{ fontSize: 11, fontFamily: 'monospace' }} />
+                        <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
+                        <Radar name="Score" dataKey="score" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.3} />
+                      </RadarChart>
+                    </ResponsiveContainer>
                   </div>
                 </div>
-              ))}
-              {candidate.promptsList.length === 0 && (
-                <div className="border-2 border-black p-8 text-center font-mono text-gray-500">
-                  No prompt data available yet
+              )}
+
+              {/* Expandable Category Sections */}
+              <div className="space-y-3">
+                {CATEGORY_CONFIG.map((cat) => {
+                  const catScore = catScores[cat.key];
+                  const metrics = detailedScores[cat.key] || {};
+                  const catExplanations = explanations[cat.key] || {};
+                  const isExpanded = expandedCategory === cat.key;
+
+                  if (catScore == null && Object.keys(metrics).length === 0) return null;
+
+                  return (
+                    <div key={cat.key} className="border-2 border-black">
+                      <button
+                        type="button"
+                        className="w-full flex items-center justify-between p-4 hover:bg-gray-50 text-left"
+                        onClick={() => setExpandedCategory(isExpanded ? null : cat.key)}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span>{cat.icon}</span>
+                          <span className="font-bold">{cat.label}</span>
+                          <span className="font-mono text-xs text-gray-500">(Weight: {cat.weight})</span>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          {catScore != null && (
+                            <span className="font-mono font-bold text-lg" style={{ color: catScore >= 7 ? '#16a34a' : catScore >= 5 ? '#d97706' : '#dc2626' }}>
+                              {catScore}/10
+                            </span>
+                          )}
+                          <span className="font-mono text-gray-400">{isExpanded ? '▲' : '▼'}</span>
+                        </div>
+                      </button>
+                      {isExpanded && (
+                        <div className="border-t-2 border-black p-4 space-y-3 bg-gray-50">
+                          {Object.entries(metrics).map(([metricKey, metricVal]) => (
+                            <div key={metricKey}>
+                              <div className="flex items-center gap-3 mb-1">
+                                <div className="font-mono text-sm w-44 text-gray-700">{METRIC_LABELS[metricKey] || metricKey.replace(/_/g, ' ')}</div>
+                                <div className="flex-1 bg-gray-200 h-2.5 border border-gray-300 rounded">
+                                  <div
+                                    className="h-full rounded"
+                                    style={{
+                                      width: `${((metricVal || 0) / 10) * 100}%`,
+                                      backgroundColor: (metricVal || 0) >= 7 ? '#16a34a' : (metricVal || 0) >= 5 ? '#d97706' : '#dc2626',
+                                    }}
+                                  />
+                                </div>
+                                <div className="font-mono text-sm w-14 text-right font-bold">
+                                  {metricVal != null ? `${metricVal}/10` : '—'}
+                                </div>
+                              </div>
+                              {catExplanations[metricKey] && (
+                                <div className="font-mono text-xs text-gray-500 ml-0 pl-44 mt-0.5">{catExplanations[metricKey]}</div>
+                              )}
+                            </div>
+                          ))}
+                          {Object.keys(metrics).length === 0 && (
+                            <div className="font-mono text-sm text-gray-500">No detailed metrics available for this category.</div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Assessment Metadata */}
+              <div className="border-2 border-black p-4">
+                <div className="font-bold mb-3">Assessment Metadata</div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3 font-mono text-sm">
+                  <div><span className="text-gray-500">Duration:</span> {assessment.total_duration_seconds ? `${Math.floor(assessment.total_duration_seconds / 60)}m ${assessment.total_duration_seconds % 60}s` : '—'}</div>
+                  <div><span className="text-gray-500">Total Prompts:</span> {assessment.total_prompts ?? '—'}</div>
+                  <div><span className="text-gray-500">Tokens Used:</span> {((assessment.total_input_tokens || 0) + (assessment.total_output_tokens || 0)).toLocaleString()}</div>
+                  <div><span className="text-gray-500">Tests:</span> {assessment.tests_passed ?? 0}/{assessment.tests_total ?? 0}</div>
+                  <div><span className="text-gray-500">Started:</span> {assessment.started_at ? new Date(assessment.started_at).toLocaleString() : '—'}</div>
+                  <div><span className="text-gray-500">Submitted:</span> {assessment.completed_at ? new Date(assessment.completed_at).toLocaleString() : '—'}</div>
+                </div>
+              </div>
+
+              {/* Fraud Flags */}
+              {assessment.prompt_fraud_flags && assessment.prompt_fraud_flags.length > 0 && (
+                <div className="border-2 border-red-500 bg-red-50 p-4">
+                  <div className="font-bold text-red-700 mb-2 flex items-center gap-2"><AlertTriangle size={18} /> Fraud Flags Detected</div>
+                  {assessment.prompt_fraud_flags.map((flag, i) => (
+                    <div key={i} className="font-mono text-sm text-red-700 mb-1">
+                      • {flag.type}: {flag.evidence} (confidence: {(flag.confidence * 100).toFixed(0)}%)
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Legacy results */}
+              {candidate.results.length > 0 && (
+                <div className="space-y-3">
+                  <div className="font-bold">Test Results</div>
+                  {candidate.results.map((r, i) => (
+                    <div key={i} className="border-2 border-black bg-green-50 p-4 flex items-start gap-3">
+                      <CheckCircle size={20} style={{ color: '#9D00FF' }} className="mt-0.5 flex-shrink-0" />
+                      <div>
+                        <div className="font-bold">{r.title} <span className="font-mono text-sm text-gray-500">({r.score})</span></div>
+                        <p className="font-mono text-sm text-gray-600 mt-1">{r.description}</p>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
             </div>
-          </div>
-        )}
+          );
+        })()}
+
+        {activeTab === 'ai-usage' && (() => {
+          const assessment = candidate._raw || {};
+
+          return (
+            <div className="space-y-6">
+              {/* Summary Stats */}
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+                <div className="border-2 border-black p-4">
+                  <div className="font-mono text-xs text-gray-500">Avg Prompt Quality</div>
+                  <div className="text-2xl font-bold">{assessment.prompt_quality_score?.toFixed(1) || '--'}<span className="text-sm text-gray-500">/10</span></div>
+                </div>
+                <div className="border-2 border-black p-4">
+                  <div className="font-mono text-xs text-gray-500">Time to First Prompt</div>
+                  <div className="text-2xl font-bold">{assessment.time_to_first_prompt_seconds ? `${Math.floor(assessment.time_to_first_prompt_seconds / 60)}m ${Math.round(assessment.time_to_first_prompt_seconds % 60)}s` : '--'}</div>
+                </div>
+                <div className="border-2 border-black p-4">
+                  <div className="font-mono text-xs text-gray-500">Browser Focus</div>
+                  <div className="text-2xl font-bold" style={assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 ? { color: '#dc2626' } : {}}>{assessment.browser_focus_ratio != null ? `${Math.round(assessment.browser_focus_ratio * 100)}%` : '--'}</div>
+                </div>
+                <div className="border-2 border-black p-4">
+                  <div className="font-mono text-xs text-gray-500">Tab Switches</div>
+                  <div className="text-2xl font-bold" style={assessment.tab_switch_count > 5 ? { color: '#dc2626' } : {}}>{assessment.tab_switch_count ?? '--'}</div>
+                </div>
+                <div className="border-2 border-black p-4">
+                  <div className="font-mono text-xs text-gray-500">Calibration</div>
+                  <div className="text-2xl font-bold">{assessment.calibration_score != null ? `${assessment.calibration_score.toFixed(1)}/10` : '--'}</div>
+                  <div className="font-mono text-xs text-gray-500 mt-1">
+                    vs avg {avgCalibrationScore != null ? `${avgCalibrationScore.toFixed(1)}/10` : '--'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Browser Focus Warning */}
+              {assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 && (
+                <div className="border-2 border-yellow-500 bg-yellow-50 p-4">
+                  <div className="font-bold text-yellow-700 flex items-center gap-2"><AlertTriangle size={18} /> Low Browser Focus ({Math.round(assessment.browser_focus_ratio * 100)}%)</div>
+                  <div className="font-mono text-xs text-yellow-600 mt-1">Candidate spent less than 80% of assessment time with the browser in focus. {assessment.tab_switch_count > 5 ? `${assessment.tab_switch_count} tab switches recorded.` : ''}</div>
+                </div>
+              )}
+
+              {/* Prompt Progression Chart */}
+              {assessment.prompt_analytics?.per_prompt_scores?.length > 0 && (
+                <div className="border-2 border-black p-4">
+                  <div className="font-bold mb-4">Prompt Quality Progression</div>
+                  <div style={{ width: '100%', height: 200 }}>
+                    <ResponsiveContainer>
+                      <LineChart data={assessment.prompt_analytics.per_prompt_scores.map((p, i) => ({ name: `#${i + 1}`, clarity: p.clarity || 0, specificity: p.specificity || 0, efficiency: p.efficiency || 0 }))}>
+                        <CartesianGrid strokeDasharray="3 3" />
+                        <XAxis dataKey="name" tick={{ fontSize: 10, fontFamily: 'monospace' }} />
+                        <YAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
+                        <Tooltip />
+                        <Line type="monotone" dataKey="clarity" stroke="#9D00FF" strokeWidth={2} dot={{ r: 3 }} />
+                        <Line type="monotone" dataKey="specificity" stroke="#000" strokeWidth={1} />
+                        <Line type="monotone" dataKey="efficiency" stroke="#666" strokeWidth={1} />
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {/* Prompt Log */}
+              <div className="border-2 border-black p-4">
+                <div className="font-bold mb-4">Prompt Log ({(candidate.promptsList || []).length} prompts)</div>
+                <div className="space-y-3">
+                  {(candidate.promptsList || []).map((p, i) => {
+                    const perPrompt = assessment.prompt_analytics?.per_prompt_scores?.[i];
+                    return (
+                      <div key={i} className="border border-gray-300 p-3">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-3">
+                            <span className="font-mono text-xs font-bold bg-black text-white px-2 py-0.5">#{i + 1}</span>
+                            {p.timestamp && <span className="font-mono text-xs text-gray-400">{new Date(p.timestamp).toLocaleTimeString()}</span>}
+                            {perPrompt && <span className="font-mono text-xs text-gray-500">{perPrompt.word_count} words</span>}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {perPrompt && (
+                              <>
+                                <span className="font-mono text-xs px-2 py-0.5 border" style={{ borderColor: '#9D00FF', color: '#9D00FF' }}>C:{perPrompt.clarity}</span>
+                                <span className="font-mono text-xs px-2 py-0.5 border border-gray-400">S:{perPrompt.specificity}</span>
+                                <span className="font-mono text-xs px-2 py-0.5 border border-gray-400">E:{perPrompt.efficiency}</span>
+                              </>
+                            )}
+                          </div>
+                        </div>
+                        <div className="font-mono text-sm bg-gray-50 p-2 rounded">{p.message || p.text}</div>
+                        <div className="flex items-center gap-2 mt-2">
+                          {perPrompt?.has_context && <span className="text-xs font-mono px-2 py-0.5 bg-green-100 text-green-700 border border-green-300">Has Context</span>}
+                          {perPrompt?.is_vague && <span className="text-xs font-mono px-2 py-0.5 bg-red-100 text-red-700 border border-red-300">Vague</span>}
+                          {p.paste_detected && <span className="text-xs font-mono px-2 py-0.5 bg-yellow-100 text-yellow-700 border border-yellow-400">PASTED</span>}
+                          {p.response_latency_ms && <span className="text-xs font-mono px-2 py-0.5 bg-gray-100 border border-gray-300">{p.response_latency_ms}ms</span>}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {(candidate.promptsList || []).length === 0 && (
+                    <div className="border-2 border-black p-8 text-center font-mono text-gray-500">
+                      No prompt data available yet
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Prompt Statistics */}
+              {(candidate.promptsList || []).length > 0 && assessment.prompt_analytics && (
+                <div className="border-2 border-black p-4">
+                  <div className="font-bold mb-3">Prompt Statistics</div>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3 font-mono text-sm">
+                    <div><span className="text-gray-500">Avg Words:</span> {assessment.prompt_analytics.metric_details?.word_count_avg || '—'}</div>
+                    <div><span className="text-gray-500">Questions:</span> {assessment.prompt_analytics.metric_details?.question_presence ? `${(assessment.prompt_analytics.metric_details.question_presence * 100).toFixed(0)}%` : '—'}</div>
+                    <div><span className="text-gray-500">Code Context:</span> {assessment.prompt_analytics.metric_details?.code_snippet_rate ? `${(assessment.prompt_analytics.metric_details.code_snippet_rate * 100).toFixed(0)}%` : '—'}</div>
+                    <div><span className="text-gray-500">Paste Detected:</span> {assessment.prompt_analytics.metric_details?.paste_ratio ? `${(assessment.prompt_analytics.metric_details.paste_ratio * 100).toFixed(0)}%` : '0%'}</div>
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+
+        {activeTab === 'cv-fit' && (() => {
+          const assessment = candidate._raw || {};
+          const cvMatch = assessment.cv_job_match_details || assessment.prompt_analytics?.cv_job_match?.details || {};
+          const matchScores = assessment.prompt_analytics?.cv_job_match || {};
+          const overall = matchScores.overall || assessment.cv_job_match_score;
+          const skills = matchScores.skills;
+          const experience = matchScores.experience;
+
+          return (
+            <div className="space-y-6">
+              {/* Fit Score Cards */}
+              {overall != null ? (
+                <>
+                  <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div className="border-2 border-black p-6 text-center">
+                      <div className="font-mono text-xs text-gray-500 mb-1">Overall Match</div>
+                      <div className="text-4xl font-bold" style={{ color: overall >= 7 ? '#16a34a' : overall >= 5 ? '#d97706' : '#dc2626' }}>{overall}/10</div>
+                    </div>
+                    <div className="border-2 border-black p-6 text-center">
+                      <div className="font-mono text-xs text-gray-500 mb-1">Skills Match</div>
+                      <div className="text-4xl font-bold" style={{ color: skills >= 7 ? '#16a34a' : skills >= 5 ? '#d97706' : '#dc2626' }}>{skills != null ? `${skills}/10` : '—'}</div>
+                    </div>
+                    <div className="border-2 border-black p-6 text-center">
+                      <div className="font-mono text-xs text-gray-500 mb-1">Experience</div>
+                      <div className="text-4xl font-bold" style={{ color: experience >= 7 ? '#16a34a' : experience >= 5 ? '#d97706' : '#dc2626' }}>{experience != null ? `${experience}/10` : '—'}</div>
+                    </div>
+                  </div>
+
+                  {/* Matching Skills */}
+                  {cvMatch.matching_skills?.length > 0 && (
+                    <div className="border-2 border-black p-4">
+                      <div className="font-bold mb-3 text-green-700">Matching Skills</div>
+                      <div className="flex flex-wrap gap-2">
+                        {cvMatch.matching_skills.map((skill, i) => (
+                          <span key={i} className="px-3 py-1 bg-green-100 text-green-800 font-mono text-sm border border-green-300">{skill}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Missing Skills */}
+                  {cvMatch.missing_skills?.length > 0 && (
+                    <div className="border-2 border-black p-4">
+                      <div className="font-bold mb-3 text-red-700">Missing Skills</div>
+                      <div className="flex flex-wrap gap-2">
+                        {cvMatch.missing_skills.map((skill, i) => (
+                          <span key={i} className="px-3 py-1 bg-red-100 text-red-800 font-mono text-sm border border-red-300">{skill}</span>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Experience Highlights */}
+                  {cvMatch.experience_highlights?.length > 0 && (
+                    <div className="border-2 border-black p-4">
+                      <div className="font-bold mb-3">Relevant Experience</div>
+                      <ul className="space-y-1">
+                        {cvMatch.experience_highlights.map((exp, i) => (
+                          <li key={i} className="font-mono text-sm text-gray-700 flex items-start gap-2">
+                            <span className="text-green-600 mt-0.5">•</span>{exp}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Concerns */}
+                  {cvMatch.concerns?.length > 0 && (
+                    <div className="border-2 border-yellow-500 bg-yellow-50 p-4">
+                      <div className="font-bold mb-3 text-yellow-700">Concerns</div>
+                      <ul className="space-y-1">
+                        {cvMatch.concerns.map((concern, i) => (
+                          <li key={i} className="font-mono text-sm text-yellow-800 flex items-start gap-2">
+                            <AlertTriangle size={14} className="mt-0.5 flex-shrink-0 text-yellow-600" />{concern}
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Summary */}
+                  {cvMatch.summary && (
+                    <div className="border-2 border-black p-4">
+                      <div className="font-bold mb-2">Summary</div>
+                      <p className="font-mono text-sm text-gray-700 italic">&quot;{cvMatch.summary}&quot;</p>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <div className="border-2 border-black p-8 text-center">
+                  <div className="font-mono text-gray-500 mb-2">No CV-Job fit analysis available</div>
+                  <div className="font-mono text-xs text-gray-400">
+                    Fit analysis requires both a CV and a job specification to be uploaded for this candidate.
+                    Upload documents on the Candidates page.
+                  </div>
+                </div>
+              )}
+
+              {/* Document Status */}
+              <div className="border-2 border-black p-4">
+                <div className="font-bold mb-3">Documents</div>
+                <div className="space-y-2 font-mono text-sm">
+                  <div className="flex items-center gap-3">
+                    <span>{assessment.cv_uploaded ? '✅' : '❌'}</span>
+                    <span>CV: {assessment.cv_filename || 'Not uploaded'}</span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span>{candidate._raw?.score_breakdown?.cv_job_match?.overall != null ? '✅' : '❌'}</span>
+                    <span>Job Specification: {candidate._raw?.score_breakdown?.cv_job_match?.overall != null ? 'Uploaded' : 'Not uploaded'}</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        })()}
 
         {activeTab === 'timeline' && (
           <div className="relative pl-8">
@@ -2130,7 +3071,6 @@ const TasksPage = ({ onNavigate }) => {
 
   return (
     <div>
-      <DemoBanner />
       <DashboardNav currentPage="tasks" onNavigate={onNavigate} />
       <div className="hidden md:block max-w-7xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-8">
@@ -2298,7 +3238,6 @@ const AnalyticsPage = ({ onNavigate }) => {
 
   return (
     <div>
-      <DemoBanner />
       <DashboardNav currentPage="analytics" onNavigate={onNavigate} />
       <div className="max-w-7xl mx-auto px-6 py-8">
         <h1 className="text-3xl font-bold mb-2">Analytics</h1>
@@ -2477,6 +3416,11 @@ const SettingsPage = ({ onNavigate }) => {
   const [orgLoading, setOrgLoading] = useState(true);
   const [billingUsage, setBillingUsage] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [teamMembers, setTeamMembers] = useState([]);
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [inviteName, setInviteName] = useState('');
+  const [inviteLoading, setInviteLoading] = useState(false);
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('tali_dark_mode') === '1');
 
   useEffect(() => {
     let cancelled = false;
@@ -2509,6 +3453,28 @@ const SettingsPage = ({ onNavigate }) => {
     return () => { cancelled = true; };
   }, [settingsTab]);
 
+  useEffect(() => {
+    if (settingsTab !== 'team') return;
+    let cancelled = false;
+    const fetchTeam = async () => {
+      try {
+        const res = await teamApi.list();
+        if (!cancelled) setTeamMembers(res.data || []);
+      } catch (err) {
+        console.warn('Failed to fetch team:', err.message);
+      }
+    };
+    fetchTeam();
+    return () => { cancelled = true; };
+  }, [settingsTab]);
+
+  useEffect(() => {
+    localStorage.setItem('tali_dark_mode', darkMode ? '1' : '0');
+    document.documentElement.classList.toggle('dark', darkMode);
+    document.body.classList.toggle('bg-zinc-950', darkMode);
+    document.body.classList.toggle('text-white', darkMode);
+  }, [darkMode]);
+
   const handleAddCredits = async () => {
     const base = window.location.origin + window.location.pathname + '#/settings';
     setCheckoutLoading(true);
@@ -2525,9 +3491,25 @@ const SettingsPage = ({ onNavigate }) => {
     }
   };
 
+  const handleInvite = async (e) => {
+    e.preventDefault();
+    if (!inviteEmail || !inviteName) return;
+    setInviteLoading(true);
+    try {
+      const res = await teamApi.invite({ email: inviteEmail, full_name: inviteName });
+      setTeamMembers((prev) => [...prev, res.data]);
+      setInviteEmail('');
+      setInviteName('');
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to invite team member');
+    } finally {
+      setInviteLoading(false);
+    }
+  };
+
   // Derive display values from API data or fallback
-  const orgName = orgData?.name || user?.organization?.name || 'DeepLight AI';
-  const adminEmail = user?.email || 'sam@deeplight.ai';
+  const orgName = orgData?.name || user?.organization?.name || '--';
+  const adminEmail = user?.email || '--';
   const workableConnected = orgData?.workable_connected ?? false;
   const connectedSince = orgData?.workable_connected_at
     ? new Date(orgData.workable_connected_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
@@ -2540,15 +3522,14 @@ const SettingsPage = ({ onNavigate }) => {
 
   return (
     <div>
-      <DemoBanner />
       <DashboardNav currentPage="settings" onNavigate={onNavigate} />
       <div className="max-w-7xl mx-auto px-6 py-8">
         <h1 className="text-3xl font-bold mb-2">Settings</h1>
         <p className="font-mono text-sm text-gray-600 mb-8">Manage integrations and billing</p>
 
         {/* Tabs */}
-        <div className="flex border-2 border-black mb-8 max-w-md">
-          {['workable', 'billing'].map((tab) => (
+        <div className="flex border-2 border-black mb-8">
+          {['workable', 'billing', 'team', 'preferences'].map((tab) => (
             <button
               key={tab}
               className={`flex-1 px-6 py-3 font-mono text-sm font-bold border-r-2 border-black last:border-r-0 transition-colors ${
@@ -2557,7 +3538,10 @@ const SettingsPage = ({ onNavigate }) => {
               style={settingsTab === tab ? { backgroundColor: '#9D00FF' } : {}}
               onClick={() => setSettingsTab(tab)}
             >
-              {tab === 'workable' ? 'Workable' : 'Billing'}
+              {tab === 'workable' && 'Workable'}
+              {tab === 'billing' && 'Billing'}
+              {tab === 'team' && 'Team'}
+              {tab === 'preferences' && 'Preferences'}
             </button>
           ))}
         </div>
@@ -2687,6 +3671,76 @@ const SettingsPage = ({ onNavigate }) => {
                 </div>
               </div>
             )}
+
+            {settingsTab === 'team' && (
+              <div className="space-y-6">
+                <div className="border-2 border-black p-6">
+                  <h3 className="text-xl font-bold mb-4">Invite Team Member</h3>
+                  <form className="grid md:grid-cols-3 gap-3" onSubmit={handleInvite}>
+                    <input
+                      type="text"
+                      className="border-2 border-black px-3 py-2 font-mono text-sm"
+                      placeholder="Full name"
+                      value={inviteName}
+                      onChange={(e) => setInviteName(e.target.value)}
+                    />
+                    <input
+                      type="email"
+                      className="border-2 border-black px-3 py-2 font-mono text-sm"
+                      placeholder="Email"
+                      value={inviteEmail}
+                      onChange={(e) => setInviteEmail(e.target.value)}
+                    />
+                    <button
+                      type="submit"
+                      disabled={inviteLoading}
+                      className="border-2 border-black px-4 py-2 font-mono font-bold text-white"
+                      style={{ backgroundColor: '#9D00FF' }}
+                    >
+                      {inviteLoading ? 'Inviting…' : 'Invite'}
+                    </button>
+                  </form>
+                </div>
+                <div className="border-2 border-black">
+                  <div className="border-b-2 border-black px-6 py-4 bg-black text-white">
+                    <h3 className="font-bold">Team Members</h3>
+                  </div>
+                  <table className="w-full">
+                    <thead>
+                      <tr className="border-b-2 border-black bg-gray-50">
+                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Name</th>
+                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Email</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {teamMembers.length === 0 ? (
+                        <tr><td colSpan={2} className="px-6 py-8 font-mono text-sm text-gray-500 text-center">No members yet.</td></tr>
+                      ) : teamMembers.map((m) => (
+                        <tr key={m.id} className="border-b border-gray-200">
+                          <td className="px-6 py-3">{m.full_name || '—'}</td>
+                          <td className="px-6 py-3 font-mono text-sm">{m.email}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {settingsTab === 'preferences' && (
+              <div className="border-2 border-black p-6">
+                <h3 className="text-xl font-bold mb-4">Display Preferences</h3>
+                <label className="flex items-center gap-3 font-mono text-sm">
+                  <input
+                    type="checkbox"
+                    checked={darkMode}
+                    onChange={(e) => setDarkMode(e.target.checked)}
+                    className="w-4 h-4 accent-purple-600"
+                  />
+                  Enable dark mode
+                </label>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -2698,21 +3752,56 @@ const SettingsPage = ({ onNavigate }) => {
 // CANDIDATE PORTAL — WELCOME PAGE
 // ============================================================
 
-const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
+const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarted }) => {
   const [loadingStart, setLoadingStart] = useState(false);
   const [startError, setStartError] = useState('');
+  const [startData, setStartData] = useState(null);
+  const [cvFile, setCvFile] = useState(null);
+  const [cvUploading, setCvUploading] = useState(false);
+  const [cvUploaded, setCvUploaded] = useState(false);
+  const [cvError, setCvError] = useState('');
+
+  const handleUploadCv = async () => {
+    if (!token) {
+      setCvError('Assessment link is missing required details.');
+      return;
+    }
+    if (!cvFile) {
+      setCvError('Please select your CV file first.');
+      return;
+    }
+    setCvUploading(true);
+    setCvError('');
+    try {
+      await assessmentsApi.uploadCv(assessmentId, token, cvFile);
+      setCvUploaded(true);
+    } catch (err) {
+      setCvUploaded(false);
+      setCvError(err?.response?.data?.detail || 'Failed to upload CV');
+    } finally {
+      setCvUploading(false);
+    }
+  };
 
   const handleStart = async () => {
     if (!token) {
-      onNavigate('assessment');
+      setStartError('Assessment token is missing from the link.');
+      return;
+    }
+    if (!cvUploaded) {
+      setStartError('Please upload your CV before starting the assessment.');
       return;
     }
     setLoadingStart(true);
     setStartError('');
     try {
       const res = await assessmentsApi.start(token);
+      const data = res.data;
+      // Store start data to show proctoring notice
+      setStartData(data);
       // Pass start response to parent so AssessmentPage receives it (no double-start)
-      if (onStarted) onStarted(res.data);
+      if (onStarted) onStarted(data);
+      // Navigate to assessment page
       onNavigate('assessment');
     } catch (err) {
       const msg = err.response?.data?.detail || 'Failed to start assessment';
@@ -2742,6 +3831,14 @@ const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
           <h1 className="text-4xl font-bold mb-2">Technical Assessment</h1>
           <p className="font-mono text-gray-600">You&apos;ve been invited to complete a coding challenge</p>
         </div>
+
+        {/* Proctoring notice */}
+        {startData?.task?.proctoring_enabled && (
+          <div className="border-2 border-yellow-500 bg-yellow-50 p-4 mb-8">
+            <div className="font-bold text-yellow-700">This assessment is proctored</div>
+            <div className="font-mono text-xs text-yellow-600 mt-1">Tab switches and browser focus will be monitored during this assessment.</div>
+          </div>
+        )}
 
         {/* Welcome Message */}
         <div className="border-2 border-black p-8 mb-8">
@@ -2800,6 +3897,30 @@ const CandidateWelcomePage = ({ token, onNavigate, onStarted }) => {
           </div>
         )}
 
+        <div className="border-2 border-black p-6 mb-4">
+          <div className="font-bold mb-2">CV Upload (Required)</div>
+          <p className="font-mono text-xs text-gray-600 mb-3">Upload PDF or DOCX (max 5MB) before starting.</p>
+          <input
+            type="file"
+            accept=".pdf,.docx,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            onChange={(e) => {
+              const file = e.target.files?.[0] || null;
+              setCvFile(file);
+              setCvUploaded(false);
+              setCvError('');
+            }}
+            className="w-full border-2 border-black px-3 py-2 font-mono text-sm mb-3"
+          />
+          <button
+            className="border-2 border-black px-4 py-2 font-mono text-sm bg-black text-white disabled:opacity-50"
+            onClick={handleUploadCv}
+            disabled={cvUploading || !cvFile}
+          >
+            {cvUploading ? 'Uploading CV…' : cvUploaded ? 'CV Uploaded' : 'Upload CV'}
+          </button>
+          {cvError && <div className="mt-2 font-mono text-xs text-red-600">{cvError}</div>}
+        </div>
+
         <button
           className="w-full border-2 border-black py-4 font-bold text-lg text-white hover:bg-black transition-colors flex items-center justify-center gap-2"
           style={{ backgroundColor: '#9D00FF' }}
@@ -2834,27 +3955,66 @@ function App() {
   // Parse hash route on initial load
   const initialHash = window.location.hash;
   const initialAssessMatch = initialHash.match(/^#\/assess\/(.+)$/);
+  const initialAssessWithIdMatch = initialHash.match(/^#\/assessment\/(\d+)\?token=(.+)$/);
+  const pathAssessMatch = typeof window !== 'undefined' ? window.location.pathname.match(/^\/assessment\/(\d+)$/) : null;
+  const pathAssessToken = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('token') : null;
   const initialResetMatch = initialHash.match(/^#\/reset-password(?:\?(.*))?$/);
+  const initialVerifyMatch = initialHash.match(/^#\/verify-email(?:\?(.*))?$/);
   const getResetToken = () => {
     const qs = initialHash.split('?')[1] || '';
     const params = new URLSearchParams(qs);
     return params.get('token') || '';
   };
+  const getVerifyToken = () => {
+    const qs = initialHash.split('?')[1] || '';
+    const params = new URLSearchParams(qs);
+    return params.get('token') || '';
+  };
   const [currentPage, setCurrentPage] = useState(
-    isWorkableCallback ? 'workable-callback' : initialAssessMatch ? 'candidate-welcome' : initialResetMatch ? 'reset-password' : 'landing'
+    isWorkableCallback
+      ? 'workable-callback'
+      : (initialAssessMatch || initialAssessWithIdMatch || (pathAssessMatch && pathAssessToken))
+        ? 'candidate-welcome'
+        : initialVerifyMatch
+          ? 'verify-email'
+          : initialResetMatch
+            ? 'reset-password'
+            : 'landing'
   );
-  const [assessmentToken, setAssessmentToken] = useState(initialAssessMatch ? initialAssessMatch[1] : null);
+  const [assessmentToken, setAssessmentToken] = useState(
+    initialAssessWithIdMatch
+      ? initialAssessWithIdMatch[2]
+      : (pathAssessMatch && pathAssessToken)
+        ? pathAssessToken
+        : (initialAssessMatch ? initialAssessMatch[1] : null)
+  );
+  const [assessmentIdFromLink, setAssessmentIdFromLink] = useState(
+    initialAssessWithIdMatch
+      ? Number(initialAssessWithIdMatch[1])
+      : (pathAssessMatch ? Number(pathAssessMatch[1]) : null)
+  );
   const [resetPasswordToken, setResetPasswordToken] = useState(initialResetMatch ? getResetToken() : '');
+  const [verifyEmailToken, setVerifyEmailToken] = useState(initialVerifyMatch ? getVerifyToken() : '');
 
   // Handle hash-based routing for candidate assessment and reset-password links
   useEffect(() => {
     const handleHashRoute = () => {
       const hash = window.location.hash;
       const assessMatch = hash.match(/^#\/assess\/(.+)$/);
+      const assessWithIdMatch = hash.match(/^#\/assessment\/(\d+)\?token=(.+)$/);
       const resetMatch = hash.match(/^#\/reset-password(?:\?(.*))?$/);
-      if (assessMatch) {
-        setAssessmentToken(assessMatch[1]);
+      if (assessWithIdMatch) {
+        setAssessmentToken(assessWithIdMatch[2]);
+        setAssessmentIdFromLink(Number(assessWithIdMatch[1]));
         setCurrentPage('candidate-welcome');
+      } else if (assessMatch) {
+        setAssessmentToken(assessMatch[1]);
+        setAssessmentIdFromLink(null);
+        setCurrentPage('candidate-welcome');
+      } else if (hash.match(/^#\/verify-email/)) {
+        const qs = (hash.split('?')[1] || '');
+        setVerifyEmailToken(new URLSearchParams(qs).get('token') || '');
+        setCurrentPage('verify-email');
       } else if (resetMatch) {
         const qs = (hash.split('?')[1] || '');
         setResetPasswordToken(new URLSearchParams(qs).get('token') || '');
@@ -2874,7 +4034,7 @@ function App() {
 
   // When user logs out, redirect to landing (except on reset-password and workable-callback which may be in progress)
   useEffect(() => {
-    if (!authLoading && !isAuthenticated && ['dashboard', 'analytics', 'settings', 'tasks', 'candidate-detail'].includes(currentPage)) {
+    if (!authLoading && !isAuthenticated && ['dashboard', 'candidates', 'analytics', 'settings', 'tasks', 'candidate-detail'].includes(currentPage)) {
       setCurrentPage('landing');
     }
   }, [isAuthenticated, authLoading, currentPage]);
@@ -2910,11 +4070,22 @@ function App() {
       {currentPage === 'register' && <RegisterPage onNavigate={navigateToPage} />}
       {currentPage === 'forgot-password' && <ForgotPasswordPage onNavigate={navigateToPage} />}
       {currentPage === 'reset-password' && <ResetPasswordPage onNavigate={navigateToPage} token={resetPasswordToken} />}
+      {currentPage === 'verify-email' && <VerifyEmailPage onNavigate={navigateToPage} token={verifyEmailToken} />}
       {currentPage === 'dashboard' && (
         <DashboardPage onNavigate={navigateToPage} onViewCandidate={navigateToCandidate} />
       )}
+      {currentPage === 'candidates' && (
+        <CandidatesPage onNavigate={navigateToPage} onViewCandidate={navigateToCandidate} />
+      )}
       {currentPage === 'candidate-detail' && (
-        <CandidateDetailPage candidate={selectedCandidate} onNavigate={navigateToPage} />
+        <CandidateDetailPage
+          candidate={selectedCandidate}
+          onNavigate={navigateToPage}
+          onDeleted={() => setSelectedCandidate(null)}
+          onNoteAdded={(timeline) =>
+            setSelectedCandidate((prev) => (prev ? { ...prev, timeline } : prev))
+          }
+        />
       )}
       {currentPage === 'tasks' && <TasksPage onNavigate={navigateToPage} />}
       {currentPage === 'analytics' && <AnalyticsPage onNavigate={navigateToPage} />}
@@ -2925,6 +4096,7 @@ function App() {
       {currentPage === 'candidate-welcome' && (
         <CandidateWelcomePage
           token={assessmentToken}
+          assessmentId={assessmentIdFromLink}
           onNavigate={navigateToPage}
           onStarted={handleCandidateStarted}
         />

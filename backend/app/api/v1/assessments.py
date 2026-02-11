@@ -1,9 +1,12 @@
-from fastapi import APIRouter, Depends, Header, HTTPException, status
+"""Assessment API routes — thin handlers that delegate to the service layer."""
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status, UploadFile, File, Form
+from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
-from typing import List, Dict, Any, Optional
+from typing import Dict, Any, Optional
 from datetime import datetime, timedelta, timezone
 import secrets
-import json
+import time
 
 from ...core.database import get_db
 from ...core.security import get_current_user
@@ -19,168 +22,16 @@ from ...schemas.assessment import (
 )
 from ...services.e2b_service import E2BService
 from ...services.claude_service import ClaudeService
+from ...components.notifications.service import send_assessment_invite_sync, send_results_notification_sync
+from ...components.assessments.repository import (
+    utcnow, ensure_utc, assessment_to_response, build_timeline,
+    get_active_assessment, validate_assessment_token,
+)
+from ...components.assessments.service import (
+    store_cv_upload, start_or_resume_assessment, submit_assessment as _submit_assessment,
+)
 
 router = APIRouter(prefix="/assessments", tags=["Assessments"])
-
-
-def _ensure_utc(dt: datetime) -> datetime:
-    """Return datetime as timezone-aware UTC for subtraction."""
-    if dt is None:
-        return None
-    if dt.tzinfo is None:
-        return dt.replace(tzinfo=timezone.utc)
-    return dt
-
-
-def _build_timeline(assessment: Assessment) -> List[Dict[str, Any]]:
-    """Build timeline events for candidate detail (start, optional AI prompts, submit)."""
-    events = []
-    if assessment.started_at:
-        events.append({"time": "00:00", "event": "Started assessment"})
-    prompts = assessment.ai_prompts or []
-    start_utc = _ensure_utc(assessment.started_at) if assessment.started_at else None
-    for p in prompts:
-        ts = p.get("timestamp") or ""
-        if ts and start_utc:
-            try:
-                dt = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                delta_sec = int((dt - start_utc).total_seconds())
-                mm, ss = delta_sec // 60, delta_sec % 60
-                time_str = f"{mm:02d}:{ss:02d}"
-            except Exception:
-                time_str = "—"
-        else:
-            time_str = "—"
-        events.append({
-            "time": time_str,
-            "event": "Used AI assistant",
-            "prompt": p.get("message", ""),
-        })
-    if assessment.completed_at and assessment.started_at:
-        end_utc = _ensure_utc(assessment.completed_at)
-        if start_utc:
-            delta_sec = int((end_utc - start_utc).total_seconds())
-            mm, ss = delta_sec // 60, delta_sec % 60
-            time_str = f"{mm:02d}:{ss:02d}"
-        else:
-            time_str = "—"
-        events.append({"time": time_str, "event": "Submitted assessment"})
-    elif assessment.completed_at:
-        events.append({"time": "—", "event": "Submitted assessment"})
-    return events if events else (assessment.timeline or [])
-
-
-def _build_prompts_list(assessment: Assessment) -> List[Dict[str, Any]]:
-    """Build prompts_list for candidate detail from ai_prompts (no per-prompt assessment yet)."""
-    prompts = assessment.ai_prompts or []
-    return [
-        {"text": p.get("message", ""), "assessment": p.get("assessment", "")}
-        for p in prompts
-    ]
-
-
-def _build_results(assessment: Assessment) -> List[Dict[str, Any]]:
-    """Build results list for candidate detail from test_results and code quality."""
-    results = []
-    if assessment.tests_total is not None and assessment.tests_total > 0:
-        results.append({
-            "title": "Test suite",
-            "score": f"{assessment.tests_passed or 0}/{assessment.tests_total}",
-            "description": f"Passed {assessment.tests_passed or 0} of {assessment.tests_total} tests.",
-        })
-    if assessment.test_results and isinstance(assessment.test_results, dict):
-        err = assessment.test_results.get("error")
-        if err:
-            results.append({
-                "title": "Execution",
-                "score": "—",
-                "description": err,
-            })
-    # Code quality summary if we have it in test_results or code_snapshots
-    if assessment.code_quality_score is not None:
-        results.append({
-            "title": "Code quality",
-            "score": f"{assessment.code_quality_score}/10",
-            "description": "Claude code quality analysis applied.",
-        })
-    return results
-
-
-def _build_breakdown(assessment: Assessment) -> Dict[str, Any]:
-    """Build breakdown for candidate detail (tests, code quality, AI usage)."""
-    breakdown = {}
-    if assessment.tests_passed is not None and assessment.tests_total is not None:
-        breakdown["testsPassed"] = f"{assessment.tests_passed}/{assessment.tests_total}"
-    if assessment.code_quality_score is not None:
-        breakdown["codeQuality"] = assessment.code_quality_score
-    if assessment.ai_usage_score is not None:
-        breakdown["aiUsage"] = assessment.ai_usage_score
-    elif assessment.ai_prompts:
-        # Simple heuristic: 1–5 prompts = 8, 6–10 = 7, 11+ = 6
-        n = len(assessment.ai_prompts)
-        breakdown["aiUsage"] = 8 if n <= 5 else (7 if n <= 10 else 6)
-    if assessment.time_efficiency_score is not None:
-        breakdown["timeEfficiency"] = assessment.time_efficiency_score
-    breakdown["bugsFixed"] = breakdown.get("testsPassed", "—")
-    return breakdown
-
-
-def _assessment_to_response(assessment: Assessment) -> Dict[str, Any]:
-    """Serialize assessment to response dict with computed prompts_list, results, breakdown, timeline, and candidate/task names."""
-    candidate_name = ""
-    candidate_email = ""
-    if assessment.candidate:
-        candidate_name = assessment.candidate.full_name or assessment.candidate.email or ""
-        candidate_email = assessment.candidate.email or ""
-    task_name = assessment.task.name if assessment.task else ""
-    data = {
-        "id": assessment.id,
-        "organization_id": assessment.organization_id,
-        "candidate_id": assessment.candidate_id,
-        "task_id": assessment.task_id,
-        "token": assessment.token,
-        "status": assessment.status.value if hasattr(assessment.status, "value") else str(assessment.status),
-        "duration_minutes": assessment.duration_minutes,
-        "started_at": assessment.started_at,
-        "completed_at": assessment.completed_at,
-        "expires_at": assessment.expires_at,
-        "score": assessment.score,
-        "tests_passed": assessment.tests_passed,
-        "tests_total": assessment.tests_total,
-        "code_quality_score": assessment.code_quality_score,
-        "time_efficiency_score": assessment.time_efficiency_score,
-        "ai_usage_score": assessment.ai_usage_score,
-        "test_results": assessment.test_results,
-        "ai_prompts": assessment.ai_prompts,
-        "timeline": assessment.timeline or _build_timeline(assessment),
-        "created_at": assessment.created_at,
-        "prompts_list": _build_prompts_list(assessment),
-        "results": _build_results(assessment),
-        "breakdown": _build_breakdown(assessment),
-        "candidate_name": candidate_name,
-        "candidate_email": candidate_email,
-        "task_name": task_name,
-    }
-    return data
-
-
-def _get_active_assessment(assessment_id: int, db: Session) -> Assessment:
-    """Get an in-progress assessment, raising 404 if not found or not active."""
-    assessment = db.query(Assessment).filter(
-        Assessment.id == assessment_id,
-        Assessment.status == AssessmentStatus.IN_PROGRESS,
-    ).first()
-    if not assessment:
-        raise HTTPException(status_code=404, detail="Active assessment not found")
-    return assessment
-
-
-def _validate_assessment_token(assessment: Assessment, token: str) -> None:
-    """Verify the provided token matches the assessment's token."""
-    if not secrets.compare_digest(assessment.token, token):
-        raise HTTPException(status_code=403, detail="Invalid assessment token")
 
 
 @router.post("/", response_model=AssessmentResponse, status_code=status.HTTP_201_CREATED)
@@ -190,66 +41,95 @@ def create_assessment(
     current_user: User = Depends(get_current_user),
 ):
     """Create a new assessment and send invite email to candidate."""
-    # Create or get candidate; keep name in sync when provided
-    candidate = db.query(Candidate).filter(
-        Candidate.email == data.candidate_email,
-        Candidate.organization_id == current_user.organization_id,
-    ).first()
-    if not candidate:
-        candidate = Candidate(
-            email=data.candidate_email,
-            full_name=data.candidate_name or None,
+    if data.duration_minutes < 15 or data.duration_minutes > 180:
+        raise HTTPException(status_code=400, detail="duration_minutes must be between 15 and 180")
+
+    try:
+        candidate = db.query(Candidate).filter(
+            Candidate.email == data.candidate_email,
+            Candidate.organization_id == current_user.organization_id,
+        ).first()
+        if not candidate:
+            candidate = Candidate(
+                email=data.candidate_email,
+                full_name=data.candidate_name or None,
+                organization_id=current_user.organization_id,
+            )
+            db.add(candidate)
+            db.flush()
+        elif data.candidate_name:
+            candidate.full_name = data.candidate_name
+
+        task = db.query(Task).filter(
+            Task.id == data.task_id,
+            Task.organization_id == current_user.organization_id,
+        ).first()
+        if not task:
+            raise HTTPException(status_code=404, detail="Task not found")
+
+        token = secrets.token_urlsafe(32)
+        assessment = Assessment(
             organization_id=current_user.organization_id,
+            candidate_id=candidate.id,
+            task_id=data.task_id,
+            token=token,
+            duration_minutes=data.duration_minutes,
+            expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
         )
-        db.add(candidate)
-        db.flush()
-    elif data.candidate_name:
-        candidate.full_name = data.candidate_name
+        db.add(assessment)
+        db.commit()
+        db.refresh(assessment)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        import logging as _logging
+        _logging.getLogger("tali.assessments").exception("Failed to create assessment")
+        raise HTTPException(status_code=500, detail="Failed to create assessment")
 
-    # Verify task exists and belongs to the user's organization
-    task = db.query(Task).filter(
-        Task.id == data.task_id,
-        Task.organization_id == current_user.organization_id,
-    ).first()
-    if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-
-    token = secrets.token_urlsafe(32)
-    assessment = Assessment(
-        organization_id=current_user.organization_id,
-        candidate_id=candidate.id,
-        task_id=data.task_id,
-        token=token,
-        duration_minutes=data.duration_minutes,
-        expires_at=datetime.utcnow() + timedelta(days=7),
+    assessment = (
+        db.query(Assessment)
+        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+        .filter(Assessment.id == assessment.id)
+        .first()
     )
-    db.add(assessment)
-    db.commit()
-    db.refresh(assessment)
 
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     org_name = org.name if org else "Your recruiter"
-    from ...tasks.assessment_tasks import send_assessment_email
-    send_assessment_email.delay(
-        candidate_email=data.candidate_email,
-        candidate_name=data.candidate_name or data.candidate_email,
-        token=token,
-        org_name=org_name,
-        position=task.name or "Technical assessment",
-    )
-    return _assessment_to_response(assessment)
+    if settings.MVP_DISABLE_CELERY:
+        send_assessment_invite_sync(
+            candidate_email=data.candidate_email,
+            candidate_name=data.candidate_name or data.candidate_email,
+            token=token,
+            assessment_id=assessment.id,
+            org_name=org_name,
+            position=task.name or "Technical assessment",
+        )
+    else:
+        from ...tasks.assessment_tasks import send_assessment_email
+        send_assessment_email.delay(
+            candidate_email=data.candidate_email,
+            candidate_name=data.candidate_name or data.candidate_email,
+            token=token,
+            org_name=org_name,
+            position=task.name or "Technical assessment",
+            assessment_id=assessment.id,
+        )
+    return assessment_to_response(assessment, db)
 
 
 @router.get("/")
 def list_assessments(
     status: Optional[str] = None,
     task_id: Optional[int] = None,
-    limit: int = 50,
-    offset: int = 0,
+    candidate_id: Optional[int] = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """List assessments for the current user's organization with optional filters and pagination."""
+    """List assessments for the current user's organization."""
     q = (
         db.query(Assessment)
         .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
@@ -259,11 +139,13 @@ def list_assessments(
         q = q.filter(Assessment.status == status)
     if task_id is not None:
         q = q.filter(Assessment.task_id == task_id)
+    if candidate_id is not None:
+        q = q.filter(Assessment.candidate_id == candidate_id)
     q = q.order_by(Assessment.created_at.desc())
     total = q.count()
     assessments = q.offset(offset).limit(limit).all()
     return {
-        "items": [_assessment_to_response(a) for a in assessments],
+        "items": [assessment_to_response(a, db) for a in assessments],
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -288,42 +170,47 @@ def get_assessment(
     )
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
-    return _assessment_to_response(assessment)
+    return assessment_to_response(assessment, db)
 
 
 @router.post("/token/{token}/start", response_model=AssessmentStart)
 def start_assessment(token: str, db: Session = Depends(get_db)):
-    """Candidate starts an assessment via their unique token. No auth required."""
+    """Candidate starts or resumes an assessment via token."""
+    assessment = db.query(Assessment).filter(Assessment.token == token).with_for_update().first()
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Invalid assessment token")
+    return start_or_resume_assessment(assessment, db)
+
+
+@router.post("/{assessment_id}/upload-cv")
+def upload_assessment_cv(
+    assessment_id: int,
+    file: UploadFile = File(...),
+    token: str = Form(...),
+    db: Session = Depends(get_db),
+):
+    assessment = db.query(Assessment).filter(Assessment.id == assessment_id).first()
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    if not secrets.compare_digest(assessment.token or "", token or ""):
+        raise HTTPException(status_code=401, detail="Invalid assessment token")
+    if assessment.status == AssessmentStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Assessment already submitted")
+    return store_cv_upload(assessment, file, db)
+
+
+@router.post("/token/{token}/upload-cv")
+def upload_assessment_cv_by_token(
+    token: str,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
     assessment = db.query(Assessment).filter(Assessment.token == token).first()
     if not assessment:
         raise HTTPException(status_code=404, detail="Invalid assessment token")
-    if assessment.status != AssessmentStatus.PENDING:
-        raise HTTPException(status_code=400, detail="Assessment already started or completed")
-    if assessment.expires_at and assessment.expires_at < datetime.utcnow():
-        raise HTTPException(status_code=400, detail="Assessment link has expired")
-
-    # Create E2B sandbox
-    e2b = E2BService(settings.E2B_API_KEY)
-    sandbox = e2b.create_sandbox()
-
-    assessment.status = AssessmentStatus.IN_PROGRESS
-    assessment.started_at = datetime.utcnow()
-    assessment.e2b_session_id = sandbox.id
-    db.commit()
-
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
-    return {
-        "assessment_id": assessment.id,
-        "token": assessment.token,
-        "sandbox_id": sandbox.id,
-        "task": {
-            "name": task.name,
-            "description": task.description,
-            "starter_code": task.starter_code,
-            "duration_minutes": assessment.duration_minutes,
-        },
-        "time_remaining": assessment.duration_minutes * 60,
-    }
+    if assessment.status == AssessmentStatus.COMPLETED:
+        raise HTTPException(status_code=400, detail="Assessment already submitted")
+    return store_cv_upload(assessment, file, db)
 
 
 @router.post("/{assessment_id}/execute")
@@ -333,17 +220,23 @@ def execute_code(
     x_assessment_token: str = Header(..., description="Assessment access token"),
     db: Session = Depends(get_db),
 ):
-    """Execute code in the assessment's E2B sandbox (reuses sandbox from start)."""
-    assessment = _get_active_assessment(assessment_id, db)
-    _validate_assessment_token(assessment, x_assessment_token)
+    """Execute code in the assessment's E2B sandbox."""
+    assessment = get_active_assessment(assessment_id, db)
+    validate_assessment_token(assessment, x_assessment_token)
 
     e2b = E2BService(settings.E2B_API_KEY)
     if assessment.e2b_session_id:
-        sandbox = e2b.connect_sandbox(assessment.e2b_session_id)
+        try:
+            sandbox = e2b.connect_sandbox(assessment.e2b_session_id)
+        except Exception:
+            sandbox = e2b.create_sandbox()
     else:
         sandbox = e2b.create_sandbox()
-        assessment.e2b_session_id = sandbox.id
-        db.commit()
+        assessment.e2b_session_id = e2b.get_sandbox_id(sandbox)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
     result = e2b.execute_code(sandbox, data.code)
     return result
 
@@ -356,99 +249,320 @@ def chat_with_claude(
     db: Session = Depends(get_db),
 ):
     """Send a message to Claude AI assistant during assessment."""
-    assessment = _get_active_assessment(assessment_id, db)
-    _validate_assessment_token(assessment, x_assessment_token)
+    assessment = get_active_assessment(assessment_id, db)
+    validate_assessment_token(assessment, x_assessment_token)
 
     claude = ClaudeService(settings.ANTHROPIC_API_KEY)
     messages = data.conversation_history + [{"role": "user", "content": data.message}]
-    response = claude.chat(messages)
 
-    # Track AI usage
+    t0 = time.time()
+    response = claude.chat(messages)
+    latency_ms = int((time.time() - t0) * 1000)
+
+    prompt_record = {
+        "message": data.message,
+        "response": response.get("content", ""),
+        "timestamp": utcnow().isoformat(),
+        "input_tokens": response.get("input_tokens", 0),
+        "output_tokens": response.get("output_tokens", 0),
+        "tokens_used": response.get("tokens_used", 0),
+        "response_latency_ms": latency_ms,
+        "code_before": data.code_context or "",
+        "code_after": "",
+        "word_count": len(data.message.split()),
+        "char_count": len(data.message),
+        "time_since_last_prompt_ms": data.time_since_last_prompt_ms,
+        "paste_detected": data.paste_detected,
+        "browser_focused": data.browser_focused,
+    }
+
     if assessment.ai_prompts is None:
         assessment.ai_prompts = []
-    assessment.ai_prompts = assessment.ai_prompts + [{
-        "message": data.message,
-        "timestamp": datetime.utcnow().isoformat(),
-    }]
-    db.commit()
+
+    prompts = list(assessment.ai_prompts)
+
+    if prompts and data.code_context:
+        prompts[-1] = {**prompts[-1], "code_after": data.code_context}
+
+    prompts.append(prompt_record)
+    assessment.ai_prompts = prompts
+
+    if len(prompts) == 1 and assessment.started_at:
+        started = ensure_utc(assessment.started_at)
+        assessment.time_to_first_prompt_seconds = int((utcnow() - started).total_seconds())
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to persist AI interaction")
 
     return response
 
 
 @router.post("/{assessment_id}/submit")
-def submit_assessment(
+def submit_assessment_endpoint(
     assessment_id: int,
     data: SubmitRequest,
     x_assessment_token: str = Header(..., description="Assessment access token"),
     db: Session = Depends(get_db),
 ):
-    """Submit the assessment, run tests, and calculate score."""
-    assessment = _get_active_assessment(assessment_id, db)
-    _validate_assessment_token(assessment, x_assessment_token)
+    """Submit the assessment, run tests, and calculate composite score."""
+    assessment = get_active_assessment(assessment_id, db)
+    validate_assessment_token(assessment, x_assessment_token)
+    return _submit_assessment(assessment, data.final_code, data.tab_switch_count, db)
 
-    task = db.query(Task).filter(Task.id == assessment.task_id).first()
 
-    # Run tests in the same sandbox the candidate used (or create one if missing)
-    e2b = E2BService(settings.E2B_API_KEY)
-    if assessment.e2b_session_id:
-        sandbox = e2b.connect_sandbox(assessment.e2b_session_id)
+@router.delete("/{assessment_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_assessment(
+    assessment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    assessment = db.query(Assessment).filter(
+        Assessment.id == assessment_id,
+        Assessment.organization_id == current_user.organization_id,
+    ).first()
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    try:
+        db.delete(assessment)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete assessment")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.post("/{assessment_id}/resend")
+def resend_assessment_invite(
+    assessment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    assessment = (
+        db.query(Assessment)
+        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    if not assessment.candidate:
+        raise HTTPException(status_code=400, detail="Assessment has no candidate")
+
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    org_name = org.name if org else "Your recruiter"
+    if settings.MVP_DISABLE_CELERY:
+        send_assessment_invite_sync(
+            candidate_email=assessment.candidate.email,
+            candidate_name=assessment.candidate.full_name or assessment.candidate.email,
+            token=assessment.token,
+            assessment_id=assessment.id,
+            org_name=org_name,
+            position=(assessment.task.name if assessment.task else "Technical assessment"),
+        )
     else:
-        sandbox = e2b.create_sandbox()
-
-    sandbox.files.write("/tmp/solution.py", data.final_code)
-    test_results = e2b.run_tests(sandbox, task.test_code) if task.test_code else {"passed": 0, "failed": 0, "total": 0}
-    e2b.close_sandbox(sandbox)
-
-    # Calculate score
-    passed = test_results.get("passed", 0)
-    total = test_results.get("total", 0)
-    tests_score = (passed / total * 10) if total > 0 else 0
-
-    # Code quality analysis
-    claude = ClaudeService(settings.ANTHROPIC_API_KEY)
-    quality = claude.analyze_code_quality(data.final_code)
-    code_quality_score = None
-    if quality.get("success") and quality.get("analysis"):
-        try:
-            analysis = json.loads(quality["analysis"])
-            code_quality_score = analysis.get("overall_score")
-            if code_quality_score is not None:
-                code_quality_score = float(code_quality_score)
-        except (json.JSONDecodeError, TypeError):
-            pass
-
-    assessment.status = AssessmentStatus.COMPLETED
-    assessment.completed_at = datetime.now(timezone.utc)
-    assessment.score = round(tests_score, 1)
-    assessment.tests_passed = passed
-    assessment.tests_total = total
-    assessment.test_results = test_results
-    assessment.code_snapshots = [{"final": data.final_code}]
-    assessment.timeline = _build_timeline(assessment)
-    if code_quality_score is not None:
-        assessment.code_quality_score = code_quality_score
-    if assessment.ai_prompts:
-        n = len(assessment.ai_prompts)
-        assessment.ai_usage_score = 8.0 if n <= 5 else (7.0 if n <= 10 else 6.0)
-    db.commit()
-    db.refresh(assessment)
-
-    # Notify hiring manager (first user in org) that assessment is complete
-    notify_user = db.query(User).filter(User.organization_id == assessment.organization_id).first()
-    if notify_user:
-        from ...tasks.assessment_tasks import send_results_email
-        candidate_name = (assessment.candidate.full_name or assessment.candidate.email) if assessment.candidate else "Candidate"
-        send_results_email.delay(
-            user_email=notify_user.email,
-            candidate_name=candidate_name,
-            score=assessment.score,
+        from ...tasks.assessment_tasks import send_assessment_email
+        send_assessment_email.delay(
+            candidate_email=assessment.candidate.email,
+            candidate_name=assessment.candidate.full_name or assessment.candidate.email,
+            token=assessment.token,
+            org_name=org_name,
+            position=(assessment.task.name if assessment.task else "Technical assessment"),
             assessment_id=assessment.id,
         )
+    return {"success": True}
 
-    return {
-        "success": True,
-        "score": assessment.score,
-        "tests_passed": passed,
-        "tests_total": total,
-        "quality_analysis": quality.get("analysis") if quality.get("success") else None,
-    }
+
+@router.post("/{assessment_id}/post-to-workable")
+def post_assessment_to_workable(
+    assessment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
+    from ...services.workable_service import WorkableService
+    assessment = (
+        db.query(Assessment)
+        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    if assessment.posted_to_workable:
+        return {"success": True, "already_posted": True}
+
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if not org or not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
+        raise HTTPException(status_code=400, detail="Workable is not connected")
+    if not assessment.workable_candidate_id:
+        raise HTTPException(status_code=400, detail="Assessment is not linked to a Workable candidate")
+
+    svc = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
+    result = svc.post_assessment_result(
+        candidate_id=assessment.workable_candidate_id,
+        assessment_data={
+            "score": assessment.score or 0,
+            "tests_passed": assessment.tests_passed or 0,
+            "tests_total": assessment.tests_total or 0,
+            "time_taken": assessment.duration_minutes,
+            "results_url": f"{settings.FRONTEND_URL}/#/dashboard",
+        },
+    )
+    if not result.get("success"):
+        raise HTTPException(status_code=502, detail="Failed to post to Workable")
+
+    assessment.posted_to_workable = True
+    assessment.posted_to_workable_at = utcnow()
+    db.commit()
+    return {"success": True}
+
+
+@router.get("/{assessment_id}/report.pdf")
+def download_assessment_report_pdf(
+    assessment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return a branded PDF report without external dependencies."""
+    assessment = (
+        db.query(Assessment)
+        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+
+    candidate_name = (assessment.candidate.full_name if assessment.candidate else None) or (
+        assessment.candidate.email if assessment.candidate else "Candidate"
+    )
+    task_name = assessment.task.name if assessment.task else "Assessment"
+    status_value = assessment.status.value if hasattr(assessment.status, "value") else str(assessment.status)
+    analytics = assessment.prompt_analytics or {}
+    components = analytics.get("component_scores", {}) if isinstance(analytics, dict) else {}
+    heuristics = analytics.get("heuristics", {}) if isinstance(analytics, dict) else {}
+    fraud_flags = assessment.prompt_fraud_flags or []
+
+    component_lines = []
+    for key in (
+        "tests", "code_quality", "prompt_quality", "prompt_efficiency",
+        "independence", "context_utilization", "design_thinking",
+        "debugging_strategy", "written_communication",
+    ):
+        if key in components:
+            component_lines.append(f"  - {key}: {components[key]}")
+    if not component_lines:
+        component_lines.append("  - No component scores available")
+
+    h_focus = (heuristics.get("browser_focus_ratio") or {}).get("ratio")
+    h_tab = (heuristics.get("tab_switch_count") or {}).get("count")
+    h_first = (heuristics.get("time_to_first_prompt") or {}).get("value")
+    analytics_lines = [
+        f"  - Browser focus ratio: {h_focus if h_focus is not None else 'N/A'}",
+        f"  - Tab switches: {h_tab if h_tab is not None else (assessment.tab_switch_count or 0)}",
+        f"  - Time to first prompt (s): {h_first if h_first is not None else 'N/A'}",
+    ]
+
+    fraud_lines = [
+        f"  - {f.get('type')}: {f.get('evidence', '')} (confidence={f.get('confidence')})"
+        for f in fraud_flags
+    ]
+    if not fraud_lines:
+        fraud_lines = ["  - None detected"]
+
+    body_text = (
+        "TALI - AI-Augmented Technical Assessment Report\\n"
+        "============================================\\n"
+        f"Assessment ID: {assessment.id}\\n"
+        f"Candidate: {candidate_name}\\n"
+        f"Task: {task_name}\\n"
+        f"Status: {status_value}\\n"
+        f"Overall Score: {assessment.score if assessment.score is not None else 'N/A'}/10\\n"
+        f"Calibration Score: {assessment.calibration_score if assessment.calibration_score is not None else 'N/A'}/10\\n"
+        f"Tests Passed: {assessment.tests_passed or 0}/{assessment.tests_total or 0}\\n"
+        f"Code Quality: {assessment.code_quality_score if assessment.code_quality_score is not None else 'N/A'}\\n"
+        "\\n"
+        "Component Score Breakdown\\n"
+        "-------------------------\\n"
+        f"{chr(10).join(component_lines)}\\n"
+        "\\n"
+        "Prompt Analytics Summary\\n"
+        "------------------------\\n"
+        f"{chr(10).join(analytics_lines)}\\n"
+        "\\n"
+        "Fraud / Proctoring Flags\\n"
+        "------------------------\\n"
+        f"{chr(10).join(fraud_lines)}\\n"
+    )
+    escaped = body_text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+    stream = f"BT /F1 12 Tf 50 780 Td ({escaped.replace(chr(10), ') Tj T* (')}) Tj ET"
+    pdf = (
+        b"%PDF-1.4\n"
+        b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
+        b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
+        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n"
+        b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+    )
+    content = stream.encode("latin-1", errors="ignore")
+    pdf += f"5 0 obj << /Length {len(content)} >> stream\n".encode("ascii") + content + b"\nendstream endobj\n"
+    xref_pos = len(pdf)
+    xref = (
+        b"xref\n0 6\n"
+        b"0000000000 65535 f \n"
+        b"0000000009 00000 n \n"
+        b"0000000058 00000 n \n"
+        b"0000000115 00000 n \n"
+        b"0000000241 00000 n \n"
+        b"0000000311 00000 n \n"
+    )
+    trailer = f"trailer << /Size 6 /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF".encode("ascii")
+    final_pdf = pdf + xref + trailer
+    return Response(
+        content=final_pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="assessment-{assessment.id}.pdf"'},
+    )
+
+
+@router.post("/{assessment_id}/notes")
+def add_assessment_note(
+    assessment_id: int,
+    body: Dict[str, str],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    note = (body.get("note") or "").strip()
+    if not note:
+        raise HTTPException(status_code=400, detail="note is required")
+    assessment = db.query(Assessment).filter(
+        Assessment.id == assessment_id,
+        Assessment.organization_id == current_user.organization_id,
+    ).first()
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    existing_timeline = assessment.timeline or []
+    existing_timeline.append({
+        "time": utcnow().isoformat(),
+        "event": "Recruiter note",
+        "prompt": note,
+    })
+    assessment.timeline = existing_timeline
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to save note")
+    return {"success": True, "timeline": assessment.timeline}

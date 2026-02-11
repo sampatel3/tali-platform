@@ -20,3 +20,6 @@ venv/
 
 # Ralph config (may contain API key)
 .cursor/ralph-config.json
+backend/uploads/
+test.db
+backend/.env

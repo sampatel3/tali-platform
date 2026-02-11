@@ -1,13 +1,13 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel
+from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 
 class AssessmentCreate(BaseModel):
-    candidate_email: str
-    candidate_name: str
-    task_id: int
-    duration_minutes: int = 30
+    candidate_email: EmailStr
+    candidate_name: str = Field(min_length=1, max_length=200)
+    task_id: int = Field(gt=0)
+    duration_minutes: int = Field(default=30, ge=15, le=180)
 
 
 class AssessmentResponse(BaseModel):
@@ -40,6 +40,39 @@ class AssessmentResponse(BaseModel):
     candidate_email: Optional[str] = None
     task_name: Optional[str] = None
 
+    # Prompt scoring fields
+    prompt_quality_score: Optional[float] = None
+    prompt_efficiency_score: Optional[float] = None
+    independence_score: Optional[float] = None
+    context_utilization_score: Optional[float] = None
+    design_thinking_score: Optional[float] = None
+    debugging_strategy_score: Optional[float] = None
+    written_communication_score: Optional[float] = None
+    learning_velocity_score: Optional[float] = None
+    error_recovery_score: Optional[float] = None
+    requirement_comprehension_score: Optional[float] = None
+    calibration_score: Optional[float] = None
+    prompt_fraud_flags: Optional[List[Dict[str, Any]]] = None
+    prompt_analytics: Optional[Dict[str, Any]] = None
+    browser_focus_ratio: Optional[float] = None
+    tab_switch_count: Optional[int] = None
+    time_to_first_prompt_seconds: Optional[int] = None
+    # SECURITY: cv_file_url (server path) never exposed to API; only boolean + filename
+    cv_uploaded: Optional[bool] = None
+    cv_filename: Optional[str] = None
+    cv_uploaded_at: Optional[datetime] = None
+    final_score: Optional[float] = None
+    score_breakdown: Optional[Dict[str, Any]] = None
+    score_weights_used: Optional[Dict[str, float]] = None
+    flags: Optional[List[str]] = None
+    scored_at: Optional[datetime] = None
+    total_duration_seconds: Optional[int] = None
+    total_prompts: Optional[int] = None
+    total_input_tokens: Optional[int] = None
+    total_output_tokens: Optional[int] = None
+    tests_run_count: Optional[int] = None
+    tests_pass_count: Optional[int] = None
+
     model_config = {"from_attributes": True}
 
 
@@ -52,13 +85,18 @@ class AssessmentStart(BaseModel):
 
 
 class CodeExecutionRequest(BaseModel):
-    code: str
+    code: str = Field(min_length=1, max_length=100000)
 
 
 class ClaudeRequest(BaseModel):
-    message: str
+    message: str = Field(min_length=1, max_length=4000)
     conversation_history: List[Dict[str, Any]] = []
+    code_context: Optional[str] = None  # Current editor content at time of prompt
+    paste_detected: bool = False  # Whether prompt was pasted
+    browser_focused: bool = True  # Whether browser was in focus
+    time_since_last_prompt_ms: Optional[int] = None  # Time since previous prompt in ms
 
 
 class SubmitRequest(BaseModel):
-    final_code: str
+    final_code: str = Field(min_length=1, max_length=100000)
+    tab_switch_count: int = 0  # Total tab switches during assessment

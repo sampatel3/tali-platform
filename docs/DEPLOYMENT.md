@@ -170,6 +170,23 @@ See [ENV_SETUP.md](./ENV_SETUP.md) for the complete list of backend and frontend
 
 ---
 
+## Database Backups (Railway)
+
+Production requires automated PostgreSQL backups.
+
+1. Open Railway dashboard → your PostgreSQL service
+2. Go to **Backups**
+3. Enable automated backups (daily minimum, 7+ day retention)
+4. Create a manual backup before major migrations/deployments
+5. Test restore quarterly to confirm disaster recovery works
+
+Recommended policy:
+- Daily automated backups
+- 14-day retention
+- Manual pre-release snapshot for every production rollout
+
+---
+
 ## Custom Domain Configuration
 
 ### Backend (Railway)

@@ -25,6 +25,12 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
   const [executing, setExecuting] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
   const [submitted, setSubmitted] = useState(false);
+  const [pasteDetected, setPasteDetected] = useState(false);
+  const [browserFocused, setBrowserFocused] = useState(true);
+  const [tabSwitchCount, setTabSwitchCount] = useState(0);
+  const [lastPromptTime, setLastPromptTime] = useState(null);
+  const [proctoringEnabled, setProctoringEnabled] = useState(false);
+  const [showTabWarning, setShowTabWarning] = useState(false);
   const codeRef = useRef('');
   const timerRef = useRef(null);
 
@@ -35,6 +41,7 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
       setAssessment(normalized);
       codeRef.current = normalized.starter_code || '';
       setTimeLeft(normalized.time_remaining);
+      setProctoringEnabled(startData.task?.proctoring_enabled || false);
       setLoading(false);
       return;
     }
@@ -42,6 +49,7 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
       setAssessment(taskData);
       codeRef.current = taskData.starter_code || '';
       setTimeLeft((taskData.duration_minutes || 30) * 60);
+      setProctoringEnabled(taskData.proctoring_enabled || false);
       setLoading(false);
       return;
     }
@@ -58,6 +66,7 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
         setAssessment(normalized);
         codeRef.current = normalized.starter_code || '';
         setTimeLeft(normalized.time_remaining);
+        setProctoringEnabled(data.task?.proctoring_enabled || false);
       } catch (err) {
         setOutput(`Error starting assessment: ${err.message}`);
       } finally {
@@ -84,6 +93,40 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
 
     return () => clearInterval(timerRef.current);
   }, [loading, submitted]);
+
+  // Browser focus and tab visibility tracking
+  useEffect(() => {
+    if (!proctoringEnabled) return undefined;
+
+    const handleFocus = () => setBrowserFocused(true);
+    const handleBlur = () => setBrowserFocused(false);
+    const handleVisibilityChange = () => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') {
+        setTabSwitchCount(prev => prev + 1);
+        setBrowserFocused(false);
+        if (proctoringEnabled) {
+          setShowTabWarning(true);
+          setTimeout(() => setShowTabWarning(false), 3000);
+        }
+      } else {
+        setBrowserFocused(true);
+      }
+    };
+
+    window.addEventListener('focus', handleFocus);
+    window.addEventListener('blur', handleBlur);
+    if (typeof document !== 'undefined' && 'visibilityState' in document) {
+      document.addEventListener('visibilitychange', handleVisibilityChange);
+    }
+
+    return () => {
+      window.removeEventListener('focus', handleFocus);
+      window.removeEventListener('blur', handleBlur);
+      if (typeof document !== 'undefined') {
+        document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }
+    };
+  }, [proctoringEnabled]);
 
   const formatTime = (seconds) => {
     const m = Math.floor(seconds / 60);
@@ -126,10 +169,25 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
   const handleClaudeMessage = useCallback(
     async (message, history) => {
       const id = assessment?.id || assessmentId;
-      const res = await assessments.claude(id, message, history, assessmentTokenForApi);
+
+      // Compute time since last prompt
+      const now = Date.now();
+      const timeSinceLastMs = lastPromptTime ? now - lastPromptTime : null;
+      setLastPromptTime(now);
+
+      // Capture and reset paste detected
+      const wasPasted = pasteDetected;
+      setPasteDetected(false);
+
+      const res = await assessments.claude(id, message, history, assessmentTokenForApi, {
+        code_context: codeRef.current,
+        paste_detected: wasPasted,
+        browser_focused: proctoringEnabled ? browserFocused : true,
+        time_since_last_prompt_ms: timeSinceLastMs,
+      });
       return res.data.response || res.data.message || 'No response from Claude.';
     },
-    [assessment, assessmentId, assessmentTokenForApi]
+    [assessment, assessmentId, assessmentTokenForApi, lastPromptTime, pasteDetected, browserFocused, proctoringEnabled]
   );
 
   // Submit assessment
@@ -149,14 +207,16 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
 
       try {
         const id = assessment?.id || assessmentId;
-        await assessments.submit(id, codeRef.current, assessmentTokenForApi);
+        await assessments.submit(id, codeRef.current, assessmentTokenForApi, {
+          tab_switch_count: proctoringEnabled ? tabSwitchCount : 0,
+        });
         setOutput('Assessment submitted successfully! You may close this window.');
       } catch (err) {
         setOutput(`Submit error: ${err.response?.data?.detail || err.message}`);
         setSubmitted(false);
       }
     },
-    [assessment, assessmentId, assessmentTokenForApi, submitted]
+    [assessment, assessmentId, assessmentTokenForApi, submitted, tabSwitchCount]
   );
 
   const isTimeLow = timeLeft > 0 && timeLeft < 300; // under 5 minutes
@@ -203,6 +263,21 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
 
   return (
     <div className="h-screen flex flex-col bg-white">
+      {/* Tab switch warning toast */}
+      {showTabWarning && (
+        <div className="fixed top-4 right-4 z-50 border-2 border-red-500 bg-red-50 p-4 shadow-lg">
+          <div className="font-mono text-sm text-red-700 font-bold">You have left the assessment tab.</div>
+          <div className="font-mono text-xs text-red-600">This has been recorded.</div>
+        </div>
+      )}
+
+      {/* Proctoring notice banner */}
+      {proctoringEnabled && (
+        <div className="border-b-2 border-black bg-yellow-50 p-2 text-center">
+          <span className="font-mono text-xs text-yellow-800 font-bold">⚠ This assessment is proctored — tab switches and browser focus are being recorded</span>
+        </div>
+      )}
+
       {/* Top bar */}
       <div className="border-b-2 border-black bg-white px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
@@ -260,7 +335,7 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
         <div className="w-[35%] flex flex-col">
           {/* Claude chat - 60% */}
           <div className="h-[60%] border-b-2 border-black">
-            <ClaudeChat onSendMessage={handleClaudeMessage} />
+            <ClaudeChat onSendMessage={handleClaudeMessage} onPaste={() => setPasteDetected(true)} />
           </div>
 
           {/* Output console - 40% */}

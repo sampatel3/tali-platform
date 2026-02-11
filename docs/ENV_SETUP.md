@@ -87,8 +87,19 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `FRONTEND_URL` | **Yes** | — | Frontend app URL (e.g. your Vercel URL). Used for CORS, OAuth redirects, and email links. |
+| `FRONTEND_URL` | **Yes** | — | Frontend app URL (e.g. your Vercel URL). **Must match the browser origin** for CORS; set to your production frontend URL so login and assessment start work. |
 | `BACKEND_URL` | **Yes** | — | Backend API URL (e.g. your Railway URL). Used in email templates and webhook configurations. |
+| `CORS_EXTRA_ORIGINS` | No | — | Comma-separated extra CORS origins (e.g. a second Vercel URL). Use if you have multiple frontend origins. |
+
+### Assessment and Scoring
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `ASSESSMENT_PRICE_PENCE` | No | `2500` | Price per assessment (in pence) used by billing and Stripe flows. |
+| `ASSESSMENT_EXPIRY_DAYS` | No | `7` | Number of days before an assessment invite link expires. |
+| `EMAIL_FROM` | No | `TALI <noreply@tali.dev>` | Sender address used by all transactional emails. |
+| `SCORE_WEIGHTS` | No | JSON defaults | JSON string for composite scoring weights (tests, code_quality, prompt_quality, etc.). |
+| `DEFAULT_CALIBRATION_PROMPT` | No | Reverse-string prompt | Baseline calibration prompt used when a task does not define `calibration_prompt`. |
 
 ### AWS S3 (Optional)
 

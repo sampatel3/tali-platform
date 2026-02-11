@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Bot } from 'lucide-react';
 
-export default function ClaudeChat({ onSendMessage }) {
+export default function ClaudeChat({ onSendMessage, onPaste }) {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -104,6 +104,7 @@ export default function ClaudeChat({ onSendMessage }) {
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={onPaste}
           placeholder="Ask Claude for help..."
           disabled={loading}
           className="flex-1 border-2 border-black px-3 py-2 font-mono text-sm focus:outline-none disabled:opacity-50"

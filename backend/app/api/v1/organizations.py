@@ -5,6 +5,7 @@ from ...core.security import get_current_user
 from ...models.user import User
 from ...models.organization import Organization
 from ...schemas.organization import OrgResponse, OrgUpdate, WorkableConnect
+from ...core.config import settings
 
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
 
@@ -35,15 +36,20 @@ def update_my_org(
         org.name = data.name
     if data.workable_config is not None:
         org.workable_config = data.workable_config
-    db.commit()
-    db.refresh(org)
+    try:
+        db.commit()
+        db.refresh(org)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update organization")
     return org
 
 
 @router.get("/workable/authorize-url")
 def get_workable_authorize_url(current_user: User = Depends(get_current_user)):
     """Return the Workable OAuth authorize URL for the frontend to redirect to."""
-    from ...core.config import settings
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     if not settings.WORKABLE_CLIENT_ID:
         raise HTTPException(status_code=503, detail="Workable integration is not configured")
     redirect_uri = f"{settings.FRONTEND_URL}/settings/workable/callback"
@@ -66,8 +72,9 @@ def connect_workable(
     current_user: User = Depends(get_current_user),
 ):
     """Exchange Workable OAuth code for access token."""
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     import httpx
-    from ...core.config import settings
 
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
@@ -88,12 +95,18 @@ def connect_workable(
         resp.raise_for_status()
         token_data = resp.json()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Workable OAuth failed: {str(e)}")
+        import logging as _logging
+        _logging.getLogger("tali.organizations").exception("Workable OAuth failed")
+        raise HTTPException(status_code=400, detail="Workable OAuth failed. Please try again.")
 
     org.workable_access_token = token_data.get("access_token")
     org.workable_refresh_token = token_data.get("refresh_token")
     org.workable_subdomain = token_data.get("subdomain", "")
     org.workable_connected = True
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to store Workable connection")
 
     return {"success": True, "subdomain": org.workable_subdomain}

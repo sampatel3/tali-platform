@@ -64,6 +64,8 @@ def create_checkout_session(
     current_user: User = Depends(get_current_user),
 ):
     """Create a Stripe Checkout Session for one assessment (£25). Returns URL to redirect the user."""
+    if settings.MVP_DISABLE_STRIPE:
+        raise HTTPException(status_code=503, detail="Billing is disabled for MVP pilot")
     import stripe
     if not settings.STRIPE_API_KEY or not settings.STRIPE_API_KEY.startswith("sk_"):
         raise HTTPException(status_code=503, detail="Stripe is not configured")
@@ -82,7 +84,11 @@ def create_checkout_session(
         )
         customer_id = customer.id
         org.stripe_customer_id = customer_id
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="Failed to store Stripe customer")
 
     try:
         session = stripe.checkout.Session.create(
@@ -103,4 +109,6 @@ def create_checkout_session(
         )
         return {"url": session.url}
     except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Stripe error: {str(e)}")
+        import logging as _logging
+        _logging.getLogger("tali.billing").exception("Stripe checkout session error")
+        raise HTTPException(status_code=502, detail="Payment service error. Please try again.")

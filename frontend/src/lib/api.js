@@ -11,8 +11,10 @@ const api = axios.create({
 
 // Request interceptor: attach JWT token
 api.interceptors.request.use((config) => {
+  const url = config.url || '';
   const token = localStorage.getItem('tali_access_token');
-  if (token) {
+  const isCandidateTokenEndpoint = url.includes('/assessments/token/') && url.includes('/start');
+  if (token && !isCandidateTokenEndpoint) {
     config.headers.Authorization = `Bearer ${token}`;
   }
   return config;
@@ -43,6 +45,8 @@ export const auth = {
   },
   register: (data) => api.post('/auth/register', data),
   me: () => api.get('/auth/me'),
+  verifyEmail: (token) => api.get('/auth/verify-email', { params: { token } }),
+  resendVerification: (email) => api.post('/auth/resend-verification', { email }),
   forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
   resetPassword: (token, new_password) => api.post('/auth/reset-password', { token, new_password }),
 };
@@ -57,17 +61,36 @@ export const assessments = {
     api.post(`/assessments/${id}/execute`, { code }, {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
-  claude: (id, message, conversationHistory, assessmentToken) =>
+  claude: (id, message, conversationHistory, assessmentToken, metadata = {}) =>
     api.post(`/assessments/${id}/claude`, {
       message,
       conversation_history: conversationHistory,
+      ...metadata,
     }, {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
-  submit: (id, finalCode, assessmentToken) =>
-    api.post(`/assessments/${id}/submit`, { final_code: finalCode }, {
+  submit: (id, finalCode, assessmentToken, metadata = {}) =>
+    api.post(`/assessments/${id}/submit`, { final_code: finalCode, ...metadata }, {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
+  remove: (id) => api.delete(`/assessments/${id}`),
+  resend: (id) => api.post(`/assessments/${id}/resend`),
+  postToWorkable: (id) => api.post(`/assessments/${id}/post-to-workable`),
+  downloadReport: (id) => api.get(`/assessments/${id}/report.pdf`, { responseType: 'blob' }),
+  addNote: (id, note) => api.post(`/assessments/${id}/notes`, { note }),
+  uploadCv: (assessmentId, token, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    const url = assessmentId
+      ? `/assessments/${assessmentId}/upload-cv`
+      : `/assessments/token/${token}/upload-cv`;
+    if (assessmentId) {
+      form.append('token', token);
+    }
+    return api.post(url, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
 };
 
 // ---- Billing ----
@@ -98,6 +121,35 @@ export const tasks = {
   update: (id, data) => api.patch(`/tasks/${id}`, data),
   delete: (id) => api.delete(`/tasks/${id}`),
   generate: (data) => api.post('/tasks/generate/', data),
+};
+
+// ---- Candidates ----
+export const candidates = {
+  list: (params = {}) => api.get('/candidates/', { params }),
+  get: (id) => api.get(`/candidates/${id}`),
+  create: (data) => api.post('/candidates/', data),
+  update: (id, data) => api.patch(`/candidates/${id}`, data),
+  remove: (id) => api.delete(`/candidates/${id}`),
+  uploadCv: (candidateId, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post(`/candidates/${candidateId}/upload-cv`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+  uploadJobSpec: (candidateId, file) => {
+    const form = new FormData();
+    form.append('file', file);
+    return api.post(`/candidates/${candidateId}/upload-job-spec`, form, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    });
+  },
+};
+
+// ---- Team / Users ----
+export const team = {
+  list: () => api.get('/users/'),
+  invite: (data) => api.post('/users/invite', data),
 };
 
 export default api;

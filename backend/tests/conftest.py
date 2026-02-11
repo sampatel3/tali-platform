@@ -8,6 +8,8 @@ from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
 from app.core.database import Base, get_db
 from app.main import app
+from app.platform.middleware import _rate_limit_store
+from app.models.user import User
 
 SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
 engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
@@ -39,7 +41,22 @@ def db():
 def client(db):
     app.dependency_overrides[get_db] = override_get_db
     Base.metadata.create_all(bind=engine)
+    # Clear in-memory rate limit state between tests to prevent 429 bleed-through
+    _rate_limit_store.clear()
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
+    _rate_limit_store.clear()
     Base.metadata.drop_all(bind=engine)
+
+
+def verify_user(email: str) -> None:
+    """Mark a user as email-verified in the test DB (call after register)."""
+    db = TestingSessionLocal()
+    try:
+        user = db.query(User).filter(User.email == email).first()
+        if user:
+            user.is_email_verified = True
+            db.commit()
+    finally:
+        db.close()

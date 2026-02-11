@@ -6,16 +6,17 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def send_assessment_email(self, candidate_email: str, candidate_name: str, token: str, org_name: str, position: str):
+def send_assessment_email(self, candidate_email: str, candidate_name: str, token: str, org_name: str, position: str, assessment_id: int | None = None):
     """Send assessment invitation email to candidate."""
     from ..services.email_service import EmailService
 
     try:
-        email_svc = EmailService(api_key=settings.RESEND_API_KEY)
+        email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
         result = email_svc.send_assessment_invite(
             candidate_email=candidate_email,
             candidate_name=candidate_name,
             token=token,
+            assessment_id=assessment_id,
             org_name=org_name,
             position=position,
             frontend_url=settings.FRONTEND_URL,
@@ -35,7 +36,7 @@ def send_results_email(self, user_email: str, candidate_name: str, score: float,
     from ..services.email_service import EmailService
 
     try:
-        email_svc = EmailService(api_key=settings.RESEND_API_KEY)
+        email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
         result = email_svc.send_results_notification(
             user_email=user_email,
             candidate_name=candidate_name,
@@ -72,7 +73,7 @@ def post_results_to_workable(self, access_token: str, subdomain: str, candidate_
 @celery_app.task
 def cleanup_expired_assessments():
     """Periodic task: expire old pending assessments and close abandoned sandboxes."""
-    from datetime import datetime, timedelta
+    from datetime import datetime, timedelta, timezone
     from sqlalchemy.orm import Session
     from ..core.database import SessionLocal
     from ..models.assessment import Assessment, AssessmentStatus
@@ -82,7 +83,7 @@ def cleanup_expired_assessments():
     try:
         expired = db.query(Assessment).filter(
             Assessment.status == AssessmentStatus.PENDING,
-            Assessment.expires_at < datetime.utcnow(),
+            Assessment.expires_at < datetime.now(timezone.utc),
         ).all()
 
         count = 0
@@ -91,7 +92,7 @@ def cleanup_expired_assessments():
             count += 1
 
         # Close abandoned in-progress sandboxes (over 2 hours)
-        stale_cutoff = datetime.utcnow() - timedelta(hours=2)
+        stale_cutoff = datetime.now(timezone.utc) - timedelta(hours=2)
         stale = db.query(Assessment).filter(
             Assessment.status == AssessmentStatus.IN_PROGRESS,
             Assessment.started_at < stale_cutoff,

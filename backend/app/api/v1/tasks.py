@@ -99,7 +99,7 @@ def generate_task(
     required = ["name", "description", "task_type", "difficulty", "duration_minutes", "starter_code", "test_code"]
     missing = [k for k in required if k not in generated]
     if missing:
-        raise HTTPException(status_code=502, detail=f"AI response missing fields: {', '.join(missing)}")
+        raise HTTPException(status_code=502, detail="AI response was incomplete — please try again")
 
     return TaskGenerateResponse(**{k: generated[k] for k in required})
 
@@ -114,8 +114,12 @@ def create_task(
 ):
     task = Task(organization_id=current_user.organization_id, **data.model_dump())
     db.add(task)
-    db.commit()
-    db.refresh(task)
+    try:
+        db.commit()
+        db.refresh(task)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to create task")
     return task
 
 
@@ -135,10 +139,11 @@ def get_task(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    task = db.query(Task).filter(Task.id == task_id).first()
+    task = db.query(Task).filter(
+        Task.id == task_id,
+        (Task.organization_id == current_user.organization_id) | (Task.is_template == True),
+    ).first()
     if not task:
-        raise HTTPException(status_code=404, detail="Task not found")
-    if task.organization_id != current_user.organization_id and not task.is_template:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
 
@@ -159,8 +164,12 @@ def update_task(
     update_data = data.model_dump(exclude_unset=True)
     for k, v in update_data.items():
         setattr(task, k, v)
-    db.commit()
-    db.refresh(task)
+    try:
+        db.commit()
+        db.refresh(task)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update task")
     return task
 
 
@@ -177,11 +186,18 @@ def delete_task(
     ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    in_use = db.query(Assessment).filter(Assessment.task_id == task_id).first()
+    in_use = db.query(Assessment).filter(
+        Assessment.task_id == task_id,
+        Assessment.organization_id == current_user.organization_id,
+    ).first()
     if in_use:
         raise HTTPException(
             status_code=400,
             detail="Cannot delete task: it is used by one or more assessments",
         )
     db.delete(task)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete task")

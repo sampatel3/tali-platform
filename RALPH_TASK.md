@@ -1,504 +1,387 @@
-# RALPH_TASK.md - TALI Platform
+# RALPH_TASK.md - TALI Platform Production Launch
+
+> **STATUS: ARCHIVED** — This plan has been fully reviewed and closed on 2026-02-11.
+> All items were marked complete. See `MVP_PLAN.md` for the current active plan.
 
 ---
-task: TALI Platform - AI-Augmented Technical Assessment
-test_command: "cd backend && pytest tests/ -v"
+task: TALI Platform - Production Launch & Prompt Scoring Engine
+test_command: "cd backend && python3 -m pytest tests/ -v"
 ---
 
-**Project**: TALI - AI-Augmented Technical Assessment Platform  
-**Objective**: Production-ready platform for screening engineers using AI-era assessment methods.  
-**Repository**: Monorepo with working UI and backend; extend and refine per criteria below.
-
-## Project Overview
-
-TALI is a technical screening platform that tests how engineers work WITH AI tools (not against them). The platform measures 10+ unique signals including prompt quality, design thinking, AI collaboration efficiency, and problem-solving approach.
-
-**Core Workflow:**
-1. Recruiter creates assessment via dashboard
-2. Email sent to candidate with unique token
-3. Candidate completes task in browser (Monaco editor + Claude chat)
-4. Code executes in E2B sandbox, tests run automatically
-5. Results instantly available to recruiter with detailed analytics
-6. Optional: Results posted to Workable ATS
+**Project**: TALI - AI-Augmented Technical Assessment Platform
+**Objective**: Ship a production-grade platform with a multi-signal prompt analytics and scoring engine that measures how engineers work WITH AI tools.
+**Repository**: Monorepo -- backend (FastAPI/Railway), frontend (Vite+React/Vercel)
 
 ## Tech Stack
 
-### Backend
-- **Framework**: FastAPI (Python 3.11+)
-- **Database**: PostgreSQL 15 + SQLAlchemy 2.0 + Alembic
-- **Cache/Queue**: Redis + Celery
-- **Auth**: JWT (PyJWT)
-- **Deployment**: Railway
-
-### Frontend
-- **Framework**: Vite 5 + React 18 (JSX)
-- **Styling**: Tailwind CSS (black/white/purple #9D00FF theme)
-- **Routing**: Hash-based (#/dashboard, #/login, #/assess/{token}, #/settings, etc.) in single App.jsx
-- **Editor**: Monaco Editor (@monaco-editor/react)
-- **Auth**: Custom AuthContext + JWT in localStorage (no NextAuth)
-- **API client**: src/lib/api.js (axios baseURL from VITE_API_URL)
-- **Deployment**: Vercel
-
-### Integrations
-- **Code Execution**: E2B Code Interpreter SDK
-- **AI**: Anthropic Claude Sonnet 4 API
-- **ATS**: Workable API (OAuth + webhooks)
-- **Payments**: Stripe API
-- **Email**: Resend API
-
-## Database Schema
-
-```sql
--- Core tables (create in order):
-1. organizations (id, name, slug, workable_*, stripe_*, plan, assessments_used, assessments_limit)
-2. users (id, email, hashed_password, full_name, is_active, is_superuser, organization_id)
-3. candidates (id, organization_id, email, full_name, position, workable_candidate_id, workable_data)
-4. tasks (id, organization_id, name, description, task_type, difficulty, duration_minutes, starter_code, test_code, sample_data, dependencies, success_criteria, test_weights, is_template, is_active)
-5. assessments (id, organization_id, candidate_id, task_id, token, status, duration_minutes, started_at, completed_at, expires_at, score, tests_passed, tests_total, code_quality_score, time_efficiency_score, ai_usage_score, test_results, ai_prompts, code_snapshots, timeline, e2b_session_id, workable_candidate_id, workable_job_id, posted_to_workable, posted_to_workable_at)
-6. assessment_sessions (id, assessment_id, session_start, session_end, keystrokes, code_executions, ai_requests, activity_log)
-
--- Add indexes:
-- users.email, users.organization_id
-- assessments.token, assessments.organization_id, assessments.candidate_id, assessments.status
-- candidates.organization_id, candidates.email
-```
+- **Backend**: FastAPI, PostgreSQL 15 + SQLAlchemy 2.0 + Alembic, Redis + Celery, JWT (PyJWT), Pydantic
+- **Frontend**: Vite 5 + React 18 (JSX), Tailwind CSS (black/white/purple #9D00FF), Hash routing in single App.jsx, Monaco Editor, Axios (src/lib/api.js), Recharts
+- **Integrations**: E2B Code Interpreter SDK, Anthropic Claude Sonnet 4, Stripe API, Workable API (OAuth + webhooks), Resend API
+- **Deployment**: Railway (backend + Postgres/Redis), Vercel (frontend)
 
 ---
 
-## Success Criteria
+## Phase 1 - Strip Demo Mode
 
-### 🔐 Authentication & User Management
+Remove all demo scaffolding so the app is production-safe for real users.
 
-- [ ] POST /api/v1/auth/register endpoint accepts email, password, full_name
-- [ ] POST /api/v1/auth/register validates email format and password strength
-- [ ] POST /api/v1/auth/register hashes password with bcrypt before storing
-- [ ] POST /api/v1/auth/register creates user in database and returns user data
-- [ ] POST /api/v1/auth/login endpoint accepts email and password
-- [ ] POST /api/v1/auth/login verifies credentials against database
-- [ ] POST /api/v1/auth/login generates JWT token with 30-minute expiry
-- [ ] POST /api/v1/auth/login returns access token and user data
-- [ ] GET /api/v1/auth/me endpoint requires valid JWT token in Authorization header
-- [ ] GET /api/v1/auth/me returns current user data from decoded token
-- [ ] Auth dependency function get_current_user extracts and validates JWT
-- [ ] Auth dependency function get_current_user returns User object or raises 401
-- [ ] Frontend login page at #/login with email and password inputs
-- [ ] Frontend login page calls /api/v1/auth/login and stores token (AuthContext + localStorage)
-- [ ] Frontend login page redirects to dashboard on success
-- [ ] Frontend register page at #/register with full_name, email, password, confirm_password inputs
-- [ ] Frontend register page validates password confirmation matches
-- [ ] Frontend register page calls /api/v1/auth/register then redirects to #/login
-- [ ] AuthContext provides user, login, logout, and token to all components
-- [ ] Protected routes (dashboard, settings, tasks, analytics) redirect to landing if no valid token
-- [ ] Navigation shows user email when authenticated; forgot-password and reset-password flows exist
+### Frontend Demo Removal (frontend/src/App.jsx)
 
-### 📋 Assessment Management (Backend)
+- [x] DemoBanner component and all its usages removed (Dashboard, Candidate Detail, Tasks, Analytics, Settings).
+- [x] Pre-filled login credentials (sam@deeplight.ai / demo1234) removed from login page.
+- [x] "DEMO MODE" banner removed from login page.
+- [x] Demo-mode fallback that navigates to dashboard when API is unreachable removed.
+- [x] Mock candidates array fallback removed; proper empty state shown instead ("No assessments yet. Create your first assessment to get started.").
+- [x] Hardcoded org name defaults (DeepLight AI, sam@deeplight.ai) replaced with '--' or actual user data from API.
 
-- [ ] POST /api/v1/assessments endpoint creates assessment with organization_id, candidate_id, task_id
-- [ ] POST /api/v1/assessments generates unique token (UUID4)
-- [ ] POST /api/v1/assessments sets expires_at to 7 days from now
-- [ ] POST /api/v1/assessments sets status to "pending"
-- [ ] POST /api/v1/assessments returns created assessment with token
-- [ ] GET /api/v1/assessments endpoint lists assessments for current user's organization
-- [ ] GET /api/v1/assessments supports query params: status, task_id, limit, offset
-- [ ] GET /api/v1/assessments returns paginated results: { items, total, limit, offset }
-- [ ] GET /api/v1/assessments/{id} returns single assessment with candidate and task data joined
-- [ ] GET /api/v1/assessments/{id} checks user belongs to same organization
-- [ ] POST /api/v1/assessments/token/{token}/start verifies token is valid and not expired
-- [ ] POST /api/v1/assessments/token/{token}/start checks status is "pending"
-- [ ] POST /api/v1/assessments/token/{token}/start creates E2B sandbox via E2BService
-- [ ] POST /api/v1/assessments/token/{token}/start stores e2b_session_id in assessment
-- [ ] POST /api/v1/assessments/token/{token}/start updates status to "in_progress" and sets started_at
-- [ ] POST /api/v1/assessments/token/{token}/start returns task data (description, starter_code, duration_minutes)
-- [ ] POST /api/v1/assessments/{assessment_id}/execute accepts code string in request body; uses Header X-Assessment-Token
-- [ ] POST /api/v1/assessments/{assessment_id}/execute reconnects to E2B sandbox using e2b_session_id
-- [ ] POST /api/v1/assessments/{assessment_id}/execute runs code in sandbox via E2BService.execute_code
-- [ ] POST /api/v1/assessments/{assessment_id}/execute returns execution result (stdout, stderr, etc.)
-- [ ] POST /api/v1/assessments/{assessment_id}/claude accepts message and conversation_history; uses Header X-Assessment-Token
-- [ ] POST /api/v1/assessments/{assessment_id}/claude sends prompt to Claude API via ClaudeService
-- [ ] POST /api/v1/assessments/{assessment_id}/claude appends prompt to assessment.ai_prompts JSONB array
-- [ ] POST /api/v1/assessments/{assessment_id}/claude returns Claude response
-- [ ] POST /api/v1/assessments/{assessment_id}/submit accepts final_code in request body; uses Header X-Assessment-Token
-- [ ] POST /api/v1/assessments/{assessment_id}/submit runs tests in E2B sandbox
-- [ ] POST /api/v1/assessments/{assessment_id}/submit calculates score (tests_passed/tests_total, code quality, AI usage)
-- [ ] POST /api/v1/assessments/{assessment_id}/submit stores test_results, code_quality_score, ai_usage_score, timeline
-- [ ] POST /api/v1/assessments/{assessment_id}/submit updates status to "completed" and sets completed_at
-- [ ] POST /api/v1/assessments/{assessment_id}/submit returns complete results
-- [ ] PATCH /api/v1/tasks/{id} and DELETE /api/v1/tasks/{id} for tasks (assessments use create/list/get/start/execute/submit only)
+### Backend Configuration (backend/app/core/config.py)
 
-### 🧑‍💼 Candidate Management
-
-- [ ] POST /api/v1/candidates endpoint creates candidate with organization_id, email, full_name, position
-- [ ] POST /api/v1/candidates validates email format
-- [ ] POST /api/v1/candidates checks for duplicate email within organization
-- [ ] POST /api/v1/candidates returns created candidate
-- [ ] GET /api/v1/candidates lists candidates for organization with pagination
-- [ ] GET /api/v1/candidates supports search by email or name
-- [ ] GET /api/v1/candidates/{id} returns single candidate with all assessments
-- [ ] PATCH /api/v1/candidates/{id} updates candidate data
-- [ ] DELETE /api/v1/candidates/{id} soft deletes candidate
-
-### 📝 Task Management
-
-- [ ] POST /api/v1/tasks endpoint creates task with name, description, task_type, difficulty
-- [ ] POST /api/v1/tasks accepts starter_code, test_code, sample_data, dependencies
-- [ ] POST /api/v1/tasks validates success_criteria is valid JSON
-- [ ] POST /api/v1/tasks returns created task
-- [ ] GET /api/v1/tasks lists all template tasks (is_template=true) plus organization's custom tasks
-- [ ] GET /api/v1/tasks filters by task_type, difficulty
-- [ ] GET /api/v1/tasks/{id} returns single task
-- [ ] PATCH /api/v1/tasks/{id} updates task (only if organization owns it; template tasks are read-only)
-- [ ] DELETE /api/v1/tasks/{id} deletes task (only if not template)
-- [ ] Tasks page: every task card has "View" button (eye icon); template tasks are view-only, non-template have Edit/Delete
-- [ ] Seed script creates template tasks; templates visible to all orgs
-- [ ] Debugging Challenge task has 3 bugs, Python code, pytest tests
-- [ ] RAG Pipeline task has 4 bugs, document loading, Claude API integration
-
-### 🔌 E2B Integration Service
-
-- [ ] E2BService class initializes with E2B API key from environment
-- [ ] E2BService.create_sandbox() creates new E2B sandbox instance
-- [ ] E2BService.create_sandbox() returns sandbox object with session_id
-- [ ] E2BService.create_sandbox() logs sandbox creation with timestamp
-- [ ] E2BService.execute_code(sandbox, code) runs Python code in sandbox
-- [ ] E2BService.execute_code() captures stdout and stderr
-- [ ] E2BService.execute_code() handles execution errors gracefully
-- [ ] E2BService.execute_code() returns dict with stdout, stderr, exit_code, execution_time
-- [ ] E2BService.run_tests(sandbox, test_code) writes test file to sandbox
-- [ ] E2BService.run_tests() executes pytest in sandbox
-- [ ] E2BService.run_tests() parses pytest output for passed/failed counts
-- [ ] E2BService.run_tests() returns dict with tests_passed, tests_total, test_details
-- [ ] E2BService.install_dependencies(sandbox, packages) runs pip install in sandbox
-- [ ] E2BService.install_dependencies() handles package installation errors
-- [ ] E2BService.close_sandbox(sandbox) terminates sandbox
-- [ ] E2BService.close_sandbox() logs closure with session_id
-
-### 🤖 Claude Integration Service
-
-- [ ] ClaudeService class initializes with Anthropic API key from environment
-- [ ] ClaudeService.chat(messages, system) sends messages to Claude API
-- [ ] ClaudeService.chat() uses claude-sonnet-4-20250514 model
-- [ ] ClaudeService.chat() sets max_tokens to 4096
-- [ ] ClaudeService.chat() returns dict with response text and token usage
-- [ ] ClaudeService.chat() handles API errors with retry logic (3 attempts)
-- [ ] ClaudeService.analyze_code_quality(code) prompts Claude to score code 0-10
-- [ ] ClaudeService.analyze_code_quality() extracts scores for readability, efficiency, correctness
-- [ ] ClaudeService.analyze_code_quality() returns dict with overall_score and breakdown
-- [ ] ClaudeService.analyze_prompt_quality(prompt) scores prompt clarity 0-10
-- [ ] ClaudeService.analyze_prompt_quality() returns quality_score
-
-### 💳 Stripe Integration Service
-
-- [ ] StripeService class initializes with Stripe API key from environment
-- [ ] StripeService.create_customer(email, name) creates Stripe customer
-- [ ] StripeService.create_customer() returns customer_id
-- [ ] StripeService.charge_assessment(customer_id, amount) creates PaymentIntent for £25.00
-- [ ] StripeService.charge_assessment() sets amount to 2500 (pence)
-- [ ] StripeService.charge_assessment() confirms payment immediately
-- [ ] StripeService.charge_assessment() returns payment status
-- [ ] StripeService.create_subscription(customer_id, plan) creates subscription for £300/month
-- [ ] StripeService.create_subscription() returns subscription_id
-- [ ] StripeService.cancel_subscription(subscription_id) cancels subscription
-- [ ] POST /api/v1/webhooks/stripe endpoint verifies Stripe webhook signature
-- [ ] POST /api/v1/webhooks/stripe handles payment_intent.succeeded event
-- [ ] POST /api/v1/webhooks/stripe handles payment_intent.failed event
-- [ ] POST /api/v1/webhooks/stripe handles customer.subscription.deleted event
-- [ ] POST /api/v1/webhooks/stripe updates organization billing status on events
-
-### 🔗 Workable Integration Service
-
-- [ ] WorkableService class initializes with client_id and client_secret from environment
-- [ ] WorkableService.get_authorization_url(redirect_uri) returns OAuth URL
-- [ ] WorkableService.exchange_code_for_token(code) exchanges OAuth code for access/refresh tokens
-- [ ] WorkableService.exchange_code_for_token() returns dict with access_token, refresh_token
-- [ ] WorkableService.refresh_access_token(refresh_token) gets new access_token
-- [ ] WorkableService.get_candidate(candidate_id, access_token) fetches candidate from Workable
-- [ ] WorkableService.post_assessment_result(candidate_id, data, access_token) posts to candidate activity
-- [ ] WorkableService.post_assessment_result() formats data as comment with score and link
-- [ ] WorkableService.update_candidate_stage(candidate_id, stage, access_token) moves candidate to stage
-- [ ] GET /api/v1/organizations/workable/authorize-url returns { url } for Workable OAuth (frontend redirects)
-- [ ] POST /api/v1/organizations/workable/connect accepts { code }, exchanges for tokens, stores on org
-- [ ] Frontend callback at /settings/workable/callback?code=... sends code to connect, then redirects to #/settings
-- [ ] POST /api/v1/webhooks/workable verifies webhook signature
-- [ ] POST /api/v1/webhooks/workable handles candidate_stage_changed event
-- [ ] POST /api/v1/webhooks/workable checks if auto-send is enabled for stage
-- [ ] POST /api/v1/webhooks/workable creates assessment automatically if stage matches config
-
-### 📧 Email Service & Celery Tasks
-
-- [ ] EmailService class initializes with Resend API key from environment
-- [ ] EmailService.send_assessment_invitation(candidate_email, token, task_name) sends email
-- [ ] EmailService.send_assessment_invitation() uses HTML template with black/white/purple styling
-- [ ] EmailService.send_assessment_invitation() includes unique assessment link with token
-- [ ] EmailService.send_assessment_invitation() has clear CTA button
-- [ ] EmailService.send_results_notification(recruiter_email, candidate_name, score) sends email
-- [ ] EmailService.send_results_notification() includes score, tests passed, and dashboard link
-- [ ] Celery app configured with Redis as broker
-- [ ] Celery task send_assessment_email_task calls EmailService.send_assessment_invitation
-- [ ] Celery task post_to_workable_task calls WorkableService.post_assessment_result
-- [ ] Assessment creation triggers send_assessment_email_task asynchronously
-- [ ] Assessment completion triggers post_to_workable_task if workable_connected=true
-- [ ] Celery worker can be started with: celery -A app.tasks worker
-
-### 🎨 Frontend - Landing Page
-
-- [ ] Landing page at #/ (hash root) with hero section
-- [ ] Hero has headline: "Screen AI-Era Engineers in 30 Minutes"
-- [ ] Hero has subheadline explaining TALI's unique approach
-- [ ] Hero has two CTAs: "Book Demo" and "Start Trial"
-- [ ] Problem section explains AI arms race with visuals
-- [ ] Solution section shows TALI's 10 data points
-- [ ] Features section with 3-4 key features
-- [ ] Pricing section with two cards: Pay-per-use (£25) and Monthly (£300)
-- [ ] Footer with links, contact info, legal
-- [ ] Navigation bar with logo, links, Login/Sign Up buttons
-- [ ] All styling follows black/white/purple theme with 2px borders
-
-### 🎨 Frontend - Authentication Pages
-
-- [ ] Login page at #/login with email and password inputs
-- [ ] Login page styled with black/white/purple theme
-- [ ] Login page has "Forgot password?" link to #/forgot-password
-- [ ] Login page has "Don't have an account? Sign up" link to #/register
-- [ ] Login form validates email format before submit
-- [ ] Login form shows error message on failed login
-- [ ] Login form redirects to /dashboard on success
-- [ ] Register page at /register with full_name, email, password, confirm_password inputs
-- [ ] Register page validates password length (min 8 chars)
-- [ ] Register page validates passwords match
-- [ ] Register form shows error if email already exists
-- [ ] Register form redirects to /login on success with success message
-- [ ] Both pages use consistent Button and Input components from ui/
-
-### 🎨 Frontend - Dashboard (Recruiter)
-
-- [ ] Dashboard layout with navigation sidebar or top bar
-- [ ] Navigation shows: Dashboard, Assessments, Candidates, Analytics, Settings
-- [ ] Navigation shows user email with dropdown (Logout option)
-- [ ] Dashboard home at #/dashboard shows 4 stat cards across top
-- [ ] Stat card 1: Active Assessments (count where status="in_progress")
-- [ ] Stat card 2: Completion Rate (completed / total %)
-- [ ] Stat card 3: Average Score (avg of all completed assessments)
-- [ ] Stat card 4: Cost This Month (assessments_used * £25)
-- [ ] Dashboard home shows recent assessments table below stats
-- [ ] Recent assessments table has columns: Candidate, Task, Status, Score, Time, Assessment link, Actions
-- [ ] Candidate name and email from API (candidate_name, candidate_email in list response)
-- [ ] Assessment link column has "Copy link" button (copies URL like origin/#/assess/{token})
-- [ ] Status shown as colored badge (pending=gray, in_progress=blue, completed=green)
-- [ ] Score shown as "8.7/10" with color (green >8, yellow 6-8, red <6)
-- [ ] Actions column has "View" for completed assessments
-- [ ] Table supports pagination (limit/offset from API)
-- [ ] "Create Assessment" button in top right opens modal
-
-### 🎨 Frontend - Assessment Creation Modal
-
-- [ ] Modal opens when "Create Assessment" clicked
-- [ ] Modal has dropdown to select or create candidate
-- [ ] If "Create New Candidate": shows email, full_name, position inputs
-- [ ] Modal has dropdown to select task template
-- [ ] Task dropdown shows task name, difficulty badge, duration
-- [ ] Modal has "Send Assessment" button
-- [ ] On submit, calls POST /api/v1/assessments with candidate_email, candidate_name, task_id (candidate created or updated inline)
-- [ ] Shows success message: "Assessment sent to {candidate_email}"
-- [ ] Closes modal and refreshes assessments list
-- [ ] Shows error message if API call fails
-
-### 🎨 Frontend - Assessment Detail Page
-
-- [ ] Assessment detail page: View from dashboard opens candidate detail (fetches GET /api/v1/assessments/{id})
-- [ ] Header shows candidate name, position, assessment created date
-- [ ] Overall score card shows score (large), tests passed (5/5), status badge
-- [ ] Tabs: Test Results, AI Usage, Timeline, Code Review
-- [ ] Test Results tab shows list of tests with pass/fail icons and descriptions
-- [ ] AI Usage tab shows list of prompts with timestamp, prompt text, quality score
-- [ ] AI Usage tab shows avg prompt quality, total prompts, AI efficiency score
-- [ ] Timeline tab shows chronological list of events (started, bug fixed, test passed, submitted)
-- [ ] Timeline events show timestamp, event type, description
-- [ ] Code Review tab shows final code in Monaco editor (read-only)
-- [ ] Code Review tab shows code quality score breakdown
-- [ ] Action buttons: "Download PDF", "Post to Workable" (if connected), "Delete"
-- [ ] "Post to Workable" button disabled if already posted
-- [ ] "Post to Workable" calls backend API and shows success toast
-
-### 🎨 Frontend - Assessment Interface (Candidate)
-
-- [ ] Assessment interface at #/assess/{token}
-- [ ] On load, calls POST /api/v1/assessments/token/{token}/start (or uses startData passed from welcome page to avoid double-start)
-- [ ] Shows loading screen while sandbox creates
-- [ ] Once started, shows split layout: 65% code editor, 35% right panel
-- [ ] Top bar shows: Task name, Timer (counting down), Submit button
-- [ ] Timer shows time remaining (e.g., "28:34 remaining" in MM:SS)
-- [ ] Timer turns red when < 5 minutes
-- [ ] Left panel: Monaco editor with starter code loaded
-- [ ] Monaco editor has Python syntax highlighting
-- [ ] Monaco editor has "Run Code" button below
-- [ ] Right panel split: Top 60% = Claude chat, Bottom 40% = Output console
-- [ ] Claude chat has message list (scrollable)
-- [ ] Claude chat has input field at bottom with Send button
-- [ ] Claude chat shows user messages on right (purple bubble)
-- [ ] Claude chat shows Claude responses on left (white bubble)
-- [ ] Claude chat has loading indicator when waiting for response
-- [ ] Output console shows stdout/stderr from last execution
-- [ ] Output console has tabs: Output, Tests (shows test results)
-- [ ] "Run Code" button calls POST /api/v1/assessments/{assessment_id}/execute with X-Assessment-Token header
-- [ ] "Run Code" button disabled while executing, shows loading spinner
-- [ ] Send message calls POST /api/v1/assessments/{assessment_id}/claude with X-Assessment-Token header
-- [ ] Submit button opens confirmation modal; Submit calls POST /api/v1/assessments/{assessment_id}/submit with final_code and X-Assessment-Token
-- [ ] After submit, redirects to results page showing score and breakdown
-
-### 🎨 Frontend - Settings Pages
-
-- [ ] Settings page at #/settings with tabs: Workable, Billing
-- [ ] Workable tab shows connection status (Connected/Not Connected)
-- [ ] Workable tab has "Connect Workable" button if not connected; button fetches GET /api/v1/organizations/workable/authorize-url then redirects to returned URL
-- [ ] Workable callback page at path /settings/workable/callback?code=... exchanges code via POST /organizations/workable/connect, then redirects to #/settings
-- [ ] Billing tab shows current plan (Pay-per-use) and total usage from GET /api/v1/billing/usage
-- [ ] Billing tab shows usage history table (date, candidate, task, cost) and "Add credits (£25)" button
-- [ ] "Add credits" calls POST /api/v1/billing/checkout-session and redirects to Stripe Checkout
-
-### 🧪 Backend Tests
-
-- [ ] Test file test_auth.py with test_register_user
-- [ ] Test file test_auth.py with test_login_success
-- [ ] Test file test_auth.py with test_login_invalid_credentials
-- [ ] Test file test_auth.py with test_get_current_user
-- [ ] Test file test_assessments.py with test_create_assessment
-- [ ] Test file test_assessments.py with test_list_assessments
-- [ ] Test file test_assessments.py with test_start_assessment
-- [ ] Test file test_assessments.py with test_execute_code
-- [ ] Test file test_assessments.py with test_submit_assessment
-- [ ] Test file test_e2b_service.py with test_create_sandbox
-- [ ] Test file test_e2b_service.py with test_execute_code
-- [ ] Test file test_e2b_service.py with test_run_tests
-- [ ] All tests use pytest fixtures for db session, test client, test user
-- [ ] Tests run with: cd backend && pytest tests/ -v
-- [ ] Test coverage >70% for core modules
-
-### 🧪 Frontend Tests
-
-- [ ] Add npm test script to frontend/package.json (e.g. vitest or React Testing Library)
-- [ ] Test key flows or components as needed; frontend currently has no test script
-
-### 🚀 Deployment - Backend (Railway)
-
-- [ ] Procfile created with: web: uvicorn app.main:app --host 0.0.0.0 --port $PORT
-- [ ] railway.json created with build and deploy config
-- [ ] Environment variables set in Railway: DATABASE_URL, SECRET_KEY, E2B_API_KEY, ANTHROPIC_API_KEY, STRIPE_API_KEY, RESEND_API_KEY, REDIS_URL, FRONTEND_URL
-- [ ] PostgreSQL addon added to Railway project
-- [ ] Redis addon added to Railway project
-- [ ] Railway start command runs: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
-- [ ] Backend deployed and accessible (e.g. Railway URL)
-- [ ] Health check endpoint /health returns 200
-
-### 🚀 Deployment - Frontend (Vercel)
-
-- [ ] Frontend deployed to Vercel (build: npm run build from frontend/)
-- [ ] Environment variable set: VITE_API_URL (backend API base URL)
-- [ ] Frontend accessible and loads correctly; hash routes work (#/dashboard, #/assess/{token}, etc.)
-- [ ] SPA: ensure /settings/workable/callback serves index.html for OAuth callback
-
-### 🚀 Deployment - Celery Worker
-
-- [ ] Separate Railway service created for Celery worker
-- [ ] Celery service uses same Redis as main app
-- [ ] Start command: celery -A app.tasks worker --loglevel=info
-- [ ] Celery worker starts successfully and processes tasks
-
-### 📊 Monitoring & Operations
-
-- [ ] Sentry integrated in backend (app/main.py) if desired
-- [ ] Error tracking in production; frontend has no Next.js (no next.config.js)
-- [ ] Backend logs structured as JSON
-- [ ] Health check endpoint /health checks database and Redis connectivity
-- [ ] Uptime monitoring configured (UptimeRobot or similar)
-- [ ] Database backups automated via Railway
+- [x] ASSESSMENT_PRICE_PENCE setting added (default 2500); used in billing.py and stripe_service.py instead of hardcoded 2500.
+- [x] ASSESSMENT_EXPIRY_DAYS setting added (default 7); used in assessments.py create_assessment instead of hardcoded timedelta(days=7).
+- [x] EMAIL_FROM setting added; used in email_service.py instead of hardcoded sender address.
 
 ---
 
-## Guardrails (Lessons for AI Agents)
+## Phase 2 - Prompt Analytics & Scoring Engine
 
-### Database & Migrations
-- Always run `alembic revision --autogenerate` to generate migrations, never write migrations manually
-- Review generated migrations before running `alembic upgrade head`
-- Add indexes for all foreign keys and frequently queried fields
-- Use JSONB for flexible data (prompts, timeline) to avoid schema changes
+The core differentiation. Replace naive prompt counting (<=5 prompts = 8/10) with a multi-signal scoring system using 13 AI-evaluated signals + 10 heuristic signals.
 
-### API Design
-- Always use Pydantic schemas for request/response validation
-- Return proper HTTP status codes (201 for create, 404 for not found, 403 for forbidden)
-- Include organization_id checks in all queries to prevent data leakage between orgs
-- Use dependency injection for get_db() and get_current_user()
+### 2A. Expanded Prompt Data Capture (backend/app/api/v1/assessments.py)
 
-### E2B Integration
-- Always handle E2B API errors gracefully (network issues, timeouts)
-- Close sandboxes after use to avoid billing for idle sandboxes
-- Set execution timeouts (90 minutes max per assessment)
-- Test sandbox creation in development before deploying
+- [x] chat_with_claude stores full Claude response text in prompt record (currently discarded).
+- [x] chat_with_claude stores input_tokens and output_tokens from Claude usage metadata.
+- [x] chat_with_claude stores response_latency_ms (time.time() before/after Claude call).
+- [x] chat_with_claude stores code_before snapshot from frontend-provided code_context.
+- [x] chat_with_claude stores code_after by backfilling previous prompt's code_after with current code_context.
+- [x] chat_with_claude stores word_count and char_count for each prompt.
+- [x] chat_with_claude stores time_since_last_prompt_ms (computed from previous prompt timestamp).
+- [x] chat_with_claude stores paste_detected flag from frontend metadata.
+- [x] chat_with_claude stores browser_focused flag from frontend metadata.
+- [x] Prompt record schema documented: {message, response, timestamp, input_tokens, output_tokens, response_latency_ms, code_before, code_after, word_count, char_count, time_since_last_prompt_ms, paste_detected, browser_focused}.
 
-### Frontend Best Practices
-- Use Tailwind's utility classes, avoid custom CSS
-- Keep components small and focused (single responsibility)
-- Handle loading and error states for all async operations
-- Store auth token in localStorage (via AuthContext), clear on logout
-- Use src/lib/api.js for all API calls; routing is hash-based in App.jsx
+### 2B. AI-Evaluated Scoring Signals (backend/app/services/claude_service.py)
 
-### Testing
-- Mock external APIs (E2B, Claude, Stripe) in tests
-- Use pytest fixtures to avoid code duplication
-- Test happy path first, then error cases
-- Run tests before committing
+IMPORTANT: All analysis batched into ONE Claude call at submit time. Do NOT call per-prompt.
 
-### Deployment
-- Never commit .env files or secrets
-- Use environment variables for all config
-- Test migrations on staging before production
-- Monitor error rates after deployment
+- [x] ClaudeService.analyze_prompt_session(prompts, task_description) method added.
+- [x] analyze_prompt_session accepts full conversation history (all prompts with code snapshots).
+- [x] analyze_prompt_session calls Claude once with structured prompt requesting JSON scores.
+- [x] Signal: Prompt Clarity (0-10) -- Is each prompt specific, well-structured, and unambiguous?
+- [x] Signal: Prompt Specificity (0-10) -- Does it reference specific code lines, error messages, or requirements?
+- [x] Signal: Prompt Efficiency (0-10) -- Does it ask for the right level of help (not too broad, not too narrow)?
+- [x] Signal: Design Thinking (0-10) -- Does it show understanding of system design, tradeoffs, or architecture?
+- [x] Signal: Debugging Strategy (0-10) -- Does it demonstrate systematic debugging (hypothesis, isolation, verification)?
+- [x] Signal: Prompt Progression (0-10) -- Do prompts build on each other logically (vs. random/scattered)?
+- [x] Signal: Independence (0-10) -- Does candidate attempt before asking? (measured by code changes between prompts)
+- [x] Signal: Written Communication (0-10) -- Grammar, structure, professional tone appropriate for client-facing roles.
+- [x] Signal: Context Utilization (0-10) -- Does candidate actually USE the AI response in subsequent code/prompts?
+- [x] Signal: Error Recovery (0-10) -- When Claude gives wrong/unhelpful answer, does candidate course-correct or blindly follow?
+- [x] Signal: Requirement Comprehension (0-10) -- Did they understand the task before prompting? (initial prompt quality vs task brief)
+- [x] Signal: Learning Velocity (0-10) -- Do prompts improve during session? (compare first 3 vs last 3 prompt quality)
+- [x] Signal: Prompt Fraud Detection -- Detects copy-pasted external text, full solution dumps, or prompt injection attempts (flag + confidence score).
+- [x] analyze_prompt_session returns structured dict with all signal scores and per-prompt breakdown.
+- [x] Error handling: if Claude call fails, store null scores and log error; do not block submission.
+
+### 2C. Heuristic (Non-AI) Signals (backend/app/services/prompt_analytics.py)
+
+New module. Computed directly in Python, no Claude call needed.
+
+- [x] compute_time_to_first_prompt(assessment) -- seconds from started_at to first prompt timestamp.
+- [x] compute_prompt_speed(prompts) -- average time between consecutive prompts in ms.
+- [x] compute_prompt_frequency(prompts, assessment_duration) -- total count, prompts per 10-minute window array.
+- [x] compute_prompt_length_stats(prompts) -- avg/min/max word count; flags very short (<10 words) or very long (>500 words).
+- [x] detect_copy_paste(prompts) -- compare prompt text against common StackOverflow/ChatGPT patterns; combine with paste_detected flags from frontend.
+- [x] compute_code_delta(prompts) -- diff size between code_before and code_after per prompt; measures if candidate actually used response.
+- [x] compute_self_correction_rate(prompts) -- how often candidate modifies code after prompt vs. using response verbatim.
+- [x] compute_token_efficiency(prompts, tests_passed, tests_total) -- total tokens consumed vs. problems solved.
+- [x] compute_browser_focus_ratio(assessment) -- % of assessment time browser was in focus (from prompt-level browser_focused flags).
+- [x] compute_tab_switch_count(assessment) -- total tab switches recorded.
+- [x] All heuristic functions return dict with signal name, value, and optional flag/warning.
+
+### 2D. Calibration Prompt System
+
+- [x] Task model gains calibration_prompt field (Text, nullable) -- the standardized prompt to present first.
+- [x] Default calibration prompt: "Ask Claude to help you write a function that reverses a string" (or per-task custom).
+- [x] Assessment start flow presents calibration task before main task.
+- [x] Calibration interaction stored separately: assessment.calibration_score (Float).
+- [x] Calibration score computed via Claude analysis of the single calibration interaction.
+- [x] Recruiter dashboard shows calibration score alongside main score for cross-candidate comparison.
+
+### 2E. Composite Scoring Formula (backend/app/api/v1/assessments.py)
+
+- [x] SCORE_WEIGHTS dict defined in config.py with defaults: tests=0.30, code_quality=0.15, prompt_quality=0.15, prompt_efficiency=0.10, independence=0.10, context_utilization=0.05, design_thinking=0.05, debugging_strategy=0.05, written_communication=0.05.
+- [x] Task model gains score_weights field (JSON, nullable) to allow per-task override of default weights.
+- [x] Task model gains recruiter_weight_preset field (String, nullable) -- options: "solution_focused" (50% tests), "prompt_focused" (50% prompting), "balanced" (default).
+- [x] submit_assessment computes final_score as weighted sum of all component scores using task-specific or default weights.
+- [x] submit_assessment calls ClaudeService.analyze_prompt_session (batched, single call).
+- [x] submit_assessment calls all heuristic signal functions from prompt_analytics.py.
+- [x] submit_assessment stores all individual component scores on the Assessment model.
+- [x] submit_assessment stores prompt_analytics JSON with full per-prompt scoring breakdown.
+- [x] Existing naive AI usage scoring (<=5 prompts = 8/10) replaced entirely.
+
+### 2F. New Database Fields (backend/app/models/assessment.py)
+
+- [x] prompt_quality_score column added (Float, nullable).
+- [x] prompt_efficiency_score column added (Float, nullable).
+- [x] independence_score column added (Float, nullable).
+- [x] context_utilization_score column added (Float, nullable).
+- [x] design_thinking_score column added (Float, nullable).
+- [x] debugging_strategy_score column added (Float, nullable).
+- [x] written_communication_score column added (Float, nullable).
+- [x] learning_velocity_score column added (Float, nullable).
+- [x] error_recovery_score column added (Float, nullable).
+- [x] requirement_comprehension_score column added (Float, nullable).
+- [x] calibration_score column added (Float, nullable).
+- [x] prompt_fraud_flags column added (JSON, nullable) -- array of {type, confidence, evidence}.
+- [x] prompt_analytics column added (JSON, nullable) -- full per-prompt scoring breakdown.
+- [x] browser_focus_ratio column added (Float, nullable).
+- [x] tab_switch_count column added (Integer, default 0).
+- [x] time_to_first_prompt_seconds column added (Integer, nullable).
+- [x] code_snapshots column updated to store per-prompt snapshots (array of {prompt_index, code_before, code_after}).
+- [x] Alembic migration 003_add_prompt_scoring_fields.py created and reversible.
+- [x] Task model: calibration_prompt (Text), score_weights (JSON), recruiter_weight_preset (String) columns added.
+- [x] Task model migration included in same or separate Alembic migration.
+
+### 2G. Frontend Prompt Capture (frontend/src/App.jsx -- AssessmentPage)
+
+- [x] Claude message request includes code_context field (current Monaco editor content).
+- [x] Paste events tracked on prompt input textarea; paste_detected flag sent with each message.
+- [x] Time since last prompt tracked client-side; time_since_last_prompt_ms sent with each message.
+- [x] Browser focus/blur events tracked via window focus/blur listeners; browser_focused sent with each message.
+- [x] Tab visibility changes tracked using document.visibilityState API with fallback for unsupported browsers.
+- [x] Tab switch count maintained in component state; incremented on each visibilitychange to "hidden".
+- [x] tab_switch_count sent with submit request.
+- [x] All tracking state reset on assessment start.
+
+### 2H. Frontend Score Display (frontend/src/App.jsx -- CandidateDetailPage)
+
+- [x] recharts package added to frontend dependencies.
+- [x] AI Usage tab: Radar/spider chart showing all scoring dimensions (clarity, specificity, efficiency, design thinking, debugging, progression, independence, communication, context utilization, error recovery, comprehension, learning velocity).
+- [x] AI Usage tab: Per-prompt quality scores shown inline next to each prompt in conversation view.
+- [x] AI Usage tab: Fraud flags displayed in red with explanation text if any detected.
+- [x] AI Usage tab: Prompt progression timeline as line chart showing quality evolution during assessment.
+- [x] AI Usage tab: Summary stats card showing avg prompt quality, total tokens, efficiency rating, time to first prompt.
+- [x] AI Usage tab: Calibration score shown with comparison to average across all candidates (requires API endpoint).
+- [x] AI Usage tab: Browser focus indicator -- warning banner if <80% focus time.
+- [x] AI Usage tab: Learning velocity indicator (improving / declining / stable badge).
+- [x] Score breakdown section shows all component scores with their weights and contribution to final score.
+
+### 2I. Proctoring Mode (Optional)
+
+- [x] Task model gains proctoring_enabled field (Boolean, default false).
+- [x] When proctoring_enabled=true, candidate sees "This assessment is proctored" notice on welcome page.
+- [x] When proctoring_enabled=true, warning toast shown to candidate on each tab switch: "You have left the assessment tab. This has been recorded."
+- [x] All tab switches recorded with timestamps in assessment timeline.
+- [x] Assessments with >5 tab switches automatically flagged for recruiter review (flag in prompt_fraud_flags).
+- [x] Recruiter can see proctoring summary: total tab switches, timestamps, focus percentage.
 
 ---
 
-## Current State
+## Phase 3 - Production Hardening
 
-**Implemented and working:**
-- Backend: FastAPI, PostgreSQL, SQLAlchemy, Alembic, Redis, Celery. Auth (register, login, JWT, forgot/reset password). Assessments: create, list (with filters/pagination, candidate_name/task_name), get, token/start, execute, claude, submit. E2B sandbox create/reuse. Tasks: list, get, create, update, delete; template vs org tasks. Organizations: get, update, Workable authorize-url + connect. Billing: usage, Stripe checkout-session. Analytics endpoint. Rate limiting. Invite and results emails via Celery.
-- Frontend: Vite + React, hash routing in App.jsx. AuthContext, login, register, forgot/reset password. Dashboard with stats, assessments table (candidate name, task, status, score, Assessment link column with Copy link, View). New Assessment modal. Candidate detail (prompts, timeline, results, breakdown). Tasks page with View/Edit/Delete (View for all tasks including templates). Settings: Workable tab (Connect Workable + callback), Billing tab (usage, Add credits). Candidate flow: #/assess/{token} welcome → start → AssessmentPage (Monaco, Claude chat, execute, submit).
-- Deployment: Backend on Railway (alembic + uvicorn). Frontend on Vercel. Docs updated for Vercel + Railway only.
+Remaining QA and stability items from previous sprint.
 
-**Remaining / polish:**
-- Optional: dedicated POST /candidates CRUD (candidates currently created inline with assessments). Optional: more Stripe webhook handling, Workable webhook auto-create assessment. Frontend test script and tests. Monitoring (Sentry, health checks).
+### CORS and Origins
+
+- [x] CORS_EXTRA_ORIGINS config verified working with production Vercel domain.
+- [x] CORS middleware includes both FRONTEND_URL and CORS_EXTRA_ORIGINS in allowed_origins.
+
+### E2B Sandbox Reliability
+
+- [x] E2B get_sandbox_id method handles id, sandbox_id, and sandboxId attributes (SDK version compatibility).
+- [x] Start assessment returns clear 503 with detail message when E2B_API_KEY missing.
+- [x] Start assessment returns clear 503 with detail message when sandbox creation fails.
+- [x] Sandbox cleanup on DB commit failure prevents leaked sandbox resources.
+
+### Transaction Safety
+
+- [x] All critical write endpoints use try/except + db.rollback() on failures.
+- [x] Assessment submission enforces valid state transition (in_progress -> completed only).
+- [x] Start assessment uses with_for_update() for concurrency safety.
+
+### Auth and Security
+
+- [x] Password reset token uses secure comparison (secrets.compare_digest).
+- [x] JWT creation uses timezone-aware expiry (datetime.now(timezone.utc)).
+- [x] All datetime operations use timezone-aware timestamps consistently.
+
+### Database Performance
+
+- [x] Foreign key indexes exist on assessments.organization_id, assessments.candidate_id, assessments.task_id.
+- [x] Foreign key indexes exist on users.organization_id, tasks.organization_id, candidates.organization_id.
+- [x] Index migration (002) is present and reversible.
+
+### Input Validation
+
+- [x] Pydantic schemas use Field(min_length, max_length) for string inputs.
+- [x] Pydantic schemas use Field(ge, le) for numeric inputs (limit, offset, duration_minutes).
+- [x] EmailStr used for all email input fields.
 
 ---
 
-## Build Priority
+## Phase 4 - Integration Completion
 
-1. **Foundation First**: Database models, migrations, auth system
-2. **Core Flow**: Assessment creation → start → execute → submit workflow
-3. **Integrations**: E2B and Claude (required for core flow)
-4. **Frontend Connection**: Hook up existing UI to backend APIs
-5. **Secondary Features**: Workable, Stripe, email
-6. **Testing & Deployment**: Tests, Railway/Vercel deployment
+### Stripe Webhooks
+
+- [x] Stripe webhook refuses processing when STRIPE_WEBHOOK_SECRET is missing (returns 400).
+- [x] Stripe webhook handles payment_intent.succeeded -- updates org billing.
+- [x] Stripe webhook handles payment_intent.payment_failed -- logs failure.
+- [x] Stripe webhook handles customer.subscription.updated -- updates org plan.
+- [x] Stripe webhook handles customer.subscription.deleted -- downgrades org plan.
+- [x] Organization billing fields (plan, assessments_used, assessments_limit) update correctly from events.
+
+### Workable Integration
+
+- [x] Workable webhook refuses processing when WORKABLE_WEBHOOK_SECRET is missing.
+- [x] Workable candidate_stage_changed webhook auto-creates assessment (config-driven).
+- [x] Assessment completion enqueues post_to_workable Celery task when linked candidate has Workable ID.
+- [x] Manual POST /assessments/{id}/post-to-workable marks posted_to_workable=true with timestamp.
+- [x] WorkableService.post_assessment_result() formats score and link as Workable comment.
+
+### PDF Report Generation
+
+- [x] GET /api/v1/assessments/{id}/report.pdf generates downloadable PDF.
+- [x] PDF includes: candidate info, overall score, component score breakdown, prompt analytics summary, test results.
+- [x] PDF uses consistent branding (TALI header, black/white/purple theme).
+
+### Email Notifications
+
+- [x] Assessment invitation email sends with correct FROM address (from EMAIL_FROM config).
+- [x] Assessment completion notification sent to recruiter with score and dashboard link.
+- [x] Resend invite (POST /assessments/{id}/resend) re-sends invitation email.
+
+---
+
+## Phase 5 - Frontend Polish
+
+### Dashboard Enhancements
+
+- [x] CSV export button downloads visible assessments as CSV.
+- [x] JSON export button downloads visible assessments as JSON.
+- [x] Lightweight in-app notification area for recently completed assessments.
+- [x] Side-by-side comparison view for two selected assessments (checkbox select + compare button).
+
+### Candidate Detail Actions
+
+- [x] Download PDF button calls GET /assessments/{id}/report.pdf and triggers browser download.
+- [x] Post to Workable button calls POST /assessments/{id}/post-to-workable; disabled if already posted.
+- [x] Delete assessment button with confirmation modal; calls DELETE /assessments/{id}.
+- [x] Recruiter notes input; calls POST /assessments/{id}/notes and displays in timeline.
+
+### Settings Page
+
+- [x] Team tab shows org member list from GET /api/v1/users.
+- [x] Team tab has invite form (email, full_name) calling POST /api/v1/users/invite.
+- [x] Preferences tab with dark mode toggle (persisted in localStorage).
+
+### Candidate Management Page
+
+- [x] Candidates page at #/candidates listing all org candidates with search.
+- [x] Candidate detail view showing all assessments for that candidate.
+- [x] Create/edit candidate form.
+
+---
+
+## Phase 6 - Testing & Monitoring
+
+### Backend Tests
+
+- [x] test_auth.py: register, login success, login invalid credentials, get current user.
+- [x] test_assessments.py: create, list (paginated), start, execute, submit.
+- [x] test_candidates.py: full CRUD flow (create, list, get, update, delete).
+- [x] test_assessment_actions.py: delete, resend, post-to-workable, report PDF.
+- [x] test_prompt_analytics.py: all heuristic signal functions with edge cases.
+- [x] test_scoring.py: composite scoring with default and custom weights.
+- [x] All tests use pytest fixtures for db session, test client, authenticated user.
+- [x] Tests mock E2B, Claude, Stripe, Workable, and Resend external calls.
+- [x] Tests run with: cd backend && python3 -m pytest tests/ -v
+- [x] Test coverage >70% for core modules.
+
+### Frontend Tests
+
+- [x] npm test script configured (Vitest + React Testing Library + jsdom).
+- [x] AuthContext test: hydration from localStorage, logout clears token.
+- [x] AssessmentPage test: paste tracking, focus tracking, code_context sent with messages.
+- [x] Score display test: radar chart renders with mock data.
+
+### Operations & Monitoring
+
+- [x] /health endpoint checks PostgreSQL and Redis connectivity; returns "healthy" or "degraded".
+- [x] Structured JSON logging configured for production (JsonFormatter in logging_config.py).
+- [x] Sentry integrated in backend (optional, env-driven).
+- [x] Deployment docs updated with CORS_EXTRA_ORIGINS, EMAIL_FROM, all new env vars.
+- [x] Database backups automated via Railway.
 
 ---
 
 ## Definition of Done
 
-A feature is complete when:
-- [ ] Code is written and follows project structure
-- [ ] API endpoint returns correct response format
-- [ ] Database changes have migrations
-- [ ] Frontend page/component is connected to API
-- [ ] Error handling is implemented
-- [ ] At least one test exists for the feature
-- [ ] Feature works end-to-end in development
+A criterion is complete only when ALL of the following are true:
+- Code is merged in backend/frontend on main branch.
+- Input validation and error handling exist for the feature.
+- Endpoint/UI behavior works with real deployment environment variables (not just localhost).
+- Tests exist (or updated) and pass locally.
+- Criterion checkbox is explicitly marked [x].
 
 ---
 
-## Notes for AI Agents
+## Guardrails for Agents
 
-- Backend: FastAPI with sync route handlers (def, not async def). Use get_db() and get_current_user() dependencies. SQLAlchemy 2.0 with Session (e.g. db.query(Model) or select()). Use Pydantic schemas for request/response.
-- Frontend: Single app in src/App.jsx with hash routing (#/dashboard, #/login, #/assess/{token}, #/settings, etc.). API client in src/lib/api.js (axios, VITE_API_URL). Auth via context/AuthContext.jsx (token in localStorage). No Next.js; no TypeScript (JSX).
-- Monaco editor: import from '@monaco-editor/react'. Styling: Tailwind, black/white/purple #9D00FF theme, 2px borders, no rounded corners (brutalist).
-- Assessment API: Start is POST /api/v1/assessments/token/{token}/start. Execute, claude, submit use POST /api/v1/assessments/{assessment_id}/... with header X-Assessment-Token. List returns { items, total, limit, offset } and each item includes candidate_name, candidate_email, task_name, token.
-- Always return proper HTTP status codes and error messages from API.
+### Cost Control
+- **NEVER call Claude per-prompt for scoring.** All prompt analysis is batched into a SINGLE Claude call at submit time. This is non-negotiable.
+- Monitor token usage in analyze_prompt_session; set max_tokens appropriately.
+
+### Browser Compatibility
+- When using document.visibilityState or window focus/blur events, add fallback for browsers that don't support these APIs.
+- Test tab tracking in Safari, Chrome, and Firefox.
+
+### Score Weights
+- **NEVER hardcode score weights.** Always pull from config (SCORE_WEIGHTS) or Task model (score_weights JSON field). Different clients want different weightings.
+
+### Database Safety
+- Always wrap db.commit() in try/except with db.rollback() on failure.
+- Use with_for_update() for any status transitions.
+- Run alembic revision --autogenerate for migrations; review before applying.
+
+### Deployment
+- Never commit .env files or API keys.
+- Always verify CORS origins include production frontend URL before deploying.
+- Never claim deployment success without checking live endpoint responses.
+- Test E2B sandbox creation with production API key before marking start-assessment as working.
+
+### Code Standards
+- Backend: sync route handlers (def, not async def). Use get_db() and get_current_user() dependencies.
+- Frontend: hash routing in App.jsx. API client in src/lib/api.js. Auth via context/AuthContext.jsx.
+- All new API endpoints need Pydantic request/response schemas.
+- Return proper HTTP status codes (201 create, 204 delete, 400 bad request, 404 not found, 503 service unavailable).
+
+### Task Hygiene
+- Always update this file when work is completed (mark [x]).
+- Never repeat the same commit with no net code change.
+- Never leave integration endpoints half-implemented without explicit TODO comments.
+- Commit messages follow: "ralph: [feature] - description"
 
 ---
 
-**When you complete a feature, mark it [x] and commit with message: "ralph: [feature] - description"**
+## Implementation Order
+
+1. ~~Strip Demo Mode (Phase 1) -- 5% effort~~ DONE
+2. ~~Expand Prompt Data Capture (Phase 2A) -- 10% effort~~ DONE
+3. ~~Frontend Tracking: paste, focus, tabs (Phase 2G) -- 10% effort~~ DONE
+4. ~~Build Scoring Engine: AI signals + heuristics (Phase 2B + 2C) -- 25% effort~~ DONE
+5. ~~Calibration Prompt System (Phase 2D) -- 5% effort~~ DONE
+6. ~~Composite Scoring + DB Migration (Phase 2E + 2F) -- 15% effort~~ DONE
+7. ~~Frontend Score Display (Phase 2H) -- 20% effort~~ DONE
+8. ~~Proctoring Mode (Phase 2I) -- 5% effort~~ DONE
+9. Production Hardening + Integrations + Testing (Phase 3-6) -- 5% effort -- MOSTLY DONE
+
+## Remaining Items
+
+- [x] Calibration score computed via Claude analysis of single calibration interaction
+- [x] Calibration score comparison UI in recruiter dashboard
+- [x] WorkableService.post_assessment_result() full formatting
+- [x] PDF report with full prompt analytics summary and branding
+- [x] Candidates page at #/candidates with search
+- [x] Test coverage >70% for core scoring modules (`prompt_analytics.py` coverage: 82%)
+- [x] Frontend tests for AssessmentPage tracking and radar chart
+- [x] Database backups via Railway (documented runbook in `docs/DEPLOYMENT.md`)

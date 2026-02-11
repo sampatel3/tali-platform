@@ -36,6 +36,7 @@ def get_analytics(
             "top_score": None,
             "avg_score": None,
             "avg_time_minutes": None,
+            "avg_calibration_score": None,
         }
 
     assessments = (
@@ -77,6 +78,8 @@ def get_analytics(
     scores = [a.score for a in completed if a.score is not None]
     top_score = max(scores) if scores else None
     avg_score = round(sum(scores) / len(scores), 1) if scores else None
+    calibration_scores = [a.calibration_score for a in completed if a.calibration_score is not None]
+    avg_calibration_score = round(sum(calibration_scores) / len(calibration_scores), 1) if calibration_scores else None
 
     times_min = []
     for a in completed:
@@ -95,4 +98,5 @@ def get_analytics(
         "top_score": top_score,
         "avg_score": avg_score,
         "avg_time_minutes": avg_time_minutes,
+        "avg_calibration_score": avg_calibration_score,
     }
