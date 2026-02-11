@@ -1,7 +1,7 @@
 """add CV-job match scoring fields to assessments
 
 Revision ID: 008_add_cv_job_match_fields
-Revises: 007_add_candidate_document_fields
+Revises: 007_add_candidate_docs
 Create Date: 2026-02-11
 """
 
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 
 revision = "008_add_cv_job_match_fields"
-down_revision = "007_add_candidate_document_fields"
+down_revision = "007_add_candidate_docs"
 branch_labels = None
 depends_on = None
 

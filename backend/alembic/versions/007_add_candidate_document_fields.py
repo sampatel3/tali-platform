@@ -1,6 +1,6 @@
 """add CV and job spec document fields to candidates
 
-Revision ID: 007_add_candidate_document_fields
+Revision ID: 007_add_candidate_docs
 Revises: 006_add_email_verification
 Create Date: 2026-02-11
 """
@@ -9,7 +9,7 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "007_add_candidate_document_fields"
+revision = "007_add_candidate_docs"
 down_revision = "006_add_email_verification"
 branch_labels = None
 depends_on = None
