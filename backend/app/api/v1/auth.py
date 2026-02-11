@@ -42,13 +42,23 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    # Create organization if name provided
+    # Create or reuse organization if name provided
     org = None
     if user_in.organization_name:
         slug = user_in.organization_name.lower().replace(" ", "-")
-        org = Organization(name=user_in.organization_name, slug=slug)
-        db.add(org)
-        db.flush()  # get org.id before creating user
+        # Check if org with this slug already exists — reuse it
+        org = db.query(Organization).filter(Organization.slug == slug).first()
+        if not org:
+            org = Organization(name=user_in.organization_name, slug=slug)
+            db.add(org)
+            try:
+                db.flush()  # get org.id before creating user
+            except Exception:
+                db.rollback()
+                raise HTTPException(
+                    status_code=400,
+                    detail="An organization with that name already exists. Please use a different name or leave blank.",
+                )
 
     verification_token = secrets.token_urlsafe(32)
     db_user = User(
@@ -66,6 +76,7 @@ def register(user_in: UserCreate, db: Session = Depends(get_db)):
         db.refresh(db_user)
     except Exception:
         db.rollback()
+        logger.exception("Failed to register user %s", user_in.email)
         raise HTTPException(status_code=500, detail="Failed to register user")
 
     _send_verification_email(db_user)
