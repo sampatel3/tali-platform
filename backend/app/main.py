@@ -1,6 +1,8 @@
 import logging as _logging
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
 from .platform.config import settings
@@ -34,6 +36,24 @@ app = FastAPI(
     docs_url=_docs_url,
     openapi_url=_openapi_url,
 )
+
+_val_logger = _logging.getLogger("tali.validation")
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    """Log validation errors with detail so we can diagnose 422s."""
+    _val_logger.warning(
+        "Validation error on %s %s: %s | body=%s",
+        request.method,
+        request.url.path,
+        exc.errors(),
+        exc.body,
+    )
+    return JSONResponse(
+        status_code=422,
+        content={"detail": exc.errors()},
+    )
 
 
 # ---------------------------------------------------------------------------
