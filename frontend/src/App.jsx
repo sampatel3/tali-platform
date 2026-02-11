@@ -559,13 +559,26 @@ const RegisterPage = ({ onNavigate }) => {
       setError('Email, password, and full name are required');
       return;
     }
+    if (form.password.length < 8) {
+      setError('Password must be at least 8 characters');
+      return;
+    }
     setLoading(true);
     try {
       await register(form);
       setSuccess(true);
     } catch (err) {
-      const msg = err.response?.data?.detail || err.message || 'Registration failed';
-      setError(typeof msg === 'string' ? msg : 'Registration failed');
+      const detail = err.response?.data?.detail;
+      let msg = 'Registration failed';
+      if (typeof detail === 'string') {
+        msg = detail;
+      } else if (Array.isArray(detail) && detail.length > 0) {
+        // Pydantic validation errors — extract human-readable messages
+        msg = detail.map((e) => e.msg || e.message || JSON.stringify(e)).join('. ');
+      } else if (err.message) {
+        msg = err.message;
+      }
+      setError(msg);
     } finally {
       setLoading(false);
     }
