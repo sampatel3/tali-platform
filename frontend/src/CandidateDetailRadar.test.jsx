@@ -82,8 +82,8 @@ describe('CandidateDetailPage radar chart', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'AI Usage' }));
 
-    expect(await screen.findByText('Scoring Dimensions')).toBeInTheDocument();
+    // Check for elements in the redesigned AI Usage tab
+    expect(await screen.findByText(/Avg Prompt Quality/)).toBeInTheDocument();
     expect(screen.getByText(/Prompt Quality Progression/)).toBeInTheDocument();
-    expect(screen.getByText(/Calibration/)).toBeInTheDocument();
   });
 });
