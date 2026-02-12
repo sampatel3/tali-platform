@@ -62,7 +62,7 @@ def create_assessment(
 
         task = db.query(Task).filter(
             Task.id == data.task_id,
-            Task.organization_id == current_user.organization_id,
+            (Task.organization_id == current_user.organization_id) | (Task.organization_id == None),
         ).first()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")

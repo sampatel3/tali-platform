@@ -1118,9 +1118,13 @@ const DashboardNav = ({ currentPage, onNavigate }) => {
 // DASHBOARD PAGE
 // ============================================================
 
-const NewAssessmentModal = ({ onClose, onCreated }) => {
+const NewAssessmentModal = ({ onClose, onCreated, candidate: prefillCandidate }) => {
   const [tasksList, setTasksList] = useState([]);
-  const [form, setForm] = useState({ candidate_email: '', candidate_name: '', task_id: '' });
+  const [form, setForm] = useState({
+    candidate_email: prefillCandidate?.email || '',
+    candidate_name: prefillCandidate?.full_name || '',
+    task_id: '',
+  });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [createdAssessment, setCreatedAssessment] = useState(null);
@@ -1216,26 +1220,36 @@ const NewAssessmentModal = ({ onClose, onCreated }) => {
           <div className="border-2 border-red-500 bg-red-50 p-3 mb-4 font-mono text-sm text-red-700">{error}</div>
         )}
         <div className="space-y-4">
-          <div>
-            <label className="block font-mono text-sm mb-1">Candidate Name</label>
-            <input
-              type="text"
-              className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
-              placeholder="Jane Smith"
-              value={form.candidate_name}
-              onChange={(e) => setForm((p) => ({ ...p, candidate_name: e.target.value }))}
-            />
-          </div>
-          <div>
-            <label className="block font-mono text-sm mb-1">Candidate Email *</label>
-            <input
-              type="email"
-              className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
-              placeholder="candidate@example.com"
-              value={form.candidate_email}
-              onChange={(e) => setForm((p) => ({ ...p, candidate_email: e.target.value }))}
-            />
-          </div>
+          {prefillCandidate ? (
+            <div className="border-2 border-black p-3 bg-gray-50">
+              <div className="font-mono text-xs text-gray-500 mb-1">CANDIDATE</div>
+              <div className="font-bold">{prefillCandidate.full_name || prefillCandidate.email}</div>
+              {prefillCandidate.full_name && <div className="font-mono text-sm text-gray-600">{prefillCandidate.email}</div>}
+            </div>
+          ) : (
+            <>
+              <div>
+                <label className="block font-mono text-sm mb-1">Candidate Name</label>
+                <input
+                  type="text"
+                  className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
+                  placeholder="Jane Smith"
+                  value={form.candidate_name}
+                  onChange={(e) => setForm((p) => ({ ...p, candidate_name: e.target.value }))}
+                />
+              </div>
+              <div>
+                <label className="block font-mono text-sm mb-1">Candidate Email *</label>
+                <input
+                  type="email"
+                  className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
+                  placeholder="candidate@example.com"
+                  value={form.candidate_email}
+                  onChange={(e) => setForm((p) => ({ ...p, candidate_email: e.target.value }))}
+                />
+              </div>
+            </>
+          )}
           <div>
             <label className="block font-mono text-sm mb-1">Task *</label>
             <select
@@ -1627,6 +1641,7 @@ const CandidatesPage = ({ onNavigate, onViewCandidate }) => {
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
   const [expandedCandidateId, setExpandedCandidateId] = useState(null);
+  const [sendAssessmentCandidate, setSendAssessmentCandidate] = useState(null);
   const [candidateAssessments, setCandidateAssessments] = useState([]);
   const [loadingAssessments, setLoadingAssessments] = useState(false);
   const [form, setForm] = useState({ email: '', full_name: '', position: '' });
@@ -1918,6 +1933,14 @@ const CandidatesPage = ({ onNavigate, onViewCandidate }) => {
                         </button>
                         <button
                           type="button"
+                          className="border-2 border-black px-2 py-1 font-mono text-xs font-bold text-white"
+                          style={{ backgroundColor: '#9D00FF' }}
+                          onClick={() => setSendAssessmentCandidate(c)}
+                        >
+                          Send Assessment
+                        </button>
+                        <button
+                          type="button"
                           className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
                           onClick={async () => {
                             if (expandedCandidateId === c.id) {
@@ -1999,6 +2022,17 @@ const CandidatesPage = ({ onNavigate, onViewCandidate }) => {
           </table>
         </div>
       </div>
+
+      {sendAssessmentCandidate && (
+        <NewAssessmentModal
+          candidate={sendAssessmentCandidate}
+          onClose={() => setSendAssessmentCandidate(null)}
+          onCreated={() => {
+            setSendAssessmentCandidate(null);
+            loadCandidates();
+          }}
+        />
+      )}
     </div>
   );
 };
