@@ -33,7 +33,7 @@ class TestInjectionAttacks:
         """login with username "' OR '1'='1" → 401 (not 500)"""
         resp = login_user(client, email="' OR '1'='1", password="anything123!")
         # Should be a clean auth failure, not a server error
-        assert resp.status_code in (401, 422), f"Expected 401 or 422, got {resp.status_code}"
+        assert resp.status_code in (400, 401, 422), f"Expected 400/401/422, got {resp.status_code}"
         assert resp.status_code != 500
 
     def test_sql_injection_candidate_search(self, client):

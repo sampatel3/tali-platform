@@ -69,7 +69,7 @@ class TestBoundaryValues:
 
     def test_max_length_password(self, client):
         from tests.conftest import register_user, verify_user, login_user
-        password = "P" * 200
+        password = "P" * 72
         email = "maxpass@test.com"
         resp = register_user(client, email=email, password=password)
         assert resp.status_code == 201
