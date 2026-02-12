@@ -30,6 +30,8 @@ class UserRead(schemas.BaseUser[int]):
     organization_id: Optional[int] = None
     created_at: Optional[datetime] = None  # serializes to ISO string in JSON
 
+    model_config = {"from_attributes": True}
+
 
 class UserCreate(schemas.BaseUserCreate):
     full_name: Optional[str] = None
