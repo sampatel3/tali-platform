@@ -572,7 +572,14 @@ const RegisterPage = ({ onNavigate }) => {
       const status = err.response?.status;
       let msg = 'Registration failed';
 
-      if (typeof detail === 'string') {
+      // Map API error codes to friendly messages
+      const errorMessages = {
+        REGISTER_USER_ALREADY_EXISTS: 'An account with this email already exists. Sign in instead or use a different email.',
+        INVALID_PASSWORD: 'Password should be at least 8 characters',
+      };
+      if (typeof detail === 'string' && errorMessages[detail]) {
+        msg = errorMessages[detail];
+      } else if (typeof detail === 'string') {
         msg = detail;
       } else if (Array.isArray(detail) && detail.length > 0) {
         const parts = detail.map((e) => {
