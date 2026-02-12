@@ -12,7 +12,7 @@ def _auth_headers(client, email="u@example.com"):
         "email": email, "password": "ValidPass1!", "full_name": "Test User", "organization_name": "TestOrg",
     })
     verify_user(email)
-    token = client.post("/api/v1/auth/login", data={"username": email, "password": "ValidPass1!"}).json()["access_token"]
+    token = client.post("/api/v1/auth/jwt/login", data={"username": email, "password": "ValidPass1!"}).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
 

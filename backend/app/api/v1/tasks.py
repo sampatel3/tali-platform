@@ -6,9 +6,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import List, Optional
 
-from ...core.database import get_db
-from ...core.security import get_current_user
-from ...core.config import settings
+from ...platform.database import get_db
+from ...deps import get_current_user
+from ...platform.config import settings
 from ...models.user import User
 from ...models.task import Task
 from ...schemas.task import TaskCreate, TaskResponse, TaskUpdate

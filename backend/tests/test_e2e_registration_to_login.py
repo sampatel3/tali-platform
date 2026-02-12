@@ -66,7 +66,7 @@ class TestRegistrationToLogin:
         token = login_resp.json()["access_token"]
         assert token
 
-        me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        me = client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200
         me_data = me.json()
         assert me_data["email"] == email
@@ -86,7 +86,7 @@ class TestRegistrationToLogin:
         assert login_resp.status_code == 200
         token = login_resp.json()["access_token"]
 
-        me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        me = client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200
         assert me.json()["organization_id"] is not None
 
@@ -253,8 +253,8 @@ class TestRegistrationToLogin:
         assert login2.status_code == 200
         token2 = login2.json()["access_token"]
 
-        me1 = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token1}"})
-        me2 = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token2}"})
+        me1 = client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {token1}"})
+        me2 = client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {token2}"})
 
         assert me1.status_code == 200
         assert me2.status_code == 200

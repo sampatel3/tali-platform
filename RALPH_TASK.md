@@ -385,3 +385,211 @@ A criterion is complete only when ALL of the following are true:
 - [x] Test coverage >70% for core scoring modules (`prompt_analytics.py` coverage: 82%)
 - [x] Frontend tests for AssessmentPage tracking and radar chart
 - [x] Database backups via Railway (documented runbook in `docs/DEPLOYMENT.md`)
+
+---
+
+# Project Plan — Deployability Fixes, CLI Config & Feature Roadmap
+
+> **Added**: 2026-02-12. Covers deployment fixes, environment/secret management, CI/CD, and feature extensions.
+
+---
+
+## Current State Summary
+
+**Stack:** FastAPI (Railway) + React/Vite (Vercel) + PostgreSQL + Redis (Railway add-ons)
+**Live URLs:** `https://frontend-psi-navy-15.vercel.app` → `https://resourceful-adaptation-production.up.railway.app`
+**Status:** Mid-migration from custom auth → FastAPI-Users. Backend deploys but has a critical routing conflict. Several MVP features are disabled via flags.
+
+---
+
+## Phase A — Deployability Fixes (Critical)
+
+### A1 — Fix Dual Auth System Conflict ⚠️ (Blocker)
+
+**Problem:** `main.py` mounts both the old `auth.py` router AND the FastAPI-Users router under the same `/api/v1/auth/` prefix. The old `auth.py` references columns that migration `009` drops (`is_email_verified`, `password_reset_token`, etc.), so after running the migration the old routes will crash. Additionally, `users_router` is included twice.
+
+**Fix:**
+- [x] Remove the old `auth.py` router include from `main.py` (was not mounted; only FastAPI-Users was active)
+- [x] Remove the duplicate `users_router` include from `main.py`
+- [x] Delete or archive `backend/app/api/v1/auth.py` (deleted; tests updated to use FastAPI-Users endpoints)
+- [ ] Run `alembic upgrade head` (migration 009) in production after deploying
+
+### A2 — Commit Migration 009 + All FastAPI-Users Changes
+
+The 13 modified files and new files (`deps.py`, `009_fastapi_users_schema.py`, `FASTAPI_USERS_MIGRATION.md`) form a single atomic migration. Currently untracked/uncommitted.
+
+- [ ] Stage and commit all FastAPI-Users changes together with a single clear commit message
+
+### A3 — Fix `vercel.json` — Make It Self-Contained
+
+Current `vercel.json` only has `buildCommand`. Output directory and framework preset are set in the dashboard and not version-controlled, making a fresh deploy impossible without dashboard access.
+
+- [x] Update `vercel.json` to include `outputDirectory`, `installCommand`, `framework`, and a SPA rewrite rule (done)
+
+### A4 — Fix Trailing `\n` in `VITE_API_URL`
+
+The Railway URL in `.env.vercel.local` and `frontend/.env.vercel.check` has a literal `\n` at the end. The frontend `api.js` defensively strips it, but the root cause should be fixed at the source.
+
+- [ ] When setting `VITE_API_URL` in the Vercel dashboard, verify no trailing newline is present
+- [x] Add a note to `docs/ENV_SETUP.md` warning about this
+
+### A5 — Add `railway.json` for Celery Worker Service
+
+Celery is used for async email and Workable posting but no Railway worker service config exists. When `MVP_DISABLE_CELERY=False` this is a blocker.
+
+- [x] Create `backend/railway.worker.json` (done)
+- [x] Document in `docs/DEPLOYMENT.md` that a second Railway service is needed for the Celery worker
+
+### A6 — Add `frontend/.env.example`
+
+Currently only the backend has a `.env.example`. Frontend has no documented local dev setup.
+
+- [x] Create `frontend/.env.example` (done)
+
+### A7 — Remove `core/` Shim Layer
+
+Every file under `backend/app/core/` is a one-liner re-export from `app/platform/`. This adds confusion with no benefit.
+
+- [x] Migrate all remaining imports from `app.core.*` → `app.platform.*` across all files
+- [x] Delete the `backend/app/core/` directory
+
+### A8 — Remove `test.db` from Repo
+
+A SQLite test database is present at the repo root and should not be committed.
+
+- [x] Add `test.db` to `.gitignore` (already present)
+- [x] Remove `test.db` from git tracking if tracked (`git rm --cached test.db`); verified not tracked
+
+---
+
+## Phase B — Environment & Secret Management
+
+### B1 — Secrets Storage Strategy
+
+- [ ] All production secrets live in Railway dashboard (backend) and Vercel dashboard (frontend) — confirm this is correct and document it
+- [ ] Add `scripts/check-env.sh` to validate all required env vars are set before startup (fail fast on missing keys)
+- [ ] Consider Railway shared variables for vars shared between web and worker services (DB URL, Redis URL, Secret Key, Anthropic, Resend)
+
+### B2 — Document Per-Service Variable Ownership
+
+`docs/ENV_SETUP.md` is good but missing:
+- [ ] Which Railway service each variable belongs to (web vs. worker)
+- [ ] Which variables are shared between web and worker
+- [ ] A checkbox-style "new deployment" checklist
+
+### B3 — Document `SECRET_KEY` Rotation Procedure
+
+- [ ] Add to `docs/DEPLOYMENT.md`: how to rotate `SECRET_KEY` (invalidates all JWT sessions — coordinate with users)
+
+---
+
+## Phase C — CI/CD Pipeline
+
+Currently: zero CI/CD. Deployments are manual (`railway up`, `vercel --prod`).
+
+### C1 — GitHub Actions: Backend Tests on PR
+
+- [ ] Create `.github/workflows/backend.yml`:
+  - Runs on push/PR
+  - Spins up Postgres 15 service container
+  - Installs `requirements.txt`
+  - Runs `pytest backend/ --cov=backend/app`
+
+### C2 — GitHub Actions: Frontend Tests on PR
+
+- [ ] Create `.github/workflows/frontend.yml`:
+  - Runs on push/PR
+  - `npm ci && npm test` in `frontend/`
+
+### C3 — Auto-Deploy on Merge to `main`
+
+- [ ] Link Railway backend service to GitHub repo with auto-deploy on push to `main`
+- [ ] Verify Vercel auto-deploys from GitHub (enabled by default when linked)
+- [ ] Document the setup in `docs/DEPLOYMENT.md`
+
+---
+
+## Phase D — Feature Flags → Production Features
+
+All MVP flags default to `True` (disabled). Enabling them unlocks production capabilities.
+
+| Flag | What it enables | Priority | Dependencies |
+|------|----------------|----------|-------------|
+| `MVP_DISABLE_CELERY=False` | Async email + Workable posting | High | A5 (worker service) |
+| `MVP_DISABLE_STRIPE=False` | Billing, checkout, invoicing | Medium | Stripe setup + webhook |
+| `MVP_DISABLE_WORKABLE=False` | ATS sync, OAuth2, candidate import | Medium | Workable partner approval |
+| `MVP_DISABLE_CLAUDE_SCORING=False` | AI-based assessment scoring | Low | `ANTHROPIC_API_KEY` set |
+| `MVP_DISABLE_CALIBRATION=False` | Calibration baseline scoring | Low | Scoring V2 design |
+| `SCORING_V2_ENABLED=True` | New composite scoring algorithm | Medium | Design + test first |
+| `MVP_DISABLE_PROCTORING=False` | Assessment proctoring features | High | Unknown implementation state |
+
+- [ ] Enable `MVP_DISABLE_CELERY=False` in Railway once worker service is deployed (Phase A5)
+- [ ] Enable `MVP_DISABLE_CLAUDE_SCORING=False` once `ANTHROPIC_API_KEY` is confirmed set in Railway
+- [ ] Enable `MVP_DISABLE_STRIPE=False` once Stripe webhook is registered and `STRIPE_WEBHOOK_SECRET` is set
+- [ ] Enable `MVP_DISABLE_WORKABLE=False` once Workable partner credentials are obtained
+
+---
+
+## Phase E — Feature Improvements
+
+### Frontend
+
+- [ ] **Break up `App.jsx`** — 189 KB monolithic file; split into route-level components (`/pages/`, `/components/`)
+- [ ] **Replace hash routing** — switch from `#/...` to React Router DOM path-based routing
+- [ ] **Stripe.js integration** — add `@stripe/stripe-js` dependency; `VITE_STRIPE_PUBLISHABLE_KEY` is referenced but the library is not installed
+- [ ] **PDF report download** — wire up "Download PDF" button to `GET /assessments/{id}/report.pdf`
+- [ ] **Post to Workable button** — wire up to `POST /assessments/{id}/post-to-workable`; disable if already posted
+- [ ] **Delete assessment** — add confirmation modal; call `DELETE /assessments/{id}`
+- [ ] **Toast/notification system** — replace `alert()` calls with a proper toast library (e.g. react-hot-toast)
+- [ ] **Loading/error states** — audit and standardise loading spinners and error messages across all views
+
+### Backend
+
+- [ ] **Remove dead code in `platform/security.py`** — old `get_current_user` is unused after FastAPI-Users migration
+- [ ] **Rate limiting on auth endpoints** — add rate limiting to login and forgot-password endpoints (brute force risk)
+- [ ] **Pagination enforcement** — audit all list endpoints for missing pagination limits
+- [ ] **Assessment result webhooks** — notify external systems (Workable, email) when assessment completes
+- [ ] **User roles/permissions** — currently org-scoped only; add admin/member role separation
+
+### DevEx / Ops
+
+- [ ] **Dockerfile** — optional but enables local full-stack testing without Railway
+- [ ] **Sentry integration** — `SENTRY_DSN` support exists in code; set DSN in Railway to activate
+- [ ] **Alembic autogenerate workflow** — document how to generate new migrations (`alembic revision --autogenerate -m "description"`) in `docs/DEPLOYMENT.md`
+- [ ] **DB connection pool tuning** — pool sizes (10/20) are hardcoded; document tuning guidance for Railway's connection limits in `docs/ENV_SETUP.md`
+
+---
+
+## New Deployment Checklist (Full Fresh Deploy)
+
+```
+[ ] Railway: PostgreSQL service provisioned
+[ ] Railway: Redis service provisioned
+[ ] Railway: Backend web service linked to GitHub (backend/ root), auto-deploy on main
+[ ] Railway: All required env vars set (SECRET_KEY, ANTHROPIC_API_KEY, RESEND_API_KEY, FRONTEND_URL, BACKEND_URL)
+[ ] Railway: Worker service created with railway.worker.json (when Celery enabled)
+[ ] Vercel: Project linked to GitHub (frontend/ root), auto-deploy on main
+[ ] Vercel: VITE_API_URL set (no trailing newline)
+[ ] Vercel: VITE_STRIPE_PUBLISHABLE_KEY set (or placeholder until Stripe is enabled)
+[ ] Stripe: Webhook endpoint registered → STRIPE_WEBHOOK_SECRET set in Railway
+[ ] Workable: OAuth app registered → WORKABLE_CLIENT_ID/SECRET set in Railway
+[ ] DNS: Custom domains configured in Railway and Vercel dashboards
+[ ] Post-deploy: curl /health to confirm backend is live
+[ ] Post-deploy: alembic upgrade head runs automatically via railway.json startCommand
+[ ] Post-deploy: verify login + create assessment flow end-to-end in browser
+```
+
+---
+
+## Implementation Order for Phase A–E
+
+1. **A1** — Fix dual auth routing conflict (production breakage risk) — do this first
+2. **A2** — Commit migration 009 + all FastAPI-Users changes atomically
+3. **A3** — Fix `vercel.json` to be self-contained
+4. **A4/A6/A8** — Fix env file trailing newline, add frontend `.env.example`, gitignore `test.db`
+5. **A5** — Add Celery worker `railway.worker.json`
+6. **A7** — Remove `core/` shim layer
+7. **C1/C2/C3** — GitHub Actions CI + auto-deploy wiring
+8. **D** — Enable `MVP_DISABLE_CELERY=False` + deploy worker; enable Claude scoring
+9. **E (Frontend)** — Break up `App.jsx`; wire PDF/Workable/Delete buttons; add Stripe.js
+10. **D** — Enable Stripe + Workable when business-ready

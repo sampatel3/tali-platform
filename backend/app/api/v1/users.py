@@ -2,12 +2,13 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 import secrets
 
-from ...core.database import get_db
-from ...core.security import get_current_user, get_password_hash
+from ...platform.database import get_db
+from ...deps import get_current_user
+from ...platform.security import get_password_hash
 from ...models.user import User
 from ...schemas.user import UserResponse, TeamInviteRequest
 from ...services.email_service import EmailService
-from ...core.config import settings
+from ...platform.config import settings
 
 router = APIRouter(prefix="/users", tags=["Users"])
 

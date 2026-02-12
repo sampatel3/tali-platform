@@ -20,7 +20,7 @@ def _register(client, email="u@example.com", password="ValidPass1!", full_name="
 
 
 def _login(client, email="u@example.com", password="ValidPass1!"):
-    return client.post("/api/v1/auth/login", data={"username": email, "password": password})
+    return client.post("/api/v1/auth/jwt/login", data={"username": email, "password": password})
 
 
 def _auth_headers(client, email="u@example.com", password="ValidPass1!", full_name="Test User", org_name="TestOrg"):
@@ -168,11 +168,11 @@ class TestLogin:
         assert r.status_code == 401
 
     def test_login_missing_username(self, client):
-        r = client.post("/api/v1/auth/login", data={"password": "ValidPass1!"})
+        r = client.post("/api/v1/auth/jwt/login", data={"password": "ValidPass1!"})
         assert r.status_code == 422
 
     def test_login_missing_password(self, client):
-        r = client.post("/api/v1/auth/login", data={"username": "u@example.com"})
+        r = client.post("/api/v1/auth/jwt/login", data={"username": "u@example.com"})
         assert r.status_code == 422
 
 
@@ -281,20 +281,20 @@ class TestPasswordReset:
 class TestJWTAuth:
     def test_me_with_valid_token(self, client):
         headers = _auth_headers(client)
-        r = client.get("/api/v1/auth/me", headers=headers)
+        r = client.get("/api/v1/users/me", headers=headers)
         assert r.status_code == 200
         assert r.json()["email"] == "u@example.com"
 
     def test_me_without_token(self, client):
-        r = client.get("/api/v1/auth/me")
+        r = client.get("/api/v1/users/me")
         assert r.status_code == 401
 
     def test_me_with_invalid_token(self, client):
-        r = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer invalid_token_here"})
+        r = client.get("/api/v1/users/me", headers={"Authorization": "Bearer invalid_token_here"})
         assert r.status_code == 401
 
     def test_me_with_malformed_auth_header(self, client):
-        r = client.get("/api/v1/auth/me", headers={"Authorization": "NotBearer token"})
+        r = client.get("/api/v1/users/me", headers={"Authorization": "NotBearer token"})
         assert r.status_code == 401
 
 

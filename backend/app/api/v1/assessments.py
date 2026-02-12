@@ -8,9 +8,9 @@ from datetime import datetime, timedelta, timezone
 import secrets
 import time
 
-from ...core.database import get_db
-from ...core.security import get_current_user
-from ...core.config import settings
+from ...platform.database import get_db
+from ...deps import get_current_user
+from ...platform.config import settings
 from ...models.user import User
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate

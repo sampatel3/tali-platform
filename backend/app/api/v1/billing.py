@@ -4,9 +4,9 @@ from sqlalchemy.orm import Session
 from pydantic import BaseModel
 
 from sqlalchemy.orm import joinedload
-from ...core.database import get_db
-from ...core.security import get_current_user
-from ...core.config import settings
+from ...platform.database import get_db
+from ...deps import get_current_user
+from ...platform.config import settings
 from ...models.user import User
 from ...models.organization import Organization
 from ...models.assessment import Assessment, AssessmentStatus

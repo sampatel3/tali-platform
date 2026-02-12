@@ -53,7 +53,7 @@ class TestAuthSecurity:
             algorithm="HS256",
         )
         resp = client.get(
-            "/api/v1/auth/me",
+            "/api/v1/users/me",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 401
@@ -65,7 +65,7 @@ class TestAuthSecurity:
             expires_delta=timedelta(seconds=-10),
         )
         resp = client.get(
-            "/api/v1/auth/me",
+            "/api/v1/users/me",
             headers={"Authorization": f"Bearer {token}"},
         )
         assert resp.status_code == 401
@@ -73,14 +73,14 @@ class TestAuthSecurity:
     def test_malformed_jwt_401(self, client):
         """'Bearer not-a-jwt' → 401."""
         resp = client.get(
-            "/api/v1/auth/me",
+            "/api/v1/users/me",
             headers={"Authorization": "Bearer not-a-jwt"},
         )
         assert resp.status_code == 401
 
     def test_missing_auth_header_401(self, client):
         """No Authorization header → 401 on /me."""
-        resp = client.get("/api/v1/auth/me")
+        resp = client.get("/api/v1/users/me")
         assert resp.status_code == 401
 
     def test_bearer_prefix_required(self, client):
@@ -89,7 +89,7 @@ class TestAuthSecurity:
         raw_token = headers["Authorization"].replace("Bearer ", "")
 
         resp = client.get(
-            "/api/v1/auth/me",
+            "/api/v1/users/me",
             headers={"Authorization": raw_token},
         )
         assert resp.status_code in (401, 403)
@@ -108,7 +108,7 @@ class TestAuthSecurity:
     def test_cors_headers_present(self, client):
         """OPTIONS request should include Access-Control headers."""
         resp = client.options(
-            "/api/v1/auth/login",
+            "/api/v1/auth/jwt/login",
             headers={
                 "Origin": "http://localhost:5173",
                 "Access-Control-Request-Method": "POST",
@@ -184,7 +184,7 @@ class TestAuthSecurity:
         login_resp = login_user(client, email)
         token = login_resp.json()["access_token"]
 
-        me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        me = client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200
         me_body = json.dumps(me.json()).lower()
         assert "hashed_password" not in me_body
@@ -208,7 +208,7 @@ class TestAuthSecurity:
     def test_empty_auth_header(self, client):
         """'Authorization: ' (empty value) → 401."""
         resp = client.get(
-            "/api/v1/auth/me",
+            "/api/v1/users/me",
             headers={"Authorization": ""},
         )
         assert resp.status_code in (401, 403)
@@ -216,7 +216,7 @@ class TestAuthSecurity:
     def test_bearer_empty_token(self, client):
         """'Authorization: Bearer ' (empty token) → 401."""
         resp = client.get(
-            "/api/v1/auth/me",
+            "/api/v1/users/me",
             headers={"Authorization": "Bearer "},
         )
         assert resp.status_code in (401, 403)

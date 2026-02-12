@@ -227,14 +227,14 @@ class TestFitMatchingService:
 # ===========================================================================
 class TestSecurityUtils:
     def test_password_hash_and_verify(self):
-        from app.core.security import get_password_hash, verify_password
+        from app.platform.security import get_password_hash, verify_password
         hashed = get_password_hash("MyPassword123!")
         assert hashed != "MyPassword123!"
         assert verify_password("MyPassword123!", hashed) is True
         assert verify_password("WrongPassword!", hashed) is False
 
     def test_create_and_decode_token(self):
-        from app.core.security import create_access_token, decode_token
+        from app.platform.security import create_access_token, decode_token
         from datetime import timedelta
         token = create_access_token(
             data={"sub": "test@example.com", "user_id": 1, "org_id": 1},
@@ -245,6 +245,6 @@ class TestSecurityUtils:
         assert payload["sub"] == "test@example.com"
 
     def test_decode_invalid_token(self):
-        from app.core.security import decode_token
+        from app.platform.security import decode_token
         result = decode_token("invalid.token.here")
         assert result is None

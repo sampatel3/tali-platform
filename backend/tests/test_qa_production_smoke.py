@@ -37,7 +37,7 @@ def _register(email=None, password=None, full_name="QA Smoke", org_name=None):
 
 def _login(email=None, password=None):
     time.sleep(0.5)  # Avoid rate limiting
-    return requests.post(f"{API}/auth/login", data={
+    return requests.post(f"{API}/auth/jwt/login", data={
         "username": email or TEST_EMAIL,
         "password": password or TEST_PASSWORD,
     }, timeout=15)
@@ -55,7 +55,7 @@ class TestProductionHealth:
         assert d["database"] is True, "Database should be healthy"
 
     def test_api_responds(self):
-        r = requests.get(f"{API}/auth/me", timeout=10)
+        r = requests.get(f"{API}/users/me", timeout=10)
         # Should get 401 (auth required), not 502/503/timeout
         assert r.status_code == 401
 
@@ -185,7 +185,7 @@ class TestProductionSecurity:
         assert r.headers.get("x-frame-options") == "DENY"
 
     def test_sql_injection_login(self):
-        r = requests.post(f"{API}/auth/login", data={
+        r = requests.post(f"{API}/auth/jwt/login", data={
             "username": "' OR 1=1 --",
             "password": "' OR 1=1 --",
         }, timeout=10)

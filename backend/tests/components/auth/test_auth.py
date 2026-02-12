@@ -35,7 +35,7 @@ def test_login_unverified_blocked(client):
         "password": "testpass123",
         "full_name": "Test User",
     })
-    response = client.post("/api/v1/auth/login", data={
+    response = client.post("/api/v1/auth/jwt/login", data={
         "username": "test@example.com",
         "password": "testpass123",
     })
@@ -51,7 +51,7 @@ def test_login(client):
     })
     verify_user("test@example.com")
     # Login
-    response = client.post("/api/v1/auth/login", data={
+    response = client.post("/api/v1/auth/jwt/login", data={
         "username": "test@example.com",
         "password": "testpass123",
     })
@@ -67,7 +67,7 @@ def test_login_wrong_password(client):
         "full_name": "Test User",
     })
     verify_user("test@example.com")
-    response = client.post("/api/v1/auth/login", data={
+    response = client.post("/api/v1/auth/jwt/login", data={
         "username": "test@example.com",
         "password": "wrongpassword",
     })
@@ -96,7 +96,7 @@ def test_verify_email(client):
     assert "verified" in vr.json()["detail"].lower()
 
     # Now login should work
-    lr = client.post("/api/v1/auth/login", data={
+    lr = client.post("/api/v1/auth/jwt/login", data={
         "username": "test@example.com",
         "password": "testpass123",
     })
@@ -126,20 +126,20 @@ def test_me(client):
     })
     verify_user("test@example.com")
     # Login
-    login_resp = client.post("/api/v1/auth/login", data={
+    login_resp = client.post("/api/v1/auth/jwt/login", data={
         "username": "test@example.com",
         "password": "testpass123",
     })
     token = login_resp.json()["access_token"]
     
     # Get me
-    response = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    response = client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {token}"})
     assert response.status_code == 200
     assert response.json()["email"] == "test@example.com"
     assert response.json()["is_email_verified"] is True
 
 def test_me_no_auth(client):
-    response = client.get("/api/v1/auth/me")
+    response = client.get("/api/v1/users/me")
     assert response.status_code == 401
 
 def test_health(client):

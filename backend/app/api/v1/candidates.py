@@ -2,8 +2,8 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 
-from ...core.database import get_db
-from ...core.security import get_current_user
+from ...platform.database import get_db
+from ...deps import get_current_user
 from ...models.candidate import Candidate
 from ...models.user import User
 from ...schemas.candidate import CandidateCreate, CandidateResponse, CandidateUpdate, DocumentUploadResponse

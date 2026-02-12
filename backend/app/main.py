@@ -194,7 +194,6 @@ app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(analytics_router, prefix="/api/v1")
 app.include_router(billing_router, prefix="/api/v1")
 app.include_router(candidates_router, prefix="/api/v1")
-app.include_router(users_router, prefix="/api/v1")
 
 
 @app.on_event("startup")

@@ -11,7 +11,7 @@ def _auth_headers(client, email="u@example.com"):
         "email": email, "password": "ValidPass1!", "full_name": "Test User", "organization_name": "TestOrg",
     })
     verify_user(email)
-    token = client.post("/api/v1/auth/login", data={"username": email, "password": "ValidPass1!"}).json()["access_token"]
+    token = client.post("/api/v1/auth/jwt/login", data={"username": email, "password": "ValidPass1!"}).json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -51,7 +51,7 @@ class TestAuthBypass:
             ("GET", "/api/v1/billing/usage"),
             ("GET", "/api/v1/analytics/"),
             ("GET", "/api/v1/users/"),
-            ("GET", "/api/v1/auth/me"),
+            ("GET", "/api/v1/users/me"),
         ]
         for method, path in endpoints:
             r = getattr(client, method.lower())(path)
@@ -70,7 +70,7 @@ class TestAuthBypass:
             assert r.status_code == 401, f"POST {path} should require auth, got {r.status_code}"
 
     def test_expired_or_tampered_token(self, client):
-        r = client.get("/api/v1/auth/me", headers={
+        r = client.get("/api/v1/users/me", headers={
             "Authorization": "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0ZXN0QGV4YW1wbGUuY29tIiwiZXhwIjoxfQ.invalid"
         })
         assert r.status_code == 401
@@ -81,7 +81,7 @@ class TestAuthBypass:
 # ===========================================================================
 class TestSQLInjection:
     def test_login_sql_injection(self, client):
-        r = client.post("/api/v1/auth/login", data={
+        r = client.post("/api/v1/auth/jwt/login", data={
             "username": "' OR 1=1 --",
             "password": "' OR 1=1 --",
         })
@@ -163,7 +163,7 @@ class TestDataIsolation:
             "full_name": "User B", "organization_name": "OrgB",
         })
         verify_user("b@example.com")
-        token_b = client.post("/api/v1/auth/login", data={
+        token_b = client.post("/api/v1/auth/jwt/login", data={
             "username": "b@example.com", "password": "ValidPass1!",
         }).json()["access_token"]
         h_b = {"Authorization": f"Bearer {token_b}"}
@@ -182,7 +182,7 @@ class TestDataIsolation:
             "full_name": "User B", "organization_name": "OrgB",
         })
         verify_user("b@example.com")
-        token_b = client.post("/api/v1/auth/login", data={
+        token_b = client.post("/api/v1/auth/jwt/login", data={
             "username": "b@example.com", "password": "ValidPass1!",
         }).json()["access_token"]
         h_b = {"Authorization": f"Bearer {token_b}"}

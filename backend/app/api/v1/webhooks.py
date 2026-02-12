@@ -4,8 +4,8 @@ from sqlalchemy.orm import Session
 import hmac
 import hashlib
 import stripe
-from ...core.database import get_db
-from ...core.config import settings
+from ...platform.database import get_db
+from ...platform.config import settings
 from ...models.organization import Organization
 from ...models.candidate import Candidate
 from ...models.assessment import Assessment

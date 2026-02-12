@@ -4,7 +4,7 @@ from sqlalchemy import create_engine, pool
 from alembic import context
 
 # Import Base and all models so autogenerate can detect them
-from app.core.database import Base
+from app.platform.database import Base
 from app.models import *  # noqa: F401, F403
 
 config = context.config

@@ -359,7 +359,7 @@ def test_reset_password_old_password_no_longer_works(client):
 
 def test_me_with_valid_token(client):
     headers, email = auth_headers(client)
-    resp = client.get("/api/v1/auth/me", headers=headers)
+    resp = client.get("/api/v1/users/me", headers=headers)
     assert resp.status_code == 200
     data = resp.json()
     assert data["email"] == email
@@ -368,7 +368,7 @@ def test_me_with_valid_token(client):
 
 
 def test_me_without_token_401(client):
-    resp = client.get("/api/v1/auth/me")
+    resp = client.get("/api/v1/users/me")
     assert resp.status_code == 401
 
 
@@ -381,12 +381,12 @@ def test_me_with_expired_token_401(client):
         "exp": time.time() - 3600,
     }
     expired_token = jwt.encode(payload, SECRET_KEY, algorithm=ALGORITHM)
-    resp = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {expired_token}"})
+    resp = client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {expired_token}"})
     assert resp.status_code == 401
 
 
 def test_me_with_malformed_token_401(client):
-    resp = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer not.a.valid.jwt"})
+    resp = client.get("/api/v1/users/me", headers={"Authorization": "Bearer not.a.valid.jwt"})
     assert resp.status_code == 401
 
 

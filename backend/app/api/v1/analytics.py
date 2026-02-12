@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
-from ...core.database import get_db
-from ...core.security import get_current_user
+from ...platform.database import get_db
+from ...deps import get_current_user
 from ...models.user import User
 from ...models.assessment import Assessment, AssessmentStatus
 

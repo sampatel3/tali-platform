@@ -8,7 +8,7 @@ def _register_and_login(client):
         "organization_name": "Ops Org",
     })
     verify_user("ops@example.com")
-    login_resp = client.post("/api/v1/auth/login", data={
+    login_resp = client.post("/api/v1/auth/jwt/login", data={
         "username": "ops@example.com",
         "password": "testpass123",
     })

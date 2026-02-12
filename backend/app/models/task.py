@@ -1,6 +1,6 @@
 from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Text, Boolean, Float
 from sqlalchemy.sql import func
-from ..core.database import Base
+from ..platform.database import Base
 
 
 class Task(Base):

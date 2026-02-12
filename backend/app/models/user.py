@@ -1,26 +1,29 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey
-from sqlalchemy.orm import relationship
-from sqlalchemy.sql import func
-from ..core.database import Base
+from datetime import datetime
+from typing import Optional
+
+from sqlalchemy import DateTime, ForeignKey, Integer, String, func
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from fastapi_users.db import SQLAlchemyBaseUserTable
+
+from ..platform.database import Base
 
 
-class User(Base):
+class User(SQLAlchemyBaseUserTable[int], Base):
+    """User model extending FastAPI-Users base with TALI-specific fields."""
+
     __tablename__ = "users"
 
-    id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
-    hashed_password = Column(String, nullable=False)
-    full_name = Column(String)
-    is_active = Column(Boolean, default=True)
-    is_superuser = Column(Boolean, default=False)
-    organization_id = Column(Integer, ForeignKey("organizations.id"), index=True)
-    password_reset_token = Column(String, nullable=True, index=True)
-    password_reset_expires = Column(DateTime(timezone=True), nullable=True)
-    # Email verification
-    is_email_verified = Column(Boolean, default=False, nullable=False, server_default="false")
-    email_verification_token = Column(String, nullable=True, index=True)
-    email_verification_sent_at = Column(DateTime(timezone=True), nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, index=True, autoincrement=True)
+    full_name: Mapped[Optional[str]] = mapped_column(String, nullable=True)
+    organization_id: Mapped[Optional[int]] = mapped_column(
+        ForeignKey("organizations.id"), nullable=True, index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[Optional[datetime]] = mapped_column(
+        DateTime(timezone=True), onupdate=func.now(), nullable=True
+    )
 
     organization = relationship("Organization", back_populates="users")

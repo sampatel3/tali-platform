@@ -1,6 +1,6 @@
 import logging
 from .celery_app import celery_app
-from ..core.config import settings
+from ..platform.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -75,7 +75,7 @@ def cleanup_expired_assessments():
     """Periodic task: expire old pending assessments and close abandoned sandboxes."""
     from datetime import datetime, timedelta, timezone
     from sqlalchemy.orm import Session
-    from ..core.database import SessionLocal
+    from ..platform.database import SessionLocal
     from ..models.assessment import Assessment, AssessmentStatus
 
     logger.info("Running expired assessment cleanup")

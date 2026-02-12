@@ -84,7 +84,7 @@ class TestInjectionAttacks:
         assert login_resp.status_code == 200
         token = login_resp.json()["access_token"]
 
-        me = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+        me = client.get("/api/v1/users/me", headers={"Authorization": f"Bearer {token}"})
         assert me.status_code == 200
         assert me.json()["full_name"] == xss_name
 

@@ -1,8 +1,12 @@
+from typing import AsyncGenerator
+
 from sqlalchemy import create_engine
+from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 from sqlalchemy.orm import sessionmaker, DeclarativeBase
-from ..platform.config import settings
 
+from .config import settings
 
+# Sync engine (legacy, for non-auth routes until full async migration)
 engine = create_engine(
     settings.DATABASE_URL,
     pool_pre_ping=True,
@@ -13,14 +17,44 @@ engine = create_engine(
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
-class Base(DeclarativeBase):
-    pass
-
-
 def get_db():
-    """FastAPI dependency that yields a database session."""
+    """FastAPI dependency that yields a sync database session."""
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
+
+
+# Async engine for FastAPI-Users (postgresql+asyncpg, or sqlite+aiosqlite for tests)
+def _async_database_url() -> str:
+    url = settings.DATABASE_URL
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql+asyncpg://", 1)
+    if url.startswith("sqlite://"):
+        return url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    return url
+
+
+_async_url = _async_database_url()
+_async_engine_kw: dict = {}
+if "sqlite" not in _async_url:
+    _async_engine_kw = {"pool_pre_ping": True, "pool_size": 10, "max_overflow": 20}
+
+async_engine = create_async_engine(_async_url, **_async_engine_kw)
+
+async_session_maker = async_sessionmaker(
+    async_engine, expire_on_commit=False, class_=AsyncSession
+)
+
+
+async def get_async_db() -> AsyncGenerator[AsyncSession, None]:
+    """FastAPI dependency that yields an async database session."""
+    async with async_session_maker() as session:
+        yield session
+
+
+class Base(DeclarativeBase):
+    pass

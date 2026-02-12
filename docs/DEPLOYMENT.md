@@ -93,6 +93,22 @@ curl https://your-backend.up.railway.app/health
 # Expected: {"status":"healthy","service":"tali-api"}
 ```
 
+### 6. Celery worker (second Railway service)
+
+When `MVP_DISABLE_CELERY=False`, async tasks (assessment invitation emails, Workable posting) require a Celery worker. Add a **second service** to the same Railway project:
+
+1. In the Railway project dashboard, click **New** → **GitHub Repo** (or reuse the same repo).
+2. Set **Root Directory** to `backend` (same as the web service).
+3. Railway will use `railway.json` by default; for the worker, either:
+   - Set **Override** in the service settings to use `railway.worker.json` (if your CLI/project supports multiple configs), or  
+   - In the worker service → **Settings** → **Deploy**, set **Custom start command** to:
+     ```bash
+     celery -A app.tasks worker --loglevel=info --concurrency=2
+     ```
+4. Add the **same environment variables** as the web service (or use Railway [shared variables](https://docs.railway.app/develop/variables#shared-variables)): at minimum `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `RESEND_API_KEY`, `ANTHROPIC_API_KEY`, and any keys used by your tasks.
+
+The worker uses the same Redis as the web app as the broker; no extra Redis service is needed.
+
 ---
 
 ## Frontend Deployment (Vercel)

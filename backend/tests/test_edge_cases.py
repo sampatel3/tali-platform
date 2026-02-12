@@ -14,7 +14,7 @@ from tests.conftest import auth_headers, create_task_via_api, create_candidate_v
 class TestUnicode:
     def test_unicode_in_user_name(self, client):
         headers, _ = auth_headers(client, full_name="日本語テスト", organization_name="TestOrg")
-        resp = client.get("/api/v1/auth/me", headers=headers)
+        resp = client.get("/api/v1/users/me", headers=headers)
         assert resp.status_code == 200
         assert "日本語テスト" in resp.json()["full_name"]
 

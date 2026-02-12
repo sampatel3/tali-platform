@@ -1,11 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
-from ...core.database import get_db
-from ...core.security import get_current_user
+from ...platform.database import get_db
+from ...deps import get_current_user
 from ...models.user import User
 from ...models.organization import Organization
 from ...schemas.organization import OrgResponse, OrgUpdate, WorkableConnect
-from ...core.config import settings
+from ...platform.config import settings
 
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
 

@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
-from app.core.database import Base, get_db
+from app.platform.database import Base, get_db
 from app.main import app
 from app.platform.middleware import _rate_limit_store
 from app.models.user import User
@@ -65,7 +65,11 @@ def verify_user(email: str) -> None:
     try:
         user = db.query(User).filter(User.email == email).first()
         if user:
-            user.is_email_verified = True
+            # FastAPI-Users uses is_verified; fallback for pre-migration schema
+            if hasattr(user, "is_verified"):
+                user.is_verified = True
+            else:
+                user.is_email_verified = True
             db.commit()
     finally:
         db.close()
@@ -98,9 +102,9 @@ def register_user(client, email=None, password="TestPass123!", full_name="Test U
 
 
 def login_user(client, email, password="TestPass123!"):
-    """Log in a user via the API. Returns the response."""
+    """Log in a user via the API (FastAPI-Users JWT). Returns the response."""
     return client.post(
-        "/api/v1/auth/login",
+        "/api/v1/auth/jwt/login",
         data={"username": email, "password": password},
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )

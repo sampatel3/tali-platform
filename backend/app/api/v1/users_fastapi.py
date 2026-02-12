@@ -3,6 +3,7 @@ FastAPI-Users configuration: user manager, auth backend, schemas, Resend hooks.
 """
 
 import logging
+from datetime import datetime
 from typing import Optional
 
 from fastapi import Depends, Request
@@ -27,7 +28,7 @@ from fastapi_users import schemas
 class UserRead(schemas.BaseUser[int]):
     full_name: Optional[str] = None
     organization_id: Optional[int] = None
-    created_at: Optional[str] = None
+    created_at: Optional[datetime] = None  # serializes to ISO string in JSON
 
 
 class UserCreate(schemas.BaseUserCreate):
@@ -49,6 +50,8 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
     async def validate_password(self, password: str, user) -> None:
         if len(password) < 8:
             raise InvalidPasswordException(reason="Password should be at least 8 characters")
+        if len(password.encode("utf-8")) > 72:
+            raise InvalidPasswordException(reason="Password must be at most 72 bytes (bcrypt limit)")
 
     async def create(self, user_create, safe: bool = False, request: Optional[Request] = None) -> User:
         await self.validate_password(user_create.password, user_create)
@@ -85,6 +88,8 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
                 await session.flush()
             org_id = org.id
         user_dict["organization_id"] = org_id
+        # Remove any field not on User model (e.g. organization_name) before create
+        user_dict.pop("organization_name", None)
 
         created_user = await self.user_db.create(user_dict)
         await self.on_after_register(created_user, request)

@@ -82,10 +82,7 @@ class TestUserModel:
         assert user.email == "alice@example.com"
         assert user.is_active is True
         assert user.is_superuser is False
-        assert user.is_email_verified is False
-        assert user.password_reset_token is None
-        assert user.password_reset_expires is None
-        assert user.email_verification_token is None
+        assert user.is_verified is False
 
     def test_user_email_unique(self, db):
         org = self._make_org(db)

@@ -135,3 +135,5 @@ These are compile-time variables injected by Vite. They must be prefixed with `V
 - `VITE_API_URL`: your Railway backend URL
 - `VITE_STRIPE_PUBLISHABLE_KEY`: [Stripe Dashboard](https://dashboard.stripe.com) → Developers → API keys → Publishable key
 
+**Important (Vercel):** When setting `VITE_API_URL` in the Vercel dashboard, ensure there is **no trailing newline or space**. A literal `\n` at the end can break API requests. The frontend `api.js` strips whitespace defensively, but fix the value at the source.
+
