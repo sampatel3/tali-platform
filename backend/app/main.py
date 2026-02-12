@@ -1,6 +1,10 @@
 import logging as _logging
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
+# Friendly messages for API error codes (returned to frontend)
+_API_ERROR_MESSAGES = {
+    "REGISTER_USER_ALREADY_EXISTS": "An account with this email already exists. Sign in instead or use a different email.",
+}
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -71,6 +75,17 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
 
 
 # ---------------------------------------------------------------------------
+# Friendly API error messages (rewrite raw codes for frontend)
+# ---------------------------------------------------------------------------
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
+    detail = exc.detail
+    if isinstance(detail, str) and detail in _API_ERROR_MESSAGES:
+        detail = _API_ERROR_MESSAGES[detail]
+    return JSONResponse(status_code=exc.status_code, content={"detail": detail})
+
+
+# ---------------------------------------------------------------------------
 # Security headers middleware
 # ---------------------------------------------------------------------------
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -128,7 +143,13 @@ if settings.SENTRY_DSN and settings.SENTRY_DSN.startswith("https://"):
     )
 
 # Include routers
-from .api.v1.auth import router as auth_router
+from .api.v1.users_fastapi import (
+    UserRead,
+    UserCreate,
+    UserUpdate,
+    auth_backend,
+    fastapi_users,
+)
 from .api.v1.assessments import router as assessments_router
 from .api.v1.organizations import router as organizations_router
 from .api.v1.webhooks import router as webhooks_router
@@ -138,9 +159,36 @@ from .api.v1.billing import router as billing_router
 from .api.v1.candidates import router as candidates_router
 from .api.v1.users import router as users_router
 
-app.include_router(auth_router, prefix="/api/v1")
+# FastAPI-Users auth routers
+app.include_router(
+    fastapi_users.get_auth_router(auth_backend),
+    prefix="/api/v1/auth/jwt",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_register_router(UserRead, UserCreate),
+    prefix="/api/v1/auth",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_reset_password_router(),
+    prefix="/api/v1/auth",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_verify_router(UserRead),
+    prefix="/api/v1/auth",
+    tags=["auth"],
+)
+app.include_router(
+    fastapi_users.get_users_router(UserRead, UserUpdate),
+    prefix="/api/v1/users",
+    tags=["users"],
+)
+
 app.include_router(assessments_router, prefix="/api/v1")
 app.include_router(organizations_router, prefix="/api/v1")
+app.include_router(users_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(analytics_router, prefix="/api/v1")
