@@ -40,6 +40,20 @@ app = FastAPI(
 _val_logger = _logging.getLogger("tali.validation")
 
 
+def _sanitize_errors(errors: list) -> list:
+    """Ensure validation error details are JSON-serializable (bytes → str)."""
+    sanitized = []
+    for err in errors:
+        clean = {}
+        for k, v in err.items():
+            if isinstance(v, bytes):
+                clean[k] = v.decode("utf-8", errors="replace")
+            else:
+                clean[k] = v
+        sanitized.append(clean)
+    return sanitized
+
+
 @app.exception_handler(RequestValidationError)
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """Log validation errors with detail so we can diagnose 422s."""
@@ -52,7 +66,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     )
     return JSONResponse(
         status_code=422,
-        content={"detail": exc.errors()},
+        content={"detail": _sanitize_errors(exc.errors())},
     )
 
 
@@ -83,9 +97,14 @@ _cors_origins = [
 ]
 if getattr(settings, "CORS_EXTRA_ORIGINS", None):
     _cors_origins.extend(o.strip() for o in settings.CORS_EXTRA_ORIGINS.split(",") if o.strip())
+_cors_origin_regex = settings.CORS_ALLOW_ORIGIN_REGEX
+# If frontend is on Vercel, allow preview/production subdomains by default.
+if not _cors_origin_regex and "vercel.app" in (settings.FRONTEND_URL or ""):
+    _cors_origin_regex = r"https://.*\.vercel\.app"
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[o for o in _cors_origins if o],
+    allow_origin_regex=_cors_origin_regex,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Assessment-Token", "X-Requested-With"],

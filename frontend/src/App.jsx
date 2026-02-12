@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   Code,
   Clock,
@@ -569,14 +569,27 @@ const RegisterPage = ({ onNavigate }) => {
       setSuccess(true);
     } catch (err) {
       const detail = err.response?.data?.detail;
+      const status = err.response?.status;
       let msg = 'Registration failed';
+
       if (typeof detail === 'string') {
         msg = detail;
       } else if (Array.isArray(detail) && detail.length > 0) {
-        // Pydantic validation errors — extract human-readable messages
-        msg = detail.map((e) => e.msg || e.message || JSON.stringify(e)).join('. ');
-      } else if (err.message) {
+        const parts = detail.map((e) => {
+          const m = e.msg ?? e.message;
+          if (typeof m === 'string') return m;
+          if (e.type === 'string_too_short' && e.ctx?.min_length === 8 && e.loc?.includes?.('password')) {
+            return 'Password must be at least 8 characters';
+          }
+          return m ? String(m) : JSON.stringify(e);
+        });
+        msg = parts.join('. ');
+      } else if (status === 404 || status === 0) {
+        msg = 'Cannot reach server. The app may be misconfigured — please try again later.';
+      } else if (err.message && !err.message.includes('Network Error')) {
         msg = err.message;
+      } else if (err.code === 'ERR_NETWORK' || err.message === 'Network Error') {
+        msg = 'Cannot connect to server. Check your connection and try again.';
       }
       setError(msg);
     } finally {
@@ -673,6 +686,7 @@ const RegisterPage = ({ onNavigate }) => {
                     onChange={updateField('password')}
                     onKeyDown={(e) => e.key === 'Enter' && handleRegister()}
                   />
+                  <p className="font-mono text-xs text-gray-500 mt-1">Minimum 8 characters</p>
                 </div>
                 <div>
                   <label className="block font-mono text-sm mb-1">Organization Name</label>

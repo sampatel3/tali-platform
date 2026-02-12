@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     BACKEND_URL: str = "http://localhost:8000"
     # Optional comma-separated extra CORS origins (e.g. Vercel preview URL)
     CORS_EXTRA_ORIGINS: Optional[str] = None
+    # Optional regex for additional allowed CORS origins (e.g. all Vercel previews)
+    CORS_ALLOW_ORIGIN_REGEX: Optional[str] = None
 
     # AWS S3
     AWS_ACCESS_KEY_ID: Optional[str] = None
