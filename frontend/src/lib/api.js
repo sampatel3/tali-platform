@@ -144,6 +144,8 @@ export const candidates = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+  downloadDocument: (candidateId, docType) =>
+    api.get(`/candidates/${candidateId}/documents/${docType}`, { responseType: 'blob' }),
 };
 
 // ---- Team / Users ----

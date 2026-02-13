@@ -6,7 +6,7 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def send_assessment_email(self, candidate_email: str, candidate_name: str, token: str, org_name: str, position: str, assessment_id: int | None = None):
+def send_assessment_email(self, candidate_email: str, candidate_name: str, token: str, org_name: str, position: str, assessment_id: int | None = None, request_id: str | None = None):
     """Send assessment invitation email to candidate."""
     from ..services.email_service import EmailService
 
@@ -23,15 +23,15 @@ def send_assessment_email(self, candidate_email: str, candidate_name: str, token
         )
         if not result["success"]:
             raise Exception(result.get("error", "Email send failed"))
-        logger.info(f"Assessment email sent to {candidate_email}")
+        logger.info(f"Assessment email sent to {candidate_email}", extra={"request_id": request_id or self.request.id})
         return result
     except Exception as exc:
-        logger.error(f"Failed to send assessment email to {candidate_email}: {exc}")
+        logger.error(f"Failed to send assessment email to {candidate_email}: {exc}", extra={"request_id": request_id or self.request.id})
         raise self.retry(exc=exc)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def send_results_email(self, user_email: str, candidate_name: str, score: float, assessment_id: int):
+def send_results_email(self, user_email: str, candidate_name: str, score: float, assessment_id: int, request_id: str | None = None):
     """Notify hiring manager that assessment is complete."""
     from ..services.email_service import EmailService
 
@@ -46,15 +46,15 @@ def send_results_email(self, user_email: str, candidate_name: str, score: float,
         )
         if not result["success"]:
             raise Exception(result.get("error", "Email send failed"))
-        logger.info(f"Results email sent to {user_email} for assessment {assessment_id}")
+        logger.info(f"Results email sent to {user_email} for assessment {assessment_id}", extra={"request_id": request_id or self.request.id})
         return result
     except Exception as exc:
-        logger.error(f"Failed to send results email: {exc}")
+        logger.error(f"Failed to send results email: {exc}", extra={"request_id": request_id or self.request.id})
         raise self.retry(exc=exc)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=120)
-def post_results_to_workable(self, access_token: str, subdomain: str, candidate_id: str, assessment_data: dict):
+def post_results_to_workable(self, access_token: str, subdomain: str, candidate_id: str, assessment_data: dict, request_id: str | None = None):
     """Post assessment results to Workable candidate profile."""
     from ..services.workable_service import WorkableService
 
@@ -63,10 +63,10 @@ def post_results_to_workable(self, access_token: str, subdomain: str, candidate_
         result = workable_svc.post_assessment_result(candidate_id=candidate_id, assessment_data=assessment_data)
         if not result["success"]:
             raise Exception(result.get("error", "Workable post failed"))
-        logger.info(f"Results posted to Workable for candidate {candidate_id}")
+        logger.info(f"Results posted to Workable for candidate {candidate_id}", extra={"request_id": request_id or self.request.id})
         return result
     except Exception as exc:
-        logger.error(f"Failed to post to Workable: {exc}")
+        logger.error(f"Failed to post to Workable: {exc}", extra={"request_id": request_id or self.request.id})
         raise self.retry(exc=exc)
 
 

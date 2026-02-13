@@ -346,3 +346,40 @@ def test_list_candidates_search_no_results(client):
     data = resp.json()
     items = data if isinstance(data, list) else data.get("items", data.get("results", []))
     assert len(items) == 0
+
+# ---------------------------------------------------------------------------
+# GET /api/v1/candidates/{id}/documents/{doc_type} — Document download
+# ---------------------------------------------------------------------------
+
+
+def test_download_candidate_cv_success(client):
+    headers, _ = auth_headers(client)
+    cand = create_candidate_via_api(client, headers).json()
+    pdf_header = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"
+    files = {"file": ("resume.pdf", io.BytesIO(pdf_header), "application/pdf")}
+    auth_only = {"Authorization": headers["Authorization"]}
+    up = client.post(f"/api/v1/candidates/{cand['id']}/upload-cv", files=files, headers=auth_only)
+    assert up.status_code == 200
+
+    resp = client.get(f"/api/v1/candidates/{cand['id']}/documents/cv", headers=headers)
+    assert resp.status_code == 200
+    assert resp.headers.get("content-disposition")
+
+
+def test_download_candidate_job_spec_success(client):
+    headers, _ = auth_headers(client)
+    cand = create_candidate_via_api(client, headers).json()
+    files = {"file": ("jd.txt", io.BytesIO(b"python\nfastapi\n"), "text/plain")}
+    auth_only = {"Authorization": headers["Authorization"]}
+    up = client.post(f"/api/v1/candidates/{cand['id']}/upload-job-spec", files=files, headers=auth_only)
+    assert up.status_code == 200
+
+    resp = client.get(f"/api/v1/candidates/{cand['id']}/documents/job-spec", headers=headers)
+    assert resp.status_code == 200
+
+
+def test_download_candidate_document_not_found(client):
+    headers, _ = auth_headers(client)
+    cand = create_candidate_via_api(client, headers).json()
+    resp = client.get(f"/api/v1/candidates/{cand['id']}/documents/cv", headers=headers)
+    assert resp.status_code == 404

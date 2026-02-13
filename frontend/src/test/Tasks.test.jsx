@@ -143,7 +143,7 @@ const renderAppOnTasksPage = async () => {
 
   // Wait for dashboard to render
   await waitFor(() => {
-    expect(screen.getByText('Dashboard', { selector: 'h1' })).toBeInTheDocument();
+    expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
   });
 
   // Navigate to Tasks via nav

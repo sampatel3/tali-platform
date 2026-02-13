@@ -139,7 +139,7 @@ const renderAppOnCandidatesPage = async () => {
 
   // Wait for dashboard to load
   await waitFor(() => {
-    expect(screen.getByText('Dashboard', { selector: 'h1' })).toBeInTheDocument();
+    expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
   });
 
   // Navigate to Candidates via nav link

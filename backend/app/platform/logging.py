@@ -3,16 +3,20 @@ import sys
 import json
 from datetime import datetime
 from ..platform.config import settings
+from ..platform.request_context import get_request_id
 
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
+        request_id = getattr(record, "request_id", None) or get_request_id()
         payload = {
             "timestamp": datetime.utcnow().isoformat() + "Z",
             "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
         }
+        if request_id:
+            payload["request_id"] = request_id
         return json.dumps(payload, ensure_ascii=True)
 
 

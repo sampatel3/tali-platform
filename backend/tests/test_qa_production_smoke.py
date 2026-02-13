@@ -22,6 +22,8 @@ _RUN_ID = str(int(time.time()))[-6:]
 TEST_EMAIL = f"qa-smoke-{_RUN_ID}@example.com"
 TEST_PASSWORD = "SmokeTestPass123!"
 
+pytestmark = pytest.mark.production
+
 
 def _register(email=None, password=None, full_name="QA Smoke", org_name=None):
     body = {

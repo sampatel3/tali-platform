@@ -1,7 +1,7 @@
 """CV-to-Job-Spec fit matching via a single Claude API call.
 
 This is the ONLY Claude scoring call per assessment — all other scoring
-is pure heuristic. See MVP_PLAN.md guardrail: "Single Claude call per
+is pure heuristic. See PRODUCT_PLAN.md guardrail: "Single Claude call per
 assessment".
 """
 
