@@ -173,4 +173,49 @@ describe('AssessmentPage tracking metadata', () => {
     expect(screen.queryByText(/should never render/i)).not.toBeInTheDocument();
   });
 
+  it('allows collapsing and expanding context sections', async () => {
+    const startData = {
+      assessment_id: 15,
+      token: 'tok5',
+      time_remaining: 1200,
+      task: {
+        name: 'Collapsible sections',
+        scenario: 'Investigate and patch the backfill job.',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+        repo_structure: {
+          files: {
+            'src/job.py': 'def run_job():\n    pass',
+          },
+        },
+      },
+    };
+
+    render(<AssessmentPage token="tok5" startData={startData} />);
+
+    const taskToggle = await screen.findByRole('button', { name: /Task Context/i });
+    const rubricToggle = screen.getByRole('button', { name: /How you'll be assessed/i });
+    const repoToggle = screen.getByRole('button', { name: /Repository Context/i });
+
+    expect(screen.getByText(/Investigate and patch the backfill job/i)).toBeInTheDocument();
+    expect(screen.getByText(/Rubric categories will be shown when available/i)).toBeInTheDocument();
+    expect(screen.getByText(/def run_job\(\):/i)).toBeInTheDocument();
+
+    fireEvent.click(taskToggle);
+    fireEvent.click(rubricToggle);
+    fireEvent.click(repoToggle);
+
+    expect(screen.queryByText(/Investigate and patch the backfill job/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Rubric categories will be shown when available/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/def run_job\(\):/i)).not.toBeInTheDocument();
+
+    fireEvent.click(taskToggle);
+    fireEvent.click(rubricToggle);
+    fireEvent.click(repoToggle);
+
+    expect(screen.getByText(/Investigate and patch the backfill job/i)).toBeInTheDocument();
+    expect(screen.getByText(/Rubric categories will be shown when available/i)).toBeInTheDocument();
+    expect(screen.getByText(/def run_job\(\):/i)).toBeInTheDocument();
+  });
+
 });

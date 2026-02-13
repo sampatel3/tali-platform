@@ -95,6 +95,12 @@ export default function AssessmentPage({
   const [selectedRepoFile, setSelectedRepoFile] = useState(null);
   const [repoFileEdits, setRepoFileEdits] = useState({});
   const [editorContent, setEditorContent] = useState("");
+  const [collapsedSections, setCollapsedSections] = useState({
+    taskContext: false,
+    rubric: false,
+    repoContext: false,
+    repoTree: false,
+  });
   const codeRef = useRef("");
   const timerRef = useRef(null);
 
@@ -247,6 +253,13 @@ export default function AssessmentPage({
   )?.content;
   const repoFileTree = buildRepoFileTree(repoFiles);
   const hasRepoStructure = repoFiles.length > 0;
+
+  const toggleSection = useCallback((sectionKey) => {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [sectionKey]: !prev[sectionKey],
+    }));
+  }, []);
 
   const handleSelectRepoFile = useCallback(
     (path) => {
@@ -489,57 +502,95 @@ export default function AssessmentPage({
       </div>
 
       <div className="border-b-2 border-black bg-gray-50 p-4">
-        <div className="grid md:grid-cols-2 gap-4">
-          <div>
-            <div className="font-mono text-xs text-gray-500 mb-1">
-              Task Context
-            </div>
-            <p className="font-mono text-sm text-gray-700 whitespace-pre-wrap mb-3">
-              {taskContext || "Task context has not been provided yet."}
-            </p>
-
-            <div>
-              <div className="font-mono text-xs text-gray-500 mb-1">How you'll be assessed</div>
-              {rubricCategories.length === 0 ? (
-                <p className="font-mono text-xs text-gray-600">Rubric categories will be shown when available.</p>
-              ) : (
-                <ul className="font-mono text-xs text-gray-700 space-y-1 mb-3">
-                  {rubricCategories.map((item) => (
-                    <li key={item.category} className="flex justify-between">
-                      <span>{String(item.category || '').replace(/_/g, ' ')}</span>
-                      <span>{Math.round((Number(item.weight || 0) * 100))}%</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {assessment?.clone_command && (
-                <div className="font-mono text-[11px] text-gray-600 mb-2">
-                  Workspace clone command: <code>{assessment.clone_command}</code>
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="border border-black bg-white">
+            <button
+              type="button"
+              className="w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold text-gray-700 hover:bg-gray-100"
+              onClick={() => toggleSection("taskContext")}
+            >
+              <span>Task Context</span>
+              {collapsedSections.taskContext ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+            </button>
+            {!collapsedSections.taskContext && (
+              <div className="border-t border-gray-200 px-3 py-2">
+                <div className="max-h-40 overflow-y-auto pr-1">
+                  <p className="font-mono text-sm text-gray-700 whitespace-pre-wrap">
+                    {taskContext || "Task context has not been provided yet."}
+                  </p>
                 </div>
-              )}
-            </div>
-            <div>
-              <div className="font-mono text-xs text-gray-500 mb-1">Repository Context</div>
-              {repoFiles.length === 0 ? (
-                <p className="font-mono text-xs text-gray-600">No repository files provided for this assessment.</p>
-              ) : (
-                <>
-                  <div className="flex flex-wrap gap-2 mb-2 max-h-16 overflow-auto">
-                    {repoFiles.map((file) => (
-                      <button
-                        key={file.path}
-                        type="button"
-                        className={`border px-2 py-1 font-mono text-xs ${selectedRepoPath === file.path ? 'border-black bg-black text-white' : 'border-gray-400 bg-white'}`}
-                        onClick={() => setSelectedRepoFile(file.path)}
-                      >
-                        {file.path}
-                      </button>
-                    ))}
+              </div>
+            )}
+          </div>
+
+          <div className="border border-black bg-white">
+            <button
+              type="button"
+              className="w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold text-gray-700 hover:bg-gray-100"
+              onClick={() => toggleSection("rubric")}
+            >
+              <span>How you'll be assessed</span>
+              {collapsedSections.rubric ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+            </button>
+            {!collapsedSections.rubric && (
+              <div className="border-t border-gray-200 px-3 py-2">
+                <div className="max-h-40 overflow-y-auto pr-1">
+                  {rubricCategories.length === 0 ? (
+                    <p className="font-mono text-xs text-gray-600">Rubric categories will be shown when available.</p>
+                  ) : (
+                    <ul className="font-mono text-xs text-gray-700 space-y-1">
+                      {rubricCategories.map((item) => (
+                        <li key={item.category} className="flex justify-between gap-3">
+                          <span className="truncate">{String(item.category || "").replace(/_/g, " ")}</span>
+                          <span>{Math.round((Number(item.weight || 0) * 100))}%</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+                {assessment?.clone_command && (
+                  <div className="font-mono text-[11px] text-gray-600 mt-2 break-all">
+                    Workspace clone command: <code>{assessment.clone_command}</code>
                   </div>
-                  <pre className="bg-black text-gray-200 p-2 text-xs overflow-auto max-h-36 border-2 border-black">{selectedRepoContent || 'No file content available.'}</pre>
-                </>
-              )}
-            </div>
+                )}
+              </div>
+            )}
+          </div>
+
+          <div className="border border-black bg-white">
+            <button
+              type="button"
+              className="w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold text-gray-700 hover:bg-gray-100"
+              onClick={() => toggleSection("repoContext")}
+            >
+              <span>Repository Context</span>
+              {collapsedSections.repoContext ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+            </button>
+            {!collapsedSections.repoContext && (
+              <div className="border-t border-gray-200 px-3 py-2">
+                {repoFiles.length === 0 ? (
+                  <p className="font-mono text-xs text-gray-600">No repository files provided for this assessment.</p>
+                ) : (
+                  <>
+                    <div className="flex flex-wrap gap-2 mb-2 max-h-20 overflow-auto pr-1">
+                      {repoFiles.map((file) => (
+                        <button
+                          key={file.path}
+                          type="button"
+                          className={`border px-2 py-1 font-mono text-xs ${selectedRepoPath === file.path ? "border-black bg-black text-white" : "border-gray-400 bg-white"}`}
+                          onClick={() => handleSelectRepoFile(file.path)}
+                        >
+                          {file.path}
+                        </button>
+                      ))}
+                    </div>
+                    <pre className="bg-black text-gray-200 p-2 text-xs overflow-auto max-h-40 border-2 border-black">
+                      {selectedRepoContent || "No file content available."}
+                    </pre>
+                  </>
+                )}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -550,43 +601,50 @@ export default function AssessmentPage({
         <div className="w-[65%] border-r-2 border-black flex flex-col">
           <div className="flex-1 flex overflow-hidden">
             {hasRepoStructure && (
-              <div className="w-52 border-r-2 border-black bg-gray-50 flex flex-col overflow-hidden">
-                <div className="px-3 py-2 border-b border-gray-200 font-mono text-xs font-bold text-gray-600">
-                  Repository
-                </div>
-                <div className="flex-1 overflow-y-auto py-1">
-                  {Object.entries(repoFileTree)
-                    .sort(([a], [b]) => (a || "").localeCompare(b || ""))
-                    .map(([dir, paths]) => (
-                      <div key={dir || "(root)"} className="mb-1">
-                        {dir ? (
-                          <div className="px-2 py-0.5 font-mono text-xs text-gray-500 flex items-center gap-0.5">
-                            <Folder size={10} />
-                            <span>{dir}/</span>
+              <div className={`${collapsedSections.repoTree ? "w-10" : "w-52"} border-r-2 border-black bg-gray-50 flex flex-col overflow-hidden transition-all duration-150`}>
+                <button
+                  type="button"
+                  className="px-2 py-2 border-b border-gray-200 font-mono text-xs font-bold text-gray-600 flex items-center gap-1.5 hover:bg-gray-100"
+                  onClick={() => toggleSection("repoTree")}
+                >
+                  {collapsedSections.repoTree ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
+                  {!collapsedSections.repoTree && <span>Repository</span>}
+                </button>
+                {!collapsedSections.repoTree && (
+                  <div className="flex-1 overflow-y-auto py-1">
+                    {Object.entries(repoFileTree)
+                      .sort(([a], [b]) => (a || "").localeCompare(b || ""))
+                      .map(([dir, paths]) => (
+                        <div key={dir || "(root)"} className="mb-1">
+                          {dir ? (
+                            <div className="px-2 py-0.5 font-mono text-xs text-gray-500 flex items-center gap-0.5">
+                              <Folder size={10} />
+                              <span>{dir}/</span>
+                            </div>
+                          ) : null}
+                          <div className={dir ? "pl-3" : ""}>
+                            {paths.map((path) => {
+                              const name = path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path;
+                              const isSelected = path === selectedRepoPath;
+                              return (
+                                <button
+                                  key={path}
+                                  type="button"
+                                  className={`w-full text-left px-2 py-1 font-mono text-xs flex items-center gap-1.5 hover:bg-gray-200 ${
+                                    isSelected ? "bg-black text-white hover:bg-gray-800" : "text-gray-800"
+                                  }`}
+                                  onClick={() => handleSelectRepoFile(path)}
+                                >
+                                  <FileText size={10} />
+                                  <span className="truncate">{name}</span>
+                                </button>
+                              );
+                            })}
                           </div>
-                        ) : null}
-                        <div className={dir ? "pl-3" : ""}>
-                          {paths.map((path) => {
-                            const name = path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path;
-                            const isSelected = path === selectedRepoPath;
-                            return (
-                              <button
-                                key={path}
-                                type="button"
-                                className={`w-full text-left px-2 py-1 font-mono text-xs flex items-center gap-1.5 hover:bg-gray-200 ${
-                                  isSelected ? "bg-black text-white hover:bg-gray-800" : "text-gray-800"
-                                }`}
-                                onClick={() => handleSelectRepoFile(path)}
-                              >
-                                <FileText size={10} />
-                                <span className="truncate">{name}</span>
-                              </button>
-                            );
-                          })}
                         </div>
-                      </div>
-                    ))}
-                </div>
+                      ))}
+                  </div>
+                )}
               </div>
             )}
             <div className="flex-1 min-w-0">
