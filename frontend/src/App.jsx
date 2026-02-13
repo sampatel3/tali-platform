@@ -65,13 +65,13 @@ const weeklyData = [
 const BrandGlyph = ({ borderClass = 'border-black', sizeClass = 'w-10 h-10', markSizeClass = 'w-6 h-6' }) => (
   <div
     className={`${sizeClass} border-2 ${borderClass} flex items-center justify-center`}
-    style={{ backgroundColor: '#0B3B3C' }}
+    style={{ backgroundColor: '#9D00FF' }}
     aria-hidden="true"
   >
     <svg viewBox="0 0 24 24" className={markSizeClass} fill="none">
       <path
         d="M4 5v14M8 5v14M12 5v14M16 5v14M2.5 17.5L18.5 6.5"
-        stroke="#F8E16C"
+        stroke="#FFFFFF"
         strokeWidth="2.1"
         strokeLinecap="round"
       />
