@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ArrowLeft, AlertTriangle, CheckCircle } from 'lucide-react';
 import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { assessments as assessmentsApi, analytics as analyticsApi, candidates as candidatesApi } from '../lib/api';
+import { SCORING_CATEGORY_GLOSSARY, getMetricMeta } from '../lib/scoringGlossary';
 
 export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAdded, NavComponent = null }) => {
   const [activeTab, setActiveTab] = useState('results');
@@ -294,26 +295,19 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
           const explanations = bd.explanations || assessment.prompt_analytics?.explanations || {};
 
           const CATEGORY_CONFIG = [
-            { key: 'task_completion', label: 'Task Completion', icon: '✅', weight: '20%' },
-            { key: 'prompt_clarity', label: 'Prompt Clarity', icon: '🎯', weight: '15%' },
-            { key: 'context_provision', label: 'Context Provision', icon: '📎', weight: '15%' },
-            { key: 'independence', label: 'Independence & Efficiency', icon: '🧠', weight: '20%' },
-            { key: 'utilization', label: 'Response Utilization', icon: '⚡', weight: '10%' },
-            { key: 'communication', label: 'Communication Quality', icon: '✍️', weight: '10%' },
-            { key: 'approach', label: 'Debugging & Design', icon: '🔧', weight: '5%' },
-            { key: 'cv_match', label: 'CV-Job Fit', icon: '📄', weight: '5%' },
-          ];
-
-          const METRIC_LABELS = {
-            tests_passed_ratio: 'Tests Passed', time_compliance: 'Time Compliance', time_efficiency: 'Time Efficiency',
-            prompt_length_quality: 'Prompt Length', question_clarity: 'Clear Questions', prompt_specificity: 'Specificity', vagueness_score: 'Avoids Vagueness',
-            code_context_rate: 'Includes Code', error_context_rate: 'Includes Errors', reference_rate: 'References', attempt_mention_rate: 'Prior Attempts',
-            first_prompt_delay: 'Thinks Before Asking', prompt_spacing: 'Spacing Between', prompt_efficiency: 'Prompts/Test', token_efficiency: 'Token Efficiency', pre_prompt_effort: 'Self-Attempt Rate',
-            post_prompt_changes: 'Uses Responses', wasted_prompts: 'Actionable Prompts', iteration_quality: 'Iterative Refinement',
-            grammar_score: 'Grammar', readability_score: 'Readability', tone_score: 'Professional Tone',
-            debugging_score: 'Debugging Strategy', design_score: 'Design Thinking',
-            cv_job_match_score: 'Overall Match', skills_match: 'Skills Alignment', experience_relevance: 'Experience',
-          };
+            { key: 'task_completion', icon: '✅', weight: '20%' },
+            { key: 'prompt_clarity', icon: '🎯', weight: '15%' },
+            { key: 'context_provision', icon: '📎', weight: '15%' },
+            { key: 'independence', icon: '🧠', weight: '20%' },
+            { key: 'utilization', icon: '⚡', weight: '10%' },
+            { key: 'communication', icon: '✍️', weight: '10%' },
+            { key: 'approach', icon: '🔧', weight: '5%' },
+            { key: 'cv_match', icon: '📄', weight: '5%' },
+          ].map((category) => ({
+            ...category,
+            label: SCORING_CATEGORY_GLOSSARY[category.key]?.label || category.key,
+            description: SCORING_CATEGORY_GLOSSARY[category.key]?.description || 'No description available yet.',
+          }));
 
           const radarData = CATEGORY_CONFIG.filter(c => catScores[c.key] != null).map(c => ({
             signal: c.label.split(' ')[0],
@@ -359,7 +353,7 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                       >
                         <div className="flex items-center gap-3">
                           <span>{cat.icon}</span>
-                          <span className="font-bold">{cat.label}</span>
+                          <span className="font-bold" title={cat.description}>{cat.label}</span>
                           <span className="font-mono text-xs text-gray-500">(Weight: {cat.weight})</span>
                         </div>
                         <div className="flex items-center gap-3">
@@ -376,7 +370,7 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                           {Object.entries(metrics).map(([metricKey, metricVal]) => (
                             <div key={metricKey}>
                               <div className="flex items-center gap-3 mb-1">
-                                <div className="font-mono text-sm w-44 text-gray-700">{METRIC_LABELS[metricKey] || metricKey.replace(/_/g, ' ')}</div>
+                                <div className="font-mono text-sm w-44 text-gray-700" title={getMetricMeta(metricKey).description}>{getMetricMeta(metricKey).label}</div>
                                 <div className="flex-1 bg-gray-200 h-2.5 border border-gray-300 rounded">
                                   <div
                                     className="h-full rounded"
@@ -403,6 +397,25 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                     </div>
                   );
                 })}
+              </div>
+
+              {(Object.keys(catScores).length === 0 || Object.keys(detailedScores).length === 0) && (
+                <div className="border-2 border-yellow-500 bg-yellow-50 p-4"> 
+                  <div className="font-bold text-yellow-800 mb-1">Partial scoring data</div>
+                  <div className="font-mono text-xs text-yellow-700">Some scoring categories or detailed metrics are missing for this assessment. Available results are shown above, and missing components are still being processed or were unavailable.</div>
+                </div>
+              )}
+
+              <div className="border-2 border-black p-4">
+                <div className="font-bold mb-2">Scoring Glossary</div>
+                <div className="grid md:grid-cols-2 gap-2">
+                  {CATEGORY_CONFIG.map((cat) => (
+                    <div key={`glossary-${cat.key}`} className="border border-gray-300 p-2">
+                      <div className="font-mono text-xs font-bold">{cat.label}</div>
+                      <div className="font-mono text-xs text-gray-600">{cat.description}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               {/* Recruiter Insight Summary */}

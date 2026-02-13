@@ -255,7 +255,7 @@ describe('CandidateDetailPage', () => {
     expect(taskCompletionElements.length).toBeGreaterThanOrEqual(1);
     const promptClarityElements = screen.getAllByText('Prompt Clarity');
     expect(promptClarityElements.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Independence & Efficiency')).toBeInTheDocument();
+    expect(screen.getAllByText('Independence & Efficiency').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders radar chart in results tab', () => {
@@ -421,6 +421,15 @@ describe('CandidateDetailPage', () => {
     expect(screen.getByText('Test Results')).toBeInTheDocument();
     expect(screen.getByText('Pipeline Processing')).toBeInTheDocument();
     expect(screen.getByText('Error Handling')).toBeInTheDocument();
+  });
+
+
+  it('renders scoring glossary with plain-English dimension descriptions', () => {
+    renderCandidateDetail();
+
+    expect(screen.getByText('Scoring Glossary')).toBeInTheDocument();
+    expect(screen.getAllByText('Task Completion').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Measures delivery outcomes under the assessment constraints/i)).toBeInTheDocument();
   });
 
   it('renders Post to Workable button', () => {
