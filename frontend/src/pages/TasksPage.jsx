@@ -16,6 +16,19 @@ import {
 } from 'lucide-react';
 import { tasks as tasksApi } from '../lib/api';
 
+
+const buildTaskJsonPreview = (form) => ({
+  task_id: form.task_key || null,
+  name: form.name || '',
+  role: form.role || null,
+  duration_minutes: form.duration_minutes,
+  scenario: form.scenario || null,
+  repo_structure: form.repo_structure || null,
+  evaluation_rubric: form.evaluation_rubric || null,
+  expected_approaches: form.extra_data?.expected_approaches || null,
+  extra_data: form.extra_data || null,
+});
+
 const TaskFormFields = ({ form, setForm, readOnly = false }) => {
   const noop = () => {};
   const upd = readOnly ? noop : setForm;
@@ -131,6 +144,12 @@ const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly 
     duration_minutes: initialTask?.duration_minutes ?? 30,
     starter_code: initialTask?.starter_code ?? '',
     test_code: initialTask?.test_code ?? '',
+    task_key: initialTask?.task_key ?? '',
+    role: initialTask?.role ?? '',
+    scenario: initialTask?.scenario ?? '',
+    repo_structure: initialTask?.repo_structure ?? null,
+    evaluation_rubric: initialTask?.evaluation_rubric ?? null,
+    extra_data: initialTask?.extra_data ?? null,
   });
   const [aiPrompt, setAiPrompt] = useState('');
   const [aiDifficulty, setAiDifficulty] = useState('');
@@ -149,6 +168,12 @@ const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly 
         duration_minutes: initialTask.duration_minutes ?? 30,
         starter_code: initialTask.starter_code ?? '',
         test_code: initialTask.test_code ?? '',
+        task_key: initialTask.task_key ?? '',
+        role: initialTask.role ?? '',
+        scenario: initialTask.scenario ?? '',
+        repo_structure: initialTask.repo_structure ?? null,
+        evaluation_rubric: initialTask.evaluation_rubric ?? null,
+        extra_data: initialTask.extra_data ?? null,
       });
       setStep('manual');
     }
@@ -393,13 +418,20 @@ const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly 
                 </button>
               )}
               {viewOnly && (
-                <button
-                  type="button"
-                  className="w-full border-2 border-black py-3 font-bold hover:bg-black hover:text-white transition-colors"
-                  onClick={onClose}
-                >
-                  Close
-                </button>
+                <>
+                  <div>
+                    <div className="font-mono text-sm mb-2 font-bold">Task JSON Preview</div>
+                    <p className="font-mono text-xs text-gray-500 mb-2">Aligned to the runtime task context schema (`task_id` maps to stored `task_key`).</p>
+                    <pre className="w-full border-2 border-black px-4 py-3 font-mono text-xs bg-gray-50 overflow-auto max-h-80 leading-relaxed">{JSON.stringify(buildTaskJsonPreview(form), null, 2)}</pre>
+                  </div>
+                  <button
+                    type="button"
+                    className="w-full border-2 border-black py-3 font-bold hover:bg-black hover:text-white transition-colors"
+                    onClick={onClose}
+                  >
+                    Close
+                  </button>
+                </>
               )}
             </div>
           )}

@@ -26,13 +26,16 @@ def _normalize_task_payload(payload: dict) -> dict:
 
     expected_insights = normalized.pop("expected_insights", None)
     valid_solutions = normalized.pop("valid_solutions", None)
+    expected_approaches = normalized.pop("expected_approaches", None)
 
-    if expected_insights is not None or valid_solutions is not None:
+    if expected_insights is not None or valid_solutions is not None or expected_approaches is not None:
         extra_data = normalized.get("extra_data") or {}
         if expected_insights is not None:
             extra_data["expected_insights"] = expected_insights
         if valid_solutions is not None:
             extra_data["valid_solutions"] = valid_solutions
+        if expected_approaches is not None:
+            extra_data["expected_approaches"] = expected_approaches
         normalized["extra_data"] = extra_data
 
     return normalized
