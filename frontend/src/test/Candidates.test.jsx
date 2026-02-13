@@ -44,6 +44,22 @@ vi.mock('../lib/api.js', () => ({
     uploadCv: vi.fn(),
     uploadJobSpec: vi.fn(),
   },
+  roles: {
+    list: vi.fn().mockResolvedValue({ data: [] }),
+    get: vi.fn(),
+    create: vi.fn(),
+    update: vi.fn(),
+    remove: vi.fn(),
+    uploadJobSpec: vi.fn(),
+    listTasks: vi.fn().mockResolvedValue({ data: [] }),
+    addTask: vi.fn(),
+    removeTask: vi.fn(),
+    listApplications: vi.fn().mockResolvedValue({ data: [] }),
+    createApplication: vi.fn(),
+    updateApplication: vi.fn(),
+    uploadApplicationCv: vi.fn(),
+    createAssessment: vi.fn(),
+  },
   team: { list: vi.fn(), invite: vi.fn() },
   default: {
     interceptors: {
@@ -79,7 +95,7 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, candidates as candidatesApi, assessments as assessmentsApi } from '../lib/api.js';
+import { auth, candidates as candidatesApi, assessments as assessmentsApi, roles as rolesApi } from '../lib/api.js';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -159,6 +175,9 @@ describe('CandidatesPage', () => {
     window.location.hash = '';
     setupAuthenticatedUser();
     candidatesApi.list.mockResolvedValue({ data: { items: mockCandidates } });
+    rolesApi.list.mockResolvedValue({ data: [] });
+    rolesApi.listTasks.mockResolvedValue({ data: [] });
+    rolesApi.listApplications.mockResolvedValue({ data: [] });
   });
 
   afterEach(() => {
@@ -372,5 +391,35 @@ describe('CandidatesPage', () => {
     await waitFor(() => {
       expect(screen.getByText('No candidates found.')).toBeInTheDocument();
     });
+  });
+
+  it('disables Add Application until selected role has job spec', async () => {
+    rolesApi.list.mockResolvedValue({
+      data: [{ id: 1, name: 'Backend Engineer', job_spec_filename: null }],
+    });
+
+    await renderAppOnCandidatesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Role-first workflow (recommended)')).toBeInTheDocument();
+    });
+
+    const addApplicationBtn = screen.getByRole('button', { name: 'Add Application' });
+    expect(addApplicationBtn).toBeDisabled();
+  });
+
+  it('enables Add Application when selected role has job spec', async () => {
+    rolesApi.list.mockResolvedValue({
+      data: [{ id: 2, name: 'ML Engineer', job_spec_filename: 'ml-role-spec.pdf' }],
+    });
+
+    await renderAppOnCandidatesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Role-first workflow (recommended)')).toBeInTheDocument();
+    });
+
+    const addApplicationBtn = screen.getByRole('button', { name: 'Add Application' });
+    expect(addApplicationBtn).not.toBeDisabled();
   });
 });
