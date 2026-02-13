@@ -18,8 +18,6 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
   const [comparisonCandidates, setComparisonCandidates] = useState([]);
   const [comparisonCandidateId, setComparisonCandidateId] = useState('');
   const [comparisonAssessment, setComparisonAssessment] = useState(null);
-  const [comparisonMode, setComparisonMode] = useState('overlay');
-  const [aiEvalSuggestion, setAiEvalSuggestion] = useState(null);
 
   const getRecommendation = (score100) => {
     if (score100 >= 80) return { label: 'STRONG HIRE', color: '#16a34a' };
@@ -426,20 +424,9 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                       ))}
                     </select>
                   </div>
-                  <div>
-                    <label className="font-mono text-xs text-gray-500 mb-1 block">Comparison mode</label>
-                    <select
-                      className="w-full border-2 border-black px-3 py-2 font-mono text-sm bg-white"
-                      value={comparisonMode}
-                      onChange={(e) => setComparisonMode(e.target.value)}
-                    >
-                      <option value="overlay">Radar overlay</option>
-                      <option value="side-by-side">Side-by-side</option>
-                    </select>
-                  </div>
                 </div>
                 {comparisonAssessment && (
-                  <div className="font-mono text-xs mt-3 text-green-700">Comparison active: {candidate.name} vs {comparisonAssessment.name}</div>
+                  <div className="font-mono text-xs mt-3 text-green-700">Comparison active: {candidate.name} vs {comparisonAssessment.name} (charts are overlaid)</div>
                 )}
               </div>
 
@@ -453,33 +440,11 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                         <PolarAngleAxis dataKey="signal" tick={{ fontSize: 11, fontFamily: 'monospace' }} />
                         <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
                         <Radar name={candidate.name} dataKey="score" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.25} />
-                        {comparisonAssessment && comparisonMode === 'overlay' && (
+                        {comparisonAssessment && (
                           <Radar name={comparisonAssessment.name} dataKey="comparisonScore" stroke="#111827" fill="#111827" fillOpacity={0.12} />
                         )}
                       </RadarChart>
                     </ResponsiveContainer>
-                  </div>
-                </div>
-              )}
-
-              {comparisonAssessment && comparisonMode === 'side-by-side' && (
-                <div className="border-2 border-black p-4">
-                  <div className="font-bold mb-4">Side-by-side category comparison</div>
-                  <div className="space-y-2">
-                    {CATEGORY_CONFIG.map((cat) => {
-                      const aScore = catScores[cat.key];
-                      const bScore = comparisonScores[cat.key];
-                      if (aScore == null && bScore == null) return null;
-                      const delta = (aScore ?? 0) - (bScore ?? 0);
-                      return (
-                        <div key={cat.key} className="grid grid-cols-4 gap-3 border border-gray-300 p-2 font-mono text-sm">
-                          <div>{cat.label}</div>
-                          <div>{candidate.name}: {aScore ?? '—'}/10</div>
-                          <div>{comparisonAssessment.name}: {bScore ?? '—'}/10</div>
-                          <div className={delta >= 0 ? 'text-green-700' : 'text-red-700'}>Δ {delta.toFixed(1)}</div>
-                        </div>
-                      );
-                    })}
                   </div>
                 </div>
               )}
