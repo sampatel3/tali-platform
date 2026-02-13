@@ -13,6 +13,7 @@ Date: 2026-02-13
 - Ensured assessment runtime context includes `task_key`, `role`, `scenario`, `repo_structure`, rubric and extra data.
 - Added/validated history-backfill context coverage so candidates see task + repository context before first prompt.
 - Verified telemetry events for code execution and AI prompt interactions include timing/session metadata.
+- Enforced paused-state lock for CV upload endpoints in addition to execute/submit/chat.
 
 ### P2 — Scoring completeness + glossary
 - Aligned score categories/metrics and centralized glossary descriptions for scoring dimensions.
@@ -37,3 +38,5 @@ Date: 2026-02-13
 ### P7 — Integration + release gate
 - Ran backend local-safe suite, frontend unit tests, and production build successfully.
 - Reconciled active docs with updated hardening plan and shipped outcomes.
+- Added role integrity regression checks (role delete guard and task unlink guard).
+- Added migration contract test for destructive reset guarantees.
