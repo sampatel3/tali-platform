@@ -1,6 +1,8 @@
 from pydantic_settings import BaseSettings
 from typing import Optional
 
+from .brand import brand_email_from
+
 
 class Settings(BaseSettings):
     # Database
@@ -54,7 +56,7 @@ class Settings(BaseSettings):
     # Assessment Configuration
     ASSESSMENT_PRICE_PENCE: int = 2500
     ASSESSMENT_EXPIRY_DAYS: int = 7
-    EMAIL_FROM: str = "TALI <noreply@tali.dev>"
+    EMAIL_FROM: str = brand_email_from()
 
     # Prompt Scoring Weights (configurable per deployment)
     # Keys: tests, code_quality, prompt_quality, prompt_efficiency, independence,

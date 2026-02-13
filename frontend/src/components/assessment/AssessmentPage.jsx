@@ -2,6 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Code, Clock } from 'lucide-react';
 import CodeEditor from './CodeEditor';
 import ClaudeChat from './ClaudeChat';
+import { BRAND } from '../../config/brand';
 import { assessments } from '../../lib/api';
 
 /** Normalize API start response to assessment shape used by this component */
@@ -310,7 +311,7 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
             >
               <Code size={16} className="text-white" />
             </div>
-            <span className="text-lg font-bold tracking-tight">TALI</span>
+            <span className="text-lg font-bold tracking-tight">{BRAND.name}</span>
           </div>
           {/* Task name */}
           <span className="font-mono text-sm text-gray-500">|</span>
