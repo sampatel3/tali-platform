@@ -26,7 +26,7 @@ from ...services.document_service import process_document_upload
 from ...services.fit_matching_service import calculate_cv_job_match_sync
 from ...components.notifications.service import send_results_notification_sync
 
-from .repository import utcnow, ensure_utc, resume_code_for_assessment, build_timeline
+from .repository import utcnow, ensure_utc, resume_code_for_assessment, build_timeline, append_assessment_timeline_event
 
 
 # ---------------------------------------------------------------------------
@@ -326,7 +326,22 @@ def submit_assessment(
         {"prompt_index": i, "code_before": p.get("code_before", ""), "code_after": p.get("code_after", "")}
         for i, p in enumerate(prompts)
     ] + [{"final": final_code}]
-    assessment.timeline = build_timeline(assessment)
+
+    append_assessment_timeline_event(
+        assessment,
+        "assessment_submit",
+        {
+            "session_id": assessment.e2b_session_id,
+            "final_code_length": len(final_code or ""),
+            "tests_passed": passed,
+            "tests_total": total,
+            "duration_seconds": duration_seconds,
+            "tab_switch_count": assessment.tab_switch_count,
+        },
+    )
+    existing_timeline = list(assessment.timeline or [])
+    derived_timeline = build_timeline(assessment)
+    assessment.timeline = existing_timeline + [e for e in derived_timeline if e not in existing_timeline]
     assessment.code_quality_score = code_quality_score
 
     # Map category scores (0-10) to individual assessment columns for the radar chart.

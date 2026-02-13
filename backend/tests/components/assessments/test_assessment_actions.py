@@ -102,3 +102,90 @@ def test_candidate_can_resume_in_progress_assessment(client, monkeypatch):
     second_body = second.json()
     assert second_body["assessment_id"] == a["id"]
     assert second_body["time_remaining"] >= 0
+
+
+def test_timeline_telemetry_records_execute_and_prompt_events(client, monkeypatch):
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _create_assessment(client, headers, task["id"])
+
+    import app.api.v1.assessments as assessments_api
+    import app.components.assessments.service as assessments_svc
+
+    class FakeSandbox:
+        def __init__(self, sid):
+            self.sandbox_id = sid
+
+    class FakeE2BService:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def create_sandbox(self):
+            return FakeSandbox("fake-sandbox")
+
+        def connect_sandbox(self, sandbox_id):
+            return FakeSandbox(sandbox_id)
+
+        def get_sandbox_id(self, sandbox):
+            return sandbox.sandbox_id
+
+        def execute_code(self, sandbox, code):
+            return {"stdout": "ok", "stderr": ""}
+
+        def close_sandbox(self, sandbox):
+            return None
+
+    class FakeClaudeService:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def chat(self, messages):
+            return {"content": "fake-response", "input_tokens": 11, "output_tokens": 7, "tokens_used": 18}
+
+    monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_api, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_api, "ClaudeService", FakeClaudeService)
+
+    start = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    assert start.status_code == 200
+    assessment_id = start.json()["assessment_id"]
+
+    execute = client.post(
+        f"/api/v1/assessments/{assessment_id}/execute",
+        json={"code": "print('hello')"},
+        headers={"x-assessment-token": a["token"]},
+    )
+    assert execute.status_code == 200
+
+    prompt = client.post(
+        f"/api/v1/assessments/{assessment_id}/claude",
+        json={
+            "message": "How should I debug this?",
+            "conversation_history": [],
+            "code_context": "print('hello')",
+            "paste_detected": True,
+            "browser_focused": False,
+            "time_since_last_prompt_ms": 456,
+        },
+        headers={"x-assessment-token": a["token"]},
+    )
+    assert prompt.status_code == 200
+
+    assessment = client.get(f"/api/v1/assessments/{assessment_id}", headers=headers)
+    assert assessment.status_code == 200
+    timeline = assessment.json().get("timeline") or []
+    event_types = [e.get("event_type") for e in timeline if isinstance(e, dict)]
+    assert "code_execute" in event_types
+    assert "ai_prompt" in event_types
+
+    code_event = next(e for e in timeline if e.get("event_type") == "code_execute")
+    assert code_event["session_id"] == "fake-sandbox"
+    assert code_event["code_length"] > 0
+    assert code_event["latency_ms"] >= 0
+
+    prompt_event = next(e for e in timeline if e.get("event_type") == "ai_prompt")
+    assert prompt_event["paste_detected"] is True
+    assert prompt_event["browser_focused"] is False
+    assert prompt_event["time_since_last_prompt_ms"] == 456

@@ -84,13 +84,30 @@ def validate_assessment_token(assessment: Assessment, token: str) -> None:
         raise HTTPException(status_code=403, detail="Invalid assessment token")
 
 
+def append_assessment_timeline_event(
+    assessment: Assessment,
+    event_type: str,
+    payload: Optional[Dict[str, Any]] = None,
+) -> None:
+    """Append a structured telemetry event to assessment.timeline."""
+    timeline = list(assessment.timeline or [])
+    timeline.append(
+        {
+            "event_type": event_type,
+            "timestamp": utcnow().isoformat(),
+            **(payload or {}),
+        }
+    )
+    assessment.timeline = timeline
+
+
 # ---------------------------------------------------------------------------
 # Serialization
 # ---------------------------------------------------------------------------
 
 def build_timeline(assessment: Assessment) -> List[Dict[str, Any]]:
     """Build timeline events for candidate detail (start, optional AI prompts, submit)."""
-    events = []
+    events = list(assessment.timeline or [])
     if assessment.started_at:
         events.append({"time": "00:00", "event": "Started assessment"})
     prompts = assessment.ai_prompts or []
@@ -125,7 +142,7 @@ def build_timeline(assessment: Assessment) -> List[Dict[str, Any]]:
         events.append({"time": time_str, "event": "Submitted assessment"})
     elif assessment.completed_at:
         events.append({"time": "\u2014", "event": "Submitted assessment"})
-    return events if events else (assessment.timeline or [])
+    return events
 
 
 def build_prompts_list(assessment: Assessment) -> List[Dict[str, Any]]:
