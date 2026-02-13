@@ -48,6 +48,32 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 
 **Where to get it:** Sign up at [console.anthropic.com](https://console.anthropic.com) → API Keys → Create Key.
 
+
+### Claude Model Tiering (Phase P6)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DEPLOYMENT_ENV` | No | `development` | Deployment environment (`development`, `staging`, `production`). |
+| `CLAUDE_MODEL` | No | `None` | Explicit model override for all environments. |
+| `CLAUDE_MODEL_NON_PROD` | No | `claude-3-haiku-20240307` | Default model used for test/staging/dev (cheapest tier). |
+| `CLAUDE_MODEL_PRODUCTION` | No | `claude-3-5-sonnet-20241022` | Default production model when `DEPLOYMENT_ENV=production`. |
+| `MAX_TOKENS_PER_RESPONSE` | No | `1024` | Maximum tokens returned per Claude response. |
+
+Model resolution precedence: `CLAUDE_MODEL` (if set) → environment default (`CLAUDE_MODEL_PRODUCTION` for production, otherwise `CLAUDE_MODEL_NON_PROD`).
+
+### Cost Observability Controls (Phase P6)
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `CLAUDE_INPUT_COST_PER_MILLION_USD` | No | `0.25` | Input token cost model for Claude usage estimates. |
+| `CLAUDE_OUTPUT_COST_PER_MILLION_USD` | No | `1.25` | Output token cost model for Claude usage estimates. |
+| `E2B_COST_PER_HOUR_USD` | No | `0.30` | Hourly E2B runtime cost estimate per active assessment sandbox. |
+| `EMAIL_COST_PER_SEND_USD` | No | `0.01` | Per-email send cost estimate (invite/results notifications). |
+| `STORAGE_COST_PER_GB_MONTH_USD` | No | `0.023` | Storage cost estimate for persisted assessment artifacts. |
+| `STORAGE_RETENTION_DAYS_DEFAULT` | No | `30` | Retention window used in storage-cost estimates. |
+| `COST_ALERT_DAILY_SPEND_USD` | No | `200.0` | Alert threshold for tenant daily spend estimate. |
+| `COST_ALERT_PER_COMPLETED_ASSESSMENT_USD` | No | `10.0` | Alert threshold for cost per completed assessment. |
+
 ### Workable (ATS Integration)
 
 | Variable | Required | Default | Description |

@@ -66,6 +66,7 @@ All endpoints (except Health, assessment start, and webhooks) require a Bearer t
 | `POST` | `/api/v1/assessments/{id}/execute` | No | Execute code in the assessment's E2B sandbox. |
 | `POST` | `/api/v1/assessments/{id}/claude` | No | Send a message to Claude AI assistant during assessment. |
 | `POST` | `/api/v1/assessments/{id}/submit` | No | Submit the assessment for grading. |
+| `GET` | `/api/v1/billing/costs` | Yes | Estimated per-assessment and per-tenant infrastructure costs (Claude/E2B/email/storage) with threshold alerts. |
 
 ### POST /api/v1/assessments/
 

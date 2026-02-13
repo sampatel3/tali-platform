@@ -29,7 +29,7 @@ class ClaudeService:
             api_key: Anthropic API key.
         """
         self.client = Anthropic(api_key=api_key)
-        self.model = settings.CLAUDE_MODEL
+        self.model = settings.resolved_claude_model
         self.max_tokens_per_response = settings.MAX_TOKENS_PER_RESPONSE
         logger.info("ClaudeService initialised with model=%s", self.model)
 
