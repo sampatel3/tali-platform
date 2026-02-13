@@ -284,6 +284,7 @@ def upload_assessment_cv(
         raise HTTPException(status_code=401, detail="Invalid assessment token")
     if assessment.status == AssessmentStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Assessment already submitted")
+    enforce_not_paused(assessment)
     return store_cv_upload(assessment, file, db)
 
 
@@ -298,6 +299,7 @@ def upload_assessment_cv_by_token(
         raise HTTPException(status_code=404, detail="Invalid assessment token")
     if assessment.status == AssessmentStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Assessment already submitted")
+    enforce_not_paused(assessment)
     return store_cv_upload(assessment, file, db)
 
 

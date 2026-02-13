@@ -113,3 +113,34 @@ def test_claude_retry_resumes_timer(client, db, monkeypatch):
     db.refresh(assessment)
     assert assessment.is_timer_paused is False
     assert assessment.pause_reason is None
+
+
+def test_cv_upload_blocked_while_paused(client, db):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Paused CV upload task").json()
+    created = create_assessment_via_api(
+        client,
+        headers,
+        task_id=task["id"],
+        candidate_email="paused-cv@example.com",
+        candidate_name="Paused CV",
+    )
+    assert created.status_code == 201
+    payload = created.json()
+
+    assessment = db.query(Assessment).filter(Assessment.id == payload["id"]).first()
+    assessment.status = AssessmentStatus.IN_PROGRESS
+    assessment.started_at = datetime.now(timezone.utc)
+    assessment.is_timer_paused = True
+    assessment.pause_reason = "claude_outage"
+    assessment.paused_at = datetime.now(timezone.utc)
+    db.commit()
+
+    files = {"file": ("resume.pdf", b"%PDF-1.4 paused cv", "application/pdf")}
+    resp = client.post(
+        f"/api/v1/assessments/token/{payload['token']}/upload-cv",
+        files=files,
+    )
+    assert resp.status_code == 423
+    detail = resp.json()["detail"]
+    assert detail["code"] == "ASSESSMENT_PAUSED"
