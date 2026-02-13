@@ -7,15 +7,94 @@ import {
   Loader2,
   Zap,
   Check,
-  FileText,
   Code,
-  Plus,
   Eye,
   Pencil,
   Trash2,
 } from 'lucide-react';
 import { tasks as tasksApi } from '../lib/api';
 
+
+const STANDARD_AI_PROMPT_TEMPLATE = `Create a realistic technical assessment task.
+
+Role and seniority:
+- Role: [e.g. backend engineer, data engineer, AI engineer]
+- Seniority: [junior/mid/senior/staff]
+
+What should be tested:
+- Core skills: [list]
+- Real-world scenario: [brief context]
+- Signals to evaluate: [problem-solving, debugging, testing, communication, AI collaboration]
+
+Task requirements:
+- Include starter Python code with realistic issues or missing logic
+- Include a pytest suite with 3-6 meaningful tests
+- Keep duration practical for hiring workflows
+- Return structured task metadata: role fit, rubric, and suitable roles`;
+
+const STANDARD_MANUAL_TEMPLATE = {
+  name: 'Async Data Pipeline Stabilization',
+  description: 'Fix reliability issues in an async event processing service used in production. The goal is to make ingestion deterministic, handle malformed events safely, and keep processing idempotent.',
+  task_type: 'debugging',
+  difficulty: 'mid',
+  duration_minutes: 45,
+  starter_code: `from typing import List, Dict\n\n\ndef process_events(events: List[Dict]) -> int:\n    \"\"\"Process incoming events and return number of successful writes.\"\"\"\n    processed = 0\n    for event in events:\n        # TODO: harden validation and idempotency checks\n        if event.get("id"):\n            processed += 1\n    return processed\n`,
+  test_code: `from src.task import process_events\n\n\ndef test_processes_valid_events():\n    events = [{"id": "1"}, {"id": "2"}]\n    assert process_events(events) == 2\n\n\ndef test_skips_invalid_event_payload():\n    events = [{"id": "1"}, {"payload": {}}]\n    assert process_events(events) == 1\n\n\ndef test_handles_empty_input():\n    assert process_events([]) == 0\n`,
+  role: 'backend_engineer',
+  scenario: 'A production ingestion pipeline is dropping events and producing duplicate records during spikes. Stabilize the processing logic and keep behavior predictable.',
+  task_key: '',
+  repo_structure: null,
+  evaluation_rubric: null,
+  extra_data: {
+    suitable_roles: ['backend engineer', 'platform engineer', 'full-stack engineer'],
+    skills_tested: ['debugging', 'defensive coding', 'test design'],
+  },
+};
+
+const DEFAULT_TESTS_BY_TYPE = {
+  debugging: ['Root-cause analysis', 'Bug isolation', 'Regression-safe fixes'],
+  ai_engineering: ['AI prompt quality', 'Grounded tool usage', 'Output validation'],
+  optimization: ['Performance reasoning', 'Tradeoff decisions', 'Instrumentation'],
+  build: ['System design', 'Correct implementation', 'Testing discipline'],
+  refactor: ['Code readability', 'Architecture choices', 'Behavior preservation'],
+};
+
+const prettifyRole = (role) => String(role || 'software_engineer').replace(/[_-]+/g, ' ');
+
+const collectSuitableRoles = (form) => {
+  const fromExtra = Array.isArray(form?.extra_data?.suitable_roles)
+    ? form.extra_data.suitable_roles.filter(Boolean)
+    : [];
+  if (fromExtra.length > 0) return fromExtra;
+  if (form?.role) return [prettifyRole(form.role)];
+  return ['software engineer'];
+};
+
+const collectWhatTaskTests = (form) => {
+  const fromExtra = Array.isArray(form?.extra_data?.skills_tested)
+    ? form.extra_data.skills_tested.filter(Boolean)
+    : [];
+  if (fromExtra.length > 0) return fromExtra;
+
+  const rubricKeys = form?.evaluation_rubric && typeof form.evaluation_rubric === 'object'
+    ? Object.keys(form.evaluation_rubric)
+    : [];
+  if (rubricKeys.length > 0) return rubricKeys.map((k) => String(k).replace(/[_-]+/g, ' '));
+
+  return DEFAULT_TESTS_BY_TYPE[form?.task_type] || DEFAULT_TESTS_BY_TYPE.debugging;
+};
+
+const listRepoFiles = (form) => {
+  const files = form?.repo_structure?.files;
+  if (!files) return [];
+  if (Array.isArray(files)) {
+    return files
+      .map((entry) => entry?.path || entry?.name || '')
+      .filter(Boolean);
+  }
+  if (typeof files === 'object') return Object.keys(files);
+  return [];
+};
 
 const buildTaskJsonPreview = (form) => ({
   task_id: form.task_key || null,
@@ -26,6 +105,8 @@ const buildTaskJsonPreview = (form) => ({
   repo_structure: form.repo_structure || null,
   evaluation_rubric: form.evaluation_rubric || null,
   expected_approaches: form.extra_data?.expected_approaches || null,
+  suitable_roles: form.extra_data?.suitable_roles || null,
+  skills_tested: form.extra_data?.skills_tested || null,
   extra_data: form.extra_data || null,
 });
 
@@ -105,6 +186,43 @@ const TaskFormFields = ({ form, setForm, readOnly = false }) => {
           </select>
         </div>
       </div>
+      <div className="grid md:grid-cols-2 gap-4">
+        <div>
+          <label className="block font-mono text-sm mb-1 font-bold">Primary Role</label>
+          <input
+            type="text"
+            className={inputClass('w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none')}
+            placeholder="e.g. backend_engineer"
+            value={form.role || ''}
+            onChange={(e) => upd((p) => ({ ...p, role: e.target.value }))}
+            readOnly={readOnly}
+            disabled={readOnly}
+          />
+        </div>
+        <div>
+          <label className="block font-mono text-sm mb-1 font-bold">Task Key (optional)</label>
+          <input
+            type="text"
+            className={inputClass('w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none')}
+            placeholder="e.g. backend_async_pipeline_debug"
+            value={form.task_key || ''}
+            onChange={(e) => upd((p) => ({ ...p, task_key: e.target.value }))}
+            readOnly={readOnly}
+            disabled={readOnly}
+          />
+        </div>
+      </div>
+      <div>
+        <label className="block font-mono text-sm mb-1 font-bold">Scenario / Context</label>
+        <textarea
+          className={inputClass('w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none min-h-[80px]')}
+          placeholder="Describe why this task exists and what production context it simulates."
+          value={form.scenario || ''}
+          onChange={(e) => upd((p) => ({ ...p, scenario: e.target.value }))}
+          readOnly={readOnly}
+          disabled={readOnly}
+        />
+      </div>
       <div>
         <label className="block font-mono text-sm mb-1 font-bold">Starter Code *</label>
         <p className="font-mono text-xs text-gray-500 mb-1">The code the candidate starts with. Include bugs, scaffolding, or an incomplete implementation.</p>
@@ -135,23 +253,26 @@ const TaskFormFields = ({ form, setForm, readOnly = false }) => {
 
 const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly = false }) => {
   const isEdit = Boolean(initialTask) && !viewOnly;
-  const [step, setStep] = useState(initialTask ? 'manual' : 'choose');
+  const [step, setStep] = useState(initialTask ? 'manual' : 'ai-prompt');
   const [form, setForm] = useState({
-    name: initialTask?.name ?? '',
-    description: initialTask?.description ?? '',
-    task_type: initialTask?.task_type ?? 'debugging',
-    difficulty: initialTask?.difficulty ?? 'mid',
-    duration_minutes: initialTask?.duration_minutes ?? 30,
-    starter_code: initialTask?.starter_code ?? '',
-    test_code: initialTask?.test_code ?? '',
-    task_key: initialTask?.task_key ?? '',
-    role: initialTask?.role ?? '',
-    scenario: initialTask?.scenario ?? '',
-    repo_structure: initialTask?.repo_structure ?? null,
-    evaluation_rubric: initialTask?.evaluation_rubric ?? null,
-    extra_data: initialTask?.extra_data ?? null,
+    name: initialTask?.name ?? STANDARD_MANUAL_TEMPLATE.name,
+    description: initialTask?.description ?? STANDARD_MANUAL_TEMPLATE.description,
+    task_type: initialTask?.task_type ?? STANDARD_MANUAL_TEMPLATE.task_type,
+    difficulty: initialTask?.difficulty ?? STANDARD_MANUAL_TEMPLATE.difficulty,
+    duration_minutes: initialTask?.duration_minutes ?? STANDARD_MANUAL_TEMPLATE.duration_minutes,
+    starter_code: initialTask?.starter_code ?? STANDARD_MANUAL_TEMPLATE.starter_code,
+    test_code: initialTask?.test_code ?? STANDARD_MANUAL_TEMPLATE.test_code,
+    task_key: initialTask?.task_key ?? STANDARD_MANUAL_TEMPLATE.task_key,
+    role: initialTask?.role ?? STANDARD_MANUAL_TEMPLATE.role,
+    scenario: initialTask?.scenario ?? STANDARD_MANUAL_TEMPLATE.scenario,
+    repo_structure: initialTask?.repo_structure ?? STANDARD_MANUAL_TEMPLATE.repo_structure,
+    evaluation_rubric: initialTask?.evaluation_rubric ?? STANDARD_MANUAL_TEMPLATE.evaluation_rubric,
+    extra_data: initialTask?.extra_data ?? STANDARD_MANUAL_TEMPLATE.extra_data,
+    main_repo_path: initialTask?.main_repo_path ?? '',
+    template_repo_url: initialTask?.template_repo_url ?? '',
+    repo_file_count: initialTask?.repo_file_count ?? 0,
   });
-  const [aiPrompt, setAiPrompt] = useState('');
+  const [aiPrompt, setAiPrompt] = useState(STANDARD_AI_PROMPT_TEMPLATE);
   const [aiDifficulty, setAiDifficulty] = useState('');
   const [aiDuration, setAiDuration] = useState('');
   const [loading, setLoading] = useState(false);
@@ -161,21 +282,27 @@ const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly 
   useEffect(() => {
     if (initialTask) {
       setForm({
-        name: initialTask.name ?? '',
-        description: initialTask.description ?? '',
-        task_type: initialTask.task_type ?? 'debugging',
-        difficulty: initialTask.difficulty ?? 'mid',
-        duration_minutes: initialTask.duration_minutes ?? 30,
-        starter_code: initialTask.starter_code ?? '',
-        test_code: initialTask.test_code ?? '',
-        task_key: initialTask.task_key ?? '',
-        role: initialTask.role ?? '',
-        scenario: initialTask.scenario ?? '',
-        repo_structure: initialTask.repo_structure ?? null,
-        evaluation_rubric: initialTask.evaluation_rubric ?? null,
-        extra_data: initialTask.extra_data ?? null,
+        name: initialTask.name ?? STANDARD_MANUAL_TEMPLATE.name,
+        description: initialTask.description ?? STANDARD_MANUAL_TEMPLATE.description,
+        task_type: initialTask.task_type ?? STANDARD_MANUAL_TEMPLATE.task_type,
+        difficulty: initialTask.difficulty ?? STANDARD_MANUAL_TEMPLATE.difficulty,
+        duration_minutes: initialTask.duration_minutes ?? STANDARD_MANUAL_TEMPLATE.duration_minutes,
+        starter_code: initialTask.starter_code ?? STANDARD_MANUAL_TEMPLATE.starter_code,
+        test_code: initialTask.test_code ?? STANDARD_MANUAL_TEMPLATE.test_code,
+        task_key: initialTask.task_key ?? STANDARD_MANUAL_TEMPLATE.task_key,
+        role: initialTask.role ?? STANDARD_MANUAL_TEMPLATE.role,
+        scenario: initialTask.scenario ?? STANDARD_MANUAL_TEMPLATE.scenario,
+        repo_structure: initialTask.repo_structure ?? STANDARD_MANUAL_TEMPLATE.repo_structure,
+        evaluation_rubric: initialTask.evaluation_rubric ?? STANDARD_MANUAL_TEMPLATE.evaluation_rubric,
+        extra_data: initialTask.extra_data ?? STANDARD_MANUAL_TEMPLATE.extra_data,
+        main_repo_path: initialTask.main_repo_path ?? '',
+        template_repo_url: initialTask.template_repo_url ?? '',
+        repo_file_count: initialTask.repo_file_count ?? 0,
       });
       setStep('manual');
+    } else {
+      setStep('ai-prompt');
+      setAiPrompt(STANDARD_AI_PROMPT_TEMPLATE);
     }
   }, [initialTask]);
 
@@ -192,7 +319,15 @@ const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly 
         difficulty: aiDifficulty || undefined,
         duration_minutes: aiDuration ? parseInt(aiDuration) : undefined,
       });
-      setForm(res.data);
+      setForm((prev) => ({
+        ...prev,
+        ...STANDARD_MANUAL_TEMPLATE,
+        ...res.data,
+        extra_data: res.data?.extra_data || prev.extra_data || STANDARD_MANUAL_TEMPLATE.extra_data,
+        main_repo_path: '',
+        template_repo_url: '',
+        repo_file_count: 0,
+      }));
       setStep('ai-review');
     } catch (err) {
       setError(err.response?.data?.detail || 'Failed to generate task — try again');
@@ -209,6 +344,10 @@ const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly 
     }
     if (!form.starter_code) {
       setError('Starter code is required');
+      return;
+    }
+    if (!form.test_code) {
+      setError('Test suite is required');
       return;
     }
     setLoading(true);
@@ -228,9 +367,8 @@ const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly 
     }
   };
 
-  const modalTitle = viewOnly ? 'View Task' : isEdit ? 'Edit Task' : {
-    'choose': 'Create New Task',
-    'ai-prompt': 'Generate with AI',
+  const modalTitle = viewOnly ? 'Task Overview' : isEdit ? 'Edit Task' : {
+    'ai-prompt': 'Generate Task with AI',
     'ai-review': 'Review Generated Task',
     'manual': 'Create Task Manually',
   }[step];
@@ -241,10 +379,10 @@ const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly 
         {/* Header */}
         <div className="flex items-center justify-between px-8 py-5 border-b-2 border-black">
           <div className="flex items-center gap-3">
-            {!viewOnly && !isEdit && step !== 'choose' && (
+            {!viewOnly && !isEdit && step !== 'ai-prompt' && (
               <button
                 className="border-2 border-black p-1 hover:bg-black hover:text-white transition-colors"
-                onClick={() => setStep(step === 'ai-review' ? 'ai-prompt' : 'choose')}
+                onClick={() => setStep('ai-prompt')}
               >
                 <ArrowLeft size={16} />
               </button>
@@ -263,57 +401,17 @@ const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly 
             </div>
           )}
 
-          {/* Step: Choose Path (skip when editing) */}
-          {!isEdit && step === 'choose' && (
-            <div className="space-y-4">
-              <p className="font-mono text-sm text-gray-600 mb-6">How would you like to create your assessment task?</p>
-              <button
-                className="w-full border-2 border-black p-6 text-left hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-shadow group"
-                onClick={() => setStep('ai-prompt')}
-              >
-                <div className="flex items-start gap-4">
-                  <div
-                    className="w-12 h-12 border-2 border-black flex items-center justify-center shrink-0"
-                    style={{ backgroundColor: '#9D00FF' }}
-                  >
-                    <Bot size={24} className="text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-lg mb-1">Generate with AI</h3>
-                    <p className="font-mono text-sm text-gray-600">
-                      Describe what you want to assess in plain English. Claude will generate the full task including starter code, bugs, and test suite.
-                    </p>
-                    <p className="font-mono text-xs mt-2" style={{ color: '#9D00FF' }}>
-                      Recommended for quick setup
-                    </p>
-                  </div>
-                </div>
-              </button>
-              <button
-                className="w-full border-2 border-black p-6 text-left hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-shadow group"
-                onClick={() => setStep('manual')}
-              >
-                <div className="flex items-start gap-4">
-                  <div className="w-12 h-12 border-2 border-black flex items-center justify-center bg-black shrink-0">
-                    <FileText size={24} className="text-white" />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-lg mb-1">Create Manually</h3>
-                    <p className="font-mono text-sm text-gray-600">
-                      Write your own task from scratch. Full control over the description, starter code, test suite, and all parameters.
-                    </p>
-                    <p className="font-mono text-xs text-gray-400 mt-2">
-                      Best for specific, custom assessments
-                    </p>
-                  </div>
-                </div>
-              </button>
-            </div>
-          )}
-
           {/* Step: AI Prompt (create only) */}
           {!isEdit && step === 'ai-prompt' && (
             <div className="space-y-5">
+              <div className="border-2 border-black p-3 bg-purple-50">
+                <div className="font-mono text-xs font-bold" style={{ color: '#6b21a8' }}>
+                  GenAI-first creation is enabled
+                </div>
+                <div className="font-mono text-xs text-gray-600 mt-1">
+                  Use the standard prompt template below, then generate and review before saving.
+                </div>
+              </div>
               <div>
                 <label className="block font-mono text-sm mb-1 font-bold">What do you want to assess?</label>
                 <p className="font-mono text-xs text-gray-500 mb-2">Be specific about the role, skills, and what kind of challenge you want. The more detail, the better the task.</p>
@@ -324,6 +422,31 @@ const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly 
                   onChange={(e) => setAiPrompt(e.target.value)}
                   autoFocus
                 />
+                <div className="flex flex-wrap items-center gap-2 mt-2">
+                  <button
+                    type="button"
+                    className="border border-black px-3 py-1.5 font-mono text-xs hover:bg-black hover:text-white transition-colors"
+                    onClick={() => setAiPrompt(STANDARD_AI_PROMPT_TEMPLATE)}
+                  >
+                    Use Standard Prompt Template
+                  </button>
+                  <button
+                    type="button"
+                    className="border border-black px-3 py-1.5 font-mono text-xs hover:bg-black hover:text-white transition-colors"
+                    onClick={() => {
+                      setForm((prev) => ({
+                        ...prev,
+                        ...STANDARD_MANUAL_TEMPLATE,
+                        main_repo_path: '',
+                        template_repo_url: '',
+                        repo_file_count: 0,
+                      }));
+                      setStep('manual');
+                    }}
+                  >
+                    Switch to Manual Template
+                  </button>
+                </div>
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -419,6 +542,68 @@ const CreateTaskModal = ({ onClose, onCreated, initialTask, onUpdated, viewOnly 
               )}
               {viewOnly && (
                 <>
+                  <div className="grid md:grid-cols-3 gap-3">
+                    <div className="border-2 border-black p-3">
+                      <div className="font-mono text-xs text-gray-500 mb-1">Task Type</div>
+                      <div className="font-bold capitalize">{String(form.task_type || 'debugging').replace('_', ' ')}</div>
+                    </div>
+                    <div className="border-2 border-black p-3">
+                      <div className="font-mono text-xs text-gray-500 mb-1">Difficulty</div>
+                      <div className="font-bold capitalize">{form.difficulty || 'mid'}</div>
+                    </div>
+                    <div className="border-2 border-black p-3">
+                      <div className="font-mono text-xs text-gray-500 mb-1">Duration</div>
+                      <div className="font-bold">{form.duration_minutes || 30} minutes</div>
+                    </div>
+                  </div>
+                  <div className="border-2 border-black p-4">
+                    <div className="font-mono text-sm mb-2 font-bold">Suitable Roles</div>
+                    <div className="flex flex-wrap gap-2">
+                      {collectSuitableRoles(form).map((role) => (
+                        <span key={role} className="border border-gray-300 px-2 py-1 font-mono text-xs bg-gray-50 capitalize">
+                          {role}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="border-2 border-black p-4">
+                    <div className="font-mono text-sm mb-2 font-bold">What This Task Tests</div>
+                    <ul className="space-y-1">
+                      {collectWhatTaskTests(form).map((item) => (
+                        <li key={item} className="font-mono text-sm text-gray-700">- {item}</li>
+                      ))}
+                    </ul>
+                  </div>
+                  <div className="border-2 border-black p-4">
+                    <div className="font-mono text-sm mb-2 font-bold">Task Context</div>
+                    <p className="font-mono text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">
+                      {form.scenario || form.description || 'No scenario has been added.'}
+                    </p>
+                  </div>
+                  <div className="border-2 border-black p-4">
+                    <div className="font-mono text-sm mb-2 font-bold">Repository</div>
+                    <div className="space-y-2">
+                      <div className="font-mono text-xs text-gray-600">
+                        Template repo URL: <span className="text-black">{form.template_repo_url || 'Not available'}</span>
+                      </div>
+                      <div className="font-mono text-xs text-gray-600">
+                        Local repo path: <span className="text-black">{form.main_repo_path || 'Not available'}</span>
+                      </div>
+                      <div className="font-mono text-xs text-gray-600">
+                        Files in template: <span className="text-black">{form.repo_file_count || listRepoFiles(form).length || 0}</span>
+                      </div>
+                      {listRepoFiles(form).length > 0 && (
+                        <div>
+                          <div className="font-mono text-xs text-gray-500 mb-1">Repo files</div>
+                          <div className="flex flex-wrap gap-1">
+                            {listRepoFiles(form).slice(0, 12).map((path) => (
+                              <span key={path} className="px-2 py-1 border border-gray-300 bg-gray-50 font-mono text-xs">{path}</span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                   <div>
                     <div className="font-mono text-sm mb-2 font-bold">Task JSON Preview</div>
                     <p className="font-mono text-xs text-gray-500 mb-2">Aligned to the runtime task context schema (`task_id` maps to stored `task_key`).</p>
@@ -524,7 +709,17 @@ export const TasksPage = ({ onNavigate, NavComponent }) => {
                 <h3 className="font-bold text-lg mb-2">{task.name}</h3>
                 <p className="font-mono text-sm text-gray-600 mb-4 line-clamp-3">{task.description}</p>
                 <div className="flex items-center justify-between flex-wrap gap-2">
-                  <span className="font-mono text-xs px-2 py-1 border border-gray-300">{task.task_type?.replace('_', ' ')}</span>
+                  <div className="flex flex-wrap gap-1">
+                    <span className="font-mono text-xs px-2 py-1 border border-gray-300">{task.task_type?.replace('_', ' ')}</span>
+                    {task.role && (
+                      <span className="font-mono text-xs px-2 py-1 border border-gray-300 bg-gray-50">
+                        {String(task.role).replace(/_/g, ' ')}
+                      </span>
+                    )}
+                    {typeof task.repo_file_count === 'number' && (
+                      <span className="font-mono text-xs px-2 py-1 border border-gray-300 bg-gray-50">{task.repo_file_count} files</span>
+                    )}
+                  </div>
                   <div className="flex items-center gap-2">
                     <button
                       type="button"
@@ -604,4 +799,3 @@ export const TasksPage = ({ onNavigate, NavComponent }) => {
     </div>
   );
 };
-

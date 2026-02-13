@@ -3,6 +3,7 @@ import { AlertTriangle, CheckCircle, CreditCard, Loader2 } from 'lucide-react';
 
 import { useAuth } from '../context/AuthContext';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../lib/api';
+import { ASSESSMENT_PRICE_AED, formatAed } from '../lib/currency';
 
 export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableButton }) => {
   const { user } = useAuth();
@@ -83,8 +84,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   useEffect(() => {
     localStorage.setItem('tali_dark_mode', darkMode ? '1' : '0');
     document.documentElement.classList.toggle('dark', darkMode);
-    document.body.classList.toggle('bg-zinc-950', darkMode);
-    document.body.classList.toggle('text-white', darkMode);
   }, [darkMode]);
 
   useEffect(() => {
@@ -159,13 +158,24 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     ? new Date(orgData.workable_connected_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     : '—';
   const billingPlan = orgData?.plan || 'Pay-Per-Use';
-  const costPerAssessment = 25;
+  const costPerAssessment = ASSESSMENT_PRICE_AED;
   const usageHistory = billingUsage?.usage ?? [];
   const monthlyAssessments = usageHistory.length;
-  const monthlyCost = billingUsage?.total_cost ?? 0;
+  const monthlyCost = Number(billingUsage?.total_cost ?? 0);
   const thresholdConfig = billingCosts?.thresholds || {};
   const thresholdStatus = billingCosts?.threshold_status || {};
   const spendSummary = billingCosts?.summary || {};
+  const toAedLabel = (rawValue, fallbackAmount = null) => {
+    if (typeof rawValue === 'string') {
+      const trimmed = rawValue.trim();
+      if (trimmed.toUpperCase().startsWith('AED')) return trimmed;
+      const numeric = Number(trimmed.replace(/[^\d.-]/g, ''));
+      if (!Number.isNaN(numeric)) return formatAed(numeric);
+    }
+    if (typeof rawValue === 'number') return formatAed(rawValue);
+    if (fallbackAmount != null) return formatAed(fallbackAmount);
+    return formatAed(0);
+  };
 
   return (
     <div>
@@ -255,11 +265,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <div>
                       <div className="font-mono text-xs text-gray-500 mb-1">Current Plan</div>
                       <div className="text-2xl font-bold">{billingPlan}</div>
-                      <div className="font-mono text-sm text-gray-600 mt-1">£{costPerAssessment} per assessment</div>
+                      <div className="font-mono text-sm text-gray-600 mt-1">{formatAed(costPerAssessment)} per assessment</div>
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-xs text-gray-500 mb-1">Total usage</div>
-                      <div className="text-3xl font-bold" style={{ color: '#9D00FF' }}>£{monthlyCost}</div>
+                      <div className="text-3xl font-bold" style={{ color: '#9D00FF' }}>{formatAed(monthlyCost)}</div>
                       <div className="font-mono text-xs text-gray-500">{monthlyAssessments} assessments</div>
                     </div>
                     <button
@@ -269,7 +279,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       className="flex items-center gap-2 px-6 py-3 font-mono text-sm font-bold border-2 border-black bg-black text-white hover:bg-gray-800 disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       {checkoutLoading ? <Loader2 size={18} className="animate-spin" /> : <CreditCard size={18} />}
-                      {checkoutLoading ? 'Redirecting…' : 'Add credits (£25)'}
+                      {checkoutLoading ? 'Redirecting…' : `Add credits (${formatAed(costPerAssessment)})`}
                     </button>
                   </div>
                 </div>
@@ -277,16 +287,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <div className="grid md:grid-cols-2 gap-4 mb-8">
                   <div className="border-2 border-black p-4 bg-white">
                     <div className="font-mono text-xs text-gray-500 mb-1">Daily spend threshold</div>
-                    <div className="text-2xl font-bold">${thresholdConfig.daily_spend_usd ?? 0}</div>
+                    <div className="text-2xl font-bold">{formatAed(thresholdConfig.daily_spend_usd ?? 0, { maximumFractionDigits: 2 })}</div>
                     <div className={`font-mono text-xs mt-2 ${thresholdStatus.daily_spend_exceeded ? 'text-red-700' : 'text-green-700'}`}>
-                      Today: ${Number(spendSummary.daily_spend_usd || 0).toFixed(2)} • {thresholdStatus.daily_spend_exceeded ? 'Exceeded' : 'Within threshold'}
+                      Today: {formatAed(Number(spendSummary.daily_spend_usd || 0), { maximumFractionDigits: 2 })} • {thresholdStatus.daily_spend_exceeded ? 'Exceeded' : 'Within threshold'}
                     </div>
                   </div>
                   <div className="border-2 border-black p-4 bg-white">
                     <div className="font-mono text-xs text-gray-500 mb-1">Cost / completed assessment threshold</div>
-                    <div className="text-2xl font-bold">${thresholdConfig.cost_per_completed_assessment_usd ?? 0}</div>
+                    <div className="text-2xl font-bold">{formatAed(thresholdConfig.cost_per_completed_assessment_usd ?? 0, { maximumFractionDigits: 2 })}</div>
                     <div className={`font-mono text-xs mt-2 ${thresholdStatus.cost_per_completed_assessment_exceeded ? 'text-red-700' : 'text-green-700'}`}>
-                      Current: ${Number(spendSummary.cost_per_completed_assessment_usd || 0).toFixed(2)} • {thresholdStatus.cost_per_completed_assessment_exceeded ? 'Exceeded' : 'Within threshold'}
+                      Current: {formatAed(Number(spendSummary.cost_per_completed_assessment_usd || 0), { maximumFractionDigits: 2 })} • {thresholdStatus.cost_per_completed_assessment_exceeded ? 'Exceeded' : 'Within threshold'}
                     </div>
                   </div>
                 </div>
@@ -317,7 +327,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                             <td className="px-6 py-3 font-mono text-sm">{row.date}</td>
                             <td className="px-6 py-3 text-sm">{row.candidate}</td>
                             <td className="px-6 py-3 font-mono text-sm">{row.task}</td>
-                            <td className="px-6 py-3 font-mono text-sm text-right font-bold">{row.cost || `£${costPerAssessment}`}</td>
+                            <td className="px-6 py-3 font-mono text-sm text-right font-bold">{toAedLabel(row.cost, costPerAssessment)}</td>
                           </tr>
                         ))
                       )}

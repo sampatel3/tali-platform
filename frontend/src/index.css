@@ -14,8 +14,76 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  background-color: #ffffff;
+  color: #111827;
+  transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 code {
   font-family: 'JetBrains Mono', 'Roboto Mono', 'Courier New', monospace;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+.dark body {
+  background-color: #0f172a;
+  color: #f8fafc;
+}
+
+.dark .bg-white {
+  background-color: #111827 !important;
+}
+
+.dark .bg-gray-50 {
+  background-color: #1f2937 !important;
+}
+
+.dark .bg-gray-100 {
+  background-color: #273449 !important;
+}
+
+.dark .bg-black {
+  background-color: #020617 !important;
+}
+
+.dark .text-black {
+  color: #f8fafc !important;
+}
+
+.dark .text-gray-400 {
+  color: #cbd5e1 !important;
+}
+
+.dark .text-gray-500 {
+  color: #cbd5e1 !important;
+}
+
+.dark .text-gray-600 {
+  color: #e2e8f0 !important;
+}
+
+.dark .text-gray-700 {
+  color: #f1f5f9 !important;
+}
+
+.dark .border-black {
+  border-color: #475569 !important;
+}
+
+.dark .border-gray-200 {
+  border-color: #334155 !important;
+}
+
+.dark .border-gray-300 {
+  border-color: #475569 !important;
+}
+
+.dark .hover\:bg-black:hover {
+  background-color: #334155 !important;
+}
+
+.dark .hover\:text-white:hover {
+  color: #f8fafc !important;
 }

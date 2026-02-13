@@ -231,7 +231,7 @@ describe('TasksPage', () => {
     });
   });
 
-  it('New Task button opens create modal with choose step', async () => {
+  it('New Task button opens create modal with GenAI prompt step', async () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
@@ -241,10 +241,9 @@ describe('TasksPage', () => {
     fireEvent.click(screen.getByText('New Task'));
 
     await waitFor(() => {
-      // The CreateTaskModal should render with the "choose" step first
-      expect(screen.getByText('Create New Task')).toBeInTheDocument();
-      expect(screen.getByText('Generate with AI')).toBeInTheDocument();
-      expect(screen.getByText('Create Manually')).toBeInTheDocument();
+      expect(screen.getByText('Generate Task with AI')).toBeInTheDocument();
+      expect(screen.getByText('GenAI-first creation is enabled')).toBeInTheDocument();
+      expect(screen.getByText('Use Standard Prompt Template')).toBeInTheDocument();
     });
   });
 

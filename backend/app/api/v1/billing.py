@@ -24,6 +24,10 @@ class CheckoutSessionCreate(BaseModel):
 def _safe_json_size_bytes(payload) -> int:
     if payload is None:
         return 0
+
+
+def _assessment_currency_code() -> str:
+    return (settings.ASSESSMENT_PRICE_CURRENCY or "aed").upper()
     try:
         return len(json.dumps(payload, default=str).encode("utf-8"))
     except Exception:
@@ -113,7 +117,8 @@ def get_usage(
         .limit(100)
         .all()
     )
-    cost_per = 25
+    cost_per = int(settings.ASSESSMENT_PRICE_MAJOR or 25)
+    currency_code = _assessment_currency_code()
     usage = []
     for a in assessments:
         completed_at = a.completed_at
@@ -124,7 +129,7 @@ def get_usage(
             "date": date_str,
             "candidate": candidate_name,
             "task": task_name,
-            "cost": f"£{cost_per}",
+            "cost": f"{currency_code} {cost_per}",
             "assessment_id": a.id,
         })
     return {"usage": usage, "total_cost": len(usage) * cost_per}
@@ -228,7 +233,7 @@ def create_checkout_session(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Create a Stripe Checkout Session for one assessment (£25). Returns URL to redirect the user."""
+    """Create a Stripe Checkout Session for one assessment in configured currency."""
     if settings.MVP_DISABLE_STRIPE:
         raise HTTPException(status_code=503, detail="Billing is disabled for MVP pilot")
     import stripe
@@ -261,9 +266,9 @@ def create_checkout_session(
             payment_method_types=["card"],
             line_items=[{
                 "price_data": {
-                    "currency": "gbp",
+                    "currency": (settings.ASSESSMENT_PRICE_CURRENCY or "aed").lower(),
                     "product_data": {"name": "TALI Assessment", "description": "One technical assessment"},
-                    "unit_amount": 2500,
+                    "unit_amount": int(settings.ASSESSMENT_PRICE_MINOR or 2500),
                 },
                 "quantity": 1,
             }],

@@ -78,5 +78,8 @@ class TaskResponse(BaseModel):
     repo_structure: Optional[Dict[str, Any]] = None
     evaluation_rubric: Optional[Dict[str, Any]] = None
     extra_data: Optional[Dict[str, Any]] = None
+    main_repo_path: Optional[str] = None
+    template_repo_url: Optional[str] = None
+    repo_file_count: int = 0
 
     model_config = {"from_attributes": True}

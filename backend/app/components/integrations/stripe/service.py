@@ -9,6 +9,8 @@ import logging
 
 import stripe
 
+from ....platform.config import settings
+
 logger = logging.getLogger(__name__)
 
 
@@ -66,27 +68,30 @@ class StripeService:
                 "customer_id": "",
             }
 
-    def charge_assessment(self, customer_id: str, amount: int = 2500) -> dict:
+    def charge_assessment(self, customer_id: str, amount: int | None = None) -> dict:
         """
         Create a PaymentIntent to charge for a single assessment.
 
         Args:
             customer_id: Stripe customer ID.
-            amount: Charge amount in pence (default 2500 = £25.00).
+            amount: Charge amount in minor units (default from settings).
 
         Returns:
             Dict with keys: success, payment_intent_id.
         """
         try:
+            amount_minor = int(amount if amount is not None else (settings.ASSESSMENT_PRICE_MINOR or 2500))
+            currency_code = (settings.ASSESSMENT_PRICE_CURRENCY or "aed").lower()
             logger.info(
-                "Creating assessment charge (customer_id=%s, amount=%d pence)",
+                "Creating assessment charge (customer_id=%s, amount=%d %s-minor-units)",
                 customer_id,
-                amount,
+                amount_minor,
+                currency_code,
             )
 
             payment_intent = stripe.PaymentIntent.create(
-                amount=amount,
-                currency="gbp",
+                amount=amount_minor,
+                currency=currency_code,
                 customer=customer_id,
                 description="TALI Assessment Fee",
                 metadata={"type": "assessment"},
@@ -123,7 +128,7 @@ class StripeService:
 
         Args:
             customer_id: Stripe customer ID.
-            price_id: Stripe Price ID for the plan (default: monthly £300 plan).
+            price_id: Stripe Price ID for the plan (default: monthly plan).
 
         Returns:
             Dict with keys: success, subscription_id.

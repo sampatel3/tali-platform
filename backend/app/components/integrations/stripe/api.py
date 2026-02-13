@@ -152,9 +152,9 @@ def create_checkout_session(
             payment_method_types=["card"],
             line_items=[{
                 "price_data": {
-                    "currency": "gbp",
+                    "currency": (settings.ASSESSMENT_PRICE_CURRENCY or "aed").lower(),
                     "product_data": {"name": "TALI Assessment", "description": "One technical assessment"},
-                    "unit_amount": 2500,
+                    "unit_amount": int(settings.ASSESSMENT_PRICE_MINOR or 2500),
                 },
                 "quantity": 1,
             }],

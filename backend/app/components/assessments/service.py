@@ -501,6 +501,7 @@ def submit_assessment(
                 cv_text=candidate.cv_text,
                 job_spec_text=candidate.job_spec_text,
                 api_key=settings.ANTHROPIC_API_KEY,
+                model=settings.resolved_claude_model,
             )
         elif candidate and (not candidate.cv_text or not candidate.job_spec_text):
             scoring_errors.append({"component": "cv_job_match", "error": "Missing CV or job spec text — fit scoring skipped"})

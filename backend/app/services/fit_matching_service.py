@@ -9,7 +9,9 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Dict
+from typing import Any, Dict, Optional
+
+from ..platform.config import settings
 
 logger = logging.getLogger("tali.fit_matching")
 
@@ -42,7 +44,7 @@ async def calculate_cv_job_match(
     cv_text: str,
     job_spec_text: str,
     api_key: str,
-    model: str = "claude-3-5-haiku-latest",
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Analyse CV-to-job-spec fit with a single Claude call.
 
@@ -50,7 +52,7 @@ async def calculate_cv_job_match(
         cv_text: Extracted text from the candidate's CV.
         job_spec_text: Extracted text from the job specification.
         api_key: Anthropic API key.
-        model: Claude model to use (Haiku for cost efficiency).
+        model: Optional Claude model override. Uses env-resolved default when unset.
 
     Returns:
         Dict with overall_match_score, skills_match_score,
@@ -78,15 +80,17 @@ async def calculate_cv_job_match(
             job_spec_text=js_truncated,
         )
 
+        resolved_model = model or settings.resolved_claude_model
+
         logger.info(
             "Running CV-job match analysis (cv_chars=%d, js_chars=%d, model=%s)",
             len(cv_truncated),
             len(js_truncated),
-            model,
+            resolved_model,
         )
 
         response = client.messages.create(
-            model=model,
+            model=resolved_model,
             max_tokens=1024,
             system="You are an expert recruiter. Respond ONLY with valid JSON.",
             messages=[{"role": "user", "content": prompt}],
@@ -148,7 +152,7 @@ def calculate_cv_job_match_sync(
     cv_text: str,
     job_spec_text: str,
     api_key: str,
-    model: str = "claude-3-5-haiku-latest",
+    model: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Synchronous wrapper for calculate_cv_job_match."""
     import asyncio

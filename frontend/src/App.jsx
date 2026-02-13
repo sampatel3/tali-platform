@@ -45,6 +45,7 @@ import { CandidatesPage } from './pages/CandidatesPage';
 import { BRAND } from './config/brand';
 import { TasksPage } from './pages/TasksPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { ASSESSMENT_PRICE_AED, formatAed } from './lib/currency';
 
 // ============================================================
 // DATA
@@ -284,8 +285,8 @@ const ProblemSection = () => (
           <DollarSign size={32} className="mb-4" />
           <h3 className="text-xl font-bold mb-4">Expensive</h3>
           <ul className="space-y-3">
-            <li className="font-mono text-sm text-gray-700">Senior engineers @ £100/hour doing manual screening</li>
-            <li className="font-mono text-sm text-gray-700">HackerRank/Codility: £20–50 per assessment</li>
+            <li className="font-mono text-sm text-gray-700">Senior engineers @ AED 450/hour doing manual screening</li>
+            <li className="font-mono text-sm text-gray-700">HackerRank/Codility: AED 90–225 per assessment</li>
           </ul>
         </div>
       </div>
@@ -334,7 +335,7 @@ const PricingSection = ({ onNavigate }) => (
             RECOMMENDED
           </div>
           <h3 className="text-2xl font-bold mt-4 mb-2">Pay-Per-Use</h3>
-          <div className="text-5xl font-bold mb-1">£25</div>
+          <div className="text-5xl font-bold mb-1">{formatAed(ASSESSMENT_PRICE_AED)}</div>
           <div className="font-mono text-sm text-gray-500 mb-6">per assessment</div>
           <ul className="space-y-3 mb-8">
             {['Full AI-augmented environment', 'Claude integration', 'Automated scoring', 'Candidate reports', 'Workable sync', 'Email support'].map((f) => (
@@ -354,7 +355,7 @@ const PricingSection = ({ onNavigate }) => (
         {/* Monthly */}
         <div className="border-2 border-black bg-white p-8">
           <h3 className="text-2xl font-bold mt-4 mb-2">Monthly</h3>
-          <div className="text-5xl font-bold mb-1">£300</div>
+          <div className="text-5xl font-bold mb-1">{formatAed(300)}</div>
           <div className="font-mono text-sm text-gray-500 mb-6">per month</div>
           <ul className="space-y-3 mb-8">
             {['Everything in Pay-Per-Use', 'Unlimited assessments', 'Custom tasks', 'Priority support', 'Analytics dashboard', 'Team management'].map((f) => (
@@ -1750,6 +1751,18 @@ function App() {
 
     const pathname = window.location.pathname || '/';
     const searchParams = new URLSearchParams(window.location.search || '');
+    const staticRoutes = {
+      '/': 'landing',
+      '/login': 'login',
+      '/register': 'register',
+      '/forgot-password': 'forgot-password',
+      '/dashboard': 'dashboard',
+      '/candidates': 'candidates',
+      '/candidate-detail': 'candidate-detail',
+      '/tasks': 'tasks',
+      '/analytics': 'analytics',
+      '/settings': 'settings',
+    };
 
     if (pathname === '/settings/workable/callback') {
       return {
@@ -1884,18 +1897,6 @@ function App() {
       };
     }
 
-    const staticRoutes = {
-      '/': 'landing',
-      '/login': 'login',
-      '/register': 'register',
-      '/forgot-password': 'forgot-password',
-      '/dashboard': 'dashboard',
-      '/candidates': 'candidates',
-      '/candidate-detail': 'candidate-detail',
-      '/tasks': 'tasks',
-      '/analytics': 'analytics',
-      '/settings': 'settings',
-    };
     if (staticRoutes[pathname]) {
       return {
         currentPage: staticRoutes[pathname],
@@ -2069,6 +2070,7 @@ function App() {
           onNavigate={navigateToPage}
           onViewCandidate={navigateToCandidate}
           NavComponent={DashboardNav}
+          NewAssessmentModalComponent={NewAssessmentModal}
         />
       )}
       {currentPage === 'candidate-detail' && (

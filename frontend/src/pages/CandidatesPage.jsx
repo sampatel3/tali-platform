@@ -3,6 +3,7 @@ import { Search } from 'lucide-react';
 import { assessments as assessmentsApi, candidates as candidatesApi } from '../lib/api';
 
 export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewAssessmentModalComponent }) => {
+  const AssessmentModal = NewAssessmentModalComponent;
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
@@ -410,8 +411,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
         </div>
       </div>
 
-      {sendAssessmentCandidate && (
-        <NewAssessmentModalComponent
+      {sendAssessmentCandidate && AssessmentModal ? (
+        <AssessmentModal
           candidate={sendAssessmentCandidate}
           onClose={() => setSendAssessmentCandidate(null)}
           onCreated={() => {
@@ -419,7 +420,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
             loadCandidates();
           }}
         />
-      )}
+      ) : null}
     </div>
   );
 };

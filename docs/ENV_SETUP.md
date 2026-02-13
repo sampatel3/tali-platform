@@ -55,11 +55,17 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 |----------|----------|---------|-------------|
 | `DEPLOYMENT_ENV` | No | `development` | Deployment environment (`development`, `staging`, `production`). |
 | `CLAUDE_MODEL` | No | `None` | Explicit model override for all environments. |
-| `CLAUDE_MODEL_NON_PROD` | No | `claude-3-haiku-20240307` | Default model used for test/staging/dev (cheapest tier). |
+| `CLAUDE_MODEL_NON_PROD` | No | `claude-3-5-haiku-latest` | Default model used for test/staging/dev (cheapest tier). |
 | `CLAUDE_MODEL_PRODUCTION` | No | `claude-3-5-sonnet-20241022` | Default production model when `DEPLOYMENT_ENV=production`. |
 | `MAX_TOKENS_PER_RESPONSE` | No | `1024` | Maximum tokens returned per Claude response. |
 
 Model resolution precedence: `CLAUDE_MODEL` (if set) → environment default (`CLAUDE_MODEL_PRODUCTION` for production, otherwise `CLAUDE_MODEL_NON_PROD`).
+
+For low-cost local testing, set:
+
+```bash
+CLAUDE_MODEL=claude-3-5-haiku-latest
+```
 
 ### Cost Observability Controls (Phase P6)
 
@@ -162,4 +168,3 @@ These are compile-time variables injected by Vite. They must be prefixed with `V
 - `VITE_STRIPE_PUBLISHABLE_KEY`: [Stripe Dashboard](https://dashboard.stripe.com) → Developers → API keys → Publishable key
 
 **Important (Vercel):** When setting `VITE_API_URL` in the Vercel dashboard, ensure there is **no trailing newline or space**. A literal `\n` at the end can break API requests. The frontend `api.js` strips whitespace defensively, but fix the value at the source.
-

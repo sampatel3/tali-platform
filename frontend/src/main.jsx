@@ -7,6 +7,11 @@ import { getDocumentTitle } from './config/brand'
 
 document.title = getDocumentTitle();
 
+const darkModeEnabled = typeof window !== 'undefined' && localStorage.getItem('tali_dark_mode') === '1';
+if (darkModeEnabled) {
+  document.documentElement.classList.add('dark');
+}
+
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
     <AuthProvider>

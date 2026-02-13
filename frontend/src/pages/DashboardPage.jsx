@@ -4,6 +4,7 @@ import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, Responsi
 import { useAuth } from '../context/AuthContext';
 import { assessments as assessmentsApi, tasks as tasksApi } from '../lib/api';
 import { COMPARISON_CATEGORY_CONFIG, getCategoryScoresFromAssessment } from '../lib/comparisonCategories';
+import { ASSESSMENT_PRICE_AED, formatAed } from '../lib/currency';
 
 const PAGE_SIZE = 10;
 const MAX_COMPARE = 5;
@@ -94,7 +95,7 @@ export const DashboardPage = ({
   const completionRate = totalAssessments > 0 ? ((completedCount / totalAssessments) * 100).toFixed(1) : '0';
   const scores = displayCandidates.filter((c) => c.score !== null).map((c) => c.score);
   const avgScore = scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : '—';
-  const monthCost = `£${completedCount * 25}`;
+  const monthCost = formatAed(completedCount * ASSESSMENT_PRICE_AED);
   const notifications = displayCandidates
     .filter((c) => c.status === 'completed')
     .slice(0, 5)

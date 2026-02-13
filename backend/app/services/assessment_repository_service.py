@@ -67,9 +67,15 @@ class AssessmentRepositoryService:
         files = self._repo_files(task)
         if self.mock_mode:
             self._ensure_mock_repo(repo_name, files)
-            return f"mock://{self.github_org}/{repo_name}"
+            return self.get_template_repo_url(task)
         # Production: implement GitHub API (create repo, push files to main).
         # Requires GITHUB_TOKEN with repo scope. Return public clone URL.
+        return self.get_template_repo_url(task)
+
+    def get_template_repo_url(self, task: Any) -> str:
+        repo_name = self._repo_name(task)
+        if self.mock_mode:
+            return f"mock://{self.github_org}/{repo_name}"
         return f"https://github.com/{self.github_org}/{repo_name}.git"
 
     def create_assessment_branch(self, task: Any, assessment_id: int) -> BranchContext:

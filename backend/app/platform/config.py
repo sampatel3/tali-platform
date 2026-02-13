@@ -24,7 +24,7 @@ class Settings(BaseSettings):
     # Model overrides (AGENT E / Phase P6)
     # Precedence: CLAUDE_MODEL (explicit) > env-derived default below
     CLAUDE_MODEL: Optional[str] = None
-    CLAUDE_MODEL_NON_PROD: str = "claude-3-haiku-20240307"
+    CLAUDE_MODEL_NON_PROD: str = "claude-3-5-haiku-latest"
     CLAUDE_MODEL_PRODUCTION: str = "claude-3-5-sonnet-20241022"
     MAX_TOKENS_PER_RESPONSE: int = 1024
 
@@ -90,6 +90,10 @@ class Settings(BaseSettings):
     SENTRY_DSN: Optional[str] = None
 
     # Assessment Configuration
+    ASSESSMENT_PRICE_CURRENCY: str = "aed"
+    ASSESSMENT_PRICE_MAJOR: int = 25
+    ASSESSMENT_PRICE_MINOR: int = 2500
+    # Backward-compatible alias; retained for existing deployments/tests.
     ASSESSMENT_PRICE_PENCE: int = 2500
     ASSESSMENT_EXPIRY_DAYS: int = 7
     EMAIL_FROM: str = brand_email_from()
