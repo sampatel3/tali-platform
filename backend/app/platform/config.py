@@ -48,6 +48,15 @@ class Settings(BaseSettings):
             return self.CLAUDE_MODEL_PRODUCTION
         return self.CLAUDE_MODEL_NON_PROD
 
+
+    # GitHub assessment repository integration
+    GITHUB_TOKEN: str = ""
+    GITHUB_ORG: str = "tali-assessments"
+    GITHUB_MOCK_MODE: bool = True
+
+    # V2 AI-assisted evaluator (suggestions only)
+    AI_ASSISTED_EVAL_ENABLED: bool = False
+
     # Workable
     WORKABLE_CLIENT_ID: str = ""
     WORKABLE_CLIENT_SECRET: str = ""
