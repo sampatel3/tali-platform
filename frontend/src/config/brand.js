@@ -1,7 +1,7 @@
 export const BRAND = {
   name: 'TAALI',
   domain: 'taali.ai',
-  productTagline: 'Arabic-inspired, tally-precise technical assessments for modern engineering teams.',
+  productTagline: 'Technical assessments for AI-native engineering teams.',
   appTitle: 'AI Technical Assessments That Tally Real Skill',
 };
 

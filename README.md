@@ -1,7 +1,6 @@
 # TAALI Platform
 
 **AI-augmented technical assessment** for screening engineers who work *with* AI tools. Candidates code in-browser (Monaco + Claude chat), run code in E2B sandboxes, and recruiters get scores, timelines, and optional ATS (Workable) and billing (Stripe) integration.
-TAALI blends Arabic-inspired clarity with the English idea of a tally: measuring what truly counts in modern engineering work.
 
 ---
 

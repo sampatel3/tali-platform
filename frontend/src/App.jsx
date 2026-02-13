@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import {
-  Code,
   Clock,
   BarChart3,
   DollarSign,
@@ -63,11 +62,26 @@ const weeklyData = [
 // SHARED COMPONENTS
 // ============================================================
 
+const BrandGlyph = ({ borderClass = 'border-black', sizeClass = 'w-10 h-10', markSizeClass = 'w-6 h-6' }) => (
+  <div
+    className={`${sizeClass} border-2 ${borderClass} flex items-center justify-center`}
+    style={{ backgroundColor: '#0B3B3C' }}
+    aria-hidden="true"
+  >
+    <svg viewBox="0 0 24 24" className={markSizeClass} fill="none">
+      <path
+        d="M4 5v14M8 5v14M12 5v14M16 5v14M2.5 17.5L18.5 6.5"
+        stroke="#F8E16C"
+        strokeWidth="2.1"
+        strokeLinecap="round"
+      />
+    </svg>
+  </div>
+);
+
 const Logo = ({ onClick }) => (
   <div className="flex items-center gap-2 cursor-pointer" onClick={onClick}>
-    <div className="w-10 h-10 border-2 border-black flex items-center justify-center" style={{ backgroundColor: '#9D00FF' }}>
-      <Code size={20} className="text-white" />
-    </div>
+    <BrandGlyph />
     <span className="text-xl font-bold tracking-tight">{BRAND.name}</span>
   </div>
 );
@@ -179,16 +193,13 @@ const HeroSection = ({ onNavigate }) => (
           className="inline-block px-4 py-2 text-xs font-mono font-bold text-white border-2 border-black mb-8"
           style={{ backgroundColor: '#9D00FF' }}
         >
-          POWERED BY E2B &bull; CLAUDE &bull; WORKABLE
+          BUILT FOR AI-NATIVE ENGINEERING TEAMS
         </div>
         <h1 className="text-5xl lg:text-6xl font-bold leading-tight mb-6">
-          Stop Screening for Yesterday&apos;s Skills
+          Assess Real Engineering Work
         </h1>
         <p className="text-xl lg:text-2xl font-mono text-gray-700 mb-8 leading-relaxed">
-          Test how engineers actually work—with AI tools like Cursor and Claude—not outdated algorithm puzzles.
-        </p>
-        <p className="font-mono text-sm text-gray-500 mb-8">
-          TAALI is inspired by Arabic clarity and English tally precision: evaluate what truly counts.
+          Give candidates a real coding environment with agents like Claude Code and Codex, then score how they debug, reason, and ship.
         </p>
         <div className="flex flex-wrap gap-4">
           <button
@@ -211,7 +222,7 @@ const HeroSection = ({ onNavigate }) => (
         <div className="border-2 border-black bg-gray-100 p-4">
           <div className="flex items-center gap-2 mb-3">
             <XCircle size={18} className="text-red-500" />
-            <span className="font-mono text-xs font-bold text-gray-500">OLD WAY</span>
+            <span className="font-mono text-xs font-bold text-gray-500">LEGACY TEST</span>
           </div>
           <pre className="font-mono text-xs text-gray-600 leading-relaxed">
 {`function reverseList(head) {
@@ -230,30 +241,30 @@ const HeroSection = ({ onNavigate }) => (
         <div className="border-2 border-black bg-black p-4">
           <div className="flex items-center gap-2 mb-3">
             <CheckCircle size={18} style={{ color: '#9D00FF' }} />
-            <span className="font-mono text-xs font-bold" style={{ color: '#9D00FF' }}>{BRAND.name} WAY</span>
+            <span className="font-mono text-xs font-bold" style={{ color: '#9D00FF' }}>{BRAND.name} FLOW</span>
           </div>
           <pre className="font-mono text-xs leading-relaxed" style={{ color: '#9D00FF' }}>
-{`> Fix the delimiter bug
-  in the CSV parser
+{`> Ask Codex for a
+  test scaffold
 
-> How should I handle
-  empty rows?
+> Use Claude Code to
+  trace the parser
 
-> Write a test for
-  parse_row()`}
+> Ship fix with
+  green tests`}
           </pre>
         </div>
         <div className="border-2 border-black bg-gray-100 p-4">
           <div className="font-mono text-xs text-gray-500 mb-2">TESTS FOR:</div>
-          <div className="font-mono text-sm text-gray-700">Memorized algorithms</div>
-          <div className="font-mono text-sm text-gray-700">Whiteboard tricks</div>
-          <div className="font-mono text-sm text-red-500 mt-2 font-bold">NOT real work</div>
+          <div className="font-mono text-sm text-gray-700">Algorithm recall</div>
+          <div className="font-mono text-sm text-gray-700">Interview theatrics</div>
+          <div className="font-mono text-sm text-red-500 mt-2 font-bold">NOT delivery quality</div>
         </div>
         <div className="border-2 border-black bg-black p-4">
           <div className="font-mono text-xs mb-2" style={{ color: '#9D00FF' }}>TESTS FOR:</div>
-          <div className="font-mono text-sm text-white">AI collaboration</div>
-          <div className="font-mono text-sm text-white">Real debugging</div>
-          <div className="font-mono text-sm font-bold mt-2" style={{ color: '#9D00FF' }}>ACTUAL work</div>
+          <div className="font-mono text-sm text-white">Agent collaboration</div>
+          <div className="font-mono text-sm text-white">Debugging in context</div>
+          <div className="font-mono text-sm font-bold mt-2" style={{ color: '#9D00FF' }}>ACTUAL execution</div>
         </div>
       </div>
     </div>
@@ -263,33 +274,33 @@ const HeroSection = ({ onNavigate }) => (
 const ProblemSection = () => (
   <section id="problem" className="border-b-2 border-black bg-white">
     <div className="max-w-7xl mx-auto px-6 py-20">
-      <h2 className="text-4xl font-bold text-center mb-4">The Problem</h2>
+      <h2 className="text-4xl font-bold text-center mb-4">Why Traditional Screening Fails</h2>
       <p className="text-center font-mono text-gray-600 mb-12 max-w-2xl mx-auto">
-        Current technical screening is broken. Here&apos;s why.
+        Most interview loops reward memorization under pressure. Hiring teams need evidence of real execution with modern tooling.
       </p>
       <div className="grid md:grid-cols-3 gap-6">
         <div className="border-2 border-black bg-white p-8 hover:shadow-lg transition-shadow">
           <Clock size={32} className="mb-4" />
           <h3 className="text-xl font-bold mb-4">Wastes Time</h3>
           <ul className="space-y-3">
-            <li className="font-mono text-sm text-gray-700">3-hour technical rounds for each candidate</li>
-            <li className="font-mono text-sm text-gray-700">Engineering time pulled from shipping features</li>
+            <li className="font-mono text-sm text-gray-700">Senior engineers spend hours in repetitive interview loops</li>
+            <li className="font-mono text-sm text-gray-700">Hiring velocity drops when interviews steal delivery time</li>
           </ul>
         </div>
         <div className="border-2 border-black bg-white p-8 hover:shadow-lg transition-shadow">
           <BarChart3 size={32} className="mb-4" />
           <h3 className="text-xl font-bold mb-4">Tests Wrong Skills</h3>
           <ul className="space-y-3">
-            <li className="font-mono text-sm text-gray-700">Algorithm puzzles ≠ Real engineering work</li>
-            <li className="font-mono text-sm text-gray-700">Engineers use AI tools daily—your tests don&apos;t</li>
+            <li className="font-mono text-sm text-gray-700">Puzzle questions rarely map to day-to-day engineering work</li>
+            <li className="font-mono text-sm text-gray-700">Candidates use coding agents daily, but interviews ignore that reality</li>
           </ul>
         </div>
         <div className="border-2 border-black bg-white p-8 hover:shadow-lg transition-shadow">
           <DollarSign size={32} className="mb-4" />
           <h3 className="text-xl font-bold mb-4">Expensive</h3>
           <ul className="space-y-3">
-            <li className="font-mono text-sm text-gray-700">Senior engineers @ AED 450/hour doing manual screening</li>
-            <li className="font-mono text-sm text-gray-700">HackerRank/Codility: AED 90–225 per assessment</li>
+            <li className="font-mono text-sm text-gray-700">Manual screening burns senior engineering budget</li>
+            <li className="font-mono text-sm text-gray-700">Legacy platforms add per-test costs without richer signal</li>
           </ul>
         </div>
       </div>
@@ -300,18 +311,18 @@ const ProblemSection = () => (
 const WhatWeTestSection = () => (
   <section id="what-we-test" className="border-b-2 border-black bg-white">
     <div className="max-w-7xl mx-auto px-6 py-20">
-      <h2 className="text-4xl font-bold text-center mb-4">What we test (30+ signals)</h2>
+      <h2 className="text-4xl font-bold text-center mb-4">What {BRAND.name} Measures</h2>
       <p className="text-center font-mono text-gray-600 mb-12 max-w-3xl mx-auto">
-        {BRAND.name} evaluates how candidates think and deliver in realistic, AI-assisted workflows—not just whether they can recite syntax.
+        A practical scorecard across 30+ signals from real coding sessions, including how candidates work with coding agents.
       </p>
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
         {[
-          ['Prompt clarity', 'Do they ask precise, context-rich questions that move work forward?'],
-          ['Debugging behavior', 'Can they isolate root causes, run targeted checks, and verify fixes?'],
-          ['Autonomy', 'Do they make progress independently instead of waiting for step-by-step rescue?'],
-          ['Communication quality', 'Can they explain tradeoffs, assumptions, and next steps clearly?'],
-          ['Code quality', 'Is the resulting code maintainable, testable, and production-minded?'],
-          ['Fraud signals', 'Do timeline and interaction patterns indicate authentic candidate work?'],
+          ['Prompt clarity', 'Are requests to coding agents precise enough to produce useful output quickly?'],
+          ['Debugging behavior', 'Can they isolate failures, test hypotheses, and verify fixes cleanly?'],
+          ['Autonomy', 'Do they keep moving without needing constant interviewer guidance?'],
+          ['Communication quality', 'Can they explain decisions, tradeoffs, and risks clearly?'],
+          ['Code quality', 'Is the final implementation maintainable, testable, and production-minded?'],
+          ['Integrity signals', 'Do interaction patterns indicate authentic candidate work?'],
         ].map(([title, description]) => (
           <div key={title} className="border-2 border-black bg-gray-50 p-6">
             <h3 className="text-lg font-bold mb-2">{title}</h3>
@@ -326,8 +337,8 @@ const WhatWeTestSection = () => (
 const PricingSection = ({ onNavigate }) => (
   <section id="pricing" className="border-b-2 border-black bg-gray-50">
     <div className="max-w-7xl mx-auto px-6 py-20">
-      <h2 className="text-4xl font-bold text-center mb-4">Simple Pricing</h2>
-      <p className="text-center font-mono text-gray-600 mb-12">No surprises. No hidden fees.</p>
+      <h2 className="text-4xl font-bold text-center mb-4">Pricing That Scales with Hiring</h2>
+      <p className="text-center font-mono text-gray-600 mb-12">Clear plans, predictable costs, no hidden add-ons.</p>
       <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
         {/* Recommended */}
         <div className="relative border-2 bg-white p-8" style={{ borderColor: '#9D00FF' }}>
@@ -341,7 +352,7 @@ const PricingSection = ({ onNavigate }) => (
           <div className="text-5xl font-bold mb-1">{formatAed(ASSESSMENT_PRICE_AED)}</div>
           <div className="font-mono text-sm text-gray-500 mb-6">per assessment</div>
           <ul className="space-y-3 mb-8">
-            {['Full AI-augmented environment', 'Claude integration', 'Automated scoring', 'Candidate reports', 'Workable sync', 'Email support'].map((f) => (
+            {['Full coding environment', 'Coding agents (Claude Code, Codex)', 'Automated scoring', 'Candidate reports', 'Workable sync', 'Email support'].map((f) => (
               <li key={f} className="flex items-center gap-2 font-mono text-sm">
                 <Check size={16} style={{ color: '#9D00FF' }} /> {f}
               </li>
@@ -385,9 +396,7 @@ const Footer = () => (
       <div className="grid md:grid-cols-4 gap-8">
         <div>
           <div className="flex items-center gap-2 mb-4">
-            <div className="w-10 h-10 border-2 border-white flex items-center justify-center" style={{ backgroundColor: '#9D00FF' }}>
-              <Code size={20} className="text-white" />
-            </div>
+            <BrandGlyph borderClass="border-white" />
             <span className="text-xl font-bold tracking-tight">{BRAND.name}</span>
           </div>
           <p className="font-mono text-sm text-gray-400">

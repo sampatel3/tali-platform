@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Code, Clock, ChevronRight, ChevronDown, FileText, Folder } from 'lucide-react';
+import { Clock, ChevronRight, ChevronDown, FileText, Folder } from 'lucide-react';
 import CodeEditor from './CodeEditor';
 import ClaudeChat from './ClaudeChat';
 import { BRAND } from '../../config/brand';
@@ -73,6 +73,23 @@ function languageFromPath(path) {
   if (/\.(sh|bash)$/i.test(path)) return "shell";
   return "plaintext";
 }
+
+const AssessmentBrandGlyph = ({ sizeClass = 'w-8 h-8', markSizeClass = 'w-5 h-5' }) => (
+  <div
+    className={`${sizeClass} border-2 border-black flex items-center justify-center`}
+    style={{ backgroundColor: '#0B3B3C' }}
+    aria-hidden="true"
+  >
+    <svg viewBox="0 0 24 24" className={markSizeClass} fill="none">
+      <path
+        d="M4 5v14M8 5v14M12 5v14M16 5v14M2.5 17.5L18.5 6.5"
+        stroke="#F8E16C"
+        strokeWidth="2.1"
+        strokeLinecap="round"
+      />
+    </svg>
+  </div>
+);
 
 export default function AssessmentPage({
   assessmentId,
@@ -410,11 +427,8 @@ export default function AssessmentPage({
     return (
       <div className="h-screen flex items-center justify-center bg-white">
         <div className="text-center">
-          <div
-            className="w-16 h-16 border-2 border-black flex items-center justify-center mx-auto mb-4 animate-pulse"
-            style={{ backgroundColor: "#9D00FF" }}
-          >
-            <Code size={28} className="text-white" />
+          <div className="mx-auto mb-4 animate-pulse w-fit">
+            <AssessmentBrandGlyph sizeClass="w-16 h-16" markSizeClass="w-9 h-9" />
           </div>
           <p className="font-mono text-sm text-gray-600">
             Loading assessment...
@@ -429,11 +443,8 @@ export default function AssessmentPage({
     return (
       <div className="h-screen flex items-center justify-center bg-white">
         <div className="text-center border-2 border-black p-12 max-w-md">
-          <div
-            className="w-16 h-16 border-2 border-black flex items-center justify-center mx-auto mb-6"
-            style={{ backgroundColor: "#9D00FF" }}
-          >
-            <Code size={28} className="text-white" />
+          <div className="mx-auto mb-6 w-fit">
+            <AssessmentBrandGlyph sizeClass="w-16 h-16" markSizeClass="w-9 h-9" />
           </div>
           <h1 className="text-3xl font-bold mb-4">Assessment Submitted</h1>
           <p className="font-mono text-sm text-gray-600 mb-2">
@@ -476,12 +487,7 @@ export default function AssessmentPage({
         <div className="flex items-center gap-4">
           {/* Logo */}
           <div className="flex items-center gap-2">
-            <div
-              className="w-8 h-8 border-2 border-black flex items-center justify-center"
-              style={{ backgroundColor: "#9D00FF" }}
-            >
-              <Code size={16} className="text-white" />
-            </div>
+            <AssessmentBrandGlyph />
             <span className="text-lg font-bold tracking-tight">{BRAND.name}</span>
           </div>
           {/* Task name */}
