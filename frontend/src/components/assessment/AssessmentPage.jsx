@@ -283,6 +283,12 @@ export default function AssessmentPage({
 
   const isTimeLow = timeLeft > 0 && timeLeft < 300; // under 5 minutes
   const taskContext = assessment?.task || {};
+  const taskContextText =
+    taskContext.scenario ||
+    taskContext.description ||
+    taskContext.prompt ||
+    taskContext.instructions ||
+    "Task context has not been provided yet.";
   const repoFiles = extractRepoFiles(taskContext.repo_structure);
   const activeRepoFile = selectedRepoFile || repoFiles[0]?.path || null;
   const activeRepoContent =
@@ -400,32 +406,14 @@ export default function AssessmentPage({
             <div className="font-mono text-xs text-gray-500 mb-1">
               Task Context
             </div>
-            <div>
-              <div className="font-mono text-xs text-gray-500 mb-1">Repository Context</div>
-              {repoFiles.length === 0 ? (
-                <p className="font-mono text-xs text-gray-600">No repository files are configured for this task yet.</p>
-              ) : (
-                <>
-                  <div className="flex flex-wrap gap-2 mb-2 max-h-16 overflow-auto">
-                    {repoFiles.map((file) => (
-                      <button
-                        key={file.path}
-                        type="button"
-                        className={`border px-2 py-1 font-mono text-xs ${activeRepoFile === file.path ? 'border-black bg-black text-white' : 'border-gray-400 bg-white'}`}
-                        onClick={() => setSelectedRepoFile(file.path)}
-                      >
-                        {file.path}
-                      </button>
-                    ))}
-                  </div>
-                  <pre className="bg-black text-gray-200 p-2 text-xs overflow-auto max-h-36 border-2 border-black">{activeRepoContent || 'No file content available.'}</pre>
-                </>
-              )}
-            </div>
+            <p className="font-mono text-xs text-gray-700 mb-3 whitespace-pre-wrap">
+              {taskContextText}
+            </p>
+          </div>
+          <div>
+            <div className="font-mono text-xs text-gray-500 mb-1">Repository Context</div>
             {repoFiles.length === 0 ? (
-              <p className="font-mono text-xs text-gray-600">
-                No repository files provided for this assessment.
-              </p>
+              <p className="font-mono text-xs text-gray-600">No repository files are configured for this task yet.</p>
             ) : (
               <>
                 <div className="flex flex-wrap gap-2 mb-2 max-h-16 overflow-auto">
@@ -445,6 +433,11 @@ export default function AssessmentPage({
                 </pre>
               </>
             )}
+            {repoFiles.length === 0 ? (
+              <p className="font-mono text-xs text-gray-600 mt-2">
+                No repository files provided for this assessment.
+              </p>
+            ) : null}
           </div>
         </div>
       </div>
