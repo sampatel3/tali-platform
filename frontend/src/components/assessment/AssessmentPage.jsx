@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Code, Clock } from 'lucide-react';
+import { Code, Clock, ChevronRight, ChevronDown, FileText, Folder } from 'lucide-react';
 import CodeEditor from './CodeEditor';
 import ClaudeChat from './ClaudeChat';
 import { BRAND } from '../../config/brand';
@@ -47,6 +47,33 @@ function extractRepoFiles(repoStructure) {
   return [];
 }
 
+/** Build a tree { dirPath: [filePaths] } for repo file list */
+function buildRepoFileTree(repoFiles) {
+  const tree = { "": [] };
+  for (const { path } of repoFiles) {
+    const i = path.lastIndexOf("/");
+    const dir = i >= 0 ? path.slice(0, i) : "";
+    if (!tree[dir]) tree[dir] = [];
+    tree[dir].push(path);
+  }
+  for (const dir of Object.keys(tree)) {
+    tree[dir].sort();
+  }
+  return tree;
+}
+
+/** Infer language from filename for Monaco */
+function languageFromPath(path) {
+  if (!path) return "python";
+  if (/\.(py|pyw)$/i.test(path)) return "python";
+  if (/\.(js|jsx|ts|tsx|mjs|cjs)$/i.test(path)) return "javascript";
+  if (/\.(md|mdx)$/i.test(path)) return "markdown";
+  if (/\.(json)$/i.test(path)) return "json";
+  if (/\.(yaml|yml)$/i.test(path)) return "yaml";
+  if (/\.(sh|bash)$/i.test(path)) return "shell";
+  return "plaintext";
+}
+
 export default function AssessmentPage({
   assessmentId,
   token,
@@ -66,6 +93,8 @@ export default function AssessmentPage({
   const [proctoringEnabled, setProctoringEnabled] = useState(false);
   const [showTabWarning, setShowTabWarning] = useState(false);
   const [selectedRepoFile, setSelectedRepoFile] = useState(null);
+  const [repoFileEdits, setRepoFileEdits] = useState({});
+  const [editorContent, setEditorContent] = useState("");
   const codeRef = useRef("");
   const timerRef = useRef(null);
 
@@ -74,7 +103,17 @@ export default function AssessmentPage({
     if (startData) {
       const normalized = normalizeStartData(startData);
       setAssessment(normalized);
-      codeRef.current = normalized.starter_code || "";
+      const files = extractRepoFiles(normalized.repo_structure);
+      const starter = normalized.starter_code || "";
+      if (files.length > 0) {
+        const firstPath = files[0].path;
+        setSelectedRepoFile(firstPath);
+        setEditorContent(files[0].content ?? "");
+        codeRef.current = files[0].content ?? "";
+      } else {
+        setEditorContent(starter);
+        codeRef.current = starter;
+      }
       setTimeLeft(normalized.time_remaining);
       setProctoringEnabled(startData.task?.proctoring_enabled || false);
       setLoading(false);
@@ -82,7 +121,17 @@ export default function AssessmentPage({
     }
     if (taskData) {
       setAssessment(taskData);
-      codeRef.current = taskData.starter_code || "";
+      const files = extractRepoFiles(taskData.repo_structure);
+      const starter = taskData.starter_code || "";
+      if (files.length > 0) {
+        const firstPath = files[0].path;
+        setSelectedRepoFile(firstPath);
+        setEditorContent(files[0].content ?? "");
+        codeRef.current = files[0].content ?? "";
+      } else {
+        setEditorContent(starter);
+        codeRef.current = starter;
+      }
       setTimeLeft((taskData.duration_minutes || 30) * 60);
       setProctoringEnabled(taskData.proctoring_enabled || false);
       setLoading(false);
@@ -99,7 +148,17 @@ export default function AssessmentPage({
         const data = res.data;
         const normalized = normalizeStartData(data);
         setAssessment(normalized);
-        codeRef.current = normalized.starter_code || "";
+        const files = extractRepoFiles(normalized.repo_structure);
+        const starter = normalized.starter_code || "";
+        if (files.length > 0) {
+          const firstPath = files[0].path;
+          setSelectedRepoFile(firstPath);
+          setEditorContent(files[0].content ?? "");
+          codeRef.current = files[0].content ?? "";
+        } else {
+          setEditorContent(starter);
+          codeRef.current = starter;
+        }
         setTimeLeft(normalized.time_remaining);
         setProctoringEnabled(data.task?.proctoring_enabled || false);
       } catch (err) {
@@ -186,6 +245,31 @@ export default function AssessmentPage({
   const selectedRepoContent = repoFiles.find(
     (file) => file.path === selectedRepoPath,
   )?.content;
+  const repoFileTree = buildRepoFileTree(repoFiles);
+  const hasRepoStructure = repoFiles.length > 0;
+
+  const handleSelectRepoFile = useCallback(
+    (path) => {
+      if (path === selectedRepoPath) return;
+      setRepoFileEdits((prev) => ({
+        ...prev,
+        ...(selectedRepoPath ? { [selectedRepoPath]: editorContent } : {}),
+      }));
+      setSelectedRepoFile(path);
+      const nextContent =
+        repoFileEdits[path] !== undefined
+          ? repoFileEdits[path]
+          : repoFiles.find((f) => f.path === path)?.content ?? "";
+      setEditorContent(nextContent);
+      codeRef.current = nextContent;
+    },
+    [selectedRepoPath, editorContent, repoFileEdits, repoFiles],
+  );
+
+  const handleEditorChange = useCallback((value) => {
+    setEditorContent(value ?? "");
+    codeRef.current = value ?? "";
+  }, []);
 
   // Execute code
   const handleExecute = useCallback(
@@ -462,15 +546,61 @@ export default function AssessmentPage({
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Code editor - 65% */}
-        <div className="w-[65%] border-r-2 border-black">
-          <CodeEditor
-            initialCode={assessment?.starter_code || ""}
-            onExecute={handleExecute}
-            onSave={handleSave}
-            language={assessment?.language || "python"}
-            filename={assessment?.filename || "pipeline.py"}
-          />
+        {/* Code editor + optional file tree - 65% */}
+        <div className="w-[65%] border-r-2 border-black flex flex-col">
+          <div className="flex-1 flex overflow-hidden">
+            {hasRepoStructure && (
+              <div className="w-52 border-r-2 border-black bg-gray-50 flex flex-col overflow-hidden">
+                <div className="px-3 py-2 border-b border-gray-200 font-mono text-xs font-bold text-gray-600">
+                  Repository
+                </div>
+                <div className="flex-1 overflow-y-auto py-1">
+                  {Object.entries(repoFileTree)
+                    .sort(([a], [b]) => (a || "").localeCompare(b || ""))
+                    .map(([dir, paths]) => (
+                      <div key={dir || "(root)"} className="mb-1">
+                        {dir ? (
+                          <div className="px-2 py-0.5 font-mono text-xs text-gray-500 flex items-center gap-0.5">
+                            <Folder size={10} />
+                            <span>{dir}/</span>
+                          </div>
+                        ) : null}
+                        <div className={dir ? "pl-3" : ""}>
+                          {paths.map((path) => {
+                            const name = path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path;
+                            const isSelected = path === selectedRepoPath;
+                            return (
+                              <button
+                                key={path}
+                                type="button"
+                                className={`w-full text-left px-2 py-1 font-mono text-xs flex items-center gap-1.5 hover:bg-gray-200 ${
+                                  isSelected ? "bg-black text-white hover:bg-gray-800" : "text-gray-800"
+                                }`}
+                                onClick={() => handleSelectRepoFile(path)}
+                              >
+                                <FileText size={10} />
+                                <span className="truncate">{name}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
+            <div className="flex-1 min-w-0">
+              <CodeEditor
+                initialCode={assessment?.starter_code || ""}
+                value={editorContent}
+                onChange={handleEditorChange}
+                onExecute={handleExecute}
+                onSave={handleSave}
+                language={hasRepoStructure ? languageFromPath(selectedRepoPath) : (assessment?.language || "python")}
+                filename={selectedRepoPath || assessment?.filename || "main"}
+              />
+            </div>
+          </div>
         </div>
 
         {/* Right panel - 35% */}

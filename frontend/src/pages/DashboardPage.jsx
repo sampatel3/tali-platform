@@ -1,9 +1,13 @@
-import React, { useState, useEffect } from 'react';
-import { Clipboard, DollarSign, CheckCircle, Copy, Eye, Loader2, Timer, Star } from 'lucide-react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { Clipboard, DollarSign, CheckCircle, Eye, Loader2, Timer, Star, Users } from 'lucide-react';
+import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import { useAuth } from '../context/AuthContext';
 import { assessments as assessmentsApi, tasks as tasksApi } from '../lib/api';
+import { COMPARISON_CATEGORY_CONFIG, getCategoryScoresFromAssessment } from '../lib/comparisonCategories';
 
 const PAGE_SIZE = 10;
+const MAX_COMPARE = 5;
+const COMPARE_COLORS = ['#9D00FF', '#111827', '#16a34a', '#d97706', '#2563eb'];
 
 export const DashboardPage = ({
   onNavigate,
@@ -22,6 +26,8 @@ export const DashboardPage = ({
   const [tasksForFilter, setTasksForFilter] = useState([]);
   const [page, setPage] = useState(0);
   const [compareIds, setCompareIds] = useState([]);
+  const [compareAssessments, setCompareAssessments] = useState([]);
+  const [compareLoadingId, setCompareLoadingId] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -96,7 +102,56 @@ export const DashboardPage = ({
       id: `n-${c.id}`,
       text: `${c.name} completed ${c.task} (${c.score ?? '—'}/10)`,
     }));
-  const compareCandidates = displayCandidates.filter((c) => compareIds.includes(c.id)).slice(0, 2);
+  const toggleCompare = useCallback(async (c, checked) => {
+    if (checked) {
+      if (compareIds.length >= MAX_COMPARE) return;
+      const id = c.id;
+      setCompareIds((prev) => Array.from(new Set([...prev, id])).slice(-MAX_COMPARE));
+      const existing = displayCandidates.find((x) => x.id === id);
+      const hasBreakdown = existing?.breakdown?.categoryScores ?? existing?.breakdown?.detailedScores?.category_scores;
+      if (existing && hasBreakdown) {
+        setCompareAssessments((prev) => {
+          const next = prev.filter((a) => a.id !== id);
+          next.push({ id: existing.id, name: existing.name, task: existing.task, score: existing.score, breakdown: existing.breakdown, _raw: existing._raw });
+          return next;
+        });
+        return;
+      }
+      setCompareLoadingId(id);
+      try {
+        const res = await assessmentsApi.get(id);
+        const a = res.data;
+        const name = (a.candidate_name || a.candidate_email || '').trim() || `Assessment ${id}`;
+        setCompareAssessments((prev) => {
+          const next = prev.filter((x) => x.id !== id);
+          next.push({ id: a.id, name, task: a.task_name || a.task?.name || '', score: a.score ?? a.final_score, breakdown: a.breakdown || null, _raw: a });
+          return next;
+        });
+      } catch {
+        setCompareIds((prev) => prev.filter((x) => x !== id));
+      } finally {
+        setCompareLoadingId(null);
+      }
+    } else {
+      const id = c.id;
+      setCompareIds((prev) => prev.filter((x) => x !== id));
+      setCompareAssessments((prev) => prev.filter((a) => a.id !== id));
+    }
+  }, [compareIds.length, displayCandidates]);
+
+  const compareCandidates = displayCandidates.filter((c) => compareIds.includes(c.id));
+  const tableRows = !taskFilter && displayCandidates.length > 0
+    ? (() => {
+        const byTask = {};
+        displayCandidates.forEach((c) => {
+          const t = c.task || 'Other';
+          if (!byTask[t]) byTask[t] = [];
+          byTask[t].push(c);
+        });
+        const taskOrder = [...new Set(displayCandidates.map((c) => c.task || 'Other'))].sort();
+        return taskOrder.flatMap((task) => [{ _group: task }, ...byTask[task]]);
+      })()
+    : displayCandidates;
 
   const exportJson = () => {
     const blob = new Blob([JSON.stringify(displayCandidates, null, 2)], { type: 'application/json' });
@@ -149,18 +204,63 @@ export const DashboardPage = ({
             </div>
           </div>
         )}
-        {compareCandidates.length === 2 && (
-          <div className="border-2 border-black p-4 mb-6">
-            <div className="font-mono text-xs text-gray-500 mb-2">Comparison</div>
-            <div className="grid md:grid-cols-2 gap-4">
-              {compareCandidates.map((c) => (
-                <div key={`cmp-${c.id}`} className="border-2 border-black p-3">
-                  <div className="font-bold">{c.name}</div>
-                  <div className="font-mono text-xs text-gray-500">{c.task}</div>
-                  <div className="font-mono text-sm mt-2">Score: {c.score ?? '—'}/10</div>
-                  <div className="font-mono text-sm">Status: {c.status}</div>
+        {compareAssessments.length >= 2 && (
+          <div className="border-2 border-black p-6 mb-6 bg-gray-50">
+            <div className="flex items-center gap-2 mb-4">
+              <Users size={20} />
+              <h3 className="font-bold text-lg">Candidate comparison</h3>
+            </div>
+            <p className="font-mono text-xs text-gray-600 mb-4">Overlay by category and overall score. Compare up to {MAX_COMPARE} candidates.</p>
+            <div className="grid md:grid-cols-2 gap-8">
+              <div>
+                <div className="font-mono text-xs font-bold uppercase text-gray-500 mb-2">Overall score</div>
+                <div className="space-y-2">
+                  {compareAssessments.map((a, i) => (
+                    <div key={a.id} className="flex items-center gap-3">
+                      <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: COMPARE_COLORS[i % COMPARE_COLORS.length] }} />
+                      <span className="font-medium min-w-[120px]">{a.name}</span>
+                      <span className="font-mono text-sm">{a.score != null ? `${Number(a.score).toFixed(1)}/10` : '—'}</span>
+                    </div>
+                  ))}
                 </div>
-              ))}
+              </div>
+              <div>
+                {(() => {
+                  const candKey = (i) => `_cand_${i}`;
+                  const radarData = COMPARISON_CATEGORY_CONFIG.map((cat) => {
+                    const point = { signal: cat.label.split(' ')[0], fullMark: 10 };
+                    compareAssessments.forEach((a, i) => {
+                      const scores = getCategoryScoresFromAssessment(a);
+                      point[candKey(i)] = scores[cat.key] ?? 0;
+                    });
+                    return point;
+                  }).filter((row) => compareAssessments.some((_, i) => (row[candKey(i)] ?? 0) > 0));
+                  if (radarData.length === 0) return <div className="font-mono text-sm text-gray-500">No category scores available for overlay.</div>;
+                  return (
+                    <div style={{ width: '100%', height: 320 }}>
+                      <ResponsiveContainer>
+                        <RadarChart data={radarData}>
+                          <PolarGrid />
+                          <PolarAngleAxis dataKey="signal" tick={{ fontSize: 10, fontFamily: 'monospace' }} />
+                          <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
+                          {compareAssessments.map((a, i) => (
+                            <Radar
+                              key={a.id}
+                              name={a.name || `Candidate ${i + 1}`}
+                              dataKey={candKey(i)}
+                              stroke={COMPARE_COLORS[i % COMPARE_COLORS.length]}
+                              fill={COMPARE_COLORS[i % COMPARE_COLORS.length]}
+                              fillOpacity={0.15}
+                              strokeWidth={1.5}
+                            />
+                          ))}
+                          <Legend />
+                        </RadarChart>
+                      </ResponsiveContainer>
+                    </div>
+                  );
+                })()}
+              </div>
             </div>
           </div>
         )}
@@ -173,9 +273,19 @@ export const DashboardPage = ({
           <StatsCardComponent icon={DollarSign} label="This Month Cost" value={monthCost} change={`${completedCount} assessments`} />
         </div>
 
-        {/* Filters */}
+        {/* Filters: split by job role (task); recruiters hire for many roles */}
         <div className="flex flex-wrap items-center gap-4 mb-4">
           <span className="font-mono text-sm font-bold">Filters:</span>
+          <select
+            className="border-2 border-black px-3 py-2 font-mono text-sm bg-white"
+            value={taskFilter}
+            onChange={(e) => { setTaskFilter(e.target.value); setPage(0); }}
+          >
+            <option value="">All job roles</option>
+            {tasksForFilter.map((t) => (
+              <option key={t.id} value={t.id}>{t.name}</option>
+            ))}
+          </select>
           <select
             className="border-2 border-black px-3 py-2 font-mono text-sm bg-white"
             value={statusFilter}
@@ -186,17 +296,8 @@ export const DashboardPage = ({
             <option value="in_progress">In progress</option>
             <option value="completed">Completed</option>
           </select>
-          <select
-            className="border-2 border-black px-3 py-2 font-mono text-sm bg-white"
-            value={taskFilter}
-            onChange={(e) => { setTaskFilter(e.target.value); setPage(0); }}
-          >
-            <option value="">All tasks</option>
-            {tasksForFilter.map((t) => (
-              <option key={t.id} value={t.id}>{t.name}</option>
-            ))}
-          </select>
         </div>
+        <p className="font-mono text-xs text-gray-500 mb-2">Candidates are grouped by job role. A candidate can appear in multiple roles if they have assessments for different tasks.</p>
 
         {/* Assessments Table */}
         <div className="border-2 border-black">
@@ -235,87 +336,99 @@ export const DashboardPage = ({
                     </td>
                   </tr>
                 ) : (
-                  displayCandidates.map((c) => (
-                    <tr key={c.id} className="border-b border-gray-200 hover:bg-gray-50 transition-colors">
-                      <td className="px-2 py-4">
-                        <input
-                          type="checkbox"
-                          className="w-4 h-4 accent-purple-600"
-                          checked={compareIds.includes(c.id)}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setCompareIds((prev) => Array.from(new Set([...prev, c.id])).slice(-2));
-                            } else {
-                              setCompareIds((prev) => prev.filter((id) => id !== c.id));
-                            }
-                          }}
-                        />
-                      </td>
-                      <td className="px-6 py-4">
-                        <div className="font-bold">{c.name}</div>
-                        <div className="font-mono text-xs text-gray-500">{c.email}</div>
-                      </td>
-                      <td className="px-6 py-4 font-mono text-sm">{c.task}</td>
-                      <td className="px-6 py-4"><StatusBadgeComponent status={c.status} /></td>
-                      <td className="px-6 py-4 font-bold">{c.score !== null ? `${c.score}/10` : '—'}</td>
-                      <td className="px-6 py-4 font-mono text-sm">{c.time}</td>
-                      <td className="px-6 py-4">
-                        {c.token ? (
-                          <button
-                            type="button"
-                            className="border-2 border-black bg-white px-3 py-1.5 font-mono text-xs font-bold hover:bg-black hover:text-white transition-colors flex items-center gap-1"
-                            onClick={() => {
-                              const link = c.assessmentLink || getAssessmentLink(c.token);
-                              navigator.clipboard?.writeText(link).then(() => { /* copied */ }).catch(() => {});
-                            }}
-                            title={c.assessmentLink || getAssessmentLink(c.token)}
-                          >
-                            <Clipboard size={14} /> Copy link
-                          </button>
-                        ) : (
-                          <span className="font-mono text-xs text-gray-400">—</span>
-                        )}
-                      </td>
-                      <td className="px-6 py-4">
-                        {c.status === 'completed' || c.status === 'submitted' || c.status === 'graded' ? (
-                          <button
-                            className="border-2 border-black bg-white px-4 py-2 font-mono text-sm font-bold hover:bg-black hover:text-white transition-colors flex items-center gap-1 disabled:opacity-70"
-                            disabled={loadingViewId === c.id}
-                            onClick={async () => {
-                              setLoadingViewId(c.id);
-                              try {
-                                const res = await assessmentsApi.get(c.id);
-                                const a = res.data;
-                                const merged = {
-                                  ...c,
-                                  promptsList: a.prompts_list || [],
-                                  timeline: a.timeline || [],
-                                  results: a.results || [],
-                                  breakdown: a.breakdown || null,
-                                  prompts: (a.prompts_list || []).length,
-                                };
-                                onViewCandidate(merged);
-                              } catch (err) {
-                                console.warn('Failed to fetch assessment detail, using list data:', err);
-                                onViewCandidate(c);
-                              } finally {
-                                setLoadingViewId(null);
-                              }
-                            }}
-                          >
-                            {loadingViewId === c.id ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} View
-                          </button>
-                        ) : (
-                          <button
-                            className="border-2 border-gray-300 bg-gray-100 px-4 py-2 font-mono text-sm font-bold text-gray-400 cursor-not-allowed flex items-center gap-1"
-                            disabled
-                          >
-                            <Timer size={14} /> Pending
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))
+                  tableRows.map((row) => {
+                    if (row._group) {
+                      return (
+                        <tr key={`role-${row._group}`} className="bg-gray-100 border-b-2 border-black">
+                          <td colSpan={8} className="px-6 py-2 font-mono text-sm font-bold uppercase text-gray-700">
+                            — {row._group} —
+                          </td>
+                        </tr>
+                      );
+                    }
+                    const c = row;
+                    const canCompare = (c.status === 'completed' || c.status === 'submitted' || c.status === 'graded') && (compareIds.length < MAX_COMPARE || compareIds.includes(c.id));
+                    return (
+                      <tr key={c.id} className="border-b border-gray-200 hover:bg-gray-50 transition-colors">
+                        <td className="px-2 py-4">
+                          {canCompare ? (
+                            <input
+                              type="checkbox"
+                              className="w-4 h-4 accent-purple-600"
+                              checked={compareIds.includes(c.id)}
+                              disabled={compareLoadingId === c.id}
+                              onChange={(e) => toggleCompare(c, e.target.checked)}
+                            />
+                          ) : (
+                            <span className="text-gray-300">—</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          <div className="font-bold">{c.name}</div>
+                          <div className="font-mono text-xs text-gray-500">{c.email}</div>
+                        </td>
+                        <td className="px-6 py-4 font-mono text-sm">{c.task}</td>
+                        <td className="px-6 py-4"><StatusBadgeComponent status={c.status} /></td>
+                        <td className="px-6 py-4 font-bold">{c.score !== null ? `${c.score}/10` : '—'}</td>
+                        <td className="px-6 py-4 font-mono text-sm">{c.time}</td>
+                        <td className="px-6 py-4">
+                          {c.token ? (
+                            <button
+                              type="button"
+                              className="border-2 border-black bg-white px-3 py-1.5 font-mono text-xs font-bold hover:bg-black hover:text-white transition-colors flex items-center gap-1"
+                              onClick={() => {
+                                const link = c.assessmentLink || getAssessmentLink(c.token);
+                                navigator.clipboard?.writeText(link).then(() => { /* copied */ }).catch(() => {});
+                              }}
+                              title={c.assessmentLink || getAssessmentLink(c.token)}
+                            >
+                              <Clipboard size={14} /> Copy link
+                            </button>
+                          ) : (
+                            <span className="font-mono text-xs text-gray-400">—</span>
+                          )}
+                        </td>
+                        <td className="px-6 py-4">
+                          {c.status === 'completed' || c.status === 'submitted' || c.status === 'graded' ? (
+                            <button
+                              className="border-2 border-black bg-white px-4 py-2 font-mono text-sm font-bold hover:bg-black hover:text-white transition-colors flex items-center gap-1 disabled:opacity-70"
+                              disabled={loadingViewId === c.id}
+                              onClick={async () => {
+                                setLoadingViewId(c.id);
+                                try {
+                                  const res = await assessmentsApi.get(c.id);
+                                  const a = res.data;
+                                  const merged = {
+                                    ...c,
+                                    promptsList: a.prompts_list || [],
+                                    timeline: a.timeline || [],
+                                    results: a.results || [],
+                                    breakdown: a.breakdown || null,
+                                    prompts: (a.prompts_list || []).length,
+                                  };
+                                  onViewCandidate(merged);
+                                } catch (err) {
+                                  console.warn('Failed to fetch assessment detail, using list data:', err);
+                                  onViewCandidate(c);
+                                } finally {
+                                  setLoadingViewId(null);
+                                }
+                              }}
+                            >
+                              {loadingViewId === c.id ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} View
+                            </button>
+                          ) : (
+                            <button
+                              className="border-2 border-gray-300 bg-gray-100 px-4 py-2 font-mono text-sm font-bold text-gray-400 cursor-not-allowed flex items-center gap-1"
+                              disabled
+                            >
+                              <Timer size={14} /> Pending
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    );
+                  })
                 )}
               </tbody>
             </table>

@@ -78,6 +78,7 @@ export const assessments = {
   postToWorkable: (id) => api.post(`/assessments/${id}/post-to-workable`),
   downloadReport: (id) => api.get(`/assessments/${id}/report.pdf`, { responseType: 'blob' }),
   aiEvalSuggestions: (id) => api.post(`/assessments/${id}/ai-eval-suggestions`),
+  updateManualEvaluation: (id, data) => api.patch(`/assessments/${id}/manual-evaluation`, data),
   addNote: (id, note) => api.post(`/assessments/${id}/notes`, { note }),
   uploadCv: (assessmentId, token, file) => {
     const form = new FormData();

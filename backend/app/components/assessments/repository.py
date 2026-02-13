@@ -353,5 +353,7 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "candidate_name": candidate_name,
         "candidate_email": candidate_email,
         "task_name": task_name,
+        "evaluation_rubric": (assessment.task.evaluation_rubric if assessment.task else None) or {},
+        "manual_evaluation": getattr(assessment, "manual_evaluation", None),
     }
     return data

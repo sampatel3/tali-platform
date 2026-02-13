@@ -203,7 +203,6 @@ const renderCandidateDetail = async (candidateOverrides = {}) => {
     </AuthProvider>
   );
   await waitFor(() => expect(analyticsApi.get).toHaveBeenCalled());
-  await waitFor(() => expect(candidatesApi.list).toHaveBeenCalled());
   return view;
 };
 
@@ -441,21 +440,9 @@ describe('CandidateDetailPage', () => {
     expect(screen.getByText('Post to Workable')).toBeInTheDocument();
   });
 
-  it('enables candidate comparison and loads comparison candidate assessment', async () => {
-    candidatesApi.list.mockResolvedValue({ data: { items: [{ id: 2, full_name: 'Bob Smith', email: 'bob@example.com' }] } });
-    assessmentsApi.list.mockResolvedValueOnce({ data: { items: [{ id: 20, candidate_name: 'Bob Smith', breakdown: { categoryScores: { task_completion: 6 } } }] } });
-
+  it('shows hint to compare candidates from Dashboard', async () => {
     await renderCandidateDetail();
 
-    await waitFor(() => {
-      expect(screen.getByRole('option', { name: 'Bob Smith' })).toBeInTheDocument();
-    });
-
-    fireEvent.change(screen.getByLabelText('Candidate B'), { target: { value: '2' } });
-
-    await waitFor(() => {
-      expect(assessmentsApi.list.mock.calls.some(([arg]) => arg?.candidate_id === 2)).toBe(true);
-      expect(screen.getByText(/Comparison active/)).toBeInTheDocument();
-    });
+    expect(screen.getByText(/Compare this candidate with others from the Dashboard/)).toBeInTheDocument();
   });
 });

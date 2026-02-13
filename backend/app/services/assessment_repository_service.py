@@ -16,7 +16,13 @@ class BranchContext:
 
 
 class AssessmentRepositoryService:
-    """GitHub repo/branch manager with local mock harness for tests/dev."""
+    """GitHub repo/branch manager with local mock harness for tests/dev.
+
+    Production: Set GITHUB_MOCK_MODE=false and implement real GitHub API in
+    create_template_repo / create_assessment_branch (e.g. PyGithub or REST:
+    create repo in org, push files to main, create branch assessment/{id}, return
+    clone URL). Mock mode uses local git repos under GITHUB_MOCK_ROOT for CI/dev.
+    """
 
     def __init__(self, github_org: str | None = None, github_token: str | None = None):
         self.github_org = github_org or os.getenv("GITHUB_ORG", "tali-assessments")
@@ -62,7 +68,8 @@ class AssessmentRepositoryService:
         if self.mock_mode:
             self._ensure_mock_repo(repo_name, files)
             return f"mock://{self.github_org}/{repo_name}"
-        # Production GitHub API path intentionally deferred in this iteration.
+        # Production: implement GitHub API (create repo, push files to main).
+        # Requires GITHUB_TOKEN with repo scope. Return public clone URL.
         return f"https://github.com/{self.github_org}/{repo_name}.git"
 
     def create_assessment_branch(self, task: Any, assessment_id: int) -> BranchContext:

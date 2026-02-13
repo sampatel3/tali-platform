@@ -81,6 +81,7 @@ class Assessment(Base):
     # CV-Job fit matching (Phase 2)
     cv_job_match_score = Column(Float, nullable=True)
     cv_job_match_details = Column(JSON, nullable=True)
+    manual_evaluation = Column(JSON, nullable=True)  # { category_scores: { key: { score, evidence } }, overall_score?, strengths?, improvements? }
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

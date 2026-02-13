@@ -160,3 +160,59 @@ cd backend && pytest -q
 - [ ] Incremental TypeScript migration.
 - [ ] Router migration away from hash routing.
 - [ ] Enterprise access controls (SSO/SAML).
+
+---
+
+## 7) Tali Assessment System gaps (from CURSOR_IMPLEMENTATION_SPEC)
+
+**Source:** `docs/TALI_ASSESSMENT_SYSTEM_IMPLEMENTATION_STATUS.md`. Execute in order below.
+
+### G1 — Repo management + Monaco IDE (CRITICAL: do first)
+
+**Goal:** Full working repo management and candidate-facing repo structure in the IDE.
+
+- [x] **G1.1** Monaco IDE shows repo structure: file tree from `repo_structure` (or assessment start payload) visible in assessment UI; candidate can expand/collapse and open files.
+- [x] **G1.2** Candidate interacts with repo structure in Monaco: selecting a file loads its content into the editor (or a second pane); edits apply to the “current file” context sent with prompts / persisted in sandbox where applicable.
+- [x] **G1.3** Production GitHub (optional but recommended): implement real GitHub API in `AssessmentRepositoryService` (create repo, create branch, push) using GITHUB_TOKEN/GITHUB_ORG when not in mock mode; or document and keep mock-only with clear “production: set GITHUB_MOCK_MODE=false and implement” note.
+- [x] **G1.4** If git push fails on timeout/submit: persist patch/diff in DB so work is not lost (already partially there via `git_evidence`; ensure diff is always stored even when push fails).
+
+### G2 — Task seed + production task reset
+
+**Goal:** Seed uses loader; production tasks cleared and re-seeded from `tasks/` once G1 is done.
+
+- [x] **G2.1** Seed script uses task loader: `scripts/seed_tasks_db.py` calls `load_task_specs(tasks_dir)` (or validates each JSON with `validate_task_spec`) so rubric weights are validated at seed time.
+- [x] **G2.2** Add script to remove all tasks from DB (for use with Railway): e.g. `scripts/clear_tasks.py` — nullify `assessment.task_id`, then delete all tasks; runnable via `railway run python scripts/clear_tasks.py` or with `DATABASE_URL` set.
+- [ ] **G2.3** After G1 is complete and G2.1/G2.2 are in place: remove all tasks in production using Railway CLI/script, then re-seed from `tasks/` (run seed script once) so only tasks from `tasks/*.json` exist.
+
+**Run clear then seed:** From repo root, with DB reachable (see note below):
+```bash
+railway run bash -c 'cd backend && .venv/bin/python ../scripts/clear_tasks.py'
+railway run bash -c 'cd backend && .venv/bin/python ../scripts/seed_tasks_db.py'
+```
+**Note:** `railway run` runs locally; Railway’s `DATABASE_URL` uses `postgres.railway.internal`, which only resolves inside Railway. To run G2.3 from your machine, add **`DATABASE_PUBLIC_URL`** in the Railway project (from the Postgres service → Connect → “Public network” URL) so the scripts use it. Otherwise run the same commands from **Railway Shell** in the dashboard (service → Shell).
+
+### G3 — Recruiter: git evidence + manual evaluator UI
+
+**Goal:** Evaluator sees chat + git artifacts; can set manual rubric scores and evidence.
+
+- [x] **G3.1** Display git evidence in recruiter UI: in candidate/assessment detail, show `git_evidence.diff_main`, `git_evidence.commits`, `git_evidence.head_sha` (e.g. “Code / Git” or “Evidence” tab). Data is already in API response.
+- [x] **G3.2** Manual evaluator UI: section that shows assessment `evaluation_rubric` categories; for each category, allow selecting excellent/good/poor (dropdown or buttons).
+- [x] **G3.3** Evidence notes: require at least one evidence snippet/note per category (or per assessment); store on assessment or EvaluationResult.
+- [x] **G3.4** Show chat log alongside git diff/commits so evaluator can pick evidence (timeline/prompts already exist; place next to or above git evidence in same view).
+
+### G4 — EvaluationResult model (optional)
+
+**Goal:** First-class evaluation artifact if product wants it.
+
+- [ ] **G4.1** Add EvaluationResult model (or equivalent): categoryScores[categoryKey] = {score, weight, evidence[]}, overallScore, strengths[], improvements[], link to assessment, completed_due_to_timeout.
+- [ ] **G4.2** Wire manual evaluator UI to persist to this model (or to assessment JSON field) and load for display.
+
+### Implementation order (execute in this sequence)
+
+1. **G1.1, G1.2** — Monaco repo structure + candidate interaction with repo files.
+2. **G1.3** (optional), **G1.4** — Production GitHub or doc; ensure diff persisted on push failure.
+3. **G2.1, G2.2** — Seed uses loader; clear_tasks script.
+4. **G2.3** — Remove all tasks in production (Railway), then re-seed from `tasks/` once.
+5. **G3.1** — Recruiter UI: display git_evidence.
+6. **G3.2, G3.3, G3.4** — Manual rubric UI + evidence notes + chat alongside git.
+7. **G4** — EvaluationResult model if desired.

@@ -1,19 +1,37 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
 import { Play, Save } from 'lucide-react';
 
 export default function CodeEditor({
   initialCode = '',
+  value: controlledValue,
+  onChange: onControlledChange,
   onExecute,
   onSave,
   language = 'python',
   filename = 'pipeline.py',
 }) {
-  const [code, setCode] = useState(initialCode);
+  const isControlled = controlledValue !== undefined;
+  const [internalCode, setInternalCode] = useState(initialCode);
+  const code = isControlled ? controlledValue : internalCode;
   const editorRef = useRef(null);
+
+  useEffect(() => {
+    if (isControlled && controlledValue !== code) {
+      setInternalCode(controlledValue);
+    }
+  }, [isControlled, controlledValue]);
 
   const handleEditorDidMount = (editor) => {
     editorRef.current = editor;
+  };
+
+  const handleChange = (newValue) => {
+    if (isControlled) {
+      onControlledChange?.(newValue ?? '');
+    } else {
+      setInternalCode(newValue ?? '');
+    }
   };
 
   const handleRun = () => {
@@ -58,7 +76,7 @@ export default function CodeEditor({
           language={language}
           value={code}
           theme="vs-dark"
-          onChange={(value) => setCode(value || '')}
+          onChange={handleChange}
           onMount={handleEditorDidMount}
           options={{
             minimap: { enabled: false },

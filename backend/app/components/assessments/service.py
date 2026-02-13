@@ -168,7 +168,9 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
         sandbox = e2b.connect_sandbox(assessment.e2b_session_id) if assessment.e2b_session_id else e2b.create_sandbox()
         repo_root = _workspace_repo_root(task)
         evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
-        # Auto-commit best effort when there are dirty changes
+        # Persist evidence before push so we never lose diff if push fails (G1.4)
+        assessment.git_evidence = evidence
+        assessment.final_repo_state = evidence.get("head_sha")
         if evidence.get("status_porcelain"):
             sandbox.run_code(
                 "import subprocess,pathlib\n"
@@ -178,8 +180,8 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
                 "subprocess.run(['git','push','origin','HEAD'],cwd=repo,check=False,capture_output=True)\n"
             )
             evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
-        assessment.git_evidence = evidence
-        assessment.final_repo_state = evidence.get("head_sha")
+            assessment.git_evidence = evidence
+            assessment.final_repo_state = evidence.get("head_sha")
     except Exception:
         logger.exception("Timeout finalization failed to collect git evidence")
         assessment.git_evidence = assessment.git_evidence or {"error": "git_evidence_capture_failed"}
@@ -387,10 +389,12 @@ def submit_assessment(
     passed = test_results.get("passed", 0)
     total = test_results.get("total", 0)
 
-    # --- 2. Capture git evidence and persist branch state ---
+    # --- 2. Capture git evidence and persist branch state (store before push so diff not lost on failure) ---
     try:
         repo_root = _workspace_repo_root(task)
         evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
+        assessment.git_evidence = evidence
+        assessment.final_repo_state = evidence.get("head_sha")
         if evidence.get("status_porcelain"):
             sandbox.run_code(
                 "import subprocess,pathlib\n"
@@ -400,8 +404,8 @@ def submit_assessment(
                 "subprocess.run(['git','push','origin','HEAD'],cwd=repo,check=False,capture_output=True)\n"
             )
             evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
-        assessment.git_evidence = evidence
-        assessment.final_repo_state = evidence.get("head_sha")
+            assessment.git_evidence = evidence
+            assessment.final_repo_state = evidence.get("head_sha")
     except Exception:
         logger.exception("Failed to capture git evidence on manual submit")
     finally:

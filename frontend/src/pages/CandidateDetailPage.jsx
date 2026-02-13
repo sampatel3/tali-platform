@@ -15,9 +15,9 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
   });
 
   const [expandedCategory, setExpandedCategory] = useState(null);
-  const [comparisonCandidates, setComparisonCandidates] = useState([]);
-  const [comparisonCandidateId, setComparisonCandidateId] = useState('');
-  const [comparisonAssessment, setComparisonAssessment] = useState(null);
+  const [aiEvalSuggestion, setAiEvalSuggestion] = useState(null);
+  const [manualEvalScores, setManualEvalScores] = useState({});
+  const [manualEvalSaving, setManualEvalSaving] = useState(false);
 
   const getRecommendation = (score100) => {
     if (score100 >= 80) return { label: 'STRONG HIRE', color: '#16a34a' };
@@ -49,48 +49,17 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const loadComparisonCandidates = async () => {
-      try {
-        const res = await candidatesApi.list({ limit: 100, offset: 0 });
-        if (cancelled) return;
-        const currentCandidateId = candidate?._raw?.candidate_id;
-        const items = (res.data?.items || []).filter((item) => item.id !== currentCandidateId);
-        setComparisonCandidates(items);
-      } catch {
-        if (!cancelled) setComparisonCandidates([]);
-      }
-    };
-    loadComparisonCandidates();
-    return () => {
-      cancelled = true;
-    };
-  }, [candidate?._raw?.candidate_id]);
+    const raw = candidate?._raw;
+    const me = raw?.manual_evaluation?.category_scores;
+    if (me && typeof me === 'object') setManualEvalScores(me);
+    else setManualEvalScores({});
+  }, [candidate?._raw?.manual_evaluation]);
 
   const getCategoryScores = (candidateData) => {
     const breakdownScores = candidateData?.breakdown?.categoryScores;
     const detailedCategoryScores = candidateData?.breakdown?.detailedScores?.category_scores;
     const analyticsCategoryScores = candidateData?._raw?.prompt_analytics?.detailed_scores?.category_scores;
     return breakdownScores || detailedCategoryScores || analyticsCategoryScores || {};
-  };
-
-  const loadComparisonAssessment = async (selectedCandidateId) => {
-    if (!selectedCandidateId) {
-      setComparisonAssessment(null);
-      return;
-    }
-    try {
-      const res = await assessmentsApi.list({ candidate_id: Number(selectedCandidateId), limit: 1, offset: 0 });
-      const item = res.data?.items?.[0] || null;
-      setComparisonAssessment(item ? {
-        name: item.candidate_name || item.candidate_email || `Candidate ${selectedCandidateId}`,
-        score: item.score ?? item.overall_score ?? null,
-        breakdown: item.breakdown || null,
-        _raw: item,
-      } : null);
-    } catch {
-      setComparisonAssessment(null);
-    }
   };
 
   if (!candidate) return null;
@@ -347,11 +316,11 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
             </button>
           </div>
         </div>
-        <div className="flex border-2 border-black mb-6">
-          {['results', 'ai-usage', 'cv-fit', 'timeline'].map((tab) => (
+        <div className="flex border-2 border-black mb-6 flex-wrap">
+          {['results', 'ai-usage', 'cv-fit', 'code-git', 'evaluate', 'timeline'].map((tab) => (
             <button
               key={tab}
-              className={`flex-1 px-6 py-3 font-mono text-sm font-bold border-r-2 border-black last:border-r-0 transition-colors ${
+              className={`flex-1 min-w-[100px] px-4 py-3 font-mono text-sm font-bold border-r-2 border-black last:border-r-0 transition-colors ${
                 activeTab === tab ? 'text-white' : 'bg-white hover:bg-gray-100'
               }`}
               style={activeTab === tab ? { backgroundColor: '#9D00FF' } : {}}
@@ -360,6 +329,8 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
               {tab === 'results' && 'Results'}
               {tab === 'ai-usage' && 'AI Usage'}
               {tab === 'cv-fit' && 'CV & Fit'}
+              {tab === 'code-git' && 'Code / Git'}
+              {tab === 'evaluate' && 'Evaluate'}
               {tab === 'timeline' && 'Timeline'}
             </button>
           ))}
@@ -372,8 +343,6 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
           const catScores = getCategoryScores(candidate);
           const detailedScores = bd.detailedScores || assessment.prompt_analytics?.detailed_scores || {};
           const explanations = bd.explanations || assessment.prompt_analytics?.explanations || {};
-          const comparisonScores = getCategoryScores(comparisonAssessment);
-
           const CATEGORY_CONFIG = [
             { key: 'task_completion', icon: '✅', weight: '20%' },
             { key: 'prompt_clarity', icon: '🎯', weight: '15%' },
@@ -392,44 +361,12 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
           const radarData = CATEGORY_CONFIG.filter(c => catScores[c.key] != null).map(c => ({
             signal: c.label.split(' ')[0],
             score: catScores[c.key] || 0,
-            comparisonScore: comparisonScores[c.key] || 0,
             fullMark: 10,
           }));
 
           return (
             <div className="space-y-6">
-              {/* Category Radar Chart */}
-              <div className="border-2 border-black p-4 bg-gray-50">
-                <div className="font-bold mb-3">Candidate Comparison</div>
-                <div className="grid md:grid-cols-3 gap-3 items-end">
-                  <div>
-                    <div className="font-mono text-xs text-gray-500 mb-1">Candidate A</div>
-                    <div className="border-2 border-black px-3 py-2 font-mono text-sm bg-white">{candidate.name}</div>
-                  </div>
-                  <div>
-                    <label className="font-mono text-xs text-gray-500 mb-1 block">Candidate B</label>
-                    <select
-                      aria-label="Candidate B"
-                      className="w-full border-2 border-black px-3 py-2 font-mono text-sm bg-white"
-                      value={comparisonCandidateId}
-                      onChange={(e) => {
-                        const nextId = e.target.value;
-                        setComparisonCandidateId(nextId);
-                        loadComparisonAssessment(nextId);
-                      }}
-                    >
-                      <option value="">Select candidate</option>
-                      {comparisonCandidates.map((opt) => (
-                        <option key={opt.id} value={opt.id}>{opt.full_name || opt.email}</option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-                {comparisonAssessment && (
-                  <div className="font-mono text-xs mt-3 text-green-700">Comparison active: {candidate.name} vs {comparisonAssessment.name} (charts are overlaid)</div>
-                )}
-              </div>
-
+              <p className="font-mono text-xs text-gray-500">Compare this candidate with others from the Dashboard: select 2+ candidates there and use the comparison overlay.</p>
               {radarData.length > 0 && (
                 <div className="border-2 border-black p-4">
                   <div className="font-bold mb-4">Category Breakdown</div>
@@ -440,9 +377,6 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                         <PolarAngleAxis dataKey="signal" tick={{ fontSize: 11, fontFamily: 'monospace' }} />
                         <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
                         <Radar name={candidate.name} dataKey="score" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.25} />
-                        {comparisonAssessment && (
-                          <Radar name={comparisonAssessment.name} dataKey="comparisonScore" stroke="#111827" fill="#111827" fillOpacity={0.12} />
-                        )}
                       </RadarChart>
                     </ResponsiveContainer>
                   </div>
@@ -885,6 +819,164 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                   </div>
                 </div>
               </div>
+            </div>
+          );
+        })()}
+
+        {activeTab === 'evaluate' && (() => {
+          const assessment = candidate._raw || {};
+          const rubric = assessment.evaluation_rubric || {};
+          const categories = Object.entries(rubric).filter(([, v]) => v && typeof v === 'object');
+          const prompts = assessment.ai_prompts || [];
+          const handleSaveManualEval = async () => {
+            if (!assessmentId) return;
+            setManualEvalSaving(true);
+            try {
+              const res = await assessmentsApi.updateManualEvaluation(assessmentId, {
+                category_scores: manualEvalScores,
+              });
+              if (res.data?.manual_evaluation?.category_scores) {
+                setManualEvalScores(res.data.manual_evaluation.category_scores);
+              }
+              alert('Manual evaluation saved.');
+            } catch (err) {
+              alert(err?.response?.data?.detail || 'Failed to save');
+            } finally {
+              setManualEvalSaving(false);
+            }
+          };
+          return (
+            <div className="space-y-6">
+              <div className="border-2 border-black p-4 bg-gray-50">
+                <div className="font-mono text-xs font-bold text-gray-600 mb-2">Manual rubric evaluation (excellent / good / poor). Add evidence per category.</div>
+                {categories.length === 0 ? (
+                  <p className="font-mono text-sm text-gray-500">No evaluation rubric for this task. Rubric comes from the task definition.</p>
+                ) : (
+                  <>
+                    {categories.map(([key, config]) => {
+                      const weight = config.weight != null ? Math.round(Number(config.weight) * 100) : 0;
+                      const current = manualEvalScores[key] || {};
+                      return (
+                        <div key={key} className="border border-gray-300 p-3 mb-3 bg-white">
+                          <div className="flex items-center justify-between mb-2">
+                            <span className="font-mono text-sm font-bold capitalize">{String(key).replace(/_/g, ' ')}</span>
+                            <span className="font-mono text-xs text-gray-500">{weight}%</span>
+                          </div>
+                          <div className="grid grid-cols-1 gap-2">
+                            <select
+                              className="border-2 border-black px-2 py-1 font-mono text-sm"
+                              value={current.score || ''}
+                              onChange={(e) => setManualEvalScores((prev) => ({
+                                ...prev,
+                                [key]: { ...prev[key], score: e.target.value },
+                              }))}
+                            >
+                              <option value="">—</option>
+                              <option value="excellent">Excellent</option>
+                              <option value="good">Good</option>
+                              <option value="poor">Poor</option>
+                            </select>
+                            <textarea
+                              className="border-2 border-black px-2 py-1 font-mono text-xs min-h-[60px]"
+                              placeholder="Evidence (required for this category)"
+                              value={current.evidence ?? ''}
+                              onChange={(e) => setManualEvalScores((prev) => ({
+                                ...prev,
+                                [key]: { ...prev[key], evidence: e.target.value },
+                              }))}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white hover:bg-gray-800 disabled:opacity-50"
+                      onClick={handleSaveManualEval}
+                      disabled={manualEvalSaving}
+                    >
+                      {manualEvalSaving ? 'Saving…' : 'Save manual evaluation'}
+                    </button>
+                  </>
+                )}
+              </div>
+              <div className="border-2 border-black p-4">
+                <div className="font-mono text-xs font-bold text-gray-600 mb-2">Chat log (for evidence)</div>
+                {prompts.length === 0 ? (
+                  <p className="font-mono text-sm text-gray-500">No prompts recorded.</p>
+                ) : (
+                  <div className="space-y-2 max-h-64 overflow-y-auto">
+                    {prompts.map((p, i) => (
+                      <div key={i} className="border border-gray-200 p-2 font-mono text-xs bg-white">
+                        <div className="text-gray-600 mb-1">Prompt {i + 1}</div>
+                        <div className="text-gray-800">{typeof p.message === 'string' ? p.message : (p.message?.content ?? JSON.stringify(p.message))?.slice(0, 200)}…</div>
+                        {p.response && (
+                          <div className="mt-1 text-gray-500">Response: {(typeof p.response === 'string' ? p.response : '').slice(0, 150)}…</div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
+
+        {activeTab === 'code-git' && (() => {
+          const assessment = candidate._raw || {};
+          const gitEvidence = assessment.git_evidence || {};
+          const headSha = gitEvidence.head_sha;
+          const commits = gitEvidence.commits;
+          const diffMain = gitEvidence.diff_main;
+          const diffStaged = gitEvidence.diff_staged;
+          const statusPorcelain = gitEvidence.status_porcelain;
+          const error = gitEvidence.error;
+          const hasAny = headSha || commits || diffMain || diffStaged || statusPorcelain || error;
+          if (!hasAny) {
+            return (
+              <div className="border-2 border-black p-6 bg-gray-50">
+                <div className="font-mono text-sm text-gray-600">No git evidence captured for this assessment. This can happen if the task did not use a repository or evidence capture failed.</div>
+              </div>
+            );
+          }
+          return (
+            <div className="space-y-6">
+              {assessment.completed_due_to_timeout && (
+                <div className="border-2 border-amber-400 bg-amber-50 p-3 font-mono text-sm">Assessment was auto-submitted when time expired.</div>
+              )}
+              {headSha && (
+                <div className="border-2 border-black p-4">
+                  <div className="font-mono text-xs font-bold text-gray-600 mb-1">Final HEAD (SHA)</div>
+                  <pre className="font-mono text-xs bg-black text-gray-300 p-2 overflow-x-auto">{headSha}</pre>
+                </div>
+              )}
+              {commits && (
+                <div className="border-2 border-black p-4">
+                  <div className="font-mono text-xs font-bold text-gray-600 mb-1">Commits (assessment branch)</div>
+                  <pre className="font-mono text-xs bg-black text-gray-300 p-2 overflow-auto max-h-48 whitespace-pre-wrap">{commits}</pre>
+                </div>
+              )}
+              {diffMain && (
+                <div className="border-2 border-black p-4">
+                  <div className="font-mono text-xs font-bold text-gray-600 mb-1">Diff (main...HEAD)</div>
+                  <pre className="font-mono text-xs bg-black text-green-300 p-2 overflow-auto max-h-96 whitespace-pre-wrap">{diffMain}</pre>
+                </div>
+              )}
+              {diffStaged && (
+                <div className="border-2 border-black p-4">
+                  <div className="font-mono text-xs font-bold text-gray-600 mb-1">Staged diff</div>
+                  <pre className="font-mono text-xs bg-black text-gray-300 p-2 overflow-auto max-h-48 whitespace-pre-wrap">{diffStaged}</pre>
+                </div>
+              )}
+              {statusPorcelain && (
+                <div className="border-2 border-black p-4">
+                  <div className="font-mono text-xs font-bold text-gray-600 mb-1">Status (porcelain)</div>
+                  <pre className="font-mono text-xs bg-black text-gray-300 p-2 overflow-x-auto">{statusPorcelain}</pre>
+                </div>
+              )}
+              {error && (
+                <div className="border-2 border-red-500 bg-red-50 p-3 font-mono text-sm text-red-700">{error}</div>
+              )}
             </div>
           );
         })()}

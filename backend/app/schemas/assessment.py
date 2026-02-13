@@ -84,6 +84,9 @@ class AssessmentResponse(BaseModel):
     assessment_repo_url: Optional[str] = None
     assessment_branch: Optional[str] = None
     clone_command: Optional[str] = None
+    # Manual evaluator: task rubric + saved category scores/evidence
+    evaluation_rubric: Optional[Dict[str, Any]] = None
+    manual_evaluation: Optional[Dict[str, Any]] = None
 
     model_config = {"from_attributes": True}
 

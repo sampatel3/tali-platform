@@ -583,6 +583,58 @@ def download_assessment_report_pdf(
     )
 
 
+@router.patch("/{assessment_id}/manual-evaluation")
+def update_manual_evaluation(
+    assessment_id: int,
+    body: Dict[str, Any],
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Save manual rubric evaluation (excellent/good/poor per category + evidence)."""
+    assessment = (
+        db.query(Assessment)
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    category_scores = body.get("category_scores") or {}
+    if not isinstance(category_scores, dict):
+        raise HTTPException(status_code=400, detail="category_scores must be an object")
+    allowed = {"excellent", "good", "poor"}
+    for cat, data in category_scores.items():
+        if isinstance(data, dict):
+            score = (data.get("score") or "").strip().lower()
+            if score and score not in allowed:
+                raise HTTPException(status_code=400, detail=f"Score for {cat} must be one of excellent, good, poor")
+    from ...services.evaluation_service import calculate_weighted_rubric_score
+    rubric = (assessment.task.evaluation_rubric if assessment.task else None) or {}
+    overall = None
+    if rubric and category_scores:
+        scores_flat = {
+            k: (v.get("score") if isinstance(v, dict) else v)
+            for k, v in category_scores.items()
+            if isinstance(v, dict) and v.get("score")
+        }
+        if scores_flat:
+            overall = round(calculate_weighted_rubric_score(scores_flat, rubric) * (10.0 / 3.0), 2)
+    assessment.manual_evaluation = {
+        "category_scores": category_scores,
+        "overall_score": overall,
+        "strengths": body.get("strengths") or [],
+        "improvements": body.get("improvements") or [],
+    }
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to save manual evaluation")
+    return {"success": True, "manual_evaluation": assessment.manual_evaluation}
+
+
 @router.post("/{assessment_id}/notes")
 def add_assessment_note(
     assessment_id: int,

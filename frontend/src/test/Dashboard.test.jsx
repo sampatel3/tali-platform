@@ -65,6 +65,9 @@ vi.mock('recharts', () => ({
   PolarAngleAxis: () => <div />,
   PolarRadiusAxis: () => <div />,
   Radar: () => <div />,
+  Legend: () => <div />,
+  BarChart: () => <div />,
+  Bar: () => <div />,
   LineChart: () => <div data-testid="line-chart" />,
   Line: () => <div />,
   XAxis: () => <div />,
@@ -274,10 +277,10 @@ describe('DashboardPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('All tasks')).toBeInTheDocument();
+      expect(screen.getByText('All job roles')).toBeInTheDocument();
     });
 
-    const taskSelect = screen.getByDisplayValue('All tasks');
+    const taskSelect = screen.getByDisplayValue('All job roles');
     fireEvent.change(taskSelect, { target: { value: '10' } });
 
     await waitFor(() => {
