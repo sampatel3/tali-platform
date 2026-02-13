@@ -141,7 +141,8 @@ const LandingNav = ({ onNavigate }) => {
         </button>
         {/* Desktop nav */}
         <div className="hidden md:flex items-center gap-6">
-          <button className="font-mono text-sm hover:underline" onClick={() => scrollTo('problem')}>Features</button>
+          <button className="font-mono text-sm hover:underline" onClick={() => scrollTo('why-taali')}>Why TAALI</button>
+          <button className="font-mono text-sm hover:underline" onClick={() => scrollTo('how-taali')}>How TAALI</button>
           <button className="font-mono text-sm hover:underline" onClick={() => scrollTo('pricing')}>Pricing</button>
           <button className="font-mono text-sm hover:underline" onClick={() => alert('Documentation coming soon')}>Docs</button>
           <button
@@ -162,7 +163,8 @@ const LandingNav = ({ onNavigate }) => {
       {/* Mobile menu */}
       {mobileOpen && (
         <div className="md:hidden border-t-2 border-black bg-white px-6 py-4 space-y-3">
-          <button className="block w-full text-left font-mono text-sm py-2 hover:underline" onClick={() => scrollTo('problem')}>Features</button>
+          <button className="block w-full text-left font-mono text-sm py-2 hover:underline" onClick={() => scrollTo('why-taali')}>Why TAALI</button>
+          <button className="block w-full text-left font-mono text-sm py-2 hover:underline" onClick={() => scrollTo('how-taali')}>How TAALI</button>
           <button className="block w-full text-left font-mono text-sm py-2 hover:underline" onClick={() => scrollTo('pricing')}>Pricing</button>
           <button className="block w-full text-left font-mono text-sm py-2 hover:underline" onClick={() => alert('Documentation coming soon')}>Docs</button>
           <button
@@ -271,58 +273,24 @@ const HeroSection = ({ onNavigate }) => (
   </section>
 );
 
-const ProblemSection = () => (
-  <section id="problem" className="border-b-2 border-black bg-white">
+const WhyTaaliSection = () => (
+  <section id="why-taali" className="border-b-2 border-black bg-white">
     <div className="max-w-7xl mx-auto px-6 py-20">
-      <h2 className="text-4xl font-bold text-center mb-4">Why Traditional Screening Fails</h2>
-      <p className="text-center font-mono text-gray-600 mb-12 max-w-2xl mx-auto">
-        Most interview loops reward memorization under pressure. Hiring teams need evidence of real execution with modern tooling.
+      <h2 className="text-4xl font-bold text-center mb-4">Why {BRAND.name}</h2>
+      <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">
+        We believe modern engineering hiring should measure how people think and collaborate with AI, not how well they perform
+        in puzzle interviews.
       </p>
-      <div className="grid md:grid-cols-3 gap-6">
-        <div className="border-2 border-black bg-white p-8 hover:shadow-lg transition-shadow">
-          <Clock size={32} className="mb-4" />
-          <h3 className="text-xl font-bold mb-4">Wastes Time</h3>
-          <ul className="space-y-3">
-            <li className="font-mono text-sm text-gray-700">Senior engineers spend hours in repetitive interview loops</li>
-            <li className="font-mono text-sm text-gray-700">Hiring velocity drops when interviews steal delivery time</li>
-          </ul>
-        </div>
-        <div className="border-2 border-black bg-white p-8 hover:shadow-lg transition-shadow">
-          <BarChart3 size={32} className="mb-4" />
-          <h3 className="text-xl font-bold mb-4">Tests Wrong Skills</h3>
-          <ul className="space-y-3">
-            <li className="font-mono text-sm text-gray-700">Puzzle questions rarely map to day-to-day engineering work</li>
-            <li className="font-mono text-sm text-gray-700">Candidates use coding agents daily, but interviews ignore that reality</li>
-          </ul>
-        </div>
-        <div className="border-2 border-black bg-white p-8 hover:shadow-lg transition-shadow">
-          <DollarSign size={32} className="mb-4" />
-          <h3 className="text-xl font-bold mb-4">Expensive</h3>
-          <ul className="space-y-3">
-            <li className="font-mono text-sm text-gray-700">Manual screening burns senior engineering budget</li>
-            <li className="font-mono text-sm text-gray-700">Legacy platforms add per-test costs without richer signal</li>
-          </ul>
-        </div>
-      </div>
-    </div>
-  </section>
-);
+      <p className="text-center font-mono text-gray-600 mb-12 max-w-4xl mx-auto">
+        Our mission is to help teams hire engineers who can prompt well, reason clearly, and ship reliable outcomes with coding agents.
+      </p>
 
-const WhatWeTestSection = () => (
-  <section id="what-we-test" className="border-b-2 border-black bg-white">
-    <div className="max-w-7xl mx-auto px-6 py-20">
-      <h2 className="text-4xl font-bold text-center mb-4">What {BRAND.name} Measures</h2>
-      <p className="text-center font-mono text-gray-600 mb-12 max-w-3xl mx-auto">
-        A practical scorecard across 30+ signals from real coding sessions, including how candidates work with coding agents.
-      </p>
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
         {[
-          ['Prompt clarity', 'Are requests to coding agents precise enough to produce useful output quickly?'],
-          ['Debugging behavior', 'Can they isolate failures, test hypotheses, and verify fixes cleanly?'],
-          ['Autonomy', 'Do they keep moving without needing constant interviewer guidance?'],
-          ['Communication quality', 'Can they explain decisions, tradeoffs, and risks clearly?'],
-          ['Code quality', 'Is the final implementation maintainable, testable, and production-minded?'],
-          ['Integrity signals', 'Do interaction patterns indicate authentic candidate work?'],
+          ['Prompting Is a Core Skill', 'As agents automate more implementation work, prompt quality increasingly determines engineering output quality.'],
+          ['Conversation Is Signal', 'Agent conversations reveal subtle cues about collaboration, ownership, and communication maturity.'],
+          ['Prompting Exposes Thinking', 'How candidates frame requests surfaces critical thinking, design judgment, and tradeoff awareness.'],
+          ['Efficiency Shows Experience', 'Strong candidates get better outcomes with fewer, sharper prompts and tighter iteration loops.'],
         ].map(([title, description]) => (
           <div key={title} className="border-2 border-black bg-gray-50 p-6">
             <h3 className="text-lg font-bold mb-2">{title}</h3>
@@ -333,6 +301,102 @@ const WhatWeTestSection = () => (
     </div>
   </section>
 );
+
+const HowTaaliSection = () => {
+  const dimensions = [
+    ['Tests', 'Evidence of correctness, regression protection, and validation discipline.'],
+    ['Code quality', 'Maintainability, readability, structure, and production readiness.'],
+    ['Prompt quality', 'Specificity, context framing, constraints, and instruction clarity.'],
+    ['Prompt efficiency', 'Useful output per iteration with minimal churn and retries.'],
+    ['Independence', 'Forward momentum without excessive interviewer intervention.'],
+    ['Context utilization', 'Effective use of repo, requirements, and prior interaction context.'],
+    ['Design thinking', 'Architecture and decomposition quality under real constraints.'],
+    ['Debugging strategy', 'Hypothesis-driven debugging and verification rigor.'],
+    ['Written communication', 'Clear articulation of intent, tradeoffs, and next actions.'],
+  ];
+
+  const demoComparison = [
+    { dimension: 'Prompt Quality', candidateA: 92, candidateB: 64, candidateC: 81, fullMark: 100 },
+    { dimension: 'Prompt Efficiency', candidateA: 89, candidateB: 58, candidateC: 76, fullMark: 100 },
+    { dimension: 'Design Thinking', candidateA: 84, candidateB: 72, candidateC: 79, fullMark: 100 },
+    { dimension: 'Debugging', candidateA: 86, candidateB: 69, candidateC: 74, fullMark: 100 },
+    { dimension: 'Code Quality', candidateA: 80, candidateB: 77, candidateC: 72, fullMark: 100 },
+    { dimension: 'Communication', candidateA: 90, candidateB: 61, candidateC: 83, fullMark: 100 },
+  ];
+
+  return (
+    <section id="how-taali" className="border-b-2 border-black bg-white">
+      <div className="max-w-7xl mx-auto px-6 py-20">
+        <h2 className="text-4xl font-bold text-center mb-4">How {BRAND.name} Evaluates Candidates</h2>
+        <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">
+          We convert real session behavior into a structured scorecard so hiring teams can evaluate strengths and risks with confidence.
+        </p>
+        <p className="text-center font-mono text-gray-600 mb-12 max-w-4xl mx-auto">
+          Candidates are evaluated across multiple dimensions through a proprietary scoring model calibrated to role and seniority.
+        </p>
+
+        <div className="border-2 border-black bg-gray-50 p-6 mb-8">
+          <h3 className="text-2xl font-bold mb-2">Evaluation Approach</h3>
+          <div className="grid md:grid-cols-3 gap-4 mt-4">
+            {[
+              ['Evidence capture', 'Prompt/response logs, code edits, tests, execution traces, and time-sequenced interaction data.'],
+              ['Dimension review', 'Each dimension is evaluated against consistent behavioral rubrics instead of subjective interviewer feel.'],
+              ['Role calibration', 'Assessments are tuned for role type, seniority, and hiring priorities.'],
+            ].map(([title, description]) => (
+              <div key={title} className="border-2 border-black bg-white p-4">
+                <h4 className="font-bold mb-2">{title}</h4>
+                <p className="font-mono text-sm text-gray-700">{description}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+          {dimensions.map(([title, description]) => (
+            <div key={title} className="border-2 border-black bg-white p-6">
+              <h3 className="text-lg font-bold mb-2">{title}</h3>
+              <p className="font-mono text-sm text-gray-700">{description}</p>
+            </div>
+          ))}
+        </div>
+
+        <div className="border-2 border-black bg-gray-50 p-6">
+          <h3 className="text-2xl font-bold mb-2">Example Role Persona Comparison (Demo)</h3>
+          <p className="font-mono text-sm text-gray-700 mb-5">
+            Teams can compare candidate profiles against role-oriented personas to quickly spot fit gaps in prompting, reasoning, and execution.
+          </p>
+          <div className="grid lg:grid-cols-[2fr_1fr] gap-6">
+            <div className="border-2 border-black bg-white p-3 h-[340px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <RadarChart data={demoComparison} outerRadius="72%">
+                  <PolarGrid />
+                  <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11 }} />
+                  <PolarRadiusAxis domain={[0, 100]} tickCount={6} />
+                  <Radar name="AI-Native Product Engineer" dataKey="candidateA" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.14} />
+                  <Radar name="Execution-Heavy Backend Engineer" dataKey="candidateB" stroke="#111827" fill="#111827" fillOpacity={0.06} />
+                  <Radar name="Balanced Systems Engineer" dataKey="candidateC" stroke="#0ea5e9" fill="#0ea5e9" fillOpacity={0.10} />
+                  <Tooltip />
+                </RadarChart>
+              </ResponsiveContainer>
+            </div>
+            <div className="space-y-3">
+              {[
+                ['AI-Native Product Engineer', 'Strong prompt discipline and communication, with high agent-collaboration signal across workflow decisions.'],
+                ['Execution-Heavy Backend Engineer', 'Strong implementation fundamentals but less effective prompt strategy and slower agent iteration loops.'],
+                ['Balanced Systems Engineer', 'Consistent across technical and collaboration dimensions, with room to improve prompt sharpness.'],
+              ].map(([title, description]) => (
+                <div key={title} className="border-2 border-black bg-white p-4">
+                  <h4 className="font-bold mb-1">{title}</h4>
+                  <p className="font-mono text-sm text-gray-700">{description}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+};
 
 const PricingSection = ({ onNavigate }) => (
   <section id="pricing" className="border-b-2 border-black bg-gray-50">
@@ -443,8 +507,8 @@ const LandingPage = ({ onNavigate }) => (
   <div className="min-h-screen bg-white">
     <LandingNav onNavigate={onNavigate} />
     <HeroSection onNavigate={onNavigate} />
-    <ProblemSection />
-    <WhatWeTestSection />
+    <WhyTaaliSection />
+    <HowTaaliSection />
     <PricingSection onNavigate={onNavigate} />
     <Footer />
   </div>
