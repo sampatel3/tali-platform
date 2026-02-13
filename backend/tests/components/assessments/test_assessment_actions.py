@@ -30,7 +30,7 @@ def _create_task(client, headers):
         "scenario": "Backfill missing account history",
         "repo_structure": {"files": {"src/backfill.py": "def run():\n    pass"}},
         "evaluation_rubric": {"correctness": 0.7, "readability": 0.3},
-        "extra_data": {"expected_insights": ["cache repeated prompts"], "valid_solutions": ["redis cache"]},
+        "extra_data": {"expected_insights": ["cache repeated prompts"], "valid_solutions": ["redis cache"], "expected_approaches": {"schema_evolution": ["detect and add columns"]}},
     }, headers=headers)
     return resp.json()
 
@@ -96,6 +96,7 @@ def test_candidate_can_resume_in_progress_assessment(client, monkeypatch):
     assert "repo_structure" in first_body["task"]
     assert first_body["task"]["expected_insights"] == ["cache repeated prompts"]
     assert first_body["task"]["valid_solutions"] == ["redis cache"]
+    assert first_body["task"]["expected_approaches"]["schema_evolution"] == ["detect and add columns"]
 
     second = client.post(f"/api/v1/assessments/token/{a['token']}/start")
     assert second.status_code == 200

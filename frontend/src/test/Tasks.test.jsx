@@ -101,6 +101,12 @@ const mockTasks = [
     is_template: false,
     starter_code: 'async function process() {}',
     test_code: 'test("works", () => {});',
+    task_key: 'data_eng_c_backfill_schema',
+    role: 'data_engineer',
+    scenario: 'Compliance audit needs full history and schema keeps changing.',
+    repo_structure: { files: { 'pipeline/main.py': 'print("ok")' } },
+    evaluation_rubric: { implementation: { weight: 0.2 } },
+    extra_data: { expected_approaches: { backfill: ['delete-then-insert'] } },
   },
   {
     id: 11,
@@ -258,6 +264,25 @@ describe('TasksPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Loading tasks...')).toBeInTheDocument();
+    });
+  });
+
+
+  it('view task shows JSON preview aligned with task context schema', async () => {
+    await renderAppOnTasksPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Async Pipeline Debugging')).toBeInTheDocument();
+    });
+
+    const viewButtons = screen.getAllByTitle('View task');
+    fireEvent.click(viewButtons[0]);
+
+    await waitFor(() => {
+      expect(screen.getByText('Task JSON Preview')).toBeInTheDocument();
+      expect(screen.getByText(/"task_id": "data_eng_c_backfill_schema"/)).toBeInTheDocument();
+      expect(screen.getByText(/"repo_structure"/)).toBeInTheDocument();
+      expect(screen.getByText(/"expected_approaches"/)).toBeInTheDocument();
     });
   });
 
