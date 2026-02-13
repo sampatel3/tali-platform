@@ -1145,6 +1145,50 @@ const NewAssessmentModal = ({ onClose, onCreated, candidate: prefillCandidate })
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const getEmailTemplate = (token, candidateName, candidateEmail, taskName, durationMinutes) => {
+    const link = getCandidateLink(token);
+    const name = candidateName || candidateEmail || 'there';
+    const firstName = name.split(' ')[0];
+    const duration = durationMinutes || 30;
+    const task = taskName || 'Technical Assessment';
+    return `Subject: Your Technical Assessment — ${task}
+
+Hi ${firstName},
+
+Thank you for your interest. As part of our process, we'd like you to complete a short technical assessment.
+
+Assessment: ${task}
+Time allowed: ${duration} minutes
+Your unique link: ${link}
+
+A few things to note:
+- The assessment is self-contained — no setup required, just a browser
+- The timer starts when you click Begin
+- You can use the built-in AI assistant during the task
+- Make sure you're in a quiet place with a stable internet connection before starting
+
+Please complete the assessment at your earliest convenience.
+
+If you have any questions, just reply to this email.
+
+Good luck!`;
+  };
+
+  const [copiedEmail, setCopiedEmail] = useState(false);
+  const handleCopyEmail = () => {
+    if (!createdAssessment) return;
+    const template = getEmailTemplate(
+      createdAssessment.token,
+      form.candidate_name || prefillCandidate?.full_name,
+      form.candidate_email || prefillCandidate?.email,
+      createdAssessment.task_name,
+      createdAssessment.duration_minutes,
+    );
+    navigator.clipboard.writeText(template);
+    setCopiedEmail(true);
+    setTimeout(() => setCopiedEmail(false), 2000);
+  };
+
   const handleCreate = async () => {
     setError('');
     if (!form.candidate_email || !form.task_id) {
@@ -1167,39 +1211,65 @@ const NewAssessmentModal = ({ onClose, onCreated, candidate: prefillCandidate })
     }
   };
 
-  // After creation: show the link
+  // After creation: show email template + link
   if (createdAssessment) {
     const link = getCandidateLink(createdAssessment.token);
+    const candidateName = form.candidate_name || prefillCandidate?.full_name;
+    const candidateEmail = form.candidate_email || prefillCandidate?.email;
+    const emailTemplate = getEmailTemplate(
+      createdAssessment.token,
+      candidateName,
+      candidateEmail,
+      createdAssessment.task_name,
+      createdAssessment.duration_minutes,
+    );
     return (
       <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-        <div className="bg-white border-2 border-black p-8 w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-          <div className="text-center mb-6">
-            <div
-              className="inline-flex items-center justify-center w-16 h-16 border-2 border-black mb-4"
-              style={{ backgroundColor: '#9D00FF' }}
-            >
-              <CheckCircle size={32} className="text-white" />
+        <div className="bg-white border-2 border-black p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="inline-flex items-center justify-center w-10 h-10 border-2 border-black flex-shrink-0" style={{ backgroundColor: '#9D00FF' }}>
+              <CheckCircle size={20} className="text-white" />
             </div>
-            <h2 className="text-2xl font-bold">Assessment Created</h2>
-            <p className="font-mono text-sm text-gray-600 mt-2">
-              Share this link with <strong>{form.candidate_name || form.candidate_email}</strong>
-            </p>
+            <div>
+              <h2 className="text-xl font-bold">Assessment Created</h2>
+              <p className="font-mono text-xs text-gray-500">Send the email below to {candidateName || candidateEmail}</p>
+            </div>
           </div>
-          <div className="border-2 border-black p-4 mb-4 bg-gray-50">
-            <label className="block font-mono text-xs text-gray-500 mb-2">CANDIDATE ASSESSMENT LINK</label>
-            <div className="font-mono text-xs break-all text-gray-800">{link}</div>
+
+          {/* Email template */}
+          <div className="border-2 border-black mb-4">
+            <div className="flex items-center justify-between px-3 py-2 border-b-2 border-black bg-gray-50">
+              <span className="font-mono text-xs font-bold text-gray-600">EMAIL TEMPLATE</span>
+              <span className="font-mono text-xs text-gray-400">Copy and paste into your email client</span>
+            </div>
+            <pre className="p-3 font-mono text-xs text-gray-800 whitespace-pre-wrap leading-relaxed">{emailTemplate}</pre>
           </div>
+
           <button
-            className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors flex items-center justify-center gap-2 mb-3"
-            style={{ backgroundColor: copied ? '#22c55e' : '#9D00FF' }}
-            onClick={handleCopy}
+            className="w-full border-2 border-black py-3 font-bold text-white flex items-center justify-center gap-2 mb-2"
+            style={{ backgroundColor: copiedEmail ? '#22c55e' : '#9D00FF' }}
+            onClick={handleCopyEmail}
           >
-            {copied ? <><Check size={18} /> Copied!</> : <><Clipboard size={18} /> Copy Link</>}
+            {copiedEmail ? <><Check size={16} /> Email Copied!</> : <><Clipboard size={16} /> Copy Email</>}
           </button>
-          <button
-            className="w-full border-2 border-black py-3 font-bold hover:bg-gray-100 transition-colors"
-            onClick={onClose}
-          >
+
+          {/* Link as secondary action */}
+          <div className="border border-gray-200 p-2 mb-3">
+            <div className="font-mono text-xs text-gray-400 mb-1">or copy just the link</div>
+            <div className="flex items-center gap-2">
+              <span className="font-mono text-xs text-gray-700 truncate flex-1">{link}</span>
+              <button
+                className="border border-black px-2 py-1 font-mono text-xs flex-shrink-0 flex items-center gap-1"
+                style={{ backgroundColor: copied ? '#22c55e' : 'white', color: copied ? 'white' : 'black' }}
+                onClick={handleCopy}
+              >
+                {copied ? <Check size={12} /> : <Clipboard size={12} />}
+                {copied ? 'Copied' : 'Copy'}
+              </button>
+            </div>
+          </div>
+
+          <button className="w-full border-2 border-black py-2 font-mono text-sm font-bold hover:bg-black hover:text-white" onClick={onClose}>
             Done
           </button>
         </div>
@@ -1400,7 +1470,7 @@ const DashboardPage = ({ onNavigate, onViewCandidate }) => {
       <div className="hidden md:block max-w-7xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-3xl font-bold">Dashboard</h1>
+            <h1 className="text-3xl font-bold">Assessments</h1>
             <p className="font-mono text-sm text-gray-600 mt-1">Welcome back, {userName}</p>
           </div>
           <button
@@ -1644,6 +1714,7 @@ const CandidatesPage = ({ onNavigate, onViewCandidate }) => {
   const [sendAssessmentCandidate, setSendAssessmentCandidate] = useState(null);
   const [candidateAssessments, setCandidateAssessments] = useState([]);
   const [loadingAssessments, setLoadingAssessments] = useState(false);
+  const [copiedInviteId, setCopiedInviteId] = useState(null);
   const [form, setForm] = useState({ email: '', full_name: '', position: '' });
   const [editingId, setEditingId] = useState(null);
   const [uploadingDoc, setUploadingDoc] = useState(null); // { candidateId, type: 'cv'|'job_spec' }
@@ -1981,32 +2052,52 @@ const CandidatesPage = ({ onNavigate, onViewCandidate }) => {
                                     <div className="font-mono text-xs">{a.task_name || 'Assessment'}</div>
                                     <div className="font-mono text-xs text-gray-500">Status: {a.status} | Score: {a.score ?? '--'}</div>
                                   </div>
-                                  <button
-                                    type="button"
-                                    className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
-                                    onClick={() =>
-                                      onViewCandidate({
-                                        id: a.id,
-                                        name: a.candidate_name || c.full_name || c.email,
-                                        email: a.candidate_email || c.email,
-                                        task: a.task_name || 'Assessment',
-                                        status: a.status || 'pending',
-                                        score: a.score ?? null,
-                                        time: a.duration_taken ? `${Math.round(a.duration_taken / 60)}m` : '—',
-                                        position: c.position || '',
-                                        completedDate: a.completed_at ? new Date(a.completed_at).toLocaleDateString() : null,
-                                        breakdown: a.breakdown || null,
-                                        prompts: a.prompt_count ?? 0,
-                                        promptsList: a.prompts_list || [],
-                                        timeline: a.timeline || [],
-                                        results: a.results || [],
-                                        token: a.token,
-                                        _raw: a,
-                                      })
-                                    }
-                                  >
-                                    Open Detail
-                                  </button>
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
+                                      onClick={() => {
+                                        const base = window.location.origin;
+                                        const link = `${base}/#/assess/${a.token}`;
+                                        const name = a.candidate_name || c.full_name || c.email || 'there';
+                                        const firstName = name.split(' ')[0];
+                                        const duration = a.duration_minutes || 30;
+                                        const task = a.task_name || 'Technical Assessment';
+                                        const template = `Subject: Your Technical Assessment — ${task}\n\nHi ${firstName},\n\nThank you for your interest. As part of our process, we'd like you to complete a short technical assessment.\n\nAssessment: ${task}\nTime allowed: ${duration} minutes\nYour unique link: ${link}\n\nA few things to note:\n- The assessment is self-contained — no setup required, just a browser\n- The timer starts when you click Begin\n- You can use the built-in AI assistant during the task\n- Make sure you're in a quiet place with a stable internet connection before starting\n\nPlease complete the assessment at your earliest convenience.\n\nIf you have any questions, just reply to this email.\n\nGood luck!`;
+                                        navigator.clipboard.writeText(template);
+                                        setCopiedInviteId(a.id);
+                                        setTimeout(() => setCopiedInviteId(null), 2000);
+                                      }}
+                                    >
+                                      {copiedInviteId === a.id ? 'Copied!' : 'Copy Invite Email'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
+                                      onClick={() =>
+                                        onViewCandidate({
+                                          id: a.id,
+                                          name: a.candidate_name || c.full_name || c.email,
+                                          email: a.candidate_email || c.email,
+                                          task: a.task_name || 'Assessment',
+                                          status: a.status || 'pending',
+                                          score: a.score ?? null,
+                                          time: a.duration_taken ? `${Math.round(a.duration_taken / 60)}m` : '—',
+                                          position: c.position || '',
+                                          completedDate: a.completed_at ? new Date(a.completed_at).toLocaleDateString() : null,
+                                          breakdown: a.breakdown || null,
+                                          prompts: a.prompt_count ?? 0,
+                                          promptsList: a.prompts_list || [],
+                                          timeline: a.timeline || [],
+                                          results: a.results || [],
+                                          token: a.token,
+                                          _raw: a,
+                                        })
+                                      }
+                                    >
+                                      Open Detail
+                                    </button>
+                                  </div>
                                 </div>
                               ))}
                             </div>
