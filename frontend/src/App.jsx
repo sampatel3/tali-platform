@@ -62,7 +62,7 @@ const weeklyData = [
 // SHARED COMPONENTS
 // ============================================================
 
-const BrandGlyph = ({ borderClass = 'border-black', sizeClass = 'w-10 h-10', markSizeClass = 'w-6 h-6' }) => (
+const BrandGlyph = ({ borderClass = 'border-black', sizeClass = 'w-10 h-10', markSizeClass = 'w-[1.8rem] h-[1.8rem]' }) => (
   <div
     className={`${sizeClass} border-2 ${borderClass} flex items-center justify-center`}
     style={{ backgroundColor: '#9D00FF' }}
@@ -70,9 +70,9 @@ const BrandGlyph = ({ borderClass = 'border-black', sizeClass = 'w-10 h-10', mar
   >
     <svg viewBox="0 0 24 24" className={markSizeClass} fill="none">
       <path
-        d="M4 5v14M8 5v14M12 5v14M16 5v14M2.5 17.5L18.5 6.5"
+        d="M6 4.5v15M10 4.5v15M14 4.5v15M18 4.5v15M4 18.5L20 5.5"
         stroke="#FFFFFF"
-        strokeWidth="2.1"
+        strokeWidth="2.5"
         strokeLinecap="round"
       />
     </svg>

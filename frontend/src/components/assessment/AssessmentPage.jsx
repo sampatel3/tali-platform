@@ -74,7 +74,7 @@ function languageFromPath(path) {
   return "plaintext";
 }
 
-const AssessmentBrandGlyph = ({ sizeClass = 'w-8 h-8', markSizeClass = 'w-5 h-5' }) => (
+const AssessmentBrandGlyph = ({ sizeClass = 'w-8 h-8', markSizeClass = 'w-6 h-6' }) => (
   <div
     className={`${sizeClass} border-2 border-black flex items-center justify-center`}
     style={{ backgroundColor: '#9D00FF' }}
@@ -82,9 +82,9 @@ const AssessmentBrandGlyph = ({ sizeClass = 'w-8 h-8', markSizeClass = 'w-5 h-5'
   >
     <svg viewBox="0 0 24 24" className={markSizeClass} fill="none">
       <path
-        d="M4 5v14M8 5v14M12 5v14M16 5v14M2.5 17.5L18.5 6.5"
+        d="M6 4.5v15M10 4.5v15M14 4.5v15M18 4.5v15M4 18.5L20 5.5"
         stroke="#FFFFFF"
-        strokeWidth="2.1"
+        strokeWidth="2.5"
         strokeLinecap="round"
       />
     </svg>
@@ -428,7 +428,7 @@ export default function AssessmentPage({
       <div className="h-screen flex items-center justify-center bg-white">
         <div className="text-center">
           <div className="mx-auto mb-4 animate-pulse w-fit">
-            <AssessmentBrandGlyph sizeClass="w-16 h-16" markSizeClass="w-9 h-9" />
+            <AssessmentBrandGlyph sizeClass="w-16 h-16" markSizeClass="w-[2.7rem] h-[2.7rem]" />
           </div>
           <p className="font-mono text-sm text-gray-600">
             Loading assessment...
@@ -444,7 +444,7 @@ export default function AssessmentPage({
       <div className="h-screen flex items-center justify-center bg-white">
         <div className="text-center border-2 border-black p-12 max-w-md">
           <div className="mx-auto mb-6 w-fit">
-            <AssessmentBrandGlyph sizeClass="w-16 h-16" markSizeClass="w-9 h-9" />
+            <AssessmentBrandGlyph sizeClass="w-16 h-16" markSizeClass="w-[2.7rem] h-[2.7rem]" />
           </div>
           <h1 className="text-3xl font-bold mb-4">Assessment Submitted</h1>
           <p className="font-mono text-sm text-gray-600 mb-2">
