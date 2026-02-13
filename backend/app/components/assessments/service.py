@@ -121,6 +121,7 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
     resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
 
     from .repository import time_remaining_seconds
+    task_extra_data = task.extra_data or {}
     return {
         "assessment_id": assessment.id,
         "token": assessment.token,
@@ -136,6 +137,8 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
             "repo_structure": task.repo_structure,
             "evaluation_rubric": task.evaluation_rubric,
             "extra_data": task.extra_data,
+            "expected_insights": task_extra_data.get("expected_insights"),
+            "valid_solutions": task_extra_data.get("valid_solutions"),
             "calibration_prompt": None if settings.MVP_DISABLE_CALIBRATION else (task.calibration_prompt if task else None),
             "proctoring_enabled": False if settings.MVP_DISABLE_PROCTORING else (task.proctoring_enabled if task else False),
         },
