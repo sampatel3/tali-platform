@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
+from ...services.evaluation_result_service import normalize_stored_evaluation_result
 
 
 # ---------------------------------------------------------------------------
@@ -277,6 +278,13 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
     if not candidate_name and candidate_email:
         candidate_name = candidate_email
     task_name = assessment.task.name if assessment.task else ""
+    evaluation_rubric = (assessment.task.evaluation_rubric if assessment.task else None) or {}
+    evaluation_result = normalize_stored_evaluation_result(
+        getattr(assessment, "manual_evaluation", None),
+        assessment_id=assessment.id,
+        completed_due_to_timeout=bool(getattr(assessment, "completed_due_to_timeout", False)),
+        evaluation_rubric=evaluation_rubric,
+    )
 
     # Derive a safe CV indicator (filename only, never the server path)
     cv_uploaded = bool(assessment.cv_file_url)
@@ -353,7 +361,8 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "candidate_name": candidate_name,
         "candidate_email": candidate_email,
         "task_name": task_name,
-        "evaluation_rubric": (assessment.task.evaluation_rubric if assessment.task else None) or {},
-        "manual_evaluation": getattr(assessment, "manual_evaluation", None),
+        "evaluation_rubric": evaluation_rubric,
+        "manual_evaluation": evaluation_result,
+        "evaluation_result": evaluation_result,
     }
     return data

@@ -24,7 +24,7 @@ def _send_verification_email(user: User) -> None:
         logger.warning("RESEND_API_KEY not set — skipping verification email for %s", user.email)
         return
     try:
-        verification_link = f"{settings.FRONTEND_URL}/#/verify-email?token={user.email_verification_token}"
+        verification_link = f"{settings.FRONTEND_URL}/verify-email?token={user.email_verification_token}"
         email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
         email_svc.send_email_verification(
             to_email=user.email,
@@ -171,7 +171,7 @@ def forgot_password(body: ForgotPasswordRequest, db: Session = Depends(get_db)):
         except Exception:
             db.rollback()
             raise HTTPException(status_code=500, detail="Failed to create reset token")
-        reset_link = f"{settings.FRONTEND_URL}/#/reset-password?token={raw_token}"
+        reset_link = f"{settings.FRONTEND_URL}/reset-password?token={raw_token}"
         email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
         email_svc.send_password_reset(to_email=user.email, reset_link=reset_link)
     return {"detail": "If an account exists with that email, you will receive a password reset link."}

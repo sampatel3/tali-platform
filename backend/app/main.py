@@ -12,7 +12,7 @@ from starlette.responses import Response as StarletteResponse
 from .platform.brand import BRAND_APP_DESCRIPTION, BRAND_NAME
 from .platform.config import settings
 from .platform.logging import setup_logging
-from .platform.middleware import RequestLoggingMiddleware, RateLimitMiddleware
+from .platform.middleware import RequestLoggingMiddleware, RateLimitMiddleware, EnterpriseAccessMiddleware
 
 # Set up logging
 logger = setup_logging()
@@ -128,6 +128,9 @@ app.add_middleware(
 
 # Rate limiting (auth and assessment endpoints)
 app.add_middleware(RateLimitMiddleware)
+
+# Enterprise access controls (SSO enforcement on password-auth endpoints)
+app.add_middleware(EnterpriseAccessMiddleware)
 
 # Request logging
 app.add_middleware(RequestLoggingMiddleware)

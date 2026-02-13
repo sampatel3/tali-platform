@@ -1169,7 +1169,7 @@ const NewAssessmentModal = ({ onClose, onCreated, candidate: prefillCandidate })
 
   const getCandidateLink = (token) => {
     const base = window.location.origin;
-    return `${base}/#/assess/${token}`;
+    return `${base}/assess/${token}`;
   };
 
   const handleCopy = () => {
@@ -1553,8 +1553,7 @@ const WorkableCallbackPage = ({ code, onNavigate }) => {
         await orgsApi.connectWorkable(code);
         if (!cancelled) {
           setStatus('success');
-          window.history.replaceState(null, '', `${window.location.origin}${window.location.pathname || '/'}#/settings`);
-          onNavigate('settings');
+          onNavigate('settings', { replace: true });
         }
       } catch (err) {
         if (!cancelled) {
@@ -1738,87 +1737,219 @@ function App() {
   /** Start response from candidate welcome — passed to AssessmentPage so it does not call start() again */
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
 
-  // Workable OAuth callback: pathname is /settings/workable/callback?code=...
+  const parseRouteFromLocation = () => {
+    if (typeof window === 'undefined') {
+      return {
+        currentPage: 'landing',
+        assessmentToken: null,
+        assessmentIdFromLink: null,
+        resetPasswordToken: '',
+        verifyEmailToken: '',
+      };
+    }
+
+    const pathname = window.location.pathname || '/';
+    const searchParams = new URLSearchParams(window.location.search || '');
+
+    if (pathname === '/settings/workable/callback') {
+      return {
+        currentPage: 'workable-callback',
+        assessmentToken: null,
+        assessmentIdFromLink: null,
+        resetPasswordToken: '',
+        verifyEmailToken: '',
+      };
+    }
+
+    const assessPath = pathname.match(/^\/assess\/(.+)$/);
+    if (assessPath) {
+      return {
+        currentPage: 'candidate-welcome',
+        assessmentToken: decodeURIComponent(assessPath[1]),
+        assessmentIdFromLink: null,
+        resetPasswordToken: '',
+        verifyEmailToken: '',
+      };
+    }
+
+    const assessWithIdPath = pathname.match(/^\/assessment\/(\d+)$/);
+    if (assessWithIdPath && searchParams.get('token')) {
+      return {
+        currentPage: 'candidate-welcome',
+        assessmentToken: searchParams.get('token'),
+        assessmentIdFromLink: Number(assessWithIdPath[1]),
+        resetPasswordToken: '',
+        verifyEmailToken: '',
+      };
+    }
+
+    if (pathname === '/assessment/live') {
+      return {
+        currentPage: 'assessment',
+        assessmentToken: searchParams.get('token'),
+        assessmentIdFromLink: null,
+        resetPasswordToken: '',
+        verifyEmailToken: '',
+      };
+    }
+
+    if (pathname === '/reset-password') {
+      return {
+        currentPage: 'reset-password',
+        assessmentToken: null,
+        assessmentIdFromLink: null,
+        resetPasswordToken: searchParams.get('token') || '',
+        verifyEmailToken: '',
+      };
+    }
+
+    if (pathname === '/verify-email') {
+      return {
+        currentPage: 'verify-email',
+        assessmentToken: null,
+        assessmentIdFromLink: null,
+        resetPasswordToken: '',
+        verifyEmailToken: searchParams.get('token') || '',
+      };
+    }
+
+    const hash = window.location.hash || '';
+    // Backward compatibility: accept legacy hash routes and normalize to path routes.
+    // Handle these before static "/" route matching so "/#/reset-password" works.
+    const hashAssess = hash.match(/^#\/assess\/(.+)$/);
+    if (hashAssess) {
+      const token = decodeURIComponent(hashAssess[1]);
+      window.history.replaceState(null, '', `/assess/${encodeURIComponent(token)}`);
+      return {
+        currentPage: 'candidate-welcome',
+        assessmentToken: token,
+        assessmentIdFromLink: null,
+        resetPasswordToken: '',
+        verifyEmailToken: '',
+      };
+    }
+    const hashAssessment = hash.match(/^#\/assessment\/(\d+)\?token=(.+)$/);
+    if (hashAssessment) {
+      const id = Number(hashAssessment[1]);
+      const token = decodeURIComponent(hashAssessment[2]);
+      window.history.replaceState(null, '', `/assessment/${id}?token=${encodeURIComponent(token)}`);
+      return {
+        currentPage: 'candidate-welcome',
+        assessmentToken: token,
+        assessmentIdFromLink: id,
+        resetPasswordToken: '',
+        verifyEmailToken: '',
+      };
+    }
+    if (hash.startsWith('#/reset-password')) {
+      const query = hash.split('?')[1] || '';
+      const token = new URLSearchParams(query).get('token') || '';
+      window.history.replaceState(null, '', `/reset-password${token ? `?token=${encodeURIComponent(token)}` : ''}`);
+      return {
+        currentPage: 'reset-password',
+        assessmentToken: null,
+        assessmentIdFromLink: null,
+        resetPasswordToken: token,
+        verifyEmailToken: '',
+      };
+    }
+    if (hash.startsWith('#/verify-email')) {
+      const query = hash.split('?')[1] || '';
+      const token = new URLSearchParams(query).get('token') || '';
+      window.history.replaceState(null, '', `/verify-email${token ? `?token=${encodeURIComponent(token)}` : ''}`);
+      return {
+        currentPage: 'verify-email',
+        assessmentToken: null,
+        assessmentIdFromLink: null,
+        resetPasswordToken: '',
+        verifyEmailToken: token,
+      };
+    }
+    const hashStatic = {
+      '#/dashboard': '/dashboard',
+      '#/settings': '/settings',
+      '#/login': '/login',
+      '#/register': '/register',
+      '#/forgot-password': '/forgot-password',
+    };
+    if (hashStatic[hash]) {
+      const target = hashStatic[hash];
+      window.history.replaceState(null, '', target);
+      return {
+        currentPage: staticRoutes[target],
+        assessmentToken: null,
+        assessmentIdFromLink: null,
+        resetPasswordToken: '',
+        verifyEmailToken: '',
+      };
+    }
+
+    const staticRoutes = {
+      '/': 'landing',
+      '/login': 'login',
+      '/register': 'register',
+      '/forgot-password': 'forgot-password',
+      '/dashboard': 'dashboard',
+      '/candidates': 'candidates',
+      '/candidate-detail': 'candidate-detail',
+      '/tasks': 'tasks',
+      '/analytics': 'analytics',
+      '/settings': 'settings',
+    };
+    if (staticRoutes[pathname]) {
+      return {
+        currentPage: staticRoutes[pathname],
+        assessmentToken: null,
+        assessmentIdFromLink: null,
+        resetPasswordToken: '',
+        verifyEmailToken: '',
+      };
+    }
+
+    return {
+      currentPage: 'landing',
+      assessmentToken: null,
+      assessmentIdFromLink: null,
+      resetPasswordToken: '',
+      verifyEmailToken: '',
+    };
+  };
+
+  const initialRoute = parseRouteFromLocation();
+  const [currentPage, setCurrentPage] = useState(initialRoute.currentPage);
+  const [assessmentToken, setAssessmentToken] = useState(initialRoute.assessmentToken);
+  const [assessmentIdFromLink, setAssessmentIdFromLink] = useState(initialRoute.assessmentIdFromLink);
+  const [resetPasswordToken, setResetPasswordToken] = useState(initialRoute.resetPasswordToken);
+  const [verifyEmailToken, setVerifyEmailToken] = useState(initialRoute.verifyEmailToken);
+
   const isWorkableCallback = typeof window !== 'undefined' && window.location.pathname === '/settings/workable/callback';
   const workableCallbackCode = isWorkableCallback ? new URLSearchParams(window.location.search).get('code') : null;
 
-  // Parse hash route on initial load
-  const initialHash = window.location.hash;
-  const initialAssessMatch = initialHash.match(/^#\/assess\/(.+)$/);
-  const initialAssessWithIdMatch = initialHash.match(/^#\/assessment\/(\d+)\?token=(.+)$/);
-  const pathAssessMatch = typeof window !== 'undefined' ? window.location.pathname.match(/^\/assessment\/(\d+)$/) : null;
-  const pathAssessToken = typeof window !== 'undefined' ? new URLSearchParams(window.location.search).get('token') : null;
-  const initialResetMatch = initialHash.match(/^#\/reset-password(?:\?(.*))?$/);
-  const initialVerifyMatch = initialHash.match(/^#\/verify-email(?:\?(.*))?$/);
-  const getResetToken = () => {
-    const qs = initialHash.split('?')[1] || '';
-    const params = new URLSearchParams(qs);
-    return params.get('token') || '';
-  };
-  const getVerifyToken = () => {
-    const qs = initialHash.split('?')[1] || '';
-    const params = new URLSearchParams(qs);
-    return params.get('token') || '';
-  };
-  const [currentPage, setCurrentPage] = useState(
-    isWorkableCallback
-      ? 'workable-callback'
-      : (initialAssessMatch || initialAssessWithIdMatch || (pathAssessMatch && pathAssessToken))
-        ? 'candidate-welcome'
-        : initialVerifyMatch
-          ? 'verify-email'
-          : initialResetMatch
-            ? 'reset-password'
-            : 'landing'
-  );
-  const [assessmentToken, setAssessmentToken] = useState(
-    initialAssessWithIdMatch
-      ? initialAssessWithIdMatch[2]
-      : (pathAssessMatch && pathAssessToken)
-        ? pathAssessToken
-        : (initialAssessMatch ? initialAssessMatch[1] : null)
-  );
-  const [assessmentIdFromLink, setAssessmentIdFromLink] = useState(
-    initialAssessWithIdMatch
-      ? Number(initialAssessWithIdMatch[1])
-      : (pathAssessMatch ? Number(pathAssessMatch[1]) : null)
-  );
-  const [resetPasswordToken, setResetPasswordToken] = useState(initialResetMatch ? getResetToken() : '');
-  const [verifyEmailToken, setVerifyEmailToken] = useState(initialVerifyMatch ? getVerifyToken() : '');
-
-  // Handle hash-based routing for candidate assessment and reset-password links
   useEffect(() => {
-    const handleHashRoute = () => {
-      const hash = window.location.hash;
-      const assessMatch = hash.match(/^#\/assess\/(.+)$/);
-      const assessWithIdMatch = hash.match(/^#\/assessment\/(\d+)\?token=(.+)$/);
-      const resetMatch = hash.match(/^#\/reset-password(?:\?(.*))?$/);
-      if (assessWithIdMatch) {
-        setAssessmentToken(assessWithIdMatch[2]);
-        setAssessmentIdFromLink(Number(assessWithIdMatch[1]));
-        setCurrentPage('candidate-welcome');
-      } else if (assessMatch) {
-        setAssessmentToken(assessMatch[1]);
-        setAssessmentIdFromLink(null);
-        setCurrentPage('candidate-welcome');
-      } else if (hash.match(/^#\/verify-email/)) {
-        const qs = (hash.split('?')[1] || '');
-        setVerifyEmailToken(new URLSearchParams(qs).get('token') || '');
-        setCurrentPage('verify-email');
-      } else if (resetMatch) {
-        const qs = (hash.split('?')[1] || '');
-        setResetPasswordToken(new URLSearchParams(qs).get('token') || '');
-        setCurrentPage('reset-password');
-      }
+    const syncRouteState = () => {
+      const route = parseRouteFromLocation();
+      setCurrentPage(route.currentPage);
+      setAssessmentToken(route.assessmentToken);
+      setAssessmentIdFromLink(route.assessmentIdFromLink);
+      setResetPasswordToken(route.resetPasswordToken);
+      setVerifyEmailToken(route.verifyEmailToken);
     };
-    window.addEventListener('hashchange', handleHashRoute);
-    return () => window.removeEventListener('hashchange', handleHashRoute);
+
+    window.addEventListener('popstate', syncRouteState);
+    window.addEventListener('hashchange', syncRouteState);
+    return () => {
+      window.removeEventListener('popstate', syncRouteState);
+      window.removeEventListener('hashchange', syncRouteState);
+    };
   }, []);
 
   // Auto-redirect: if already authenticated and on landing/login/forgot-password, go to dashboard
   useEffect(() => {
     if (isAuthenticated && ['landing', 'login', 'forgot-password'].includes(currentPage)) {
       setCurrentPage('dashboard');
+      if (typeof window !== 'undefined' && window.location.pathname !== '/dashboard') {
+        window.history.replaceState(null, '', '/dashboard');
+      }
     }
   }, [isAuthenticated, currentPage]);
 
@@ -1826,11 +1957,75 @@ function App() {
   useEffect(() => {
     if (!authLoading && !isAuthenticated && ['dashboard', 'candidates', 'analytics', 'settings', 'tasks', 'candidate-detail'].includes(currentPage)) {
       setCurrentPage('landing');
+      if (typeof window !== 'undefined' && window.location.pathname !== '/') {
+        window.history.replaceState(null, '', '/');
+      }
     }
   }, [isAuthenticated, authLoading, currentPage]);
 
-  const navigateToPage = (page) => {
+  const pathForPage = (page, options = {}) => {
+    switch (page) {
+      case 'landing':
+        return '/';
+      case 'login':
+        return '/login';
+      case 'register':
+        return '/register';
+      case 'forgot-password':
+        return '/forgot-password';
+      case 'reset-password':
+        return `/reset-password${options.resetPasswordToken ? `?token=${encodeURIComponent(options.resetPasswordToken)}` : ''}`;
+      case 'verify-email':
+        return `/verify-email${options.verifyEmailToken ? `?token=${encodeURIComponent(options.verifyEmailToken)}` : ''}`;
+      case 'dashboard':
+        return '/dashboard';
+      case 'candidates':
+        return '/candidates';
+      case 'candidate-detail':
+        return '/candidate-detail';
+      case 'tasks':
+        return '/tasks';
+      case 'analytics':
+        return '/analytics';
+      case 'settings':
+        return '/settings';
+      case 'candidate-welcome':
+        if (options.assessmentIdFromLink && options.assessmentToken) {
+          return `/assessment/${options.assessmentIdFromLink}?token=${encodeURIComponent(options.assessmentToken)}`;
+        }
+        if (options.assessmentToken) {
+          return `/assess/${encodeURIComponent(options.assessmentToken)}`;
+        }
+        return '/';
+      case 'assessment':
+        return `/assessment/live${options.assessmentToken ? `?token=${encodeURIComponent(options.assessmentToken)}` : ''}`;
+      case 'workable-callback':
+        return '/settings/workable/callback';
+      default:
+        return null;
+    }
+  };
+
+  const navigateToPage = (page, options = {}) => {
+    if (Object.prototype.hasOwnProperty.call(options, 'assessmentToken')) setAssessmentToken(options.assessmentToken);
+    if (Object.prototype.hasOwnProperty.call(options, 'assessmentIdFromLink')) setAssessmentIdFromLink(options.assessmentIdFromLink);
+    if (Object.prototype.hasOwnProperty.call(options, 'resetPasswordToken')) setResetPasswordToken(options.resetPasswordToken);
+    if (Object.prototype.hasOwnProperty.call(options, 'verifyEmailToken')) setVerifyEmailToken(options.verifyEmailToken);
     setCurrentPage(page);
+
+    const nextPath = pathForPage(page, {
+      assessmentToken: Object.prototype.hasOwnProperty.call(options, 'assessmentToken') ? options.assessmentToken : assessmentToken,
+      assessmentIdFromLink: Object.prototype.hasOwnProperty.call(options, 'assessmentIdFromLink') ? options.assessmentIdFromLink : assessmentIdFromLink,
+      resetPasswordToken: Object.prototype.hasOwnProperty.call(options, 'resetPasswordToken') ? options.resetPasswordToken : resetPasswordToken,
+      verifyEmailToken: Object.prototype.hasOwnProperty.call(options, 'verifyEmailToken') ? options.verifyEmailToken : verifyEmailToken,
+    });
+    if (typeof window !== 'undefined' && nextPath) {
+      const currentPath = `${window.location.pathname}${window.location.search}`;
+      if (currentPath !== nextPath) {
+        const historyMethod = options.replace ? 'replaceState' : 'pushState';
+        window.history[historyMethod](null, '', nextPath);
+      }
+    }
     window.scrollTo(0, 0);
   };
 
@@ -1840,8 +2035,7 @@ function App() {
 
   const navigateToCandidate = (candidate) => {
     setSelectedCandidate(candidate);
-    setCurrentPage('candidate-detail');
-    window.scrollTo(0, 0);
+    navigateToPage('candidate-detail');
   };
 
   // Show nothing while auth is validating token

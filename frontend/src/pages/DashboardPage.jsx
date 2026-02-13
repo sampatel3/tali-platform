@@ -58,7 +58,7 @@ export const DashboardPage = ({
   }, [page, statusFilter, taskFilter]);
 
   const getAssessmentLink = (token) =>
-    `${typeof window !== 'undefined' ? window.location.origin : ''}${typeof window !== 'undefined' ? (window.location.pathname || '/') : ''}#/assess/${token || ''}`;
+    `${typeof window !== 'undefined' ? window.location.origin : ''}/assess/${token || ''}`;
 
   // Map API assessments to table-friendly shape, falling back to mock data
   const displayCandidates = assessmentsList.length > 0
@@ -459,4 +459,3 @@ export const DashboardPage = ({
     </div>
   );
 };
-

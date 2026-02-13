@@ -17,6 +17,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [inviteName, setInviteName] = useState('');
   const [inviteLoading, setInviteLoading] = useState(false);
   const [darkMode, setDarkMode] = useState(() => localStorage.getItem('tali_dark_mode') === '1');
+  const [enterpriseSaving, setEnterpriseSaving] = useState(false);
+  const [enterpriseForm, setEnterpriseForm] = useState({
+    allowedEmailDomains: '',
+    ssoEnforced: false,
+    samlEnabled: false,
+    samlMetadataUrl: '',
+  });
 
   useEffect(() => {
     let cancelled = false;
@@ -80,8 +87,19 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     document.body.classList.toggle('text-white', darkMode);
   }, [darkMode]);
 
+  useEffect(() => {
+    if (!orgData) return;
+    const domains = Array.isArray(orgData.allowed_email_domains) ? orgData.allowed_email_domains.join(', ') : '';
+    setEnterpriseForm({
+      allowedEmailDomains: domains,
+      ssoEnforced: Boolean(orgData.sso_enforced),
+      samlEnabled: Boolean(orgData.saml_enabled),
+      samlMetadataUrl: orgData.saml_metadata_url || '',
+    });
+  }, [orgData]);
+
   const handleAddCredits = async () => {
-    const base = window.location.origin + window.location.pathname + '#/settings';
+    const base = `${window.location.origin}/settings`;
     setCheckoutLoading(true);
     try {
       const res = await billingApi.createCheckoutSession({
@@ -112,6 +130,28 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
+  const handleSaveEnterprise = async () => {
+    setEnterpriseSaving(true);
+    const domains = enterpriseForm.allowedEmailDomains
+      .split(',')
+      .map((domain) => domain.trim())
+      .filter(Boolean);
+    try {
+      const res = await orgsApi.update({
+        allowed_email_domains: domains,
+        sso_enforced: enterpriseForm.ssoEnforced,
+        saml_enabled: enterpriseForm.samlEnabled,
+        saml_metadata_url: enterpriseForm.samlMetadataUrl || null,
+      });
+      setOrgData(res.data);
+      alert('Enterprise access controls updated.');
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to save enterprise settings');
+    } finally {
+      setEnterpriseSaving(false);
+    }
+  };
+
   const orgName = orgData?.name || user?.organization?.name || '--';
   const adminEmail = user?.email || '--';
   const workableConnected = orgData?.workable_connected ?? false;
@@ -135,7 +175,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         <p className="font-mono text-sm text-gray-600 mb-8">Manage integrations and billing</p>
 
         <div className="flex border-2 border-black mb-8">
-          {['workable', 'billing', 'team', 'preferences'].map((tab) => (
+          {['workable', 'billing', 'team', 'enterprise', 'preferences'].map((tab) => (
             <button
               key={tab}
               className={`flex-1 px-6 py-3 font-mono text-sm font-bold border-r-2 border-black last:border-r-0 transition-colors ${
@@ -147,6 +187,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               {tab === 'workable' && 'Workable'}
               {tab === 'billing' && 'Billing'}
               {tab === 'team' && 'Team'}
+              {tab === 'enterprise' && 'Enterprise'}
               {tab === 'preferences' && 'Preferences'}
             </button>
           ))}
@@ -337,6 +378,66 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       ))}
                     </tbody>
                   </table>
+                </div>
+              </div>
+            )}
+
+            {settingsTab === 'enterprise' && (
+              <div className="space-y-6">
+                <div className="border-2 border-black p-6">
+                  <h3 className="text-xl font-bold mb-4">Enterprise Access Controls</h3>
+                  <div className="space-y-4">
+                    <div>
+                      <label className="font-mono text-xs text-gray-500 mb-1 block">Allowed email domains (comma separated)</label>
+                      <input
+                        type="text"
+                        className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                        placeholder="acme.com, subsidiary.org"
+                        value={enterpriseForm.allowedEmailDomains}
+                        onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, allowedEmailDomains: e.target.value }))}
+                      />
+                      <div className="font-mono text-xs text-gray-500 mt-1">
+                        Leave empty to allow any domain.
+                      </div>
+                    </div>
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 accent-purple-600"
+                        checked={enterpriseForm.ssoEnforced}
+                        onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, ssoEnforced: e.target.checked }))}
+                      />
+                      <span className="font-mono text-sm">Enforce SSO (blocks password login and invites)</span>
+                    </label>
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 accent-purple-600"
+                        checked={enterpriseForm.samlEnabled}
+                        onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, samlEnabled: e.target.checked }))}
+                      />
+                      <span className="font-mono text-sm">Enable SAML metadata configuration</span>
+                    </label>
+                    <div>
+                      <label className="font-mono text-xs text-gray-500 mb-1 block">SAML metadata URL</label>
+                      <input
+                        type="url"
+                        className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                        placeholder="https://idp.example.com/metadata.xml"
+                        value={enterpriseForm.samlMetadataUrl}
+                        onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, samlMetadataUrl: e.target.value }))}
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={enterpriseSaving}
+                      className="border-2 border-black px-4 py-2 font-mono text-sm font-bold text-white"
+                      style={{ backgroundColor: '#9D00FF' }}
+                      onClick={handleSaveEnterprise}
+                    >
+                      {enterpriseSaving ? 'Saving…' : 'Save enterprise settings'}
+                    </button>
+                  </div>
                 </div>
               </div>
             )}

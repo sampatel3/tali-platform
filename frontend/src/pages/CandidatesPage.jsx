@@ -354,7 +354,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
                                       className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
                                       onClick={() => {
                                         const base = window.location.origin;
-                                        const link = `${base}/#/assess/${a.token}`;
+                                        const link = `${base}/assess/${a.token}`;
                                         const name = a.candidate_name || c.full_name || c.email || 'there';
                                         const firstName = name.split(' ')[0];
                                         const duration = a.duration_minutes || 30;
@@ -423,4 +423,3 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
     </div>
   );
 };
-

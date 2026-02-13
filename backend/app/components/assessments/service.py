@@ -710,7 +710,7 @@ def submit_assessment(
                 "tests_passed": assessment.tests_passed or 0,
                 "tests_total": assessment.tests_total or 0,
                 "time_taken": assessment.duration_minutes,
-                "results_url": f"{settings.FRONTEND_URL}/#/dashboard",
+                "results_url": f"{settings.FRONTEND_URL}/dashboard",
             },
             request_id=get_request_id(),
         )

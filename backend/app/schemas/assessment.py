@@ -87,6 +87,7 @@ class AssessmentResponse(BaseModel):
     # Manual evaluator: task rubric + saved category scores/evidence
     evaluation_rubric: Optional[Dict[str, Any]] = None
     manual_evaluation: Optional[Dict[str, Any]] = None
+    evaluation_result: Optional[Dict[str, Any]] = None
 
     model_config = {"from_attributes": True}
 

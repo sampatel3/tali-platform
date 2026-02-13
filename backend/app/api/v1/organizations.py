@@ -6,6 +6,7 @@ from ...models.user import User
 from ...models.organization import Organization
 from ...schemas.organization import OrgResponse, OrgUpdate, WorkableConnect
 from ...platform.config import settings
+from ...services.access_control_service import normalize_allowed_domains
 
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
 
@@ -20,6 +21,7 @@ def get_my_org(
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
+    org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
     return org
 
 
@@ -36,12 +38,24 @@ def update_my_org(
         org.name = data.name
     if data.workable_config is not None:
         org.workable_config = data.workable_config
+    if data.allowed_email_domains is not None:
+        org.allowed_email_domains = normalize_allowed_domains(data.allowed_email_domains)
+    if data.sso_enforced is not None:
+        org.sso_enforced = data.sso_enforced
+    if data.saml_enabled is not None:
+        org.saml_enabled = data.saml_enabled
+    if data.saml_metadata_url is not None:
+        metadata_url = (data.saml_metadata_url or "").strip()
+        org.saml_metadata_url = metadata_url or None
+    if org.saml_enabled and not org.saml_metadata_url:
+        raise HTTPException(status_code=400, detail="saml_metadata_url is required when saml_enabled is true")
     try:
         db.commit()
         db.refresh(org)
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update organization")
+    org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
     return org
 
 

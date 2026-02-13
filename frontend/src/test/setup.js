@@ -29,6 +29,13 @@ if (typeof window !== 'undefined') {
   });
 }
 
+beforeEach(() => {
+  if (typeof window !== 'undefined') {
+    window.history.replaceState(null, '', '/');
+    window.location.hash = '';
+  }
+});
+
 afterEach(async () => {
   await act(async () => {
     await Promise.resolve();

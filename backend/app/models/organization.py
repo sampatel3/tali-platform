@@ -20,6 +20,11 @@ class Organization(Base):
     plan = Column(String, default="pay_per_use")
     assessments_used = Column(Integer, default=0)
     assessments_limit = Column(Integer, default=None)
+    # Enterprise access controls
+    allowed_email_domains = Column(JSON, nullable=True)  # ["company.com", "subsidiary.org"]
+    sso_enforced = Column(Boolean, default=False)
+    saml_enabled = Column(Boolean, default=False)
+    saml_metadata_url = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

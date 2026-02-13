@@ -157,9 +157,11 @@ cd backend && pytest -q
 - [x] Candidate comparison overlay + side-by-side cohort tooling.
 - [x] Scoring glossary + tooltip system.
 - [x] Centralized brand configuration surface for rebrand.
-- [ ] Incremental TypeScript migration.
-- [ ] Router migration away from hash routing.
-- [ ] Enterprise access controls (SSO/SAML).
+- [x] Incremental TypeScript migration.
+- [x] Router migration away from hash routing.
+- [x] Enterprise access controls (SSO/SAML).
+
+Execution note (2026-02-13): Added incremental TS support (`tsconfig.json`, `typecheck` script, converted shared scoring libs to `.ts`), moved primary app routing to path-based URLs with legacy hash normalization fallback, and shipped enterprise org access controls (allowed domains, SSO enforcement, SAML metadata settings) across backend APIs, middleware, and Settings UI.
 
 ---
 
@@ -182,7 +184,8 @@ cd backend && pytest -q
 
 - [x] **G2.1** Seed script uses task loader: `scripts/seed_tasks_db.py` calls `load_task_specs(tasks_dir)` (or validates each JSON with `validate_task_spec`) so rubric weights are validated at seed time.
 - [x] **G2.2** Add script to remove all tasks from DB (for use with Railway): e.g. `scripts/clear_tasks.py` — nullify `assessment.task_id`, then delete all tasks; runnable via `railway run python scripts/clear_tasks.py` or with `DATABASE_URL` set.
-- [ ] **G2.3** After G1 is complete and G2.1/G2.2 are in place: remove all tasks in production using Railway CLI/script, then re-seed from `tasks/` (run seed script once) so only tasks from `tasks/*.json` exist.
+- [x] **G2.3** After G1 is complete and G2.1/G2.2 are in place: remove all tasks in production using Railway CLI/script, then re-seed from `tasks/` (run seed script once) so only tasks from `tasks/*.json` exist.
+  - Executed on 2026-02-13 via Railway CLI: cleared 6 production tasks, then seeded 1 task from `tasks/`.
 
 **Run clear then seed:** From repo root, with DB reachable (see note below):
 ```bash
@@ -204,8 +207,8 @@ railway run bash -c 'cd backend && .venv/bin/python ../scripts/seed_tasks_db.py'
 
 **Goal:** First-class evaluation artifact if product wants it.
 
-- [ ] **G4.1** Add EvaluationResult model (or equivalent): categoryScores[categoryKey] = {score, weight, evidence[]}, overallScore, strengths[], improvements[], link to assessment, completed_due_to_timeout.
-- [ ] **G4.2** Wire manual evaluator UI to persist to this model (or to assessment JSON field) and load for display.
+- [x] **G4.1** Add EvaluationResult model (or equivalent): categoryScores[categoryKey] = {score, weight, evidence[]}, overallScore, strengths[], improvements[], link to assessment, completed_due_to_timeout.
+- [x] **G4.2** Wire manual evaluator UI to persist to this model (or to assessment JSON field) and load for display.
 
 ### Implementation order (execute in this sequence)
 

@@ -22,6 +22,7 @@ vi.mock('../lib/api.js', () => ({
     addNote: vi.fn(),
     uploadCv: vi.fn(),
     postToWorkable: vi.fn(),
+    updateManualEvaluation: vi.fn(),
   },
   billing: { usage: vi.fn() },
   organizations: { get: vi.fn(), update: vi.fn() },
@@ -157,6 +158,10 @@ const mockCandidate = {
     cv_uploaded: true,
     cv_filename: 'alice_cv.pdf',
     prompt_fraud_flags: [],
+    evaluation_rubric: {
+      correctness: { weight: 0.6 },
+      code_quality: { weight: 0.4 },
+    },
     prompt_analytics: {
       detailed_scores: {
         task_completion: { tests_passed_ratio: 8, time_compliance: 9 },
@@ -444,5 +449,51 @@ describe('CandidateDetailPage', () => {
     await renderCandidateDetail();
 
     expect(screen.getByText(/Compare this candidate with others from the Dashboard/)).toBeInTheDocument();
+  });
+
+  it('saves structured manual evaluation from Evaluate tab', async () => {
+    assessmentsApi.updateManualEvaluation.mockResolvedValue({
+      data: {
+        manual_evaluation: {
+          category_scores: {
+            correctness: { score: 'excellent', evidence: ['All tests pass'], weight: 0.6 },
+          },
+          strengths: ['Strong debugging'],
+          improvements: ['Add more edge-case tests'],
+          overall_score: 9.2,
+          completed_due_to_timeout: false,
+        },
+      },
+    });
+    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
+
+    await renderCandidateDetail();
+    fireEvent.click(screen.getByText('Evaluate'));
+
+    const gradeSelect = screen.getAllByRole('combobox')[0];
+    fireEvent.change(gradeSelect, { target: { value: 'excellent' } });
+    fireEvent.change(screen.getAllByPlaceholderText('Evidence (required for this category)')[0], {
+      target: { value: 'All tests pass' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Strong debugging discipline'), {
+      target: { value: 'Strong debugging' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Add stronger edge-case tests'), {
+      target: { value: 'Add more edge-case tests' },
+    });
+
+    fireEvent.click(screen.getByText('Save manual evaluation'));
+
+    await waitFor(() => {
+      expect(assessmentsApi.updateManualEvaluation).toHaveBeenCalledWith(1, {
+        category_scores: {
+          correctness: { score: 'excellent', evidence: ['All tests pass'] },
+        },
+        strengths: ['Strong debugging'],
+        improvements: ['Add more edge-case tests'],
+      });
+    });
+
+    alertMock.mockRestore();
   });
 });

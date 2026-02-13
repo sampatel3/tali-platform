@@ -4,7 +4,9 @@ import uuid
 from datetime import datetime, timezone
 
 from app.models.assessment import Assessment, AssessmentStatus
-from tests.conftest import auth_headers
+from app.models.organization import Organization
+from app.models.user import User
+from tests.conftest import auth_headers, register_user, verify_user
 
 
 # ---------------------------------------------------------------------------
@@ -241,3 +243,88 @@ def test_team_invited_user_appears_in_list(client):
     assert invite_email in emails, (
         f"Expected invited user {invite_email} in team list, got: {emails}"
     )
+
+
+def test_update_org_enterprise_policy_fields(client):
+    headers, _ = auth_headers(client, email="owner@acme.com", organization_name="Acme Org")
+    resp = client.patch(
+        "/api/v1/organizations/me",
+        json={
+            "allowed_email_domains": ["acme.com", "@subsidiary.org"],
+            "sso_enforced": True,
+            "saml_enabled": True,
+            "saml_metadata_url": "https://idp.acme.com/metadata.xml",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["allowed_email_domains"] == ["acme.com", "subsidiary.org"]
+    assert data["sso_enforced"] is True
+    assert data["saml_enabled"] is True
+    assert data["saml_metadata_url"] == "https://idp.acme.com/metadata.xml"
+
+
+def test_team_invite_rejects_email_outside_allowed_domains(client, db):
+    headers, owner_email = auth_headers(client, email="owner@acme.com", organization_name="Acme Domain Org")
+    owner = db.query(User).filter(User.email == owner_email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.allowed_email_domains = ["acme.com"]
+    db.commit()
+
+    resp = client.post(
+        "/api/v1/users/invite",
+        json={"email": "newcolleague@gmail.com", "full_name": "Outside Domain"},
+        headers=headers,
+    )
+    assert resp.status_code == 400
+    assert "Email domain is not allowed" in resp.json()["detail"]
+
+
+def test_register_rejects_disallowed_domain_for_existing_org(client, db):
+    first = register_user(
+        client,
+        email="admin@acme.com",
+        password="TestPass123!",
+        full_name="Admin",
+        organization_name="Acme Locked Org",
+    )
+    assert first.status_code == 201, first.text
+    verify_user("admin@acme.com")
+
+    owner = db.query(User).filter(User.email == "admin@acme.com").first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.allowed_email_domains = ["acme.com"]
+    db.commit()
+
+    second = register_user(
+        client,
+        email="outsider@other.com",
+        password="TestPass123!",
+        full_name="Outsider",
+        organization_name="Acme Locked Org",
+    )
+    assert second.status_code == 400
+    assert "Email domain is not allowed" in second.text
+
+
+def test_jwt_login_blocked_when_org_enforces_sso(client, db):
+    headers, owner_email = auth_headers(client, email="owner@sso.com", organization_name="SSO Org")
+    owner = db.query(User).filter(User.email == owner_email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.sso_enforced = True
+    db.commit()
+
+    login_resp = client.post(
+        "/api/v1/auth/jwt/login",
+        data={"username": owner_email, "password": "TestPass123!"},
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+    )
+    assert login_resp.status_code == 403
+    assert "Organization enforces SSO" in login_resp.json()["detail"]

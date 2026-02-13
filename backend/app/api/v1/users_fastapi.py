@@ -6,7 +6,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import Depends, Request
+from fastapi import Depends, HTTPException, Request
 from fastapi_users import BaseUserManager, FastAPIUsers, IntegerIDMixin, InvalidPasswordException
 from fastapi_users.authentication import AuthenticationBackend, BearerTransport, JWTStrategy
 from fastapi_users.db import SQLAlchemyUserDatabase
@@ -17,6 +17,10 @@ from ...models.organization import Organization
 from ...platform.config import settings
 from ...platform.database import get_async_db
 from ...components.notifications.email_client import EmailService
+from ...services.access_control_service import (
+    is_email_allowed_for_domains,
+    normalize_allowed_domains,
+)
 
 logger = logging.getLogger("tali.auth")
 
@@ -84,6 +88,16 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
 
             result = await session.execute(select(Organization).where(Organization.slug == slug))
             org = result.scalar_one_or_none()
+            if org and getattr(org, "sso_enforced", False):
+                raise HTTPException(status_code=403, detail="Organization enforces SSO. Use enterprise sign-in.")
+            if org and not is_email_allowed_for_domains(
+                user_create.email,
+                normalize_allowed_domains(getattr(org, "allowed_email_domains", None)),
+            ):
+                raise HTTPException(
+                    status_code=400,
+                    detail="Email domain is not allowed for this organization",
+                )
             if not org:
                 org = Organization(name=organization_name, slug=slug)
                 session.add(org)
@@ -110,7 +124,7 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
                 self.verification_token_secret,
                 self.verification_token_lifetime_seconds,
             )
-            verification_link = f"{settings.FRONTEND_URL}/#/verify-email?token={token}"
+            verification_link = f"{settings.FRONTEND_URL}/verify-email?token={token}"
             email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
             email_svc.send_email_verification(
                 to_email=user.email,
@@ -128,7 +142,7 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
             logger.warning("RESEND_API_KEY not set or 'skip' — not sending password reset email to %s", user.email)
             return
         try:
-            reset_link = f"{settings.FRONTEND_URL}/#/reset-password?token={token}"
+            reset_link = f"{settings.FRONTEND_URL}/reset-password?token={token}"
             logger.info("Sending password reset email to %s (FRONTEND_URL=%s)", user.email, settings.FRONTEND_URL)
             email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
             result = email_svc.send_password_reset(to_email=user.email, reset_link=reset_link)
@@ -144,7 +158,7 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
             logger.warning("RESEND_API_KEY not set — skipping verification email for %s", user.email)
             return
         try:
-            verification_link = f"{settings.FRONTEND_URL}/#/verify-email?token={token}"
+            verification_link = f"{settings.FRONTEND_URL}/verify-email?token={token}"
             email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
             email_svc.send_email_verification(
                 to_email=user.email,

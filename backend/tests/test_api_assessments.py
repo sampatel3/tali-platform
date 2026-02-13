@@ -212,3 +212,68 @@ def test_add_note_empty_rejected(client):
         headers=env["headers"],
     )
     assert resp.status_code in (400, 422)
+
+
+# ---------------------------------------------------------------------------
+# PATCH /api/v1/assessments/{id}/manual-evaluation
+# ---------------------------------------------------------------------------
+
+
+def test_manual_evaluation_saved_as_structured_result(client):
+    headers, _ = auth_headers(client)
+    rubric = {
+        "correctness": {"weight": 0.6},
+        "code_quality": {"weight": 0.4},
+    }
+    task = create_task_via_api(client, headers, evaluation_rubric=rubric).json()
+    assessment = create_assessment_via_api(client, headers, task["id"]).json()
+
+    resp = client.patch(
+        f"/api/v1/assessments/{assessment['id']}/manual-evaluation",
+        headers=headers,
+        json={
+            "category_scores": {
+                "correctness": {"score": "excellent", "evidence": ["All core tests pass", "Edge cases covered"]},
+                "code_quality": {"score": "good", "evidence": "Readable naming and clear structure"},
+            },
+            "strengths": ["Strong debugging discipline"],
+            "improvements": ["Could add more comments around tricky logic"],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    manual = payload["manual_evaluation"]
+    assert payload["evaluation_result"] == manual
+    assert manual["assessment_id"] == assessment["id"]
+    assert manual["completed_due_to_timeout"] is False
+    assert manual["overall_score"] == 8.67
+    assert manual["category_scores"]["correctness"]["weight"] == 0.6
+    assert manual["category_scores"]["correctness"]["evidence"] == ["All core tests pass", "Edge cases covered"]
+    assert manual["category_scores"]["code_quality"]["evidence"] == ["Readable naming and clear structure"]
+    assert manual["strengths"] == ["Strong debugging discipline"]
+    assert manual["improvements"] == ["Could add more comments around tricky logic"]
+
+    get_resp = client.get(f"/api/v1/assessments/{assessment['id']}", headers=headers)
+    assert get_resp.status_code == 200
+    detail = get_resp.json()
+    assert detail["evaluation_result"] == detail["manual_evaluation"]
+    assert detail["manual_evaluation"]["category_scores"]["correctness"]["evidence"][0] == "All core tests pass"
+
+
+def test_manual_evaluation_rejects_scored_category_without_evidence(client):
+    headers, _ = auth_headers(client)
+    rubric = {"correctness": {"weight": 1.0}}
+    task = create_task_via_api(client, headers, evaluation_rubric=rubric).json()
+    assessment = create_assessment_via_api(client, headers, task["id"]).json()
+
+    resp = client.patch(
+        f"/api/v1/assessments/{assessment['id']}/manual-evaluation",
+        headers=headers,
+        json={
+            "category_scores": {
+                "correctness": {"score": "excellent", "evidence": []},
+            },
+        },
+    )
+    assert resp.status_code == 400
+    assert "Evidence is required" in resp.json()["detail"]

@@ -17,7 +17,22 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
   const [expandedCategory, setExpandedCategory] = useState(null);
   const [aiEvalSuggestion, setAiEvalSuggestion] = useState(null);
   const [manualEvalScores, setManualEvalScores] = useState({});
+  const [manualEvalStrengths, setManualEvalStrengths] = useState('');
+  const [manualEvalImprovements, setManualEvalImprovements] = useState('');
+  const [manualEvalSummary, setManualEvalSummary] = useState(null);
   const [manualEvalSaving, setManualEvalSaving] = useState(false);
+
+  const toEvidenceTextareaValue = (value) => {
+    if (Array.isArray(value)) return value.filter(Boolean).join('\n');
+    if (typeof value === 'string') return value;
+    return '';
+  };
+
+  const toLineList = (value) =>
+    String(value || '')
+      .split('\n')
+      .map((line) => line.trim())
+      .filter(Boolean);
 
   const getRecommendation = (score100) => {
     if (score100 >= 80) return { label: 'STRONG HIRE', color: '#16a34a' };
@@ -50,10 +65,26 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
 
   useEffect(() => {
     const raw = candidate?._raw;
-    const me = raw?.manual_evaluation?.category_scores;
-    if (me && typeof me === 'object') setManualEvalScores(me);
-    else setManualEvalScores({});
-  }, [candidate?._raw?.manual_evaluation]);
+    const evaluationResult = raw?.evaluation_result || raw?.manual_evaluation || {};
+    const categoryScores = evaluationResult?.category_scores;
+    if (categoryScores && typeof categoryScores === 'object') {
+      const normalized = {};
+      Object.entries(categoryScores).forEach(([key, value]) => {
+        const item = value && typeof value === 'object' ? value : {};
+        normalized[key] = {
+          score: item.score || '',
+          evidence: toEvidenceTextareaValue(item.evidence),
+        };
+      });
+      setManualEvalScores(normalized);
+    } else {
+      setManualEvalScores({});
+    }
+    setManualEvalStrengths(Array.isArray(evaluationResult?.strengths) ? evaluationResult.strengths.join('\n') : '');
+    setManualEvalImprovements(Array.isArray(evaluationResult?.improvements) ? evaluationResult.improvements.join('\n') : '');
+    const hasSavedResult = evaluationResult && typeof evaluationResult === 'object' && Object.keys(evaluationResult).length > 0;
+    setManualEvalSummary(hasSavedResult ? evaluationResult : null);
+  }, [candidate?._raw?.manual_evaluation, candidate?._raw?.evaluation_result]);
 
   const getCategoryScores = (candidateData) => {
     const breakdownScores = candidateData?.breakdown?.categoryScores;
@@ -830,13 +861,37 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
           const prompts = assessment.ai_prompts || [];
           const handleSaveManualEval = async () => {
             if (!assessmentId) return;
+            const payloadScores = {};
+            for (const [key, value] of Object.entries(manualEvalScores || {})) {
+              const score = String(value?.score || '').trim().toLowerCase();
+              const evidenceList = toLineList(value?.evidence);
+              if (score && evidenceList.length === 0) {
+                alert(`Evidence is required for "${String(key).replace(/_/g, ' ')}".`);
+                return;
+              }
+              payloadScores[key] = { score: score || null, evidence: evidenceList };
+            }
             setManualEvalSaving(true);
             try {
               const res = await assessmentsApi.updateManualEvaluation(assessmentId, {
-                category_scores: manualEvalScores,
+                category_scores: payloadScores,
+                strengths: toLineList(manualEvalStrengths),
+                improvements: toLineList(manualEvalImprovements),
               });
-              if (res.data?.manual_evaluation?.category_scores) {
-                setManualEvalScores(res.data.manual_evaluation.category_scores);
+              const saved = res.data?.evaluation_result || res.data?.manual_evaluation;
+              if (saved?.category_scores) {
+                const normalized = {};
+                Object.entries(saved.category_scores).forEach(([key, value]) => {
+                  const item = value && typeof value === 'object' ? value : {};
+                  normalized[key] = {
+                    score: item.score || '',
+                    evidence: toEvidenceTextareaValue(item.evidence),
+                  };
+                });
+                setManualEvalScores(normalized);
+                setManualEvalStrengths(Array.isArray(saved.strengths) ? saved.strengths.join('\n') : '');
+                setManualEvalImprovements(Array.isArray(saved.improvements) ? saved.improvements.join('\n') : '');
+                setManualEvalSummary(saved);
               }
               alert('Manual evaluation saved.');
             } catch (err) {
@@ -847,6 +902,19 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
           };
           return (
             <div className="space-y-6">
+              {manualEvalSummary && (
+                <div className="border-2 border-black p-3 bg-white">
+                  <div className="font-mono text-xs text-gray-600">
+                    Manual overall score:{' '}
+                    <span className="font-bold text-black">
+                      {manualEvalSummary.overall_score != null ? `${manualEvalSummary.overall_score}/10` : '—'}
+                    </span>
+                    {manualEvalSummary.completed_due_to_timeout && (
+                      <span className="ml-3 text-amber-700">Assessment auto-submitted on timeout.</span>
+                    )}
+                  </div>
+                </div>
+              )}
               <div className="border-2 border-black p-4 bg-gray-50">
                 <div className="font-mono text-xs font-bold text-gray-600 mb-2">Manual rubric evaluation (excellent / good / poor). Add evidence per category.</div>
                 {categories.length === 0 ? (
@@ -899,6 +967,29 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                     </button>
                   </>
                 )}
+              </div>
+              <div className="border-2 border-black p-4 bg-gray-50">
+                <div className="font-mono text-xs font-bold text-gray-600 mb-2">Summary notes</div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <div className="font-mono text-xs text-gray-500 mb-1">Strengths (one per line)</div>
+                    <textarea
+                      className="w-full border-2 border-black px-2 py-1 font-mono text-xs min-h-[90px]"
+                      placeholder="Strong debugging discipline"
+                      value={manualEvalStrengths}
+                      onChange={(e) => setManualEvalStrengths(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <div className="font-mono text-xs text-gray-500 mb-1">Improvements (one per line)</div>
+                    <textarea
+                      className="w-full border-2 border-black px-2 py-1 font-mono text-xs min-h-[90px]"
+                      placeholder="Add stronger edge-case tests"
+                      value={manualEvalImprovements}
+                      onChange={(e) => setManualEvalImprovements(e.target.value)}
+                    />
+                  </div>
+                </div>
               </div>
               <div className="border-2 border-black p-4">
                 <div className="font-mono text-xs font-bold text-gray-600 mb-2">Chat log (for evidence)</div>

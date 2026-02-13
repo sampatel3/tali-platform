@@ -2,6 +2,7 @@ import time
 import uuid
 import logging
 from collections import defaultdict
+from urllib.parse import parse_qs
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
@@ -93,3 +94,56 @@ class RequestLoggingMiddleware(BaseHTTPMiddleware):
         response.headers["X-Request-ID"] = request_id
 
         return response
+
+
+class EnterpriseAccessMiddleware(BaseHTTPMiddleware):
+    """Enforce org-level SSO policy for password-based auth endpoints."""
+
+    async def dispatch(self, request: Request, call_next):
+        path = request.url.path
+        if request.method != "POST":
+            return await call_next(request)
+
+        if path not in {"/api/v1/auth/jwt/login", "/api/v1/auth/forgot-password"}:
+            return await call_next(request)
+
+        email = ""
+        try:
+            body = await request.body()
+            if not body:
+                return await call_next(request)
+            if path.endswith("/jwt/login"):
+                params = parse_qs(body.decode("utf-8", errors="ignore"))
+                email = (params.get("username") or [""])[0].strip().lower()
+            else:
+                import json as _json
+
+                payload = _json.loads(body.decode("utf-8", errors="ignore"))
+                if isinstance(payload, dict):
+                    email = str(payload.get("email") or "").strip().lower()
+        except Exception:
+            # If parsing fails, don't block endpoint behavior.
+            return await call_next(request)
+
+        if not email:
+            return await call_next(request)
+
+        from ..platform.database import SessionLocal
+        from ..models.user import User
+        from ..models.organization import Organization
+
+        db = SessionLocal()
+        try:
+            user = db.query(User).filter(User.email == email).first()
+            if not user or not user.organization_id:
+                return await call_next(request)
+            org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+            if org and getattr(org, "sso_enforced", False):
+                return JSONResponse(
+                    status_code=403,
+                    content={"detail": "Organization enforces SSO. Use enterprise sign-in."},
+                )
+        finally:
+            db.close()
+
+        return await call_next(request)

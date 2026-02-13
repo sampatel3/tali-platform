@@ -24,6 +24,10 @@ from ...services.e2b_service import E2BService
 from ...services.claude_service import ClaudeService
 from ...components.notifications.service import send_assessment_invite_sync, send_results_notification_sync
 from ...services.ai_assisted_evaluator import generate_ai_suggestions
+from ...services.evaluation_result_service import (
+    build_evaluation_result,
+    normalize_stored_evaluation_result,
+)
 from ...components.assessments.repository import (
     utcnow, ensure_utc, assessment_to_response, build_timeline,
     get_active_assessment, validate_assessment_token, append_assessment_timeline_event,
@@ -457,7 +461,7 @@ def post_assessment_to_workable(
             "tests_passed": assessment.tests_passed or 0,
             "tests_total": assessment.tests_total or 0,
             "time_taken": assessment.duration_minutes,
-            "results_url": f"{settings.FRONTEND_URL}/#/dashboard",
+            "results_url": f"{settings.FRONTEND_URL}/dashboard",
         },
     )
     if not result.get("success"):
@@ -601,38 +605,39 @@ def update_manual_evaluation(
     )
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
-    category_scores = body.get("category_scores") or {}
-    if not isinstance(category_scores, dict):
+
+    category_scores = body.get("category_scores")
+    if category_scores is not None and not isinstance(category_scores, dict):
         raise HTTPException(status_code=400, detail="category_scores must be an object")
-    allowed = {"excellent", "good", "poor"}
-    for cat, data in category_scores.items():
-        if isinstance(data, dict):
-            score = (data.get("score") or "").strip().lower()
-            if score and score not in allowed:
-                raise HTTPException(status_code=400, detail=f"Score for {cat} must be one of excellent, good, poor")
-    from ...services.evaluation_service import calculate_weighted_rubric_score
+
     rubric = (assessment.task.evaluation_rubric if assessment.task else None) or {}
-    overall = None
-    if rubric and category_scores:
-        scores_flat = {
-            k: (v.get("score") if isinstance(v, dict) else v)
-            for k, v in category_scores.items()
-            if isinstance(v, dict) and v.get("score")
-        }
-        if scores_flat:
-            overall = round(calculate_weighted_rubric_score(scores_flat, rubric) * (10.0 / 3.0), 2)
-    assessment.manual_evaluation = {
-        "category_scores": category_scores,
-        "overall_score": overall,
-        "strengths": body.get("strengths") or [],
-        "improvements": body.get("improvements") or [],
-    }
+    try:
+        evaluation_result = build_evaluation_result(
+            assessment_id=assessment.id,
+            completed_due_to_timeout=bool(getattr(assessment, "completed_due_to_timeout", False)),
+            evaluation_rubric=rubric,
+            body=body,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+
+    assessment.manual_evaluation = evaluation_result
     try:
         db.commit()
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to save manual evaluation")
-    return {"success": True, "manual_evaluation": assessment.manual_evaluation}
+    normalized = normalize_stored_evaluation_result(
+        assessment.manual_evaluation,
+        assessment_id=assessment.id,
+        completed_due_to_timeout=bool(getattr(assessment, "completed_due_to_timeout", False)),
+        evaluation_rubric=rubric,
+    )
+    return {
+        "success": True,
+        "manual_evaluation": normalized,
+        "evaluation_result": normalized,
+    }
 
 
 @router.post("/{assessment_id}/notes")

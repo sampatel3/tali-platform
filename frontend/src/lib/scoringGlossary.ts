@@ -1,4 +1,11 @@
-export const SCORING_CATEGORY_GLOSSARY = {
+type ScoringMeta = {
+  label: string;
+  description: string;
+};
+
+type ScoringGlossary = Record<string, ScoringMeta>;
+
+export const SCORING_CATEGORY_GLOSSARY: ScoringGlossary = {
   task_completion: {
     label: 'Task Completion',
     description: 'Measures delivery outcomes under the assessment constraints: passing tests and finishing within the expected time window.',
@@ -33,7 +40,7 @@ export const SCORING_CATEGORY_GLOSSARY = {
   },
 };
 
-export const SCORING_METRIC_GLOSSARY = {
+export const SCORING_METRIC_GLOSSARY: ScoringGlossary = {
   tests_passed_ratio: { label: 'Tests Passed', description: 'How many required tests passed out of the total test suite.' },
   time_compliance: { label: 'Time Compliance', description: 'Whether the candidate completed within the assessment time limit.' },
   time_efficiency: { label: 'Time Efficiency', description: 'How efficiently the candidate used available time.' },
@@ -70,7 +77,7 @@ export const SCORING_METRIC_GLOSSARY = {
   experience_relevance: { label: 'Experience', description: 'Relevance of prior project experience to the target role.' },
 };
 
-export const getMetricMeta = (metricKey) => {
+export const getMetricMeta = (metricKey: string): ScoringMeta => {
   const fallback = metricKey ? metricKey.replace(/_/g, ' ') : 'Unknown metric';
   return SCORING_METRIC_GLOSSARY[metricKey] || {
     label: fallback,
