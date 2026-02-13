@@ -2169,6 +2169,7 @@ function App() {
       return;
     }
     if (selectedCandidate && Number(selectedCandidate.id) === Number(candidateDetailAssessmentId)) {
+      setLoadingCandidateDetail(false);
       return;
     }
 
@@ -2178,13 +2179,12 @@ function App() {
       .then((res) => {
         if (cancelled) return;
         setSelectedCandidate(mapAssessmentToCandidateView(res.data || {}));
+        setLoadingCandidateDetail(false);
       })
       .catch(() => {
         if (cancelled) return;
         setSelectedCandidate(null);
-      })
-      .finally(() => {
-        if (!cancelled) setLoadingCandidateDetail(false);
+        setLoadingCandidateDetail(false);
       });
 
     return () => {

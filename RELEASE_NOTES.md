@@ -25,6 +25,8 @@ Date: 2026-02-13
 
 ### P4 — Frontend quality
 - Default frontend tests pass in CI/local baseline.
+- Added regressions for direct candidate-detail deep-link loading by `assessmentId`.
+- Added assessment pause/resume UI tests for Claude outage handling and response-field contract.
 - Remaining test warning cleanup tracked in task plan.
 
 ### P5 — Brand/landing

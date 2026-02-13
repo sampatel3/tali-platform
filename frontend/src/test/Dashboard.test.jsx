@@ -44,6 +44,9 @@ vi.mock('../lib/api.js', () => ({
     uploadCv: vi.fn(),
     uploadJobSpec: vi.fn(),
   },
+  roles: {
+    list: vi.fn().mockResolvedValue({ data: [] }),
+  },
   team: { list: vi.fn(), invite: vi.fn() },
   default: {
     interceptors: {
@@ -82,7 +85,7 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, assessments as assessmentsApi, tasks as tasksApi } from '../lib/api.js';
+import { auth, assessments as assessmentsApi, tasks as tasksApi, roles as rolesApi } from '../lib/api.js';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -99,6 +102,7 @@ const mockAssessments = [
     id: 1,
     candidate_name: 'Alice Johnson',
     candidate_email: 'alice@example.com',
+    role_name: 'Backend Engineer',
     task: { name: 'Async Debugging' },
     task_name: 'Async Debugging',
     status: 'completed',
@@ -117,6 +121,7 @@ const mockAssessments = [
     id: 2,
     candidate_name: 'Bob Smith',
     candidate_email: 'bob@example.com',
+    role_name: 'ML Engineer',
     task: { name: 'API Integration' },
     task_name: 'API Integration',
     status: 'in_progress',
@@ -135,6 +140,7 @@ const mockAssessments = [
     id: 3,
     candidate_name: 'Carol White',
     candidate_email: 'carol@example.com',
+    role_name: 'Backend Engineer',
     task: { name: 'Data Pipeline' },
     task_name: 'Data Pipeline',
     status: 'completed',
@@ -156,6 +162,11 @@ const mockTasks = [
   { id: 11, name: 'API Integration', task_type: 'ai_engineering', difficulty: 'senior', duration_minutes: 60 },
 ];
 
+const mockRoles = [
+  { id: 101, name: 'Backend Engineer' },
+  { id: 102, name: 'ML Engineer' },
+];
+
 const setupAuthenticatedUser = () => {
   localStorage.setItem('taali_access_token', 'fake-jwt-token');
   localStorage.setItem('taali_user', JSON.stringify(mockUser));
@@ -175,12 +186,15 @@ describe('DashboardPage', () => {
     vi.clearAllMocks();
     localStorage.clear();
     window.location.hash = '';
+    window.history.pushState({}, '', '/');
     setupAuthenticatedUser();
     tasksApi.list.mockResolvedValue({ data: mockTasks });
+    rolesApi.list.mockResolvedValue({ data: mockRoles });
   });
 
   afterEach(() => {
     window.location.hash = '';
+    window.history.pushState({}, '', '/');
     localStorage.clear();
   });
 
@@ -270,6 +284,57 @@ describe('DashboardPage', () => {
       expect(assessmentsApi.list).toHaveBeenCalledWith(
         expect.objectContaining({ status: 'completed' })
       );
+    });
+  });
+
+  it('groups assessment rows by role when no role filter is selected', async () => {
+    assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
+    renderApp();
+
+    await waitFor(() => {
+      expect(screen.getByText('— Backend Engineer —')).toBeInTheDocument();
+      expect(screen.getByText('— ML Engineer —')).toBeInTheDocument();
+    });
+  });
+
+  it('role filter re-fetches assessments with role_id', async () => {
+    assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
+    renderApp();
+
+    await waitFor(() => {
+      expect(screen.getByText('Filters:')).toBeInTheDocument();
+    });
+
+    const roleSelect = screen.getByDisplayValue('All roles');
+    fireEvent.change(roleSelect, { target: { value: '101' } });
+
+    await waitFor(() => {
+      expect(assessmentsApi.list).toHaveBeenCalledWith(
+        expect.objectContaining({ role_id: '101' })
+      );
+    });
+  });
+
+  it('loads candidate detail from URL deep-link by assessment id', async () => {
+    window.history.pushState({}, '', '/candidate-detail?assessmentId=1');
+    assessmentsApi.get.mockResolvedValue({
+      data: {
+        ...mockAssessments[0],
+        final_score: 85,
+        role_name: 'Backend Engineer',
+        application_status: 'applied',
+      },
+    });
+    renderApp();
+
+    await waitFor(() => {
+      expect(assessmentsApi.get).toHaveBeenCalledWith(1);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
+      expect(screen.getByText('Role: Backend Engineer')).toBeInTheDocument();
+      expect(screen.getByText('Application: applied')).toBeInTheDocument();
     });
   });
 

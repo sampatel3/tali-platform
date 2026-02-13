@@ -139,5 +139,6 @@ taali-platform/
 
 - **Deployment:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)  
 - **Environment variables:** [docs/ENV_SETUP.md](docs/ENV_SETUP.md)  
+- **Backend testing:** [backend/docs/TESTING.md](backend/docs/TESTING.md)
 - **Full task list and criteria:** [RALPH_TASK.md](RALPH_TASK.md)  
 - **Observability metrics:** [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)

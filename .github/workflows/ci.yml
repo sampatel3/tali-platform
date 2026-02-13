@@ -22,6 +22,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
+      - name: Validate backend test dependency parity
+        run: |
+          python -c "import aiosqlite, sqlalchemy; print(f'aiosqlite={aiosqlite.__version__} sqlalchemy={sqlalchemy.__version__}')"
       - name: Backend syntax check
         run: python -m compileall app
       - name: Run backend tests with coverage threshold

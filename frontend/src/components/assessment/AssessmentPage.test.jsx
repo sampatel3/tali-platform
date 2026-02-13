@@ -4,13 +4,16 @@ import { vi } from 'vitest';
 import AssessmentPage from './AssessmentPage';
 
 const mockClaude = vi.fn();
+const mockClaudeRetry = vi.fn();
 const mockSubmit = vi.fn();
+let lastClaudeReply = '';
 
 vi.mock('../../lib/api', () => ({
   assessments: {
     start: vi.fn(),
     execute: vi.fn(),
     claude: (...args) => mockClaude(...args),
+    claudeRetry: (...args) => mockClaudeRetry(...args),
     submit: (...args) => mockSubmit(...args),
   },
 }));
@@ -20,17 +23,20 @@ vi.mock('./CodeEditor', () => ({
 }));
 
 vi.mock('./ClaudeChat', () => ({
-  default: ({ onSendMessage, onPaste }) => (
+  default: ({ onSendMessage, onPaste, disabled = false }) => (
     <div>
       <button type="button" onClick={() => onPaste?.()}>paste</button>
       <button
         type="button"
+        disabled={disabled}
         onClick={async () => {
-          await onSendMessage('Help me debug this', []);
+          lastClaudeReply = await onSendMessage('Help me debug this', []);
         }}
       >
         send-claude
       </button>
+      <div data-testid="claude-disabled">{disabled ? 'true' : 'false'}</div>
+      <div data-testid="claude-reply">{lastClaudeReply}</div>
     </div>
   ),
 }));
@@ -38,7 +44,9 @@ vi.mock('./ClaudeChat', () => ({
 describe('AssessmentPage tracking metadata', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    lastClaudeReply = '';
     mockClaude.mockResolvedValue({ data: { response: 'ok' } });
+    mockClaudeRetry.mockResolvedValue({ data: { success: true, is_timer_paused: false } });
     mockSubmit.mockResolvedValue({ data: { success: true } });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
@@ -216,6 +224,91 @@ describe('AssessmentPage tracking metadata', () => {
     expect(screen.getByText(/Investigate and patch the backfill job/i)).toBeInTheDocument();
     expect(screen.getByText(/Rubric categories will be shown when available/i)).toBeInTheDocument();
     expect(screen.getByText(/def run_job\(\):/i)).toBeInTheDocument();
+  });
+
+  it('uses canonical response field from Claude payload', async () => {
+    mockClaude.mockResolvedValueOnce({
+      data: {
+        success: true,
+        response: 'canonical response text',
+        content: 'legacy content fallback',
+      },
+    });
+
+    const startData = {
+      assessment_id: 16,
+      token: 'tok6',
+      time_remaining: 1200,
+      task: {
+        name: 'Response contract task',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+      },
+    };
+
+    render(<AssessmentPage token="tok6" startData={startData} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('send-claude'));
+    });
+
+    await waitFor(() => {
+      expect(lastClaudeReply).toBe('canonical response text');
+    });
+    expect(screen.getByTestId('claude-reply')).toHaveTextContent('canonical response text');
+  });
+
+  it('pauses interaction on Claude outage and resumes on retry', async () => {
+    mockClaude.mockResolvedValueOnce({
+      data: {
+        success: false,
+        response: 'Claude is temporarily unavailable. Your timer is paused. Please retry in a moment.',
+        is_timer_paused: true,
+        pause_reason: 'claude_outage',
+      },
+    });
+    mockClaudeRetry.mockResolvedValueOnce({
+      data: {
+        success: true,
+        is_timer_paused: false,
+        message: 'Claude recovered and assessment resumed',
+      },
+    });
+
+    const startData = {
+      assessment_id: 17,
+      token: 'tok7',
+      time_remaining: 1200,
+      task: {
+        name: 'Claude outage pause task',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+      },
+    };
+
+    render(<AssessmentPage token="tok7" startData={startData} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('send-claude'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/Assessment paused: Claude is currently unavailable/i)).toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled();
+    expect(screen.getByText('send-claude')).toBeDisabled();
+    expect(screen.getByTestId('claude-disabled')).toHaveTextContent('true');
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Retry Claude' }));
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Assessment paused: Claude is currently unavailable/i)).not.toBeInTheDocument();
+    });
+    expect(screen.getByRole('button', { name: 'Submit' })).not.toBeDisabled();
+    expect(screen.getByText('send-claude')).not.toBeDisabled();
+    expect(screen.getByTestId('claude-disabled')).toHaveTextContent('false');
   });
 
 });

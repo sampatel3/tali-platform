@@ -47,9 +47,11 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
     return { label: 'NOT RECOMMENDED', color: '#FF0033' };
   };
 
-  const score100 = candidate._raw?.final_score || (candidate.score ? candidate.score * 10 : null);
+  const score100 = candidate?._raw?.final_score || (candidate?.score ? candidate.score * 10 : null);
   const rec = score100 != null ? getRecommendation(score100) : null;
   const assessmentId = candidate?._raw?.id;
+  const roleName = candidate?._raw?.role_name || null;
+  const applicationStatus = candidate?._raw?.application_status || null;
 
   useEffect(() => {
     let cancelled = false;
@@ -258,6 +260,12 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
             <div className="flex flex-wrap gap-4 font-mono text-sm text-gray-600">
               <span className="border-2 border-black px-3 py-1">{candidate.position}</span>
               <span className="border-2 border-black px-3 py-1">Task: {candidate.task}</span>
+              {roleName && (
+                <span className="border-2 border-black px-3 py-1">Role: {roleName}</span>
+              )}
+              {applicationStatus && (
+                <span className="border-2 border-black px-3 py-1">Application: {applicationStatus}</span>
+              )}
               <span className="border-2 border-black px-3 py-1">Duration: {candidate.time}</span>
               {candidate.completedDate && (
                 <span className="border-2 border-black px-3 py-1">Completed: {candidate.completedDate}</span>

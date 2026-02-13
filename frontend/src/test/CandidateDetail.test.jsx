@@ -143,6 +143,8 @@ const mockCandidate = {
     id: 1,
     final_score: 85,
     status: 'completed',
+    role_name: 'Backend Engineer',
+    application_status: 'applied',
     total_duration_seconds: 2700,
     total_prompts: 5,
     total_input_tokens: 5000,
@@ -243,6 +245,12 @@ describe('CandidateDetailPage', () => {
     await renderCandidateDetail();
     expect(screen.getByText('Senior Engineer')).toBeInTheDocument();
     expect(screen.getByText('Task: Async Pipeline Debugging')).toBeInTheDocument();
+  });
+
+  it('renders role and application context badges', async () => {
+    await renderCandidateDetail();
+    expect(screen.getByText('Role: Backend Engineer')).toBeInTheDocument();
+    expect(screen.getByText('Application: applied')).toBeInTheDocument();
   });
 
   it('renders duration info', async () => {
