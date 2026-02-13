@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Mock the API module
@@ -154,7 +154,9 @@ const renderAppOnTasksPage = async () => {
 
   // Navigate to Tasks via nav
   const tasksNav = screen.getByText('Tasks', { selector: 'button' });
-  fireEvent.click(tasksNav);
+  await act(async () => {
+    fireEvent.click(tasksNav);
+  });
 
   return result;
 };

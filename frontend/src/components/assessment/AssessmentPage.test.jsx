@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 
 import AssessmentPage from './AssessmentPage';
@@ -58,8 +58,13 @@ describe('AssessmentPage tracking metadata', () => {
 
     render(<AssessmentPage token="tok" startData={startData} />);
 
-    fireEvent.click(screen.getByText('paste'));
-    fireEvent.click(screen.getByText('send-claude'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('paste'));
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('send-claude'));
+    });
 
     await waitFor(() => expect(mockClaude).toHaveBeenCalledTimes(1));
     const claudeArgs = mockClaude.mock.calls[0];
@@ -76,10 +81,14 @@ describe('AssessmentPage tracking metadata', () => {
       configurable: true,
       get: () => 'hidden',
     });
-    document.dispatchEvent(new Event('visibilitychange'));
+    await act(async () => {
+      document.dispatchEvent(new Event('visibilitychange'));
+    });
     await screen.findByText('This has been recorded.');
 
-    fireEvent.click(screen.getByText('Submit'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Submit'));
+    });
 
     await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
     expect(mockSubmit.mock.calls[0][3]).toMatchObject({ tab_switch_count: 1 });
