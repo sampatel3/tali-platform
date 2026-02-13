@@ -1,4 +1,6 @@
-"""HTML email templates for TALI notifications."""
+"""HTML email templates for platform notifications."""
+
+from ...platform.brand import BRAND_NAME, BRAND_PRODUCT_NAME
 
 
 def assessment_invite_html(
@@ -21,8 +23,8 @@ def assessment_invite_html(
         <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
           <tr>
             <td style="background-color:#6366f1;padding:32px 40px;text-align:center;">
-              <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:-0.5px;">TALI</h1>
-              <p style="margin:4px 0 0;color:#c7d2fe;font-size:14px;">Technical Assessment Platform</p>
+              <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:-0.5px;">{BRAND_NAME}</h1>
+              <p style="margin:4px 0 0;color:#c7d2fe;font-size:14px;">{BRAND_PRODUCT_NAME}</p>
             </td>
           </tr>
           <tr>
@@ -50,7 +52,7 @@ def assessment_invite_html(
               <p style="margin:0 0 24px;color:#6366f1;font-size:13px;word-break:break-all;">{assessment_link}</p>
               <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
               <p style="margin:0;color:#9ca3af;font-size:13px;text-align:center;">
-                This invitation was sent via TALI on behalf of {org_name}.<br>
+                This invitation was sent via {BRAND_NAME} on behalf of {org_name}.<br>
                 If you did not expect this email, you can safely ignore it.
               </p>
             </td>
@@ -89,8 +91,8 @@ def results_notification_html(
         <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
           <tr>
             <td style="background-color:#6366f1;padding:32px 40px;text-align:center;">
-              <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:-0.5px;">TALI</h1>
-              <p style="margin:4px 0 0;color:#c7d2fe;font-size:14px;">Technical Assessment Platform</p>
+              <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:-0.5px;">{BRAND_NAME}</h1>
+              <p style="margin:4px 0 0;color:#c7d2fe;font-size:14px;">{BRAND_PRODUCT_NAME}</p>
             </td>
           </tr>
           <tr>
@@ -119,7 +121,7 @@ def results_notification_html(
               </table>
               <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
               <p style="margin:0;color:#9ca3af;font-size:13px;text-align:center;">
-                This notification was sent by TALI. You are receiving this because
+                This notification was sent by {BRAND_NAME}. You are receiving this because
                 you are listed as a reviewer for this assessment.
               </p>
             </td>
@@ -142,8 +144,8 @@ def email_verification_html(full_name: str, verification_link: str) -> str:
     <tr><td align="center">
       <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
         <tr><td style="background-color:#6366f1;padding:32px;text-align:center;">
-          <h1 style="margin:0;color:#ffffff;font-size:28px;">TALI</h1>
-          <p style="margin:4px 0 0;color:#c7d2fe;font-size:14px;">Technical Assessment Platform</p>
+          <h1 style="margin:0;color:#ffffff;font-size:28px;">{BRAND_NAME}</h1>
+          <p style="margin:4px 0 0;color:#c7d2fe;font-size:14px;">{BRAND_PRODUCT_NAME}</p>
         </td></tr>
         <tr><td style="padding:40px;">
           <h2 style="margin:0 0 16px;color:#1f2937;font-size:22px;">Verify your email</h2>
@@ -151,7 +153,7 @@ def email_verification_html(full_name: str, verification_link: str) -> str:
             Hi {full_name},
           </p>
           <p style="margin:0 0 24px;color:#4b5563;font-size:16px;line-height:1.6;">
-            Thanks for signing up for TALI. Please verify your email address by clicking the button below.
+            Thanks for signing up for {BRAND_NAME}. Please verify your email address by clicking the button below.
           </p>
           <table cellpadding="0" cellspacing="0" style="margin:0 auto 24px;"><tr><td style="background-color:#6366f1;border-radius:6px;text-align:center;">
             <a href="{verification_link}" style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;">Verify Email</a>
@@ -160,7 +162,7 @@ def email_verification_html(full_name: str, verification_link: str) -> str:
           <p style="margin:0 0 24px;color:#6366f1;font-size:13px;word-break:break-all;">{verification_link}</p>
           <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
           <p style="margin:0;color:#9ca3af;font-size:13px;text-align:center;">
-            This link expires in 24 hours. If you didn't create a TALI account, you can ignore this email.
+            This link expires in 24 hours. If you didn't create a {BRAND_NAME} account, you can ignore this email.
           </p>
         </td></tr>
       </table>
@@ -180,7 +182,7 @@ def password_reset_html(reset_link: str) -> str:
     <tr><td align="center">
       <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
         <tr><td style="background-color:#6366f1;padding:32px;text-align:center;">
-          <h1 style="margin:0;color:#ffffff;font-size:28px;">TALI</h1>
+          <h1 style="margin:0;color:#ffffff;font-size:28px;">{BRAND_NAME}</h1>
         </td></tr>
         <tr><td style="padding:40px;">
           <h2 style="margin:0 0 16px;color:#1f2937;font-size:22px;">Reset your password</h2>

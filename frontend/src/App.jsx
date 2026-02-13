@@ -42,6 +42,7 @@ import AssessmentPage from './components/assessment/AssessmentPage';
 import { CandidateDetailPage } from './pages/CandidateDetailPage';
 import { DashboardPage } from './pages/DashboardPage';
 import { CandidatesPage } from './pages/CandidatesPage';
+import { BRAND } from './config/brand';
 import { TasksPage } from './pages/TasksPage';
 
 // ============================================================
@@ -65,7 +66,7 @@ const Logo = ({ onClick }) => (
     <div className="w-10 h-10 border-2 border-black flex items-center justify-center" style={{ backgroundColor: '#9D00FF' }}>
       <Code size={20} className="text-white" />
     </div>
-    <span className="text-xl font-bold tracking-tight">TALI</span>
+    <span className="text-xl font-bold tracking-tight">{BRAND.name}</span>
   </div>
 );
 
@@ -224,7 +225,7 @@ const HeroSection = ({ onNavigate }) => (
         <div className="border-2 border-black bg-black p-4">
           <div className="flex items-center gap-2 mb-3">
             <CheckCircle size={18} style={{ color: '#9D00FF' }} />
-            <span className="font-mono text-xs font-bold" style={{ color: '#9D00FF' }}>TALI WAY</span>
+            <span className="font-mono text-xs font-bold" style={{ color: '#9D00FF' }}>{BRAND.name} WAY</span>
           </div>
           <pre className="font-mono text-xs leading-relaxed" style={{ color: '#9D00FF' }}>
 {`> Fix the delimiter bug
@@ -286,6 +287,32 @@ const ProblemSection = () => (
             <li className="font-mono text-sm text-gray-700">HackerRank/Codility: £20–50 per assessment</li>
           </ul>
         </div>
+      </div>
+    </div>
+  </section>
+);
+
+const WhatWeTestSection = () => (
+  <section id="what-we-test" className="border-b-2 border-black bg-white">
+    <div className="max-w-7xl mx-auto px-6 py-20">
+      <h2 className="text-4xl font-bold text-center mb-4">What we test (30+ signals)</h2>
+      <p className="text-center font-mono text-gray-600 mb-12 max-w-3xl mx-auto">
+        {BRAND.name} evaluates how candidates think and deliver in realistic, AI-assisted workflows—not just whether they can recite syntax.
+      </p>
+      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+        {[
+          ['Prompt clarity', 'Do they ask precise, context-rich questions that move work forward?'],
+          ['Debugging behavior', 'Can they isolate root causes, run targeted checks, and verify fixes?'],
+          ['Autonomy', 'Do they make progress independently instead of waiting for step-by-step rescue?'],
+          ['Communication quality', 'Can they explain tradeoffs, assumptions, and next steps clearly?'],
+          ['Code quality', 'Is the resulting code maintainable, testable, and production-minded?'],
+          ['Fraud signals', 'Do timeline and interaction patterns indicate authentic candidate work?'],
+        ].map(([title, description]) => (
+          <div key={title} className="border-2 border-black bg-gray-50 p-6">
+            <h3 className="text-lg font-bold mb-2">{title}</h3>
+            <p className="font-mono text-sm text-gray-700">{description}</p>
+          </div>
+        ))}
       </div>
     </div>
   </section>
@@ -356,10 +383,10 @@ const Footer = () => (
             <div className="w-10 h-10 border-2 border-white flex items-center justify-center" style={{ backgroundColor: '#9D00FF' }}>
               <Code size={20} className="text-white" />
             </div>
-            <span className="text-xl font-bold tracking-tight">TALI</span>
+            <span className="text-xl font-bold tracking-tight">{BRAND.name}</span>
           </div>
           <p className="font-mono text-sm text-gray-400">
-            AI-augmented technical assessments for modern engineering teams.
+            {BRAND.productTagline}
           </p>
         </div>
         <div>
@@ -391,7 +418,7 @@ const Footer = () => (
         </div>
       </div>
       <div className="border-t border-gray-800 mt-12 pt-8 flex flex-wrap items-center justify-between">
-        <div className="font-mono text-xs text-gray-500">&copy; 2026 TALI. All rights reserved.</div>
+        <div className="font-mono text-xs text-gray-500">&copy; 2026 {BRAND.name}. All rights reserved.</div>
         <div className="font-mono text-xs text-gray-500">Built with React + Vite + Tailwind CSS</div>
       </div>
     </div>
@@ -403,6 +430,7 @@ const LandingPage = ({ onNavigate }) => (
     <LandingNav onNavigate={onNavigate} />
     <HeroSection onNavigate={onNavigate} />
     <ProblemSection />
+    <WhatWeTestSection />
     <PricingSection onNavigate={onNavigate} />
     <Footer />
   </div>
@@ -483,7 +511,7 @@ const LoginPage = ({ onNavigate }) => {
           )}
           <div className="border-2 border-black p-8">
             <h2 className="text-3xl font-bold mb-2">Sign In</h2>
-            <p className="font-mono text-sm text-gray-600 mb-8">Access your TALI dashboard</p>
+            <p className="font-mono text-sm text-gray-600 mb-8">Access your {BRAND.name} dashboard</p>
             <div className="space-y-4">
               <div>
                 <label className="block font-mono text-sm mb-1">Email</label>
@@ -659,7 +687,7 @@ const RegisterPage = ({ onNavigate }) => {
           ) : (
             <div className="border-2 border-black p-8">
               <h2 className="text-3xl font-bold mb-2">Create Account</h2>
-              <p className="font-mono text-sm text-gray-600 mb-8">Start using TALI for your team</p>
+              <p className="font-mono text-sm text-gray-600 mb-8">Start using {BRAND.name} for your team</p>
               {error && (
                 <div className="border-2 border-red-500 bg-red-50 p-4 mb-6 flex items-center gap-2">
                   <AlertTriangle size={18} className="text-red-500 flex-shrink-0" />
