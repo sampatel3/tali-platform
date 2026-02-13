@@ -339,39 +339,41 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
         </div>
       </div>
 
-      {(taskContext.description || taskContext.scenario || repoFiles.length > 0) && (
-        <div className="border-b-2 border-black bg-gray-50 p-4">
-          <div className="grid md:grid-cols-2 gap-4">
-            <div>
-              <div className="font-mono text-xs text-gray-500 mb-1">Task Context</div>
-              {taskContext.scenario ? <p className="font-mono text-sm mb-2"><strong>Scenario:</strong> {taskContext.scenario}</p> : null}
-              {taskContext.description ? <p className="font-mono text-sm whitespace-pre-wrap">{taskContext.description}</p> : null}
-            </div>
-            <div>
-              <div className="font-mono text-xs text-gray-500 mb-1">Repository Context</div>
-              {repoFiles.length === 0 ? (
-                <p className="font-mono text-xs text-gray-600">No repository files provided for this assessment.</p>
-              ) : (
-                <>
-                  <div className="flex flex-wrap gap-2 mb-2 max-h-16 overflow-auto">
-                    {repoFiles.map((file) => (
-                      <button
-                        key={file.path}
-                        type="button"
-                        className={`border px-2 py-1 font-mono text-xs ${activeRepoFile === file.path ? 'border-black bg-black text-white' : 'border-gray-400 bg-white'}`}
-                        onClick={() => setSelectedRepoFile(file.path)}
-                      >
-                        {file.path}
-                      </button>
-                    ))}
-                  </div>
-                  <pre className="bg-black text-gray-200 p-2 text-xs overflow-auto max-h-36 border-2 border-black">{activeRepoContent || 'No file content available.'}</pre>
-                </>
-              )}
-            </div>
+      <div className="border-b-2 border-black bg-gray-50 p-4">
+        <div className="grid md:grid-cols-2 gap-4">
+          <div>
+            <div className="font-mono text-xs text-gray-500 mb-1">Task Context</div>
+            {taskContext.scenario ? <p className="font-mono text-sm mb-2"><strong>Scenario:</strong> {taskContext.scenario}</p> : null}
+            {taskContext.description ? (
+              <p className="font-mono text-sm whitespace-pre-wrap">{taskContext.description}</p>
+            ) : (
+              <p className="font-mono text-xs text-gray-600">Task context has not been provided yet.</p>
+            )}
+          </div>
+          <div>
+            <div className="font-mono text-xs text-gray-500 mb-1">Repository Context</div>
+            {repoFiles.length === 0 ? (
+              <p className="font-mono text-xs text-gray-600">No repository files provided for this assessment.</p>
+            ) : (
+              <>
+                <div className="flex flex-wrap gap-2 mb-2 max-h-16 overflow-auto">
+                  {repoFiles.map((file) => (
+                    <button
+                      key={file.path}
+                      type="button"
+                      className={`border px-2 py-1 font-mono text-xs ${activeRepoFile === file.path ? 'border-black bg-black text-white' : 'border-gray-400 bg-white'}`}
+                      onClick={() => setSelectedRepoFile(file.path)}
+                    >
+                      {file.path}
+                    </button>
+                  ))}
+                </div>
+                <pre className="bg-black text-gray-200 p-2 text-xs overflow-auto max-h-36 border-2 border-black">{activeRepoContent || 'No file content available.'}</pre>
+              </>
+            )}
           </div>
         </div>
-      )}
+      </div>
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">
