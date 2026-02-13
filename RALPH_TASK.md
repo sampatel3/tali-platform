@@ -222,13 +222,22 @@ This section restructures execution into assignable phases so multiple agents ca
 
 **Goal:** freeze baseline quality signal before new work.
 
-- [ ] Confirm green baseline on default local-safe test commands.
-- [ ] Confirm production-smoke is still isolated from default path.
-- [ ] Create working branch plan (one branch per phase/agent).
+- [x] Confirm green baseline on default local-safe test commands.
+- [x] Confirm production-smoke is still isolated from default path.
+- [x] Create working branch plan (one branch per phase/agent).
 
 **Validation:**
 - `cd backend && pytest -q -m "not production"`
 - `cd frontend && npm test -- --run`
+
+**Branch plan (Agent F release management):**
+- `agent-a/p1-assessment-integrity`
+- `agent-b/p2-scoring-glossary`
+- `agent-c/p3-candidate-comparison`
+- `agent-c/p4-frontend-decomposition`
+- `agent-d/p5-landing-brand-config`
+- `agent-e/p6-model-cost-observability`
+- `agent-f/p7-integration-release-gate`
 
 ---
 
@@ -344,9 +353,9 @@ This section restructures execution into assignable phases so multiple agents ca
 
 **Goal:** merge all phase outputs safely with measurable release confidence.
 
-- [ ] Run full local-safe QA matrix and production build.
-- [ ] Validate no doc drift across `README`, `PRODUCT_PLAN.md`, and `RALPH_TASK.md`.
-- [ ] Publish release notes mapping each phase to shipped outcomes.
+- [x] Run full local-safe QA matrix and production build.
+- [x] Validate no doc drift across `README`, `PRODUCT_PLAN.md`, and `RALPH_TASK.md`.
+- [x] Publish release notes mapping each phase to shipped outcomes.
 
 **Validation commands:**
 - `cd backend && pytest -q -m "not production"`

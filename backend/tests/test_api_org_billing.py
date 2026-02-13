@@ -1,7 +1,9 @@
 """API tests for organization, billing, analytics, and team endpoints."""
 
 import uuid
+from datetime import datetime, timezone
 
+from app.models.assessment import Assessment, AssessmentStatus
 from tests.conftest import auth_headers
 
 
@@ -65,6 +67,74 @@ def test_billing_usage_success(client):
 
 def test_billing_usage_no_auth_401(client):
     resp = client.get("/api/v1/billing/usage")
+    assert resp.status_code == 401
+
+
+def test_billing_costs_success(client, db):
+    headers, _ = auth_headers(client)
+
+    task_resp = client.post(
+        "/api/v1/tasks/",
+        json={
+            "name": "Cost Task",
+            "description": "Cost tracking task",
+            "task_type": "python",
+            "difficulty": "medium",
+            "duration_minutes": 30,
+            "starter_code": "# start",
+            "test_code": "def test_ok():\n    assert True",
+        },
+        headers=headers,
+    )
+    assert task_resp.status_code == 201
+    task_id = task_resp.json()["id"]
+
+    assessment_resp = client.post(
+        "/api/v1/assessments/",
+        json={
+            "candidate_email": "cost-candidate@example.com",
+            "candidate_name": "Cost Candidate",
+            "task_id": task_id,
+        },
+        headers=headers,
+    )
+    assert assessment_resp.status_code == 201
+
+    # Seed usage signals so cost breakdown is non-zero
+    assessment = db.query(Assessment).first()
+    assert assessment is not None
+    assessment.status = AssessmentStatus.COMPLETED
+    assessment.started_at = datetime.now(timezone.utc)
+    assessment.completed_at = datetime.now(timezone.utc)
+    assessment.total_duration_seconds = 1800
+    assessment.total_input_tokens = 12000
+    assessment.total_output_tokens = 6000
+    assessment.ai_prompts = [{"message": "help", "response": "ok"}]
+    assessment.code_snapshots = [{"code": "print(1)"}]
+    db.commit()
+
+    resp = client.get('/api/v1/billing/costs', headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+
+    assert 'costs' in data
+    assert 'summary' in data
+    assert 'thresholds' in data
+    assert 'alerts' in data
+    assert isinstance(data['costs'], list)
+    assert len(data['costs']) >= 1
+
+    first = data['costs'][0]
+    assert 'cost_usd' in first
+    assert first['cost_usd']['total'] >= 0
+    assert 'claude' in first['cost_usd']
+    assert 'e2b' in first['cost_usd']
+    assert 'email' in first['cost_usd']
+    assert 'storage' in first['cost_usd']
+
+
+def test_billing_costs_no_auth_401(client):
+    resp = client.get('/api/v1/billing/costs')
     assert resp.status_code == 401
 
 

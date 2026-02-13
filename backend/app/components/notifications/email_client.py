@@ -9,6 +9,7 @@ import logging
 
 import resend
 
+from ...platform.brand import BRAND_NAME, brand_email_from
 from .templates import assessment_invite_html, results_notification_html, password_reset_html, email_verification_html
 
 logger = logging.getLogger(__name__)
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 class EmailService:
     """Service for sending transactional emails through Resend."""
 
-    def __init__(self, api_key: str, from_email: str = "TALI <noreply@tali.dev>"):
+    def __init__(self, api_key: str, from_email: str = brand_email_from()):
         resend.api_key = api_key
         self.from_email = from_email
         logger.info("EmailService initialised (from=%s)", self.from_email)
@@ -103,7 +104,7 @@ class EmailService:
             email = resend.Emails.send({
                 "from": self.from_email,
                 "to": [to_email],
-                "subject": "TALI — Verify your email address",
+                "subject": f"{BRAND_NAME} — Verify your email address",
                 "html": html_body,
             })
 
@@ -122,7 +123,7 @@ class EmailService:
             email = resend.Emails.send({
                 "from": self.from_email,
                 "to": [to_email],
-                "subject": "TALI — Reset your password",
+                "subject": f"{BRAND_NAME} — Reset your password",
                 "html": html_body,
             })
 

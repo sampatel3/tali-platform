@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response as StarletteResponse
+from .platform.brand import BRAND_APP_DESCRIPTION, BRAND_NAME
 from .platform.config import settings
 from .platform.logging import setup_logging
 from .platform.middleware import RequestLoggingMiddleware, RateLimitMiddleware
@@ -34,8 +35,8 @@ _docs_url = None if _is_production else "/api/docs"
 _openapi_url = None if _is_production else "/api/openapi.json"
 
 app = FastAPI(
-    title="TALI API",
-    description="AI-augmented technical assessment platform",
+    title=f"{BRAND_NAME} API",
+    description=BRAND_APP_DESCRIPTION,
     version="1.0.0",
     docs_url=_docs_url,
     openapi_url=_openapi_url,
@@ -198,7 +199,7 @@ app.include_router(candidates_router, prefix="/api/v1")
 
 @app.on_event("startup")
 def startup():
-    logger.info("TALI API started | env=%s", "production" if settings.SENTRY_DSN else "development")
+    logger.info("%s API started | env=%s", BRAND_NAME, "production" if settings.SENTRY_DSN else "development")
 
 
 @app.get("/health")
