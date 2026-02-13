@@ -53,5 +53,12 @@ class TaskResponse(BaseModel):
     score_weights: Optional[Dict[str, Any]] = None
     recruiter_weight_preset: Optional[str] = None
     proctoring_enabled: bool = False
+    # New fields from task JSON spec
+    task_key: Optional[str] = None
+    role: Optional[str] = None
+    scenario: Optional[str] = None
+    repo_structure: Optional[Dict[str, Any]] = None
+    evaluation_rubric: Optional[Dict[str, Any]] = None
+    extra_data: Optional[Dict[str, Any]] = None
 
     model_config = {"from_attributes": True}

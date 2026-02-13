@@ -26,5 +26,12 @@ class Task(Base):
     score_weights = Column(JSON, nullable=True)
     recruiter_weight_preset = Column(String, nullable=True)  # "solution_focused", "prompt_focused", "balanced"
     proctoring_enabled = Column(Boolean, default=False)
+    # New fields from task JSON spec
+    task_key = Column(String, nullable=True, index=True)  # e.g. "ai_eng_a_prompt_cache"
+    role = Column(String, nullable=True)                  # "ai_engineer" | "data_engineer"
+    scenario = Column(Text, nullable=True)                # Problem description shown to candidate
+    repo_structure = Column(JSON, nullable=True)          # {name, files: {path: content}}
+    evaluation_rubric = Column(JSON, nullable=True)       # {category: {weight, criteria}}
+    extra_data = Column(JSON, nullable=True)              # expected_insights, expected_fixes, valid_solutions, etc.
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
