@@ -78,7 +78,7 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, assessments as assessmentsApi, analytics as analyticsApi } from '../lib/api.js';
+import { auth, assessments as assessmentsApi, analytics as analyticsApi, candidates as candidatesApi } from '../lib/api.js';
 import { CandidateDetailPage } from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -220,7 +220,7 @@ describe('CandidateDetailPage', () => {
 
   it('renders candidate name and email', () => {
     renderCandidateDetail();
-    expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
+    expect(screen.getAllByText('Alice Johnson').length).toBeGreaterThan(0);
     expect(screen.getByText('alice@example.com')).toBeInTheDocument();
   });
 
@@ -436,5 +436,23 @@ describe('CandidateDetailPage', () => {
     renderCandidateDetail();
 
     expect(screen.getByText('Post to Workable')).toBeInTheDocument();
+  });
+
+  it('enables candidate comparison and loads comparison candidate assessment', async () => {
+    candidatesApi.list.mockResolvedValue({ data: { items: [{ id: 2, full_name: 'Bob Smith', email: 'bob@example.com' }] } });
+    assessmentsApi.list.mockResolvedValueOnce({ data: { items: [{ id: 20, candidate_name: 'Bob Smith', breakdown: { categoryScores: { task_completion: 6 } } }] } });
+
+    renderCandidateDetail();
+
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: 'Bob Smith' })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Candidate B'), { target: { value: '2' } });
+
+    await waitFor(() => {
+      expect(assessmentsApi.list.mock.calls.some(([arg]) => arg?.candidate_id === 2)).toBe(true);
+      expect(screen.getByText(/Comparison active/)).toBeInTheDocument();
+    });
   });
 });

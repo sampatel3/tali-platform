@@ -15,6 +15,10 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
   });
 
   const [expandedCategory, setExpandedCategory] = useState(null);
+  const [comparisonCandidates, setComparisonCandidates] = useState([]);
+  const [comparisonCandidateId, setComparisonCandidateId] = useState('');
+  const [comparisonAssessment, setComparisonAssessment] = useState(null);
+  const [comparisonMode, setComparisonMode] = useState('overlay');
 
   const getRecommendation = (score100) => {
     if (score100 >= 80) return { label: 'STRONG HIRE', color: '#16a34a' };
@@ -44,6 +48,51 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadComparisonCandidates = async () => {
+      try {
+        const res = await candidatesApi.list({ limit: 100, offset: 0 });
+        if (cancelled) return;
+        const currentCandidateId = candidate?._raw?.candidate_id;
+        const items = (res.data?.items || []).filter((item) => item.id !== currentCandidateId);
+        setComparisonCandidates(items);
+      } catch {
+        if (!cancelled) setComparisonCandidates([]);
+      }
+    };
+    loadComparisonCandidates();
+    return () => {
+      cancelled = true;
+    };
+  }, [candidate?._raw?.candidate_id]);
+
+  const getCategoryScores = (candidateData) => {
+    const breakdownScores = candidateData?.breakdown?.categoryScores;
+    const detailedCategoryScores = candidateData?.breakdown?.detailedScores?.category_scores;
+    const analyticsCategoryScores = candidateData?._raw?.prompt_analytics?.detailed_scores?.category_scores;
+    return breakdownScores || detailedCategoryScores || analyticsCategoryScores || {};
+  };
+
+  const loadComparisonAssessment = async (selectedCandidateId) => {
+    if (!selectedCandidateId) {
+      setComparisonAssessment(null);
+      return;
+    }
+    try {
+      const res = await assessmentsApi.list({ candidate_id: Number(selectedCandidateId), limit: 1, offset: 0 });
+      const item = res.data?.items?.[0] || null;
+      setComparisonAssessment(item ? {
+        name: item.candidate_name || item.candidate_email || `Candidate ${selectedCandidateId}`,
+        score: item.score ?? item.overall_score ?? null,
+        breakdown: item.breakdown || null,
+        _raw: item,
+      } : null);
+    } catch {
+      setComparisonAssessment(null);
+    }
+  };
 
   if (!candidate) return null;
 
@@ -290,9 +339,10 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
         {activeTab === 'results' && (() => {
           const assessment = candidate._raw || {};
           const bd = candidate.breakdown || {};
-          const catScores = bd.categoryScores || bd.detailedScores?.category_scores || {};
+          const catScores = getCategoryScores(candidate);
           const detailedScores = bd.detailedScores || assessment.prompt_analytics?.detailed_scores || {};
           const explanations = bd.explanations || assessment.prompt_analytics?.explanations || {};
+          const comparisonScores = getCategoryScores(comparisonAssessment);
 
           const CATEGORY_CONFIG = [
             { key: 'task_completion', icon: '✅', weight: '20%' },
@@ -312,12 +362,55 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
           const radarData = CATEGORY_CONFIG.filter(c => catScores[c.key] != null).map(c => ({
             signal: c.label.split(' ')[0],
             score: catScores[c.key] || 0,
+            comparisonScore: comparisonScores[c.key] || 0,
             fullMark: 10,
           }));
 
           return (
             <div className="space-y-6">
               {/* Category Radar Chart */}
+              <div className="border-2 border-black p-4 bg-gray-50">
+                <div className="font-bold mb-3">Candidate Comparison</div>
+                <div className="grid md:grid-cols-3 gap-3 items-end">
+                  <div>
+                    <div className="font-mono text-xs text-gray-500 mb-1">Candidate A</div>
+                    <div className="border-2 border-black px-3 py-2 font-mono text-sm bg-white">{candidate.name}</div>
+                  </div>
+                  <div>
+                    <label className="font-mono text-xs text-gray-500 mb-1 block">Candidate B</label>
+                    <select
+                      aria-label="Candidate B"
+                      className="w-full border-2 border-black px-3 py-2 font-mono text-sm bg-white"
+                      value={comparisonCandidateId}
+                      onChange={(e) => {
+                        const nextId = e.target.value;
+                        setComparisonCandidateId(nextId);
+                        loadComparisonAssessment(nextId);
+                      }}
+                    >
+                      <option value="">Select candidate</option>
+                      {comparisonCandidates.map((opt) => (
+                        <option key={opt.id} value={opt.id}>{opt.full_name || opt.email}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-mono text-xs text-gray-500 mb-1 block">Comparison mode</label>
+                    <select
+                      className="w-full border-2 border-black px-3 py-2 font-mono text-sm bg-white"
+                      value={comparisonMode}
+                      onChange={(e) => setComparisonMode(e.target.value)}
+                    >
+                      <option value="overlay">Radar overlay</option>
+                      <option value="side-by-side">Side-by-side</option>
+                    </select>
+                  </div>
+                </div>
+                {comparisonAssessment && (
+                  <div className="font-mono text-xs mt-3 text-green-700">Comparison active: {candidate.name} vs {comparisonAssessment.name}</div>
+                )}
+              </div>
+
               {radarData.length > 0 && (
                 <div className="border-2 border-black p-4">
                   <div className="font-bold mb-4">Category Breakdown</div>
@@ -327,9 +420,34 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                         <PolarGrid />
                         <PolarAngleAxis dataKey="signal" tick={{ fontSize: 11, fontFamily: 'monospace' }} />
                         <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
-                        <Radar name="Score" dataKey="score" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.3} />
+                        <Radar name={candidate.name} dataKey="score" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.25} />
+                        {comparisonAssessment && comparisonMode === 'overlay' && (
+                          <Radar name={comparisonAssessment.name} dataKey="comparisonScore" stroke="#111827" fill="#111827" fillOpacity={0.12} />
+                        )}
                       </RadarChart>
                     </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {comparisonAssessment && comparisonMode === 'side-by-side' && (
+                <div className="border-2 border-black p-4">
+                  <div className="font-bold mb-4">Side-by-side category comparison</div>
+                  <div className="space-y-2">
+                    {CATEGORY_CONFIG.map((cat) => {
+                      const aScore = catScores[cat.key];
+                      const bScore = comparisonScores[cat.key];
+                      if (aScore == null && bScore == null) return null;
+                      const delta = (aScore ?? 0) - (bScore ?? 0);
+                      return (
+                        <div key={cat.key} className="grid grid-cols-4 gap-3 border border-gray-300 p-2 font-mono text-sm">
+                          <div>{cat.label}</div>
+                          <div>{candidate.name}: {aScore ?? '—'}/10</div>
+                          <div>{comparisonAssessment.name}: {bScore ?? '—'}/10</div>
+                          <div className={delta >= 0 ? 'text-green-700' : 'text-red-700'}>Δ {delta.toFixed(1)}</div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -796,4 +914,3 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
     </div>
   );
 };
-
