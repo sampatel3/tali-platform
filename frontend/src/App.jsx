@@ -196,10 +196,10 @@ const HeroSection = ({ onNavigate }) => (
           BUILT FOR AI-NATIVE ENGINEERING TEAMS
         </div>
         <h1 className="text-5xl lg:text-6xl font-bold leading-tight mb-6">
-          Assess Real Engineering Work
+          Stop Screening for Yesterday&apos;s Skills
         </h1>
         <p className="text-xl lg:text-2xl font-mono text-gray-700 mb-8 leading-relaxed">
-          Give candidates a real coding environment with agents like Claude Code and Codex, then score how they debug, reason, and ship.
+          Test how engineers actually work—with AI tools like Cursor and Claude—not outdated algorithm puzzles.
         </p>
         <div className="flex flex-wrap gap-4">
           <button
