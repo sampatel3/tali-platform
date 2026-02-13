@@ -25,7 +25,7 @@ from ...services.claude_service import ClaudeService
 from ...components.notifications.service import send_assessment_invite_sync, send_results_notification_sync
 from ...components.assessments.repository import (
     utcnow, ensure_utc, assessment_to_response, build_timeline,
-    get_active_assessment, validate_assessment_token,
+    get_active_assessment, validate_assessment_token, append_assessment_timeline_event,
 )
 from ...components.assessments.service import (
     store_cv_upload, start_or_resume_assessment, submit_assessment as _submit_assessment,
@@ -238,7 +238,24 @@ def execute_code(
             db.commit()
         except Exception:
             db.rollback()
+    t0 = time.time()
     result = e2b.execute_code(sandbox, data.code)
+    exec_latency_ms = int((time.time() - t0) * 1000)
+
+    append_assessment_timeline_event(
+        assessment,
+        "code_execute",
+        {
+            "session_id": assessment.e2b_session_id,
+            "code_length": len(data.code or ""),
+            "latency_ms": exec_latency_ms,
+            "has_stderr": bool(result.get("stderr")),
+        },
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
     return result
 
 
@@ -287,6 +304,21 @@ def chat_with_claude(
 
     prompts.append(prompt_record)
     assessment.ai_prompts = prompts
+
+    append_assessment_timeline_event(
+        assessment,
+        "ai_prompt",
+        {
+            "word_count": prompt_record["word_count"],
+            "char_count": prompt_record["char_count"],
+            "input_tokens": prompt_record["input_tokens"],
+            "output_tokens": prompt_record["output_tokens"],
+            "response_latency_ms": prompt_record["response_latency_ms"],
+            "paste_detected": prompt_record["paste_detected"],
+            "browser_focused": prompt_record["browser_focused"],
+            "time_since_last_prompt_ms": prompt_record["time_since_last_prompt_ms"],
+        },
+    )
 
     if len(prompts) == 1 and assessment.started_at:
         started = ensure_utc(assessment.started_at)

@@ -115,4 +115,24 @@ describe('AssessmentPage tracking metadata', () => {
     expect(screen.getByText(/def run\(\):/)).toBeInTheDocument();
   });
 
+  it('shows fallback context copy when task metadata is missing', async () => {
+    const startData = {
+      assessment_id: 13,
+      token: 'tok3',
+      time_remaining: 1200,
+      task: {
+        name: 'Untitled task',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+      },
+    };
+
+    render(<AssessmentPage token="tok3" startData={startData} />);
+
+    expect(await screen.findByText('Task Context')).toBeInTheDocument();
+    expect(screen.getByText('Task context has not been provided yet.')).toBeInTheDocument();
+    expect(screen.getByText('Repository Context')).toBeInTheDocument();
+    expect(screen.getByText('No repository files provided for this assessment.')).toBeInTheDocument();
+  });
+
 });
