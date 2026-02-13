@@ -754,7 +754,7 @@ Backend:  FastAPI + SQLAlchemy + PostgreSQL
           Platform:   app/platform/{config,database,security,middleware,logging}.py
 
 Frontend: React 18 + Tailwind CSS + Monaco Editor + Recharts
-          Single-file: src/App.jsx (3773 lines)
+          Single-file: src/App.jsx (now reduced; still primary composition surface)
           API client: src/lib/api.js
           Assessment: src/components/assessment/{AssessmentPage,ClaudeChat,CodeEditor}.jsx
 
@@ -764,4 +764,4 @@ Feature flags: MVP_DISABLE_STRIPE, MVP_DISABLE_WORKABLE, MVP_DISABLE_CELERY,
 
 ---
 
-*This plan supersedes all previous task files. `RALPH_TASK.md` has been archived.*
+*This plan tracks product scope; active hardening execution lives in `RALPH_TASK.md`.*
