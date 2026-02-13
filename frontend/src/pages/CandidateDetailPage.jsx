@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { ArrowLeft, AlertTriangle, CheckCircle } from 'lucide-react';
 import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
 import { assessments as assessmentsApi, analytics as analyticsApi, candidates as candidatesApi } from '../lib/api';
+import { SCORING_CATEGORY_GLOSSARY, getMetricMeta } from '../lib/scoringGlossary';
 
 export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAdded, NavComponent = null }) => {
   const [activeTab, setActiveTab] = useState('results');
@@ -14,6 +15,10 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
   });
 
   const [expandedCategory, setExpandedCategory] = useState(null);
+  const [comparisonCandidates, setComparisonCandidates] = useState([]);
+  const [comparisonCandidateId, setComparisonCandidateId] = useState('');
+  const [comparisonAssessment, setComparisonAssessment] = useState(null);
+  const [comparisonMode, setComparisonMode] = useState('overlay');
 
   const getRecommendation = (score100) => {
     if (score100 >= 80) return { label: 'STRONG HIRE', color: '#16a34a' };
@@ -43,6 +48,51 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadComparisonCandidates = async () => {
+      try {
+        const res = await candidatesApi.list({ limit: 100, offset: 0 });
+        if (cancelled) return;
+        const currentCandidateId = candidate?._raw?.candidate_id;
+        const items = (res.data?.items || []).filter((item) => item.id !== currentCandidateId);
+        setComparisonCandidates(items);
+      } catch {
+        if (!cancelled) setComparisonCandidates([]);
+      }
+    };
+    loadComparisonCandidates();
+    return () => {
+      cancelled = true;
+    };
+  }, [candidate?._raw?.candidate_id]);
+
+  const getCategoryScores = (candidateData) => {
+    const breakdownScores = candidateData?.breakdown?.categoryScores;
+    const detailedCategoryScores = candidateData?.breakdown?.detailedScores?.category_scores;
+    const analyticsCategoryScores = candidateData?._raw?.prompt_analytics?.detailed_scores?.category_scores;
+    return breakdownScores || detailedCategoryScores || analyticsCategoryScores || {};
+  };
+
+  const loadComparisonAssessment = async (selectedCandidateId) => {
+    if (!selectedCandidateId) {
+      setComparisonAssessment(null);
+      return;
+    }
+    try {
+      const res = await assessmentsApi.list({ candidate_id: Number(selectedCandidateId), limit: 1, offset: 0 });
+      const item = res.data?.items?.[0] || null;
+      setComparisonAssessment(item ? {
+        name: item.candidate_name || item.candidate_email || `Candidate ${selectedCandidateId}`,
+        score: item.score ?? item.overall_score ?? null,
+        breakdown: item.breakdown || null,
+        _raw: item,
+      } : null);
+    } catch {
+      setComparisonAssessment(null);
+    }
+  };
 
   if (!candidate) return null;
 
@@ -289,41 +339,78 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
         {activeTab === 'results' && (() => {
           const assessment = candidate._raw || {};
           const bd = candidate.breakdown || {};
-          const catScores = bd.categoryScores || bd.detailedScores?.category_scores || {};
+          const catScores = getCategoryScores(candidate);
           const detailedScores = bd.detailedScores || assessment.prompt_analytics?.detailed_scores || {};
           const explanations = bd.explanations || assessment.prompt_analytics?.explanations || {};
+          const comparisonScores = getCategoryScores(comparisonAssessment);
 
           const CATEGORY_CONFIG = [
-            { key: 'task_completion', label: 'Task Completion', icon: '✅', weight: '20%' },
-            { key: 'prompt_clarity', label: 'Prompt Clarity', icon: '🎯', weight: '15%' },
-            { key: 'context_provision', label: 'Context Provision', icon: '📎', weight: '15%' },
-            { key: 'independence', label: 'Independence & Efficiency', icon: '🧠', weight: '20%' },
-            { key: 'utilization', label: 'Response Utilization', icon: '⚡', weight: '10%' },
-            { key: 'communication', label: 'Communication Quality', icon: '✍️', weight: '10%' },
-            { key: 'approach', label: 'Debugging & Design', icon: '🔧', weight: '5%' },
-            { key: 'cv_match', label: 'CV-Job Fit', icon: '📄', weight: '5%' },
-          ];
-
-          const METRIC_LABELS = {
-            tests_passed_ratio: 'Tests Passed', time_compliance: 'Time Compliance', time_efficiency: 'Time Efficiency',
-            prompt_length_quality: 'Prompt Length', question_clarity: 'Clear Questions', prompt_specificity: 'Specificity', vagueness_score: 'Avoids Vagueness',
-            code_context_rate: 'Includes Code', error_context_rate: 'Includes Errors', reference_rate: 'References', attempt_mention_rate: 'Prior Attempts',
-            first_prompt_delay: 'Thinks Before Asking', prompt_spacing: 'Spacing Between', prompt_efficiency: 'Prompts/Test', token_efficiency: 'Token Efficiency', pre_prompt_effort: 'Self-Attempt Rate',
-            post_prompt_changes: 'Uses Responses', wasted_prompts: 'Actionable Prompts', iteration_quality: 'Iterative Refinement',
-            grammar_score: 'Grammar', readability_score: 'Readability', tone_score: 'Professional Tone',
-            debugging_score: 'Debugging Strategy', design_score: 'Design Thinking',
-            cv_job_match_score: 'Overall Match', skills_match: 'Skills Alignment', experience_relevance: 'Experience',
-          };
+            { key: 'task_completion', icon: '✅', weight: '20%' },
+            { key: 'prompt_clarity', icon: '🎯', weight: '15%' },
+            { key: 'context_provision', icon: '📎', weight: '15%' },
+            { key: 'independence', icon: '🧠', weight: '20%' },
+            { key: 'utilization', icon: '⚡', weight: '10%' },
+            { key: 'communication', icon: '✍️', weight: '10%' },
+            { key: 'approach', icon: '🔧', weight: '5%' },
+            { key: 'cv_match', icon: '📄', weight: '5%' },
+          ].map((category) => ({
+            ...category,
+            label: SCORING_CATEGORY_GLOSSARY[category.key]?.label || category.key,
+            description: SCORING_CATEGORY_GLOSSARY[category.key]?.description || 'No description available yet.',
+          }));
 
           const radarData = CATEGORY_CONFIG.filter(c => catScores[c.key] != null).map(c => ({
             signal: c.label.split(' ')[0],
             score: catScores[c.key] || 0,
+            comparisonScore: comparisonScores[c.key] || 0,
             fullMark: 10,
           }));
 
           return (
             <div className="space-y-6">
               {/* Category Radar Chart */}
+              <div className="border-2 border-black p-4 bg-gray-50">
+                <div className="font-bold mb-3">Candidate Comparison</div>
+                <div className="grid md:grid-cols-3 gap-3 items-end">
+                  <div>
+                    <div className="font-mono text-xs text-gray-500 mb-1">Candidate A</div>
+                    <div className="border-2 border-black px-3 py-2 font-mono text-sm bg-white">{candidate.name}</div>
+                  </div>
+                  <div>
+                    <label className="font-mono text-xs text-gray-500 mb-1 block">Candidate B</label>
+                    <select
+                      aria-label="Candidate B"
+                      className="w-full border-2 border-black px-3 py-2 font-mono text-sm bg-white"
+                      value={comparisonCandidateId}
+                      onChange={(e) => {
+                        const nextId = e.target.value;
+                        setComparisonCandidateId(nextId);
+                        loadComparisonAssessment(nextId);
+                      }}
+                    >
+                      <option value="">Select candidate</option>
+                      {comparisonCandidates.map((opt) => (
+                        <option key={opt.id} value={opt.id}>{opt.full_name || opt.email}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="font-mono text-xs text-gray-500 mb-1 block">Comparison mode</label>
+                    <select
+                      className="w-full border-2 border-black px-3 py-2 font-mono text-sm bg-white"
+                      value={comparisonMode}
+                      onChange={(e) => setComparisonMode(e.target.value)}
+                    >
+                      <option value="overlay">Radar overlay</option>
+                      <option value="side-by-side">Side-by-side</option>
+                    </select>
+                  </div>
+                </div>
+                {comparisonAssessment && (
+                  <div className="font-mono text-xs mt-3 text-green-700">Comparison active: {candidate.name} vs {comparisonAssessment.name}</div>
+                )}
+              </div>
+
               {radarData.length > 0 && (
                 <div className="border-2 border-black p-4">
                   <div className="font-bold mb-4">Category Breakdown</div>
@@ -333,9 +420,34 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                         <PolarGrid />
                         <PolarAngleAxis dataKey="signal" tick={{ fontSize: 11, fontFamily: 'monospace' }} />
                         <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
-                        <Radar name="Score" dataKey="score" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.3} />
+                        <Radar name={candidate.name} dataKey="score" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.25} />
+                        {comparisonAssessment && comparisonMode === 'overlay' && (
+                          <Radar name={comparisonAssessment.name} dataKey="comparisonScore" stroke="#111827" fill="#111827" fillOpacity={0.12} />
+                        )}
                       </RadarChart>
                     </ResponsiveContainer>
+                  </div>
+                </div>
+              )}
+
+              {comparisonAssessment && comparisonMode === 'side-by-side' && (
+                <div className="border-2 border-black p-4">
+                  <div className="font-bold mb-4">Side-by-side category comparison</div>
+                  <div className="space-y-2">
+                    {CATEGORY_CONFIG.map((cat) => {
+                      const aScore = catScores[cat.key];
+                      const bScore = comparisonScores[cat.key];
+                      if (aScore == null && bScore == null) return null;
+                      const delta = (aScore ?? 0) - (bScore ?? 0);
+                      return (
+                        <div key={cat.key} className="grid grid-cols-4 gap-3 border border-gray-300 p-2 font-mono text-sm">
+                          <div>{cat.label}</div>
+                          <div>{candidate.name}: {aScore ?? '—'}/10</div>
+                          <div>{comparisonAssessment.name}: {bScore ?? '—'}/10</div>
+                          <div className={delta >= 0 ? 'text-green-700' : 'text-red-700'}>Δ {delta.toFixed(1)}</div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -359,7 +471,7 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                       >
                         <div className="flex items-center gap-3">
                           <span>{cat.icon}</span>
-                          <span className="font-bold">{cat.label}</span>
+                          <span className="font-bold" title={cat.description}>{cat.label}</span>
                           <span className="font-mono text-xs text-gray-500">(Weight: {cat.weight})</span>
                         </div>
                         <div className="flex items-center gap-3">
@@ -376,7 +488,7 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                           {Object.entries(metrics).map(([metricKey, metricVal]) => (
                             <div key={metricKey}>
                               <div className="flex items-center gap-3 mb-1">
-                                <div className="font-mono text-sm w-44 text-gray-700">{METRIC_LABELS[metricKey] || metricKey.replace(/_/g, ' ')}</div>
+                                <div className="font-mono text-sm w-44 text-gray-700" title={getMetricMeta(metricKey).description}>{getMetricMeta(metricKey).label}</div>
                                 <div className="flex-1 bg-gray-200 h-2.5 border border-gray-300 rounded">
                                   <div
                                     className="h-full rounded"
@@ -403,6 +515,25 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                     </div>
                   );
                 })}
+              </div>
+
+              {(Object.keys(catScores).length === 0 || Object.keys(detailedScores).length === 0) && (
+                <div className="border-2 border-yellow-500 bg-yellow-50 p-4"> 
+                  <div className="font-bold text-yellow-800 mb-1">Partial scoring data</div>
+                  <div className="font-mono text-xs text-yellow-700">Some scoring categories or detailed metrics are missing for this assessment. Available results are shown above, and missing components are still being processed or were unavailable.</div>
+                </div>
+              )}
+
+              <div className="border-2 border-black p-4">
+                <div className="font-bold mb-2">Scoring Glossary</div>
+                <div className="grid md:grid-cols-2 gap-2">
+                  {CATEGORY_CONFIG.map((cat) => (
+                    <div key={`glossary-${cat.key}`} className="border border-gray-300 p-2">
+                      <div className="font-mono text-xs font-bold">{cat.label}</div>
+                      <div className="font-mono text-xs text-gray-600">{cat.description}</div>
+                    </div>
+                  ))}
+                </div>
               </div>
 
               {/* Recruiter Insight Summary */}
@@ -783,4 +914,3 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
     </div>
   );
 };
-

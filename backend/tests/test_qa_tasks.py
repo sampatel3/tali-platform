@@ -47,9 +47,54 @@ class TestCreateTask:
         h = _auth_headers(client)
         body = {**VALID_TASK, "sample_data": {"key": "val"}, "dependencies": ["numpy"],
                 "success_criteria": {"tests": True}, "is_template": False,
-                "score_weights": {"task_completion": 0.5}, "proctoring_enabled": True}
+                "score_weights": {"task_completion": 0.5}, "proctoring_enabled": True,
+                "task_key": "ai_eng_a_prompt_cache", "role": "ai_engineer",
+                "scenario": "Fix flaky cache invalidation in a service.",
+                "repo_structure": {"files": {"src/service.py": "def run():\n    return 1"}},
+                "evaluation_rubric": {"correctness": 0.7, "quality": 0.3},
+                "extra_data": {"hints": ["look at cache key"]}}
         r = client.post("/api/v1/tasks", json=body, headers=h)
         assert r.status_code == 201
+        d = r.json()
+        assert d["task_key"] == "ai_eng_a_prompt_cache"
+        assert d["repo_structure"]["files"]["src/service.py"].startswith("def run")
+
+
+    def test_create_accepts_task_id_alias_and_top_level_insights(self, client):
+        h = _auth_headers(client)
+        body = {
+            **VALID_TASK,
+            "task_id": "ai_eng_a_prompt_cache",
+            "expected_insights": ["lots of repeated prompts"],
+            "valid_solutions": ["redis exact-match cache"],
+            "extra_data": {"difficulty_notes": "prefer pragmatic fix"},
+        }
+        r = client.post("/api/v1/tasks", json=body, headers=h)
+        assert r.status_code == 201
+        d = r.json()
+        assert d["task_key"] == "ai_eng_a_prompt_cache"
+        assert d["extra_data"]["difficulty_notes"] == "prefer pragmatic fix"
+        assert d["extra_data"]["expected_insights"] == ["lots of repeated prompts"]
+        assert d["extra_data"]["valid_solutions"] == ["redis exact-match cache"]
+
+
+    def test_create_recreates_main_repo_snapshot(self, client, tmp_path, monkeypatch):
+        monkeypatch.setenv("TASK_REPOS_ROOT", str(tmp_path))
+        h = _auth_headers(client)
+        body = {
+            **VALID_TASK,
+            "task_key": "llm-cache",
+            "name": "LLM Cache Task",
+            "repo_structure": {"files": {"src/app.py": "print('ok')"}},
+        }
+        r = client.post("/api/v1/tasks", json=body, headers=h)
+        assert r.status_code == 201
+
+        repo_root_entries = list(tmp_path.iterdir())
+        assert repo_root_entries, "expected task repo to be created"
+        repo_dir = repo_root_entries[0]
+        assert (repo_dir / "src" / "app.py").exists()
+        assert (repo_dir / ".git").exists()
 
     def test_create_no_auth(self, client):
         r = client.post("/api/v1/tasks", json=VALID_TASK)

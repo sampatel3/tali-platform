@@ -78,7 +78,7 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, assessments as assessmentsApi, analytics as analyticsApi } from '../lib/api.js';
+import { auth, assessments as assessmentsApi, analytics as analyticsApi, candidates as candidatesApi } from '../lib/api.js';
 import { CandidateDetailPage } from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -220,7 +220,7 @@ describe('CandidateDetailPage', () => {
 
   it('renders candidate name and email', () => {
     renderCandidateDetail();
-    expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
+    expect(screen.getAllByText('Alice Johnson').length).toBeGreaterThan(0);
     expect(screen.getByText('alice@example.com')).toBeInTheDocument();
   });
 
@@ -255,7 +255,7 @@ describe('CandidateDetailPage', () => {
     expect(taskCompletionElements.length).toBeGreaterThanOrEqual(1);
     const promptClarityElements = screen.getAllByText('Prompt Clarity');
     expect(promptClarityElements.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('Independence & Efficiency')).toBeInTheDocument();
+    expect(screen.getAllByText('Independence & Efficiency').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders radar chart in results tab', () => {
@@ -423,9 +423,36 @@ describe('CandidateDetailPage', () => {
     expect(screen.getByText('Error Handling')).toBeInTheDocument();
   });
 
+
+  it('renders scoring glossary with plain-English dimension descriptions', () => {
+    renderCandidateDetail();
+
+    expect(screen.getByText('Scoring Glossary')).toBeInTheDocument();
+    expect(screen.getAllByText('Task Completion').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Measures delivery outcomes under the assessment constraints/i)).toBeInTheDocument();
+  });
+
   it('renders Post to Workable button', () => {
     renderCandidateDetail();
 
     expect(screen.getByText('Post to Workable')).toBeInTheDocument();
+  });
+
+  it('enables candidate comparison and loads comparison candidate assessment', async () => {
+    candidatesApi.list.mockResolvedValue({ data: { items: [{ id: 2, full_name: 'Bob Smith', email: 'bob@example.com' }] } });
+    assessmentsApi.list.mockResolvedValueOnce({ data: { items: [{ id: 20, candidate_name: 'Bob Smith', breakdown: { categoryScores: { task_completion: 6 } } }] } });
+
+    renderCandidateDetail();
+
+    await waitFor(() => {
+      expect(screen.getByRole('option', { name: 'Bob Smith' })).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByLabelText('Candidate B'), { target: { value: '2' } });
+
+    await waitFor(() => {
+      expect(assessmentsApi.list.mock.calls.some(([arg]) => arg?.candidate_id === 2)).toBe(true);
+      expect(screen.getByText(/Comparison active/)).toBeInTheDocument();
+    });
   });
 });
