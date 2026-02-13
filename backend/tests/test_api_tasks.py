@@ -251,3 +251,57 @@ def test_create_task_duration_above_max_422(client):
     headers, _ = auth_headers(client)
     resp = create_task_via_api(client, headers, duration_minutes=999)
     assert resp.status_code == 422
+
+
+
+
+def test_create_task_creates_template_repo(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    captured = {}
+
+    class StubRepoService:
+        def __init__(self, github_org=None, github_token=None):
+            captured["github_org"] = github_org
+
+        def create_template_repo(self, task):
+            captured["task_key"] = task.task_key
+            captured["repo_structure"] = task.repo_structure
+            return "mock://tali-assessments/data_eng_c_backfill_schema"
+
+    monkeypatch.setattr("app.api.v1.tasks.AssessmentRepositoryService", StubRepoService)
+
+    resp = create_task_via_api(
+        client,
+        headers,
+        task_id="data_eng_c_backfill_schema",
+        repo_structure={"name": "transaction-pipeline", "files": {"README.md": "# Transaction Pipeline"}},
+    )
+    assert resp.status_code == 201
+    assert captured["task_key"] == "data_eng_c_backfill_schema"
+    assert captured["repo_structure"]["name"] == "transaction-pipeline"
+
+
+def test_update_task_recreates_template_repo(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    calls = {"count": 0}
+
+    class StubRepoService:
+        def __init__(self, github_org=None, github_token=None):
+            pass
+
+        def create_template_repo(self, task):
+            calls["count"] += 1
+            calls["task_key"] = task.task_key
+            return "mock://tali-assessments/updated-task"
+
+    monkeypatch.setattr("app.api.v1.tasks.AssessmentRepositoryService", StubRepoService)
+
+    task_id = create_task_via_api(client, headers, task_id="seed_task").json()["id"]
+    resp = client.patch(
+        f"/api/v1/tasks/{task_id}",
+        json={"task_id": "data_eng_c_backfill_schema"},
+        headers=headers,
+    )
+    assert resp.status_code == 200
+    assert calls["count"] >= 2
+    assert calls["task_key"] == "data_eng_c_backfill_schema"

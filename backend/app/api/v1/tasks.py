@@ -14,6 +14,7 @@ from ...models.task import Task
 from ...schemas.task import TaskCreate, TaskResponse, TaskUpdate
 from ...services.claude_service import ClaudeService
 from ...services.task_repo_service import recreate_task_main_repo
+from ...services.assessment_repository_service import AssessmentRepositoryService
 
 logger = logging.getLogger(__name__)
 
@@ -138,9 +139,12 @@ def create_task(
     task = Task(organization_id=current_user.organization_id, **payload)
     db.add(task)
     try:
+        db.flush()
+        recreate_task_main_repo(task)
+        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
+        repo_service.create_template_repo(task)
         db.commit()
         db.refresh(task)
-        recreate_task_main_repo(task)
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create task")
@@ -189,9 +193,12 @@ def update_task(
     for k, v in update_data.items():
         setattr(task, k, v)
     try:
+        db.flush()
+        recreate_task_main_repo(task)
+        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
+        repo_service.create_template_repo(task)
         db.commit()
         db.refresh(task)
-        recreate_task_main_repo(task)
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update task")
