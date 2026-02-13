@@ -78,6 +78,12 @@ class AssessmentResponse(BaseModel):
     total_output_tokens: Optional[int] = None
     tests_run_count: Optional[int] = None
     tests_pass_count: Optional[int] = None
+    completed_due_to_timeout: Optional[bool] = None
+    final_repo_state: Optional[str] = None
+    git_evidence: Optional[Dict[str, Any]] = None
+    assessment_repo_url: Optional[str] = None
+    assessment_branch: Optional[str] = None
+    clone_command: Optional[str] = None
 
     model_config = {"from_attributes": True}
 

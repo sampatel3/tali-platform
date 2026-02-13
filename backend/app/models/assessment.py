@@ -9,6 +9,7 @@ class AssessmentStatus(str, enum.Enum):
     PENDING = "pending"
     IN_PROGRESS = "in_progress"
     COMPLETED = "completed"
+    COMPLETED_DUE_TO_TIMEOUT = "completed_due_to_timeout"
     EXPIRED = "expired"
 
 
@@ -36,6 +37,12 @@ class Assessment(Base):
     code_snapshots = Column(JSON)
     timeline = Column(JSON)
     e2b_session_id = Column(String)
+    assessment_repo_url = Column(String, nullable=True)
+    assessment_branch = Column(String, nullable=True)
+    clone_command = Column(Text, nullable=True)
+    final_repo_state = Column(String, nullable=True)
+    git_evidence = Column(JSON, nullable=True)
+    completed_due_to_timeout = Column(Boolean, default=False)
     workable_candidate_id = Column(String)
     workable_job_id = Column(String)
     posted_to_workable = Column(Boolean, default=False)

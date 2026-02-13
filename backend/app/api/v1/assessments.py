@@ -23,12 +23,13 @@ from ...schemas.assessment import (
 from ...services.e2b_service import E2BService
 from ...services.claude_service import ClaudeService
 from ...components.notifications.service import send_assessment_invite_sync, send_results_notification_sync
+from ...services.ai_assisted_evaluator import generate_ai_suggestions
 from ...components.assessments.repository import (
     utcnow, ensure_utc, assessment_to_response, build_timeline,
     get_active_assessment, validate_assessment_token, append_assessment_timeline_event,
 )
 from ...components.assessments.service import (
-    store_cv_upload, start_or_resume_assessment, submit_assessment as _submit_assessment,
+    store_cv_upload, start_or_resume_assessment, submit_assessment as _submit_assessment, enforce_active_or_timeout,
 )
 
 router = APIRouter(prefix="/assessments", tags=["Assessments"])
@@ -224,6 +225,7 @@ def execute_code(
     """Execute code in the assessment's E2B sandbox."""
     assessment = get_active_assessment(assessment_id, db)
     validate_assessment_token(assessment, x_assessment_token)
+    enforce_active_or_timeout(assessment, db)
 
     e2b = E2BService(settings.E2B_API_KEY)
     if assessment.e2b_session_id:
@@ -269,6 +271,7 @@ def chat_with_claude(
     """Send a message to Claude AI assistant during assessment."""
     assessment = get_active_assessment(assessment_id, db)
     validate_assessment_token(assessment, x_assessment_token)
+    enforce_active_or_timeout(assessment, db)
 
     claude = ClaudeService(settings.ANTHROPIC_API_KEY)
     messages = data.conversation_history + [{"role": "user", "content": data.message}]
@@ -609,3 +612,34 @@ def add_assessment_note(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to save note")
     return {"success": True, "timeline": assessment.timeline}
+
+
+@router.post("/{assessment_id}/ai-eval-suggestions")
+def ai_eval_suggestions(
+    assessment_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """V2 scaffold: AI suggests rubric scores/evidence; human reviewer decides final scores."""
+    if not settings.AI_ASSISTED_EVAL_ENABLED:
+        raise HTTPException(status_code=404, detail="AI-assisted evaluation is disabled")
+
+    assessment = (
+        db.query(Assessment)
+        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+
+    payload = {
+        "evaluation_rubric": (assessment.task.evaluation_rubric if assessment.task else {}) or {},
+        "chat_log": assessment.ai_prompts or [],
+        "git_evidence": getattr(assessment, "git_evidence", {}) or {},
+        "test_results": assessment.test_results or {},
+    }
+    return generate_ai_suggestions(payload)

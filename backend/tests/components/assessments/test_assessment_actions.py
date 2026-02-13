@@ -94,9 +94,8 @@ def test_candidate_can_resume_in_progress_assessment(client, monkeypatch):
     assert first_body["time_remaining"] > 0
     assert "scenario" in first_body["task"]
     assert "repo_structure" in first_body["task"]
-    assert first_body["task"]["expected_insights"] == ["cache repeated prompts"]
-    assert first_body["task"]["valid_solutions"] == ["redis cache"]
-    assert first_body["task"]["expected_approaches"]["schema_evolution"] == ["detect and add columns"]
+    assert first_body["task"]["rubric_categories"] is not None
+    assert first_body["task"]["evaluation_rubric"] is None
 
     second = client.post(f"/api/v1/assessments/token/{a['token']}/start")
     assert second.status_code == 200
@@ -190,3 +189,132 @@ def test_timeline_telemetry_records_execute_and_prompt_events(client, monkeypatc
     assert prompt_event["paste_detected"] is True
     assert prompt_event["browser_focused"] is False
     assert prompt_event["time_since_last_prompt_ms"] == 456
+
+
+def test_start_materializes_repository_files_in_sandbox(client, monkeypatch):
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _create_assessment(client, headers, task["id"])
+
+    import app.api.v1.assessments as assessments_api
+    import app.components.assessments.service as assessments_svc
+
+    class FakeFiles:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, path, content):
+            self.writes.append((path, content))
+
+    class FakeSandbox:
+        def __init__(self, sid):
+            self.sandbox_id = sid
+            self.files = FakeFiles()
+            self.run_code_calls = []
+
+        def run_code(self, code):
+            self.run_code_calls.append(code)
+            return {"stdout": "", "stderr": "", "error": None}
+
+    holder = {}
+
+    class FakeE2BService:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def create_sandbox(self):
+            sandbox = FakeSandbox("sandbox-with-repo")
+            holder["sandbox"] = sandbox
+            return sandbox
+
+        def connect_sandbox(self, sandbox_id):
+            return holder["sandbox"]
+
+        def get_sandbox_id(self, sandbox):
+            return sandbox.sandbox_id
+
+        def close_sandbox(self, sandbox):
+            return None
+
+    monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_api, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+
+    start = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    assert start.status_code == 200
+
+    sandbox = holder["sandbox"]
+    assert any(path.endswith("/src/backfill.py") for path, _ in sandbox.files.writes)
+    assert any("'git', 'init', '-b', 'candidate'" in code for code in sandbox.run_code_calls)
+
+
+def test_execute_auto_submits_when_time_expires(client, monkeypatch):
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _create_assessment(client, headers, task["id"])
+
+    import app.api.v1.assessments as assessments_api
+    import app.components.assessments.service as assessments_svc
+    from app.models.assessment import Assessment
+    from tests.conftest import TestingSessionLocal
+    from datetime import timedelta
+    from app.components.assessments.repository import utcnow
+
+    class FakeFiles:
+        def write(self, path, content):
+            return None
+
+    class FakeSandbox:
+        def __init__(self, sid):
+            self.sandbox_id = sid
+            self.files = FakeFiles()
+
+        def run_code(self, code):
+            return {"stdout": "{}", "stderr": "", "error": None}
+
+    class FakeE2BService:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def create_sandbox(self):
+            return FakeSandbox("s-timeout")
+
+        def connect_sandbox(self, sandbox_id):
+            return FakeSandbox(sandbox_id)
+
+        def get_sandbox_id(self, sandbox):
+            return sandbox.sandbox_id
+
+        def execute_code(self, sandbox, code):
+            return {"stdout": "ok", "stderr": ""}
+
+        def close_sandbox(self, sandbox):
+            return None
+
+    monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_api, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+
+    start = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    assert start.status_code == 200
+    assessment_id = start.json()["assessment_id"]
+
+    db = TestingSessionLocal()
+    rec = db.query(Assessment).filter(Assessment.id == assessment_id).first()
+    rec.started_at = utcnow() - timedelta(minutes=31)
+    db.commit()
+    db.close()
+
+    execute = client.post(
+        f"/api/v1/assessments/{assessment_id}/execute",
+        json={"code": "print('hello')"},
+        headers={"x-assessment-token": a["token"]},
+    )
+    assert execute.status_code == 409
+    assert "auto-submitted" in execute.json()["detail"]
+
+    check = client.get(f"/api/v1/assessments/{assessment_id}", headers=headers)
+    assert check.status_code == 200
+    assert check.json()["completed_due_to_timeout"] is True

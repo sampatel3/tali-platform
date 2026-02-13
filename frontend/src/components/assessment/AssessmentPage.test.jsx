@@ -135,4 +135,33 @@ describe('AssessmentPage tracking metadata', () => {
     expect(screen.getByText('No repository files provided for this assessment.')).toBeInTheDocument();
   });
 
+
+  it('shows rubric categories and hides criteria text', async () => {
+    const startData = {
+      assessment_id: 14,
+      token: 'tok4',
+      time_remaining: 1200,
+      clone_command: 'git clone --branch assessment/14 mock://repo',
+      task: {
+        name: 'Rubric task',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+        rubric_categories: [
+          { category: 'exploration', weight: 0.25 },
+          { category: 'implementation_quality', weight: 0.35 },
+        ],
+        evaluation_rubric: {
+          exploration: { weight: 0.25, criteria: { excellent: 'should never render' } },
+        },
+      },
+    };
+
+    render(<AssessmentPage token="tok4" startData={startData} />);
+
+    expect(await screen.findByText(/How you'll be assessed/i)).toBeInTheDocument();
+    expect(screen.getByText('exploration')).toBeInTheDocument();
+    expect(screen.getByText('25%')).toBeInTheDocument();
+    expect(screen.queryByText(/should never render/i)).not.toBeInTheDocument();
+  });
+
 });

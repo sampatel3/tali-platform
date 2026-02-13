@@ -20,6 +20,8 @@ function normalizeStartData(startData) {
     scenario: task.scenario || startData.scenario || "",
     repo_structure: task.repo_structure || startData.repo_structure || null,
     task,
+    rubric_categories: task.rubric_categories || startData.rubric_categories || [],
+    clone_command: startData.clone_command || task.clone_command || null,
   };
 }
 
@@ -176,6 +178,7 @@ export default function AssessmentPage({
   const assessmentTokenForApi = assessment?.token ?? token;
   const taskContext = assessment?.scenario || assessment?.description || "";
   const repoFiles = extractRepoFiles(assessment?.repo_structure);
+  const rubricCategories = assessment?.rubric_categories || assessment?.task?.rubric_categories || [];
   const selectedRepoPath =
     selectedRepoFile && repoFiles.some((file) => file.path === selectedRepoFile)
       ? selectedRepoFile
@@ -410,6 +413,27 @@ export default function AssessmentPage({
             <p className="font-mono text-sm text-gray-700 whitespace-pre-wrap mb-3">
               {taskContext || "Task context has not been provided yet."}
             </p>
+
+            <div>
+              <div className="font-mono text-xs text-gray-500 mb-1">How you'll be assessed</div>
+              {rubricCategories.length === 0 ? (
+                <p className="font-mono text-xs text-gray-600">Rubric categories will be shown when available.</p>
+              ) : (
+                <ul className="font-mono text-xs text-gray-700 space-y-1 mb-3">
+                  {rubricCategories.map((item) => (
+                    <li key={item.category} className="flex justify-between">
+                      <span>{String(item.category || '').replace(/_/g, ' ')}</span>
+                      <span>{Math.round((Number(item.weight || 0) * 100))}%</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {assessment?.clone_command && (
+                <div className="font-mono text-[11px] text-gray-600 mb-2">
+                  Workspace clone command: <code>{assessment.clone_command}</code>
+                </div>
+              )}
+            </div>
             <div>
               <div className="font-mono text-xs text-gray-500 mb-1">Repository Context</div>
               {repoFiles.length === 0 ? (
