@@ -15,7 +15,7 @@ The core platform is implemented and deployable end-to-end, and active execution
 - **Assessments:** Create (candidate inline), list (filters, pagination, `candidate_name` / `candidate_email` / `task_name`), get by id, start by token, execute code, Claude chat, submit. E2B sandbox create/reuse, timeline and results persisted.
 - **Tasks:** List, get, create, PATCH, DELETE; template vs org tasks.
 - **Organizations:** Get, update; Workable OAuth: `GET authorize-url`, `POST workable/connect`.
-- **Billing:** `GET usage`, `POST checkout-session` (Stripe Checkout, £25).
+- **Billing:** `GET usage`, `GET costs` (per-assessment + per-tenant infrastructure cost estimates), `POST checkout-session` (Stripe Checkout, £25).
 - **Other:** Analytics endpoint, rate limiting (auth + assessment), invite + results emails via Celery. Health: `GET /health`.
 
 ### Frontend (Vercel)
@@ -126,7 +126,7 @@ tali-platform/
 | Backend   | FastAPI, Python 3.11+, PostgreSQL 15, SQLAlchemy 2, Alembic, Redis, Celery, JWT |
 | Frontend  | Vite 5, React 18, Tailwind CSS, Monaco Editor, hash routing |
 | Execution | E2B Code Interpreter SDK |
-| AI        | Anthropic Claude (Sonnet) |
+| AI        | Anthropic Claude (environment-tiered: Haiku non-prod, configurable production) |
 | ATS       | Workable (OAuth + webhooks) |
 | Payments  | Stripe (Checkout, usage) |
 | Email     | Resend |

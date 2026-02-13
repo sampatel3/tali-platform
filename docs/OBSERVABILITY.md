@@ -20,6 +20,15 @@ This document defines the minimum operational dashboard for TALI runtime confide
   - Definition: p95 time from submit request to score persisted
   - Target: < 5s
 
+
+- **Daily spend estimate (USD)**
+  - Definition: rolling 24h sum of estimated Claude + E2B + email + storage costs from `/api/v1/billing/costs`
+  - Target: below `COST_ALERT_DAILY_SPEND_USD`
+
+- **Cost per completed assessment (USD)**
+  - Definition: tenant total estimated cost / completed assessments
+  - Target: below `COST_ALERT_PER_COMPLETED_ASSESSMENT_USD`
+
 ## Supporting Metrics
 
 - API request error rate by route
