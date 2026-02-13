@@ -1,5 +1,5 @@
 """
-Seed tasks from example_tasks/*.json into the production database.
+Seed tasks from tasks/*.json into the production database.
 Removes ALL existing tasks first. Assessments with task_id references will have
 task_id nullified so the FK constraint doesn't block deletion.
 
@@ -19,7 +19,7 @@ DATABASE_URL = os.environ.get(
     "postgresql://postgres:zQGFEMbwDNMrHiMwDybTRsMQhpnIFYDx@yamabiko.proxy.rlwy.net:17842/railway",
 )
 
-TASKS_DIR = os.path.join(os.path.dirname(__file__), "..", "example_tasks")
+TASKS_DIR = os.path.join(os.path.dirname(__file__), "..", "tasks")
 
 engine = create_engine(DATABASE_URL)
 Session = sessionmaker(bind=engine)

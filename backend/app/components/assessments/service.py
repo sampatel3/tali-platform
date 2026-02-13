@@ -62,6 +62,38 @@ def _repo_files_from_structure(repo_structure: Dict[str, Any] | None) -> List[tu
     return normalized
 
 
+def _workspace_repo_root(task: Task) -> str:
+    root_name = (task.task_key or f"assessment-{task.id}").strip() or f"assessment-{task.id}"
+    safe_root = re.sub(r"[^a-zA-Z0-9._-]+", "-", root_name).strip("-") or f"assessment-{task.id}"
+    return f"/workspace/{safe_root}"
+
+
+def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment, task: Task) -> bool:
+    clone_command = getattr(assessment, "clone_command", None)
+    repo_url = getattr(assessment, "assessment_repo_url", None)
+    if not clone_command or not repo_url or str(repo_url).startswith("mock://"):
+        return False
+
+    repo_root = _workspace_repo_root(task)
+    result = sandbox.run_code(
+        "import json, pathlib, subprocess, shlex\n"
+        f"repo_root=pathlib.Path({repo_root!r})\n"
+        "repo_root.parent.mkdir(parents=True, exist_ok=True)\n"
+        "subprocess.run(['rm','-rf',str(repo_root)], check=False, capture_output=True)\n"
+        f"cmd={clone_command!r}\n"
+        "args=shlex.split(cmd)\n"
+        "p=subprocess.run(args + [str(repo_root)], capture_output=True, text=True)\n"
+        "payload={'returncode': p.returncode, 'stderr': p.stderr[-500:]}\n"
+        "print(json.dumps(payload))\n"
+    )
+    try:
+        lines = (result.get("stdout") or "").strip().splitlines()
+        payload = json.loads(lines[-1]) if lines else {}
+        return int(payload.get("returncode", 1)) == 0
+    except Exception:
+        return False
+
+
 def _materialize_task_repository(sandbox: Any, task: Task) -> None:
     """Write repo files into sandbox and initialise git branch for candidates."""
     repo_files = _repo_files_from_structure(task.repo_structure)
@@ -73,9 +105,7 @@ def _materialize_task_repository(sandbox: Any, task: Task) -> None:
         logger.warning("Sandbox files API unavailable; skipping repository materialization")
         return
 
-    root_name = (task.task_key or f"assessment-{task.id}").strip() or f"assessment-{task.id}"
-    safe_root = re.sub(r"[^a-zA-Z0-9._-]+", "-", root_name).strip("-") or f"assessment-{task.id}"
-    repo_root = f"/workspace/{safe_root}"
+    repo_root = _workspace_repo_root(task)
 
     sandbox.run_code(
         "import pathlib\n"
@@ -136,9 +166,7 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
     try:
         e2b = E2BService(settings.E2B_API_KEY)
         sandbox = e2b.connect_sandbox(assessment.e2b_session_id) if assessment.e2b_session_id else e2b.create_sandbox()
-        root_name = (task.task_key or f"assessment-{task.id}").strip() or f"assessment-{task.id}"
-        safe_root = re.sub(r"[^a-zA-Z0-9._-]+", "-", root_name).strip("-") or f"assessment-{task.id}"
-        repo_root = f"/workspace/{safe_root}"
+        repo_root = _workspace_repo_root(task)
         evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
         # Auto-commit best effort when there are dirty changes
         if evidence.get("status_porcelain"):
@@ -147,6 +175,7 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
                 f"repo=pathlib.Path({repo_root!r})\n"
                 "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True)\n"
                 "subprocess.run(['git','-c','user.email=tali@local','-c','user.name=TALI','commit','-m','auto-submit: time expired'],cwd=repo,check=False,capture_output=True)\n"
+                "subprocess.run(['git','push','origin','HEAD'],cwd=repo,check=False,capture_output=True)\n"
             )
             evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
         assessment.git_evidence = evidence
@@ -281,9 +310,11 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
             logger.exception("Failed to create assessment repository branch")
 
     try:
-        _materialize_task_repository(sandbox, task)
+        cloned = _clone_assessment_branch_into_workspace(sandbox, assessment, task)
+        if not cloned:
+            _materialize_task_repository(sandbox, task)
     except Exception:
-        logger.exception("Failed to materialize task repository in sandbox")
+        logger.exception("Failed to initialize task repository in sandbox")
 
     resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
 
@@ -350,14 +381,33 @@ def submit_assessment(
 
     sandbox.files.write("/tmp/solution.py", final_code)
     test_results = e2b.run_tests(sandbox, task.test_code) if task.test_code else {"passed": 0, "failed": 0, "total": 0}
-    e2b.close_sandbox(sandbox)
     if not isinstance(test_results, dict):
         test_results = {"passed": 0, "failed": 0, "total": 0, "error": "Invalid test results payload"}
 
     passed = test_results.get("passed", 0)
     total = test_results.get("total", 0)
 
-    # --- 2. Prompt/session analysis + heuristics ---
+    # --- 2. Capture git evidence and persist branch state ---
+    try:
+        repo_root = _workspace_repo_root(task)
+        evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
+        if evidence.get("status_porcelain"):
+            sandbox.run_code(
+                "import subprocess,pathlib\n"
+                f"repo=pathlib.Path({repo_root!r})\n"
+                "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True)\n"
+                "subprocess.run(['git','-c','user.email=tali@local','-c','user.name=TALI','commit','-m','submit: candidate'],cwd=repo,check=False,capture_output=True)\n"
+                "subprocess.run(['git','push','origin','HEAD'],cwd=repo,check=False,capture_output=True)\n"
+            )
+            evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
+        assessment.git_evidence = evidence
+        assessment.final_repo_state = evidence.get("head_sha")
+    except Exception:
+        logger.exception("Failed to capture git evidence on manual submit")
+    finally:
+        e2b.close_sandbox(sandbox)
+
+    # --- 3. Prompt/session analysis + heuristics ---
     quality: Dict[str, Any] = {"success": False, "analysis": None}
     prompts = assessment.ai_prompts or []
     prompt_analysis: Dict[str, Any] = {"success": False, "scores": {}, "per_prompt_scores": [], "fraud_flags": []}
