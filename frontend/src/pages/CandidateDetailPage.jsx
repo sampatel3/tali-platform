@@ -19,6 +19,7 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
   const [comparisonCandidateId, setComparisonCandidateId] = useState('');
   const [comparisonAssessment, setComparisonAssessment] = useState(null);
   const [comparisonMode, setComparisonMode] = useState('overlay');
+  const [aiEvalSuggestion, setAiEvalSuggestion] = useState(null);
 
   const getRecommendation = (score100) => {
     if (score100 >= 80) return { label: 'STRONG HIRE', color: '#16a34a' };
@@ -127,6 +128,21 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
       alert(res?.data?.already_posted ? 'Already posted to Workable' : 'Posted to Workable');
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to post to Workable');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+
+  const handleGenerateAiSuggestions = async () => {
+    if (!assessmentId) return;
+    setBusyAction('ai-eval');
+    try {
+      const res = await assessmentsApi.aiEvalSuggestions(assessmentId);
+      setAiEvalSuggestion(res.data);
+      alert('AI suggestions generated. Human reviewer must confirm final scores.');
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to generate AI suggestions');
     } finally {
       setBusyAction('');
     }
@@ -277,6 +293,16 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
           >
             {busyAction === 'workable' ? 'Posting…' : 'Post to Workable'}
           </button>
+          {import.meta.env.VITE_AI_ASSISTED_EVAL_ENABLED === 'true' && (
+            <button
+              type="button"
+              className="border-2 border-black px-4 py-2 font-mono text-sm font-bold hover:bg-black hover:text-white"
+              onClick={handleGenerateAiSuggestions}
+              disabled={busyAction !== ''}
+            >
+              {busyAction === 'ai-eval' ? 'Generating…' : 'Generate AI suggestions'}
+            </button>
+          )}
           <button
             type="button"
             className="border-2 border-red-600 text-red-700 px-4 py-2 font-mono text-sm font-bold hover:bg-red-600 hover:text-white"
@@ -286,6 +312,12 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
             {busyAction === 'delete' ? 'Deleting…' : 'Delete'}
           </button>
         </div>
+        {aiEvalSuggestion && (
+          <div className="border-2 border-black p-3 mb-6 bg-purple-50">
+            <div className="font-mono text-xs font-bold mb-1">AI-assisted suggestions (V2, reviewer final)</div>
+            <div className="font-mono text-xs text-gray-700">{aiEvalSuggestion.message}</div>
+          </div>
+        )}
         <div className="border-2 border-black p-3 mb-6 bg-gray-50">
           <div className="font-mono text-xs">
             <span className="text-gray-500">Workable status:</span>{' '}

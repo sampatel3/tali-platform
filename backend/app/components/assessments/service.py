@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import time
 from datetime import datetime, timedelta, timezone
@@ -24,10 +25,157 @@ from ...services.scoring_service import calculate_mvp_score
 from ...services.prompt_analytics import compute_all_heuristics
 from ...services.document_service import process_document_upload
 from ...services.fit_matching_service import calculate_cv_job_match_sync
+from ...services.assessment_repository_service import AssessmentRepositoryService
+from ...services.task_spec_loader import candidate_rubric_view
 from ...components.notifications.service import send_results_notification_sync
 
-from .repository import utcnow, ensure_utc, resume_code_for_assessment, build_timeline, append_assessment_timeline_event
+logger = logging.getLogger(__name__)
 
+from .repository import utcnow, ensure_utc, resume_code_for_assessment, build_timeline, append_assessment_timeline_event, time_remaining_seconds
+
+
+def _repo_files_from_structure(repo_structure: Dict[str, Any] | None) -> List[tuple[str, str]]:
+    """Normalize repo_structure payload into (path, content) tuples."""
+    files = (repo_structure or {}).get("files") or {}
+    normalized: List[tuple[str, str]] = []
+
+    if isinstance(files, dict):
+        for path, content in files.items():
+            if not path:
+                continue
+            if isinstance(content, str):
+                normalized.append((path, content))
+            else:
+                normalized.append((path, json.dumps(content, indent=2, sort_keys=True)))
+    elif isinstance(files, list):
+        for entry in files:
+            if not isinstance(entry, dict):
+                continue
+            path = entry.get("path") or entry.get("name")
+            if not path:
+                continue
+            content = entry.get("content", "")
+            if not isinstance(content, str):
+                content = json.dumps(content, indent=2, sort_keys=True)
+            normalized.append((path, content))
+
+    return normalized
+
+
+def _materialize_task_repository(sandbox: Any, task: Task) -> None:
+    """Write repo files into sandbox and initialise git branch for candidates."""
+    repo_files = _repo_files_from_structure(task.repo_structure)
+    if not repo_files:
+        return
+
+    files_api = getattr(sandbox, "files", None)
+    if not files_api or not hasattr(files_api, "write"):
+        logger.warning("Sandbox files API unavailable; skipping repository materialization")
+        return
+
+    root_name = (task.task_key or f"assessment-{task.id}").strip() or f"assessment-{task.id}"
+    safe_root = re.sub(r"[^a-zA-Z0-9._-]+", "-", root_name).strip("-") or f"assessment-{task.id}"
+    repo_root = f"/workspace/{safe_root}"
+
+    sandbox.run_code(
+        "import pathlib\n"
+        f"pathlib.Path({repo_root!r}).mkdir(parents=True, exist_ok=True)\n"
+    )
+
+    for rel_path, content in repo_files:
+        target_path = f"{repo_root}/{rel_path.lstrip('/')}"
+        files_api.write(target_path, content)
+
+    sandbox.run_code(
+        "import pathlib, subprocess\n"
+        f"repo = pathlib.Path({repo_root!r})\n"
+        "subprocess.run(['git', 'init', '-b', 'candidate'], cwd=repo, check=False, capture_output=True)\n"
+        "subprocess.run(['git', 'add', '.'], cwd=repo, check=False, capture_output=True)\n"
+        "subprocess.run(['git', 'commit', '-m', 'Initial assessment context'], cwd=repo, check=False, capture_output=True)\n"
+    )
+
+    logger.info("Materialized %d repository files under %s", len(repo_files), repo_root)
+
+
+def _collect_git_evidence_from_sandbox(sandbox: Any, repo_root: str) -> Dict[str, Any]:
+    """Best-effort git evidence capture for evaluator context."""
+    try:
+        result = sandbox.run_code(
+            "import json,subprocess,pathlib\n"
+            f"repo=pathlib.Path({repo_root!r})\n"
+            "def run(cmd):\n"
+            "  p=subprocess.run(cmd,cwd=repo,capture_output=True,text=True)\n"
+            "  return p.stdout.strip()\n"
+            "payload={\n"
+            " 'head_sha': run(['git','rev-parse','HEAD']),\n"
+            " 'status_porcelain': run(['git','status','--porcelain']),\n"
+            " 'diff_main': run(['git','diff','main...HEAD']),\n"
+            " 'diff_staged': run(['git','diff','--cached']),\n"
+            " 'commits': run(['git','log','--oneline','--decorate','-n','50'])\n"
+            "}\n"
+            "print(json.dumps(payload))\n"
+        )
+        out = (result.get("stdout") or "").strip().splitlines()
+        if out:
+            return json.loads(out[-1])
+    except Exception:
+        logger.exception("Failed to capture git evidence from sandbox")
+    return {
+        "head_sha": None,
+        "status_porcelain": "",
+        "diff_main": "",
+        "diff_staged": "",
+        "commits": "",
+    }
+
+
+def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> None:
+    if assessment.status != AssessmentStatus.IN_PROGRESS:
+        return
+    code = resume_code_for_assessment(assessment, task.starter_code or "")
+    try:
+        e2b = E2BService(settings.E2B_API_KEY)
+        sandbox = e2b.connect_sandbox(assessment.e2b_session_id) if assessment.e2b_session_id else e2b.create_sandbox()
+        root_name = (task.task_key or f"assessment-{task.id}").strip() or f"assessment-{task.id}"
+        safe_root = re.sub(r"[^a-zA-Z0-9._-]+", "-", root_name).strip("-") or f"assessment-{task.id}"
+        repo_root = f"/workspace/{safe_root}"
+        evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
+        # Auto-commit best effort when there are dirty changes
+        if evidence.get("status_porcelain"):
+            sandbox.run_code(
+                "import subprocess,pathlib\n"
+                f"repo=pathlib.Path({repo_root!r})\n"
+                "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True)\n"
+                "subprocess.run(['git','-c','user.email=tali@local','-c','user.name=TALI','commit','-m','auto-submit: time expired'],cwd=repo,check=False,capture_output=True)\n"
+            )
+            evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
+        assessment.git_evidence = evidence
+        assessment.final_repo_state = evidence.get("head_sha")
+    except Exception:
+        logger.exception("Timeout finalization failed to collect git evidence")
+        assessment.git_evidence = assessment.git_evidence or {"error": "git_evidence_capture_failed"}
+
+    assessment.completed_due_to_timeout = True
+    assessment.status = AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT
+    assessment.completed_at = utcnow()
+    prompts = list(assessment.ai_prompts or [])
+    if prompts:
+        prompts[-1] = {**prompts[-1], "code_after": code}
+        assessment.ai_prompts = prompts
+    append_assessment_timeline_event(assessment, "auto_submit_timeout", {"final_repo_state": assessment.final_repo_state})
+    db.commit()
+
+
+def enforce_active_or_timeout(assessment: Assessment, db: Session) -> None:
+    if assessment.status != AssessmentStatus.IN_PROGRESS:
+        return
+    if time_remaining_seconds(assessment) > 0:
+        return
+    task = db.query(Task).filter(Task.id == assessment.task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    _auto_submit_on_timeout(assessment, task, db)
+    raise HTTPException(status_code=409, detail="Assessment time expired and was auto-submitted")
 
 # ---------------------------------------------------------------------------
 # CV upload
@@ -118,9 +266,27 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+
+    repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
+    if not getattr(assessment, "assessment_branch", None):
+        try:
+            repo_service.create_template_repo(task)
+            branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
+            assessment.assessment_repo_url = branch_ctx.repo_url
+            assessment.assessment_branch = branch_ctx.branch_name
+            assessment.clone_command = branch_ctx.clone_command
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to create assessment repository branch")
+
+    try:
+        _materialize_task_repository(sandbox, task)
+    except Exception:
+        logger.exception("Failed to materialize task repository in sandbox")
+
     resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
 
-    from .repository import time_remaining_seconds
     task_extra_data = task.extra_data or {}
     return {
         "assessment_id": assessment.id,
@@ -135,15 +301,16 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
             "role": task.role,
             "scenario": task.scenario,
             "repo_structure": task.repo_structure,
-            "evaluation_rubric": task.evaluation_rubric,
-            "extra_data": task.extra_data,
-            "expected_insights": task_extra_data.get("expected_insights"),
-            "valid_solutions": task_extra_data.get("valid_solutions"),
-            "expected_approaches": task_extra_data.get("expected_approaches"),
+            "rubric_categories": candidate_rubric_view(task.evaluation_rubric),
+            "evaluation_rubric": None,
+            "extra_data": None,
             "calibration_prompt": None if settings.MVP_DISABLE_CALIBRATION else (task.calibration_prompt if task else None),
             "proctoring_enabled": False if settings.MVP_DISABLE_PROCTORING else (task.proctoring_enabled if task else False),
         },
         "time_remaining": time_remaining_seconds(assessment),
+        "repo_url": getattr(assessment, "assessment_repo_url", None),
+        "branch_name": getattr(assessment, "assessment_branch", None),
+        "clone_command": getattr(assessment, "clone_command", None),
     }
 
 
@@ -315,6 +482,7 @@ def submit_assessment(
 
     # --- 4. Persist ---
     assessment.status = AssessmentStatus.COMPLETED
+    assessment.completed_due_to_timeout = False
     assessment.completed_at = datetime.now(timezone.utc)
     assessment.score = final_score
     assessment.final_score = final_score_100
