@@ -13,10 +13,29 @@ from ...models.user import User
 from ...models.task import Task
 from ...schemas.task import TaskCreate, TaskResponse, TaskUpdate
 from ...services.claude_service import ClaudeService
+from ...services.task_repo_service import recreate_task_main_repo
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/tasks", tags=["Tasks"])
+
+
+def _normalize_task_payload(payload: dict) -> dict:
+    """Map alternate task payload keys into persisted model fields."""
+    normalized = dict(payload)
+
+    expected_insights = normalized.pop("expected_insights", None)
+    valid_solutions = normalized.pop("valid_solutions", None)
+
+    if expected_insights is not None or valid_solutions is not None:
+        extra_data = normalized.get("extra_data") or {}
+        if expected_insights is not None:
+            extra_data["expected_insights"] = expected_insights
+        if valid_solutions is not None:
+            extra_data["valid_solutions"] = valid_solutions
+        normalized["extra_data"] = extra_data
+
+    return normalized
 
 
 # --- Schemas for AI generation ---
@@ -112,11 +131,13 @@ def create_task(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    task = Task(organization_id=current_user.organization_id, **data.model_dump())
+    payload = _normalize_task_payload(data.model_dump())
+    task = Task(organization_id=current_user.organization_id, **payload)
     db.add(task)
     try:
         db.commit()
         db.refresh(task)
+        recreate_task_main_repo(task)
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create task")
@@ -161,12 +182,13 @@ def update_task(
     ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    update_data = data.model_dump(exclude_unset=True)
+    update_data = _normalize_task_payload(data.model_dump(exclude_unset=True))
     for k, v in update_data.items():
         setattr(task, k, v)
     try:
         db.commit()
         db.refresh(task)
+        recreate_task_main_repo(task)
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update task")

@@ -1,6 +1,6 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, Field
 
 
 class TaskCreate(BaseModel):
@@ -20,6 +20,14 @@ class TaskCreate(BaseModel):
     score_weights: Optional[Dict[str, Any]] = None
     recruiter_weight_preset: Optional[str] = None
     proctoring_enabled: bool = False
+    task_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("task_key", "task_id"))
+    role: Optional[str] = None
+    scenario: Optional[str] = None
+    repo_structure: Optional[Dict[str, Any]] = None
+    evaluation_rubric: Optional[Dict[str, Any]] = None
+    extra_data: Optional[Dict[str, Any]] = None
+    expected_insights: Optional[List[str]] = None
+    valid_solutions: Optional[List[str]] = None
 
 
 class TaskUpdate(BaseModel):
@@ -35,6 +43,14 @@ class TaskUpdate(BaseModel):
     score_weights: Optional[Dict[str, Any]] = None
     recruiter_weight_preset: Optional[str] = None
     proctoring_enabled: Optional[bool] = None
+    task_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("task_key", "task_id"))
+    role: Optional[str] = None
+    scenario: Optional[str] = None
+    repo_structure: Optional[Dict[str, Any]] = None
+    evaluation_rubric: Optional[Dict[str, Any]] = None
+    extra_data: Optional[Dict[str, Any]] = None
+    expected_insights: Optional[List[str]] = None
+    valid_solutions: Optional[List[str]] = None
 
 
 class TaskResponse(BaseModel):

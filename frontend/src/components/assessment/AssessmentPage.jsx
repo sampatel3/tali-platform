@@ -350,7 +350,7 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
             <div>
               <div className="font-mono text-xs text-gray-500 mb-1">Repository Context</div>
               {repoFiles.length === 0 ? (
-                <p className="font-mono text-xs text-gray-600">No repository files provided for this assessment.</p>
+                <p className="font-mono text-xs text-gray-600">No repository files are configured for this task yet.</p>
               ) : (
                 <>
                   <div className="flex flex-wrap gap-2 mb-2 max-h-16 overflow-auto">
