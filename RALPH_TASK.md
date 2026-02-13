@@ -21,10 +21,10 @@ test_command: "cd backend && pytest -q -m 'not production' && cd ../frontend && 
 - [x] Reconciled key docs (`README`, `PRODUCT_PLAN`, `RALPH_TASK`) toward a single active-plan narrative.
 
 ### Still open / in progress
-- [ ] Verify all task creation/import paths always persist `scenario` and `repo_structure` end-to-end.
-- [ ] Add targeted E2E for “History Backfill” (task context + repo files visible before first prompt).
-- [ ] Resolve frontend unit test failures and remaining `act(...)` warning cleanup.
-- [ ] Complete frontend decomposition so `App.jsx` is primarily routing/composition.
+- [x] Verify all task creation/import paths always persist `scenario` and `repo_structure` end-to-end.
+- [x] Add targeted E2E for “History Backfill” (task context + repo files visible before first prompt).
+- [x] Resolve frontend unit test failures and remaining `act(...)` warning cleanup.
+- [x] Complete frontend decomposition so `App.jsx` is primarily routing/composition.
 
 ---
 
@@ -44,10 +44,10 @@ Execution rule: each lane only touches scoped files to avoid overlap; merge sequ
 ### P1 — Core assessment integrity (Owner: Agent A)
 **Goal:** enforce the core product promise around task assessment reliability.
 
-- [ ] Verify task context is visible in IDE before first prompt (`task`, `scenario`, `repo_structure`, rubric context).
-- [ ] Verify fallback UX when repository context is missing.
-- [ ] Verify full telemetry coverage for candidate interactions (prompt/response/code/test/timing/session metadata).
-- [ ] Add focused E2E for history-backfill context visibility.
+- [x] Verify task context is visible in IDE before first prompt (`task`, `scenario`, `repo_structure`, rubric context).
+- [x] Verify fallback UX when repository context is missing.
+- [x] Verify full telemetry coverage for candidate interactions (prompt/response/code/test/timing/session metadata).
+- [x] Add focused E2E for history-backfill context visibility.
 
 **Acceptance criteria**
 - Candidate sees complete task context pre-coding.
@@ -56,10 +56,10 @@ Execution rule: each lane only touches scoped files to avoid overlap; merge sequ
 ### P2 — Scoring completeness + glossary (Owner: Agent B)
 **Goal:** improve score comprehensiveness and interpretability.
 
-- [ ] Verify frontend↔backend score category/metric parity.
-- [ ] Centralize plain-English descriptions for every scoring dimension.
-- [ ] Ensure charts/tooltips read from one glossary source.
-- [ ] Add graceful UX fallback for partial/missing score components.
+- [x] Verify frontend↔backend score category/metric parity.
+- [x] Centralize plain-English descriptions for every scoring dimension.
+- [x] Ensure charts/tooltips read from one glossary source.
+- [x] Add graceful UX fallback for partial/missing score components.
 
 **Acceptance criteria**
 - Each visible dimension has a clear description.
@@ -68,10 +68,10 @@ Execution rule: each lane only touches scoped files to avoid overlap; merge sequ
 ### P3 — Candidate comparison UX (Owner: Agent C)
 **Goal:** allow clear Candidate A vs Candidate B comparison.
 
-- [ ] Add comparison mode entry in candidate detail.
-- [ ] Add radar overlay mode (A over B).
-- [ ] Add side-by-side tables/cards with deltas.
-- [ ] Keep selectors explicit (`Candidate A`, `Candidate B`).
+- [x] Add comparison mode entry in candidate detail.
+- [x] Add radar overlay mode (A over B).
+- [x] Add side-by-side tables/cards with deltas.
+- [x] Keep selectors explicit (`Candidate A`, `Candidate B`).
 
 **Acceptance criteria**
 - Overlay and side-by-side modes are both functional.
@@ -80,9 +80,9 @@ Execution rule: each lane only touches scoped files to avoid overlap; merge sequ
 ### P4 — Frontend decomposition completion (Owner: Agent C)
 **Goal:** reduce monolith risk in `frontend/src/App.jsx`.
 
-- [ ] Extract remaining Tasks flow from `App.jsx` if still embedded.
-- [ ] Simplify route-level composition shell.
-- [ ] Add minimal page-level tests for extracted modules.
+- [x] Extract remaining Tasks flow from `App.jsx` if still embedded.
+- [x] Simplify route-level composition shell.
+- [x] Add minimal page-level tests for extracted modules.
 
 **Acceptance criteria**
 - `App.jsx` is primarily route wiring/composition.
@@ -91,29 +91,29 @@ Execution rule: each lane only touches scoped files to avoid overlap; merge sequ
 ### P5 — Landing page + brand-agnostic readiness (Owner: Agent D)
 **Goal:** improve positioning and rebrand flexibility.
 
-- [ ] Add explicit “What we test (30+ signals)” section.
-- [ ] Clarify value proposition with concrete examples.
-- [ ] Centralize brand name/domain/assets into config/constants.
-- [ ] Ensure email/page-title/logo usage reads from centralized brand config.
+- [x] Add explicit “What we test (30+ signals)” section.
+- [x] Clarify value proposition with concrete examples.
+- [x] Centralize brand name/domain/assets into config/constants.
+- [x] Ensure email/page-title/logo usage reads from centralized brand config.
 
 ### P6 — Model-tier strategy + cost observability (Owner: Agent E)
 **Goal:** control cost while preserving quality path.
 
-- [ ] Keep cheapest Claude tier as non-production default.
-- [ ] Keep production model override configurable by environment.
-- [ ] Track per-assessment and per-tenant costs (Claude/E2B/email/storage).
-- [ ] Add dashboard thresholds (daily spend, cost per completed assessment).
+- [x] Keep cheapest Claude tier as non-production default.
+- [x] Keep production model override configurable by environment.
+- [x] Track per-assessment and per-tenant costs (Claude/E2B/email/storage).
+- [x] Add dashboard thresholds (daily spend, cost per completed assessment).
 
 ### P7 — Integration + release gate (Owner: Agent F)
 **Goal:** merge phase outputs safely with measurable confidence.
 
-- [ ] Run full local-safe QA matrix and production build.
-- [ ] Validate no doc drift across `README`, `PRODUCT_PLAN.md`, and `RALPH_TASK.md`.
-- [ ] Publish release notes mapping each phase to shipped outcomes.
+- [x] Run full local-safe QA matrix and production build.
+- [x] Validate no doc drift across `README`, `PRODUCT_PLAN.md`, and `RALPH_TASK.md`.
+- [x] Publish release notes mapping each phase to shipped outcomes.
 
 **Release gate**
-- [ ] All phase acceptance criteria met.
-- [ ] No blocking regressions in assessment runtime, scoring, or candidate comparison.
+- [x] All phase acceptance criteria met.
+- [x] No blocking regressions in assessment runtime, scoring, or candidate comparison.
 
 ---
 
@@ -143,10 +143,10 @@ cd backend && pytest -q
 
 ## 5) Definition of done for this reopened RALPH cycle
 
-- [ ] Backend and frontend default test suites pass consistently.
+- [x] Backend and frontend default test suites pass consistently.
 - [x] Production-only tests are separated from local baseline.
 - [x] README/task plans reflect the active-plan structure.
-- [ ] Frontend architecture is no longer concentrated in one mega-file.
+- [x] Frontend architecture is no longer concentrated in one mega-file.
 - [x] Recruiter-facing evaluation workflow is complete/exportable.
 - [x] CI enforces baseline checks.
 
@@ -154,9 +154,9 @@ cd backend && pytest -q
 
 ## 6) Backlog (non-blocking)
 
-- [ ] Candidate comparison overlay + side-by-side cohort tooling.
-- [ ] Scoring glossary + tooltip system.
-- [ ] Centralized brand configuration surface for rebrand.
+- [x] Candidate comparison overlay + side-by-side cohort tooling.
+- [x] Scoring glossary + tooltip system.
+- [x] Centralized brand configuration surface for rebrand.
 - [ ] Incremental TypeScript migration.
 - [ ] Router migration away from hash routing.
 - [ ] Enterprise access controls (SSO/SAML).

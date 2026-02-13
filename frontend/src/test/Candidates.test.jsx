@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Mock the API module
@@ -144,7 +144,9 @@ const renderAppOnCandidatesPage = async () => {
 
   // Navigate to Candidates via nav link
   const candidatesNav = screen.getByText('Candidates', { selector: 'button' });
-  fireEvent.click(candidatesNav);
+  await act(async () => {
+    fireEvent.click(candidatesNav);
+  });
 
   return result;
 };

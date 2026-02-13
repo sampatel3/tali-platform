@@ -190,9 +190,9 @@ const mockOnNavigate = vi.fn();
 const mockOnDeleted = vi.fn();
 const mockOnNoteAdded = vi.fn();
 
-const renderCandidateDetail = (candidateOverrides = {}) => {
+const renderCandidateDetail = async (candidateOverrides = {}) => {
   const candidate = { ...mockCandidate, ...candidateOverrides };
-  return render(
+  const view = render(
     <AuthProvider>
       <CandidateDetailPage
         candidate={candidate}
@@ -202,6 +202,9 @@ const renderCandidateDetail = (candidateOverrides = {}) => {
       />
     </AuthProvider>
   );
+  await waitFor(() => expect(analyticsApi.get).toHaveBeenCalled());
+  await waitFor(() => expect(candidatesApi.list).toHaveBeenCalled());
+  return view;
 };
 
 describe('CandidateDetailPage', () => {
@@ -218,38 +221,38 @@ describe('CandidateDetailPage', () => {
     localStorage.clear();
   });
 
-  it('renders candidate name and email', () => {
-    renderCandidateDetail();
+  it('renders candidate name and email', async () => {
+    await renderCandidateDetail();
     expect(screen.getAllByText('Alice Johnson').length).toBeGreaterThan(0);
     expect(screen.getByText('alice@example.com')).toBeInTheDocument();
   });
 
-  it('renders score badge with recommendation', () => {
-    renderCandidateDetail();
+  it('renders score badge with recommendation', async () => {
+    await renderCandidateDetail();
     // Final score is 85 => STRONG HIRE
     expect(screen.getByText('85')).toBeInTheDocument();
     expect(screen.getByText('STRONG HIRE')).toBeInTheDocument();
   });
 
-  it('renders position and task info', () => {
-    renderCandidateDetail();
+  it('renders position and task info', async () => {
+    await renderCandidateDetail();
     expect(screen.getByText('Senior Engineer')).toBeInTheDocument();
     expect(screen.getByText('Task: Async Pipeline Debugging')).toBeInTheDocument();
   });
 
-  it('renders duration info', () => {
-    renderCandidateDetail();
+  it('renders duration info', async () => {
+    await renderCandidateDetail();
     expect(screen.getByText('Duration: 45m')).toBeInTheDocument();
   });
 
-  it('renders results tab by default', () => {
-    renderCandidateDetail();
+  it('renders results tab by default', async () => {
+    await renderCandidateDetail();
     // Results tab should be active
     expect(screen.getByText('Category Breakdown')).toBeInTheDocument();
   });
 
-  it('renders category scores in results tab', () => {
-    renderCandidateDetail();
+  it('renders category scores in results tab', async () => {
+    await renderCandidateDetail();
     // Category names appear in the expandable sections
     const taskCompletionElements = screen.getAllByText('Task Completion');
     expect(taskCompletionElements.length).toBeGreaterThanOrEqual(1);
@@ -258,13 +261,13 @@ describe('CandidateDetailPage', () => {
     expect(screen.getAllByText('Independence & Efficiency').length).toBeGreaterThanOrEqual(1);
   });
 
-  it('renders radar chart in results tab', () => {
-    renderCandidateDetail();
+  it('renders radar chart in results tab', async () => {
+    await renderCandidateDetail();
     expect(screen.getByTestId('radar-chart')).toBeInTheDocument();
   });
 
   it('tab switching works - AI Usage tab', async () => {
-    renderCandidateDetail();
+    await renderCandidateDetail();
 
     const aiUsageTab = screen.getByText('AI Usage');
     fireEvent.click(aiUsageTab);
@@ -277,7 +280,7 @@ describe('CandidateDetailPage', () => {
   });
 
   it('shows prompt log in AI Usage tab', async () => {
-    renderCandidateDetail();
+    await renderCandidateDetail();
 
     fireEvent.click(screen.getByText('AI Usage'));
 
@@ -288,7 +291,7 @@ describe('CandidateDetailPage', () => {
   });
 
   it('tab switching works - CV & Fit tab', async () => {
-    renderCandidateDetail();
+    await renderCandidateDetail();
 
     fireEvent.click(screen.getByText('CV & Fit'));
 
@@ -300,7 +303,7 @@ describe('CandidateDetailPage', () => {
   });
 
   it('shows matching skills in CV & Fit tab', async () => {
-    renderCandidateDetail();
+    await renderCandidateDetail();
 
     fireEvent.click(screen.getByText('CV & Fit'));
 
@@ -312,7 +315,7 @@ describe('CandidateDetailPage', () => {
   });
 
   it('shows missing skills in CV & Fit tab', async () => {
-    renderCandidateDetail();
+    await renderCandidateDetail();
 
     fireEvent.click(screen.getByText('CV & Fit'));
 
@@ -324,7 +327,7 @@ describe('CandidateDetailPage', () => {
   });
 
   it('tab switching works - Timeline tab', async () => {
-    renderCandidateDetail();
+    await renderCandidateDetail();
 
     fireEvent.click(screen.getByText('Timeline'));
 
@@ -335,8 +338,8 @@ describe('CandidateDetailPage', () => {
     });
   });
 
-  it('add note form renders with input and save button', () => {
-    renderCandidateDetail();
+  it('add note form renders with input and save button', async () => {
+    await renderCandidateDetail();
 
     expect(screen.getByPlaceholderText('Add note about this candidate')).toBeInTheDocument();
     expect(screen.getByText('Save Note')).toBeInTheDocument();
@@ -346,7 +349,7 @@ describe('CandidateDetailPage', () => {
     assessmentsApi.addNote.mockResolvedValue({ data: { timeline: [] } });
     const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
 
-    renderCandidateDetail();
+    await renderCandidateDetail();
 
     const noteInput = screen.getByPlaceholderText('Add note about this candidate');
     fireEvent.change(noteInput, { target: { value: 'Great candidate, recommend for next round' } });
@@ -360,15 +363,15 @@ describe('CandidateDetailPage', () => {
     alertMock.mockRestore();
   });
 
-  it('Download PDF button exists', () => {
-    renderCandidateDetail();
+  it('Download PDF button exists', async () => {
+    await renderCandidateDetail();
     expect(screen.getByText('Download PDF')).toBeInTheDocument();
   });
 
   it('Download PDF calls downloadReport API', async () => {
     assessmentsApi.downloadReport.mockResolvedValue({ data: new Blob(['pdf-content']) });
 
-    renderCandidateDetail();
+    await renderCandidateDetail();
 
     fireEvent.click(screen.getByText('Download PDF'));
 
@@ -381,7 +384,7 @@ describe('CandidateDetailPage', () => {
     const confirmMock = vi.spyOn(window, 'confirm').mockReturnValue(true);
     assessmentsApi.remove.mockResolvedValue({ data: {} });
 
-    renderCandidateDetail();
+    await renderCandidateDetail();
 
     // Find the Delete button (red text)
     const deleteButton = screen.getByRole('button', { name: 'Delete' });
@@ -395,8 +398,8 @@ describe('CandidateDetailPage', () => {
     confirmMock.mockRestore();
   });
 
-  it('Back to Dashboard button calls onNavigate', () => {
-    renderCandidateDetail();
+  it('Back to Dashboard button calls onNavigate', async () => {
+    await renderCandidateDetail();
 
     const backButton = screen.getByText('Back to Dashboard');
     fireEvent.click(backButton);
@@ -404,8 +407,8 @@ describe('CandidateDetailPage', () => {
     expect(mockOnNavigate).toHaveBeenCalledWith('dashboard');
   });
 
-  it('renders assessment metadata in results tab', () => {
-    renderCandidateDetail();
+  it('renders assessment metadata in results tab', async () => {
+    await renderCandidateDetail();
 
     expect(screen.getByText('Assessment Metadata')).toBeInTheDocument();
     // Duration appears in both header and metadata, check metadata section specifically
@@ -415,8 +418,8 @@ describe('CandidateDetailPage', () => {
     expect(screen.getByText(/Tests:/)).toBeInTheDocument();
   });
 
-  it('renders test results when available', () => {
-    renderCandidateDetail();
+  it('renders test results when available', async () => {
+    await renderCandidateDetail();
 
     expect(screen.getByText('Test Results')).toBeInTheDocument();
     expect(screen.getByText('Pipeline Processing')).toBeInTheDocument();
@@ -424,16 +427,16 @@ describe('CandidateDetailPage', () => {
   });
 
 
-  it('renders scoring glossary with plain-English dimension descriptions', () => {
-    renderCandidateDetail();
+  it('renders scoring glossary with plain-English dimension descriptions', async () => {
+    await renderCandidateDetail();
 
     expect(screen.getByText('Scoring Glossary')).toBeInTheDocument();
     expect(screen.getAllByText('Task Completion').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/Measures delivery outcomes under the assessment constraints/i)).toBeInTheDocument();
   });
 
-  it('renders Post to Workable button', () => {
-    renderCandidateDetail();
+  it('renders Post to Workable button', async () => {
+    await renderCandidateDetail();
 
     expect(screen.getByText('Post to Workable')).toBeInTheDocument();
   });
@@ -442,7 +445,7 @@ describe('CandidateDetailPage', () => {
     candidatesApi.list.mockResolvedValue({ data: { items: [{ id: 2, full_name: 'Bob Smith', email: 'bob@example.com' }] } });
     assessmentsApi.list.mockResolvedValueOnce({ data: { items: [{ id: 20, candidate_name: 'Bob Smith', breakdown: { categoryScores: { task_completion: 6 } } }] } });
 
-    renderCandidateDetail();
+    await renderCandidateDetail();
 
     await waitFor(() => {
       expect(screen.getByRole('option', { name: 'Bob Smith' })).toBeInTheDocument();

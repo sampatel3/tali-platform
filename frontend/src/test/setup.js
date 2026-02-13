@@ -1,4 +1,5 @@
 import '@testing-library/jest-dom';
+import { act, cleanup } from '@testing-library/react';
 
 class ResizeObserverMock {
   observe() {}
@@ -9,7 +10,6 @@ class ResizeObserverMock {
 if (typeof window !== 'undefined' && !window.ResizeObserver) {
   window.ResizeObserver = ResizeObserverMock;
 }
-
 
 if (typeof window !== 'undefined') {
   window.scrollTo = () => {};
@@ -28,3 +28,10 @@ if (typeof window !== 'undefined') {
     })),
   });
 }
+
+afterEach(async () => {
+  await act(async () => {
+    await Promise.resolve();
+  });
+  cleanup();
+});
