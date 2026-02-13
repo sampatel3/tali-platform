@@ -182,3 +182,46 @@ def test_reject_assessment_creation_without_application_cv(client):
     )
     assert resp.status_code == 400
     assert "cv" in resp.json()["detail"].lower()
+
+
+def test_reject_delete_role_with_existing_application(client):
+    headers, _ = auth_headers(client)
+    role = client.post("/api/v1/roles", json={"name": "Delete guard role"}, headers=headers).json()
+    job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Delete guard requirements"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
+    app_resp = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "delete-guard@example.com"},
+        headers=headers,
+    )
+    assert app_resp.status_code == 201
+
+    delete_resp = client.delete(f"/api/v1/roles/{role['id']}", headers=headers)
+    assert delete_resp.status_code == 400
+    assert "applications" in delete_resp.json()["detail"].lower()
+
+
+def test_reject_unlink_role_task_when_assessment_exists(client):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Unlink guard task").json()
+    role = client.post("/api/v1/roles", json={"name": "Unlink guard role"}, headers=headers).json()
+    job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Unlink guard requirements"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "unlink-guard@example.com"},
+        headers=headers,
+    ).json()
+    cv_file = {"file": ("resume.pdf", io.BytesIO(b"%PDF-1.4 unlink guard cv"), "application/pdf")}
+    assert client.post(f"/api/v1/applications/{app['id']}/upload-cv", files=cv_file, headers=headers).status_code == 200
+    created = client.post(
+        f"/api/v1/applications/{app['id']}/assessments",
+        json={"task_id": task["id"]},
+        headers=headers,
+    )
+    assert created.status_code == 201
+
+    unlink_resp = client.delete(f"/api/v1/roles/{role['id']}/tasks/{task['id']}", headers=headers)
+    assert unlink_resp.status_code == 400
+    assert "already has assessments" in unlink_resp.json()["detail"].lower()
