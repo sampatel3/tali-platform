@@ -96,11 +96,13 @@ export default function AssessmentPage({
   const [repoFileEdits, setRepoFileEdits] = useState({});
   const [editorContent, setEditorContent] = useState("");
   const [collapsedSections, setCollapsedSections] = useState({
+    contextWindow: false,
     taskContext: false,
     rubric: false,
     repoContext: false,
     repoTree: false,
   });
+  const [collapsedRepoDirs, setCollapsedRepoDirs] = useState({});
   const codeRef = useRef("");
   const timerRef = useRef(null);
 
@@ -258,6 +260,14 @@ export default function AssessmentPage({
     setCollapsedSections((prev) => ({
       ...prev,
       [sectionKey]: !prev[sectionKey],
+    }));
+  }, []);
+
+  const toggleRepoDir = useCallback((dir) => {
+    if (!dir) return;
+    setCollapsedRepoDirs((prev) => ({
+      ...prev,
+      [dir]: !prev[dir],
     }));
   }, []);
 
@@ -501,98 +511,111 @@ export default function AssessmentPage({
         </div>
       </div>
 
-      <div className="border-b-2 border-black bg-gray-50 p-4">
-        <div className="grid gap-3 md:grid-cols-3">
-          <div className="border border-black bg-white">
-            <button
-              type="button"
-              className="w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold text-gray-700 hover:bg-gray-100"
-              onClick={() => toggleSection("taskContext")}
-            >
-              <span>Task Context</span>
-              {collapsedSections.taskContext ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-            </button>
-            {!collapsedSections.taskContext && (
-              <div className="border-t border-gray-200 px-3 py-2">
-                <div className="max-h-40 overflow-y-auto pr-1">
-                  <p className="font-mono text-sm text-gray-700 whitespace-pre-wrap">
-                    {taskContext || "Task context has not been provided yet."}
-                  </p>
-                </div>
-              </div>
-            )}
-          </div>
+      <div className="border-b-2 border-black bg-gray-50">
+        <button
+          type="button"
+          className="w-full px-4 py-2.5 flex items-center justify-between font-mono text-xs font-bold text-gray-700 hover:bg-gray-100"
+          onClick={() => toggleSection("contextWindow")}
+        >
+          <span>Context Window</span>
+          {collapsedSections.contextWindow ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+        </button>
 
-          <div className="border border-black bg-white">
-            <button
-              type="button"
-              className="w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold text-gray-700 hover:bg-gray-100"
-              onClick={() => toggleSection("rubric")}
-            >
-              <span>How you'll be assessed</span>
-              {collapsedSections.rubric ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-            </button>
-            {!collapsedSections.rubric && (
-              <div className="border-t border-gray-200 px-3 py-2">
-                <div className="max-h-40 overflow-y-auto pr-1">
-                  {rubricCategories.length === 0 ? (
-                    <p className="font-mono text-xs text-gray-600">Rubric categories will be shown when available.</p>
-                  ) : (
-                    <ul className="font-mono text-xs text-gray-700 space-y-1">
-                      {rubricCategories.map((item) => (
-                        <li key={item.category} className="flex justify-between gap-3">
-                          <span className="truncate">{String(item.category || "").replace(/_/g, " ")}</span>
-                          <span>{Math.round((Number(item.weight || 0) * 100))}%</span>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                {assessment?.clone_command && (
-                  <div className="font-mono text-[11px] text-gray-600 mt-2 break-all">
-                    Workspace clone command: <code>{assessment.clone_command}</code>
+        {!collapsedSections.contextWindow && (
+          <div className="p-4 border-t border-gray-200 max-h-[34vh] overflow-y-auto">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+              <div className="border border-black bg-white">
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold text-gray-700 hover:bg-gray-100"
+                  onClick={() => toggleSection("taskContext")}
+                >
+                  <span>Task Context</span>
+                  {collapsedSections.taskContext ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </button>
+                {!collapsedSections.taskContext && (
+                  <div className="border-t border-gray-200 px-3 py-2">
+                    <div className="max-h-32 overflow-y-auto pr-1">
+                      <p className="font-mono text-sm text-gray-700 whitespace-pre-wrap">
+                        {taskContext || "Task context has not been provided yet."}
+                      </p>
+                    </div>
                   </div>
                 )}
               </div>
-            )}
-          </div>
 
-          <div className="border border-black bg-white">
-            <button
-              type="button"
-              className="w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold text-gray-700 hover:bg-gray-100"
-              onClick={() => toggleSection("repoContext")}
-            >
-              <span>Repository Context</span>
-              {collapsedSections.repoContext ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-            </button>
-            {!collapsedSections.repoContext && (
-              <div className="border-t border-gray-200 px-3 py-2">
-                {repoFiles.length === 0 ? (
-                  <p className="font-mono text-xs text-gray-600">No repository files provided for this assessment.</p>
-                ) : (
-                  <>
-                    <div className="flex flex-wrap gap-2 mb-2 max-h-20 overflow-auto pr-1">
-                      {repoFiles.map((file) => (
-                        <button
-                          key={file.path}
-                          type="button"
-                          className={`border px-2 py-1 font-mono text-xs ${selectedRepoPath === file.path ? "border-black bg-black text-white" : "border-gray-400 bg-white"}`}
-                          onClick={() => handleSelectRepoFile(file.path)}
-                        >
-                          {file.path}
-                        </button>
-                      ))}
+              <div className="border border-black bg-white">
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold text-gray-700 hover:bg-gray-100"
+                  onClick={() => toggleSection("rubric")}
+                >
+                  <span>How you'll be assessed</span>
+                  {collapsedSections.rubric ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </button>
+                {!collapsedSections.rubric && (
+                  <div className="border-t border-gray-200 px-3 py-2">
+                    <div className="max-h-32 overflow-y-auto pr-1">
+                      {rubricCategories.length === 0 ? (
+                        <p className="font-mono text-xs text-gray-600">Rubric categories will be shown when available.</p>
+                      ) : (
+                        <ul className="font-mono text-xs text-gray-700 space-y-1">
+                          {rubricCategories.map((item) => (
+                            <li key={item.category} className="flex justify-between gap-3">
+                              <span className="truncate">{String(item.category || "").replace(/_/g, " ")}</span>
+                              <span>{Math.round((Number(item.weight || 0) * 100))}%</span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
                     </div>
-                    <pre className="bg-black text-gray-200 p-2 text-xs overflow-auto max-h-40 border-2 border-black">
-                      {selectedRepoContent || "No file content available."}
-                    </pre>
-                  </>
+                    {assessment?.clone_command && (
+                      <div className="font-mono text-[11px] text-gray-600 mt-2 break-all">
+                        Workspace clone command: <code>{assessment.clone_command}</code>
+                      </div>
+                    )}
+                  </div>
                 )}
               </div>
-            )}
+
+              <div className="border border-black bg-white">
+                <button
+                  type="button"
+                  className="w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold text-gray-700 hover:bg-gray-100"
+                  onClick={() => toggleSection("repoContext")}
+                >
+                  <span>Repository Context</span>
+                  {collapsedSections.repoContext ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
+                </button>
+                {!collapsedSections.repoContext && (
+                  <div className="border-t border-gray-200 px-3 py-2">
+                    {repoFiles.length === 0 ? (
+                      <p className="font-mono text-xs text-gray-600">No repository files provided for this assessment.</p>
+                    ) : (
+                      <>
+                        <div className="flex flex-wrap gap-2 mb-2 max-h-16 overflow-auto pr-1">
+                          {repoFiles.map((file) => (
+                            <button
+                              key={file.path}
+                              type="button"
+                              className={`border px-2 py-1 font-mono text-xs ${selectedRepoPath === file.path ? "border-black bg-black text-white" : "border-gray-400 bg-white"}`}
+                              onClick={() => handleSelectRepoFile(file.path)}
+                            >
+                              {file.path}
+                            </button>
+                          ))}
+                        </div>
+                        <pre className="bg-black text-gray-200 p-2 text-xs overflow-auto max-h-32 border-2 border-black">
+                          {selectedRepoContent || "No file content available."}
+                        </pre>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Main content */}
@@ -617,12 +640,17 @@ export default function AssessmentPage({
                       .map(([dir, paths]) => (
                         <div key={dir || "(root)"} className="mb-1">
                           {dir ? (
-                            <div className="px-2 py-0.5 font-mono text-xs text-gray-500 flex items-center gap-0.5">
+                            <button
+                              type="button"
+                              className="w-full px-2 py-0.5 font-mono text-xs text-gray-500 flex items-center gap-0.5 hover:bg-gray-100 text-left"
+                              onClick={() => toggleRepoDir(dir)}
+                            >
+                              {collapsedRepoDirs[dir] ? <ChevronRight size={10} /> : <ChevronDown size={10} />}
                               <Folder size={10} />
                               <span>{dir}/</span>
-                            </div>
+                            </button>
                           ) : null}
-                          <div className={dir ? "pl-3" : ""}>
+                          <div className={dir ? "pl-3" : ""} hidden={Boolean(dir && collapsedRepoDirs[dir])}>
                             {paths.map((path) => {
                               const name = path.includes("/") ? path.slice(path.lastIndexOf("/") + 1) : path;
                               const isSelected = path === selectedRepoPath;
