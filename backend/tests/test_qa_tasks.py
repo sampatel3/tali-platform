@@ -60,13 +60,14 @@ class TestCreateTask:
         assert d["repo_structure"]["files"]["src/service.py"].startswith("def run")
 
 
-    def test_create_accepts_task_id_alias_and_top_level_insights(self, client):
+    def test_create_accepts_task_id_alias_and_top_level_context(self, client):
         h = _auth_headers(client)
         body = {
             **VALID_TASK,
             "task_id": "ai_eng_a_prompt_cache",
             "expected_insights": ["lots of repeated prompts"],
             "valid_solutions": ["redis exact-match cache"],
+            "expected_approaches": {"backfill": ["delete-then-insert"], "schema_evolution": ["detect-and-add-columns"]},
             "extra_data": {"difficulty_notes": "prefer pragmatic fix"},
         }
         r = client.post("/api/v1/tasks", json=body, headers=h)
@@ -76,6 +77,7 @@ class TestCreateTask:
         assert d["extra_data"]["difficulty_notes"] == "prefer pragmatic fix"
         assert d["extra_data"]["expected_insights"] == ["lots of repeated prompts"]
         assert d["extra_data"]["valid_solutions"] == ["redis exact-match cache"]
+        assert d["extra_data"]["expected_approaches"]["backfill"] == ["delete-then-insert"]
 
 
     def test_create_recreates_main_repo_snapshot(self, client, tmp_path, monkeypatch):

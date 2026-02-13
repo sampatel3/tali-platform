@@ -28,6 +28,7 @@ class TaskCreate(BaseModel):
     extra_data: Optional[Dict[str, Any]] = None
     expected_insights: Optional[List[str]] = None
     valid_solutions: Optional[List[str]] = None
+    expected_approaches: Optional[Dict[str, Any]] = None
 
 
 class TaskUpdate(BaseModel):
@@ -51,6 +52,7 @@ class TaskUpdate(BaseModel):
     extra_data: Optional[Dict[str, Any]] = None
     expected_insights: Optional[List[str]] = None
     valid_solutions: Optional[List[str]] = None
+    expected_approaches: Optional[Dict[str, Any]] = None
 
 
 class TaskResponse(BaseModel):
