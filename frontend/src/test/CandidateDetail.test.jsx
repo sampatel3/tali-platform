@@ -39,6 +39,7 @@ vi.mock('../lib/api.js', () => ({
     list: vi.fn().mockResolvedValue({ data: { items: [] } }),
     get: vi.fn(),
     create: vi.fn(),
+    createWithCv: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
     uploadCv: vi.fn(),

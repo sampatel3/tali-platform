@@ -1,7 +1,10 @@
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from datetime import datetime, timezone
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response, FileResponse, RedirectResponse
+from pydantic import EmailStr
 from sqlalchemy.orm import Session
 
 from ...platform.database import get_db
@@ -70,6 +73,60 @@ def create_candidate(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create candidate")
     return candidate
+
+
+@router.post("/with-cv", response_model=CandidateResponse, status_code=status.HTTP_201_CREATED)
+def create_candidate_with_cv(
+    email: EmailStr = Form(...),
+    full_name: str | None = Form(default=None),
+    position: str | None = Form(default=None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a candidate with mandatory CV upload in one request."""
+    normalized_email = str(email).strip()
+    if not normalized_email:
+        raise HTTPException(status_code=400, detail="Email is required")
+    if file is None:
+        raise HTTPException(status_code=400, detail="CV file is required")
+
+    existing = db.query(Candidate).filter(
+        Candidate.organization_id == current_user.organization_id,
+        Candidate.email == normalized_email,
+    ).first()
+    if existing:
+        raise HTTPException(status_code=400, detail="Candidate email already exists")
+
+    candidate = Candidate(
+        organization_id=current_user.organization_id,
+        email=normalized_email,
+        full_name=full_name,
+        position=position,
+    )
+    db.add(candidate)
+    db.flush()
+
+    result = process_document_upload(
+        upload=file,
+        entity_id=candidate.id,
+        doc_type="cv",
+        allowed_extensions={"pdf", "docx"},
+    )
+
+    now = datetime.now(timezone.utc)
+    candidate.cv_file_url = result["file_url"]
+    candidate.cv_filename = result["filename"]
+    candidate.cv_text = result["extracted_text"]
+    candidate.cv_uploaded_at = now
+
+    try:
+        db.commit()
+        db.refresh(candidate)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to create candidate")
+    return _candidate_to_response(candidate)
 
 
 @router.get("/{candidate_id}")
@@ -162,8 +219,6 @@ def upload_candidate_cv(
         doc_type="cv",
         allowed_extensions={"pdf", "docx"},
     )
-
-    from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
 
     candidate.cv_file_url = result["file_url"]
@@ -203,8 +258,6 @@ def upload_candidate_job_spec(
         doc_type="job_spec",
         allowed_extensions={"pdf", "docx", "txt"},
     )
-
-    from datetime import datetime, timezone
     now = datetime.now(timezone.utc)
 
     candidate.job_spec_file_url = result["file_url"]

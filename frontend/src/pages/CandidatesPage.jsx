@@ -13,6 +13,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
   const [loadingAssessments, setLoadingAssessments] = useState(false);
   const [copiedInviteId, setCopiedInviteId] = useState(null);
   const [form, setForm] = useState({ email: '', full_name: '', position: '' });
+  const [createCvFile, setCreateCvFile] = useState(null);
   const [editingId, setEditingId] = useState(null);
   const [uploadingDoc, setUploadingDoc] = useState(null); // { candidateId, type: 'cv'|'job_spec' }
   const [showDocUpload, setShowDocUpload] = useState(null); // candidateId to show upload panel for
@@ -50,6 +51,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
       alert('Email is required');
       return;
     }
+    if (!editingId && !createCvFile) {
+      alert('CV is required when creating a candidate');
+      return;
+    }
     try {
       if (editingId) {
         await candidatesApi.update(editingId, {
@@ -58,10 +63,11 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
         });
         setEditingId(null);
       } else {
-        const res = await candidatesApi.create({
+        const res = await candidatesApi.createWithCv({
           email: form.email.trim(),
           full_name: form.full_name || null,
           position: form.position || null,
+          file: createCvFile,
         });
         // After creation, show document upload panel for the new candidate
         if (res.data?.id) {
@@ -69,6 +75,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
         }
       }
       setForm({ email: '', full_name: '', position: '' });
+      setCreateCvFile(null);
       await loadCandidates();
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to save candidate');
@@ -163,6 +170,20 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
               onChange={(e) => setForm((p) => ({ ...p, position: e.target.value }))}
             />
           </div>
+          {!editingId && (
+            <div className="mt-3">
+              <div className="font-mono text-xs text-gray-500 mb-1">CV Upload (required for new candidates)</div>
+              <input
+                type="file"
+                accept=".pdf,.docx"
+                className="font-mono text-xs"
+                onChange={(e) => setCreateCvFile(e.target.files?.[0] || null)}
+              />
+              {createCvFile && (
+                <div className="font-mono text-xs text-gray-600 mt-1">{createCvFile.name}</div>
+              )}
+            </div>
+          )}
           <div className="flex gap-2 mt-3">
             <button
               type="button"
@@ -179,6 +200,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
                 onClick={() => {
                   setEditingId(null);
                   setForm({ email: '', full_name: '', position: '' });
+                  setCreateCvFile(null);
                 }}
               >
                 Cancel
@@ -196,7 +218,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <div className="font-mono text-xs text-gray-500">Upload Documents for {candidate.full_name || candidate.email}</div>
-                  <div className="font-mono text-xs text-gray-400 mt-1">Upload CV and job specification before sending the assessment</div>
+                  <div className="font-mono text-xs text-gray-400 mt-1">CV is required at creation. You can optionally upload/update CV and job spec here.</div>
                 </div>
                 <button type="button" className="font-mono text-xs text-gray-500 hover:text-black" onClick={() => setShowDocUpload(null)}>Close</button>
               </div>

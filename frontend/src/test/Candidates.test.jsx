@@ -38,6 +38,7 @@ vi.mock('../lib/api.js', () => ({
     list: vi.fn(),
     get: vi.fn(),
     create: vi.fn(),
+    createWithCv: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
     uploadCv: vi.fn(),
@@ -226,6 +227,7 @@ describe('CandidatesPage', () => {
       expect(screen.getByPlaceholderText('email@company.com')).toBeInTheDocument();
       expect(screen.getByPlaceholderText('Full name')).toBeInTheDocument();
       expect(screen.getByPlaceholderText('Position')).toBeInTheDocument();
+      expect(screen.getByText('CV Upload (required for new candidates)')).toBeInTheDocument();
     });
   });
 
@@ -249,8 +251,8 @@ describe('CandidatesPage', () => {
     alertMock.mockRestore();
   });
 
-  it('calls candidatesApi.create with form data', async () => {
-    candidatesApi.create.mockResolvedValue({ data: { id: 200, email: 'new@test.com' } });
+  it('calls candidatesApi.createWithCv with form data', async () => {
+    candidatesApi.createWithCv.mockResolvedValue({ data: { id: 200, email: 'new@test.com' } });
 
     await renderAppOnCandidatesPage();
 
@@ -267,14 +269,18 @@ describe('CandidatesPage', () => {
     fireEvent.change(screen.getByPlaceholderText('Position'), {
       target: { value: 'Mid Engineer' },
     });
+    const file = new File(['cv-content'], 'resume.pdf', { type: 'application/pdf' });
+    const fileInput = document.querySelector('input[type="file"][accept=".pdf,.docx"]');
+    fireEvent.change(fileInput, { target: { files: [file] } });
 
     fireEvent.click(screen.getByRole('button', { name: 'Create Candidate' }));
 
     await waitFor(() => {
-      expect(candidatesApi.create).toHaveBeenCalledWith({
+      expect(candidatesApi.createWithCv).toHaveBeenCalledWith({
         email: 'new@test.com',
         full_name: 'New Candidate',
         position: 'Mid Engineer',
+        file,
       });
     });
   });

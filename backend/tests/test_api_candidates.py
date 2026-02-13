@@ -83,6 +83,33 @@ def test_create_candidate_no_auth_401(client):
     assert resp.status_code == 401
 
 
+def test_create_candidate_with_cv_success(client):
+    headers, _ = auth_headers(client)
+    cv_bytes = b"%PDF-1.4\n1 0 obj\n<< /Type /Catalog >>\nendobj\n"
+    files = {"file": ("resume.pdf", io.BytesIO(cv_bytes), "application/pdf")}
+    data = {
+        "email": "cv-required@example.com",
+        "full_name": "CV Required",
+        "position": "Engineer",
+    }
+    auth_only = {"Authorization": headers["Authorization"]}
+    resp = client.post("/api/v1/candidates/with-cv", data=data, files=files, headers=auth_only)
+    assert resp.status_code == 201
+    payload = resp.json()
+    assert payload["email"] == "cv-required@example.com"
+    assert payload["cv_filename"] == "resume.pdf"
+
+
+def test_create_candidate_with_cv_missing_file_422(client):
+    headers, _ = auth_headers(client)
+    resp = client.post(
+        "/api/v1/candidates/with-cv",
+        data={"email": "missing-file@example.com"},
+        headers=headers,
+    )
+    assert resp.status_code == 422
+
+
 # ---------------------------------------------------------------------------
 # GET /api/v1/candidates/ — List
 # ---------------------------------------------------------------------------
