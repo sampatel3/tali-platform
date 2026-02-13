@@ -16,6 +16,9 @@ function normalizeStartData(startData) {
     time_remaining:
       startData.time_remaining ?? (task.duration_minutes ?? 30) * 60,
     task_name: task.name || "Assessment",
+    description: task.description || startData.description || "",
+    scenario: task.scenario || startData.scenario || "",
+    repo_structure: task.repo_structure || startData.repo_structure || null,
     task,
   };
 }
@@ -171,6 +174,15 @@ export default function AssessmentPage({
   };
 
   const assessmentTokenForApi = assessment?.token ?? token;
+  const taskContext = assessment?.scenario || assessment?.description || "";
+  const repoFiles = extractRepoFiles(assessment?.repo_structure);
+  const activeRepoFile =
+    selectedRepoFile && repoFiles.some((file) => file.path === selectedRepoFile)
+      ? selectedRepoFile
+      : repoFiles[0]?.path || null;
+  const selectedRepoContent = repoFiles.find(
+    (file) => file.path === activeRepoFile,
+  )?.content;
 
   // Execute code
   const handleExecute = useCallback(
