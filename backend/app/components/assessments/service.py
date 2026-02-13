@@ -80,8 +80,6 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         raise HTTPException(status_code=400, detail="Assessment has already been submitted")
     if assessment.expires_at and ensure_utc(assessment.expires_at) < utcnow():
         raise HTTPException(status_code=400, detail="Assessment link has expired")
-    if not assessment.cv_file_url:
-        raise HTTPException(status_code=400, detail="CV upload is required before starting the assessment")
     if not (settings.E2B_API_KEY or "").strip():
         raise HTTPException(status_code=503, detail="Code environment is not configured. Please try again later.")
 
@@ -132,6 +130,12 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
             "description": task.description,
             "starter_code": resume_code,
             "duration_minutes": assessment.duration_minutes,
+            "task_key": task.task_key,
+            "role": task.role,
+            "scenario": task.scenario,
+            "repo_structure": task.repo_structure,
+            "evaluation_rubric": task.evaluation_rubric,
+            "extra_data": task.extra_data,
             "calibration_prompt": None if settings.MVP_DISABLE_CALIBRATION else (task.calibration_prompt if task else None),
             "proctoring_enabled": False if settings.MVP_DISABLE_PROCTORING else (task.proctoring_enabled if task else False),
         },
@@ -467,6 +471,7 @@ def submit_assessment(
                 "time_taken": assessment.duration_minutes,
                 "results_url": f"{settings.FRONTEND_URL}/#/dashboard",
             },
+            request_id=get_request_id(),
         )
 
     if notify_user and settings.MVP_DISABLE_CELERY:

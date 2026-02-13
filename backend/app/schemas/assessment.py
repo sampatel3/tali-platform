@@ -5,7 +5,7 @@ from pydantic import BaseModel, EmailStr, Field, ConfigDict
 
 class AssessmentCreate(BaseModel):
     candidate_email: EmailStr
-    candidate_name: Optional[str] = Field(default=None, max_length=200)
+    candidate_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     task_id: int = Field(gt=0)
     duration_minutes: int = Field(default=30, ge=15, le=180)
 
@@ -66,6 +66,12 @@ class AssessmentResponse(BaseModel):
     score_weights_used: Optional[Dict[str, float]] = None
     flags: Optional[List[str]] = None
     scored_at: Optional[datetime] = None
+    posted_to_workable: Optional[bool] = None
+    posted_to_workable_at: Optional[datetime] = None
+    candidate_cv_filename: Optional[str] = None
+    candidate_job_spec_filename: Optional[str] = None
+    candidate_cv_uploaded_at: Optional[datetime] = None
+    candidate_job_spec_uploaded_at: Optional[datetime] = None
     total_duration_seconds: Optional[int] = None
     total_prompts: Optional[int] = None
     total_input_tokens: Optional[int] = None

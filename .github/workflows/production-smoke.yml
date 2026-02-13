@@ -1,0 +1,32 @@
+name: Production Smoke Tests
+
+on:
+  workflow_dispatch:
+    inputs:
+      tali_prod_url:
+        description: 'Production backend URL (e.g. https://<service>.up.railway.app)'
+        required: true
+  schedule:
+    - cron: '0 */12 * * *'
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
+      - name: Install deps
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run production-only smoke suite
+        env:
+          TALI_PROD_URL: ${{ inputs.tali_prod_url || secrets.TALI_PROD_URL }}
+        run: pytest -q -m production tests/test_qa_production_smoke.py

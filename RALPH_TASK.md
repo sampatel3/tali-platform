@@ -1,595 +1,261 @@
-# RALPH_TASK.md - TALI Platform Production Launch
+# RALPH_TASK.md — TALI Platform Comprehensive Audit & Execution Plan (2026-02-13)
 
-> **STATUS: ARCHIVED** — This plan has been fully reviewed and closed on 2026-02-11.
-> All items were marked complete. See `MVP_PLAN.md` for the current active plan.
-
----
-task: TALI Platform - Production Launch & Prompt Scoring Engine
-test_command: "cd backend && python3 -m pytest tests/ -v"
----
-
-**Project**: TALI - AI-Augmented Technical Assessment Platform
-**Objective**: Ship a production-grade platform with a multi-signal prompt analytics and scoring engine that measures how engineers work WITH AI tools.
-**Repository**: Monorepo -- backend (FastAPI/Railway), frontend (Vite+React/Vercel)
-
-## Tech Stack
-
-- **Backend**: FastAPI, PostgreSQL 15 + SQLAlchemy 2.0 + Alembic, Redis + Celery, JWT (PyJWT), Pydantic
-- **Frontend**: Vite 5 + React 18 (JSX), Tailwind CSS (black/white/purple #9D00FF), Hash routing in single App.jsx, Monaco Editor, Axios (src/lib/api.js), Recharts
-- **Integrations**: E2B Code Interpreter SDK, Anthropic Claude Sonnet 4, Stripe API, Workable API (OAuth + webhooks), Resend API
-- **Deployment**: Railway (backend + Postgres/Redis), Vercel (frontend)
+> **STATUS: ACTIVE (REOPENED)**
+> This document replaces the previously archived launch checklist. It is now the source of truth for the next execution cycle.
 
 ---
-
-## Phase 1 - Strip Demo Mode
-
-Remove all demo scaffolding so the app is production-safe for real users.
-
-### Frontend Demo Removal (frontend/src/App.jsx)
-
-- [x] DemoBanner component and all its usages removed (Dashboard, Candidate Detail, Tasks, Analytics, Settings).
-- [x] Pre-filled login credentials (sam@deeplight.ai / demo1234) removed from login page.
-- [x] "DEMO MODE" banner removed from login page.
-- [x] Demo-mode fallback that navigates to dashboard when API is unreachable removed.
-- [x] Mock candidates array fallback removed; proper empty state shown instead ("No assessments yet. Create your first assessment to get started.").
-- [x] Hardcoded org name defaults (DeepLight AI, sam@deeplight.ai) replaced with '--' or actual user data from API.
-
-### Backend Configuration (backend/app/core/config.py)
-
-- [x] ASSESSMENT_PRICE_PENCE setting added (default 2500); used in billing.py and stripe_service.py instead of hardcoded 2500.
-- [x] ASSESSMENT_EXPIRY_DAYS setting added (default 7); used in assessments.py create_assessment instead of hardcoded timedelta(days=7).
-- [x] EMAIL_FROM setting added; used in email_service.py instead of hardcoded sender address.
-
+task: TALI Platform - Codebase + Product Hardening Sprint
+test_command: "cd backend && pytest -q && cd ../frontend && npm test -- --run"
 ---
 
-## Phase 2 - Prompt Analytics & Scoring Engine
+## 0) Parallel lane assignment (4-agent split, non-overlapping)
 
-The core differentiation. Replace naive prompt counting (<=5 prompts = 8/10) with a multi-signal scoring system using 13 AI-evaluated signals + 10 heuristic signals.
+- **Lane A (Platform/Backend reliability):** schema correctness, request tracing, health readiness, task correlation.
+- **Lane B (CI & test gates):** production smoke isolation, CI matrix, coverage/lint quality gates.
+- **Lane C (Frontend quality):** test suite stabilization, jsdom/test env hardening, warning reduction pass.
+- **Lane D (Product UX/workflow):** recruiter insights, Workable/report actions, candidate document visibility/download UX.
 
-### 2A. Expanded Prompt Data Capture (backend/app/api/v1/assessments.py)
+Execution rule: each lane only touches its scoped files to avoid overlap, then merges sequentially.
 
-- [x] chat_with_claude stores full Claude response text in prompt record (currently discarded).
-- [x] chat_with_claude stores input_tokens and output_tokens from Claude usage metadata.
-- [x] chat_with_claude stores response_latency_ms (time.time() before/after Claude call).
-- [x] chat_with_claude stores code_before snapshot from frontend-provided code_context.
-- [x] chat_with_claude stores code_after by backfilling previous prompt's code_after with current code_context.
-- [x] chat_with_claude stores word_count and char_count for each prompt.
-- [x] chat_with_claude stores time_since_last_prompt_ms (computed from previous prompt timestamp).
-- [x] chat_with_claude stores paste_detected flag from frontend metadata.
-- [x] chat_with_claude stores browser_focused flag from frontend metadata.
-- [x] Prompt record schema documented: {message, response, timestamp, input_tokens, output_tokens, response_latency_ms, code_before, code_after, word_count, char_count, time_since_last_prompt_ms, paste_detected, browser_focused}.
 
-### 2B. AI-Evaluated Scoring Signals (backend/app/services/claude_service.py)
+## 0.1) Immediate production-parity hotfix plan (2026-02-13 priority)
 
-IMPORTANT: All analysis batched into ONE Claude call at submit time. Do NOT call per-prompt.
+Context from live user testing revealed critical workflow regressions that must be handled before additional feature work.
 
-- [x] ClaudeService.analyze_prompt_session(prompts, task_description) method added.
-- [x] analyze_prompt_session accepts full conversation history (all prompts with code snapshots).
-- [x] analyze_prompt_session calls Claude once with structured prompt requesting JSON scores.
-- [x] Signal: Prompt Clarity (0-10) -- Is each prompt specific, well-structured, and unambiguous?
-- [x] Signal: Prompt Specificity (0-10) -- Does it reference specific code lines, error messages, or requirements?
-- [x] Signal: Prompt Efficiency (0-10) -- Does it ask for the right level of help (not too broad, not too narrow)?
-- [x] Signal: Design Thinking (0-10) -- Does it show understanding of system design, tradeoffs, or architecture?
-- [x] Signal: Debugging Strategy (0-10) -- Does it demonstrate systematic debugging (hypothesis, isolation, verification)?
-- [x] Signal: Prompt Progression (0-10) -- Do prompts build on each other logically (vs. random/scattered)?
-- [x] Signal: Independence (0-10) -- Does candidate attempt before asking? (measured by code changes between prompts)
-- [x] Signal: Written Communication (0-10) -- Grammar, structure, professional tone appropriate for client-facing roles.
-- [x] Signal: Context Utilization (0-10) -- Does candidate actually USE the AI response in subsequent code/prompts?
-- [x] Signal: Error Recovery (0-10) -- When Claude gives wrong/unhelpful answer, does candidate course-correct or blindly follow?
-- [x] Signal: Requirement Comprehension (0-10) -- Did they understand the task before prompting? (initial prompt quality vs task brief)
-- [x] Signal: Learning Velocity (0-10) -- Do prompts improve during session? (compare first 3 vs last 3 prompt quality)
-- [x] Signal: Prompt Fraud Detection -- Detects copy-pasted external text, full solution dumps, or prompt injection attempts (flag + confidence score).
-- [x] analyze_prompt_session returns structured dict with all signal scores and per-prompt breakdown.
-- [x] Error handling: if Claude call fails, store null scores and log error; do not block submission.
+- [x] **Remove candidate-side CV gate on assessment start**
+  - Candidate should be able to start directly from invite link.
+  - CV upload remains a recruiter/candidate profile artifact, not a runtime gate.
+  - Backend start endpoint no longer hard-fails on missing CV.
 
-### 2C. Heuristic (Non-AI) Signals (backend/app/services/prompt_analytics.py)
+- [x] **Remove dashboard-side assessment creation entry point**
+  - Source of truth for creating/sending assessments is the Candidates page.
+  - Dashboard is assessment monitoring/reporting only.
 
-New module. Computed directly in Python, no Claude call needed.
+- [x] **Restore assessment runtime context visibility (core product path)**
+  - Show task context (description/scenario) in the assessment workspace.
+  - Show repository context/file list and file contents when repo structure is provided.
+  - Extend assessment start payload to include `task_key`, `role`, `scenario`, `repo_structure`, `evaluation_rubric`, `extra_data`.
 
-- [x] compute_time_to_first_prompt(assessment) -- seconds from started_at to first prompt timestamp.
-- [x] compute_prompt_speed(prompts) -- average time between consecutive prompts in ms.
-- [x] compute_prompt_frequency(prompts, assessment_duration) -- total count, prompts per 10-minute window array.
-- [x] compute_prompt_length_stats(prompts) -- avg/min/max word count; flags very short (<10 words) or very long (>500 words).
-- [x] detect_copy_paste(prompts) -- compare prompt text against common StackOverflow/ChatGPT patterns; combine with paste_detected flags from frontend.
-- [x] compute_code_delta(prompts) -- diff size between code_before and code_after per prompt; measures if candidate actually used response.
-- [x] compute_self_correction_rate(prompts) -- how often candidate modifies code after prompt vs. using response verbatim.
-- [x] compute_token_efficiency(prompts, tests_passed, tests_total) -- total tokens consumed vs. problems solved.
-- [x] compute_browser_focus_ratio(assessment) -- % of assessment time browser was in focus (from prompt-level browser_focused flags).
-- [x] compute_tab_switch_count(assessment) -- total tab switches recorded.
-- [x] All heuristic functions return dict with signal name, value, and optional flag/warning.
+- [ ] **Follow-up hardening (next slice)**
+  - Validate all task creation/import paths persist `scenario` and `repo_structure` end-to-end.
+  - Add explicit UX fallback copy when repo context is missing on a task.
+  - Add focused E2E for “History Backfill” (task context visible + repo files visible before first prompt).
 
-### 2D. Calibration Prompt System
+## 1) Executive summary
 
-- [x] Task model gains calibration_prompt field (Text, nullable) -- the standardized prompt to present first.
-- [x] Default calibration prompt: "Ask Claude to help you write a function that reverses a string" (or per-task custom).
-- [x] Assessment start flow presents calibration task before main task.
-- [x] Calibration interaction stored separately: assessment.calibration_score (Float).
-- [x] Calibration score computed via Claude analysis of the single calibration interaction.
-- [x] Recruiter dashboard shows calibration score alongside main score for cross-candidate comparison.
+TALI is **substantially built** and demonstrates a credible end-to-end product:
 
-### 2E. Composite Scoring Formula (backend/app/api/v1/assessments.py)
+- Multi-tenant auth, candidate/task/assessment lifecycles, AI-assisted assessment flow, scoring pipeline, billing/integration scaffolding, and broad automated backend test coverage are present.
+- Frontend ships a full recruiter + candidate experience, but has notable maintainability and test fragility concerns.
 
-- [x] SCORE_WEIGHTS dict defined in config.py with defaults: tests=0.30, code_quality=0.15, prompt_quality=0.15, prompt_efficiency=0.10, independence=0.10, context_utilization=0.05, design_thinking=0.05, debugging_strategy=0.05, written_communication=0.05.
-- [x] Task model gains score_weights field (JSON, nullable) to allow per-task override of default weights.
-- [x] Task model gains recruiter_weight_preset field (String, nullable) -- options: "solution_focused" (50% tests), "prompt_focused" (50% prompting), "balanced" (default).
-- [x] submit_assessment computes final_score as weighted sum of all component scores using task-specific or default weights.
-- [x] submit_assessment calls ClaudeService.analyze_prompt_session (batched, single call).
-- [x] submit_assessment calls all heuristic signal functions from prompt_analytics.py.
-- [x] submit_assessment stores all individual component scores on the Assessment model.
-- [x] submit_assessment stores prompt_analytics JSON with full per-prompt scoring breakdown.
-- [x] Existing naive AI usage scoring (<=5 prompts = 8/10) replaced entirely.
+However, this audit identified **critical execution gaps** that must be addressed before relying on this repo as “production-stable”:
 
-### 2F. New Database Fields (backend/app/models/assessment.py)
+1. **Test suite signal quality is degraded**:
+   - Backend run produced **27 failures** (26 external production-smoke proxy failures + 1 real schema validation mismatch).
+   - Frontend run produced **29 failures** concentrated in dashboard/candidates/tasks tests.
+2. **Documentation drift** between README, historical task files, and current implementation status.
+3. **Monolithic frontend architecture** (`App.jsx`) increases regression risk and slows feature work.
+4. **Scoring/product UX gaps** still exist around explainability, reliability, and recruiter actions.
 
-- [x] prompt_quality_score column added (Float, nullable).
-- [x] prompt_efficiency_score column added (Float, nullable).
-- [x] independence_score column added (Float, nullable).
-- [x] context_utilization_score column added (Float, nullable).
-- [x] design_thinking_score column added (Float, nullable).
-- [x] debugging_strategy_score column added (Float, nullable).
-- [x] written_communication_score column added (Float, nullable).
-- [x] learning_velocity_score column added (Float, nullable).
-- [x] error_recovery_score column added (Float, nullable).
-- [x] requirement_comprehension_score column added (Float, nullable).
-- [x] calibration_score column added (Float, nullable).
-- [x] prompt_fraud_flags column added (JSON, nullable) -- array of {type, confidence, evidence}.
-- [x] prompt_analytics column added (JSON, nullable) -- full per-prompt scoring breakdown.
-- [x] browser_focus_ratio column added (Float, nullable).
-- [x] tab_switch_count column added (Integer, default 0).
-- [x] time_to_first_prompt_seconds column added (Integer, nullable).
-- [x] code_snapshots column updated to store per-prompt snapshots (array of {prompt_index, code_before, code_after}).
-- [x] Alembic migration 003_add_prompt_scoring_fields.py created and reversible.
-- [x] Task model: calibration_prompt (Text), score_weights (JSON), recruiter_weight_preset (String) columns added.
-- [x] Task model migration included in same or separate Alembic migration.
-
-### 2G. Frontend Prompt Capture (frontend/src/App.jsx -- AssessmentPage)
-
-- [x] Claude message request includes code_context field (current Monaco editor content).
-- [x] Paste events tracked on prompt input textarea; paste_detected flag sent with each message.
-- [x] Time since last prompt tracked client-side; time_since_last_prompt_ms sent with each message.
-- [x] Browser focus/blur events tracked via window focus/blur listeners; browser_focused sent with each message.
-- [x] Tab visibility changes tracked using document.visibilityState API with fallback for unsupported browsers.
-- [x] Tab switch count maintained in component state; incremented on each visibilitychange to "hidden".
-- [x] tab_switch_count sent with submit request.
-- [x] All tracking state reset on assessment start.
-
-### 2H. Frontend Score Display (frontend/src/App.jsx -- CandidateDetailPage)
-
-- [x] recharts package added to frontend dependencies.
-- [x] AI Usage tab: Radar/spider chart showing all scoring dimensions (clarity, specificity, efficiency, design thinking, debugging, progression, independence, communication, context utilization, error recovery, comprehension, learning velocity).
-- [x] AI Usage tab: Per-prompt quality scores shown inline next to each prompt in conversation view.
-- [x] AI Usage tab: Fraud flags displayed in red with explanation text if any detected.
-- [x] AI Usage tab: Prompt progression timeline as line chart showing quality evolution during assessment.
-- [x] AI Usage tab: Summary stats card showing avg prompt quality, total tokens, efficiency rating, time to first prompt.
-- [x] AI Usage tab: Calibration score shown with comparison to average across all candidates (requires API endpoint).
-- [x] AI Usage tab: Browser focus indicator -- warning banner if <80% focus time.
-- [x] AI Usage tab: Learning velocity indicator (improving / declining / stable badge).
-- [x] Score breakdown section shows all component scores with their weights and contribution to final score.
-
-### 2I. Proctoring Mode (Optional)
-
-- [x] Task model gains proctoring_enabled field (Boolean, default false).
-- [x] When proctoring_enabled=true, candidate sees "This assessment is proctored" notice on welcome page.
-- [x] When proctoring_enabled=true, warning toast shown to candidate on each tab switch: "You have left the assessment tab. This has been recorded."
-- [x] All tab switches recorded with timestamps in assessment timeline.
-- [x] Assessments with >5 tab switches automatically flagged for recruiter review (flag in prompt_fraud_flags).
-- [x] Recruiter can see proctoring summary: total tab switches, timestamps, focus percentage.
+This plan is structured so Cursor/Claude Code can execute in controlled phases.
 
 ---
 
-## Phase 3 - Production Hardening
+## 2) Scope of this plan
 
-Remaining QA and stability items from previous sprint.
-
-### CORS and Origins
-
-- [x] CORS_EXTRA_ORIGINS config verified working with production Vercel domain.
-- [x] CORS middleware includes both FRONTEND_URL and CORS_EXTRA_ORIGINS in allowed_origins.
-
-### E2B Sandbox Reliability
-
-- [x] E2B get_sandbox_id method handles id, sandbox_id, and sandboxId attributes (SDK version compatibility).
-- [x] Start assessment returns clear 503 with detail message when E2B_API_KEY missing.
-- [x] Start assessment returns clear 503 with detail message when sandbox creation fails.
-- [x] Sandbox cleanup on DB commit failure prevents leaked sandbox resources.
-
-### Transaction Safety
-
-- [x] All critical write endpoints use try/except + db.rollback() on failures.
-- [x] Assessment submission enforces valid state transition (in_progress -> completed only).
-- [x] Start assessment uses with_for_update() for concurrency safety.
-
-### Auth and Security
-
-- [x] Password reset token uses secure comparison (secrets.compare_digest).
-- [x] JWT creation uses timezone-aware expiry (datetime.now(timezone.utc)).
-- [x] All datetime operations use timezone-aware timestamps consistently.
-
-### Database Performance
-
-- [x] Foreign key indexes exist on assessments.organization_id, assessments.candidate_id, assessments.task_id.
-- [x] Foreign key indexes exist on users.organization_id, tasks.organization_id, candidates.organization_id.
-- [x] Index migration (002) is present and reversible.
-
-### Input Validation
-
-- [x] Pydantic schemas use Field(min_length, max_length) for string inputs.
-- [x] Pydantic schemas use Field(ge, le) for numeric inputs (limit, offset, duration_minutes).
-- [x] EmailStr used for all email input fields.
+- Comprehensive codebase review (backend + frontend + tests + docs)
+- Product readiness review (UX, data quality, ops reliability)
+- Concrete, prioritized engineering tasks with acceptance criteria
+- “Definition of done” that can be validated via CI/local checks
 
 ---
 
-## Phase 4 - Integration Completion
+## 3) Audit findings
 
-### Stripe Webhooks
+## 3.1 What is strong today
 
-- [x] Stripe webhook refuses processing when STRIPE_WEBHOOK_SECRET is missing (returns 400).
-- [x] Stripe webhook handles payment_intent.succeeded -- updates org billing.
-- [x] Stripe webhook handles payment_intent.payment_failed -- logs failure.
-- [x] Stripe webhook handles customer.subscription.updated -- updates org plan.
-- [x] Stripe webhook handles customer.subscription.deleted -- downgrades org plan.
-- [x] Organization billing fields (plan, assessments_used, assessments_limit) update correctly from events.
+- Strong backend functional surface area and broad test corpus.
+- Security and platform hardening features are present (headers, CORS controls, auth/rate-limit paths).
+- Candidate assessment workflow appears complete including Claude + E2B interaction and analytics capture.
+- Frontend includes core business screens and candidate detail visualizations.
 
-### Workable Integration
+## 3.2 Critical issues (must fix first)
 
-- [x] Workable webhook refuses processing when WORKABLE_WEBHOOK_SECRET is missing.
-- [x] Workable candidate_stage_changed webhook auto-creates assessment (config-driven).
-- [x] Assessment completion enqueues post_to_workable Celery task when linked candidate has Workable ID.
-- [x] Manual POST /assessments/{id}/post-to-workable marks posted_to_workable=true with timestamp.
-- [x] WorkableService.post_assessment_result() formats score and link as Workable comment.
+### A. Backend test reliability + correctness
 
-### PDF Report Generation
+- [x] **Fix schema validation mismatch**:
+  - `AssessmentCreate.candidate_name` currently accepts empty string; unit test expects validation failure.
+  - Add `min_length=1` (or pre-validator to normalize blank-to-None) and align tests accordingly.
 
-- [x] GET /api/v1/assessments/{id}/report.pdf generates downloadable PDF.
-- [x] PDF includes: candidate info, overall score, component score breakdown, prompt analytics summary, test results.
-- [x] PDF uses consistent branding (TALI header, black/white/purple theme).
+- [x] **Quarantine true production smoke tests from local default run**:
+  - `tests/test_qa_production_smoke.py` depends on live URL and failed in this environment due to proxy restrictions.
+  - Mark as `@pytest.mark.production` (or equivalent) and exclude by default in local/CI baseline.
 
-### Email Notifications
+### B. Frontend test suite breakage
 
-- [x] Assessment invitation email sends with correct FROM address (from EMAIL_FROM config).
-- [x] Assessment completion notification sent to recruiter with score and dashboard link.
-- [x] Resend invite (POST /assessments/{id}/resend) re-sends invitation email.
+- [x] **Fix 29 failing frontend tests**:
+  - Failing files: `Dashboard.test.jsx`, `Candidates.test.jsx`, `Tasks.test.jsx`.
+  - Root causes likely route/render assumptions and async waiting patterns after UI refactors.
+  - Update tests to current UX contracts (headings, navigation state, responsive rendering behavior).
 
----
+- [ ] **Address noisy act()/jsdom warnings**:
+  - Wrap async state updates in `act`-safe interactions.
+  - Mock/patch unsupported browser APIs (`scrollTo`, navigation) in test setup.
 
-## Phase 5 - Frontend Polish
+### C. Documentation and planning drift
 
-### Dashboard Enhancements
+- [x] **Reconcile README with current implementation**:
+  - Remove stale statements (e.g., missing test scripts when scripts now exist).
+  - Align feature-status sections with actual backend/frontend behavior.
 
-- [x] CSV export button downloads visible assessments as CSV.
-- [x] JSON export button downloads visible assessments as JSON.
-- [x] Lightweight in-app notification area for recently completed assessments.
-- [x] Side-by-side comparison view for two selected assessments (checkbox select + compare button).
-
-### Candidate Detail Actions
-
-- [x] Download PDF button calls GET /assessments/{id}/report.pdf and triggers browser download.
-- [x] Post to Workable button calls POST /assessments/{id}/post-to-workable; disabled if already posted.
-- [x] Delete assessment button with confirmation modal; calls DELETE /assessments/{id}.
-- [x] Recruiter notes input; calls POST /assessments/{id}/notes and displays in timeline.
-
-### Settings Page
-
-- [x] Team tab shows org member list from GET /api/v1/users.
-- [x] Team tab has invite form (email, full_name) calling POST /api/v1/users/invite.
-- [x] Preferences tab with dark mode toggle (persisted in localStorage).
-
-### Candidate Management Page
-
-- [x] Candidates page at #/candidates listing all org candidates with search.
-- [x] Candidate detail view showing all assessments for that candidate.
-- [x] Create/edit candidate form.
+- [x] **Cross-link plan docs**:
+  - Keep `PRODUCT_PLAN.md` and `RALPH_TASK.md` non-contradictory.
+  - Archive completed sections with timestamped changelog entries.
 
 ---
 
-## Phase 6 - Testing & Monitoring
+## 3.3 High-priority product/code improvements
 
-### Backend Tests
+### D. Frontend architecture refactor (risk reduction)
 
-- [x] test_auth.py: register, login success, login invalid credentials, get current user.
-- [x] test_assessments.py: create, list (paginated), start, execute, submit.
-- [x] test_candidates.py: full CRUD flow (create, list, get, update, delete).
-- [x] test_assessment_actions.py: delete, resend, post-to-workable, report PDF.
-- [x] test_prompt_analytics.py: all heuristic signal functions with edge cases.
-- [x] test_scoring.py: composite scoring with default and custom weights.
-- [x] All tests use pytest fixtures for db session, test client, authenticated user.
-- [x] Tests mock E2B, Claude, Stripe, Workable, and Resend external calls.
-- [x] Tests run with: cd backend && python3 -m pytest tests/ -v
-- [x] Test coverage >70% for core modules.
+- [ ] Break `frontend/src/App.jsx` into feature modules:
+  - `pages/` (Dashboard, Candidates, Tasks, CandidateDetail, Settings, Landing)
+  - `components/` shared UI
+  - `hooks/` data + state orchestration
+  - `utils/formatters` and scoring adapters
+- [ ] Introduce route-level composition (keep hash routing if desired, but isolate page boundaries).
+- [ ] Add typed API response adapters (even in JS) to prevent snake_case/camelCase drift.
 
-### Frontend Tests
+### E. Scoring product quality
 
-- [x] npm test script configured (Vitest + React Testing Library + jsdom).
-- [x] AuthContext test: hydration from localStorage, logout clears token.
-- [x] AssessmentPage test: paste tracking, focus tracking, code_context sent with messages.
-- [x] Score display test: radar chart renders with mock data.
+- [ ] Verify full scoring payload consistency from backend to frontend visualizations.
+- [ ] Add explicit fallback UX for partially available scores (e.g., Claude timeout, fit-score unavailable).
+- [x] Improve recruiter interpretability:
+  - Top 3 strengths
+  - Top 3 risks
+  - Recommended interview focus questions based on observed behavior
 
-### Operations & Monitoring
+### F. Recruiter workflow completeness
 
-- [x] /health endpoint checks PostgreSQL and Redis connectivity; returns "healthy" or "degraded".
-- [x] Structured JSON logging configured for production (JsonFormatter in logging_config.py).
-- [x] Sentry integrated in backend (optional, env-driven).
-- [x] Deployment docs updated with CORS_EXTRA_ORIGINS, EMAIL_FROM, all new env vars.
-- [x] Database backups automated via Railway.
+- [x] Confirm/ship end-to-end “Post to Workable” action in recruiter UI + backend endpoint behavior.
+- [x] Confirm/ship report export (PDF/JSON summary) from candidate detail.
+- [x] Ensure candidate document visibility/download links are robust.
 
 ---
 
-## Definition of Done
+## 3.4 Operational hardening
 
-A criterion is complete only when ALL of the following are true:
-- Code is merged in backend/frontend on main branch.
-- Input validation and error handling exist for the feature.
-- Endpoint/UI behavior works with real deployment environment variables (not just localhost).
-- Tests exist (or updated) and pass locally.
-- Criterion checkbox is explicitly marked [x].
+### G. Observability and runtime confidence
 
----
+- [x] Add structured request IDs correlated across API logs + Celery tasks.
+- [x] Add explicit health checks for external dependencies (Claude/E2B optional status indicators).
+- [x] Add error budget dashboard metrics:
+  - assessment start failures
+  - Claude request failures
+  - sandbox provisioning latency
+  - scoring computation latency
 
-## Guardrails for Agents
+### H. CI and quality gates
 
-### Cost Control
-- **NEVER call Claude per-prompt for scoring.** All prompt analysis is batched into a SINGLE Claude call at submit time. This is non-negotiable.
-- Monitor token usage in analyze_prompt_session; set max_tokens appropriately.
-
-### Browser Compatibility
-- When using document.visibilityState or window focus/blur events, add fallback for browsers that don't support these APIs.
-- Test tab tracking in Safari, Chrome, and Firefox.
-
-### Score Weights
-- **NEVER hardcode score weights.** Always pull from config (SCORE_WEIGHTS) or Task model (score_weights JSON field). Different clients want different weightings.
-
-### Database Safety
-- Always wrap db.commit() in try/except with db.rollback() on failure.
-- Use with_for_update() for any status transitions.
-- Run alembic revision --autogenerate for migrations; review before applying.
-
-### Deployment
-- Never commit .env files or API keys.
-- Always verify CORS origins include production frontend URL before deploying.
-- Never claim deployment success without checking live endpoint responses.
-- Test E2B sandbox creation with production API key before marking start-assessment as working.
-
-### Code Standards
-- Backend: sync route handlers (def, not async def). Use get_db() and get_current_user() dependencies.
-- Frontend: hash routing in App.jsx. API client in src/lib/api.js. Auth via context/AuthContext.jsx.
-- All new API endpoints need Pydantic request/response schemas.
-- Return proper HTTP status codes (201 create, 204 delete, 400 bad request, 404 not found, 503 service unavailable).
-
-### Task Hygiene
-- Always update this file when work is completed (mark [x]).
-- Never repeat the same commit with no net code change.
-- Never leave integration endpoints half-implemented without explicit TODO comments.
-- Commit messages follow: "ralph: [feature] - description"
+- [x] Create/upgrade CI pipeline with separate jobs:
+  - backend unit/integration (default)
+  - frontend unit (default)
+  - production smoke (manual/scheduled only)
+- [x] Enforce minimum coverage thresholds for touched files or critical modules.
+- [x] Add lint/format checks if absent.
 
 ---
 
-## Implementation Order
+## 4) Execution plan (Cursor-ready)
 
-1. ~~Strip Demo Mode (Phase 1) -- 5% effort~~ DONE
-2. ~~Expand Prompt Data Capture (Phase 2A) -- 10% effort~~ DONE
-3. ~~Frontend Tracking: paste, focus, tabs (Phase 2G) -- 10% effort~~ DONE
-4. ~~Build Scoring Engine: AI signals + heuristics (Phase 2B + 2C) -- 25% effort~~ DONE
-5. ~~Calibration Prompt System (Phase 2D) -- 5% effort~~ DONE
-6. ~~Composite Scoring + DB Migration (Phase 2E + 2F) -- 15% effort~~ DONE
-7. ~~Frontend Score Display (Phase 2H) -- 20% effort~~ DONE
-8. ~~Proctoring Mode (Phase 2I) -- 5% effort~~ DONE
-9. Production Hardening + Integrations + Testing (Phase 3-6) -- 5% effort -- MOSTLY DONE
+## Phase 0 — Stabilize test signal (Day 1)
 
-## Remaining Items
+- [x] Patch `AssessmentCreate` validation and corresponding schema tests.
+- [x] Mark production smoke tests with dedicated marker and default exclusion.
+- [x] Fix failing frontend tests to green baseline.
 
-- [x] Calibration score computed via Claude analysis of single calibration interaction
-- [x] Calibration score comparison UI in recruiter dashboard
-- [x] WorkableService.post_assessment_result() full formatting
-- [x] PDF report with full prompt analytics summary and branding
-- [x] Candidates page at #/candidates with search
-- [x] Test coverage >70% for core scoring modules (`prompt_analytics.py` coverage: 82%)
-- [x] Frontend tests for AssessmentPage tracking and radar chart
-- [x] Database backups via Railway (documented runbook in `docs/DEPLOYMENT.md`)
+**Exit criteria:**
+- [x] `cd backend && pytest -q -m "not production"` passes.
+- [x] `cd frontend && npm test -- --run` passes.
 
----
+## Phase 1 — Docs + status truthfulness (Day 1-2)
 
-# Project Plan — Deployability Fixes, CLI Config & Feature Roadmap
+- [x] Rewrite README “Implemented / Not yet implemented” based on actual code.
+- [x] Add a short “Known limitations” section for external dependency behaviors.
+- [x] Keep `PRODUCT_PLAN.md` and `RALPH_TASK.md` aligned with clear ownership.
 
-> **Added**: 2026-02-12. Covers deployment fixes, environment/secret management, CI/CD, and feature extensions.
+**Exit criteria:**
+- [x] No contradictory feature-status claims across key docs.
 
----
+## Phase 2 — Frontend decomposition (Day 2-4)
 
-## Current State Summary
+- [x] Extract CandidateDetailPage from `App.jsx` first (highest complexity).
+- [ ] Extract Dashboard/Candidates/Tasks into separate modules.
+  - [x] Dashboard page extracted to `frontend/src/pages/DashboardPage.jsx`.
+  - [x] Candidates page extracted to `frontend/src/pages/CandidatesPage.jsx`.
+  - [ ] Tasks page extraction pending.
+- [ ] Introduce minimal page-level tests for each extracted module.
 
-**Stack:** FastAPI (Railway) + React/Vite (Vercel) + PostgreSQL + Redis (Railway add-ons)
-**Live URLs:** `https://frontend-psi-navy-15.vercel.app` → `https://resourceful-adaptation-production.up.railway.app`
-**Status:** Mid-migration from custom auth → FastAPI-Users. Backend deploys but has a critical routing conflict. Several MVP features are disabled via flags.
+**Exit criteria:**
+- [ ] `App.jsx` reduced to routing/composition shell.
+- [ ] Existing behavior parity maintained.
 
----
+## Phase 3 — Product polish and recruiter value (Day 4-6)
 
-## Phase A — Deployability Fixes (Critical)
+- [x] Ship actionable score insights (strengths/risks/interview prompts).
+- [x] Complete Workable post action + visible status trail.
+- [x] Implement report export from candidate detail.
 
-### A1 — Fix Dual Auth System Conflict ⚠️ (Blocker)
+**Exit criteria:**
+- [x] Recruiter can complete full evaluation loop without manual data copy.
 
-**Problem:** `main.py` mounts both the old `auth.py` router AND the FastAPI-Users router under the same `/api/v1/auth/` prefix. The old `auth.py` references columns that migration `009` drops (`is_email_verified`, `password_reset_token`, etc.), so after running the migration the old routes will crash. Additionally, `users_router` is included twice.
+## Phase 4 — Ops + CI confidence (Day 6-7)
 
-**Fix:**
-- [x] Remove the old `auth.py` router include from `main.py` (was not mounted; only FastAPI-Users was active)
-- [x] Remove the duplicate `users_router` include from `main.py`
-- [x] Delete or archive `backend/app/api/v1/auth.py` (deleted; tests updated to use FastAPI-Users endpoints)
-- [ ] Run `alembic upgrade head` (migration 009) in production after deploying
+- [x] Add CI matrix with clear pass/fail gates.
+- [x] Add production-smoke scheduled/manual workflow.
+- [x] Add observability dashboard definitions to docs.
 
-### A2 — Commit Migration 009 + All FastAPI-Users Changes
-
-The 13 modified files and new files (`deps.py`, `009_fastapi_users_schema.py`, `FASTAPI_USERS_MIGRATION.md`) form a single atomic migration. Currently untracked/uncommitted.
-
-- [ ] Stage and commit all FastAPI-Users changes together with a single clear commit message
-
-### A3 — Fix `vercel.json` — Make It Self-Contained
-
-Current `vercel.json` only has `buildCommand`. Output directory and framework preset are set in the dashboard and not version-controlled, making a fresh deploy impossible without dashboard access.
-
-- [x] Update `vercel.json` to include `outputDirectory`, `installCommand`, `framework`, and a SPA rewrite rule (done)
-
-### A4 — Fix Trailing `\n` in `VITE_API_URL`
-
-The Railway URL in `.env.vercel.local` and `frontend/.env.vercel.check` has a literal `\n` at the end. The frontend `api.js` defensively strips it, but the root cause should be fixed at the source.
-
-- [ ] When setting `VITE_API_URL` in the Vercel dashboard, verify no trailing newline is present
-- [x] Add a note to `docs/ENV_SETUP.md` warning about this
-
-### A5 — Add `railway.json` for Celery Worker Service
-
-Celery is used for async email and Workable posting but no Railway worker service config exists. When `MVP_DISABLE_CELERY=False` this is a blocker.
-
-- [x] Create `backend/railway.worker.json` (done)
-- [x] Document in `docs/DEPLOYMENT.md` that a second Railway service is needed for the Celery worker
-
-### A6 — Add `frontend/.env.example`
-
-Currently only the backend has a `.env.example`. Frontend has no documented local dev setup.
-
-- [x] Create `frontend/.env.example` (done)
-
-### A7 — Remove `core/` Shim Layer
-
-Every file under `backend/app/core/` is a one-liner re-export from `app/platform/`. This adds confusion with no benefit.
-
-- [x] Migrate all remaining imports from `app.core.*` → `app.platform.*` across all files
-- [x] Delete the `backend/app/core/` directory
-
-### A8 — Remove `test.db` from Repo
-
-A SQLite test database is present at the repo root and should not be committed.
-
-- [x] Add `test.db` to `.gitignore` (already present)
-- [x] Remove `test.db` from git tracking if tracked (`git rm --cached test.db`); verified not tracked
+**Exit criteria:**
+- [x] New PRs cannot merge with broken baseline tests.
 
 ---
 
-## Phase B — Environment & Secret Management
+## 5) Backlog (non-blocking)
 
-### B1 — Secrets Storage Strategy
-
-- [ ] All production secrets live in Railway dashboard (backend) and Vercel dashboard (frontend) — confirm this is correct and document it
-- [ ] Add `scripts/check-env.sh` to validate all required env vars are set before startup (fail fast on missing keys)
-- [ ] Consider Railway shared variables for vars shared between web and worker services (DB URL, Redis URL, Secret Key, Anthropic, Resend)
-
-### B2 — Document Per-Service Variable Ownership
-
-`docs/ENV_SETUP.md` is good but missing:
-- [ ] Which Railway service each variable belongs to (web vs. worker)
-- [ ] Which variables are shared between web and worker
-- [ ] A checkbox-style "new deployment" checklist
-
-### B3 — Document `SECRET_KEY` Rotation Procedure
-
-- [ ] Add to `docs/DEPLOYMENT.md`: how to rotate `SECRET_KEY` (invalidates all JWT sessions — coordinate with users)
+- [ ] TypeScript migration (incremental, page-by-page).
+- [ ] React Router migration away from hash routing.
+- [ ] SSO/SAML and enterprise access controls.
+- [ ] White-label branding controls.
+- [ ] Candidate comparison and cohort analytics views.
 
 ---
 
-## Phase C — CI/CD Pipeline
+## 6) QA commands
 
-Currently: zero CI/CD. Deployments are manual (`railway up`, `vercel --prod`).
+Use these exact commands during implementation:
 
-### C1 — GitHub Actions: Backend Tests on PR
+```bash
+# Backend fast path (local-safe)
+cd backend && pytest -q -m "not production"
 
-- [ ] Create `.github/workflows/backend.yml`:
-  - Runs on push/PR
-  - Spins up Postgres 15 service container
-  - Installs `requirements.txt`
-  - Runs `pytest backend/ --cov=backend/app`
+# Backend full (includes production smoke; expected to require live env)
+cd backend && pytest -q
 
-### C2 — GitHub Actions: Frontend Tests on PR
+# Frontend tests
+cd frontend && npm test -- --run
 
-- [ ] Create `.github/workflows/frontend.yml`:
-  - Runs on push/PR
-  - `npm ci && npm test` in `frontend/`
-
-### C3 — Auto-Deploy on Merge to `main`
-
-- [ ] Link Railway backend service to GitHub repo with auto-deploy on push to `main`
-- [ ] Verify Vercel auto-deploys from GitHub (enabled by default when linked)
-- [ ] Document the setup in `docs/DEPLOYMENT.md`
-
----
-
-## Phase D — Feature Flags → Production Features
-
-All MVP flags default to `True` (disabled). Enabling them unlocks production capabilities.
-
-| Flag | What it enables | Priority | Dependencies |
-|------|----------------|----------|-------------|
-| `MVP_DISABLE_CELERY=False` | Async email + Workable posting | High | A5 (worker service) |
-| `MVP_DISABLE_STRIPE=False` | Billing, checkout, invoicing | Medium | Stripe setup + webhook |
-| `MVP_DISABLE_WORKABLE=False` | ATS sync, OAuth2, candidate import | Medium | Workable partner approval |
-| `MVP_DISABLE_CLAUDE_SCORING=False` | AI-based assessment scoring | Low | `ANTHROPIC_API_KEY` set |
-| `MVP_DISABLE_CALIBRATION=False` | Calibration baseline scoring | Low | Scoring V2 design |
-| `SCORING_V2_ENABLED=True` | New composite scoring algorithm | Medium | Design + test first |
-| `MVP_DISABLE_PROCTORING=False` | Assessment proctoring features | High | Unknown implementation state |
-
-- [ ] Enable `MVP_DISABLE_CELERY=False` in Railway once worker service is deployed (Phase A5)
-- [ ] Enable `MVP_DISABLE_CLAUDE_SCORING=False` once `ANTHROPIC_API_KEY` is confirmed set in Railway
-- [ ] Enable `MVP_DISABLE_STRIPE=False` once Stripe webhook is registered and `STRIPE_WEBHOOK_SECRET` is set
-- [ ] Enable `MVP_DISABLE_WORKABLE=False` once Workable partner credentials are obtained
-
----
-
-## Phase E — Feature Improvements
-
-### Frontend
-
-- [ ] **Break up `App.jsx`** — 189 KB monolithic file; split into route-level components (`/pages/`, `/components/`)
-- [ ] **Replace hash routing** — switch from `#/...` to React Router DOM path-based routing
-- [ ] **Stripe.js integration** — add `@stripe/stripe-js` dependency; `VITE_STRIPE_PUBLISHABLE_KEY` is referenced but the library is not installed
-- [ ] **PDF report download** — wire up "Download PDF" button to `GET /assessments/{id}/report.pdf`
-- [ ] **Post to Workable button** — wire up to `POST /assessments/{id}/post-to-workable`; disable if already posted
-- [ ] **Delete assessment** — add confirmation modal; call `DELETE /assessments/{id}`
-- [ ] **Toast/notification system** — replace `alert()` calls with a proper toast library (e.g. react-hot-toast)
-- [ ] **Loading/error states** — audit and standardise loading spinners and error messages across all views
-
-### Backend
-
-- [ ] **Remove dead code in `platform/security.py`** — old `get_current_user` is unused after FastAPI-Users migration
-- [ ] **Rate limiting on auth endpoints** — add rate limiting to login and forgot-password endpoints (brute force risk)
-- [ ] **Pagination enforcement** — audit all list endpoints for missing pagination limits
-- [ ] **Assessment result webhooks** — notify external systems (Workable, email) when assessment completes
-- [ ] **User roles/permissions** — currently org-scoped only; add admin/member role separation
-
-### DevEx / Ops
-
-- [ ] **Dockerfile** — optional but enables local full-stack testing without Railway
-- [ ] **Sentry integration** — `SENTRY_DSN` support exists in code; set DSN in Railway to activate
-- [ ] **Alembic autogenerate workflow** — document how to generate new migrations (`alembic revision --autogenerate -m "description"`) in `docs/DEPLOYMENT.md`
-- [ ] **DB connection pool tuning** — pool sizes (10/20) are hardcoded; document tuning guidance for Railway's connection limits in `docs/ENV_SETUP.md`
-
----
-
-## New Deployment Checklist (Full Fresh Deploy)
-
-```
-[ ] Railway: PostgreSQL service provisioned
-[ ] Railway: Redis service provisioned
-[ ] Railway: Backend web service linked to GitHub (backend/ root), auto-deploy on main
-[ ] Railway: All required env vars set (SECRET_KEY, ANTHROPIC_API_KEY, RESEND_API_KEY, FRONTEND_URL, BACKEND_URL)
-[ ] Railway: Worker service created with railway.worker.json (when Celery enabled)
-[ ] Vercel: Project linked to GitHub (frontend/ root), auto-deploy on main
-[ ] Vercel: VITE_API_URL set (no trailing newline)
-[ ] Vercel: VITE_STRIPE_PUBLISHABLE_KEY set (or placeholder until Stripe is enabled)
-[ ] Stripe: Webhook endpoint registered → STRIPE_WEBHOOK_SECRET set in Railway
-[ ] Workable: OAuth app registered → WORKABLE_CLIENT_ID/SECRET set in Railway
-[ ] DNS: Custom domains configured in Railway and Vercel dashboards
-[ ] Post-deploy: curl /health to confirm backend is live
-[ ] Post-deploy: alembic upgrade head runs automatically via railway.json startCommand
-[ ] Post-deploy: verify login + create assessment flow end-to-end in browser
+# Frontend production build
+cd frontend && npm run build
 ```
 
 ---
 
-## Implementation Order for Phase A–E
+## 7) Definition of done for this reopened RALPH cycle
 
-1. **A1** — Fix dual auth routing conflict (production breakage risk) — do this first
-2. **A2** — Commit migration 009 + all FastAPI-Users changes atomically
-3. **A3** — Fix `vercel.json` to be self-contained
-4. **A4/A6/A8** — Fix env file trailing newline, add frontend `.env.example`, gitignore `test.db`
-5. **A5** — Add Celery worker `railway.worker.json`
-6. **A7** — Remove `core/` shim layer
-7. **C1/C2/C3** — GitHub Actions CI + auto-deploy wiring
-8. **D** — Enable `MVP_DISABLE_CELERY=False` + deploy worker; enable Claude scoring
-9. **E (Frontend)** — Break up `App.jsx`; wire PDF/Workable/Delete buttons; add Stripe.js
-10. **D** — Enable Stripe + Workable when business-ready
+- [x] Backend and frontend default test suites pass consistently.
+- [x] Production-only tests are explicitly separated from local baseline.
+- [x] README/task plans reflect actual product truth.
+- [ ] Frontend architecture no longer concentrated in a single mega-file.
+- [x] Recruiter-facing evaluation workflow is complete and exportable.
+- [x] CI enforces these guarantees automatically.
+

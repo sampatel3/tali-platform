@@ -220,5 +220,19 @@ def health_check():
         redis_ok = bool(r.ping())
     except Exception:
         redis_ok = False
+
+    integrations = {
+        "e2b_configured": bool((settings.E2B_API_KEY or "").strip()),
+        "claude_configured": bool((settings.ANTHROPIC_API_KEY or "").strip()),
+        "workable_configured": bool((settings.WORKABLE_CLIENT_ID or "").strip() and (settings.WORKABLE_CLIENT_SECRET or "").strip()),
+        "stripe_configured": bool((settings.STRIPE_API_KEY or "").strip()),
+    }
+
     status_str = "healthy" if db_ok and redis_ok else "degraded"
-    return {"status": status_str, "service": "tali-api", "database": db_ok, "redis": redis_ok}
+    return {
+        "status": status_str,
+        "service": "tali-api",
+        "database": db_ok,
+        "redis": redis_ok,
+        "integrations": integrations,
+    }

@@ -18,6 +18,22 @@ function normalizeStartData(startData) {
   };
 }
 
+function extractRepoFiles(repoStructure) {
+  if (!repoStructure) return [];
+  if (Array.isArray(repoStructure?.files)) {
+    return repoStructure.files
+      .map((f) => ({ path: f.path || f.name || 'file', content: f.content || '' }))
+      .filter((f) => f.path);
+  }
+  if (repoStructure?.files && typeof repoStructure.files === 'object') {
+    return Object.entries(repoStructure.files).map(([path, content]) => ({
+      path,
+      content: typeof content === 'string' ? content : JSON.stringify(content, null, 2),
+    }));
+  }
+  return [];
+}
+
 export default function AssessmentPage({ assessmentId, token, taskData, startData }) {
   const [assessment, setAssessment] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -31,6 +47,7 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
   const [lastPromptTime, setLastPromptTime] = useState(null);
   const [proctoringEnabled, setProctoringEnabled] = useState(false);
   const [showTabWarning, setShowTabWarning] = useState(false);
+  const [selectedRepoFile, setSelectedRepoFile] = useState(null);
   const codeRef = useRef('');
   const timerRef = useRef(null);
 
@@ -220,6 +237,10 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
   );
 
   const isTimeLow = timeLeft > 0 && timeLeft < 300; // under 5 minutes
+  const taskContext = assessment?.task || {};
+  const repoFiles = extractRepoFiles(taskContext.repo_structure);
+  const activeRepoFile = selectedRepoFile || repoFiles[0]?.path || null;
+  const activeRepoContent = repoFiles.find((f) => f.path === activeRepoFile)?.content || '';
 
   // Loading state
   if (loading) {
@@ -317,6 +338,40 @@ export default function AssessmentPage({ assessmentId, token, taskData, startDat
           </button>
         </div>
       </div>
+
+      {(taskContext.description || taskContext.scenario || repoFiles.length > 0) && (
+        <div className="border-b-2 border-black bg-gray-50 p-4">
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <div className="font-mono text-xs text-gray-500 mb-1">Task Context</div>
+              {taskContext.scenario ? <p className="font-mono text-sm mb-2"><strong>Scenario:</strong> {taskContext.scenario}</p> : null}
+              {taskContext.description ? <p className="font-mono text-sm whitespace-pre-wrap">{taskContext.description}</p> : null}
+            </div>
+            <div>
+              <div className="font-mono text-xs text-gray-500 mb-1">Repository Context</div>
+              {repoFiles.length === 0 ? (
+                <p className="font-mono text-xs text-gray-600">No repository files provided for this assessment.</p>
+              ) : (
+                <>
+                  <div className="flex flex-wrap gap-2 mb-2 max-h-16 overflow-auto">
+                    {repoFiles.map((file) => (
+                      <button
+                        key={file.path}
+                        type="button"
+                        className={`border px-2 py-1 font-mono text-xs ${activeRepoFile === file.path ? 'border-black bg-black text-white' : 'border-gray-400 bg-white'}`}
+                        onClick={() => setSelectedRepoFile(file.path)}
+                      >
+                        {file.path}
+                      </button>
+                    ))}
+                  </div>
+                  <pre className="bg-black text-gray-200 p-2 text-xs overflow-auto max-h-36 border-2 border-black">{activeRepoContent || 'No file content available.'}</pre>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Main content */}
       <div className="flex-1 flex overflow-hidden">

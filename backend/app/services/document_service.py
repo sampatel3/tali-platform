@@ -111,7 +111,7 @@ def save_file_locally(content: bytes, directory: str, prefix: str, ext: str) -> 
     """Save file to local filesystem. Returns the file path.
 
     NOTE: For production on Railway (ephemeral disk), files should be
-    uploaded to S3 instead. See Phase 4 of MVP_PLAN.md.
+    uploaded to S3 instead. See Phase 4 of PRODUCT_PLAN.md.
     """
     uploads_dir = Path(__file__).resolve().parents[2] / "uploads" / directory
     uploads_dir.mkdir(parents=True, exist_ok=True)

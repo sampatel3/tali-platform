@@ -194,7 +194,7 @@ describe('DashboardPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('Dashboard', { selector: 'h1' })).toBeInTheDocument();
+      expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
       expect(screen.getByText('Welcome back, Admin')).toBeInTheDocument();
     });
   });
@@ -287,53 +287,24 @@ describe('DashboardPage', () => {
     });
   });
 
-  it('renders New Assessment button', async () => {
+  it('does not render New Assessment button and points to Candidates page', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: [], total: 0 } });
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('New Assessment')).toBeInTheDocument();
+      expect(screen.getByText('Assessments')).toBeInTheDocument();
     });
+
+    expect(screen.queryByText('New Assessment')).not.toBeInTheDocument();
+    expect(screen.getByText('No assessments yet. Create an assessment from the Candidates page.')).toBeInTheDocument();
   });
 
-  it('create assessment modal opens when button clicked', async () => {
-    assessmentsApi.list.mockResolvedValue({ data: { items: [], total: 0 } });
-    renderApp();
 
-    await waitFor(() => {
-      expect(screen.getByText('New Assessment')).toBeInTheDocument();
-    });
+  
 
-    fireEvent.click(screen.getByText('New Assessment'));
+  
 
-    await waitFor(() => {
-      expect(screen.getByText('New Assessment', { selector: 'h2' })).toBeInTheDocument();
-      expect(screen.getByText('Candidate Email *')).toBeInTheDocument();
-      expect(screen.getByText('Task *')).toBeInTheDocument();
-    });
-  });
-
-  it('new assessment form validates required fields', async () => {
-    assessmentsApi.list.mockResolvedValue({ data: { items: [], total: 0 } });
-    renderApp();
-
-    await waitFor(() => {
-      expect(screen.getByText('New Assessment')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByText('New Assessment'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Create Assessment')).toBeInTheDocument();
-    });
-
-    // Submit without filling fields
-    fireEvent.click(screen.getByText('Create Assessment'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Candidate email and task are required')).toBeInTheDocument();
-    });
-  });
+  
 
   it('shows candidate scores in the table', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });

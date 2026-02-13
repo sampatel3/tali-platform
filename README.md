@@ -6,7 +6,7 @@
 
 ## What’s Implemented and Deployed
 
-The **core platform is implemented and deployable** end-to-end. The checklist in `RALPH_TASK.md` has most items marked done; a few optional/polish items remain (see [Not yet implemented](#not-yet-implemented)).
+The core platform is implemented and deployable end-to-end, and active execution priorities now live in `RALPH_TASK.md` (current hardening plan).
 
 ### Backend (Railway)
 
@@ -24,7 +24,7 @@ The **core platform is implemented and deployable** end-to-end. The checklist in
 - **Landing:** Hero, problem/solution, features, pricing (£25 pay-per-use, £300 monthly), nav, footer.
 - **Auth:** Login, register, forgot/reset password; protected routes.
 - **Dashboard:** Four stat cards (active assessments, completion rate, average score, cost this month); assessments table with Candidate, Task, Status, Score, Time, **Assessment link** (Copy link), View; filters and pagination; “Create Assessment” modal (select/create candidate, select task, send).
-- **Candidate detail (View):** Header, score card, tabs (Test Results, AI Usage, Timeline, Code Review). *Not yet:* Download PDF, “Post to Workable” button, Delete assessment.
+- **Candidate detail (View):** Header, score card, tabs (Test Results, AI Usage, Timeline, Code Review), CV/Job Fit analysis, and recruiter action buttons (Download PDF, Post to Workable, Delete).
 - **Tasks:** List with View (all tasks, including templates) and Edit/Delete for non-templates.
 - **Settings:** Workable tab (Connect Workable, OAuth callback at `#/settings/workable/callback`); Billing tab (usage, “Add credits” → Stripe Checkout).
 - **Candidate flow:** `#/assess/{token}` → welcome → start → AssessmentPage (Monaco, Claude chat, Run Code, execute, submit) → results.
@@ -99,13 +99,22 @@ tali-platform/
 
 ---
 
+
+## Known limitations
+
+- Production smoke tests hit live infrastructure and are intentionally separated from the default backend run (`pytest -m "production"`).
+- Frontend tests currently pass with residual React `act(...)` warnings in some suites; behavior is validated but cleanup is still recommended.
+- Frontend bundle size warning remains (~768KB main JS chunk), so additional code-splitting is still advised.
+
+---
+
 ## Not yet implemented (optional / polish)
 
 - **Candidate detail actions:** “Download PDF”, “Post to Workable” (button in UI), “Delete” assessment. (Backend has `posted_to_workable` and Celery task; no recruiter-triggered API/UI yet.)
-- **Dedicated candidate CRUD:** Candidates are created inline with assessments; optional `POST/GET/PATCH/DELETE /candidates` not added.
+- **Candidate workflow depth:** candidate CRUD exists, but multi-step creation (assign task + review/send in one guided flow) is not complete.
 - **Stripe webhooks:** Checkout session is used; extra handlers (e.g. `payment_intent.succeeded`) can be added.
 - **Workable webhooks:** Endpoint exists; auto-create assessment / post on completion can be extended.
-- **Frontend tests:** No test script in `package.json` yet.
+- **Frontend test quality:** test script exists and suite passes, but there are remaining `act(...)` warnings to clean up for quieter CI logs.
 - **Monitoring:** Sentry, structured JSON logs, uptime checks, DB backups not required for current deployment but recommended for production.
 
 ---
@@ -129,4 +138,5 @@ tali-platform/
 
 - **Deployment:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)  
 - **Environment variables:** [docs/ENV_SETUP.md](docs/ENV_SETUP.md)  
-- **Full task list and criteria:** [RALPH_TASK.md](RALPH_TASK.md)
+- **Full task list and criteria:** [RALPH_TASK.md](RALPH_TASK.md)  
+- **Observability metrics:** [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)

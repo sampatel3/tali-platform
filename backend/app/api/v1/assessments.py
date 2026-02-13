@@ -115,6 +115,7 @@ def create_assessment(
             org_name=org_name,
             position=task.name or "Technical assessment",
             assessment_id=assessment.id,
+            request_id=get_request_id(),
         )
     return assessment_to_response(assessment, db)
 
@@ -374,6 +375,7 @@ def resend_assessment_invite(
             org_name=org_name,
             position=(assessment.task.name if assessment.task else "Technical assessment"),
             assessment_id=assessment.id,
+            request_id=get_request_id(),
         )
     return {"success": True}
 
@@ -399,7 +401,12 @@ def post_assessment_to_workable(
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
     if assessment.posted_to_workable:
-        return {"success": True, "already_posted": True}
+        return {
+            "success": True,
+            "already_posted": True,
+            "posted_to_workable": True,
+            "posted_to_workable_at": assessment.posted_to_workable_at,
+        }
 
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org or not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
@@ -424,7 +431,11 @@ def post_assessment_to_workable(
     assessment.posted_to_workable = True
     assessment.posted_to_workable_at = utcnow()
     db.commit()
-    return {"success": True}
+    return {
+        "success": True,
+        "posted_to_workable": True,
+        "posted_to_workable_at": assessment.posted_to_workable_at,
+    }
 
 
 @router.get("/{assessment_id}/report.pdf")

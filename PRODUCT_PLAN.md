@@ -1,8 +1,30 @@
-# MVP_PLAN.md — TALI Platform: MVP Feature Completion
+# PRODUCT_PLAN.md — TALI Platform: Full Product Plan
 
 > **Created**: 2026-02-11
 > **Status**: ACTIVE
-> **Previous plans**: `RALPH_TASK.md` (archived — all items complete)
+> **Previous plans**: `RALPH_TASK.md` (reopened as active hardening execution plan)
+
+> **Execution note (2026-02-13)**: MVP feature scope remains in this file; cross-cutting hardening, CI, and baseline stability tasks are tracked in `RALPH_TASK.md`.
+
+---
+
+This document captures the full product plan. The sections below explicitly separate what is **in scope for MVP** vs **out of scope for MVP (V2+)**.
+
+
+## Current implementation snapshot (2026-02-13)
+
+The product is live as a functional MVP with hardening in progress:
+
+- Auth, candidate/task/assessment lifecycle, and candidate assessment execution flow are operational.
+- CV + Job Spec upload/extraction and CV-job-fit scoring are implemented.
+- Scoring breakdown and recruiter-facing candidate detail workflow (including report download, Workable posting, and candidate document downloads) are implemented.
+- CI now runs backend/frontend checks by default, with production smoke tests isolated.
+
+Known active engineering focus:
+- Frontend decomposition away from the single `App.jsx` surface (CandidateDetail + Dashboard + Candidates extracted, remaining pages pending).
+- Residual frontend test warnings (`act(...)`) cleanup.
+- Assessment runtime context fidelity (task + repo context visible before coding).
+- Further UX polish and export/reporting depth.
 
 ---
 
@@ -14,7 +36,7 @@ TALI is an AI-augmented technical assessment platform that evaluates candidates 
 
 ---
 
-## MVP Scope
+## Product Scope (with MVP boundaries)
 
 ### What's IN:
 - Business registration + authentication
@@ -28,17 +50,15 @@ TALI is an AI-augmented technical assessment platform that evaluates candidates 
 - Business dashboard with complete scoring breakdown per candidate
 
 ### What's OUT (V2):
-- Workable integration (keep behind feature flag)
 - Stripe billing (free pilot phase)
 - Custom email templates (use defaults — revisit V2)
 - Candidate comparison views (side-by-side radar)
 - Proctoring mode (exists but disabled)
-- PDF report export (exists but low priority)
 - Team/multi-user management (exists, but not core)
 - Real-time WebSocket monitoring
 - White-labeling / custom branding
 - SSO / SAML
-- React Router migration / TypeScript / App.jsx decomposition
+- React Router migration / TypeScript migration
 
 ---
 

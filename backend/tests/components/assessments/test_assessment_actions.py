@@ -25,6 +25,11 @@ def _create_task(client, headers):
         "duration_minutes": 30,
         "starter_code": "print('x')",
         "test_code": "def test_ok(): assert True",
+        "task_key": "history-backfill",
+        "role": "Data Engineer",
+        "scenario": "Backfill missing account history",
+        "repo_structure": {"files": {"src/backfill.py": "def run():\n    pass"}},
+        "evaluation_rubric": {"correctness": 0.7, "readability": 0.3},
     }, headers=headers)
     return resp.json()
 
@@ -81,17 +86,13 @@ def test_candidate_can_resume_in_progress_assessment(client, monkeypatch):
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
 
-    cv_upload = client.post(
-        f"/api/v1/assessments/token/{a['token']}/upload-cv",
-        files={"file": ("resume.pdf", b"%PDF-1.4 test cv", "application/pdf")},
-    )
-    assert cv_upload.status_code == 200
-
     first = client.post(f"/api/v1/assessments/token/{a['token']}/start")
     assert first.status_code == 200
     first_body = first.json()
     assert first_body["assessment_id"] == a["id"]
     assert first_body["time_remaining"] > 0
+    assert "scenario" in first_body["task"]
+    assert "repo_structure" in first_body["task"]
 
     second = client.post(f"/api/v1/assessments/token/{a['token']}/start")
     assert second.status_code == 200

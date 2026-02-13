@@ -1,5 +1,7 @@
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import Response
+from fastapi.responses import Response, FileResponse, RedirectResponse
 from sqlalchemy.orm import Session
 
 from ...platform.database import get_db
@@ -224,3 +226,35 @@ def upload_candidate_job_spec(
         text_preview=result["text_preview"],
         uploaded_at=now,
     )
+
+
+@router.get("/{candidate_id}/documents/{doc_type}")
+def download_candidate_document(
+    candidate_id: int,
+    doc_type: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Download candidate CV or job spec when available."""
+    candidate = _get_candidate_for_org(candidate_id, current_user.organization_id, db)
+    if doc_type not in {"cv", "job-spec"}:
+        raise HTTPException(status_code=400, detail="Unsupported document type")
+
+    if doc_type == "cv":
+        file_url = candidate.cv_file_url
+        filename = candidate.cv_filename or "candidate-cv"
+    else:
+        file_url = candidate.job_spec_file_url
+        filename = candidate.job_spec_filename or "job-spec"
+
+    if not file_url:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    if file_url.startswith("http://") or file_url.startswith("https://"):
+        return RedirectResponse(url=file_url, status_code=307)
+
+    file_path = Path(file_url).resolve()
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Document file missing")
+
+    return FileResponse(path=str(file_path), filename=filename)

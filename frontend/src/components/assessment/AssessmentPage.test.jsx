@@ -84,4 +84,35 @@ describe('AssessmentPage tracking metadata', () => {
     await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
     expect(mockSubmit.mock.calls[0][3]).toMatchObject({ tab_switch_count: 1 });
   });
+
+
+  it('renders task and repository context when provided', async () => {
+    const startData = {
+      assessment_id: 12,
+      token: 'tok2',
+      time_remaining: 1200,
+      task: {
+        name: 'History Backfill',
+        description: 'Backfill account history for missing rows.',
+        scenario: 'A migration left historical records incomplete.',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+        repo_structure: {
+          files: {
+            'src/backfill.py': 'def run():\n    return True',
+            'README.md': '# task',
+          },
+        },
+      },
+    };
+
+    render(<AssessmentPage token="tok2" startData={startData} />);
+
+    expect(await screen.findByText('Task Context')).toBeInTheDocument();
+    expect(screen.getByText(/migration left historical records incomplete/i)).toBeInTheDocument();
+    expect(screen.getByText('Repository Context')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'src/backfill.py' })).toBeInTheDocument();
+    expect(screen.getByText(/def run\(\):/)).toBeInTheDocument();
+  });
+
 });
