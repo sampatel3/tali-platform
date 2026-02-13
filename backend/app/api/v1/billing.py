@@ -24,14 +24,14 @@ class CheckoutSessionCreate(BaseModel):
 def _safe_json_size_bytes(payload) -> int:
     if payload is None:
         return 0
-
-
-def _assessment_currency_code() -> str:
-    return (settings.ASSESSMENT_PRICE_CURRENCY or "aed").upper()
     try:
         return len(json.dumps(payload, default=str).encode("utf-8"))
     except Exception:
         return 0
+
+
+def _assessment_currency_code() -> str:
+    return (settings.ASSESSMENT_PRICE_CURRENCY or "aed").upper()
 
 
 def _duration_hours(assessment: Assessment) -> float:

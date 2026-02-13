@@ -10,6 +10,7 @@ export default function CodeEditor({
   onSave,
   language = 'python',
   filename = 'pipeline.py',
+  disabled = false,
 }) {
   const isControlled = controlledValue !== undefined;
   const [internalCode, setInternalCode] = useState(initialCode);
@@ -35,11 +36,13 @@ export default function CodeEditor({
   };
 
   const handleRun = () => {
+    if (disabled) return;
     const currentCode = editorRef.current?.getValue() || code;
     onExecute?.(currentCode);
   };
 
   const handleSave = () => {
+    if (disabled) return;
     const currentCode = editorRef.current?.getValue() || code;
     onSave?.(currentCode);
   };
@@ -55,6 +58,7 @@ export default function CodeEditor({
         <div className="flex items-center gap-2">
           <button
             onClick={handleRun}
+            disabled={disabled}
             className="border-2 border-black px-4 py-1.5 font-mono text-sm font-bold flex items-center gap-2 text-white hover:bg-black transition-colors"
             style={{ backgroundColor: '#9D00FF' }}
           >
@@ -62,6 +66,7 @@ export default function CodeEditor({
           </button>
           <button
             onClick={handleSave}
+            disabled={disabled}
             className="border-2 border-black px-4 py-1.5 font-mono text-sm font-bold flex items-center gap-2 bg-white hover:bg-black hover:text-white transition-colors"
           >
             <Save size={14} /> Save
@@ -89,6 +94,7 @@ export default function CodeEditor({
             renderLineHighlight: 'line',
             cursorBlinking: 'smooth',
             wordWrap: 'on',
+            readOnly: disabled,
           }}
         />
       </div>

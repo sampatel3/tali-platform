@@ -2,7 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Clipboard, DollarSign, CheckCircle, Eye, Loader2, Timer, Star, Users } from 'lucide-react';
 import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
 import { useAuth } from '../context/AuthContext';
-import { assessments as assessmentsApi, tasks as tasksApi } from '../lib/api';
+import * as apiClient from '../lib/api';
 import { COMPARISON_CATEGORY_CONFIG, getCategoryScoresFromAssessment } from '../lib/comparisonCategories';
 import { ASSESSMENT_PRICE_AED, formatAed } from '../lib/currency';
 
@@ -17,6 +17,9 @@ export const DashboardPage = ({
   StatsCardComponent,
   StatusBadgeComponent,
 }) => {
+  const assessmentsApi = apiClient.assessments;
+  const tasksApi = apiClient.tasks;
+  const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
   const { user } = useAuth();
   const [assessmentsList, setAssessmentsList] = useState([]);
   const [totalAssessmentsCount, setTotalAssessmentsCount] = useState(0);
@@ -25,6 +28,8 @@ export const DashboardPage = ({
   const [statusFilter, setStatusFilter] = useState('');
   const [taskFilter, setTaskFilter] = useState('');
   const [tasksForFilter, setTasksForFilter] = useState([]);
+  const [rolesForFilter, setRolesForFilter] = useState([]);
+  const [roleFilter, setRoleFilter] = useState('');
   const [page, setPage] = useState(0);
   const [compareIds, setCompareIds] = useState([]);
   const [compareAssessments, setCompareAssessments] = useState([]);
@@ -33,8 +38,11 @@ export const DashboardPage = ({
   useEffect(() => {
     let cancelled = false;
     tasksApi.list().then((res) => { if (!cancelled) setTasksForFilter(res.data || []); }).catch(() => {});
+    if (rolesApi?.list) {
+      rolesApi.list().then((res) => { if (!cancelled) setRolesForFilter(res.data || []); }).catch(() => {});
+    }
     return () => { cancelled = true; };
-  }, []);
+  }, [rolesApi, tasksApi]);
 
   useEffect(() => {
     let cancelled = false;
@@ -42,6 +50,7 @@ export const DashboardPage = ({
     const params = { limit: PAGE_SIZE, offset: page * PAGE_SIZE };
     if (statusFilter) params.status = statusFilter;
     if (taskFilter) params.task_id = taskFilter;
+    if (roleFilter) params.role_id = roleFilter;
     assessmentsApi.list(params)
       .then((res) => {
         if (cancelled) return;
@@ -56,7 +65,7 @@ export const DashboardPage = ({
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [page, statusFilter, taskFilter]);
+  }, [page, statusFilter, taskFilter, roleFilter]);
 
   const getAssessmentLink = (token) =>
     `${typeof window !== 'undefined' ? window.location.origin : ''}/assess/${token || ''}`;
@@ -68,6 +77,7 @@ export const DashboardPage = ({
         name: (a.candidate_name || a.candidate?.full_name || a.candidate_email || '').trim() || 'Unknown',
         email: a.candidate_email || a.candidate?.email || '',
         task: a.task?.name || a.task_name || 'Assessment',
+        role: a.role_name || a.task?.role || 'Unassigned role',
         status: a.status === 'submitted' || a.status === 'graded' ? 'completed' : (a.status || 'in-progress'),
         score: a.score ?? a.overall_score ?? null,
         time: a.duration_taken ? `${Math.round(a.duration_taken / 60)}m` : '—',
@@ -141,16 +151,16 @@ export const DashboardPage = ({
   }, [compareIds.length, displayCandidates]);
 
   const compareCandidates = displayCandidates.filter((c) => compareIds.includes(c.id));
-  const tableRows = !taskFilter && displayCandidates.length > 0
+  const tableRows = !roleFilter && displayCandidates.length > 0
     ? (() => {
-        const byTask = {};
+        const byRole = {};
         displayCandidates.forEach((c) => {
-          const t = c.task || 'Other';
-          if (!byTask[t]) byTask[t] = [];
-          byTask[t].push(c);
+          const roleName = c.role || 'Unassigned role';
+          if (!byRole[roleName]) byRole[roleName] = [];
+          byRole[roleName].push(c);
         });
-        const taskOrder = [...new Set(displayCandidates.map((c) => c.task || 'Other'))].sort();
-        return taskOrder.flatMap((task) => [{ _group: task }, ...byTask[task]]);
+        const roleOrder = [...new Set(displayCandidates.map((c) => c.role || 'Unassigned role'))].sort();
+        return roleOrder.flatMap((roleName) => [{ _group: roleName }, ...byRole[roleName]]);
       })()
     : displayCandidates;
 
@@ -279,6 +289,16 @@ export const DashboardPage = ({
           <span className="font-mono text-sm font-bold">Filters:</span>
           <select
             className="border-2 border-black px-3 py-2 font-mono text-sm bg-white"
+            value={roleFilter}
+            onChange={(e) => { setRoleFilter(e.target.value); setPage(0); }}
+          >
+            <option value="">All roles</option>
+            {rolesForFilter.map((role) => (
+              <option key={role.id} value={role.id}>{role.name}</option>
+            ))}
+          </select>
+          <select
+            className="border-2 border-black px-3 py-2 font-mono text-sm bg-white"
             value={taskFilter}
             onChange={(e) => { setTaskFilter(e.target.value); setPage(0); }}
           >
@@ -298,7 +318,7 @@ export const DashboardPage = ({
             <option value="completed">Completed</option>
           </select>
         </div>
-        <p className="font-mono text-xs text-gray-500 mb-2">Candidates are grouped by job role. A candidate can appear in multiple roles if they have assessments for different tasks.</p>
+          <p className="font-mono text-xs text-gray-500 mb-2">Candidates are grouped by job role. A candidate can appear in multiple roles if they have assessments for different tasks.</p>
 
         {/* Assessments Table */}
         <div className="border-2 border-black">
@@ -367,6 +387,7 @@ export const DashboardPage = ({
                         <td className="px-6 py-4">
                           <div className="font-bold">{c.name}</div>
                           <div className="font-mono text-xs text-gray-500">{c.email}</div>
+                          <div className="font-mono text-xs text-gray-500">Role: {c.role}</div>
                         </td>
                         <td className="px-6 py-4 font-mono text-sm">{c.task}</td>
                         <td className="px-6 py-4"><StatusBadgeComponent status={c.status} /></td>

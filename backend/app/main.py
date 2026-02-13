@@ -46,17 +46,22 @@ _val_logger = _logging.getLogger("taali.validation")
 
 
 def _sanitize_errors(errors: list) -> list:
-    """Ensure validation error details are JSON-serializable (bytes → str)."""
-    sanitized = []
-    for err in errors:
-        clean = {}
-        for k, v in err.items():
-            if isinstance(v, bytes):
-                clean[k] = v.decode("utf-8", errors="replace")
-            else:
-                clean[k] = v
-        sanitized.append(clean)
-    return sanitized
+    """Ensure validation error details are JSON-serializable."""
+
+    def _json_safe(value):
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            return value
+        if isinstance(value, bytes):
+            return value.decode("utf-8", errors="replace")
+        if isinstance(value, dict):
+            return {str(k): _json_safe(v) for k, v in value.items()}
+        if isinstance(value, (list, tuple, set)):
+            return [_json_safe(v) for v in value]
+        if isinstance(value, BaseException):
+            return str(value)
+        return str(value)
+
+    return [_json_safe(err) for err in errors]
 
 
 @app.exception_handler(RequestValidationError)
@@ -161,6 +166,8 @@ from .api.v1.tasks import router as tasks_router
 from .api.v1.analytics import router as analytics_router
 from .api.v1.billing import router as billing_router
 from .api.v1.candidates import router as candidates_router
+from .api.v1.roles import router as roles_router
+from .api.v1.scoring import router as scoring_router
 from .api.v1.users import router as users_router
 
 # FastAPI-Users auth routers
@@ -198,6 +205,8 @@ app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(analytics_router, prefix="/api/v1")
 app.include_router(billing_router, prefix="/api/v1")
 app.include_router(candidates_router, prefix="/api/v1")
+app.include_router(roles_router, prefix="/api/v1")
+app.include_router(scoring_router, prefix="/api/v1")
 
 
 @app.on_event("startup")

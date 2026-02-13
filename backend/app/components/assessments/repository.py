@@ -35,7 +35,12 @@ def time_remaining_seconds(assessment: Assessment) -> int:
     total = (assessment.duration_minutes or 30) * 60
     if not assessment.started_at:
         return total
-    elapsed = int((utcnow() - ensure_utc(assessment.started_at)).total_seconds())
+    paused_seconds = int(getattr(assessment, "total_paused_seconds", 0) or 0)
+    if getattr(assessment, "is_timer_paused", False) and getattr(assessment, "paused_at", None):
+        paused_at = ensure_utc(assessment.paused_at)
+        if paused_at:
+            paused_seconds += max(0, int((utcnow() - paused_at).total_seconds()))
+    elapsed = int((utcnow() - ensure_utc(assessment.started_at)).total_seconds()) - paused_seconds
     return max(0, total - max(0, elapsed))
 
 
@@ -278,6 +283,8 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
     if not candidate_name and candidate_email:
         candidate_name = candidate_email
     task_name = assessment.task.name if assessment.task else ""
+    role_name = (assessment.role.name if getattr(assessment, "role", None) else "") or ""
+    application_status = (assessment.application.status if getattr(assessment, "application", None) else None)
     evaluation_rubric = (assessment.task.evaluation_rubric if assessment.task else None) or {}
     evaluation_result = normalize_stored_evaluation_result(
         getattr(assessment, "manual_evaluation", None),
@@ -294,6 +301,8 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "organization_id": assessment.organization_id,
         "candidate_id": assessment.candidate_id,
         "task_id": assessment.task_id,
+        "role_id": getattr(assessment, "role_id", None),
+        "application_id": getattr(assessment, "application_id", None),
         "token": assessment.token,  # Needed by recruiter UI to share assessment links
         "status": assessment.status.value if hasattr(assessment.status, "value") else str(assessment.status),
         "duration_minutes": assessment.duration_minutes,
@@ -339,6 +348,10 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "total_output_tokens": assessment.total_output_tokens,
         "tests_run_count": assessment.tests_run_count,
         "tests_pass_count": assessment.tests_pass_count,
+        "is_timer_paused": getattr(assessment, "is_timer_paused", False),
+        "paused_at": getattr(assessment, "paused_at", None),
+        "pause_reason": getattr(assessment, "pause_reason", None),
+        "total_paused_seconds": getattr(assessment, "total_paused_seconds", 0),
         "completed_due_to_timeout": getattr(assessment, "completed_due_to_timeout", False),
         "final_repo_state": getattr(assessment, "final_repo_state", None),
         "git_evidence": getattr(assessment, "git_evidence", None),
@@ -347,10 +360,22 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "clone_command": getattr(assessment, "clone_command", None),
         "posted_to_workable": assessment.posted_to_workable,
         "posted_to_workable_at": assessment.posted_to_workable_at,
-        "candidate_cv_filename": (assessment.candidate.cv_filename if assessment.candidate else None),
-        "candidate_job_spec_filename": (assessment.candidate.job_spec_filename if assessment.candidate else None),
-        "candidate_cv_uploaded_at": (assessment.candidate.cv_uploaded_at if assessment.candidate else None),
-        "candidate_job_spec_uploaded_at": (assessment.candidate.job_spec_uploaded_at if assessment.candidate else None),
+        "candidate_cv_filename": (
+            assessment.application.cv_filename if getattr(assessment, "application", None) and assessment.application.cv_filename
+            else (assessment.candidate.cv_filename if assessment.candidate else None)
+        ),
+        "candidate_job_spec_filename": (
+            assessment.role.job_spec_filename if getattr(assessment, "role", None) and assessment.role.job_spec_filename
+            else (assessment.candidate.job_spec_filename if assessment.candidate else None)
+        ),
+        "candidate_cv_uploaded_at": (
+            assessment.application.cv_uploaded_at if getattr(assessment, "application", None) and assessment.application.cv_uploaded_at
+            else (assessment.candidate.cv_uploaded_at if assessment.candidate else None)
+        ),
+        "candidate_job_spec_uploaded_at": (
+            assessment.role.job_spec_uploaded_at if getattr(assessment, "role", None) and assessment.role.job_spec_uploaded_at
+            else (assessment.candidate.job_spec_uploaded_at if assessment.candidate else None)
+        ),
         "test_results": assessment.test_results,
         "ai_prompts": assessment.ai_prompts,
         "timeline": assessment.timeline or build_timeline(assessment),
@@ -361,6 +386,8 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "candidate_name": candidate_name,
         "candidate_email": candidate_email,
         "task_name": task_name,
+        "role_name": role_name,
+        "application_status": application_status,
         "evaluation_rubric": evaluation_rubric,
         "manual_evaluation": evaluation_result,
         "evaluation_result": evaluation_result,

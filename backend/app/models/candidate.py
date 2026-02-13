@@ -29,4 +29,5 @@ class Candidate(Base):
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
+    applications = relationship("CandidateApplication", back_populates="candidate", cascade="all, delete-orphan")
     assessments = relationship("Assessment", back_populates="candidate")

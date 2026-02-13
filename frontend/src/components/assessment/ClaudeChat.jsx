@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Bot } from 'lucide-react';
 
-export default function ClaudeChat({ onSendMessage, onPaste }) {
+export default function ClaudeChat({ onSendMessage, onPaste, disabled = false }) {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -22,7 +22,7 @@ export default function ClaudeChat({ onSendMessage, onPaste }) {
 
   const handleSend = async () => {
     const trimmed = input.trim();
-    if (!trimmed || loading) return;
+    if (!trimmed || loading || disabled) return;
 
     const userMessage = { role: 'user', content: trimmed };
     const updatedMessages = [...messages, userMessage];
@@ -106,12 +106,12 @@ export default function ClaudeChat({ onSendMessage, onPaste }) {
           onKeyDown={handleKeyDown}
           onPaste={onPaste}
           placeholder="Ask Claude for help..."
-          disabled={loading}
+          disabled={loading || disabled}
           className="flex-1 border-2 border-black px-3 py-2 font-mono text-sm focus:outline-none disabled:opacity-50"
         />
         <button
           onClick={handleSend}
-          disabled={loading || !input.trim()}
+          disabled={loading || !input.trim() || disabled}
           className="border-2 border-black px-4 py-2 text-white font-bold flex items-center gap-1 hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           style={{ backgroundColor: '#9D00FF' }}
         >

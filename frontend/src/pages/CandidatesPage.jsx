@@ -1,14 +1,16 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { Search } from 'lucide-react';
-import { assessments as assessmentsApi, candidates as candidatesApi } from '../lib/api';
+import * as apiClient from '../lib/api';
 
-export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewAssessmentModalComponent }) => {
-  const AssessmentModal = NewAssessmentModalComponent;
+export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) => {
+  const assessmentsApi = apiClient.assessments;
+  const candidatesApi = apiClient.candidates;
+  const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
+  const tasksApi = apiClient.tasks;
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [q, setQ] = useState('');
   const [expandedCandidateId, setExpandedCandidateId] = useState(null);
-  const [sendAssessmentCandidate, setSendAssessmentCandidate] = useState(null);
   const [candidateAssessments, setCandidateAssessments] = useState([]);
   const [loadingAssessments, setLoadingAssessments] = useState(false);
   const [copiedInviteId, setCopiedInviteId] = useState(null);
@@ -17,6 +19,17 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
   const [editingId, setEditingId] = useState(null);
   const [uploadingDoc, setUploadingDoc] = useState(null); // { candidateId, type: 'cv'|'job_spec' }
   const [showDocUpload, setShowDocUpload] = useState(null); // candidateId to show upload panel for
+  const [roles, setRoles] = useState([]);
+  const [selectedRoleId, setSelectedRoleId] = useState('');
+  const [roleTasks, setRoleTasks] = useState([]);
+  const [roleApplications, setRoleApplications] = useState([]);
+  const [allTasks, setAllTasks] = useState([]);
+  const [taskToLink, setTaskToLink] = useState('');
+  const [jobSpecFile, setJobSpecFile] = useState(null);
+  const [roleForm, setRoleForm] = useState({ name: '', description: '' });
+  const [applicationForm, setApplicationForm] = useState({ candidate_email: '', candidate_name: '', candidate_position: '' });
+  const [applicationCvFile, setApplicationCvFile] = useState(null);
+  const [assessmentTaskByApplication, setAssessmentTaskByApplication] = useState({});
 
   const loadCandidates = useCallback(async () => {
     setLoading(true);
@@ -33,6 +46,50 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
   useEffect(() => {
     loadCandidates();
   }, [loadCandidates]);
+
+  const loadRoles = useCallback(async () => {
+    if (!rolesApi?.list) return;
+    try {
+      const res = await rolesApi.list();
+      const roleItems = res.data || [];
+      setRoles(roleItems);
+      if (!selectedRoleId && roleItems.length > 0) {
+        setSelectedRoleId(String(roleItems[0].id));
+      }
+    } catch {
+      setRoles([]);
+    }
+  }, [rolesApi, selectedRoleId]);
+
+  const loadRoleContext = useCallback(async (roleId) => {
+    if (!roleId) {
+      setRoleTasks([]);
+      setRoleApplications([]);
+      return;
+    }
+    try {
+      const [tasksRes, appsRes] = await Promise.all([
+        rolesApi?.listTasks ? rolesApi.listTasks(roleId) : Promise.resolve({ data: [] }),
+        rolesApi?.listApplications ? rolesApi.listApplications(roleId) : Promise.resolve({ data: [] }),
+      ]);
+      setRoleTasks(tasksRes.data || []);
+      setRoleApplications(appsRes.data || []);
+    } catch {
+      setRoleTasks([]);
+      setRoleApplications([]);
+    }
+  }, [rolesApi]);
+
+  useEffect(() => {
+    loadRoles();
+    if (tasksApi?.list) {
+      tasksApi.list().then((res) => setAllTasks(res.data || [])).catch(() => setAllTasks([]));
+    }
+  }, [loadRoles, tasksApi]);
+
+  useEffect(() => {
+    loadRoleContext(selectedRoleId);
+  }, [selectedRoleId, loadRoleContext]);
 
   const loadCandidateAssessments = async (candidateId) => {
     setLoadingAssessments(true);
@@ -121,6 +178,110 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
     }
   };
 
+  const handleCreateRole = async () => {
+    if (!rolesApi?.create) return;
+    if (!roleForm.name.trim()) {
+      alert('Role name is required');
+      return;
+    }
+    try {
+      const res = await rolesApi.create({
+        name: roleForm.name.trim(),
+        description: roleForm.description || undefined,
+      });
+      const createdRole = res.data;
+      setRoleForm({ name: '', description: '' });
+      await loadRoles();
+      setSelectedRoleId(String(createdRole.id));
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to create role');
+    }
+  };
+
+  const handleUploadRoleJobSpec = async () => {
+    if (!rolesApi?.uploadJobSpec) return;
+    if (!selectedRoleId) {
+      alert('Select a role first');
+      return;
+    }
+    if (!jobSpecFile) {
+      alert('Select a job specification file');
+      return;
+    }
+    try {
+      await rolesApi.uploadJobSpec(selectedRoleId, jobSpecFile);
+      setJobSpecFile(null);
+      await loadRoles();
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to upload job specification');
+    }
+  };
+
+  const handleLinkTaskToRole = async () => {
+    if (!rolesApi?.addTask) return;
+    if (!selectedRoleId || !taskToLink) {
+      alert('Select a role and a task');
+      return;
+    }
+    try {
+      await rolesApi.addTask(selectedRoleId, Number(taskToLink));
+      setTaskToLink('');
+      await loadRoleContext(selectedRoleId);
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to link task');
+    }
+  };
+
+  const handleCreateApplication = async () => {
+    if (!rolesApi?.createApplication) return;
+    if (!selectedRoleId) {
+      alert('Select a role first');
+      return;
+    }
+    if (!applicationForm.candidate_email.trim()) {
+      alert('Candidate email is required');
+      return;
+    }
+    if (!applicationCvFile) {
+      alert('CV is required for role application');
+      return;
+    }
+    try {
+      const res = await rolesApi.createApplication(selectedRoleId, {
+        candidate_email: applicationForm.candidate_email.trim(),
+        candidate_name: applicationForm.candidate_name || undefined,
+        candidate_position: applicationForm.candidate_position || undefined,
+      });
+      await rolesApi.uploadApplicationCv(res.data.id, applicationCvFile);
+      setApplicationForm({ candidate_email: '', candidate_name: '', candidate_position: '' });
+      setApplicationCvFile(null);
+      await loadRoleContext(selectedRoleId);
+      await loadCandidates();
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to create role application');
+    }
+  };
+
+  const handleSendAssessmentForApplication = async (applicationId) => {
+    if (!rolesApi?.createAssessment) return;
+    const taskId = Number(assessmentTaskByApplication[applicationId] || 0);
+    if (!taskId) {
+      alert('Select a role task first');
+      return;
+    }
+    try {
+      await rolesApi.createAssessment(applicationId, { task_id: taskId });
+      await loadRoleContext(selectedRoleId);
+      alert('Assessment created and invite sent.');
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to create assessment');
+    }
+  };
+
+  const selectedRole = roles.find((role) => String(role.id) === String(selectedRoleId));
+  const canCreateApplicationsForRole = Boolean(selectedRoleId && selectedRole?.job_spec_filename);
+  const unlinkedTasks = allTasks.filter((task) => !roleTasks.some((linked) => linked.id === task.id));
+
   return (
     <div>
       <NavComponent currentPage="candidates" onNavigate={onNavigate} />
@@ -131,6 +292,186 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
             <p className="font-mono text-sm text-gray-600 mt-1">Search and manage candidate profiles</p>
           </div>
           <div className="font-mono text-sm text-gray-600">{items.length} total</div>
+        </div>
+
+        <div className="border-2 border-black p-4 mb-6 bg-gray-50">
+          <div className="font-mono text-xs font-bold mb-3">Role-first workflow (recommended)</div>
+          <div className="grid lg:grid-cols-2 gap-4">
+            <div className="border border-black p-3 bg-white">
+              <div className="font-mono text-xs text-gray-500 mb-2">Step A: Create or select role + upload job spec</div>
+              <div className="flex flex-wrap gap-2 mb-2">
+                <input
+                  type="text"
+                  className="flex-1 min-w-[180px] border-2 border-black px-2 py-1 font-mono text-sm"
+                  placeholder="Role name (e.g. Backend Engineer)"
+                  value={roleForm.name}
+                  onChange={(e) => setRoleForm((prev) => ({ ...prev, name: e.target.value }))}
+                />
+                <button
+                  type="button"
+                  className="border-2 border-black px-3 py-1 font-mono text-sm font-bold text-white"
+                  style={{ backgroundColor: '#9D00FF' }}
+                  onClick={handleCreateRole}
+                >
+                  Add Role
+                </button>
+              </div>
+              <textarea
+                className="w-full border-2 border-black px-2 py-1 font-mono text-xs mb-2"
+                placeholder="Role description (optional)"
+                value={roleForm.description}
+                onChange={(e) => setRoleForm((prev) => ({ ...prev, description: e.target.value }))}
+              />
+              <select
+                className="w-full border-2 border-black px-2 py-1 font-mono text-sm bg-white mb-2"
+                value={selectedRoleId}
+                onChange={(e) => setSelectedRoleId(e.target.value)}
+              >
+                <option value="">Select role...</option>
+                {roles.map((role) => (
+                  <option key={role.id} value={role.id}>{role.name}</option>
+                ))}
+              </select>
+              <div className="flex items-center gap-2">
+                <input
+                  type="file"
+                  accept=".pdf,.docx,.txt"
+                  className="font-mono text-xs"
+                  onChange={(e) => setJobSpecFile(e.target.files?.[0] || null)}
+                />
+                <button
+                  type="button"
+                  className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
+                  onClick={handleUploadRoleJobSpec}
+                >
+                  Upload job spec
+                </button>
+              </div>
+              {selectedRole && (
+                <div className="font-mono text-xs text-gray-600 mt-2">
+                  Selected role: <span className="font-bold">{selectedRole.name}</span>{' '}
+                  {selectedRole.job_spec_filename ? `(Job spec: ${selectedRole.job_spec_filename})` : '(No job spec uploaded)'}
+                </div>
+              )}
+            </div>
+
+            <div className="border border-black p-3 bg-white">
+              <div className="font-mono text-xs text-gray-500 mb-2">Step B/C: Add application (CV required) + assign role tasks</div>
+              <div className="grid md:grid-cols-3 gap-2 mb-2">
+                <input
+                  type="email"
+                  className="border-2 border-black px-2 py-1 font-mono text-xs"
+                  placeholder="candidate@company.com"
+                  value={applicationForm.candidate_email}
+                  onChange={(e) => setApplicationForm((prev) => ({ ...prev, candidate_email: e.target.value }))}
+                />
+                <input
+                  type="text"
+                  className="border-2 border-black px-2 py-1 font-mono text-xs"
+                  placeholder="Candidate name"
+                  value={applicationForm.candidate_name}
+                  onChange={(e) => setApplicationForm((prev) => ({ ...prev, candidate_name: e.target.value }))}
+                />
+                <input
+                  type="text"
+                  className="border-2 border-black px-2 py-1 font-mono text-xs"
+                  placeholder="Candidate position"
+                  value={applicationForm.candidate_position}
+                  onChange={(e) => setApplicationForm((prev) => ({ ...prev, candidate_position: e.target.value }))}
+                />
+              </div>
+              <div className="flex items-center gap-2 mb-2">
+                <input
+                  type="file"
+                  accept=".pdf,.docx,.doc"
+                  className="font-mono text-xs"
+                  onChange={(e) => setApplicationCvFile(e.target.files?.[0] || null)}
+                />
+                <button
+                  type="button"
+                  className="border-2 border-black px-3 py-1 font-mono text-xs font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                  style={{ backgroundColor: '#9D00FF' }}
+                  onClick={handleCreateApplication}
+                  disabled={!canCreateApplicationsForRole}
+                >
+                  Add Application
+                </button>
+              </div>
+              {!canCreateApplicationsForRole && selectedRoleId && (
+                <div className="font-mono text-xs text-red-600 mb-2">
+                  Upload a job spec for this role before adding applications.
+                </div>
+              )}
+              <div className="flex items-center gap-2 mb-2">
+                <select
+                  className="flex-1 border-2 border-black px-2 py-1 font-mono text-xs bg-white"
+                  value={taskToLink}
+                  onChange={(e) => setTaskToLink(e.target.value)}
+                >
+                  <option value="">Link task to role...</option>
+                  {unlinkedTasks.map((task) => (
+                    <option key={task.id} value={task.id}>{task.name}</option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
+                  onClick={handleLinkTaskToRole}
+                >
+                  Link task
+                </button>
+              </div>
+              <div className="font-mono text-xs text-gray-600">
+                Linked tasks: {roleTasks.length > 0 ? roleTasks.map((task) => task.name).join(', ') : 'None'}
+              </div>
+            </div>
+          </div>
+
+          <div className="border border-black p-3 bg-white mt-4">
+            <div className="font-mono text-xs text-gray-500 mb-2">Step D: Create/send assessments by role application</div>
+            {selectedRoleId ? (
+              roleApplications.length > 0 ? (
+                <div className="space-y-2">
+                  {roleApplications.map((app) => (
+                    <div key={app.id} className="border border-gray-300 p-2 flex flex-wrap items-center gap-2 justify-between">
+                      <div>
+                        <div className="font-mono text-sm font-bold">{app.candidate_name || app.candidate_email}</div>
+                        <div className="font-mono text-xs text-gray-600">{app.candidate_email} • CV: {app.cv_filename || 'missing'}</div>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <select
+                          className="border-2 border-black px-2 py-1 font-mono text-xs bg-white"
+                          value={assessmentTaskByApplication[app.id] || ''}
+                          onChange={(e) => setAssessmentTaskByApplication((prev) => ({ ...prev, [app.id]: e.target.value }))}
+                        >
+                          <option value="">Select role task...</option>
+                          {roleTasks.map((task) => (
+                            <option key={task.id} value={task.id}>{task.name}</option>
+                          ))}
+                        </select>
+                        <button
+                          type="button"
+                          className="border-2 border-black px-3 py-1 font-mono text-xs font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                          style={{ backgroundColor: '#9D00FF' }}
+                          onClick={() => handleSendAssessmentForApplication(app.id)}
+                          disabled={!app.cv_filename || roleTasks.length === 0}
+                        >
+                          Create Assessment
+                        </button>
+                        {!app.cv_filename && (
+                          <span className="font-mono text-[11px] text-red-600">Upload CV first</span>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="font-mono text-xs text-gray-500">No applications for this role yet.</div>
+              )
+            ) : (
+              <div className="font-mono text-xs text-gray-500">Select a role to manage applications and assessments.</div>
+            )}
+          </div>
         </div>
 
         <div className="border-2 border-black p-4 mb-6">
@@ -325,13 +666,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
                           type="button"
                           className="border-2 border-black px-2 py-1 font-mono text-xs font-bold text-white"
                           style={{ backgroundColor: '#9D00FF' }}
-                          onClick={() => setSendAssessmentCandidate(c)}
-                        >
-                          Send Assessment
-                        </button>
-                        <button
-                          type="button"
-                          className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
                           onClick={async () => {
                             if (expandedCandidateId === c.id) {
                               setExpandedCandidateId(null);
@@ -432,17 +766,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent, NewA
           </table>
         </div>
       </div>
-
-      {sendAssessmentCandidate && AssessmentModal ? (
-        <AssessmentModal
-          candidate={sendAssessmentCandidate}
-          onClose={() => setSendAssessmentCandidate(null)}
-          onCreated={() => {
-            setSendAssessmentCandidate(null);
-            loadCandidates();
-          }}
-        />
-      ) : null}
     </div>
   );
 };

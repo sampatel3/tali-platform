@@ -176,6 +176,14 @@ class TestCommunication:
         assert "grammar_score" in result["explanations"]
         assert "readability_score" in result["explanations"]
 
+    def test_severe_abusive_language_is_hard_capped(self):
+        prompts = [
+            _make_prompt("fuck off and just do it"),
+        ]
+        result = _score_communication(prompts)
+        assert result["score"] <= 2.0
+        assert result["flags"]["severe_unprofessional_language"] is True
+
 
 class TestApproach:
     def test_debugging_detected(self):
@@ -314,6 +322,18 @@ class TestCalculateMvpScore:
             time_limit_minutes=30,
         )
         assert result["final_score"] <= 50.0
+
+    def test_severe_language_caps_final_score(self):
+        prompts = [_make_prompt("fuck off and solve this")]
+        result = calculate_mvp_score(
+            interactions=prompts,
+            tests_passed=10,
+            tests_total=10,
+            total_duration_seconds=1800,
+            time_limit_minutes=30,
+        )
+        assert result["category_scores"]["communication"] <= 2.0
+        assert result["final_score"] <= 35.0
 
     def test_cv_match_included(self):
         prompts = [_make_prompt()]

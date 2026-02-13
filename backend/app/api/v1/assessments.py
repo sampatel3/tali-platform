@@ -14,8 +14,11 @@ from ...platform.config import settings
 from ...models.user import User
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
+from ...models.candidate_application import CandidateApplication
 from ...models.task import Task
 from ...models.organization import Organization
+from ...models.role import Role
+from ...platform.request_context import get_request_id
 from ...schemas.assessment import (
     AssessmentCreate, AssessmentResponse, AssessmentStart,
     CodeExecutionRequest, ClaudeRequest, SubmitRequest,
@@ -31,9 +34,11 @@ from ...services.evaluation_result_service import (
 from ...components.assessments.repository import (
     utcnow, ensure_utc, assessment_to_response, build_timeline,
     get_active_assessment, validate_assessment_token, append_assessment_timeline_event,
+    time_remaining_seconds,
 )
 from ...components.assessments.service import (
-    store_cv_upload, start_or_resume_assessment, submit_assessment as _submit_assessment, enforce_active_or_timeout,
+    store_cv_upload, start_or_resume_assessment, submit_assessment as _submit_assessment,
+    enforce_active_or_timeout, enforce_not_paused, resume_assessment_timer,
 )
 
 router = APIRouter(prefix="/assessments", tags=["Assessments"])
@@ -49,34 +54,90 @@ def create_assessment(
     if data.duration_minutes < 15 or data.duration_minutes > 180:
         raise HTTPException(status_code=400, detail="duration_minutes must be between 15 and 180")
 
-    try:
-        candidate = db.query(Candidate).filter(
-            Candidate.email == data.candidate_email,
-            Candidate.organization_id == current_user.organization_id,
-        ).first()
-        if not candidate:
-            candidate = Candidate(
-                email=data.candidate_email,
-                full_name=data.candidate_name or None,
-                organization_id=current_user.organization_id,
-            )
-            db.add(candidate)
-            db.flush()
-        elif data.candidate_name:
-            candidate.full_name = data.candidate_name
+    candidate = None
+    application = None
+    resolved_role_id = data.role_id
+    candidate_email = None
+    candidate_name = None
 
+    try:
         task = db.query(Task).filter(
             Task.id == data.task_id,
-            (Task.organization_id == current_user.organization_id) | (Task.organization_id == None),
+            (Task.organization_id == current_user.organization_id) | (Task.organization_id == None),  # noqa: E711
         ).first()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
+
+        if data.application_id:
+            application = (
+                db.query(CandidateApplication)
+                .options(joinedload(CandidateApplication.candidate), joinedload(CandidateApplication.role))
+                .filter(
+                    CandidateApplication.id == data.application_id,
+                    CandidateApplication.organization_id == current_user.organization_id,
+                )
+                .first()
+            )
+            if not application:
+                raise HTTPException(status_code=404, detail="Application not found")
+            candidate = application.candidate
+            if not candidate:
+                raise HTTPException(status_code=400, detail="Application has no candidate")
+            resolved_role_id = application.role_id
+            if data.role_id and data.role_id != resolved_role_id:
+                raise HTTPException(status_code=400, detail="application_id and role_id do not match")
+
+            role = (
+                db.query(Role)
+                .options(joinedload(Role.tasks))
+                .filter(Role.id == resolved_role_id, Role.organization_id == current_user.organization_id)
+                .first()
+            )
+            if not role:
+                raise HTTPException(status_code=404, detail="Role not found")
+            if not any(t.id == task.id for t in (role.tasks or [])):
+                raise HTTPException(status_code=400, detail="Task is not linked to the selected role")
+            candidate_email = candidate.email
+            candidate_name = candidate.full_name or candidate.email
+        else:
+            if not data.candidate_email:
+                raise HTTPException(status_code=400, detail="application_id or candidate_email is required")
+            candidate = db.query(Candidate).filter(
+                Candidate.email == data.candidate_email,
+                Candidate.organization_id == current_user.organization_id,
+            ).first()
+            if not candidate:
+                candidate = Candidate(
+                    email=data.candidate_email,
+                    full_name=data.candidate_name or None,
+                    organization_id=current_user.organization_id,
+                )
+                db.add(candidate)
+                db.flush()
+            elif data.candidate_name:
+                candidate.full_name = data.candidate_name
+
+            if resolved_role_id:
+                role = (
+                    db.query(Role)
+                    .options(joinedload(Role.tasks))
+                    .filter(Role.id == resolved_role_id, Role.organization_id == current_user.organization_id)
+                    .first()
+                )
+                if not role:
+                    raise HTTPException(status_code=404, detail="Role not found")
+                if not any(t.id == task.id for t in (role.tasks or [])):
+                    raise HTTPException(status_code=400, detail="Task is not linked to the selected role")
+            candidate_email = candidate.email
+            candidate_name = candidate.full_name or candidate.email
 
         token = secrets.token_urlsafe(32)
         assessment = Assessment(
             organization_id=current_user.organization_id,
             candidate_id=candidate.id,
             task_id=data.task_id,
+            role_id=resolved_role_id,
+            application_id=(application.id if application else None),
             token=token,
             duration_minutes=data.duration_minutes,
             expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
@@ -95,7 +156,12 @@ def create_assessment(
 
     assessment = (
         db.query(Assessment)
-        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+        .options(
+            joinedload(Assessment.candidate),
+            joinedload(Assessment.task),
+            joinedload(Assessment.role),
+            joinedload(Assessment.application),
+        )
         .filter(Assessment.id == assessment.id)
         .first()
     )
@@ -104,8 +170,8 @@ def create_assessment(
     org_name = org.name if org else "Your recruiter"
     if settings.MVP_DISABLE_CELERY:
         send_assessment_invite_sync(
-            candidate_email=data.candidate_email,
-            candidate_name=data.candidate_name or data.candidate_email,
+            candidate_email=candidate_email,
+            candidate_name=candidate_name,
             token=token,
             assessment_id=assessment.id,
             org_name=org_name,
@@ -114,8 +180,8 @@ def create_assessment(
     else:
         from ...tasks.assessment_tasks import send_assessment_email
         send_assessment_email.delay(
-            candidate_email=data.candidate_email,
-            candidate_name=data.candidate_name or data.candidate_email,
+            candidate_email=candidate_email,
+            candidate_name=candidate_name,
             token=token,
             org_name=org_name,
             position=task.name or "Technical assessment",
@@ -130,6 +196,8 @@ def list_assessments(
     status: Optional[str] = None,
     task_id: Optional[int] = None,
     candidate_id: Optional[int] = None,
+    role_id: Optional[int] = None,
+    application_id: Optional[int] = None,
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -138,7 +206,12 @@ def list_assessments(
     """List assessments for the current user's organization."""
     q = (
         db.query(Assessment)
-        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+        .options(
+            joinedload(Assessment.candidate),
+            joinedload(Assessment.task),
+            joinedload(Assessment.role),
+            joinedload(Assessment.application),
+        )
         .filter(Assessment.organization_id == current_user.organization_id)
     )
     if status:
@@ -147,6 +220,10 @@ def list_assessments(
         q = q.filter(Assessment.task_id == task_id)
     if candidate_id is not None:
         q = q.filter(Assessment.candidate_id == candidate_id)
+    if role_id is not None:
+        q = q.filter(Assessment.role_id == role_id)
+    if application_id is not None:
+        q = q.filter(Assessment.application_id == application_id)
     q = q.order_by(Assessment.created_at.desc())
     total = q.count()
     assessments = q.offset(offset).limit(limit).all()
@@ -167,7 +244,12 @@ def get_assessment(
     """Get a single assessment by ID."""
     assessment = (
         db.query(Assessment)
-        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+        .options(
+            joinedload(Assessment.candidate),
+            joinedload(Assessment.task),
+            joinedload(Assessment.role),
+            joinedload(Assessment.application),
+        )
         .filter(
             Assessment.id == assessment_id,
             Assessment.organization_id == current_user.organization_id,
@@ -230,6 +312,7 @@ def execute_code(
     assessment = get_active_assessment(assessment_id, db)
     validate_assessment_token(assessment, x_assessment_token)
     enforce_active_or_timeout(assessment, db)
+    enforce_not_paused(assessment)
 
     e2b = E2BService(settings.E2B_API_KEY)
     if assessment.e2b_session_id:
@@ -276,6 +359,7 @@ def chat_with_claude(
     assessment = get_active_assessment(assessment_id, db)
     validate_assessment_token(assessment, x_assessment_token)
     enforce_active_or_timeout(assessment, db)
+    enforce_not_paused(assessment)
 
     claude = ClaudeService(settings.ANTHROPIC_API_KEY)
     messages = data.conversation_history + [{"role": "user", "content": data.message}]
@@ -283,10 +367,14 @@ def chat_with_claude(
     t0 = time.time()
     response = claude.chat(messages)
     latency_ms = int((time.time() - t0) * 1000)
+    claude_success = bool(response.get("success"))
+    claude_text = (response.get("content", "") if claude_success else "") or ""
 
     prompt_record = {
         "message": data.message,
-        "response": response.get("content", ""),
+        "response": claude_text,
+        "success": claude_success,
+        "claude_outage": not claude_success,
         "timestamp": utcnow().isoformat(),
         "input_tokens": response.get("input_tokens", 0),
         "output_tokens": response.get("output_tokens", 0),
@@ -324,6 +412,7 @@ def chat_with_claude(
             "paste_detected": prompt_record["paste_detected"],
             "browser_focused": prompt_record["browser_focused"],
             "time_since_last_prompt_ms": prompt_record["time_since_last_prompt_ms"],
+            "claude_outage": not claude_success,
         },
     )
 
@@ -331,13 +420,87 @@ def chat_with_claude(
         started = ensure_utc(assessment.started_at)
         assessment.time_to_first_prompt_seconds = int((utcnow() - started).total_seconds())
 
+    if not claude_success and not assessment.is_timer_paused:
+        assessment.is_timer_paused = True
+        assessment.paused_at = utcnow()
+        assessment.pause_reason = "claude_outage"
+        append_assessment_timeline_event(
+            assessment,
+            "timer_paused",
+            {"pause_reason": "claude_outage"},
+        )
+
     try:
         db.commit()
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to persist AI interaction")
 
-    return response
+    if not claude_success:
+        return {
+            "success": False,
+            "response": "Claude is temporarily unavailable. Your timer is paused. Please retry in a moment.",
+            "content": "",
+            "message": "Claude is temporarily unavailable. Your timer is paused. Please retry in a moment.",
+            "is_timer_paused": True,
+            "pause_reason": assessment.pause_reason,
+            "time_remaining_seconds": time_remaining_seconds(assessment),
+            "requires_retry": True,
+        }
+
+    return {
+        "success": True,
+        "response": claude_text,
+        "content": claude_text,
+        "message": claude_text,
+        "tokens_used": response.get("tokens_used", 0),
+        "input_tokens": response.get("input_tokens", 0),
+        "output_tokens": response.get("output_tokens", 0),
+        "is_timer_paused": False,
+        "pause_reason": None,
+        "time_remaining_seconds": time_remaining_seconds(assessment),
+    }
+
+
+@router.post("/{assessment_id}/claude/retry")
+def retry_claude_after_outage(
+    assessment_id: int,
+    x_assessment_token: str = Header(..., description="Assessment access token"),
+    db: Session = Depends(get_db),
+):
+    assessment = get_active_assessment(assessment_id, db)
+    validate_assessment_token(assessment, x_assessment_token)
+
+    if not assessment.is_timer_paused:
+        return {
+            "success": True,
+            "message": "Assessment is not paused",
+            "is_timer_paused": False,
+            "time_remaining_seconds": time_remaining_seconds(assessment),
+        }
+
+    claude = ClaudeService(settings.ANTHROPIC_API_KEY)
+    health = claude.chat(
+        messages=[{"role": "user", "content": "Reply with OK."}],
+        system="Reply with the single word OK.",
+    )
+    if not health.get("success"):
+        return {
+            "success": False,
+            "message": "Claude is still unavailable",
+            "is_timer_paused": True,
+            "pause_reason": assessment.pause_reason,
+            "time_remaining_seconds": time_remaining_seconds(assessment),
+        }
+
+    resume_assessment_timer(assessment, db, resume_reason="claude_retry_success")
+    db.refresh(assessment)
+    return {
+        "success": True,
+        "message": "Claude recovered and assessment resumed",
+        "is_timer_paused": False,
+        "time_remaining_seconds": time_remaining_seconds(assessment),
+    }
 
 
 @router.post("/{assessment_id}/submit")
@@ -350,6 +513,7 @@ def submit_assessment_endpoint(
     """Submit the assessment, run tests, and calculate composite score."""
     assessment = get_active_assessment(assessment_id, db)
     validate_assessment_token(assessment, x_assessment_token)
+    enforce_not_paused(assessment)
     return _submit_assessment(assessment, data.final_code, data.tab_switch_count, db)
 
 

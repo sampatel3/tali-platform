@@ -22,6 +22,8 @@ function normalizeStartData(startData) {
     task,
     rubric_categories: task.rubric_categories || startData.rubric_categories || [],
     clone_command: startData.clone_command || task.clone_command || null,
+    is_timer_paused: Boolean(startData.is_timer_paused),
+    pause_reason: startData.pause_reason || null,
   };
 }
 
@@ -109,6 +111,10 @@ export default function AssessmentPage({
   const [lastPromptTime, setLastPromptTime] = useState(null);
   const [proctoringEnabled, setProctoringEnabled] = useState(false);
   const [showTabWarning, setShowTabWarning] = useState(false);
+  const [isTimerPaused, setIsTimerPaused] = useState(false);
+  const [pauseReason, setPauseReason] = useState(null);
+  const [pauseMessage, setPauseMessage] = useState("");
+  const [retryingClaude, setRetryingClaude] = useState(false);
   const [selectedRepoFile, setSelectedRepoFile] = useState(null);
   const [repoFileEdits, setRepoFileEdits] = useState({});
   const [editorContent, setEditorContent] = useState("");
@@ -141,6 +147,8 @@ export default function AssessmentPage({
       }
       setTimeLeft(normalized.time_remaining);
       setProctoringEnabled(startData.task?.proctoring_enabled || false);
+      setIsTimerPaused(Boolean(normalized.is_timer_paused));
+      setPauseReason(normalized.pause_reason || null);
       setLoading(false);
       return;
     }
@@ -159,6 +167,8 @@ export default function AssessmentPage({
       }
       setTimeLeft((taskData.duration_minutes || 30) * 60);
       setProctoringEnabled(taskData.proctoring_enabled || false);
+      setIsTimerPaused(false);
+      setPauseReason(null);
       setLoading(false);
       return;
     }
@@ -186,6 +196,8 @@ export default function AssessmentPage({
         }
         setTimeLeft(normalized.time_remaining);
         setProctoringEnabled(data.task?.proctoring_enabled || false);
+        setIsTimerPaused(Boolean(normalized.is_timer_paused));
+        setPauseReason(normalized.pause_reason || null);
       } catch (err) {
         setOutput(`Error starting assessment: ${err.message}`);
       } finally {
@@ -197,7 +209,7 @@ export default function AssessmentPage({
 
   // Countdown timer
   useEffect(() => {
-    if (loading || submitted || timeLeft <= 0) return;
+    if (loading || submitted || timeLeft <= 0 || isTimerPaused) return;
 
     timerRef.current = setInterval(() => {
       setTimeLeft((prev) => {
@@ -211,7 +223,7 @@ export default function AssessmentPage({
     }, 1000);
 
     return () => clearInterval(timerRef.current);
-  }, [loading, submitted]);
+  }, [loading, submitted, isTimerPaused]);
 
   // Browser focus and tab visibility tracking
   useEffect(() => {
@@ -314,6 +326,10 @@ export default function AssessmentPage({
   // Execute code
   const handleExecute = useCallback(
     async (code) => {
+      if (isTimerPaused) {
+        setOutput("Assessment is paused. Retry Claude to resume execution.");
+        return;
+      }
       codeRef.current = code;
       setExecuting(true);
       setOutput("Running...\n");
@@ -326,14 +342,20 @@ export default function AssessmentPage({
           setOutput((prev) => prev + "\n--- stderr ---\n" + result.stderr);
         }
       } catch (err) {
+        const detail = err.response?.data?.detail;
+        if (detail?.code === "ASSESSMENT_PAUSED") {
+          setIsTimerPaused(true);
+          setPauseReason(detail.pause_reason || "claude_outage");
+          setPauseMessage(detail.message || "Assessment is paused.");
+        }
         setOutput(
-          `Execution error: ${err.response?.data?.detail || err.message}`,
+          `Execution error: ${detail?.message || detail || err.message}`,
         );
       } finally {
         setExecuting(false);
       }
     },
-    [assessment, assessmentId, assessmentTokenForApi],
+    [assessment, assessmentId, assessmentTokenForApi, isTimerPaused],
   );
 
   // Save code (just updates ref, could persist)
@@ -345,6 +367,9 @@ export default function AssessmentPage({
   // Claude chat
   const handleClaudeMessage = useCallback(
     async (message, history) => {
+      if (isTimerPaused) {
+        return "Assessment is paused while Claude is unavailable. Use Retry to resume.";
+      }
       const id = assessment?.id || assessmentId;
 
       // Compute time since last prompt
@@ -368,8 +393,17 @@ export default function AssessmentPage({
           time_since_last_prompt_ms: timeSinceLastMs,
         },
       );
+      const payload = res.data || {};
+      if (payload.is_timer_paused) {
+        setIsTimerPaused(true);
+        setPauseReason(payload.pause_reason || "claude_outage");
+        setPauseMessage(payload.response || payload.message || "Claude is unavailable and your timer is paused.");
+      } else {
+        setIsTimerPaused(false);
+        setPauseReason(null);
+      }
       return (
-        res.data.response || res.data.message || "No response from Claude."
+        payload.response || payload.content || payload.message || "No response from Claude."
       );
     },
     [
@@ -380,13 +414,46 @@ export default function AssessmentPage({
       pasteDetected,
       browserFocused,
       proctoringEnabled,
+      isTimerPaused,
     ],
   );
+
+  const handleRetryClaude = useCallback(async () => {
+    const id = assessment?.id || assessmentId;
+    if (!id) return;
+    setRetryingClaude(true);
+    try {
+      const res = await assessments.claudeRetry(id, assessmentTokenForApi);
+      const payload = res.data || {};
+      if (payload.success && !payload.is_timer_paused) {
+        setIsTimerPaused(false);
+        setPauseReason(null);
+        setPauseMessage("");
+        if (typeof payload.time_remaining_seconds === "number") {
+          setTimeLeft(payload.time_remaining_seconds);
+        }
+        setOutput("Claude recovered. Assessment resumed.");
+      } else {
+        setIsTimerPaused(true);
+        setPauseReason(payload.pause_reason || "claude_outage");
+        setPauseMessage(payload.message || "Claude is still unavailable.");
+      }
+    } catch (err) {
+      setIsTimerPaused(true);
+      setPauseMessage(err?.response?.data?.detail?.message || "Claude is still unavailable.");
+    } finally {
+      setRetryingClaude(false);
+    }
+  }, [assessment, assessmentId, assessmentTokenForApi]);
 
   // Submit assessment
   const handleSubmit = useCallback(
     async (autoSubmit = false) => {
       if (submitted) return;
+      if (isTimerPaused) {
+        setOutput("Assessment is paused. Retry Claude before submitting.");
+        return;
+      }
 
       if (!autoSubmit) {
         const confirmed = window.confirm(
@@ -407,7 +474,13 @@ export default function AssessmentPage({
           "Assessment submitted successfully! You may close this window.",
         );
       } catch (err) {
-        setOutput(`Submit error: ${err.response?.data?.detail || err.message}`);
+        const detail = err.response?.data?.detail;
+        if (detail?.code === "ASSESSMENT_PAUSED") {
+          setIsTimerPaused(true);
+          setPauseReason(detail.pause_reason || "claude_outage");
+          setPauseMessage(detail.message || "Assessment is paused.");
+        }
+        setOutput(`Submit error: ${detail?.message || detail || err.message}`);
         setSubmitted(false);
       }
     },
@@ -417,6 +490,7 @@ export default function AssessmentPage({
       assessmentTokenForApi,
       submitted,
       tabSwitchCount,
+      isTimerPaused,
     ],
   );
 
@@ -482,6 +556,23 @@ export default function AssessmentPage({
         </div>
       )}
 
+      {isTimerPaused && (
+        <div className="border-b-2 border-black bg-red-50 px-4 py-2 flex items-center justify-between gap-3">
+          <div className="font-mono text-xs text-red-700">
+            Assessment paused: Claude is currently unavailable{pauseReason ? ` (${pauseReason})` : ""}.
+            {pauseMessage ? ` ${pauseMessage}` : ""}
+          </div>
+          <button
+            type="button"
+            className="border-2 border-black px-3 py-1 font-mono text-xs font-bold bg-white hover:bg-black hover:text-white disabled:opacity-60"
+            onClick={handleRetryClaude}
+            disabled={retryingClaude}
+          >
+            {retryingClaude ? "Retrying..." : "Retry Claude"}
+          </button>
+        </div>
+      )}
+
       {/* Top bar */}
       <div className="border-b-2 border-black bg-white px-4 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4">
@@ -505,10 +596,12 @@ export default function AssessmentPage({
           >
             <Clock size={16} />
             <span>{formatTime(timeLeft)}</span>
+            {isTimerPaused && <span className="text-xs uppercase">Paused</span>}
           </div>
           {/* Submit */}
           <button
             onClick={() => handleSubmit(false)}
+            disabled={isTimerPaused}
             className="border-2 border-black px-6 py-1.5 font-mono text-sm font-bold text-white hover:bg-black transition-colors"
             style={{ backgroundColor: "#9D00FF" }}
           >
@@ -690,6 +783,7 @@ export default function AssessmentPage({
                 onSave={handleSave}
                 language={hasRepoStructure ? languageFromPath(selectedRepoPath) : (assessment?.language || "python")}
                 filename={selectedRepoPath || assessment?.filename || "main"}
+                disabled={isTimerPaused}
               />
             </div>
           </div>
@@ -702,6 +796,7 @@ export default function AssessmentPage({
             <ClaudeChat
               onSendMessage={handleClaudeMessage}
               onPaste={() => setPasteDetected(true)}
+              disabled={isTimerPaused}
             />
           </div>
 

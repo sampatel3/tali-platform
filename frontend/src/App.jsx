@@ -861,7 +861,6 @@ const ForgotPasswordPage = ({ onNavigate }) => {
     }
     setLoading(true);
     try {
-      const { auth } = await import('./lib/api');
       await auth.forgotPassword(email.trim());
       setSent(true);
     } catch (err) {
@@ -971,7 +970,6 @@ const ResetPasswordPage = ({ onNavigate, token }) => {
     }
     setLoading(true);
     try {
-      const { auth } = await import('./lib/api');
       await auth.resetPassword(token, password);
       setSuccess(true);
     } catch (err) {
@@ -1811,8 +1809,28 @@ const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarted }) =>
 function App() {
   const { isAuthenticated, loading: authLoading } = useAuth();
   const [selectedCandidate, setSelectedCandidate] = useState(null);
+  const [loadingCandidateDetail, setLoadingCandidateDetail] = useState(false);
   /** Start response from candidate welcome — passed to AssessmentPage so it does not call start() again */
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
+
+  const mapAssessmentToCandidateView = (assessment) => ({
+    id: assessment.id,
+    name: (assessment.candidate_name || assessment.candidate?.full_name || assessment.candidate_email || '').trim() || 'Unknown',
+    email: assessment.candidate_email || assessment.candidate?.email || '',
+    task: assessment.task_name || assessment.task?.name || 'Assessment',
+    status: assessment.status || 'pending',
+    score: assessment.score ?? assessment.overall_score ?? null,
+    time: assessment.duration_taken ? `${Math.round(assessment.duration_taken / 60)}m` : '—',
+    position: assessment.role_name || assessment.candidate?.position || '',
+    completedDate: assessment.completed_at ? new Date(assessment.completed_at).toLocaleDateString() : null,
+    breakdown: assessment.breakdown || null,
+    prompts: assessment.prompt_count ?? 0,
+    promptsList: assessment.prompts_list || [],
+    timeline: assessment.timeline || [],
+    results: assessment.results || [],
+    token: assessment.token,
+    _raw: assessment,
+  });
 
   const parseRouteFromLocation = () => {
     if (typeof window === 'undefined') {
@@ -1820,6 +1838,7 @@ function App() {
         currentPage: 'landing',
         assessmentToken: null,
         assessmentIdFromLink: null,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: '',
         verifyEmailToken: '',
       };
@@ -1834,17 +1853,29 @@ function App() {
       '/forgot-password': 'forgot-password',
       '/dashboard': 'dashboard',
       '/candidates': 'candidates',
-      '/candidate-detail': 'candidate-detail',
       '/tasks': 'tasks',
       '/analytics': 'analytics',
       '/settings': 'settings',
     };
+
+    if (pathname === '/candidate-detail') {
+      const assessmentId = searchParams.get('assessmentId');
+      return {
+        currentPage: 'candidate-detail',
+        assessmentToken: null,
+        assessmentIdFromLink: null,
+        candidateDetailAssessmentId: assessmentId ? Number(assessmentId) : null,
+        resetPasswordToken: '',
+        verifyEmailToken: '',
+      };
+    }
 
     if (pathname === '/settings/workable/callback') {
       return {
         currentPage: 'workable-callback',
         assessmentToken: null,
         assessmentIdFromLink: null,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: '',
         verifyEmailToken: '',
       };
@@ -1856,6 +1887,7 @@ function App() {
         currentPage: 'candidate-welcome',
         assessmentToken: decodeURIComponent(assessPath[1]),
         assessmentIdFromLink: null,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: '',
         verifyEmailToken: '',
       };
@@ -1867,6 +1899,7 @@ function App() {
         currentPage: 'candidate-welcome',
         assessmentToken: searchParams.get('token'),
         assessmentIdFromLink: Number(assessWithIdPath[1]),
+        candidateDetailAssessmentId: null,
         resetPasswordToken: '',
         verifyEmailToken: '',
       };
@@ -1877,6 +1910,7 @@ function App() {
         currentPage: 'assessment',
         assessmentToken: searchParams.get('token'),
         assessmentIdFromLink: null,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: '',
         verifyEmailToken: '',
       };
@@ -1887,6 +1921,7 @@ function App() {
         currentPage: 'reset-password',
         assessmentToken: null,
         assessmentIdFromLink: null,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: searchParams.get('token') || '',
         verifyEmailToken: '',
       };
@@ -1897,6 +1932,7 @@ function App() {
         currentPage: 'verify-email',
         assessmentToken: null,
         assessmentIdFromLink: null,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: '',
         verifyEmailToken: searchParams.get('token') || '',
       };
@@ -1913,6 +1949,7 @@ function App() {
         currentPage: 'candidate-welcome',
         assessmentToken: token,
         assessmentIdFromLink: null,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: '',
         verifyEmailToken: '',
       };
@@ -1926,6 +1963,7 @@ function App() {
         currentPage: 'candidate-welcome',
         assessmentToken: token,
         assessmentIdFromLink: id,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: '',
         verifyEmailToken: '',
       };
@@ -1938,6 +1976,7 @@ function App() {
         currentPage: 'reset-password',
         assessmentToken: null,
         assessmentIdFromLink: null,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: token,
         verifyEmailToken: '',
       };
@@ -1950,6 +1989,7 @@ function App() {
         currentPage: 'verify-email',
         assessmentToken: null,
         assessmentIdFromLink: null,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: '',
         verifyEmailToken: token,
       };
@@ -1968,6 +2008,7 @@ function App() {
         currentPage: staticRoutes[target],
         assessmentToken: null,
         assessmentIdFromLink: null,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: '',
         verifyEmailToken: '',
       };
@@ -1978,6 +2019,7 @@ function App() {
         currentPage: staticRoutes[pathname],
         assessmentToken: null,
         assessmentIdFromLink: null,
+        candidateDetailAssessmentId: null,
         resetPasswordToken: '',
         verifyEmailToken: '',
       };
@@ -1987,6 +2029,7 @@ function App() {
       currentPage: 'landing',
       assessmentToken: null,
       assessmentIdFromLink: null,
+      candidateDetailAssessmentId: null,
       resetPasswordToken: '',
       verifyEmailToken: '',
     };
@@ -1996,6 +2039,7 @@ function App() {
   const [currentPage, setCurrentPage] = useState(initialRoute.currentPage);
   const [assessmentToken, setAssessmentToken] = useState(initialRoute.assessmentToken);
   const [assessmentIdFromLink, setAssessmentIdFromLink] = useState(initialRoute.assessmentIdFromLink);
+  const [candidateDetailAssessmentId, setCandidateDetailAssessmentId] = useState(initialRoute.candidateDetailAssessmentId);
   const [resetPasswordToken, setResetPasswordToken] = useState(initialRoute.resetPasswordToken);
   const [verifyEmailToken, setVerifyEmailToken] = useState(initialRoute.verifyEmailToken);
 
@@ -2008,6 +2052,7 @@ function App() {
       setCurrentPage(route.currentPage);
       setAssessmentToken(route.assessmentToken);
       setAssessmentIdFromLink(route.assessmentIdFromLink);
+      setCandidateDetailAssessmentId(route.candidateDetailAssessmentId || null);
       setResetPasswordToken(route.resetPasswordToken);
       setVerifyEmailToken(route.verifyEmailToken);
     };
@@ -2059,7 +2104,9 @@ function App() {
       case 'candidates':
         return '/candidates';
       case 'candidate-detail':
-        return '/candidate-detail';
+        return options.candidateDetailAssessmentId
+          ? `/candidate-detail?assessmentId=${encodeURIComponent(options.candidateDetailAssessmentId)}`
+          : '/candidate-detail';
       case 'tasks':
         return '/tasks';
       case 'analytics':
@@ -2086,6 +2133,7 @@ function App() {
   const navigateToPage = (page, options = {}) => {
     if (Object.prototype.hasOwnProperty.call(options, 'assessmentToken')) setAssessmentToken(options.assessmentToken);
     if (Object.prototype.hasOwnProperty.call(options, 'assessmentIdFromLink')) setAssessmentIdFromLink(options.assessmentIdFromLink);
+    if (Object.prototype.hasOwnProperty.call(options, 'candidateDetailAssessmentId')) setCandidateDetailAssessmentId(options.candidateDetailAssessmentId);
     if (Object.prototype.hasOwnProperty.call(options, 'resetPasswordToken')) setResetPasswordToken(options.resetPasswordToken);
     if (Object.prototype.hasOwnProperty.call(options, 'verifyEmailToken')) setVerifyEmailToken(options.verifyEmailToken);
     setCurrentPage(page);
@@ -2093,6 +2141,7 @@ function App() {
     const nextPath = pathForPage(page, {
       assessmentToken: Object.prototype.hasOwnProperty.call(options, 'assessmentToken') ? options.assessmentToken : assessmentToken,
       assessmentIdFromLink: Object.prototype.hasOwnProperty.call(options, 'assessmentIdFromLink') ? options.assessmentIdFromLink : assessmentIdFromLink,
+      candidateDetailAssessmentId: Object.prototype.hasOwnProperty.call(options, 'candidateDetailAssessmentId') ? options.candidateDetailAssessmentId : candidateDetailAssessmentId,
       resetPasswordToken: Object.prototype.hasOwnProperty.call(options, 'resetPasswordToken') ? options.resetPasswordToken : resetPasswordToken,
       verifyEmailToken: Object.prototype.hasOwnProperty.call(options, 'verifyEmailToken') ? options.verifyEmailToken : verifyEmailToken,
     });
@@ -2112,8 +2161,36 @@ function App() {
 
   const navigateToCandidate = (candidate) => {
     setSelectedCandidate(candidate);
-    navigateToPage('candidate-detail');
+    navigateToPage('candidate-detail', { candidateDetailAssessmentId: candidate?.id || candidate?._raw?.id || null });
   };
+
+  useEffect(() => {
+    if (currentPage !== 'candidate-detail' || !candidateDetailAssessmentId || !isAuthenticated) {
+      return;
+    }
+    if (selectedCandidate && Number(selectedCandidate.id) === Number(candidateDetailAssessmentId)) {
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingCandidateDetail(true);
+    assessmentsApi.get(candidateDetailAssessmentId)
+      .then((res) => {
+        if (cancelled) return;
+        setSelectedCandidate(mapAssessmentToCandidateView(res.data || {}));
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSelectedCandidate(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingCandidateDetail(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPage, candidateDetailAssessmentId, isAuthenticated, selectedCandidate]);
 
   // Show nothing while auth is validating token
   if (authLoading) {
@@ -2146,19 +2223,25 @@ function App() {
           onNavigate={navigateToPage}
           onViewCandidate={navigateToCandidate}
           NavComponent={DashboardNav}
-          NewAssessmentModalComponent={NewAssessmentModal}
         />
       )}
       {currentPage === 'candidate-detail' && (
-        <CandidateDetailPage
-          candidate={selectedCandidate}
-          onNavigate={navigateToPage}
-          onDeleted={() => setSelectedCandidate(null)}
-          onNoteAdded={(timeline) =>
-            setSelectedCandidate((prev) => (prev ? { ...prev, timeline } : prev))
-          }
-          NavComponent={DashboardNav}
-        />
+        loadingCandidateDetail ? (
+          <div className="min-h-screen flex items-center justify-center">
+            <Loader2 size={28} className="animate-spin" style={{ color: '#9D00FF' }} />
+          </div>
+        ) : (
+          <CandidateDetailPage
+            candidate={selectedCandidate}
+            assessmentId={candidateDetailAssessmentId}
+            onNavigate={navigateToPage}
+            onDeleted={() => setSelectedCandidate(null)}
+            onNoteAdded={(timeline) =>
+              setSelectedCandidate((prev) => (prev ? { ...prev, timeline } : prev))
+            }
+            NavComponent={DashboardNav}
+          />
+        )
       )}
       {currentPage === 'tasks' && <TasksPage onNavigate={navigateToPage} NavComponent={DashboardNav} />}
       {currentPage === 'analytics' && <AnalyticsPage onNavigate={navigateToPage} />}

@@ -1,13 +1,21 @@
 from datetime import datetime
 from typing import Optional, List, Dict, Any
-from pydantic import BaseModel, EmailStr, Field, ConfigDict
+from pydantic import BaseModel, EmailStr, Field, ConfigDict, model_validator
 
 
 class AssessmentCreate(BaseModel):
-    candidate_email: EmailStr
+    candidate_email: Optional[EmailStr] = None
     candidate_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     task_id: int = Field(gt=0)
+    application_id: Optional[int] = Field(default=None, gt=0)
+    role_id: Optional[int] = Field(default=None, gt=0)
     duration_minutes: int = Field(default=30, ge=15, le=180)
+
+    @model_validator(mode="after")
+    def validate_candidate_or_application(self):
+        if not self.application_id and not self.candidate_email:
+            raise ValueError("candidate_email or application_id is required")
+        return self
 
 
 class AssessmentResponse(BaseModel):
@@ -15,6 +23,8 @@ class AssessmentResponse(BaseModel):
     organization_id: int
     candidate_id: int
     task_id: int
+    role_id: Optional[int] = None
+    application_id: Optional[int] = None
     token: str
     status: str
     duration_minutes: int
@@ -39,6 +49,8 @@ class AssessmentResponse(BaseModel):
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
     task_name: Optional[str] = None
+    role_name: Optional[str] = None
+    application_status: Optional[str] = None
 
     # Prompt scoring fields
     prompt_quality_score: Optional[float] = None
@@ -78,6 +90,10 @@ class AssessmentResponse(BaseModel):
     total_output_tokens: Optional[int] = None
     tests_run_count: Optional[int] = None
     tests_pass_count: Optional[int] = None
+    is_timer_paused: Optional[bool] = None
+    paused_at: Optional[datetime] = None
+    pause_reason: Optional[str] = None
+    total_paused_seconds: Optional[int] = None
     completed_due_to_timeout: Optional[bool] = None
     final_repo_state: Optional[str] = None
     git_evidence: Optional[Dict[str, Any]] = None
@@ -98,6 +114,9 @@ class AssessmentStart(BaseModel):
     sandbox_id: str
     task: Dict[str, Any]
     time_remaining: int
+    is_timer_paused: bool = False
+    pause_reason: Optional[str] = None
+    total_paused_seconds: int = 0
 
 
 class CodeExecutionRequest(BaseModel):

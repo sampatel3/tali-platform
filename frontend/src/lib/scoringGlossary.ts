@@ -84,3 +84,32 @@ export const getMetricMeta = (metricKey: string): ScoringMeta => {
     description: 'No glossary description yet for this metric.',
   };
 };
+
+export const buildGlossaryFromMetadata = (
+  metadata: { categories?: Record<string, { label?: string; description?: string }>; metrics?: Record<string, { label?: string; description?: string }> } | null | undefined
+): { categories: ScoringGlossary; metrics: ScoringGlossary } => {
+  if (!metadata || !metadata.categories || !metadata.metrics) {
+    return {
+      categories: SCORING_CATEGORY_GLOSSARY,
+      metrics: SCORING_METRIC_GLOSSARY,
+    };
+  }
+
+  const categories: ScoringGlossary = { ...SCORING_CATEGORY_GLOSSARY };
+  Object.entries(metadata.categories).forEach(([key, value]) => {
+    categories[key] = {
+      label: value?.label || key.replace(/_/g, ' '),
+      description: value?.description || SCORING_CATEGORY_GLOSSARY[key]?.description || 'No category description yet.',
+    };
+  });
+
+  const metrics: ScoringGlossary = { ...SCORING_METRIC_GLOSSARY };
+  Object.entries(metadata.metrics).forEach(([key, value]) => {
+    metrics[key] = {
+      label: value?.label || key.replace(/_/g, ' '),
+      description: value?.description || SCORING_METRIC_GLOSSARY[key]?.description || 'No metric description yet.',
+    };
+  });
+
+  return { categories, metrics };
+};

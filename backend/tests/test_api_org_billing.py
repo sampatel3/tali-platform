@@ -133,6 +133,8 @@ def test_billing_costs_success(client, db):
     assert 'e2b' in first['cost_usd']
     assert 'email' in first['cost_usd']
     assert 'storage' in first['cost_usd']
+    assert isinstance(first['cost_usd']['estimated_storage_bytes'], int)
+    assert first['cost_usd']['estimated_storage_bytes'] > 0
 
 
 def test_billing_costs_no_auth_401(client):

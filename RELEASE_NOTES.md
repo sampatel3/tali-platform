@@ -4,6 +4,11 @@ Date: 2026-02-13
 
 ## Shipped outcomes
 
+### P0 — Pre-pilot role-first hardening reset
+- Added irreversible migration `015_role_first_applications_pause_reset` for role-first workflow rollout.
+- Migration deletes all rows from `assessments`, `candidate_applications`, and `candidates` in every environment by design.
+- Release gate flag logged at migration time: `2026-02-13-role-first-hardening`.
+
 ### P1 — Core assessment integrity
 - Ensured assessment runtime context includes `task_key`, `role`, `scenario`, `repo_structure`, rubric and extra data.
 - Added/validated history-backfill context coverage so candidates see task + repository context before first prompt.

@@ -39,6 +39,14 @@ UNPROFESSIONAL_PATTERNS = [
     r"\?\?\?+",
     r"^(ugh|argh|damn|shit|fuck)",
 ]
+SEVERE_UNPROFESSIONAL_PATTERNS = [
+    (r"\bfuck(?:\s+off|\s+you|ing|ed|er)?\b", "explicit_profanity"),
+    (r"\bstfu\b", "hostile_directive"),
+    (r"\b(shithead|dumbass|idiot|moron)\b", "insult"),
+    (r"\b(kill yourself|kys)\b", "abusive_threat"),
+]
+SEVERE_COMMUNICATION_SCORE_CAP = 2.0
+SEVERE_LANGUAGE_FINAL_SCORE_CAP = 35.0
 FILLER_WORDS = ["um", "uh", "like", "basically", "actually", "just", "really", "very"]
 
 DEBUGGING_PATTERNS = [
@@ -447,19 +455,30 @@ def _score_communication(prompts: list) -> Dict[str, Any]:
     # professional_tone — check for unprofessional patterns and filler words
     unprofessional = 0
     filler_count = 0
+    severe_unprofessional = 0
+    severe_terms: list[str] = []
     for msg in all_messages:
         lower = msg.lower()
         for pat in UNPROFESSIONAL_PATTERNS:
             if re.search(pat, lower):
                 unprofessional += 1
                 break
+        for pat, label in SEVERE_UNPROFESSIONAL_PATTERNS:
+            if re.search(pat, lower):
+                severe_unprofessional += 1
+                severe_terms.append(label)
+                break
         for fw in FILLER_WORDS:
             filler_count += len(re.findall(r"\b" + fw + r"\b", lower))
 
     filler_rate = filler_count / max(sum(_count_words(m) for m in all_messages), 1)
     tone_score = _clamp10(10.0 - unprofessional * 2.0 - filler_rate * 20.0)
+    if severe_unprofessional > 0:
+        tone_score = min(tone_score, 1.0)
 
     cat_score = _clamp10((grammar_score + readability_score + tone_score) / 3.0)
+    if severe_unprofessional > 0:
+        cat_score = min(cat_score, SEVERE_COMMUNICATION_SCORE_CAP)
 
     grammar_issue_summary = f"{grammar_issues} issue(s) detected" if grammar_issues else "Clean writing"
     if grammar_detail:
@@ -478,7 +497,15 @@ def _score_communication(prompts: list) -> Dict[str, Any]:
         "explanations": {
             "grammar_score": grammar_issue_summary,
             "readability_score": f"Average sentence length: {sum(sentence_lens)/len(sentence_lens):.0f} words." if sentence_lens else "Not enough sentences to evaluate.",
-            "tone_score": f"{'No' if unprofessional == 0 else str(unprofessional)} unprofessional pattern(s); filler word rate: {filler_rate*100:.1f}%.",
+            "tone_score": (
+                f"{'No' if unprofessional == 0 else str(unprofessional)} unprofessional pattern(s); "
+                f"{severe_unprofessional} severe abuse event(s); filler word rate: {filler_rate*100:.1f}%."
+            ),
+        },
+        "flags": {
+            "severe_unprofessional_language": severe_unprofessional > 0,
+            "severe_unprofessional_count": severe_unprofessional,
+            "severe_terms": sorted(set(severe_terms)),
         },
     }
 
@@ -760,9 +787,18 @@ def calculate_mvp_score(
             weighted_sum += score * w * 10.0  # Convert 0-10 to 0-100 contribution
             total_weight += w
     final_score = round(_clamp(weighted_sum / total_weight if total_weight > 0 else 0.0), 2)
+    communication_flags = (cat_results.get("communication", {}) or {}).get("flags", {}) or {}
+    severe_unprofessional_language = bool(communication_flags.get("severe_unprofessional_language"))
+    if severe_unprofessional_language:
+        final_score = round(min(final_score, SEVERE_LANGUAGE_FINAL_SCORE_CAP), 2)
 
     # --- Fraud detection ---
     fraud = _detect_fraud(prompts, total_duration_seconds, tests_passed)
+    if severe_unprofessional_language:
+        fraud_flags = list(fraud.get("flags") or [])
+        if "severe_unprofessional_language" not in fraud_flags:
+            fraud_flags.append("severe_unprofessional_language")
+        fraud["flags"] = fraud_flags
     if fraud["flags"]:
         final_score = round(min(final_score, FRAUD_SCORE_CAP), 2)
 

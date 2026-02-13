@@ -1,10 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, AlertTriangle, CheckCircle } from 'lucide-react';
 import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ResponsiveContainer, LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip } from 'recharts';
-import { assessments as assessmentsApi, analytics as analyticsApi, candidates as candidatesApi } from '../lib/api';
-import { SCORING_CATEGORY_GLOSSARY, getMetricMeta } from '../lib/scoringGlossary';
+import * as apiClient from '../lib/api';
+import { SCORING_CATEGORY_GLOSSARY, getMetricMeta, buildGlossaryFromMetadata } from '../lib/scoringGlossary';
 
 export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAdded, NavComponent = null }) => {
+  const assessmentsApi = apiClient.assessments;
+  const analyticsApi = apiClient.analytics;
+  const candidatesApi = apiClient.candidates;
+  const scoringApi = 'scoring' in apiClient ? apiClient.scoring : null;
   const [activeTab, setActiveTab] = useState('results');
   const [busyAction, setBusyAction] = useState('');
   const [noteText, setNoteText] = useState('');
@@ -21,6 +25,8 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
   const [manualEvalImprovements, setManualEvalImprovements] = useState('');
   const [manualEvalSummary, setManualEvalSummary] = useState(null);
   const [manualEvalSaving, setManualEvalSaving] = useState(false);
+  const [categoryGlossary, setCategoryGlossary] = useState(SCORING_CATEGORY_GLOSSARY);
+  const [metricGlossary, setMetricGlossary] = useState({});
 
   const toEvidenceTextareaValue = (value) => {
     if (Array.isArray(value)) return value.filter(Boolean).join('\n');
@@ -64,6 +70,32 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
   }, []);
 
   useEffect(() => {
+    let cancelled = false;
+    const loadScoringMetadata = async () => {
+      if (!scoringApi?.metadata) {
+        setCategoryGlossary(SCORING_CATEGORY_GLOSSARY);
+        setMetricGlossary({});
+        return;
+      }
+      try {
+        const res = await scoringApi.metadata();
+        if (cancelled) return;
+        const built = buildGlossaryFromMetadata(res.data);
+        setCategoryGlossary(built.categories);
+        setMetricGlossary(built.metrics);
+      } catch {
+        if (cancelled) return;
+        setCategoryGlossary(SCORING_CATEGORY_GLOSSARY);
+        setMetricGlossary({});
+      }
+    };
+    loadScoringMetadata();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
     const raw = candidate?._raw;
     const evaluationResult = raw?.evaluation_result || raw?.manual_evaluation || {};
     const categoryScores = evaluationResult?.category_scores;
@@ -93,7 +125,17 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
     return breakdownScores || detailedCategoryScores || analyticsCategoryScores || {};
   };
 
-  if (!candidate) return null;
+  const getMetricMetaResolved = (metricKey) => metricGlossary[metricKey] || getMetricMeta(metricKey);
+
+  if (!candidate) {
+    return (
+      <div className="max-w-5xl mx-auto px-6 py-10">
+        <div className="border-2 border-black p-6 font-mono text-sm text-gray-600">
+          Candidate assessment not found.
+        </div>
+      </div>
+    );
+  }
 
   const handleDownloadReport = async () => {
     if (!assessmentId) return;
@@ -385,8 +427,8 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
             { key: 'cv_match', icon: '📄', weight: '5%' },
           ].map((category) => ({
             ...category,
-            label: SCORING_CATEGORY_GLOSSARY[category.key]?.label || category.key,
-            description: SCORING_CATEGORY_GLOSSARY[category.key]?.description || 'No description available yet.',
+            label: categoryGlossary[category.key]?.label || category.key,
+            description: categoryGlossary[category.key]?.description || 'No description available yet.',
           }));
 
           const radarData = CATEGORY_CONFIG.filter(c => catScores[c.key] != null).map(c => ({
@@ -450,7 +492,7 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                           {Object.entries(metrics).map(([metricKey, metricVal]) => (
                             <div key={metricKey}>
                               <div className="flex items-center gap-3 mb-1">
-                                <div className="font-mono text-sm w-44 text-gray-700" title={getMetricMeta(metricKey).description}>{getMetricMeta(metricKey).label}</div>
+                                <div className="font-mono text-sm w-44 text-gray-700" title={getMetricMetaResolved(metricKey).description}>{getMetricMetaResolved(metricKey).label}</div>
                                 <div className="flex-1 bg-gray-200 h-2.5 border border-gray-300 rounded">
                                   <div
                                     className="h-full rounded"

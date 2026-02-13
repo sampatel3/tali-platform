@@ -30,3 +30,5 @@ class Organization(Base):
 
     users = relationship("User", back_populates="organization")
     assessments = relationship("Assessment", back_populates="organization")
+    roles = relationship("Role", cascade="all, delete-orphan")
+    applications = relationship("CandidateApplication", cascade="all, delete-orphan")

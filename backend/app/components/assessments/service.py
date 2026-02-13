@@ -16,6 +16,8 @@ from sqlalchemy.orm import Session
 from ...platform.config import settings
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
+from ...models.candidate_application import CandidateApplication
+from ...models.role import Role
 from ...models.task import Task
 from ...models.user import User
 from ...models.organization import Organization
@@ -208,6 +210,60 @@ def enforce_active_or_timeout(assessment: Assessment, db: Session) -> None:
     _auto_submit_on_timeout(assessment, task, db)
     raise HTTPException(status_code=409, detail="Assessment time expired and was auto-submitted")
 
+
+def enforce_not_paused(assessment: Assessment) -> None:
+    if getattr(assessment, "is_timer_paused", False):
+        raise HTTPException(
+            status_code=423,
+            detail={
+                "code": "ASSESSMENT_PAUSED",
+                "message": "Assessment is paused while AI assistant is unavailable",
+                "pause_reason": getattr(assessment, "pause_reason", None),
+            },
+        )
+
+
+def pause_assessment_timer(assessment: Assessment, pause_reason: str, db: Session) -> None:
+    if assessment.is_timer_paused:
+        return
+    assessment.is_timer_paused = True
+    assessment.paused_at = utcnow()
+    assessment.pause_reason = pause_reason
+    append_assessment_timeline_event(
+        assessment,
+        "timer_paused",
+        {"pause_reason": pause_reason},
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to pause assessment timer")
+
+
+def resume_assessment_timer(assessment: Assessment, db: Session, resume_reason: str = "manual_retry") -> None:
+    if not assessment.is_timer_paused:
+        return
+    now = utcnow()
+    paused_at = ensure_utc(assessment.paused_at)
+    paused_for_seconds = 0
+    if paused_at is not None:
+        paused_for_seconds = max(0, int((now - paused_at).total_seconds()))
+    assessment.total_paused_seconds = int(assessment.total_paused_seconds or 0) + paused_for_seconds
+    assessment.is_timer_paused = False
+    assessment.paused_at = None
+    assessment.pause_reason = None
+    append_assessment_timeline_event(
+        assessment,
+        "timer_resumed",
+        {"resume_reason": resume_reason, "paused_for_seconds": paused_for_seconds},
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to resume assessment timer")
+
 # ---------------------------------------------------------------------------
 # CV upload
 # ---------------------------------------------------------------------------
@@ -341,6 +397,9 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
             "proctoring_enabled": False if settings.MVP_DISABLE_PROCTORING else (task.proctoring_enabled if task else False),
         },
         "time_remaining": time_remaining_seconds(assessment),
+        "is_timer_paused": bool(getattr(assessment, "is_timer_paused", False)),
+        "pause_reason": getattr(assessment, "pause_reason", None),
+        "total_paused_seconds": int(getattr(assessment, "total_paused_seconds", 0) or 0),
         "repo_url": getattr(assessment, "assessment_repo_url", None),
         "branch_name": getattr(assessment, "assessment_branch", None),
         "clone_command": getattr(assessment, "clone_command", None),
@@ -496,14 +555,28 @@ def submit_assessment(
     cv_match_result = {"cv_job_match_score": None, "skills_match": None, "experience_relevance": None, "match_details": {}}
     try:
         candidate = db.query(Candidate).filter(Candidate.id == assessment.candidate_id).first() if assessment.candidate_id else None
-        if candidate and candidate.cv_text and candidate.job_spec_text and settings.ANTHROPIC_API_KEY:
+        app_cv_text = None
+        role_job_spec_text = None
+        if assessment.application_id:
+            app_row = db.query(CandidateApplication).filter(
+                CandidateApplication.id == assessment.application_id
+            ).first()
+            app_cv_text = app_row.cv_text if app_row else None
+        if assessment.role_id:
+            role_row = db.query(Role).filter(Role.id == assessment.role_id).first()
+            role_job_spec_text = role_row.job_spec_text if role_row else None
+
+        cv_text = app_cv_text or (candidate.cv_text if candidate else None)
+        job_spec_text = role_job_spec_text or (candidate.job_spec_text if candidate else None)
+
+        if cv_text and job_spec_text and settings.ANTHROPIC_API_KEY:
             cv_match_result = calculate_cv_job_match_sync(
-                cv_text=candidate.cv_text,
-                job_spec_text=candidate.job_spec_text,
+                cv_text=cv_text,
+                job_spec_text=job_spec_text,
                 api_key=settings.ANTHROPIC_API_KEY,
                 model=settings.resolved_claude_model,
             )
-        elif candidate and (not candidate.cv_text or not candidate.job_spec_text):
+        elif candidate and (not cv_text or not job_spec_text):
             scoring_errors.append({"component": "cv_job_match", "error": "Missing CV or job spec text — fit scoring skipped"})
     except Exception as exc:
         import logging as _logging
