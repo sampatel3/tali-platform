@@ -11,7 +11,7 @@
 This document captures the full product plan. The sections below explicitly separate what is **in scope for MVP** vs **out of scope for MVP (V2+)**.
 
 
-## Current implementation snapshot (2026-02-13)
+## Current implementation snapshot (reviewed 2026-02-13)
 
 The product is live as a functional MVP with hardening in progress:
 
@@ -26,6 +26,20 @@ Known active engineering focus:
 - Assessment runtime context fidelity (task + repo context visible before coding).
 - Further UX polish and export/reporting depth.
 
+### Product refinements requested in latest review
+
+1. **Candidate comparison modes:** support both radar overlay (A vs B) and side-by-side comparison summaries.
+2. **Dimension explainability:** each scoring dimension needs plain-English definitions via chart tooltips + glossary fallback.
+3. **Landing page positioning:** make “what is being tested” explicit as a core selling point.
+4. **Brand agnosticism:** centralize brand name/domain/assets to make rebranding low-risk.
+5. **Core assessment focus checks:**
+   - Ensure full in-IDE task context visibility.
+   - Ensure complete telemetry capture for all interactions.
+   - Keep scoring deeply comprehensive across all categories and metrics.
+   - Preserve basic CV↔Job Spec comparison as a default capability.
+6. **Model cost strategy:** default non-production/test workloads to the cheapest Claude model, with environment-level override to stronger models.
+7. **Service cost observability:** track per-assessment/per-tenant costs for Claude, E2B, email, storage, and background jobs.
+
 ---
 
 ## Product Vision
@@ -39,6 +53,8 @@ TALI is an AI-augmented technical assessment platform that evaluates candidates 
 ## Product Scope (with MVP boundaries)
 
 ### What's IN:
+- Candidate comparison (overlay + side-by-side modes) for recruiter decision support
+- Plain-English scoring dimension glossary with chart hover tooltips
 - Business registration + authentication
 - Task creation and management
 - Candidate management with CV upload and job spec upload
@@ -52,7 +68,6 @@ TALI is an AI-augmented technical assessment platform that evaluates candidates 
 ### What's OUT (V2):
 - Stripe billing (free pilot phase)
 - Custom email templates (use defaults — revisit V2)
-- Candidate comparison views (side-by-side radar)
 - Proctoring mode (exists but disabled)
 - Team/multi-user management (exists, but not core)
 - Real-time WebSocket monitoring
@@ -64,19 +79,21 @@ TALI is an AI-augmented technical assessment platform that evaluates candidates 
 
 ## Codebase Audit Summary
 
-A full codebase audit was performed on 2026-02-11. The platform has a solid foundation with the full happy path working end-to-end.
+A full codebase audit was performed on 2026-02-11. This section was refreshed against the current repository state on 2026-02-13.
 
 ### What works today:
 - Auth: register, login, email verification, password reset, JWT ✅
 - Task CRUD + AI generation via Claude ✅
 - Candidate CRUD (create, list, search, edit, delete) ✅
-- Assessment lifecycle: create → email → candidate opens link → CV upload → start → E2B sandbox → Claude chat → submit ✅
-- 12-component heuristic scoring engine with fraud detection ✅
+- Assessment lifecycle: create → email → candidate opens link → start → E2B sandbox → Claude chat → submit ✅
+- 30+ metric scoring model across 8 categories with fraud detection ✅
 - Frontend: landing page, dashboard, candidate detail (radar chart, component scores, per-prompt scores, timeline) ✅
 - Analytics dashboard, billing/usage display, team management ✅
 - Email sending via Resend (invite, results, verification, password reset) ✅
 
-### Critical gaps (what this plan addresses):
+### Historical critical gaps (from 2026-02-11 baseline):
+
+Most of the baseline gaps below are now resolved in this repository. Remaining active items are primarily async scoring (`SCORING` state/Celery flow), reminder automation, and frontend decomposition away from `App.jsx`.
 
 | # | Gap | Impact | Phase |
 |---|-----|--------|-------|
@@ -155,14 +172,14 @@ The "Add Candidate" flow should become a multi-step process:
 - [x] Step 2: Upload documents
   - CV upload dropzone (PDF/DOCX, max 5MB) — **required**
   - Job spec upload dropzone (PDF/DOCX/TXT, max 5MB) — **required**
-  - Show upload progress and extracted text preview
+  - Show upload progress
 - [ ] Step 3: Assign task (dropdown of active tasks)
 - [ ] Step 4: Review & send invite
   - Preview: candidate name, email, task, uploaded documents
   - "Send Assessment Invitation" button
 
 - [x] Update the Candidates page to show document status (CV uploaded? Job spec uploaded?)
-- [ ] Update the Candidate Detail page to show uploaded documents with download links
+- [x] Update the Candidate Detail page to show uploaded documents with download links
 
 ### 1.6 — Update schemas
 
@@ -628,6 +645,20 @@ CATEGORY_WEIGHTS = {
 
 ---
 
+### 5.5 — Candidate comparison + score glossary UX
+
+- [ ] Add candidate-vs-candidate comparison entry point in Candidate Detail
+- [ ] Add radar overlay toggle (`single`, `overlay`, `side-by-side`)
+- [ ] Add metric comparison table with deltas and confidence notes
+- [ ] Add chart dimension tooltip content sourced from a central score-dimension glossary file
+- [ ] Ensure keyboard-accessible and mobile-safe fallback (non-hover glossary drawer)
+
+### 5.6 — Cost and model controls
+
+- [ ] Add model selection config per environment (`test/staging/prod`) with cheapest default in non-prod
+- [ ] Add cost ledger events for Claude/E2B/email/storage and aggregate into per-assessment + per-tenant summaries
+- [ ] Add cost dashboard cards and alert thresholds (daily spend, cost per completed assessment, anomalies)
+
 ## IMPLEMENTATION ORDER
 
 ```
@@ -673,6 +704,18 @@ Week 4:
 ### Single Claude call per assessment
 - **Trigger**: Multiple Claude scoring calls
 - **Rule**: CV-job match = ONE Claude call at submission. No other Claude calls for scoring. Keep costs low and scoring fast.
+
+---
+
+## CORE PRODUCT VALIDATION CHECKLIST
+
+- [ ] **Assessment workspace completeness:** candidate sees full task/scenario/repo context before first prompt.
+- [ ] **Telemetry completeness:** every interaction event is captured with enough granularity for replay and scoring audits.
+- [ ] **Scoring completeness:** each category + dimension has clear rubric logic, explanations, and frontend visibility.
+- [ ] **CV↔Job Spec baseline fit:** maintain low-cost LLM fit scoring; optionally add embedding similarity as fallback/validation.
+- [ ] **Model tiering controls:** cheapest model default for test/staging, explicit override path for higher-quality production scoring.
+- [ ] **Cost monitoring:** per-assessment and per-tenant cost attribution across LLM, sandbox, storage, and comms providers.
+- [ ] **Additional high-leverage checks:** prompt-injection resilience, fairness/drift review, and deterministic score replay tooling.
 
 ---
 

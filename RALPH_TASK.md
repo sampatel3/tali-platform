@@ -3,6 +3,8 @@
 > **STATUS: ACTIVE (REOPENED)**
 > This document replaces the previously archived launch checklist. It is now the source of truth for the next execution cycle.
 
+> **Review refresh (2026-02-13):** status markers in this file were rechecked against the current codebase. Candidate Detail, Dashboard, and Candidates pages are extracted from `App.jsx`; Tasks extraction and broader decomposition remain pending.
+
 ---
 task: TALI Platform - Codebase + Product Hardening Sprint
 test_command: "cd backend && pytest -q && cd ../frontend && npm test -- --run"
@@ -70,6 +72,36 @@ This plan is structured so Cursor/Claude Code can execute in controlled phases.
 
 ---
 
+## 2.1) Additional refinement directives (2026-02-13)
+
+- [ ] **Candidate comparison UX v1**
+  - Add a comparison mode in Candidate Detail that overlays one candidate on another in the radar chart.
+  - Also provide side-by-side comparison cards/tables for category and metric-level scores.
+  - Keep candidate pickers explicit (`Candidate A`, `Candidate B`) to avoid accidental comparisons.
+
+- [ ] **Dimension definitions in plain English**
+  - Every score dimension shown in charts must include an accessible description.
+  - Add hover/tooltips on radar axes and bars; include a persistent glossary panel as fallback for touch devices.
+
+- [ ] **Clarify product value on front page**
+  - Expand landing page copy to clearly explain what is being tested (prompt clarity, debugging behavior, autonomy, fraud signals, communication quality, etc.).
+  - Include a short “What we measure (30+ signals)” section with concrete examples.
+
+- [ ] **Brand-agnostic readiness**
+  - Remove hard-coded brand strings from reusable code paths and centralize display name/domain references in config/constants.
+  - Ensure email templates, page titles, and UI logos can be swapped without broad code edits.
+
+- [ ] **Core assessment integrity checklist**
+  - (a) Verify all task context is visible in-IDE before first prompt.
+  - (b) Verify ALL interaction telemetry is tracked and queryable.
+  - (c) Verify scoring remains comprehensive across all categories/metrics with detailed explanations.
+  - (d) Keep a basic CV↔Job Spec fit path (LLM-based baseline plus optional similarity-search fallback).
+  - (e) Default testing/staging model to cheapest Claude tier; keep model configurable per environment.
+  - (f) Add cost monitoring for Claude/E2B/email/storage with per-assessment and per-tenant rollups.
+  - (g) Add weekly “unknown unknowns” review: scoring drift, prompt-injection handling, replay/debug tooling, and fairness checks.
+
+---
+
 ## 3) Audit findings
 
 ## 3.1 What is strong today
@@ -119,6 +151,7 @@ This plan is structured so Cursor/Claude Code can execute in controlled phases.
 ### D. Frontend architecture refactor (risk reduction)
 
 - [ ] Break `frontend/src/App.jsx` into feature modules:
+- [x] Candidate Detail, Dashboard, and Candidates page extraction completed.
   - `pages/` (Dashboard, Candidates, Tasks, CandidateDetail, Settings, Landing)
   - `components/` shared UI
   - `hooks/` data + state orchestration
@@ -166,62 +199,182 @@ This plan is structured so Cursor/Claude Code can execute in controlled phases.
 
 ---
 
-## 4) Execution plan (Cursor-ready)
+## 4) Multi-agent execution plan (assignment-ready)
 
-## Phase 0 — Stabilize test signal (Day 1)
+This section restructures execution into assignable phases so multiple agents can run in parallel with clear handoffs.
 
-- [x] Patch `AssessmentCreate` validation and corresponding schema tests.
-- [x] Mark production smoke tests with dedicated marker and default exclusion.
-- [x] Fix failing frontend tests to green baseline.
+### Agent roster (recommended)
 
-**Exit criteria:**
-- [x] `cd backend && pytest -q -m "not production"` passes.
-- [x] `cd frontend && npm test -- --run` passes.
+- **Agent A — Core assessment runtime (backend + candidate runtime UX)**
+- **Agent B — Scoring quality + explainability**
+- **Agent C — Frontend architecture + comparison UX**
+- **Agent D — Landing page + brand-agnostic refactor**
+- **Agent E — Cost/model controls + observability**
+- **Agent F — CI/QA + release management**
 
-## Phase 1 — Docs + status truthfulness (Day 1-2)
+### Parallelization rules
 
-- [x] Rewrite README “Implemented / Not yet implemented” based on actual code.
-- [x] Add a short “Known limitations” section for external dependency behaviors.
-- [x] Keep `PRODUCT_PLAN.md` and `RALPH_TASK.md` aligned with clear ownership.
+- One agent owns one phase at a time; cross-phase edits require explicit handoff notes in PR description.
+- Shared files (`frontend/src/App.jsx`, scoring schema contracts, shared API clients) require merge order: **B → C → F**.
+- Every phase must include: scope, file boundaries, acceptance criteria, and validation commands.
 
-**Exit criteria:**
-- [x] No contradictory feature-status claims across key docs.
+### Phase P0 — Baseline lock & branch strategy (Owner: Agent F)
 
-## Phase 2 — Frontend decomposition (Day 2-4)
+**Goal:** freeze baseline quality signal before new work.
 
-- [x] Extract CandidateDetailPage from `App.jsx` first (highest complexity).
-- [ ] Extract Dashboard/Candidates/Tasks into separate modules.
-  - [x] Dashboard page extracted to `frontend/src/pages/DashboardPage.jsx`.
-  - [x] Candidates page extracted to `frontend/src/pages/CandidatesPage.jsx`.
-  - [ ] Tasks page extraction pending.
-- [ ] Introduce minimal page-level tests for each extracted module.
+- [ ] Confirm green baseline on default local-safe test commands.
+- [ ] Confirm production-smoke is still isolated from default path.
+- [ ] Create working branch plan (one branch per phase/agent).
 
-**Exit criteria:**
-- [ ] `App.jsx` reduced to routing/composition shell.
-- [ ] Existing behavior parity maintained.
+**Validation:**
+- `cd backend && pytest -q -m "not production"`
+- `cd frontend && npm test -- --run`
 
-## Phase 3 — Product polish and recruiter value (Day 4-6)
+---
 
-- [x] Ship actionable score insights (strengths/risks/interview prompts).
-- [x] Complete Workable post action + visible status trail.
-- [x] Implement report export from candidate detail.
+### Phase P1 — Core assessment integrity (Owner: Agent A)
 
-**Exit criteria:**
-- [x] Recruiter can complete full evaluation loop without manual data copy.
+**Goal:** enforce the core product promise around task assessment reliability.
 
-## Phase 4 — Ops + CI confidence (Day 6-7)
+- [ ] Verify all task context is visible in IDE before first prompt (`task`, `scenario`, `repo_structure`, rubric context).
+- [ ] Add/verify fallback UX when repo context is missing.
+- [ ] Verify full telemetry capture for all candidate interactions (prompt/response/code/test/timing/session metadata).
+- [ ] Add focused E2E for “History Backfill” context visibility.
 
-- [x] Add CI matrix with clear pass/fail gates.
-- [x] Add production-smoke scheduled/manual workflow.
-- [x] Add observability dashboard definitions to docs.
+**File scope (expected):**
+- `backend/app/components/assessments/*`
+- `backend/app/schemas/*assessment*`
+- `frontend/src/components/assessment/*`
+- `frontend/src/pages/*Candidate*` (only if needed for context display)
 
-**Exit criteria:**
-- [x] New PRs cannot merge with broken baseline tests.
+**Acceptance criteria:**
+- Candidate sees complete task context pre-coding.
+- No major telemetry gaps in stored assessment artifacts.
+
+---
+
+### Phase P2 — Scoring completeness + dimension glossary (Owner: Agent B)
+
+**Goal:** make scoring deeply comprehensive and understandable in plain English.
+
+- [ ] Verify category + metric coverage remains comprehensive and mapped frontend↔backend.
+- [ ] Add/centralize plain-English descriptions for every scoring dimension.
+- [ ] Ensure chart tooltip/hover content reads from one glossary source of truth.
+- [ ] Add fallback display for missing/partial scoring components.
+
+**File scope (expected):**
+- `backend/app/components/scoring/*`
+- `backend/app/components/assessments/repository.py`
+- `frontend/src/pages/CandidateDetailPage.jsx`
+- `frontend/src/components/**/*score*`
+- `frontend/src/lib/*` (adapters/formatters)
+
+**Acceptance criteria:**
+- Each visible dimension has a clear explanation.
+- Frontend safely handles partial scores without confusing empty states.
+
+---
+
+### Phase P3 — Candidate comparison UX (Owner: Agent C)
+
+**Goal:** recruiter can compare Candidate A vs Candidate B quickly and accurately.
+
+- [ ] Add candidate comparison mode entry point from candidate detail.
+- [ ] Add radar overlay mode (A on top of B).
+- [ ] Add side-by-side mode (cards/table with per-category deltas).
+- [ ] Add explicit candidate selectors and clear “comparison active” state.
+
+**File scope (expected):**
+- `frontend/src/pages/CandidateDetailPage.jsx`
+- `frontend/src/components/**/*radar*`
+- `frontend/src/components/**/*comparison*`
+- `frontend/src/lib/api.js` (if extra fetches needed)
+
+**Acceptance criteria:**
+- Overlay and side-by-side both functional.
+- Recruiter can compare candidates without leaving candidate detail workflow.
+
+---
+
+### Phase P4 — Frontend decomposition completion (Owner: Agent C)
+
+**Goal:** reduce `App.jsx` monolith risk and isolate page boundaries.
+
+- [ ] Extract `Tasks` page from `App.jsx`.
+- [ ] Continue routing/composition shell simplification.
+- [ ] Add minimal page-level tests for extracted modules.
+
+**Acceptance criteria:**
+- `App.jsx` is primarily routing/composition.
+- Behavior parity maintained for dashboard/candidates/tasks/detail flows.
+
+---
+
+### Phase P5 — Landing page message + brand-agnostic readiness (Owner: Agent D)
+
+**Goal:** improve sales clarity and de-risk rebrand.
+
+- [ ] Add explicit “What we test (30+ signals)” section on front page.
+- [ ] Clarify core value proposition with concrete examples.
+- [ ] Centralize brand name/domain/assets into config/constants.
+- [ ] Ensure email templates/page titles/logo references use centralized brand config.
+
+**Acceptance criteria:**
+- Landing page clearly explains what is assessed.
+- Brand rename can be done in one configuration surface.
+
+---
+
+### Phase P6 — Model-tier strategy + cost observability (Owner: Agent E)
+
+**Goal:** keep costs controlled while preserving quality path.
+
+- [ ] Set cheapest Claude model as default for test/staging.
+- [ ] Keep production model configurable via environment.
+- [ ] Track per-assessment and per-tenant costs across Claude/E2B/email/storage.
+- [ ] Add cost dashboard metrics + thresholds (daily spend, cost/completed assessment).
+
+**Acceptance criteria:**
+- Model tiering is environment-driven and documented.
+- Costs attributable by tenant and assessment.
+
+---
+
+### Phase P7 — Integration, QA, and release gate (Owner: Agent F)
+
+**Goal:** merge all phase outputs safely with measurable release confidence.
+
+- [ ] Run full local-safe QA matrix and production build.
+- [ ] Validate no doc drift across `README`, `PRODUCT_PLAN.md`, and `RALPH_TASK.md`.
+- [ ] Publish release notes mapping each phase to shipped outcomes.
+
+**Validation commands:**
+- `cd backend && pytest -q -m "not production"`
+- `cd frontend && npm test -- --run`
+- `cd frontend && npm run build`
+
+**Release gate:**
+- [ ] All phase acceptance criteria met.
+- [ ] No blocking regressions in assessment runtime, scoring, or candidate comparison.
+
+---
+
+### Suggested execution order for multiple agents
+
+1. **P0 (F)** baseline lock
+2. **Parallel:** **P1 (A)** + **P2 (B)** + **P5 (D)**
+3. **Then:** **P3 (C)** (depends on P2 glossary/score contracts)
+4. **Then:** **P4 (C)** decomposition cleanup
+5. **Parallel:** **P6 (E)** + integration prep by **F**
+6. **Final:** **P7 (F)** release gate
 
 ---
 
 ## 5) Backlog (non-blocking)
 
+- [ ] Candidate comparison views with overlay + side-by-side mode.
+- [ ] Scoring dimension glossary + chart tooltip system.
+- [ ] Centralized brand configuration (name/domain/assets) for easy rebrand.
 - [ ] TypeScript migration (incremental, page-by-page).
 - [ ] React Router migration away from hash routing.
 - [ ] SSO/SAML and enterprise access controls.
