@@ -1,5 +1,5 @@
 """
-TALI platform service layer.
+TAALI platform service layer.
 
 Convenience imports for all service classes.
 """

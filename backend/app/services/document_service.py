@@ -10,7 +10,7 @@ from typing import Any, Dict
 
 from fastapi import HTTPException, UploadFile
 
-logger = logging.getLogger("tali.documents")
+logger = logging.getLogger("taali.documents")
 
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB

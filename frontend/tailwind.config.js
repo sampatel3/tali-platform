@@ -8,8 +8,8 @@ export default {
   theme: {
     extend: {
       colors: {
-        'tali-purple': '#9D00FF',
-        'tali-purple-dark': '#7B00CC',
+        'taali-purple': '#9D00FF',
+        'taali-purple-dark': '#7B00CC',
       }
     },
   },

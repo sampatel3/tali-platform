@@ -13,7 +13,7 @@ from ...models.organization import Organization
 from ...schemas.user import UserCreate, UserResponse, Token, ForgotPasswordRequest, ResetPasswordRequest, ResendVerificationRequest
 from ...components.notifications.email_client import EmailService
 
-logger = logging.getLogger("tali.auth")
+logger = logging.getLogger("taali.auth")
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 

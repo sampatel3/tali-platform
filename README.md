@@ -1,6 +1,7 @@
-# TALI Platform
+# TAALI Platform
 
 **AI-augmented technical assessment** for screening engineers who work *with* AI tools. Candidates code in-browser (Monaco + Claude chat), run code in E2B sandboxes, and recruiters get scores, timelines, and optional ATS (Workable) and billing (Stripe) integration.
+TAALI blends Arabic-inspired clarity with the English idea of a tally: measuring what truly counts in modern engineering work.
 
 ---
 
@@ -13,7 +14,7 @@ The core platform is implemented and deployable end-to-end, and active execution
 - **Stack:** FastAPI, PostgreSQL (SQLAlchemy 2 + Alembic), Redis, Celery.
 - **Auth:** Register, login, JWT (`/api/v1/auth/*`), forgot/reset password.
 - **Assessments:** Create (candidate inline), list (filters, pagination, `candidate_name` / `candidate_email` / `task_name`), get by id, start by token, execute code, Claude chat, submit. E2B sandbox create/reuse, timeline and results persisted.
-- **Repository context model:** when a task is created/updated, TALI recreates a canonical local `main` Git repo snapshot from `task.repo_structure`; assessment sessions still do **not** create candidate-specific branches.
+- **Repository context model:** when a task is created/updated, TAALI recreates a canonical local `main` Git repo snapshot from `task.repo_structure`; assessment sessions still do **not** create candidate-specific branches.
 - **Tasks:** List, get, create, PATCH, DELETE; template vs org tasks.
 - **Organizations:** Get, update; Workable OAuth: `GET authorize-url`, `POST workable/connect`.
 - **Billing:** `GET usage`, `GET costs` (per-assessment + per-tenant infrastructure cost estimates), `POST checkout-session` (Stripe Checkout, £25).
@@ -45,7 +46,7 @@ The core platform is implemented and deployable end-to-end, and active execution
 ## Repository layout
 
 ```
-tali-platform/
+taali-platform/
 ├── backend/                 # FastAPI app
 │   ├── app/
 │   │   ├── api/v1/          # auth, assessments, tasks, organizations, billing, analytics, webhooks
@@ -82,7 +83,7 @@ tali-platform/
    - New project; add PostgreSQL and Redis.  
    - Set env vars (see [ENV_SETUP.md](docs/ENV_SETUP.md)): `SECRET_KEY`, `E2B_API_KEY`, `ANTHROPIC_API_KEY`, `STRIPE_*`, `WORKABLE_*`, `RESEND_API_KEY`, `REDIS_URL`, `DATABASE_URL`, `FRONTEND_URL`, `BACKEND_URL`.  
    - Deploy from `backend/` (e.g. `railway up`).  
-   - Confirm: `curl https://<your-backend>.up.railway.app/health` → `{"status":"healthy","service":"tali-api"}`.
+   - Confirm: `curl https://<your-backend>.up.railway.app/health` → `{"status":"healthy","service":"taali-api"}`.
 
 2. **Frontend (Vercel)**  
    - Import or deploy from `frontend/`.  

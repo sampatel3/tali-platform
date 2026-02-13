@@ -13,7 +13,7 @@ import logging
 import os
 from typing import Optional
 
-logger = logging.getLogger("tali.s3")
+logger = logging.getLogger("taali.s3")
 
 
 def _get_client():

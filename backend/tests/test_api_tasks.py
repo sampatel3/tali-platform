@@ -266,7 +266,7 @@ def test_create_task_creates_template_repo(client, monkeypatch):
         def create_template_repo(self, task):
             captured["task_key"] = task.task_key
             captured["repo_structure"] = task.repo_structure
-            return "mock://tali-assessments/data_eng_c_backfill_schema"
+            return "mock://taali-assessments/data_eng_c_backfill_schema"
 
     monkeypatch.setattr("app.api.v1.tasks.AssessmentRepositoryService", StubRepoService)
 
@@ -292,7 +292,7 @@ def test_update_task_recreates_template_repo(client, monkeypatch):
         def create_template_repo(self, task):
             calls["count"] += 1
             calls["task_key"] = task.task_key
-            return "mock://tali-assessments/updated-task"
+            return "mock://taali-assessments/updated-task"
 
     monkeypatch.setattr("app.api.v1.tasks.AssessmentRepositoryService", StubRepoService)
 

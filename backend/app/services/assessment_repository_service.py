@@ -25,10 +25,10 @@ class AssessmentRepositoryService:
     """
 
     def __init__(self, github_org: str | None = None, github_token: str | None = None):
-        self.github_org = github_org or os.getenv("GITHUB_ORG", "tali-assessments")
+        self.github_org = github_org or os.getenv("GITHUB_ORG", "taali-assessments")
         self.github_token = github_token or os.getenv("GITHUB_TOKEN", "")
         self.mock_mode = os.getenv("GITHUB_MOCK_MODE", "true").lower() in {"1", "true", "yes"}
-        self.mock_root = Path(os.getenv("GITHUB_MOCK_ROOT", "/tmp/tali_github_mock"))
+        self.mock_root = Path(os.getenv("GITHUB_MOCK_ROOT", "/tmp/taali_github_mock"))
 
     def _repo_name(self, task: Any) -> str:
         raw = getattr(task, "task_key", None) or (task.get("task_id") if isinstance(task, dict) else None) or getattr(task, "id", "task")
@@ -59,7 +59,7 @@ class AssessmentRepositoryService:
             target.write_text(content, encoding="utf-8")
         self._run(["git", "init", "-b", "main"], repo)
         self._run(["git", "add", "."], repo)
-        self._run(["git", "-c", "user.email=tali@local", "-c", "user.name=TALI", "commit", "-m", "Initialize task template"], repo)
+        self._run(["git", "-c", "user.email=taali@local", "-c", "user.name=TAALI", "commit", "-m", "Initialize task template"], repo)
         return repo
 
     def create_template_repo(self, task: Any) -> str:

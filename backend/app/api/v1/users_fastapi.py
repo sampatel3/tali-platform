@@ -22,7 +22,7 @@ from ...services.access_control_service import (
     normalize_allowed_domains,
 )
 
-logger = logging.getLogger("tali.auth")
+logger = logging.getLogger("taali.auth")
 
 
 # ---- Schemas (extend FastAPI-Users base) ----

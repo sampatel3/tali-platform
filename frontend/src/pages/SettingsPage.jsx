@@ -17,7 +17,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
   const [inviteLoading, setInviteLoading] = useState(false);
-  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('tali_dark_mode') === '1');
+  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('taali_dark_mode') === '1');
   const [enterpriseSaving, setEnterpriseSaving] = useState(false);
   const [enterpriseForm, setEnterpriseForm] = useState({
     allowedEmailDomains: '',
@@ -82,7 +82,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   }, [settingsTab]);
 
   useEffect(() => {
-    localStorage.setItem('tali_dark_mode', darkMode ? '1' : '0');
+    localStorage.setItem('taali_dark_mode', darkMode ? '1' : '0');
     document.documentElement.classList.toggle('dark', darkMode);
   }, [darkMode]);
 

@@ -85,7 +85,7 @@ import { AuthProvider } from '../context/AuthContext';
 
 const mockUser = {
   id: 1,
-  email: 'admin@tali.com',
+  email: 'admin@taali.ai',
   full_name: 'Admin User',
   organization_id: 1,
   role: 'admin',
@@ -134,8 +134,8 @@ const mockTasks = [
 ];
 
 const setupAuthenticatedUser = () => {
-  localStorage.setItem('tali_access_token', 'fake-jwt-token');
-  localStorage.setItem('tali_user', JSON.stringify(mockUser));
+  localStorage.setItem('taali_access_token', 'fake-jwt-token');
+  localStorage.setItem('taali_user', JSON.stringify(mockUser));
   auth.me.mockResolvedValue({ data: mockUser });
 };
 

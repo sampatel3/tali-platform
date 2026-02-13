@@ -42,7 +42,7 @@ app = FastAPI(
     openapi_url=_openapi_url,
 )
 
-_val_logger = _logging.getLogger("tali.validation")
+_val_logger = _logging.getLogger("taali.validation")
 
 
 def _sanitize_errors(errors: list) -> list:
@@ -235,7 +235,7 @@ def health_check():
     status_str = "healthy" if db_ok and redis_ok else "degraded"
     return {
         "status": status_str,
-        "service": "tali-api",
+        "service": "taali-api",
         "database": db_ok,
         "redis": redis_ok,
         "integrations": integrations,

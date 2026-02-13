@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 
 from ..platform.config import settings
 
-logger = logging.getLogger("tali.fit_matching")
+logger = logging.getLogger("taali.fit_matching")
 
 CV_MATCH_PROMPT = """Analyze the match between this candidate's CV and the job specification.
 

@@ -90,7 +90,7 @@ def create_assessment(
     except Exception as e:
         db.rollback()
         import logging as _logging
-        _logging.getLogger("tali.assessments").exception("Failed to create assessment")
+        _logging.getLogger("taali.assessments").exception("Failed to create assessment")
         raise HTTPException(status_code=500, detail="Failed to create assessment")
 
     assessment = (
@@ -534,7 +534,7 @@ def download_assessment_report_pdf(
         fraud_lines = ["  - None detected"]
 
     body_text = (
-        "TALI - AI-Augmented Technical Assessment Report\\n"
+        "TAALI - AI-Augmented Technical Assessment Report\\n"
         "============================================\\n"
         f"Assessment ID: {assessment.id}\\n"
         f"Candidate: {candidate_name}\\n"

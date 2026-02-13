@@ -1,4 +1,4 @@
-# Cursor Implementation Spec - Tali Assessment System
+# Cursor Implementation Spec - Taali Assessment System
 
 ## Implementation Notes (Product Decisions Applied)
 

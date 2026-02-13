@@ -1,4 +1,4 @@
-# TALI Deployment Guide
+# TAALI Deployment Guide
 
 This guide covers deployment only (Vercel for frontend, Railway for backend). Local run is not required.
 
@@ -90,7 +90,7 @@ Railway will detect the `railway.json` configuration and:
 
 ```bash
 curl https://your-backend.up.railway.app/health
-# Expected: {"status":"healthy","service":"tali-api"}
+# Expected: {"status":"healthy","service":"taali-api"}
 ```
 
 ### 6. Celery worker (second Railway service)
@@ -209,19 +209,19 @@ Recommended policy:
 
 1. Railway dashboard → your service → **Settings** → **Domains**
 2. Click **Add Custom Domain**
-3. Enter your domain (e.g., `api.tali.dev`)
+3. Enter your domain (e.g., `api.taali.ai`)
 4. Add the provided CNAME record to your DNS provider
 5. Wait for DNS propagation and SSL provisioning
-6. Update `BACKEND_URL` env var to `https://api.tali.dev`
+6. Update `BACKEND_URL` env var to `https://api.taali.ai`
 
 ### Frontend (Vercel)
 
 1. Vercel dashboard → your project → **Settings** → **Domains**
 2. Click **Add Domain**
-3. Enter your domain (e.g., `app.tali.dev`)
+3. Enter your domain (e.g., `app.taali.ai`)
 4. Add the provided CNAME or A records to your DNS provider
 5. Vercel automatically provisions SSL
-6. Update `FRONTEND_URL` in the Railway backend env vars to `https://app.tali.dev`
+6. Update `FRONTEND_URL` in the Railway backend env vars to `https://app.taali.ai`
 
 ### Important
 

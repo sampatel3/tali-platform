@@ -1,10 +1,10 @@
-"""Seed the TALI database with demo data.
+"""Seed the TAALI database with demo data.
 
 Usage:
     cd backend
     python -m scripts.seed_data
     
-    OR from the tali/ root:
+    OR from the taali/ root:
     PYTHONPATH=backend python scripts/seed_data.py
 """
 import sys

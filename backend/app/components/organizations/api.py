@@ -96,7 +96,7 @@ def connect_workable(
         token_data = resp.json()
     except Exception as e:
         import logging as _logging
-        _logging.getLogger("tali.organizations").exception("Workable OAuth failed")
+        _logging.getLogger("taali.organizations").exception("Workable OAuth failed")
         raise HTTPException(status_code=400, detail="Workable OAuth failed. Please try again.")
 
     org.workable_access_token = token_data.get("access_token")

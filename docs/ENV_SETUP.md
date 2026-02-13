@@ -1,6 +1,6 @@
-# TALI Environment Variables
+# TAALI Environment Variables
 
-Complete reference for all environment variables used by the TALI platform.
+Complete reference for all environment variables used by the TAALI platform.
 
 ---
 
@@ -129,7 +129,7 @@ CLAUDE_MODEL=claude-3-5-haiku-latest
 |----------|----------|---------|-------------|
 | `ASSESSMENT_PRICE_PENCE` | No | `2500` | Price per assessment (in pence) used by billing and Stripe flows. |
 | `ASSESSMENT_EXPIRY_DAYS` | No | `7` | Number of days before an assessment invite link expires. |
-| `EMAIL_FROM` | No | `TALI <noreply@tali.dev>` | Sender address used by all transactional emails. |
+| `EMAIL_FROM` | No | `TAALI <noreply@taali.ai>` | Sender address used by all transactional emails. |
 | `SCORE_WEIGHTS` | No | JSON defaults | JSON string for composite scoring weights (tests, code_quality, prompt_quality, etc.). |
 | `DEFAULT_CALIBRATION_PROMPT` | No | Reverse-string prompt | Baseline calibration prompt used when a task does not define `calibration_prompt`. |
 
@@ -139,7 +139,7 @@ CLAUDE_MODEL=claude-3-5-haiku-latest
 |----------|----------|---------|-------------|
 | `AWS_ACCESS_KEY_ID` | No | `None` | AWS IAM access key for S3 uploads. |
 | `AWS_SECRET_ACCESS_KEY` | No | `None` | AWS IAM secret key for S3 uploads. |
-| `AWS_S3_BUCKET` | No | `tali-assessments` | S3 bucket name for storing assessment artifacts. |
+| `AWS_S3_BUCKET` | No | `taali-assessments` | S3 bucket name for storing assessment artifacts. |
 | `AWS_REGION` | No | `us-east-1` | AWS region for the S3 bucket. |
 
 **Where to get it:** [AWS Console](https://console.aws.amazon.com) → IAM → Users → Create user with S3 permissions → Access Keys.
@@ -160,7 +160,7 @@ These are compile-time variables injected by Vite. They must be prefixed with `V
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `VITE_API_URL` | **Yes** | — | Backend API base URL (e.g., `https://api.tali.dev`). |
+| `VITE_API_URL` | **Yes** | — | Backend API base URL (e.g., `https://api.taali.ai`). |
 | `VITE_STRIPE_PUBLISHABLE_KEY` | **Yes** | — | Stripe publishable key (starts with `pk_live_` or `pk_test_`). |
 
 **Where to get it:**

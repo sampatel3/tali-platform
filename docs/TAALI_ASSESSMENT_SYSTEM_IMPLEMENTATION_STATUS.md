@@ -1,4 +1,4 @@
-# Tali Assessment System — Implementation Status
+# Taali Assessment System — Implementation Status
 
 This document checks the codebase against the goal and requirements in your spec (CURSOR_IMPLEMENTATION_SPEC.md + product decisions).
 
@@ -37,7 +37,7 @@ This document checks the codebase against the goal and requirements in your spec
 
 | Requirement | Status | Location |
 |-------------|--------|----------|
-| Per-task private GitHub repo (e.g. tali-assessments) | ⚠️ | `AssessmentRepositoryService`; production path deferred |
+| Per-task private GitHub repo (e.g. taali-assessments) | ⚠️ | `AssessmentRepositoryService`; production path deferred |
 | Repo name = task_id (or repo_structure.name) | ✅ | `_repo_name(task)` uses task_key / task_id |
 | Repo contents = task.repo_structure.files | ✅ | `_repo_files(task)` |
 | createTemplateRepo(task) | ✅ | Creates repo (mock) or returns URL (prod) |
@@ -156,4 +156,4 @@ So the **manual evaluator UI** as described (rubric dropdowns + evidence + git a
 
 ---
 
-*Generated from codebase review against the Tali Assessment System spec. Last checked: 2026-02-13.*
+*Generated from codebase review against the Taali Assessment System spec. Last checked: 2026-02-13.*

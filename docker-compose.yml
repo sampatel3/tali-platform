@@ -5,9 +5,9 @@ services:
     image: postgres:15
     restart: unless-stopped
     environment:
-      POSTGRES_USER: tali
-      POSTGRES_PASSWORD: tali_dev_password
-      POSTGRES_DB: tali_db
+      POSTGRES_USER: taali
+      POSTGRES_PASSWORD: taali_dev_password
+      POSTGRES_DB: taali_db
     ports:
       - "5432:5432"
     volumes:

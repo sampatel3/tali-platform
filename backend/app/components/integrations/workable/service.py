@@ -57,12 +57,12 @@ class WorkableService:
 
             body = {
                 "body": (
-                    "TALI Assessment Complete\n\n"
+                    "TAALI Assessment Complete\n\n"
                     f"Overall score: {score}/10\n"
                     f"Tests passed: {tests_passed}/{tests_total}\n"
                     f"Time taken: {time_taken} minutes\n"
                     f"Full recruiter report: {results_url}\n\n"
-                    "This result was posted automatically by TALI."
+                    "This result was posted automatically by TAALI."
                 ),
             }
 

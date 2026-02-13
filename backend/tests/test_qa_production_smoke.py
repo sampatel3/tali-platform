@@ -12,7 +12,7 @@ import pytest
 import requests
 
 PROD_URL = os.getenv(
-    "TALI_PROD_URL",
+    "TAALI_PROD_URL",
     "https://resourceful-adaptation-production.up.railway.app"
 )
 API = f"{PROD_URL}/api/v1"

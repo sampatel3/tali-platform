@@ -136,7 +136,7 @@ def create_checkout_session(
         customer = stripe_lib.Customer.create(
             email=current_user.email,
             name=current_user.full_name or current_user.email,
-            metadata={"org_id": str(org.id), "platform": "tali"},
+            metadata={"org_id": str(org.id), "platform": "taali"},
         )
         customer_id = customer.id
         org.stripe_customer_id = customer_id
@@ -153,7 +153,7 @@ def create_checkout_session(
             line_items=[{
                 "price_data": {
                     "currency": (settings.ASSESSMENT_PRICE_CURRENCY or "aed").lower(),
-                    "product_data": {"name": "TALI Assessment", "description": "One technical assessment"},
+                    "product_data": {"name": "TAALI Assessment", "description": "One technical assessment"},
                     "unit_amount": int(settings.ASSESSMENT_PRICE_MINOR or 2500),
                 },
                 "quantity": 1,
@@ -166,5 +166,5 @@ def create_checkout_session(
         return {"url": session.url}
     except Exception as e:
         import logging as _logging
-        _logging.getLogger("tali.billing").exception("Stripe checkout session error")
+        _logging.getLogger("taali.billing").exception("Stripe checkout session error")
         raise HTTPException(status_code=502, detail="Payment service error. Please try again.")

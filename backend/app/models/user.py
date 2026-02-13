@@ -10,7 +10,7 @@ from ..platform.database import Base
 
 
 class User(SQLAlchemyBaseUserTable[int], Base):
-    """User model extending FastAPI-Users base with TALI-specific fields."""
+    """User model extending FastAPI-Users base with TAALI-specific fields."""
 
     __tablename__ = "users"
 

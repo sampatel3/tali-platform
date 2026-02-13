@@ -296,4 +296,4 @@ class TestHealth:
         assert "status" in d
         assert "database" in d
         assert "redis" in d
-        assert d["service"] == "tali-api"
+        assert d["service"] == "taali-api"

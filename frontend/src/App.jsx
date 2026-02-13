@@ -187,6 +187,9 @@ const HeroSection = ({ onNavigate }) => (
         <p className="text-xl lg:text-2xl font-mono text-gray-700 mb-8 leading-relaxed">
           Test how engineers actually work—with AI tools like Cursor and Claude—not outdated algorithm puzzles.
         </p>
+        <p className="font-mono text-sm text-gray-500 mb-8">
+          TAALI is inspired by Arabic clarity and English tally precision: evaluate what truly counts.
+        </p>
         <div className="flex flex-wrap gap-4">
           <button
             className="border-2 border-black px-8 py-4 font-bold text-lg text-white hover:bg-black transition-colors"
@@ -203,7 +206,7 @@ const HeroSection = ({ onNavigate }) => (
           </button>
         </div>
       </div>
-      {/* Right Column — Old Way vs TALI Way */}
+      {/* Right Column — Old Way vs TAALI Way */}
       <div className="grid grid-cols-2 gap-4">
         <div className="border-2 border-black bg-gray-100 p-4">
           <div className="flex items-center gap-2 mb-3">
@@ -1647,7 +1650,7 @@ const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarted }) =>
             className="inline-block px-4 py-2 text-xs font-mono font-bold text-white border-2 border-black mb-4"
             style={{ backgroundColor: '#9D00FF' }}
           >
-            TALI Assessment
+            TAALI Assessment
           </div>
           <h1 className="text-4xl font-bold mb-2">Technical Assessment</h1>
           <p className="font-mono text-gray-600">You&apos;ve been invited to complete a coding challenge</p>

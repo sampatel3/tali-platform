@@ -9,7 +9,7 @@ class Settings(BaseSettings):
     DEPLOYMENT_ENV: str = "development"
 
     # Database
-    DATABASE_URL: str = "postgresql://tali:tali_dev_password@localhost:5432/tali_db"
+    DATABASE_URL: str = "postgresql://taali:taali_dev_password@localhost:5432/taali_db"
 
     # Security
     SECRET_KEY: str = "dev-secret-key-change-in-production"
@@ -51,7 +51,7 @@ class Settings(BaseSettings):
 
     # GitHub assessment repository integration
     GITHUB_TOKEN: str = ""
-    GITHUB_ORG: str = "tali-assessments"
+    GITHUB_ORG: str = "taali-assessments"
     GITHUB_MOCK_MODE: bool = True
 
     # V2 AI-assisted evaluator (suggestions only)
@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     # AWS S3
     AWS_ACCESS_KEY_ID: Optional[str] = None
     AWS_SECRET_ACCESS_KEY: Optional[str] = None
-    AWS_S3_BUCKET: Optional[str] = "tali-assessments"
+    AWS_S3_BUCKET: Optional[str] = "taali-assessments"
     AWS_REGION: str = "us-east-1"
 
     # Sentry

@@ -2,7 +2,7 @@
 
 ## Overview
 
-The TALI backend follows a **component-based modular monolith** architecture.
+The TAALI backend follows a **component-based modular monolith** architecture.
 Code is organised into self-contained components that communicate through
 well-defined service interfaces rather than reaching into each other's internals.
 

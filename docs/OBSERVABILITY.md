@@ -1,6 +1,6 @@
 # Observability Dashboard Definitions
 
-This document defines the minimum operational dashboard for TALI runtime confidence.
+This document defines the minimum operational dashboard for TAALI runtime confidence.
 
 ## Core SLIs
 

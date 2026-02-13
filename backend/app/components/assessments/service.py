@@ -176,7 +176,7 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
                 "import subprocess,pathlib\n"
                 f"repo=pathlib.Path({repo_root!r})\n"
                 "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True)\n"
-                "subprocess.run(['git','-c','user.email=tali@local','-c','user.name=TALI','commit','-m','auto-submit: time expired'],cwd=repo,check=False,capture_output=True)\n"
+                "subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','auto-submit: time expired'],cwd=repo,check=False,capture_output=True)\n"
                 "subprocess.run(['git','push','origin','HEAD'],cwd=repo,check=False,capture_output=True)\n"
             )
             evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
@@ -277,7 +277,7 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         sandbox_id = e2b.get_sandbox_id(sandbox)
     except Exception as e:
         import logging as _logging
-        _logging.getLogger("tali.assessments").exception("Could not start code environment")
+        _logging.getLogger("taali.assessments").exception("Could not start code environment")
         raise HTTPException(status_code=503, detail="Could not start code environment. Please try again later.")
 
     try:
@@ -400,7 +400,7 @@ def submit_assessment(
                 "import subprocess,pathlib\n"
                 f"repo=pathlib.Path({repo_root!r})\n"
                 "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True)\n"
-                "subprocess.run(['git','-c','user.email=tali@local','-c','user.name=TALI','commit','-m','submit: candidate'],cwd=repo,check=False,capture_output=True)\n"
+                "subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','submit: candidate'],cwd=repo,check=False,capture_output=True)\n"
                 "subprocess.run(['git','push','origin','HEAD'],cwd=repo,check=False,capture_output=True)\n"
             )
             evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
@@ -507,7 +507,7 @@ def submit_assessment(
             scoring_errors.append({"component": "cv_job_match", "error": "Missing CV or job spec text — fit scoring skipped"})
     except Exception as exc:
         import logging as _logging
-        _logging.getLogger("tali.assessments").exception("CV-job match failed, continuing without fit score")
+        _logging.getLogger("taali.assessments").exception("CV-job match failed, continuing without fit score")
         scoring_errors.append({"component": "cv_job_match", "error": str(exc)})
 
     # --- 4. MVP composite score (30+ metrics, 8 categories) ---

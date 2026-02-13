@@ -1,4 +1,4 @@
-# RALPH_TASK.md — TALI Platform Hardening Execution Plan
+# RALPH_TASK.md — TAALI Platform Hardening Execution Plan
 
 > **Status:** ACTIVE (reopened)
 > **Last refreshed:** 2026-02-13
@@ -6,7 +6,7 @@
 
 ---
 
-task: TALI Platform - Codebase + Product Hardening Sprint
+task: TAALI Platform - Codebase + Product Hardening Sprint
 test_command: "cd backend && pytest -q -m 'not production' && cd ../frontend && npm test -- --run"
 
 ---
@@ -165,9 +165,9 @@ Execution note (2026-02-13): Added incremental TS support (`tsconfig.json`, `typ
 
 ---
 
-## 7) Tali Assessment System gaps (from CURSOR_IMPLEMENTATION_SPEC)
+## 7) Taali Assessment System gaps (from CURSOR_IMPLEMENTATION_SPEC)
 
-**Source:** `docs/TALI_ASSESSMENT_SYSTEM_IMPLEMENTATION_STATUS.md`. Execute in order below.
+**Source:** `docs/TAALI_ASSESSMENT_SYSTEM_IMPLEMENTATION_STATUS.md`. Execute in order below.
 
 ### G1 — Repo management + Monaco IDE (CRITICAL: do first)
 

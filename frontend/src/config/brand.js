@@ -1,8 +1,8 @@
 export const BRAND = {
-  name: 'TALI',
-  domain: 'tali.dev',
-  productTagline: 'AI-augmented technical assessments for modern engineering teams.',
-  appTitle: 'AI-Augmented Technical Assessments',
+  name: 'TAALI',
+  domain: 'taali.ai',
+  productTagline: 'Arabic-inspired, tally-precise technical assessments for modern engineering teams.',
+  appTitle: 'AI Technical Assessments That Tally Real Skill',
 };
 
 export const getDocumentTitle = (pageLabel) => {

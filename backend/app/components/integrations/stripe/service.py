@@ -44,7 +44,7 @@ class StripeService:
             customer = stripe.Customer.create(
                 email=email,
                 name=name,
-                metadata={"platform": "tali"},
+                metadata={"platform": "taali"},
             )
 
             logger.info(
@@ -93,7 +93,7 @@ class StripeService:
                 amount=amount_minor,
                 currency=currency_code,
                 customer=customer_id,
-                description="TALI Assessment Fee",
+                description="TAALI Assessment Fee",
                 metadata={"type": "assessment"},
             )
 
@@ -143,7 +143,7 @@ class StripeService:
             subscription = stripe.Subscription.create(
                 customer=customer_id,
                 items=[{"price": price_id}],
-                metadata={"platform": "tali"},
+                metadata={"platform": "taali"},
             )
 
             logger.info(

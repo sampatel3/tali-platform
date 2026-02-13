@@ -1,4 +1,4 @@
-# TALI API Reference
+# TAALI API Reference
 
 Base URL: `/api/v1`
 
@@ -10,7 +10,7 @@ All endpoints (except Health, assessment start, and webhooks) require a Bearer t
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `GET` | `/health` | No | Health check. Returns `{"status": "healthy", "service": "tali-api"}`. |
+| `GET` | `/health` | No | Health check. Returns `{"status": "healthy", "service": "taali-api"}`. |
 
 ---
 
@@ -193,7 +193,7 @@ All endpoints (except Health, assessment start, and webhooks) require a Bearer t
 `POST /api/v1/tasks/` and `PATCH /api/v1/tasks/{id}` support repository-context metadata used in assessment sessions:
 - `task_key` (or alias `task_id`), `role`, `scenario`, `repo_structure`, `evaluation_rubric`, `extra_data`.
 - `expected_insights` and `valid_solutions` are also accepted and merged into `extra_data`.
-- On create/update, TALI recreates the task's canonical local `main` repository snapshot from `repo_structure`.
+- On create/update, TAALI recreates the task's canonical local `main` repository snapshot from `repo_structure`.
 
 **Request body:**
 

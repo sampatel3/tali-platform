@@ -5,7 +5,7 @@ const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
-    const saved = localStorage.getItem('tali_user');
+    const saved = localStorage.getItem('taali_user');
     return saved ? JSON.parse(saved) : null;
   });
   const [loading, setLoading] = useState(false);
@@ -14,11 +14,11 @@ export function AuthProvider({ children }) {
 
   const login = useCallback(async (email, password) => {
     const { data } = await authApi.login(email, password);
-    localStorage.setItem('tali_access_token', data.access_token);
+    localStorage.setItem('taali_access_token', data.access_token);
 
     // Fetch user profile
     const { data: profile } = await authApi.me();
-    localStorage.setItem('tali_user', JSON.stringify(profile));
+    localStorage.setItem('taali_user', JSON.stringify(profile));
     setUser(profile);
     return profile;
   }, []);
@@ -29,8 +29,8 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(() => {
-    localStorage.removeItem('tali_access_token');
-    localStorage.removeItem('tali_user');
+    localStorage.removeItem('taali_access_token');
+    localStorage.removeItem('taali_user');
     setUser(null);
   }, []);
 
@@ -45,17 +45,17 @@ export function AuthProvider({ children }) {
 
   // Validate token on mount
   useEffect(() => {
-    const token = localStorage.getItem('tali_access_token');
+    const token = localStorage.getItem('taali_access_token');
     if (token && !user) {
       setLoading(true);
       authApi.me()
         .then(({ data }) => {
           setUser(data);
-          localStorage.setItem('tali_user', JSON.stringify(data));
+          localStorage.setItem('taali_user', JSON.stringify(data));
         })
         .catch(() => {
-          localStorage.removeItem('tali_access_token');
-          localStorage.removeItem('tali_user');
+          localStorage.removeItem('taali_access_token');
+          localStorage.removeItem('taali_user');
           setUser(null);
         })
         .finally(() => setLoading(false));

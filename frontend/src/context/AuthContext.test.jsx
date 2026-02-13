@@ -14,8 +14,8 @@ function TestConsumer() {
 describe('AuthContext', () => {
   beforeEach(() => {
     localStorage.clear();
-    localStorage.setItem('tali_user', JSON.stringify({ id: 1, email: 'user@example.com' }));
-    localStorage.setItem('tali_access_token', 'token');
+    localStorage.setItem('taali_user', JSON.stringify({ id: 1, email: 'user@example.com' }));
+    localStorage.setItem('taali_access_token', 'token');
   });
 
   it('hydrates auth state from localStorage and clears on logout', () => {
@@ -28,7 +28,7 @@ describe('AuthContext', () => {
     expect(screen.getByTestId('auth-state')).toHaveTextContent('true');
     fireEvent.click(screen.getByText('logout'));
     expect(screen.getByTestId('auth-state')).toHaveTextContent('false');
-    expect(localStorage.getItem('tali_user')).toBeNull();
-    expect(localStorage.getItem('tali_access_token')).toBeNull();
+    expect(localStorage.getItem('taali_user')).toBeNull();
+    expect(localStorage.getItem('taali_access_token')).toBeNull();
   });
 });

@@ -1,4 +1,4 @@
-# PRODUCT_PLAN.md — TALI Platform: Full Product Plan
+# PRODUCT_PLAN.md — TAALI Platform: Full Product Plan
 
 > **Created**: 2026-02-11
 > **Status**: ACTIVE
@@ -44,7 +44,7 @@ Known active engineering focus:
 
 ## Product Vision
 
-TALI is an AI-augmented technical assessment platform that evaluates candidates on their **prompt engineering ability** — how they collaborate with AI to solve problems. This reveals more about modern engineering capability than CVs or traditional coding tests.
+TAALI is an AI-augmented technical assessment platform that evaluates candidates on their **prompt engineering ability** — how they collaborate with AI to solve problems. This reveals more about modern engineering capability than CVs or traditional coding tests.
 
 **Sales Pitch:** "We capture 30+ signals about how candidates work with AI — from prompt clarity to debugging strategy to communication quality. See exactly how each candidate thinks, not just what they produce."
 

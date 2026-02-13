@@ -15,7 +15,7 @@ def _slug(value: str) -> str:
 
 
 def _repo_root() -> Path:
-    root = os.getenv("TASK_REPOS_ROOT", "/tmp/tali_task_repos")
+    root = os.getenv("TASK_REPOS_ROOT", "/tmp/taali_task_repos")
     p = Path(root)
     p.mkdir(parents=True, exist_ok=True)
     return p
@@ -117,7 +117,7 @@ def recreate_task_main_repo(task: Any) -> str:
     subprocess.run(["git", "init", "-b", "main"], cwd=repo_dir, check=False, capture_output=True)
     subprocess.run(["git", "add", "."], cwd=repo_dir, check=False, capture_output=True)
     subprocess.run(
-        ["git", "-c", "user.name=TALI", "-c", "user.email=noreply@tali.dev", "commit", "-m", "Initialize task repo"],
+        ["git", "-c", "user.name=TAALI", "-c", "user.email=noreply@taali.ai", "commit", "-m", "Initialize task repo"],
         cwd=repo_dir,
         check=False,
         capture_output=True,

@@ -8,7 +8,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from .request_context import set_request_id
 
-logger = logging.getLogger("tali.middleware")
+logger = logging.getLogger("taali.middleware")
 
 # In-memory rate limit: key -> list of request timestamps (pruned to last window_sec)
 _rate_limit_store = defaultdict(list)
