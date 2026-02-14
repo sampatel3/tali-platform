@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Table, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -24,6 +24,8 @@ class Role(Base):
     job_spec_filename = Column(String, nullable=True)
     job_spec_text = Column(Text, nullable=True)
     job_spec_uploaded_at = Column(DateTime(timezone=True), nullable=True)
+    interview_focus = Column(JSON, nullable=True)
+    interview_focus_generated_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

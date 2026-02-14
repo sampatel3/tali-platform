@@ -106,6 +106,9 @@ class AssessmentResponse(BaseModel):
     evaluation_rubric: Optional[Dict[str, Any]] = None
     manual_evaluation: Optional[Dict[str, Any]] = None
     evaluation_result: Optional[Dict[str, Any]] = None
+    is_demo: Optional[bool] = False
+    demo_track: Optional[str] = None
+    demo_profile: Optional[Dict[str, Any]] = None
 
     model_config = {"from_attributes": True}
 
@@ -138,3 +141,14 @@ class ClaudeRequest(BaseModel):
 class SubmitRequest(BaseModel):
     final_code: str = Field(min_length=1, max_length=100000)
     tab_switch_count: int = 0  # Total tab switches during assessment
+
+
+class DemoAssessmentStartRequest(BaseModel):
+    full_name: str = Field(min_length=1, max_length=200)
+    position: Optional[str] = Field(default=None, max_length=200)
+    email: EmailStr
+    work_email: Optional[EmailStr] = None
+    company_name: str = Field(min_length=1, max_length=200)
+    company_size: str = Field(min_length=1, max_length=100)
+    assessment_track: str = Field(min_length=1, max_length=120)
+    marketing_consent: bool = True

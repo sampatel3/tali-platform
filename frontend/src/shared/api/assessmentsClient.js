@@ -4,6 +4,7 @@ export const assessments = {
   list: (params = {}) => api.get('/assessments/', { params }),
   get: (id) => api.get(`/assessments/${id}`),
   create: (data) => api.post('/assessments/', data),
+  startDemo: (data) => api.post('/assessments/demo/start', data),
   start: (token) => api.post(`/assessments/token/${token}/start`),
   execute: (id, code, assessmentToken) =>
     api.post(`/assessments/${id}/execute`, { code }, {

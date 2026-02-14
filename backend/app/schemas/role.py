@@ -4,6 +4,18 @@ from typing import Optional
 from pydantic import BaseModel, EmailStr, Field
 
 
+class InterviewFocusQuestion(BaseModel):
+    question: str
+    what_to_listen_for: list[str] = Field(default_factory=list)
+    concerning_signals: list[str] = Field(default_factory=list)
+
+
+class InterviewFocus(BaseModel):
+    role_summary: Optional[str] = None
+    manual_screening_triggers: list[str] = Field(default_factory=list)
+    questions: list[InterviewFocusQuestion] = Field(default_factory=list)
+
+
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=4000)
@@ -21,6 +33,8 @@ class RoleResponse(BaseModel):
     description: Optional[str] = None
     job_spec_filename: Optional[str] = None
     job_spec_uploaded_at: Optional[datetime] = None
+    interview_focus: Optional[InterviewFocus] = None
+    interview_focus_generated_at: Optional[datetime] = None
     tasks_count: int = 0
     applications_count: int = 0
     created_at: datetime

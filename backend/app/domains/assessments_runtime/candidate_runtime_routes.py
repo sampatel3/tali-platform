@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import secrets
 import time
+from datetime import timedelta
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
 from sqlalchemy.orm import Session
@@ -31,16 +32,203 @@ from ...domains.integrations_notifications.adapters import (
     build_sandbox_adapter,
 )
 from ...models.assessment import Assessment, AssessmentStatus
+from ...models.candidate import Candidate
+from ...models.organization import Organization
 from ...models.task import Task
+from ...platform.config import settings
 from ...platform.database import get_db
 from ...schemas.assessment import (
     AssessmentStart,
     ClaudeRequest,
     CodeExecutionRequest,
+    DemoAssessmentStartRequest,
     SubmitRequest,
 )
 
 router = APIRouter()
+
+
+DEMO_ORG_SLUG = "taali-demo"
+DEMO_ORG_NAME = "TAALI Demo Leads"
+DEMO_TRACK_TASKS = {
+    "backend-reliability": {
+        "task_key": "taali_demo_backend_reliability",
+        "name": "TAALI Demo: Backend API Reliability",
+        "description": "Stabilize a flaky API endpoint and ship a safe patch with validation.",
+        "task_type": "python",
+        "difficulty": "medium",
+        "duration_minutes": 25,
+        "role": "ai_engineer",
+        "scenario": (
+            "An order sync endpoint occasionally duplicates records in production. "
+            "Patch the issue, explain the root cause, and add a regression test."
+        ),
+        "repo_structure": {
+            "files": {
+                "src/order_merge.py": (
+                    "def merge_order(existing, incoming):\n"
+                    "    \"\"\"Merge incoming payload into an existing order record.\"\"\"\n"
+                    "    if incoming.get(\"status\"):\n"
+                    "        existing[\"status\"] = incoming[\"status\"]\n"
+                    "    if incoming.get(\"items\"):\n"
+                    "        existing[\"items\"] += incoming[\"items\"]\n"
+                    "    return existing\n"
+                ),
+                "tests/test_order_merge.py": (
+                    "from src.order_merge import merge_order\n\n"
+                    "def test_merge_status():\n"
+                    "    existing = {\"status\": \"open\", \"items\": []}\n"
+                    "    incoming = {\"status\": \"closed\"}\n"
+                    "    assert merge_order(existing, incoming)[\"status\"] == \"closed\"\n"
+                ),
+            },
+        },
+    },
+    "frontend-debugging": {
+        "task_key": "taali_demo_frontend_debugging",
+        "name": "TAALI Demo: Frontend Bug Triage",
+        "description": "Investigate state overwrite issues and apply a robust fix.",
+        "task_type": "javascript",
+        "difficulty": "medium",
+        "duration_minutes": 20,
+        "role": "frontend_engineer",
+        "scenario": (
+            "A settings form resets local edits after slow API responses. "
+            "Fix stale response handling and explain your approach."
+        ),
+        "repo_structure": {
+            "files": {
+                "src/settingsMerge.js": (
+                    "export function mergeRemoteSettings(localDraft, remoteData) {\n"
+                    "  return { ...localDraft, ...remoteData };\n"
+                    "}\n"
+                ),
+                "src/hooks/useSettingsSync.js": (
+                    "export function shouldApplyServerPayload(lastEditedAt, payloadFetchedAt) {\n"
+                    "  return payloadFetchedAt >= lastEditedAt;\n"
+                    "}\n"
+                ),
+            },
+        },
+    },
+    "data-pipeline": {
+        "task_key": "taali_demo_data_pipeline",
+        "name": "TAALI Demo: Data Pipeline Incident",
+        "description": "Trace a transformation bug and restore safe downstream output.",
+        "task_type": "python",
+        "difficulty": "hard",
+        "duration_minutes": 30,
+        "role": "data_engineer",
+        "scenario": (
+            "A daily ETL run is dropping qualifying records. "
+            "Identify the transformation bug, patch it, and add validation coverage."
+        ),
+        "repo_structure": {
+            "files": {
+                "pipeline/transform.py": (
+                    "def normalize_record(record):\n"
+                    "    score = int(record.get(\"score\", 0))\n"
+                    "    if score < 50:\n"
+                    "        return None\n"
+                    "    record[\"score\"] = score\n"
+                    "    return record\n"
+                ),
+                "pipeline/tests/test_transform.py": (
+                    "from pipeline.transform import normalize_record\n\n"
+                    "def test_preserves_qualifying_rows():\n"
+                    "    assert normalize_record({\"score\": \"65\"})[\"score\"] == 65\n"
+                ),
+            },
+        },
+    },
+}
+DEMO_TRACK_KEYS = set(DEMO_TRACK_TASKS.keys())
+
+
+def _ensure_demo_org(db: Session) -> Organization:
+    org = db.query(Organization).filter(Organization.slug == DEMO_ORG_SLUG).first()
+    if org:
+        return org
+
+    org = Organization(name=DEMO_ORG_NAME, slug=DEMO_ORG_SLUG, plan="pay_per_use")
+    db.add(org)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        org = db.query(Organization).filter(Organization.slug == DEMO_ORG_SLUG).first()
+        if org:
+            return org
+        raise HTTPException(status_code=500, detail="Failed to initialize demo organization")
+
+    db.refresh(org)
+    return org
+
+
+def _resolve_demo_task(db: Session, org_id: int, track: str) -> Task | None:
+    track_def = DEMO_TRACK_TASKS.get(track)
+    if not track_def:
+        return None
+
+    task_key = track_def["task_key"]
+    task = (
+        db.query(Task)
+        .filter(
+            Task.is_active == True,  # noqa: E712
+            Task.task_key == task_key,
+            Task.organization_id == org_id,
+        )
+        .order_by(Task.id.asc())
+        .first()
+    )
+    if task:
+        return task
+
+    task = (
+        db.query(Task)
+        .filter(
+            Task.is_active == True,  # noqa: E712
+            Task.task_key == task_key,
+            Task.organization_id == None,  # noqa: E711
+        )
+        .order_by(Task.id.asc())
+        .first()
+    )
+    if task:
+        return task
+
+    evaluation_rubric = {
+        "task_completion": {"weight": 0.3},
+        "prompt_clarity": {"weight": 0.2},
+        "context_provision": {"weight": 0.2},
+        "independence_efficiency": {"weight": 0.2},
+        "written_communication": {"weight": 0.1},
+    }
+    task = Task(
+        organization_id=org_id,
+        name=track_def["name"],
+        description=track_def["description"],
+        task_type=track_def["task_type"],
+        difficulty=track_def["difficulty"],
+        duration_minutes=track_def["duration_minutes"],
+        starter_code="",
+        test_code="",
+        task_key=task_key,
+        role=track_def["role"],
+        scenario=track_def["scenario"],
+        repo_structure=track_def["repo_structure"],
+        evaluation_rubric=evaluation_rubric,
+        extra_data={"demo_track": track},
+        is_active=True,
+    )
+    db.add(task)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        return None
+    db.refresh(task)
+    return task
 
 
 @router.post("/token/{token}/start", response_model=AssessmentStart)
@@ -49,6 +237,84 @@ def start_assessment(token: str, db: Session = Depends(get_db)):
     assessment = db.query(Assessment).filter(Assessment.token == token).with_for_update().first()
     if not assessment:
         raise HTTPException(status_code=404, detail="Invalid assessment token")
+    return start_or_resume_assessment(assessment, db)
+
+
+@router.post("/demo/start", response_model=AssessmentStart)
+def start_demo_assessment(
+    data: DemoAssessmentStartRequest,
+    db: Session = Depends(get_db),
+):
+    """Create a demo lead + assessment and start the normal runtime session."""
+    track = str(data.assessment_track or "").strip().lower()
+    if track not in DEMO_TRACK_KEYS:
+        raise HTTPException(status_code=400, detail="Unsupported demo assessment track")
+
+    org = _ensure_demo_org(db)
+    task = _resolve_demo_task(db, org.id, track)
+    if not task:
+        raise HTTPException(status_code=503, detail="No demo assessment task is available yet")
+
+    normalized_email = str(data.email).strip().lower()
+    normalized_work_email = str(data.work_email).strip().lower() if data.work_email else None
+
+    candidate = (
+        db.query(Candidate)
+        .filter(
+            Candidate.organization_id == org.id,
+            Candidate.email == normalized_email,
+        )
+        .first()
+    )
+    if not candidate:
+        candidate = Candidate(
+            organization_id=org.id,
+            email=normalized_email,
+        )
+        db.add(candidate)
+        db.flush()
+
+    candidate.full_name = data.full_name
+    candidate.position = data.position
+    candidate.work_email = normalized_work_email
+    candidate.company_name = data.company_name
+    candidate.company_size = data.company_size
+    candidate.lead_source = "landing_demo"
+    candidate.marketing_consent = bool(data.marketing_consent)
+    candidate.workable_data = {
+        **(candidate.workable_data or {}),
+        "demo_track": track,
+        "marketing_consent": bool(data.marketing_consent),
+    }
+
+    assessment = Assessment(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        task_id=task.id,
+        token=secrets.token_urlsafe(32),
+        duration_minutes=task.duration_minutes or 30,
+        expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
+        is_demo=True,
+        demo_track=track,
+        demo_profile={
+            "full_name": data.full_name,
+            "position": data.position,
+            "email": normalized_email,
+            "work_email": normalized_work_email,
+            "company_name": data.company_name,
+            "company_size": data.company_size,
+            "marketing_consent": bool(data.marketing_consent),
+            "lead_source": "landing_demo",
+        },
+    )
+    db.add(assessment)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to create demo assessment")
+
+    db.refresh(assessment)
     return start_or_resume_assessment(assessment, db)
 
 

@@ -33,6 +33,9 @@ import {
 import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
 
 const AssessmentPage = lazy(() => import('./features/assessment_runtime/AssessmentPage'));
+const DemoExperiencePage = lazy(() =>
+  import('./features/demo/DemoExperiencePage').then((m) => ({ default: m.DemoExperiencePage }))
+);
 const LazyCandidateDetailPage = lazy(() =>
   import('./features/candidates/CandidateDetailPage').then((m) => ({ default: m.CandidateDetailPage }))
 );
@@ -244,6 +247,14 @@ function AppContent() {
   return (
     <Routes>
       <Route path="/" element={<LandingPage onNavigate={navigateToPage} />} />
+      <Route
+        path="/demo"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <DemoExperiencePage onNavigate={navigateToPage} />
+          </Suspense>
+        )}
+      />
       <Route path="/login" element={<LoginPage onNavigate={navigateToPage} />} />
       <Route path="/register" element={<RegisterPage onNavigate={navigateToPage} />} />
       <Route path="/forgot-password" element={<ForgotPasswordPage onNavigate={navigateToPage} />} />

@@ -7,11 +7,21 @@ class CandidateCreate(BaseModel):
     email: EmailStr
     full_name: Optional[str] = Field(default=None, max_length=200)
     position: Optional[str] = Field(default=None, max_length=200)
+    work_email: Optional[EmailStr] = None
+    company_name: Optional[str] = Field(default=None, max_length=200)
+    company_size: Optional[str] = Field(default=None, max_length=100)
+    lead_source: Optional[str] = Field(default=None, max_length=100)
+    marketing_consent: Optional[bool] = True
 
 
 class CandidateUpdate(BaseModel):
     full_name: Optional[str] = Field(default=None, max_length=200)
     position: Optional[str] = Field(default=None, max_length=200)
+    work_email: Optional[EmailStr] = None
+    company_name: Optional[str] = Field(default=None, max_length=200)
+    company_size: Optional[str] = Field(default=None, max_length=100)
+    lead_source: Optional[str] = Field(default=None, max_length=100)
+    marketing_consent: Optional[bool] = None
 
 
 class CandidateResponse(BaseModel):
@@ -19,6 +29,11 @@ class CandidateResponse(BaseModel):
     email: str
     full_name: Optional[str] = None
     position: Optional[str] = None
+    work_email: Optional[str] = None
+    company_name: Optional[str] = None
+    company_size: Optional[str] = None
+    lead_source: Optional[str] = None
+    marketing_consent: Optional[bool] = True
     organization_id: int
 
     # Document status

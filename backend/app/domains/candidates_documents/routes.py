@@ -64,6 +64,11 @@ def create_candidate(
         email=data.email,
         full_name=data.full_name,
         position=data.position,
+        work_email=data.work_email,
+        company_name=data.company_name,
+        company_size=data.company_size,
+        lead_source=data.lead_source,
+        marketing_consent=True if data.marketing_consent is None else bool(data.marketing_consent),
     )
     db.add(candidate)
     try:
@@ -103,6 +108,7 @@ def create_candidate_with_cv(
         email=normalized_email,
         full_name=full_name,
         position=position,
+        marketing_consent=True,
     )
     db.add(candidate)
     db.flush()

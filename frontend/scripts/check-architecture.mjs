@@ -4,8 +4,10 @@ import path from 'node:path';
 const projectRoot = path.resolve(process.cwd());
 const srcRoot = path.join(projectRoot, 'src');
 const appShellPath = path.join(srcRoot, 'App.jsx');
+const featureRoot = path.join(srcRoot, 'features');
 
 const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx']);
+const PAGE_FILE_PATTERN = /Page\.(js|jsx|ts|tsx)$/;
 const DISALLOWED_IMPORT_PATTERNS = [
   /from\s+['"][^'"]*lib\/api(?:\.js)?['"]/g,
   /import\s*\(\s*['"][^'"]*lib\/api(?:\.js)?['"]\s*\)/g,
@@ -46,6 +48,26 @@ if (fs.existsSync(appShellPath)) {
   }
   if (appContent.includes('location.hash') || appContent.includes('window.location.hash')) {
     violations.push('Hash-route compatibility fallback detected in src/App.jsx.');
+  }
+}
+
+if (fs.existsSync(featureRoot)) {
+  const featureEntries = fs.readdirSync(featureRoot, { withFileTypes: true });
+  for (const entry of featureEntries) {
+    if (!entry.isDirectory()) continue;
+    const featureDir = path.join(featureRoot, entry.name);
+    const files = fs.readdirSync(featureDir, { withFileTypes: true });
+    for (const file of files) {
+      if (!file.isFile()) continue;
+      if (!PAGE_FILE_PATTERN.test(file.name)) continue;
+      const fullPath = path.join(featureDir, file.name);
+      const lines = fs.readFileSync(fullPath, 'utf8').split('\n').length;
+      if (lines > 500) {
+        violations.push(
+          `Feature page too large: ${path.relative(projectRoot, fullPath)} has ${lines} lines (max 500).`
+        );
+      }
+    }
   }
 }
 

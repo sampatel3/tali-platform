@@ -48,6 +48,9 @@ const LandingNav = ({ onNavigate }) => {
           <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => scrollTo('pricing')}>
             Pricing
           </Button>
+          <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => onNavigate('demo')}>
+            Demo
+          </Button>
           <Button type="button" variant="secondary" size="sm" className="font-mono" onClick={() => onNavigate('login')}>
             Sign In
           </Button>
@@ -62,6 +65,18 @@ const LandingNav = ({ onNavigate }) => {
           <div className="grid gap-2">
             <Button type="button" variant="ghost" size="sm" className="justify-start font-mono" onClick={() => scrollTo('pricing')}>
               Pricing
+            </Button>
+            <Button
+              type="button"
+              variant="ghost"
+              size="sm"
+              className="justify-start font-mono"
+              onClick={() => {
+                setMobileOpen(false);
+                onNavigate('demo');
+              }}
+            >
+              Demo
             </Button>
             <Button
               type="button"
@@ -110,7 +125,7 @@ const HeroSection = ({ onNavigate }) => (
           Assess how engineers actually work today using Cursor, Claude Code, and OpenAI Codex on real tasks, in real workflows.
         </p>
         <div className="mt-6 flex flex-wrap gap-3">
-          <Button type="button" variant="primary" size="lg" onClick={() => onNavigate('login')}>
+          <Button type="button" variant="primary" size="lg" onClick={() => onNavigate('demo')}>
             Book a Demo
             <ArrowRight size={16} />
           </Button>
@@ -347,7 +362,7 @@ const PricingSection = ({ onNavigate }) => (
               </li>
             ))}
           </ul>
-          <Button type="button" variant="secondary" size="lg" className="mt-6 w-full" onClick={() => onNavigate('login')}>
+          <Button type="button" variant="secondary" size="lg" className="mt-6 w-full" onClick={() => onNavigate('demo')}>
             Book Demo
           </Button>
         </Panel>

@@ -2,6 +2,11 @@
 
 import uuid
 
+from app.domains.assessments_runtime import candidate_runtime_routes as candidate_runtime_module
+from app.models.assessment import Assessment
+from app.models.candidate import Candidate
+from app.models.organization import Organization
+from app.models.task import Task
 from tests.conftest import (
     auth_headers,
     create_assessment_via_api,
@@ -167,6 +172,105 @@ def test_start_assessment_invalid_token(client):
     fake_token = "nonexistent-token-value"
     resp = client.post(f"/api/v1/assessments/token/{fake_token}/start")
     assert resp.status_code == 404
+
+
+def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
+    task = Task(
+        organization_id=None,
+        name="Demo task",
+        description="Demo task description",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=30,
+        starter_code="print('demo')",
+        test_code="def test_placeholder():\n    assert True\n",
+    )
+    db.add(task)
+    db.commit()
+    db.refresh(task)
+
+    def fake_start_or_resume(assessment, _db):
+        return {
+            "assessment_id": assessment.id,
+            "token": assessment.token,
+            "sandbox_id": "sandbox-demo",
+            "task": {
+                "name": task.name,
+                "description": task.description,
+                "starter_code": task.starter_code,
+                "duration_minutes": assessment.duration_minutes,
+                "task_key": task.task_key,
+                "role": task.role,
+                "scenario": task.scenario,
+                "repo_structure": task.repo_structure,
+                "rubric_categories": [],
+                "evaluation_rubric": None,
+                "extra_data": None,
+                "calibration_prompt": None,
+                "proctoring_enabled": False,
+                "claude_budget_limit_usd": None,
+            },
+            "claude_budget": {"enabled": False},
+            "time_remaining": 1800,
+            "is_timer_paused": False,
+            "pause_reason": None,
+            "total_paused_seconds": 0,
+        }
+
+    monkeypatch.setattr(candidate_runtime_module, "start_or_resume_assessment", fake_start_or_resume)
+
+    payload = {
+        "full_name": "Demo User",
+        "position": "Engineering Manager",
+        "email": "demo-user@example.com",
+        "work_email": "demo-user@company.com",
+        "company_name": "Acme Corp",
+        "company_size": "51-200",
+        "assessment_track": "backend-reliability",
+        "marketing_consent": True,
+    }
+    resp = client.post("/api/v1/assessments/demo/start", json=payload)
+    assert resp.status_code == 200, resp.text
+
+    body = resp.json()
+    assert body["assessment_id"] > 0
+    assert body["token"]
+    assert body["sandbox_id"] == "sandbox-demo"
+
+    demo_org = db.query(Organization).filter(Organization.slug == "taali-demo").first()
+    assert demo_org is not None
+
+    candidate = db.query(Candidate).filter(Candidate.email == "demo-user@example.com").first()
+    assert candidate is not None
+    assert candidate.organization_id == demo_org.id
+    assert candidate.work_email == "demo-user@company.com"
+    assert candidate.company_name == "Acme Corp"
+    assert candidate.company_size == "51-200"
+    assert candidate.lead_source == "landing_demo"
+    assert candidate.marketing_consent is True
+
+    assessment = db.query(Assessment).filter(Assessment.id == body["assessment_id"]).first()
+    assert assessment is not None
+    assert assessment.is_demo is True
+    assert assessment.demo_track == "backend-reliability"
+    assert assessment.demo_profile["work_email"] == "demo-user@company.com"
+    assert assessment.demo_profile["marketing_consent"] is True
+
+
+def test_demo_start_rejects_invalid_track(client):
+    payload = {
+        "full_name": "Demo User",
+        "position": "Engineer",
+        "email": "demo-invalid@example.com",
+        "work_email": "demo-invalid@company.com",
+        "company_name": "Acme Corp",
+        "company_size": "11-50",
+        "assessment_track": "non-existent-track",
+        "marketing_consent": True,
+    }
+    resp = client.post("/api/v1/assessments/demo/start", json=payload)
+    assert resp.status_code == 400
+    assert "Unsupported demo assessment track" in resp.json()["detail"]
 
 
 # ---------------------------------------------------------------------------

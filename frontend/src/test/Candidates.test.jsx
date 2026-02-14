@@ -199,6 +199,47 @@ describe('CandidatesPage', () => {
     });
   });
 
+  it('shows interview focus guidance when available', async () => {
+    rolesApi.list.mockResolvedValue({
+      data: [
+        {
+          ...baseRoles[0],
+          interview_focus_generated_at: '2026-01-12T10:00:00Z',
+          interview_focus: {
+            role_summary: 'Prioritize validation of API ownership and on-call incident depth.',
+            manual_screening_triggers: ['Ownership depth', 'Incident response'],
+            questions: [
+              {
+                question: 'Tell me about a production incident you directly owned.',
+                what_to_listen_for: ['Clear root cause and mitigation details'],
+                concerning_signals: ['Cannot explain personal decisions'],
+              },
+              {
+                question: 'How did you design a backend API for reliability?',
+                what_to_listen_for: ['Tradeoffs and failure-mode handling'],
+                concerning_signals: ['Only high-level abstractions'],
+              },
+              {
+                question: 'How do you verify compensation aligns with role scope?',
+                what_to_listen_for: ['Evidence-based impact and ownership'],
+                concerning_signals: ['Title-only justification'],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await renderAppOnCandidatesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Interview focus')).toBeInTheDocument();
+      expect(screen.getByText(/Q1\./)).toBeInTheDocument();
+      expect(screen.getAllByText(/Look for:/).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/Watch out for:/).length).toBeGreaterThan(0);
+    });
+  });
+
   it('shows empty role state and disables Add candidate when there are no roles', async () => {
     rolesApi.list.mockResolvedValue({ data: [] });
     rolesApi.listApplications.mockResolvedValue({ data: [] });
@@ -414,12 +455,13 @@ describe('CandidatesPage', () => {
     });
   });
 
-  it('shows unassigned role when candidates exist without role applications', async () => {
+  it('shows dashboard candidates when no roles exist', async () => {
     rolesApi.list.mockResolvedValue({ data: [] });
     rolesApi.listApplications.mockResolvedValue({ data: [] });
     rolesApi.listTasks.mockResolvedValue({ data: [] });
     assessmentsApi.list
-      .mockResolvedValue({
+      .mockResolvedValueOnce({ data: { items: [], total: 0 } })
+      .mockResolvedValueOnce({
         data: {
           items: [
             {
@@ -431,7 +473,6 @@ describe('CandidatesPage', () => {
               status: 'pending',
               created_at: '2026-01-12T10:00:00Z',
               application_id: null,
-              role_id: null,
             },
           ],
           total: 1,
@@ -441,9 +482,8 @@ describe('CandidatesPage', () => {
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getAllByText('Unassigned role').length).toBeGreaterThan(0);
+      expect(screen.getByText('Dashboard candidates')).toBeInTheDocument();
       expect(screen.getByText('Legacy Candidate')).toBeInTheDocument();
-      expect(screen.queryByText('Dashboard candidates')).not.toBeInTheDocument();
     });
   });
 });

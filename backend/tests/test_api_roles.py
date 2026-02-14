@@ -3,6 +3,7 @@
 import io
 
 from app.domains.assessments_runtime import applications_routes
+from app.domains.assessments_runtime import roles_management_routes
 from tests.conftest import auth_headers, create_task_via_api
 
 
@@ -273,3 +274,86 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
     assert apps[0]["cv_match_score"] == 8.4
     assert apps[0]["cv_match_details"]["summary"] == "Strong API and SQL alignment."
     assert apps[0]["cv_match_scored_at"] is not None
+
+
+def test_job_spec_upload_generates_interview_focus(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    role = client.post("/api/v1/roles", json={"name": "Interview focus role"}, headers=headers).json()
+
+    monkeypatch.setattr(roles_management_routes.settings, "ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(
+        roles_management_routes,
+        "process_document_upload",
+        lambda **_: {
+            "file_url": "/tmp/mock-job-spec.pdf",
+            "filename": "job-spec.pdf",
+            "extracted_text": "Senior backend role requiring APIs, SQL, and incident ownership.",
+            "text_preview": "Senior backend role requiring APIs, SQL, and incident ownership.",
+        },
+    )
+    monkeypatch.setattr(
+        roles_management_routes,
+        "generate_interview_focus_sync",
+        lambda **_: {
+            "role_summary": "Role needs strong API design, data modeling, and production ownership.",
+            "manual_screening_triggers": ["Hands-on API ownership", "Database depth"],
+            "questions": [
+                {
+                    "question": "Describe an API you designed end-to-end.",
+                    "what_to_listen_for": ["Tradeoffs, scale, reliability"],
+                    "concerning_signals": ["Vague ownership"],
+                },
+                {
+                    "question": "How did you optimize a slow SQL workload?",
+                    "what_to_listen_for": ["Profiling approach", "Index strategy"],
+                    "concerning_signals": ["No concrete example"],
+                },
+                {
+                    "question": "Walk through an incident you led in production.",
+                    "what_to_listen_for": ["Root cause, mitigation, prevention"],
+                    "concerning_signals": ["No post-incident learning"],
+                },
+            ],
+        },
+    )
+
+    job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"role requirements"), "text/plain")}
+    upload_resp = client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers)
+    assert upload_resp.status_code == 200, upload_resp.text
+    payload = upload_resp.json()
+    assert payload["interview_focus_generated"] is True
+    assert payload["interview_focus_error"] is None
+    assert len(payload["interview_focus"]["questions"]) == 3
+    assert payload["interview_focus_generated_at"] is not None
+
+    list_resp = client.get("/api/v1/roles", headers=headers)
+    assert list_resp.status_code == 200, list_resp.text
+    roles = list_resp.json()
+    assert len(roles) >= 1
+    assert roles[0]["interview_focus"]["questions"][0]["question"] == "Describe an API you designed end-to-end."
+    assert roles[0]["interview_focus_generated_at"] is not None
+
+
+def test_job_spec_upload_returns_interview_focus_error_when_api_key_missing(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    role = client.post("/api/v1/roles", json={"name": "No key role"}, headers=headers).json()
+
+    monkeypatch.setattr(roles_management_routes.settings, "ANTHROPIC_API_KEY", "")
+    monkeypatch.setattr(
+        roles_management_routes,
+        "process_document_upload",
+        lambda **_: {
+            "file_url": "/tmp/mock-job-spec.pdf",
+            "filename": "job-spec.pdf",
+            "extracted_text": "Role requirements for production backend engineer.",
+            "text_preview": "Role requirements for production backend engineer.",
+        },
+    )
+
+    job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"role requirements"), "text/plain")}
+    upload_resp = client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers)
+    assert upload_resp.status_code == 200, upload_resp.text
+    payload = upload_resp.json()
+    assert payload["interview_focus_generated"] is False
+    assert payload["interview_focus"] is None
+    assert "not configured" in (payload["interview_focus_error"] or "").lower()

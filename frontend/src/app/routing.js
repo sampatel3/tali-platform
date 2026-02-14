@@ -14,6 +14,8 @@ export const pathForPage = (page, options = {}) => {
       return `/verify-email${options.verifyEmailToken ? `?token=${encodeURIComponent(options.verifyEmailToken)}` : ''}`;
     case 'dashboard':
       return '/dashboard';
+    case 'demo':
+      return '/demo';
     case 'candidates':
       return '/candidates';
     case 'candidate-detail':

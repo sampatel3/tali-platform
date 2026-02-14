@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Text
+from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Text, Boolean
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from ..platform.database import Base
@@ -12,6 +12,11 @@ class Candidate(Base):
     email = Column(String, index=True)
     full_name = Column(String)
     position = Column(String)
+    work_email = Column(String, nullable=True, index=True)
+    company_name = Column(String, nullable=True)
+    company_size = Column(String, nullable=True)
+    lead_source = Column(String, nullable=True)
+    marketing_consent = Column(Boolean, default=True)
     workable_candidate_id = Column(String)
     workable_data = Column(JSON)
 

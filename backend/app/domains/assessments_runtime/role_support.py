@@ -42,6 +42,8 @@ def role_to_response(role: Role) -> RoleResponse:
         description=role.description,
         job_spec_filename=role.job_spec_filename,
         job_spec_uploaded_at=role.job_spec_uploaded_at,
+        interview_focus=role.interview_focus,
+        interview_focus_generated_at=role.interview_focus_generated_at,
         tasks_count=len(role.tasks or []),
         applications_count=len(role.applications or []),
         created_at=role.created_at,

@@ -392,5 +392,8 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "evaluation_rubric": evaluation_rubric,
         "manual_evaluation": evaluation_result,
         "evaluation_result": evaluation_result,
+        "is_demo": bool(getattr(assessment, "is_demo", False)),
+        "demo_track": getattr(assessment, "demo_track", None),
+        "demo_profile": getattr(assessment, "demo_profile", None),
     }
     return data

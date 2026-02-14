@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
@@ -11,12 +12,32 @@ from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...models.task import Task
 from ...models.user import User
+from ...platform.config import settings
 from ...platform.database import get_db
 from ...schemas.role import RoleCreate, RoleResponse, RoleTaskLinkRequest, RoleUpdate
 from ...services.document_service import process_document_upload
+from ...services.interview_focus_service import generate_interview_focus_sync
 from .role_support import get_role, role_to_response
 
 router = APIRouter(tags=["Roles"])
+logger = logging.getLogger("taali.roles")
+
+
+def _generate_interview_focus(role: Role) -> tuple[dict | None, str | None]:
+    job_spec_text = (role.job_spec_text or "").strip()
+    if not job_spec_text:
+        return None, "Interview focus unavailable: job spec text is empty"
+    if not settings.ANTHROPIC_API_KEY:
+        return None, "Interview focus unavailable: Anthropic API key is not configured"
+
+    interview_focus = generate_interview_focus_sync(
+        job_spec_text=job_spec_text,
+        api_key=settings.ANTHROPIC_API_KEY,
+        model=settings.resolved_claude_model,
+    )
+    if not interview_focus:
+        return None, "Interview focus unavailable: failed to generate pointers"
+    return interview_focus, None
 
 
 @router.post("/roles", response_model=RoleResponse, status_code=status.HTTP_201_CREATED)
@@ -141,6 +162,22 @@ def upload_role_job_spec(
     role.job_spec_filename = result["filename"]
     role.job_spec_text = result["extracted_text"]
     role.job_spec_uploaded_at = now
+    role.interview_focus = None
+    role.interview_focus_generated_at = None
+
+    interview_focus: dict | None = None
+    interview_focus_error: str | None = None
+    try:
+        interview_focus, interview_focus_error = _generate_interview_focus(role)
+    except Exception:
+        logger.exception("Failed to generate interview focus for role_id=%s", role.id)
+        interview_focus = None
+        interview_focus_error = "Interview focus unavailable: failed to generate pointers"
+
+    if interview_focus:
+        role.interview_focus = interview_focus
+        role.interview_focus_generated_at = now
+
     try:
         db.commit()
         db.refresh(role)
@@ -153,6 +190,10 @@ def upload_role_job_spec(
         "filename": result["filename"],
         "text_preview": result["text_preview"],
         "uploaded_at": now,
+        "interview_focus_generated": bool(role.interview_focus),
+        "interview_focus_generated_at": role.interview_focus_generated_at,
+        "interview_focus": role.interview_focus,
+        "interview_focus_error": interview_focus_error,
     }
 
 
