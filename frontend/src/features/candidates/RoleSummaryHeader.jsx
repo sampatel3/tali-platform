@@ -1,5 +1,5 @@
-import React from 'react';
-import { BriefcaseBusiness, FileText } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { BriefcaseBusiness, ChevronDown, ChevronUp, FileText } from 'lucide-react';
 
 import {
   Badge,
@@ -14,6 +14,12 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
   const focusQuestions = Array.isArray(focus?.questions) ? focus.questions.slice(0, 3) : [];
   const focusTriggers = Array.isArray(focus?.manual_screening_triggers) ? focus.manual_screening_triggers : [];
   const hasInterviewFocus = focusQuestions.length > 0;
+  const [focusExpanded, setFocusExpanded] = useState(true);
+  const focusPanelId = `interview-focus-panel-${role.id || 'active'}`;
+
+  useEffect(() => {
+    setFocusExpanded(true);
+  }, [role.id, role.interview_focus_generated_at]);
 
   return (
     <Panel className="p-5">
@@ -56,49 +62,75 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
               <p className="text-sm font-semibold text-gray-900">Interview focus</p>
               <p className="text-xs text-gray-500">Manual screening pointers from the job spec.</p>
             </div>
-            {role.interview_focus_generated_at ? (
-              <span className="text-[11px] text-gray-400">
-                Updated {new Date(role.interview_focus_generated_at).toLocaleDateString()}
-              </span>
-            ) : null}
+            <div className="flex flex-col items-end gap-1">
+              {role.interview_focus_generated_at ? (
+                <span className="text-[11px] text-gray-400">
+                  Updated {new Date(role.interview_focus_generated_at).toLocaleDateString()}
+                </span>
+              ) : null}
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-expanded={focusExpanded}
+                aria-controls={focusPanelId}
+                onClick={() => setFocusExpanded((prev) => !prev)}
+              >
+                {focusExpanded ? (
+                  <>
+                    Collapse
+                    <ChevronUp size={14} />
+                  </>
+                ) : (
+                  <>
+                    Expand
+                    <ChevronDown size={14} />
+                  </>
+                )}
+              </Button>
+            </div>
           </div>
 
-          {focus?.role_summary ? (
-            <p className="mt-2 text-sm text-gray-700">{focus.role_summary}</p>
-          ) : null}
+          {focusExpanded ? (
+            <div id={focusPanelId}>
+              {focus?.role_summary ? (
+                <p className="mt-2 text-sm text-gray-700">{focus.role_summary}</p>
+              ) : null}
 
-          {focusTriggers.length > 0 ? (
-            <div className="mt-3 flex flex-wrap gap-1.5">
-              {focusTriggers.map((trigger) => (
-                <Badge key={trigger} variant="muted">{trigger}</Badge>
-              ))}
+              {focusTriggers.length > 0 ? (
+                <div className="mt-3 flex flex-wrap gap-1.5">
+                  {focusTriggers.map((trigger) => (
+                    <Badge key={trigger} variant="muted">{trigger}</Badge>
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="mt-3 space-y-2">
+                {focusQuestions.map((item, index) => (
+                  <Card key={`${item.question}-${index}`} className="border-[var(--taali-border-muted)] bg-[#fffcf5] px-3 py-2">
+                    <p className="text-sm font-semibold text-gray-900">
+                      {`Q${index + 1}. `}
+                      {item.question}
+                    </p>
+                    {Array.isArray(item.what_to_listen_for) && item.what_to_listen_for.length > 0 ? (
+                      <p className="mt-1 text-xs text-gray-700">
+                        <span className="font-semibold text-gray-800">Look for:</span>
+                        {' '}
+                        {item.what_to_listen_for.join(' • ')}
+                      </p>
+                    ) : null}
+                    {Array.isArray(item.concerning_signals) && item.concerning_signals.length > 0 ? (
+                      <p className="mt-1 text-xs text-gray-600">
+                        <span className="font-semibold text-gray-700">Watch out for:</span>
+                        {' '}
+                        {item.concerning_signals.join(' • ')}
+                      </p>
+                    ) : null}
+                  </Card>
+                ))}
+              </div>
             </div>
           ) : null}
-
-          <div className="mt-3 space-y-2">
-            {focusQuestions.map((item, index) => (
-              <Card key={`${item.question}-${index}`} className="border-[var(--taali-border-muted)] bg-[#fffcf5] px-3 py-2">
-                <p className="text-sm font-semibold text-gray-900">
-                  {`Q${index + 1}. `}
-                  {item.question}
-                </p>
-                {Array.isArray(item.what_to_listen_for) && item.what_to_listen_for.length > 0 ? (
-                  <p className="mt-1 text-xs text-gray-700">
-                    <span className="font-semibold text-gray-800">Look for:</span>
-                    {' '}
-                    {item.what_to_listen_for.join(' • ')}
-                  </p>
-                ) : null}
-                {Array.isArray(item.concerning_signals) && item.concerning_signals.length > 0 ? (
-                  <p className="mt-1 text-xs text-gray-600">
-                    <span className="font-semibold text-gray-700">Watch out for:</span>
-                    {' '}
-                    {item.concerning_signals.join(' • ')}
-                  </p>
-                ) : null}
-              </Card>
-            ))}
-          </div>
         </Card>
       ) : (
         <Card className="mt-4 border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">

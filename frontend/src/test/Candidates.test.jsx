@@ -239,6 +239,47 @@ describe('CandidatesPage', () => {
     });
   });
 
+  it('allows collapsing and expanding interview focus guidance', async () => {
+    rolesApi.list.mockResolvedValue({
+      data: [
+        {
+          ...baseRoles[0],
+          interview_focus_generated_at: '2026-01-12T10:00:00Z',
+          interview_focus: {
+            role_summary: 'Focus on practical ownership and tradeoffs.',
+            manual_screening_triggers: ['Ownership depth'],
+            questions: [
+              {
+                question: 'Describe an incident you owned end to end.',
+                what_to_listen_for: ['Root cause and mitigation clarity'],
+                concerning_signals: ['Vague contribution details'],
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    await renderAppOnCandidatesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText(/Q1\./)).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Collapse/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/Q1\./)).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Expand/i })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Expand/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Q1\./)).toBeInTheDocument();
+    });
+  });
+
   it('shows empty role state and disables Add candidate when there are no roles', async () => {
     rolesApi.list.mockResolvedValue({ data: [] });
     rolesApi.listApplications.mockResolvedValue({ data: [] });
