@@ -393,7 +393,7 @@ describe('CandidatesPage', () => {
     });
   });
 
-  it('disables Add Application until selected role has job spec', async () => {
+  it('disables Add Candidate until selected role has job spec', async () => {
     rolesApi.list.mockResolvedValue({
       data: [{ id: 1, name: 'Backend Engineer', job_spec_filename: null }],
     });
@@ -401,14 +401,14 @@ describe('CandidatesPage', () => {
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Role-first workflow (recommended)')).toBeInTheDocument();
+      expect(screen.getByText('Role workflow')).toBeInTheDocument();
     });
 
-    const addApplicationBtn = screen.getByRole('button', { name: 'Add Application' });
+    const addApplicationBtn = screen.getByRole('button', { name: 'Add Candidate' });
     expect(addApplicationBtn).toBeDisabled();
   });
 
-  it('enables Add Application when selected role has job spec', async () => {
+  it('enables Add Candidate when selected role has job spec', async () => {
     rolesApi.list.mockResolvedValue({
       data: [{ id: 2, name: 'ML Engineer', job_spec_filename: 'ml-role-spec.pdf' }],
     });
@@ -416,10 +416,10 @@ describe('CandidatesPage', () => {
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Role-first workflow (recommended)')).toBeInTheDocument();
+      expect(screen.getByText('Role workflow')).toBeInTheDocument();
     });
 
-    const addApplicationBtn = screen.getByRole('button', { name: 'Add Application' });
+    const addApplicationBtn = screen.getByRole('button', { name: 'Add Candidate' });
     expect(addApplicationBtn).not.toBeDisabled();
   });
 });

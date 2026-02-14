@@ -295,10 +295,15 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         </div>
 
         <div className="border-2 border-black p-4 mb-6 bg-gray-50">
-          <div className="font-mono text-xs font-bold mb-3">Role-first workflow (recommended)</div>
+          <div className="mb-3">
+            <div className="font-mono text-xs font-bold">Role workflow</div>
+            <div className="font-mono text-xs text-gray-600 mt-1">
+              Create a role first, then add candidates to that role.
+            </div>
+          </div>
           <div className="grid lg:grid-cols-2 gap-4">
             <div className="border border-black p-3 bg-white">
-              <div className="font-mono text-xs text-gray-500 mb-2">Step A: Create or select role + upload job spec</div>
+              <div className="font-mono text-xs text-gray-500 mb-2">1. Create role and upload job spec</div>
               <div className="flex flex-wrap gap-2 mb-2">
                 <input
                   type="text"
@@ -356,7 +361,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
             </div>
 
             <div className="border border-black p-3 bg-white">
-              <div className="font-mono text-xs text-gray-500 mb-2">Step B/C: Add application (CV required) + assign role tasks</div>
+              <div className="font-mono text-xs text-gray-500 mb-2">2. Add candidate to selected role (CV required)</div>
               <div className="grid md:grid-cols-3 gap-2 mb-2">
                 <input
                   type="email"
@@ -394,41 +399,47 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   onClick={handleCreateApplication}
                   disabled={!canCreateApplicationsForRole}
                 >
-                  Add Application
+                  Add Candidate
                 </button>
               </div>
-              {!canCreateApplicationsForRole && selectedRoleId && (
-                <div className="font-mono text-xs text-red-600 mb-2">
-                  Upload a job spec for this role before adding applications.
+              {!selectedRoleId && (
+                <div className="font-mono text-xs text-gray-500 mb-2">
+                  Select a role before adding a candidate.
                 </div>
               )}
-              <div className="flex items-center gap-2 mb-2">
-                <select
-                  className="flex-1 border-2 border-black px-2 py-1 font-mono text-xs bg-white"
-                  value={taskToLink}
-                  onChange={(e) => setTaskToLink(e.target.value)}
-                >
-                  <option value="">Link task to role...</option>
-                  {unlinkedTasks.map((task) => (
-                    <option key={task.id} value={task.id}>{task.name}</option>
-                  ))}
-                </select>
-                <button
-                  type="button"
-                  className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
-                  onClick={handleLinkTaskToRole}
-                >
-                  Link task
-                </button>
-              </div>
-              <div className="font-mono text-xs text-gray-600">
-                Linked tasks: {roleTasks.length > 0 ? roleTasks.map((task) => task.name).join(', ') : 'None'}
-              </div>
+              {selectedRoleId && !canCreateApplicationsForRole && (
+                <div className="font-mono text-xs text-red-600 mb-2">
+                  Upload a job spec for this role before adding candidates.
+                </div>
+              )}
             </div>
           </div>
 
           <div className="border border-black p-3 bg-white mt-4">
-            <div className="font-mono text-xs text-gray-500 mb-2">Step D: Create/send assessments by role application</div>
+            <div className="font-mono text-xs text-gray-500 mb-2">3. Link tasks and send assessments</div>
+            <div className="flex items-center gap-2 mb-2">
+              <select
+                className="flex-1 border-2 border-black px-2 py-1 font-mono text-xs bg-white"
+                value={taskToLink}
+                onChange={(e) => setTaskToLink(e.target.value)}
+              >
+                <option value="">Link task to role...</option>
+                {unlinkedTasks.map((task) => (
+                  <option key={task.id} value={task.id}>{task.name}</option>
+                ))}
+              </select>
+              <button
+                type="button"
+                className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
+                onClick={handleLinkTaskToRole}
+                disabled={!selectedRoleId}
+              >
+                Link task
+              </button>
+            </div>
+            <div className="font-mono text-xs text-gray-600 mb-3">
+              Linked tasks: {roleTasks.length > 0 ? roleTasks.map((task) => task.name).join(', ') : 'None'}
+            </div>
             {selectedRoleId ? (
               roleApplications.length > 0 ? (
                 <div className="space-y-2">
@@ -466,10 +477,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   ))}
                 </div>
               ) : (
-                <div className="font-mono text-xs text-gray-500">No applications for this role yet.</div>
+                <div className="font-mono text-xs text-gray-500">No candidates added to this role yet.</div>
               )
             ) : (
-              <div className="font-mono text-xs text-gray-500">Select a role to manage applications and assessments.</div>
+              <div className="font-mono text-xs text-gray-500">Select a role to link tasks and send assessments.</div>
             )}
           </div>
         </div>
