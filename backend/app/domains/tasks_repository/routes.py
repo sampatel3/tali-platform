@@ -152,7 +152,7 @@ def _serialize_task_response(task: Task) -> TaskResponse:
 def _resolve_tasks_dir() -> Optional[Path]:
     for parent in Path(__file__).resolve().parents:
         candidate = parent / "tasks"
-        if candidate.is_dir():
+        if candidate.is_dir() and any(candidate.glob("*.json")):
             return candidate
     return None
 
