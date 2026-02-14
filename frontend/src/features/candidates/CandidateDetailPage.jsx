@@ -310,14 +310,14 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
             </div>
 
             {(score100 != null || candidate.score) ? (
-              <div className="rounded-[var(--taali-radius)] border-2 border-[var(--taali-purple)] bg-[#151122] p-5 text-white">
+              <div className="border-2 border-[var(--taali-purple)] bg-[#151122] p-5 text-white">
                 <div className="mb-1 text-5xl font-bold text-[var(--taali-purple)]">
                   {score100 != null ? `${Math.round(score100)}` : candidate.score}
                   <span className="text-lg text-gray-400">/{score100 != null ? '100' : '10'}</span>
                 </div>
 
                 {rec ? (
-                  <div className="mb-3 inline-flex rounded-[6px] px-3 py-1 font-mono text-xs font-bold text-white" style={{ backgroundColor: rec.color }}>
+                  <div className="mb-3 inline-flex px-3 py-1 font-mono text-xs font-bold text-white" style={{ backgroundColor: rec.color }}>
                     {rec.label}
                   </div>
                 ) : null}
@@ -330,7 +330,7 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
                       return val != null ? (
                         <div key={key} className="flex items-center gap-2">
                           <span className="w-36 truncate text-gray-400">{label}</span>
-                          <div className="h-1.5 flex-1 overflow-hidden rounded bg-gray-700">
+                          <div className="h-1.5 flex-1 overflow-hidden bg-gray-700">
                             <div
                               className="h-full"
                               style={{

@@ -10,7 +10,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check:architecture": "node scripts/check-architecture.mjs",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "lint:ui": "node scripts/lint-ui.mjs"
   },
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",

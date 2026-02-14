@@ -87,7 +87,7 @@ export const CandidateResultsTab = ({
   return (
     <div className="space-y-6">
       <Card className="bg-[#faf8ff] px-3 py-2">
-        <p className="font-mono text-xs text-gray-600">Compare this candidate with others from the Dashboard: select 2+ candidates there and use the comparison overlay.</p>
+        <p className="font-mono text-xs text-[var(--taali-muted)]">Compare this candidate with others from the Dashboard: select 2+ candidates there and use the comparison overlay.</p>
       </Card>
 
       {hasAnyCategoryScore ? (
@@ -97,7 +97,7 @@ export const CandidateResultsTab = ({
             <ResponsiveContainer>
               <RadarChart data={radarData}>
                 <PolarGrid stroke="rgba(157, 0, 255, 0.24)" />
-                <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'monospace', fill: '#4b5563' }} />
+                <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'var(--taali-font)', fill: 'var(--taali-muted)' }} />
                 <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10, fill: '#6b7280' }} />
                 <Radar name={candidate.name} dataKey="score" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.2} />
               </RadarChart>
@@ -133,7 +133,7 @@ export const CandidateResultsTab = ({
                       {catScore}/10
                     </span>
                   ) : null}
-                  <span className="font-mono text-xs text-gray-400">{isExpanded ? '▲' : '▼'}</span>
+                  <span className="font-mono text-xs text-[var(--taali-muted)]">{isExpanded ? '▲' : '▼'}</span>
                 </div>
               </button>
 
@@ -142,10 +142,10 @@ export const CandidateResultsTab = ({
                   {Object.entries(metrics).map(([metricKey, metricVal]) => (
                     <div key={metricKey} className="mb-3 last:mb-0">
                       <div className="mb-1 flex items-center gap-3">
-                        <div className="w-44 font-mono text-sm text-gray-700" title={getMetricMetaResolved(metricKey).description}>
+                        <div className="w-44 font-mono text-sm text-[var(--taali-text)]" title={getMetricMetaResolved(metricKey).description}>
                           {getMetricMetaResolved(metricKey).label}
                         </div>
-                        <div className="h-2.5 flex-1 overflow-hidden rounded bg-gray-200">
+                        <div className="h-2.5 flex-1 overflow-hidden bg-[var(--taali-border-muted)]">
                           <div
                             className="h-full"
                             style={{
@@ -165,7 +165,7 @@ export const CandidateResultsTab = ({
                   ))}
 
                   {Object.keys(metrics).length === 0 ? (
-                    <div className="font-mono text-sm text-gray-500">No detailed metrics available for this category.</div>
+                    <div className="font-mono text-sm text-[var(--taali-muted)]">No detailed metrics available for this category.</div>
                   ) : null}
                 </div>
               ) : null}

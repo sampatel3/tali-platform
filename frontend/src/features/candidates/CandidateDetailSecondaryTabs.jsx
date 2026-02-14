@@ -112,7 +112,7 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
                   ) : null}
                 </div>
 
-                <div className="rounded-[var(--taali-radius)] bg-[#f7f6fb] p-2 font-mono text-sm text-gray-700">
+                <div className="bg-[var(--taali-purple-soft)] p-2 font-mono text-sm text-[var(--taali-text)]">
                   {p.message || p.text}
                 </div>
 
@@ -308,35 +308,35 @@ export const CandidateCodeGitTab = ({ candidate }) => {
       {headSha ? (
         <Panel className="p-4">
           <div className="mb-1 font-mono text-xs font-bold text-gray-600">Final HEAD (SHA)</div>
-          <pre className="overflow-x-auto rounded-[var(--taali-radius)] bg-gray-900 p-2 font-mono text-xs text-gray-200">{headSha}</pre>
+          <pre className="overflow-x-auto bg-[#151122] p-2 font-mono text-xs text-gray-200">{headSha}</pre>
         </Panel>
       ) : null}
 
       {commits ? (
         <Panel className="p-4">
           <div className="mb-1 font-mono text-xs font-bold text-gray-600">Commits (assessment branch)</div>
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-[var(--taali-radius)] bg-gray-900 p-2 font-mono text-xs text-gray-200">{commits}</pre>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[#151122] p-2 font-mono text-xs text-gray-200">{commits}</pre>
         </Panel>
       ) : null}
 
       {diffMain ? (
         <Panel className="p-4">
           <div className="mb-1 font-mono text-xs font-bold text-gray-600">Diff (main...HEAD)</div>
-          <pre className="max-h-96 overflow-auto whitespace-pre-wrap rounded-[var(--taali-radius)] bg-gray-900 p-2 font-mono text-xs text-green-300">{diffMain}</pre>
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap bg-[#151122] p-2 font-mono text-xs text-green-300">{diffMain}</pre>
         </Panel>
       ) : null}
 
       {diffStaged ? (
         <Panel className="p-4">
           <div className="mb-1 font-mono text-xs font-bold text-gray-600">Staged diff</div>
-          <pre className="max-h-48 overflow-auto whitespace-pre-wrap rounded-[var(--taali-radius)] bg-gray-900 p-2 font-mono text-xs text-gray-200">{diffStaged}</pre>
+          <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[#151122] p-2 font-mono text-xs text-gray-200">{diffStaged}</pre>
         </Panel>
       ) : null}
 
       {statusPorcelain ? (
         <Panel className="p-4">
           <div className="mb-1 font-mono text-xs font-bold text-gray-600">Status (porcelain)</div>
-          <pre className="overflow-x-auto rounded-[var(--taali-radius)] bg-gray-900 p-2 font-mono text-xs text-gray-200">{statusPorcelain}</pre>
+          <pre className="overflow-x-auto bg-[#151122] p-2 font-mono text-xs text-gray-200">{statusPorcelain}</pre>
         </Panel>
       ) : null}
 
@@ -353,7 +353,7 @@ export const CandidateTimelineTab = ({ candidate }) => (
       <div className="absolute bottom-0 left-2 top-0 w-0.5 bg-[var(--taali-purple)]" />
       {candidate.timeline.map((t, i) => (
         <div key={i} className="relative mb-5 pl-7 last:mb-0">
-          <div className="absolute -left-0 top-1 h-4 w-4 rounded-sm border-2 border-[var(--taali-border)] bg-[var(--taali-purple)]" />
+          <div className="absolute -left-0 top-1 h-4 w-4 border-2 border-[var(--taali-border)] bg-[var(--taali-purple)]" />
           <div className="mb-1 font-mono text-xs text-gray-500">{t.time}</div>
           <div className="font-bold text-gray-900">{t.event}</div>
           {t.prompt ? (

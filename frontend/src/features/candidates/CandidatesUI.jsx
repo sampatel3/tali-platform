@@ -103,16 +103,16 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
                 type="button"
                 onClick={() => onSelectRole(String(role.id))}
                 className={cx(
-                  'w-full text-left border-2 rounded-[var(--taali-radius)] px-3 py-3 transition',
+                  'w-full text-left border-2 px-3 py-3 transition',
                   selected
                     ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)]'
-                    : 'border-[var(--taali-border-muted)] bg-white hover:border-[var(--taali-border)]'
+                    : 'border-[var(--taali-border-muted)] bg-[var(--taali-surface)] hover:border-[var(--taali-border)]'
                 )}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate font-semibold text-gray-900">{role.name}</p>
-                    <p className="mt-0.5 text-xs text-gray-600">
+                    <p className="truncate font-semibold text-[var(--taali-text)]">{role.name}</p>
+                    <p className="mt-0.5 text-xs text-[var(--taali-muted)]">
                       {role.applications_count || 0} candidate{(role.applications_count || 0) === 1 ? '' : 's'}
                     </p>
                   </div>
@@ -139,8 +139,8 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
     <Panel className="p-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
-          <h2 className="text-2xl font-bold tracking-tight text-gray-900">{role.name}</h2>
-          {role.description ? <p className="text-sm text-gray-600">{role.description}</p> : null}
+          <h2 className="text-2xl font-bold tracking-tight text-[var(--taali-text)]">{role.name}</h2>
+          {role.description ? <p className="text-sm text-[var(--taali-muted)]">{role.description}</p> : null}
         </div>
         <Button type="button" variant="secondary" size="sm" onClick={onEditRole}>
           Edit role
@@ -517,7 +517,7 @@ export const RoleSheet = ({
               Current file: <span className="font-medium">{role.job_spec_filename}</span>
             </Card>
           ) : null}
-          <label className="block rounded-[var(--taali-radius)] border-2 border-dashed border-[var(--taali-border-muted)] p-5 text-center transition hover:border-[var(--taali-border)]">
+          <label className="block border-2 border-dashed border-[var(--taali-border-muted)] p-5 text-center transition hover:border-[var(--taali-border)]">
             <UploadCloud size={20} className="mx-auto text-gray-500" />
             <span className="mt-2 block text-sm font-medium text-gray-700">
               {jobSpecFile ? jobSpecFile.name : 'Choose a job specification file'}
@@ -553,10 +553,10 @@ export const RoleSheet = ({
                   <label
                     key={task.id}
                     className={cx(
-                      'flex cursor-pointer items-start gap-3 rounded-[var(--taali-radius)] border-2 px-3 py-2',
+                      'flex cursor-pointer items-start gap-3 border-2 px-3 py-2',
                       checked
                         ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)]'
-                        : 'border-[var(--taali-border-muted)] bg-white'
+                        : 'border-[var(--taali-border-muted)] bg-[var(--taali-surface)]'
                     )}
                   >
                     <input
@@ -727,10 +727,10 @@ export const CandidateSheet = ({
             }}
             onDrop={onDropFile}
             className={cx(
-              'block rounded-[var(--taali-radius)] border-2 border-dashed p-5 text-center transition',
+              'block border-2 border-dashed p-5 text-center transition',
               dragActive
                 ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)]'
-                : 'border-[var(--taali-border-muted)] bg-white hover:border-[var(--taali-border)]'
+                : 'border-[var(--taali-border-muted)] bg-[var(--taali-surface)] hover:border-[var(--taali-border)]'
             )}
           >
             <UploadCloud size={20} className="mx-auto text-gray-500" />

@@ -64,7 +64,7 @@ const LandingNav = ({ onNavigate }) => {
       </div>
 
       {mobileOpen ? (
-        <div className="border-t-2 border-[var(--taali-border)] bg-white px-6 py-3 md:hidden">
+        <div className="border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-6 py-3 md:hidden">
           <div className="grid gap-2">
             <Button type="button" variant="ghost" size="sm" className="justify-start font-mono" onClick={() => scrollTo('why-taali')}>
               Why TAALI
@@ -113,12 +113,12 @@ const HeroSection = ({ onNavigate }) => (
         <span className="taali-badge taali-badge-purple mb-4 inline-flex px-3 py-1 font-mono text-xs">
           BUILT FOR AI-NATIVE ENGINEERING TEAMS
         </span>
-        <h1 className="text-4xl font-bold leading-tight text-gray-900 md:text-6xl">
+        <h1 className="text-4xl font-bold leading-tight text-[var(--taali-text)] md:text-6xl">
           Stop hiring for yesterday&apos;s skills.
           <br />
           Start hiring with TAALI.
         </h1>
-        <p className="mt-4 max-w-2xl font-mono text-base text-gray-700 md:text-xl">
+        <p className="mt-4 max-w-2xl text-base text-[var(--taali-text)] md:text-xl" style={{ opacity: 0.9 }}>
           Assess how engineers actually work today using Cursor, Claude Code, and OpenAI Codex on real tasks, in real workflows.
         </p>
         <div className="mt-6 flex flex-wrap gap-3">
@@ -133,12 +133,12 @@ const HeroSection = ({ onNavigate }) => (
       </div>
 
       <Panel className="grid grid-cols-2 gap-3 p-4">
-        <Card className="bg-gray-50 p-3">
+        <Card className="bg-[var(--taali-border-muted)]/30 p-3">
           <div className="mb-2 flex items-center gap-2">
             <XCircle size={16} className="text-red-500" />
-            <span className="font-mono text-xs font-bold text-gray-500">LEGACY TEST</span>
+            <span className="font-mono text-xs font-bold text-[var(--taali-muted)]">LEGACY TEST</span>
           </div>
-          <pre className="overflow-auto font-mono text-xs text-gray-600">{`function reverseList(head) {
+          <pre className="overflow-auto font-mono text-xs text-[var(--taali-muted)]">{`function reverseList(head) {
   let prev = null;
   let curr = head;
   while (curr) {
@@ -166,10 +166,10 @@ const HeroSection = ({ onNavigate }) => (
   green tests`}</pre>
         </Card>
 
-        <Card className="bg-gray-50 p-3">
-          <p className="font-mono text-xs text-gray-500">TESTS FOR:</p>
-          <p className="mt-1 font-mono text-sm text-gray-700">Algorithm recall</p>
-          <p className="font-mono text-sm text-gray-700">Interview theatrics</p>
+        <Card className="bg-[var(--taali-border-muted)]/30 p-3">
+          <p className="font-mono text-xs text-[var(--taali-muted)]">TESTS FOR:</p>
+          <p className="mt-1 font-mono text-sm text-[var(--taali-text)]">Algorithm recall</p>
+          <p className="font-mono text-sm text-[var(--taali-text)]">Interview theatrics</p>
           <p className="mt-2 font-mono text-sm font-bold text-red-600">NOT delivery quality</p>
         </Card>
 
@@ -185,12 +185,12 @@ const HeroSection = ({ onNavigate }) => (
 );
 
 const WhyTaaliSection = () => (
-  <section id="why-taali" className="border-b-2 border-[var(--taali-border)] bg-white">
+  <section id="why-taali" className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
     <PageContainer>
       <div className="mx-auto max-w-4xl text-center">
         <h2 className="text-4xl font-bold">Why TAALI</h2>
-        <p className="mt-3 font-mono text-sm text-gray-700">Engineering changed. Hiring didn&apos;t.</p>
-        <p className="mt-2 font-mono text-sm text-gray-700">
+        <p className="mt-3 font-mono text-sm text-[var(--taali-muted)]">Engineering changed. Hiring didn&apos;t.</p>
+        <p className="mt-2 font-mono text-sm text-[var(--taali-muted)]">
           Modern engineers do not work in a blank editor. They work in real repos, with modern coding agents, through fast
           iteration and validation. TAALI helps teams hire for that reality.
         </p>
@@ -258,7 +258,7 @@ const HowTaaliSection = () => {
       <PageContainer>
         <div className="mx-auto max-w-4xl text-center">
           <h2 className="text-4xl font-bold">How TAALI Evaluates Candidates</h2>
-          <p className="mt-3 font-mono text-sm text-gray-700">Real session behavior to structured scorecard.</p>
+          <p className="mt-3 font-mono text-sm text-[var(--taali-muted)]">Real session behavior to structured scorecard.</p>
         </div>
 
         <Panel className="mt-8 p-6">
@@ -268,7 +268,7 @@ const HowTaaliSection = () => {
 
         <Panel className="mt-6 p-6">
           <h3 className="text-2xl font-bold">Example candidate persona comparison</h3>
-          <p className="mt-2 font-mono text-sm text-gray-700">
+          <p className="mt-2 font-mono text-sm text-[var(--taali-muted)]">
             Same task, very different signal. TAALI shows how candidates reached outcomes and whether performance is repeatable.
           </p>
 
@@ -277,7 +277,7 @@ const HowTaaliSection = () => {
               <ResponsiveContainer width="100%" height="100%">
                 <RadarChart data={demoComparison} outerRadius="72%">
                   <PolarGrid stroke="rgba(157, 0, 255, 0.22)" />
-                  <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'monospace' }} />
+                  <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'var(--taali-font)' }} />
                   <PolarRadiusAxis domain={[0, 100]} tickCount={6} />
                   <Radar name="AI-Native Product Engineer" dataKey="candidateA" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.16} />
                   <Radar name="Code-Strong Backend Engineer" dataKey="candidateB" stroke="#3f3f56" fill="#3f3f56" fillOpacity={0.08} />
@@ -288,13 +288,13 @@ const HowTaaliSection = () => {
             <div className="grid gap-3">
               <Card className="p-4">
                 <h4 className="font-bold">AI-Native Product Engineer</h4>
-                <p className="mt-1 font-mono text-sm text-gray-700">
+                <p className="mt-1 font-mono text-sm text-[var(--taali-text)]">
                   High Task completion, Prompt clarity, Context provision, and Response utilization with clear communication.
                 </p>
               </Card>
               <Card className="p-4">
                 <h4 className="font-bold">Code-Strong Backend Engineer</h4>
-                <p className="mt-1 font-mono text-sm text-gray-700">
+                <p className="mt-1 font-mono text-sm text-[var(--taali-text)]">
                   Strong Debugging and design plus Role fit, but lower Prompt clarity and slower iteration loops.
                 </p>
               </Card>
@@ -307,11 +307,11 @@ const HowTaaliSection = () => {
 };
 
 const PricingSection = ({ onNavigate }) => (
-  <section id="pricing" className="border-b-2 border-[var(--taali-border)] bg-white">
+  <section id="pricing" className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
     <PageContainer>
       <div className="mx-auto max-w-4xl text-center">
         <h2 className="text-4xl font-bold">Pricing That Scales with Hiring</h2>
-        <p className="mt-2 font-mono text-sm text-gray-600">Clear plans, predictable costs, no hidden add-ons.</p>
+        <p className="mt-2 font-mono text-sm text-[var(--taali-muted)]">Clear plans, predictable costs, no hidden add-ons.</p>
       </div>
 
       <div className="mx-auto mt-8 grid max-w-4xl gap-5 md:grid-cols-2">
@@ -319,7 +319,7 @@ const PricingSection = ({ onNavigate }) => (
           <span className="taali-badge taali-badge-purple absolute -top-3 left-5">Recommended</span>
           <h3 className="mt-3 text-2xl font-bold">Pay-Per-Use</h3>
           <p className="mt-1 text-5xl font-bold">{formatAed(ASSESSMENT_PRICE_AED)}</p>
-          <p className="font-mono text-sm text-gray-500">per assessment</p>
+          <p className="font-mono text-sm text-[var(--taali-muted)]">per assessment</p>
           <ul className="mt-4 grid gap-2">
             {[
               'Full coding environment',
@@ -329,7 +329,7 @@ const PricingSection = ({ onNavigate }) => (
               'Workable sync',
               'Email support',
             ].map((feature) => (
-              <li key={feature} className="flex items-center gap-2 font-mono text-sm text-gray-700">
+              <li key={feature} className="flex items-center gap-2 font-mono text-sm text-[var(--taali-text)]">
                 <Check size={16} className="text-[var(--taali-purple)]" />
                 {feature}
               </li>
@@ -343,7 +343,7 @@ const PricingSection = ({ onNavigate }) => (
         <Panel className="p-6">
           <h3 className="mt-3 text-2xl font-bold">Monthly</h3>
           <p className="mt-1 text-5xl font-bold">{formatAed(300)}</p>
-          <p className="font-mono text-sm text-gray-500">per month</p>
+          <p className="font-mono text-sm text-[var(--taali-muted)]">per month</p>
           <ul className="mt-4 grid gap-2">
             {[
               'Everything in Pay-Per-Use',
@@ -353,7 +353,7 @@ const PricingSection = ({ onNavigate }) => (
               'Analytics dashboard',
               'Team management',
             ].map((feature) => (
-              <li key={feature} className="flex items-center gap-2 font-mono text-sm text-gray-700">
+              <li key={feature} className="flex items-center gap-2 font-mono text-sm text-[var(--taali-text)]">
                 <Check size={16} className="text-[var(--taali-purple)]" />
                 {feature}
               </li>

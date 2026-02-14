@@ -21,7 +21,7 @@ export const PageHeader = ({ title, subtitle, actions, className = '', children 
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div>
         {title ? <h1 className="text-3xl font-bold tracking-tight">{title}</h1> : null}
-        {subtitle ? <p className="mt-1 text-sm text-gray-600">{subtitle}</p> : null}
+        {subtitle ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{subtitle}</p> : null}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
     </div>
@@ -103,8 +103,8 @@ export const Badge = ({ variant = 'muted', className = '', children }) => (
 
 export const EmptyState = ({ title, description, action, className = '' }) => (
   <div className={cx('taali-empty-state px-5 py-12 text-center', className)}>
-    <p className="text-lg font-semibold text-gray-900">{title}</p>
-    {description ? <p className="mt-1 text-sm text-gray-600">{description}</p> : null}
+    <p className="text-lg font-semibold text-[var(--taali-text)]">{title}</p>
+    {description ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{description}</p> : null}
     {action ? <div className="mt-4 flex justify-center">{action}</div> : null}
   </div>
 );
@@ -188,7 +188,7 @@ export const Sheet = ({ open, onClose, title, description, children, footer }) =
           <div className="flex items-start justify-between gap-4">
             <div>
               <h2 className="text-xl font-bold tracking-tight">{title}</h2>
-              {description ? <p className="mt-1 text-sm text-gray-600">{description}</p> : null}
+              {description ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{description}</p> : null}
             </div>
             <Button
               type="button"

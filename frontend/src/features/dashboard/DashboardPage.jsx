@@ -216,7 +216,7 @@ export const DashboardPage = ({
           </div>
         )}
         {compareAssessments.length >= 2 && (
-          <div className="border-2 border-black p-6 mb-6 bg-gray-50">
+          <div className="border-2 border-[var(--taali-border)] p-6 mb-6 bg-[var(--taali-purple-soft)]">
             <div className="flex items-center gap-2 mb-4">
               <Users size={20} />
               <h3 className="font-bold text-lg">Candidate comparison</h3>
@@ -228,7 +228,7 @@ export const DashboardPage = ({
                 <div className="space-y-2">
                   {compareAssessments.map((a, i) => (
                     <div key={a.id} className="flex items-center gap-3">
-                      <span className="w-3 h-3 rounded-full shrink-0" style={{ backgroundColor: COMPARE_COLORS[i % COMPARE_COLORS.length] }} />
+                      <span className="w-3 h-3 shrink-0" style={{ backgroundColor: COMPARE_COLORS[i % COMPARE_COLORS.length] }} />
                       <span className="font-medium min-w-[120px]">{a.name}</span>
                       <span className="font-mono text-sm">{a.score != null ? `${Number(a.score).toFixed(1)}/10` : '—'}</span>
                     </div>
@@ -253,7 +253,7 @@ export const DashboardPage = ({
                       <ResponsiveContainer>
                         <RadarChart data={radarData}>
                           <PolarGrid />
-                          <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 10, fontFamily: 'monospace' }} />
+                          <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 10, fontFamily: 'var(--taali-font)' }} />
                           <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
                           {compareAssessments.map((a, i) => (
                             <Radar
@@ -339,7 +339,7 @@ export const DashboardPage = ({
           ) : (
             <table className="w-full">
               <thead>
-                <tr className="border-b-2 border-black bg-gray-50">
+                <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-purple-soft)]">
                   <th className="text-left px-2 py-3 font-mono text-xs font-bold uppercase">Compare</th>
                   <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Candidate</th>
                   <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Task</th>
@@ -361,7 +361,7 @@ export const DashboardPage = ({
                   tableRows.map((row) => {
                     if (row._group) {
                       return (
-                        <tr key={`role-${row._group}`} className="bg-gray-100 border-b-2 border-black">
+                        <tr key={`role-${row._group}`} className="bg-[var(--taali-border-muted)]/30 border-b-2 border-[var(--taali-border)]">
                           <td colSpan={8} className="px-6 py-2 font-mono text-sm font-bold uppercase text-gray-700">
                             — {row._group} —
                           </td>
@@ -398,7 +398,7 @@ export const DashboardPage = ({
                           {c.token ? (
                             <button
                               type="button"
-                              className="border-2 border-black bg-white px-3 py-1.5 font-mono text-xs font-bold hover:bg-black hover:text-white transition-colors flex items-center gap-1"
+                              className="border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-3 py-1.5 font-mono text-xs font-bold hover:bg-[var(--taali-border)] hover:text-white transition-colors flex items-center gap-1"
                               onClick={() => {
                                 const link = c.assessmentLink || getAssessmentLink(c.token);
                                 navigator.clipboard?.writeText(link).then(() => { /* copied */ }).catch(() => {});
@@ -414,7 +414,7 @@ export const DashboardPage = ({
                         <td className="px-6 py-4">
                           {c.status === 'completed' || c.status === 'submitted' || c.status === 'graded' ? (
                             <button
-                              className="border-2 border-black bg-white px-4 py-2 font-mono text-sm font-bold hover:bg-black hover:text-white transition-colors flex items-center gap-1 disabled:opacity-70"
+                              className="border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-4 py-2 font-mono text-sm font-bold hover:bg-[var(--taali-border)] hover:text-white transition-colors flex items-center gap-1 disabled:opacity-70"
                               disabled={loadingViewId === c.id}
                               onClick={async () => {
                                 setLoadingViewId(c.id);

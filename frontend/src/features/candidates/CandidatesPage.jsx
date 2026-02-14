@@ -358,7 +358,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   </Panel>
                 ) : null}
                 {roleContextError ? (
-                  <div className="inline-flex items-center gap-2 rounded-[var(--taali-radius)] border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  <div className="inline-flex items-center gap-2 border-2 border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
                     <AlertCircle size={15} />
                     {roleContextError}
                   </div>
