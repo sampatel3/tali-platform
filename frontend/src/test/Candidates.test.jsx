@@ -94,7 +94,6 @@ vi.mock('@monaco-editor/react', () => ({
 
 import {
   auth,
-  assessments as assessmentsApi,
   roles as rolesApi,
   tasks as tasksApi,
 } from '../shared/api';
@@ -455,35 +454,4 @@ describe('CandidatesPage', () => {
     });
   });
 
-  it('shows dashboard candidates when no roles exist', async () => {
-    rolesApi.list.mockResolvedValue({ data: [] });
-    rolesApi.listApplications.mockResolvedValue({ data: [] });
-    rolesApi.listTasks.mockResolvedValue({ data: [] });
-    assessmentsApi.list
-      .mockResolvedValueOnce({ data: { items: [], total: 0 } })
-      .mockResolvedValueOnce({
-        data: {
-          items: [
-            {
-              id: 301,
-              candidate_id: 88,
-              candidate_name: 'Legacy Candidate',
-              candidate_email: 'legacy@example.com',
-              role_name: null,
-              status: 'pending',
-              created_at: '2026-01-12T10:00:00Z',
-              application_id: null,
-            },
-          ],
-          total: 1,
-        },
-      });
-
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Dashboard candidates')).toBeInTheDocument();
-      expect(screen.getByText('Legacy Candidate')).toBeInTheDocument();
-    });
-  });
 });

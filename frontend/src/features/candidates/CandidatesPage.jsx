@@ -15,7 +15,6 @@ import {
   parseCollection,
   trimOrUndefined,
 } from './CandidatesUI';
-import { LegacyCandidatesPanel } from './LegacyCandidatesPanel';
 
 export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) => {
   const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
@@ -44,9 +43,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [candidateSheetError, setCandidateSheetError] = useState('');
   const [creatingAssessmentId, setCreatingAssessmentId] = useState(null);
   const [viewingApplicationId, setViewingApplicationId] = useState(null);
-  const [legacyAssessments, setLegacyAssessments] = useState([]);
-  const [loadingLegacyAssessments, setLoadingLegacyAssessments] = useState(true);
-  const [legacyAssessmentsError, setLegacyAssessmentsError] = useState('');
 
   const selectedRole = useMemo(
     () => roles.find((role) => String(role.id) === String(selectedRoleId)) || null,
@@ -122,40 +118,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
   }, [tasksApi]);
 
-  const loadLegacyAssessments = useCallback(async () => {
-    if (!assessmentsApi?.list) {
-      setLegacyAssessments([]);
-      setLoadingLegacyAssessments(false);
-      return;
-    }
-    setLoadingLegacyAssessments(true);
-    setLegacyAssessmentsError('');
-    try {
-      const res = await assessmentsApi.list({ limit: 200, offset: 0 });
-      const items = parseCollection(res.data);
-      const deduped = [];
-      const seen = new Set();
-      for (const item of items) {
-        if (item.application_id) continue;
-        const key = `${item.role_id || 'none'}:${item.candidate_id || item.candidate_email || item.id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        deduped.push(item);
-      }
-      setLegacyAssessments(deduped);
-    } catch {
-      setLegacyAssessments([]);
-      setLegacyAssessmentsError('Failed to load dashboard candidates.');
-    } finally {
-      setLoadingLegacyAssessments(false);
-    }
-  }, [assessmentsApi]);
-
   useEffect(() => {
     loadRoles();
     loadTasks();
-    loadLegacyAssessments();
-  }, [loadRoles, loadTasks, loadLegacyAssessments]);
+  }, [loadRoles, loadTasks]);
 
   useEffect(() => {
     loadRoleContext(selectedRoleId);
@@ -179,28 +145,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     token: assessment.token,
     _raw: assessment,
   });
-
-  const legacyCandidates = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    return legacyAssessments.filter((assessment) => {
-      const matchesRole = !selectedRoleId
-        || !assessment.role_id
-        || String(assessment.role_id) === String(selectedRoleId);
-      if (!matchesRole) return false;
-      if (!query) return true;
-      const haystack = [
-        assessment.candidate_name,
-        assessment.candidate_email,
-        assessment.role_name,
-        assessment.status,
-        assessment.task_name,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [legacyAssessments, searchQuery, selectedRoleId]);
 
   const handleOpenRoleSheet = (mode) => {
     setRoleSheetMode(mode);
@@ -400,16 +344,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
 
           <div className="space-y-4">
             {!selectedRole ? (
-              <>
-                <EmptyRoleDetail onCreateRole={() => handleOpenRoleSheet('create')} />
-                <LegacyCandidatesPanel
-                  loading={loadingLegacyAssessments}
-                  error={legacyAssessmentsError}
-                  legacyCandidates={legacyCandidates}
-                  onViewCandidate={onViewCandidate}
-                  mapAssessmentForDetail={mapAssessmentForDetail}
-                />
-              </>
+              <EmptyRoleDetail onCreateRole={() => handleOpenRoleSheet('create')} />
             ) : (
               <>
                 <RoleSummaryHeader
@@ -443,13 +378,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   }}
                   onViewCandidate={handleViewFromApplication}
                   onCreateAssessment={handleCreateAssessment}
-                />
-                <LegacyCandidatesPanel
-                  loading={loadingLegacyAssessments}
-                  error={legacyAssessmentsError}
-                  legacyCandidates={legacyCandidates}
-                  onViewCandidate={onViewCandidate}
-                  mapAssessmentForDetail={mapAssessmentForDetail}
                 />
               </>
             )}
