@@ -238,69 +238,81 @@ describe('CandidatesPage', () => {
     });
   });
 
-  it('renders Create Candidate form', async () => {
+  it('renders Add Candidate section', async () => {
+    rolesApi.list.mockResolvedValue({
+      data: [{ id: 1, name: 'Backend Engineer', job_spec_filename: 'backend-role-spec.pdf' }],
+    });
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Create Candidate' })).toBeInTheDocument();
-      expect(screen.getByPlaceholderText('email@company.com')).toBeInTheDocument();
-      expect(screen.getByPlaceholderText('Full name')).toBeInTheDocument();
-      expect(screen.getByPlaceholderText('Position')).toBeInTheDocument();
-      expect(screen.getByText('CV Upload (required for new candidates)')).toBeInTheDocument();
+      expect(screen.getByText('Add Candidate', { selector: 'div' })).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('candidate@company.com')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Candidate name')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('Candidate position')).toBeInTheDocument();
     });
   });
 
-  it('validates email required on create', async () => {
+  it('validates email required on role candidate create', async () => {
+    rolesApi.list.mockResolvedValue({
+      data: [{ id: 1, name: 'Backend Engineer', job_spec_filename: 'backend-role-spec.pdf' }],
+    });
     // window.alert should be called with error
     const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
 
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Create Candidate' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Add Candidate' })).toBeInTheDocument();
     });
 
     // Click create without filling email
-    fireEvent.click(screen.getByRole('button', { name: 'Create Candidate' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Candidate' }));
 
     await waitFor(() => {
-      expect(alertMock).toHaveBeenCalledWith('Email is required');
+      expect(alertMock).toHaveBeenCalledWith('Candidate email is required');
     });
 
     alertMock.mockRestore();
   });
 
-  it('calls candidatesApi.createWithCv with form data', async () => {
-    candidatesApi.createWithCv.mockResolvedValue({ data: { id: 200, email: 'new@test.com' } });
+  it('creates role application and uploads CV', async () => {
+    rolesApi.list.mockResolvedValue({
+      data: [{ id: 9, name: 'ML Engineer', job_spec_filename: 'ml-role-spec.pdf' }],
+    });
+    rolesApi.createApplication.mockResolvedValue({ data: { id: 200 } });
+    rolesApi.uploadApplicationCv.mockResolvedValue({ data: { success: true } });
 
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByPlaceholderText('email@company.com')).toBeInTheDocument();
+      expect(screen.getByPlaceholderText('candidate@company.com')).toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByPlaceholderText('email@company.com'), {
+    fireEvent.change(screen.getByPlaceholderText('candidate@company.com'), {
       target: { value: 'new@test.com' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Full name'), {
+    fireEvent.change(screen.getByPlaceholderText('Candidate name'), {
       target: { value: 'New Candidate' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Position'), {
+    fireEvent.change(screen.getByPlaceholderText('Candidate position'), {
       target: { value: 'Mid Engineer' },
     });
     const file = new File(['cv-content'], 'resume.pdf', { type: 'application/pdf' });
-    const fileInput = document.querySelector('input[type="file"][accept=".pdf,.docx"]');
+    const fileInput = document.querySelector('input[type="file"][accept=".pdf,.docx,.doc"]');
     fireEvent.change(fileInput, { target: { files: [file] } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create Candidate' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add Candidate' }));
 
     await waitFor(() => {
-      expect(candidatesApi.createWithCv).toHaveBeenCalledWith({
-        email: 'new@test.com',
-        full_name: 'New Candidate',
-        position: 'Mid Engineer',
-        file,
-      });
+      expect(rolesApi.createApplication).toHaveBeenCalledWith(
+        '9',
+        expect.objectContaining({
+          candidate_email: 'new@test.com',
+          candidate_name: 'New Candidate',
+          candidate_position: 'Mid Engineer',
+        })
+      );
+      expect(rolesApi.uploadApplicationCv).toHaveBeenCalledWith(200, file);
     });
   });
 
@@ -353,12 +365,21 @@ describe('CandidatesPage', () => {
     });
   });
 
-  it('renders Edit button for each candidate', async () => {
+  it('renders New Assessment action for role candidates', async () => {
+    rolesApi.list.mockResolvedValue({
+      data: [{ id: 10, name: 'Platform Engineer', job_spec_filename: 'platform-spec.pdf' }],
+    });
+    rolesApi.listTasks.mockResolvedValue({
+      data: [{ id: 700, name: 'Async Debugging Challenge' }],
+    });
+    rolesApi.listApplications.mockResolvedValue({
+      data: [{ id: 501, candidate_email: 'apply@example.com', candidate_name: 'Apply Person', cv_filename: 'apply.pdf' }],
+    });
+
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      const editButtons = screen.getAllByText('Edit');
-      expect(editButtons.length).toBe(mockCandidates.length);
+      expect(screen.getByRole('button', { name: 'New Assessment' })).toBeInTheDocument();
     });
   });
 
@@ -401,7 +422,7 @@ describe('CandidatesPage', () => {
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Role workflow')).toBeInTheDocument();
+      expect(screen.getByText('Role Setup')).toBeInTheDocument();
     });
 
     const addApplicationBtn = screen.getByRole('button', { name: 'Add Candidate' });
@@ -416,7 +437,7 @@ describe('CandidatesPage', () => {
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Role workflow')).toBeInTheDocument();
+      expect(screen.getByText('Role Setup')).toBeInTheDocument();
     });
 
     const addApplicationBtn = screen.getByRole('button', { name: 'Add Candidate' });

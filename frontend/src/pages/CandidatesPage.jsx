@@ -14,9 +14,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [candidateAssessments, setCandidateAssessments] = useState([]);
   const [loadingAssessments, setLoadingAssessments] = useState(false);
   const [copiedInviteId, setCopiedInviteId] = useState(null);
-  const [form, setForm] = useState({ email: '', full_name: '', position: '' });
-  const [createCvFile, setCreateCvFile] = useState(null);
-  const [editingId, setEditingId] = useState(null);
   const [uploadingDoc, setUploadingDoc] = useState(null); // { candidateId, type: 'cv'|'job_spec' }
   const [showDocUpload, setShowDocUpload] = useState(null); // candidateId to show upload panel for
   const [roles, setRoles] = useState([]);
@@ -30,6 +27,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [applicationForm, setApplicationForm] = useState({ candidate_email: '', candidate_name: '', candidate_position: '' });
   const [applicationCvFile, setApplicationCvFile] = useState(null);
   const [assessmentTaskByApplication, setAssessmentTaskByApplication] = useState({});
+  const [assessmentComposerApplicationId, setAssessmentComposerApplicationId] = useState(null);
 
   const loadCandidates = useCallback(async () => {
     setLoading(true);
@@ -91,6 +89,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     loadRoleContext(selectedRoleId);
   }, [selectedRoleId, loadRoleContext]);
 
+  useEffect(() => {
+    setAssessmentComposerApplicationId(null);
+  }, [selectedRoleId]);
+
   const loadCandidateAssessments = async (candidateId) => {
     setLoadingAssessments(true);
     try {
@@ -100,42 +102,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       setCandidateAssessments([]);
     } finally {
       setLoadingAssessments(false);
-    }
-  };
-
-  const handleCreateOrUpdate = async () => {
-    if (!form.email.trim() && !editingId) {
-      alert('Email is required');
-      return;
-    }
-    if (!editingId && !createCvFile) {
-      alert('CV is required when creating a candidate');
-      return;
-    }
-    try {
-      if (editingId) {
-        await candidatesApi.update(editingId, {
-          full_name: form.full_name || null,
-          position: form.position || null,
-        });
-        setEditingId(null);
-      } else {
-        const res = await candidatesApi.createWithCv({
-          email: form.email.trim(),
-          full_name: form.full_name || null,
-          position: form.position || null,
-          file: createCvFile,
-        });
-        // After creation, show document upload panel for the new candidate
-        if (res.data?.id) {
-          setShowDocUpload(res.data.id);
-        }
-      }
-      setForm({ email: '', full_name: '', position: '' });
-      setCreateCvFile(null);
-      await loadCandidates();
-    } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to save candidate');
     }
   };
 
@@ -153,15 +119,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     } finally {
       setUploadingDoc(null);
     }
-  };
-
-  const handleEdit = (candidate) => {
-    setEditingId(candidate.id);
-    setForm({
-      email: candidate.email || '',
-      full_name: candidate.full_name || '',
-      position: candidate.position || '',
-    });
   };
 
   const handleDelete = async (candidateId) => {
@@ -271,6 +228,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
     try {
       await rolesApi.createAssessment(applicationId, { task_id: taskId });
+      setAssessmentTaskByApplication((prev) => ({ ...prev, [applicationId]: '' }));
+      setAssessmentComposerApplicationId(null);
       await loadRoleContext(selectedRoleId);
       alert('Assessment created and invite sent.');
     } catch (err) {
@@ -294,195 +253,231 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
           <div className="font-mono text-sm text-gray-600">{items.length} total</div>
         </div>
 
+        <div className="border-2 border-black p-4 mb-4 bg-gray-50">
+          <div className="font-mono text-xs font-bold mb-1">Role Setup</div>
+          <div className="font-mono text-xs text-gray-600 mb-3">Create a role, upload its job spec, and link role tasks.</div>
+
+          <div className="flex flex-wrap gap-2 mb-2">
+            <input
+              type="text"
+              className="flex-1 min-w-[180px] border-2 border-black px-2 py-1 font-mono text-sm"
+              placeholder="Role name (e.g. Backend Engineer)"
+              value={roleForm.name}
+              onChange={(e) => setRoleForm((prev) => ({ ...prev, name: e.target.value }))}
+            />
+            <button
+              type="button"
+              className="border-2 border-black px-3 py-1 font-mono text-sm font-bold text-white"
+              style={{ backgroundColor: '#9D00FF' }}
+              onClick={handleCreateRole}
+            >
+              Add Role
+            </button>
+          </div>
+          <textarea
+            className="w-full border-2 border-black px-2 py-1 font-mono text-xs mb-2"
+            placeholder="Role description (optional)"
+            value={roleForm.description}
+            onChange={(e) => setRoleForm((prev) => ({ ...prev, description: e.target.value }))}
+          />
+          <select
+            className="w-full border-2 border-black px-2 py-1 font-mono text-sm bg-white mb-2"
+            value={selectedRoleId}
+            onChange={(e) => setSelectedRoleId(e.target.value)}
+          >
+            <option value="">Select role...</option>
+            {roles.map((role) => (
+              <option key={role.id} value={role.id}>{role.name}</option>
+            ))}
+          </select>
+          <div className="flex flex-wrap items-center gap-2 mb-2">
+            <input
+              type="file"
+              accept=".pdf,.docx,.txt"
+              className="font-mono text-xs"
+              onChange={(e) => setJobSpecFile(e.target.files?.[0] || null)}
+            />
+            <button
+              type="button"
+              className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
+              onClick={handleUploadRoleJobSpec}
+              disabled={!selectedRoleId}
+            >
+              Upload job spec
+            </button>
+          </div>
+          {selectedRole && (
+            <div className="font-mono text-xs text-gray-600 mb-2">
+              Selected role: <span className="font-bold">{selectedRole.name}</span>{' '}
+              {selectedRole.job_spec_filename ? `(Job spec: ${selectedRole.job_spec_filename})` : '(No job spec uploaded)'}
+            </div>
+          )}
+          <div className="flex items-center gap-2 mb-2">
+            <select
+              className="flex-1 border-2 border-black px-2 py-1 font-mono text-xs bg-white"
+              value={taskToLink}
+              onChange={(e) => setTaskToLink(e.target.value)}
+            >
+              <option value="">Link task to role...</option>
+              {unlinkedTasks.map((task) => (
+                <option key={task.id} value={task.id}>{task.name}</option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
+              onClick={handleLinkTaskToRole}
+              disabled={!selectedRoleId}
+            >
+              Link task
+            </button>
+          </div>
+          <div className="font-mono text-xs text-gray-600">
+            Linked tasks: {roleTasks.length > 0 ? roleTasks.map((task) => task.name).join(', ') : 'None'}
+          </div>
+        </div>
+
+        <div className="border-2 border-black p-4 mb-4 bg-gray-50">
+          <div className="font-mono text-xs font-bold mb-1">Add Candidate</div>
+          <div className="font-mono text-xs text-gray-600 mb-3">
+            Candidates must be assigned to a role and include a CV.
+          </div>
+          <select
+            className="w-full border-2 border-black px-2 py-1 font-mono text-sm bg-white mb-2"
+            value={selectedRoleId}
+            onChange={(e) => setSelectedRoleId(e.target.value)}
+          >
+            <option value="">Select role...</option>
+            {roles.map((role) => (
+              <option key={role.id} value={role.id}>{role.name}</option>
+            ))}
+          </select>
+          <div className="grid md:grid-cols-3 gap-2 mb-2">
+            <input
+              type="email"
+              className="border-2 border-black px-2 py-1 font-mono text-xs"
+              placeholder="candidate@company.com"
+              value={applicationForm.candidate_email}
+              onChange={(e) => setApplicationForm((prev) => ({ ...prev, candidate_email: e.target.value }))}
+            />
+            <input
+              type="text"
+              className="border-2 border-black px-2 py-1 font-mono text-xs"
+              placeholder="Candidate name"
+              value={applicationForm.candidate_name}
+              onChange={(e) => setApplicationForm((prev) => ({ ...prev, candidate_name: e.target.value }))}
+            />
+            <input
+              type="text"
+              className="border-2 border-black px-2 py-1 font-mono text-xs"
+              placeholder="Candidate position"
+              value={applicationForm.candidate_position}
+              onChange={(e) => setApplicationForm((prev) => ({ ...prev, candidate_position: e.target.value }))}
+            />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <input
+              type="file"
+              accept=".pdf,.docx,.doc"
+              className="font-mono text-xs"
+              onChange={(e) => setApplicationCvFile(e.target.files?.[0] || null)}
+            />
+            <button
+              type="button"
+              className="border-2 border-black px-3 py-1 font-mono text-xs font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
+              style={{ backgroundColor: '#9D00FF' }}
+              onClick={handleCreateApplication}
+              disabled={!canCreateApplicationsForRole}
+            >
+              Add Candidate
+            </button>
+          </div>
+          {!selectedRoleId && (
+            <div className="font-mono text-xs text-gray-500 mt-2">
+              Select a role before adding a candidate.
+            </div>
+          )}
+          {selectedRoleId && !canCreateApplicationsForRole && (
+            <div className="font-mono text-xs text-red-600 mt-2">
+              Upload a job spec for this role before adding candidates.
+            </div>
+          )}
+        </div>
+
         <div className="border-2 border-black p-4 mb-6 bg-gray-50">
-          <div className="mb-3">
-            <div className="font-mono text-xs font-bold">Role workflow</div>
-            <div className="font-mono text-xs text-gray-600 mt-1">
-              Create a role first, then add candidates to that role.
-            </div>
+          <div className="font-mono text-xs font-bold mb-1">Candidates in Role</div>
+          <div className="font-mono text-xs text-gray-600 mb-3">
+            {selectedRole ? `${selectedRole.name}` : 'Select a role to view candidates and create assessments.'}
           </div>
-          <div className="grid lg:grid-cols-2 gap-4">
-            <div className="border border-black p-3 bg-white">
-              <div className="font-mono text-xs text-gray-500 mb-2">1. Create role and upload job spec</div>
-              <div className="flex flex-wrap gap-2 mb-2">
-                <input
-                  type="text"
-                  className="flex-1 min-w-[180px] border-2 border-black px-2 py-1 font-mono text-sm"
-                  placeholder="Role name (e.g. Backend Engineer)"
-                  value={roleForm.name}
-                  onChange={(e) => setRoleForm((prev) => ({ ...prev, name: e.target.value }))}
-                />
-                <button
-                  type="button"
-                  className="border-2 border-black px-3 py-1 font-mono text-sm font-bold text-white"
-                  style={{ backgroundColor: '#9D00FF' }}
-                  onClick={handleCreateRole}
-                >
-                  Add Role
-                </button>
-              </div>
-              <textarea
-                className="w-full border-2 border-black px-2 py-1 font-mono text-xs mb-2"
-                placeholder="Role description (optional)"
-                value={roleForm.description}
-                onChange={(e) => setRoleForm((prev) => ({ ...prev, description: e.target.value }))}
-              />
-              <select
-                className="w-full border-2 border-black px-2 py-1 font-mono text-sm bg-white mb-2"
-                value={selectedRoleId}
-                onChange={(e) => setSelectedRoleId(e.target.value)}
-              >
-                <option value="">Select role...</option>
-                {roles.map((role) => (
-                  <option key={role.id} value={role.id}>{role.name}</option>
-                ))}
-              </select>
-              <div className="flex items-center gap-2">
-                <input
-                  type="file"
-                  accept=".pdf,.docx,.txt"
-                  className="font-mono text-xs"
-                  onChange={(e) => setJobSpecFile(e.target.files?.[0] || null)}
-                />
-                <button
-                  type="button"
-                  className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
-                  onClick={handleUploadRoleJobSpec}
-                >
-                  Upload job spec
-                </button>
-              </div>
-              {selectedRole && (
-                <div className="font-mono text-xs text-gray-600 mt-2">
-                  Selected role: <span className="font-bold">{selectedRole.name}</span>{' '}
-                  {selectedRole.job_spec_filename ? `(Job spec: ${selectedRole.job_spec_filename})` : '(No job spec uploaded)'}
-                </div>
-              )}
-            </div>
-
-            <div className="border border-black p-3 bg-white">
-              <div className="font-mono text-xs text-gray-500 mb-2">2. Add candidate to selected role (CV required)</div>
-              <div className="grid md:grid-cols-3 gap-2 mb-2">
-                <input
-                  type="email"
-                  className="border-2 border-black px-2 py-1 font-mono text-xs"
-                  placeholder="candidate@company.com"
-                  value={applicationForm.candidate_email}
-                  onChange={(e) => setApplicationForm((prev) => ({ ...prev, candidate_email: e.target.value }))}
-                />
-                <input
-                  type="text"
-                  className="border-2 border-black px-2 py-1 font-mono text-xs"
-                  placeholder="Candidate name"
-                  value={applicationForm.candidate_name}
-                  onChange={(e) => setApplicationForm((prev) => ({ ...prev, candidate_name: e.target.value }))}
-                />
-                <input
-                  type="text"
-                  className="border-2 border-black px-2 py-1 font-mono text-xs"
-                  placeholder="Candidate position"
-                  value={applicationForm.candidate_position}
-                  onChange={(e) => setApplicationForm((prev) => ({ ...prev, candidate_position: e.target.value }))}
-                />
-              </div>
-              <div className="flex items-center gap-2 mb-2">
-                <input
-                  type="file"
-                  accept=".pdf,.docx,.doc"
-                  className="font-mono text-xs"
-                  onChange={(e) => setApplicationCvFile(e.target.files?.[0] || null)}
-                />
-                <button
-                  type="button"
-                  className="border-2 border-black px-3 py-1 font-mono text-xs font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                  style={{ backgroundColor: '#9D00FF' }}
-                  onClick={handleCreateApplication}
-                  disabled={!canCreateApplicationsForRole}
-                >
-                  Add Candidate
-                </button>
-              </div>
-              {!selectedRoleId && (
-                <div className="font-mono text-xs text-gray-500 mb-2">
-                  Select a role before adding a candidate.
-                </div>
-              )}
-              {selectedRoleId && !canCreateApplicationsForRole && (
-                <div className="font-mono text-xs text-red-600 mb-2">
-                  Upload a job spec for this role before adding candidates.
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="border border-black p-3 bg-white mt-4">
-            <div className="font-mono text-xs text-gray-500 mb-2">3. Link tasks and send assessments</div>
-            <div className="flex items-center gap-2 mb-2">
-              <select
-                className="flex-1 border-2 border-black px-2 py-1 font-mono text-xs bg-white"
-                value={taskToLink}
-                onChange={(e) => setTaskToLink(e.target.value)}
-              >
-                <option value="">Link task to role...</option>
-                {unlinkedTasks.map((task) => (
-                  <option key={task.id} value={task.id}>{task.name}</option>
-                ))}
-              </select>
-              <button
-                type="button"
-                className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
-                onClick={handleLinkTaskToRole}
-                disabled={!selectedRoleId}
-              >
-                Link task
-              </button>
-            </div>
-            <div className="font-mono text-xs text-gray-600 mb-3">
-              Linked tasks: {roleTasks.length > 0 ? roleTasks.map((task) => task.name).join(', ') : 'None'}
-            </div>
-            {selectedRoleId ? (
-              roleApplications.length > 0 ? (
-                <div className="space-y-2">
-                  {roleApplications.map((app) => (
-                    <div key={app.id} className="border border-gray-300 p-2 flex flex-wrap items-center gap-2 justify-between">
+          {selectedRoleId ? (
+            roleApplications.length > 0 ? (
+              <div className="space-y-2">
+                {roleApplications.map((app) => (
+                  <div key={app.id} className="border border-gray-300 p-3 bg-white">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
                       <div>
                         <div className="font-mono text-sm font-bold">{app.candidate_name || app.candidate_email}</div>
-                        <div className="font-mono text-xs text-gray-600">{app.candidate_email} • CV: {app.cv_filename || 'missing'}</div>
+                        <div className="font-mono text-xs text-gray-600">{app.candidate_email}</div>
+                        <div className="font-mono text-xs text-gray-600">CV: {app.cv_filename || 'missing'}</div>
                       </div>
                       <div className="flex items-center gap-2">
-                        <select
-                          className="border-2 border-black px-2 py-1 font-mono text-xs bg-white"
-                          value={assessmentTaskByApplication[app.id] || ''}
-                          onChange={(e) => setAssessmentTaskByApplication((prev) => ({ ...prev, [app.id]: e.target.value }))}
-                        >
-                          <option value="">Select role task...</option>
-                          {roleTasks.map((task) => (
-                            <option key={task.id} value={task.id}>{task.name}</option>
-                          ))}
-                        </select>
-                        <button
-                          type="button"
-                          className="border-2 border-black px-3 py-1 font-mono text-xs font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
-                          style={{ backgroundColor: '#9D00FF' }}
-                          onClick={() => handleSendAssessmentForApplication(app.id)}
-                          disabled={!app.cv_filename || roleTasks.length === 0}
-                        >
-                          Create Assessment
-                        </button>
-                        {!app.cv_filename && (
-                          <span className="font-mono text-[11px] text-red-600">Upload CV first</span>
+                        {assessmentComposerApplicationId === app.id ? (
+                          <>
+                            <select
+                              className="border-2 border-black px-2 py-1 font-mono text-xs bg-white"
+                              value={assessmentTaskByApplication[app.id] || ''}
+                              onChange={(e) => setAssessmentTaskByApplication((prev) => ({ ...prev, [app.id]: e.target.value }))}
+                            >
+                              <option value="">Select role task...</option>
+                              {roleTasks.map((task) => (
+                                <option key={task.id} value={task.id}>{task.name}</option>
+                              ))}
+                            </select>
+                            <button
+                              type="button"
+                              className="border-2 border-black px-3 py-1 font-mono text-xs font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                              style={{ backgroundColor: '#9D00FF' }}
+                              onClick={() => handleSendAssessmentForApplication(app.id)}
+                              disabled={!app.cv_filename || roleTasks.length === 0}
+                            >
+                              Send Assessment
+                            </button>
+                            <button
+                              type="button"
+                              className="border border-black px-3 py-1 font-mono text-xs hover:bg-black hover:text-white"
+                              onClick={() => setAssessmentComposerApplicationId(null)}
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            type="button"
+                            className="border-2 border-black px-3 py-1 font-mono text-xs font-bold text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                            style={{ backgroundColor: '#9D00FF' }}
+                            onClick={() => setAssessmentComposerApplicationId(app.id)}
+                            disabled={!app.cv_filename || roleTasks.length === 0}
+                          >
+                            New Assessment
+                          </button>
                         )}
                       </div>
                     </div>
-                  ))}
-                </div>
-              ) : (
-                <div className="font-mono text-xs text-gray-500">No candidates added to this role yet.</div>
-              )
+                    {!app.cv_filename && (
+                      <div className="font-mono text-[11px] text-red-600 mt-2">Upload CV before creating an assessment.</div>
+                    )}
+                    {app.cv_filename && roleTasks.length === 0 && (
+                      <div className="font-mono text-[11px] text-red-600 mt-2">Link at least one task to this role first.</div>
+                    )}
+                  </div>
+                ))}
+              </div>
             ) : (
-              <div className="font-mono text-xs text-gray-500">Select a role to link tasks and send assessments.</div>
-            )}
-          </div>
+              <div className="font-mono text-xs text-gray-500">No candidates added to this role yet.</div>
+            )
+          ) : (
+            <div className="font-mono text-xs text-gray-500">Select a role to view candidates and create assessments.</div>
+          )}
         </div>
 
         <div className="border-2 border-black p-4 mb-6">
@@ -496,72 +491,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
           />
         </div>
 
-        <div className="border-2 border-black p-4 mb-6">
-          <div className="font-mono text-xs text-gray-500 mb-2">{editingId ? 'Edit Candidate' : 'Create Candidate'}</div>
-          <div className="grid md:grid-cols-3 gap-2">
-            <input
-              type="email"
-              className="border-2 border-black px-3 py-2 font-mono text-sm"
-              placeholder="email@company.com"
-              value={form.email}
-              onChange={(e) => setForm((p) => ({ ...p, email: e.target.value }))}
-              disabled={Boolean(editingId)}
-            />
-            <input
-              type="text"
-              className="border-2 border-black px-3 py-2 font-mono text-sm"
-              placeholder="Full name"
-              value={form.full_name}
-              onChange={(e) => setForm((p) => ({ ...p, full_name: e.target.value }))}
-            />
-            <input
-              type="text"
-              className="border-2 border-black px-3 py-2 font-mono text-sm"
-              placeholder="Position"
-              value={form.position}
-              onChange={(e) => setForm((p) => ({ ...p, position: e.target.value }))}
-            />
-          </div>
-          {!editingId && (
-            <div className="mt-3">
-              <div className="font-mono text-xs text-gray-500 mb-1">CV Upload (required for new candidates)</div>
-              <input
-                type="file"
-                accept=".pdf,.docx"
-                className="font-mono text-xs"
-                onChange={(e) => setCreateCvFile(e.target.files?.[0] || null)}
-              />
-              {createCvFile && (
-                <div className="font-mono text-xs text-gray-600 mt-1">{createCvFile.name}</div>
-              )}
-            </div>
-          )}
-          <div className="flex gap-2 mt-3">
-            <button
-              type="button"
-              className="border-2 border-black px-4 py-2 font-mono text-sm font-bold text-white"
-              style={{ backgroundColor: '#9D00FF' }}
-              onClick={handleCreateOrUpdate}
-            >
-              {editingId ? 'Update Candidate' : 'Create Candidate'}
-            </button>
-            {editingId && (
-              <button
-                type="button"
-                className="border-2 border-black px-4 py-2 font-mono text-sm font-bold hover:bg-black hover:text-white"
-                onClick={() => {
-                  setEditingId(null);
-                  setForm({ email: '', full_name: '', position: '' });
-                  setCreateCvFile(null);
-                }}
-              >
-                Cancel
-              </button>
-            )}
-          </div>
-        </div>
-
-        {/* Document upload panel (shown after creating a new candidate) */}
+        {/* Document upload panel */}
         {showDocUpload && (() => {
           const candidate = items.find(c => c.id === showDocUpload);
           if (!candidate) return null;
@@ -659,13 +589,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                     <td className="px-4 py-3 font-mono text-sm">{c.created_at ? new Date(c.created_at).toLocaleDateString() : '--'}</td>
                     <td className="px-4 py-3">
                       <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
-                          onClick={() => handleEdit(c)}
-                        >
-                          Edit
-                        </button>
                         <button
                           type="button"
                           className="border border-black px-2 py-1 font-mono text-xs hover:bg-black hover:text-white"
