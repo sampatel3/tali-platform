@@ -233,6 +233,7 @@ class TestTaskCreate:
         assert t.name == "My Task"
         assert t.is_template is False
         assert t.proctoring_enabled is False
+        assert t.claude_budget_limit_usd is None
 
     def test_task_create_name_min_boundary(self):
         t = TaskCreate(**self._valid_payload(name="abc"))
@@ -287,6 +288,17 @@ class TestTaskCreate:
         assert t.calibration_prompt is None
         assert t.score_weights is None
         assert t.recruiter_weight_preset is None
+        assert t.claude_budget_limit_usd is None
+
+    def test_task_create_budget_accepts_decimal(self):
+        t = TaskCreate(**self._valid_payload(claude_budget_limit_usd=5.25))
+        assert t.claude_budget_limit_usd == 5.25
+
+    def test_task_create_budget_rejects_zero_or_negative(self):
+        with pytest.raises(ValidationError):
+            TaskCreate(**self._valid_payload(claude_budget_limit_usd=0))
+        with pytest.raises(ValidationError):
+            TaskCreate(**self._valid_payload(claude_budget_limit_usd=-1))
 
 
 # ---------------------------------------------------------------------------

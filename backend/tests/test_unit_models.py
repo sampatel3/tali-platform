@@ -153,6 +153,7 @@ class TestTaskModel:
         assert task.is_template is False
         assert task.is_active is True
         assert task.proctoring_enabled is False
+        assert task.claude_budget_limit_usd is None
         assert task.created_at is not None
 
     def test_task_custom_duration(self, db):

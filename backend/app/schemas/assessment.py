@@ -113,6 +113,7 @@ class AssessmentStart(BaseModel):
     token: str
     sandbox_id: str
     task: Dict[str, Any]
+    claude_budget: Optional[Dict[str, Any]] = None
     time_remaining: int
     is_timer_paused: bool = False
     pause_reason: Optional[str] = None

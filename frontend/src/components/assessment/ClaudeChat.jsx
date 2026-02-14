@@ -1,7 +1,17 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Bot } from 'lucide-react';
 
-export default function ClaudeChat({ onSendMessage, onPaste, disabled = false }) {
+function formatUsd(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return 'N/A';
+  return `$${value.toFixed(2)}`;
+}
+
+function formatInt(value) {
+  if (typeof value !== 'number' || Number.isNaN(value)) return '0';
+  return value.toLocaleString();
+}
+
+export default function ClaudeChat({ onSendMessage, onPaste, disabled = false, budget = null, disabledReason = null }) {
   const [messages, setMessages] = useState([
     {
       role: 'assistant',
@@ -61,12 +71,40 @@ export default function ClaudeChat({ onSendMessage, onPaste, disabled = false })
     }
   };
 
+  const budgetEnabled = Boolean(budget?.enabled);
+  const budgetExhausted = Boolean(budget?.is_exhausted);
+  const headerBudgetText = budgetEnabled
+    ? `Budget left ${formatUsd(budget?.remaining_usd)} / ${formatUsd(budget?.limit_usd)}`
+    : `Tokens used ${formatInt(budget?.tokens_used || 0)}`;
+  const headerTokenEstimate = budgetEnabled && typeof budget?.remaining_total_tokens_estimate === 'number'
+    ? `~${formatInt(budget.remaining_total_tokens_estimate)} tokens left`
+    : null;
+  const inputPlaceholder =
+    disabledReason === 'budget_exhausted'
+      ? 'Claude budget exhausted for this task.'
+      : disabledReason === 'timer_paused'
+        ? 'Assessment is paused while Claude is unavailable.'
+        : 'Ask Claude for help...';
+
   return (
     <div className="h-full flex flex-col bg-white">
       {/* Header */}
-      <div className="border-b-2 border-black px-4 py-2 flex items-center gap-2">
-        <Bot size={18} style={{ color: '#9D00FF' }} />
-        <span className="font-mono text-sm font-bold">Claude AI</span>
+      <div className="border-b-2 border-black px-4 py-2">
+        <div className="flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Bot size={18} style={{ color: '#9D00FF' }} />
+            <span className="font-mono text-sm font-bold">Claude AI</span>
+          </div>
+          <span className={`font-mono text-[11px] ${budgetExhausted ? 'text-red-700 font-bold' : 'text-gray-600'}`}>
+            {headerBudgetText}
+          </span>
+        </div>
+        {(budgetEnabled || budget?.tokens_used) && (
+          <div className="mt-1 font-mono text-[11px] text-gray-500">
+            Tokens used: {formatInt(budget?.tokens_used || 0)}
+            {headerTokenEstimate ? ` • ${headerTokenEstimate}` : ''}
+          </div>
+        )}
       </div>
 
       {/* Messages */}
@@ -105,7 +143,7 @@ export default function ClaudeChat({ onSendMessage, onPaste, disabled = false })
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={handleKeyDown}
           onPaste={onPaste}
-          placeholder="Ask Claude for help..."
+          placeholder={inputPlaceholder}
           disabled={loading || disabled}
           className="flex-1 border-2 border-black px-3 py-2 font-mono text-sm focus:outline-none disabled:opacity-50"
         />

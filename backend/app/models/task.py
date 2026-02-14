@@ -33,5 +33,6 @@ class Task(Base):
     repo_structure = Column(JSON, nullable=True)          # {name, files: {path: content}}
     evaluation_rubric = Column(JSON, nullable=True)       # {category: {weight, criteria}}
     extra_data = Column(JSON, nullable=True)              # expected_insights, expected_fixes, valid_solutions, etc.
+    claude_budget_limit_usd = Column(Float, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -16,8 +16,8 @@ def _register_and_login(client):
     return {"Authorization": f"Bearer {token}"}
 
 
-def _create_task(client, headers):
-    resp = client.post("/api/v1/tasks", json={
+def _create_task(client, headers, claude_budget_limit_usd=None):
+    payload = {
         "name": "Sample Task",
         "description": "desc",
         "task_type": "debugging",
@@ -31,7 +31,10 @@ def _create_task(client, headers):
         "repo_structure": {"files": {"src/backfill.py": "def run():\n    pass"}},
         "evaluation_rubric": {"correctness": 0.7, "readability": 0.3},
         "extra_data": {"expected_insights": ["cache repeated prompts"], "valid_solutions": ["redis cache"], "expected_approaches": {"schema_evolution": ["detect and add columns"]}},
-    }, headers=headers)
+    }
+    if claude_budget_limit_usd is not None:
+        payload["claude_budget_limit_usd"] = claude_budget_limit_usd
+    resp = client.post("/api/v1/tasks", json=payload, headers=headers)
     return resp.json()
 
 
@@ -59,7 +62,8 @@ def test_candidate_can_resume_in_progress_assessment(client, monkeypatch):
     task = _create_task(client, headers)
     a = _create_assessment(client, headers, task["id"])
 
-    import app.api.v1.assessments as assessments_api
+    import app.domains.assessments_runtime.routes as assessments_api
+    import app.domains.integrations_notifications.adapters as integrations_adapters
     import app.components.assessments.service as assessments_svc
 
     class FakeSandbox:
@@ -83,7 +87,7 @@ def test_candidate_can_resume_in_progress_assessment(client, monkeypatch):
             return None
 
     monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
-    monkeypatch.setattr(assessments_api, "E2BService", FakeE2BService)
+    monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
 
@@ -109,7 +113,8 @@ def test_timeline_telemetry_records_execute_and_prompt_events(client, monkeypatc
     task = _create_task(client, headers)
     a = _create_assessment(client, headers, task["id"])
 
-    import app.api.v1.assessments as assessments_api
+    import app.domains.assessments_runtime.routes as assessments_api
+    import app.domains.integrations_notifications.adapters as integrations_adapters
     import app.components.assessments.service as assessments_svc
 
     class FakeSandbox:
@@ -143,10 +148,10 @@ def test_timeline_telemetry_records_execute_and_prompt_events(client, monkeypatc
             return {"content": "fake-response", "input_tokens": 11, "output_tokens": 7, "tokens_used": 18}
 
     monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
-    monkeypatch.setattr(assessments_api, "E2BService", FakeE2BService)
+    monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
-    monkeypatch.setattr(assessments_api, "ClaudeService", FakeClaudeService)
+    monkeypatch.setattr(integrations_adapters, "ClaudeService", FakeClaudeService)
 
     start = client.post(f"/api/v1/assessments/token/{a['token']}/start")
     assert start.status_code == 200
@@ -191,12 +196,95 @@ def test_timeline_telemetry_records_execute_and_prompt_events(client, monkeypatc
     assert prompt_event["time_since_last_prompt_ms"] == 456
 
 
+def test_claude_budget_snapshot_and_limit_enforcement(client, monkeypatch):
+    headers = _register_and_login(client)
+    task = _create_task(client, headers, claude_budget_limit_usd=0.000005)
+    a = _create_assessment(client, headers, task["id"])
+
+    import app.domains.assessments_runtime.routes as assessments_api
+    import app.domains.integrations_notifications.adapters as integrations_adapters
+    import app.components.assessments.service as assessments_svc
+
+    class FakeSandbox:
+        def __init__(self, sid):
+            self.sandbox_id = sid
+
+    class FakeE2BService:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def create_sandbox(self):
+            return FakeSandbox("budget-sandbox")
+
+        def connect_sandbox(self, sandbox_id):
+            return FakeSandbox(sandbox_id)
+
+        def get_sandbox_id(self, sandbox):
+            return sandbox.sandbox_id
+
+        def close_sandbox(self, sandbox):
+            return None
+
+    class FakeClaudeService:
+        call_count = 0
+
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def chat(self, messages, system=None):
+            FakeClaudeService.call_count += 1
+            return {
+                "success": True,
+                "content": "budget-aware-response",
+                "input_tokens": 4,
+                "output_tokens": 4,
+                "tokens_used": 8,
+            }
+
+    monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+    monkeypatch.setattr(integrations_adapters, "ClaudeService", FakeClaudeService)
+
+    start = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    assert start.status_code == 200
+    start_payload = start.json()
+    assert start_payload["task"]["claude_budget_limit_usd"] == 0.000005
+    assert start_payload["claude_budget"]["enabled"] is True
+    assert start_payload["claude_budget"]["is_exhausted"] is False
+    assessment_id = start_payload["assessment_id"]
+
+    first_prompt = client.post(
+        f"/api/v1/assessments/{assessment_id}/claude",
+        json={"message": "Please help", "conversation_history": []},
+        headers={"x-assessment-token": a["token"]},
+    )
+    assert first_prompt.status_code == 200
+    first_payload = first_prompt.json()
+    assert first_payload["success"] is True
+    assert first_payload["claude_budget"]["is_exhausted"] is True
+
+    second_prompt = client.post(
+        f"/api/v1/assessments/{assessment_id}/claude",
+        json={"message": "Please help again", "conversation_history": []},
+        headers={"x-assessment-token": a["token"]},
+    )
+    assert second_prompt.status_code == 200
+    second_payload = second_prompt.json()
+    assert second_payload["success"] is False
+    assert second_payload["requires_budget_top_up"] is True
+    assert second_payload["claude_budget"]["is_exhausted"] is True
+    assert FakeClaudeService.call_count == 1
+
+
 def test_start_materializes_repository_files_in_sandbox(client, monkeypatch):
     headers = _register_and_login(client)
     task = _create_task(client, headers)
     a = _create_assessment(client, headers, task["id"])
 
-    import app.api.v1.assessments as assessments_api
+    import app.domains.assessments_runtime.routes as assessments_api
+    import app.domains.integrations_notifications.adapters as integrations_adapters
     import app.components.assessments.service as assessments_svc
 
     class FakeFiles:
@@ -237,7 +325,7 @@ def test_start_materializes_repository_files_in_sandbox(client, monkeypatch):
             return None
 
     monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
-    monkeypatch.setattr(assessments_api, "E2BService", FakeE2BService)
+    monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
 
@@ -254,7 +342,8 @@ def test_execute_auto_submits_when_time_expires(client, monkeypatch):
     task = _create_task(client, headers)
     a = _create_assessment(client, headers, task["id"])
 
-    import app.api.v1.assessments as assessments_api
+    import app.domains.assessments_runtime.routes as assessments_api
+    import app.domains.integrations_notifications.adapters as integrations_adapters
     import app.components.assessments.service as assessments_svc
     from app.models.assessment import Assessment
     from tests.conftest import TestingSessionLocal
@@ -293,7 +382,7 @@ def test_execute_auto_submits_when_time_expires(client, monkeypatch):
             return None
 
     monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
-    monkeypatch.setattr(assessments_api, "E2BService", FakeE2BService)
+    monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
 

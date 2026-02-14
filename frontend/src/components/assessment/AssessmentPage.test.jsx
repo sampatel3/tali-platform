@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { vi } from 'vitest';
 
-import AssessmentPage from './AssessmentPage';
+import AssessmentPage from '../../features/assessment_runtime/AssessmentPage';
 
 const mockClaude = vi.fn();
 const mockClaudeRetry = vi.fn();
@@ -23,7 +23,7 @@ vi.mock('./CodeEditor', () => ({
 }));
 
 vi.mock('./ClaudeChat', () => ({
-  default: ({ onSendMessage, onPaste, disabled = false }) => (
+  default: ({ onSendMessage, onPaste, disabled = false, budget = null, disabledReason = null }) => (
     <div>
       <button type="button" onClick={() => onPaste?.()}>paste</button>
       <button
@@ -37,6 +37,8 @@ vi.mock('./ClaudeChat', () => ({
       </button>
       <div data-testid="claude-disabled">{disabled ? 'true' : 'false'}</div>
       <div data-testid="claude-reply">{lastClaudeReply}</div>
+      <div data-testid="claude-budget-remaining">{budget?.remaining_usd ?? 'none'}</div>
+      <div data-testid="claude-disabled-reason">{disabledReason || 'none'}</div>
     </div>
   ),
 }));
@@ -309,6 +311,82 @@ describe('AssessmentPage tracking metadata', () => {
     expect(screen.getByRole('button', { name: 'Submit' })).not.toBeDisabled();
     expect(screen.getByText('send-claude')).not.toBeDisabled();
     expect(screen.getByTestId('claude-disabled')).toHaveTextContent('false');
+  });
+
+  it('updates Claude budget from API payload', async () => {
+    mockClaude.mockResolvedValueOnce({
+      data: {
+        success: true,
+        response: 'budgeted response',
+        claude_budget: {
+          enabled: true,
+          limit_usd: 5,
+          used_usd: 1.2,
+          remaining_usd: 3.8,
+          tokens_used: 123,
+          is_exhausted: false,
+        },
+      },
+    });
+
+    const startData = {
+      assessment_id: 18,
+      token: 'tok8',
+      time_remaining: 1200,
+      claude_budget: {
+        enabled: true,
+        limit_usd: 5,
+        used_usd: 0,
+        remaining_usd: 5,
+        tokens_used: 0,
+        is_exhausted: false,
+      },
+      task: {
+        name: 'Budget task',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+      },
+    };
+
+    render(<AssessmentPage token="tok8" startData={startData} />);
+
+    expect(await screen.findByTestId('claude-budget-remaining')).toHaveTextContent('5');
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('send-claude'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('claude-budget-remaining')).toHaveTextContent('3.8');
+    });
+  });
+
+  it('disables Claude when task budget is exhausted', async () => {
+    const startData = {
+      assessment_id: 19,
+      token: 'tok9',
+      time_remaining: 1200,
+      claude_budget: {
+        enabled: true,
+        limit_usd: 5,
+        used_usd: 5,
+        remaining_usd: 0,
+        tokens_used: 5000,
+        is_exhausted: true,
+      },
+      task: {
+        name: 'Exhausted budget task',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+      },
+    };
+
+    render(<AssessmentPage token="tok9" startData={startData} />);
+
+    expect(await screen.findByText(/Claude budget exhausted for this task/i)).toBeInTheDocument();
+    expect(screen.getByText('send-claude')).toBeDisabled();
+    expect(screen.getByTestId('claude-disabled')).toHaveTextContent('true');
+    expect(screen.getByTestId('claude-disabled-reason')).toHaveTextContent('budget_exhausted');
   });
 
 });

@@ -52,10 +52,11 @@ try:
         name = t.get("name", task_id_str)
         role = t.get("role", None)
         duration_minutes = t.get("duration_minutes", 30)
+        claude_budget_limit_usd = t.get("claude_budget_limit_usd")
         scenario = t.get("scenario", None)
         repo_structure = t.get("repo_structure", None)
         evaluation_rubric = t.get("evaluation_rubric", None)
-        known_keys = {"task_id", "name", "role", "duration_minutes", "scenario", "repo_structure", "evaluation_rubric"}
+        known_keys = {"task_id", "name", "role", "duration_minutes", "claude_budget_limit_usd", "scenario", "repo_structure", "evaluation_rubric"}
         extra_data = {k: v for k, v in t.items() if k not in known_keys}
 
         # Map role to legacy task_type field
@@ -66,11 +67,11 @@ try:
             text("""
                 INSERT INTO tasks (
                     name, description, task_type, difficulty, duration_minutes,
-                    is_template, is_active, organization_id,
+                    claude_budget_limit_usd, is_template, is_active, organization_id,
                     task_key, role, scenario, repo_structure, evaluation_rubric, extra_data
                 ) VALUES (
                     :name, :description, :task_type, :difficulty, :duration_minutes,
-                    true, true, NULL,
+                    :claude_budget_limit_usd, true, true, NULL,
                     :task_key, :role, :scenario,
                     cast(:repo_structure as jsonb),
                     cast(:evaluation_rubric as jsonb),
@@ -83,6 +84,7 @@ try:
                 "task_type": task_type,
                 "difficulty": difficulty,
                 "duration_minutes": duration_minutes,
+                "claude_budget_limit_usd": claude_budget_limit_usd,
                 "task_key": task_id_str,
                 "role": role,
                 "scenario": scenario,

@@ -21,15 +21,16 @@ from ...models.role import Role
 from ...models.task import Task
 from ...models.user import User
 from ...models.organization import Organization
-from ...services.e2b_service import E2BService
-from ...services.claude_service import ClaudeService
-from ...services.scoring_service import calculate_mvp_score
-from ...services.prompt_analytics import compute_all_heuristics
+from ...components.integrations.e2b.service import E2BService
+from ...components.integrations.claude.service import ClaudeService
+from ...components.scoring.service import calculate_mvp_score
+from ...components.scoring.analytics import compute_all_heuristics
 from ...services.document_service import process_document_upload
 from ...services.fit_matching_service import calculate_cv_job_match_sync
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.task_spec_loader import candidate_rubric_view
 from ...components.notifications.service import send_results_notification_sync
+from .claude_budget import build_claude_budget_snapshot
 
 logger = logging.getLogger(__name__)
 
@@ -376,7 +377,10 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
 
     resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
 
-    task_extra_data = task.extra_data or {}
+    claude_budget = build_claude_budget_snapshot(
+        budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
+        prompts=assessment.ai_prompts or [],
+    )
     return {
         "assessment_id": assessment.id,
         "token": assessment.token,
@@ -395,7 +399,9 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
             "extra_data": None,
             "calibration_prompt": None if settings.MVP_DISABLE_CALIBRATION else (task.calibration_prompt if task else None),
             "proctoring_enabled": False if settings.MVP_DISABLE_PROCTORING else (task.proctoring_enabled if task else False),
+            "claude_budget_limit_usd": getattr(task, "claude_budget_limit_usd", None),
         },
+        "claude_budget": claude_budget,
         "time_remaining": time_remaining_seconds(assessment),
         "is_timer_paused": bool(getattr(assessment, "is_timer_paused", False)),
         "pause_reason": getattr(assessment, "pause_reason", None),

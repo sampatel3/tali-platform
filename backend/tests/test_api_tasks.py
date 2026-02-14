@@ -33,11 +33,19 @@ def test_create_task_all_optional_fields(client):
         test_code="def test_js(): pass\n",
         is_template=True,
         proctoring_enabled=True,
+        claude_budget_limit_usd=5.0,
     )
     assert resp.status_code == 201
     data = resp.json()
     assert data["name"] == "Full Task"
     assert data["duration_minutes"] == 60
+    assert data["claude_budget_limit_usd"] == 5.0
+
+
+def test_create_task_invalid_claude_budget_rejected(client):
+    headers, _ = auth_headers(client)
+    resp = create_task_via_api(client, headers, claude_budget_limit_usd=0)
+    assert resp.status_code == 422
 
 
 def test_create_task_name_too_short_422(client):
@@ -268,7 +276,7 @@ def test_create_task_creates_template_repo(client, monkeypatch):
             captured["repo_structure"] = task.repo_structure
             return "mock://taali-assessments/data_eng_c_backfill_schema"
 
-    monkeypatch.setattr("app.api.v1.tasks.AssessmentRepositoryService", StubRepoService)
+    monkeypatch.setattr("app.domains.tasks_repository.routes.AssessmentRepositoryService", StubRepoService)
 
     resp = create_task_via_api(
         client,
@@ -294,7 +302,7 @@ def test_update_task_recreates_template_repo(client, monkeypatch):
             calls["task_key"] = task.task_key
             return "mock://taali-assessments/updated-task"
 
-    monkeypatch.setattr("app.api.v1.tasks.AssessmentRepositoryService", StubRepoService)
+    monkeypatch.setattr("app.domains.tasks_repository.routes.AssessmentRepositoryService", StubRepoService)
 
     task_id = create_task_via_api(client, headers, task_id="seed_task").json()["id"]
     resp = client.patch(

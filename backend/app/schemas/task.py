@@ -20,6 +20,7 @@ class TaskCreate(BaseModel):
     score_weights: Optional[Dict[str, Any]] = None
     recruiter_weight_preset: Optional[str] = None
     proctoring_enabled: bool = False
+    claude_budget_limit_usd: Optional[float] = Field(default=None, gt=0, le=1000)
     task_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("task_key", "task_id"))
     role: Optional[str] = None
     scenario: Optional[str] = None
@@ -44,6 +45,7 @@ class TaskUpdate(BaseModel):
     score_weights: Optional[Dict[str, Any]] = None
     recruiter_weight_preset: Optional[str] = None
     proctoring_enabled: Optional[bool] = None
+    claude_budget_limit_usd: Optional[float] = Field(default=None, gt=0, le=1000)
     task_key: Optional[str] = Field(default=None, validation_alias=AliasChoices("task_key", "task_id"))
     role: Optional[str] = None
     scenario: Optional[str] = None
@@ -71,6 +73,7 @@ class TaskResponse(BaseModel):
     score_weights: Optional[Dict[str, Any]] = None
     recruiter_weight_preset: Optional[str] = None
     proctoring_enabled: bool = False
+    claude_budget_limit_usd: Optional[float] = None
     # New fields from task JSON spec
     task_key: Optional[str] = None
     role: Optional[str] = None
