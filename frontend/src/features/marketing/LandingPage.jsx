@@ -125,7 +125,7 @@ const HeroSection = ({ onNavigate }) => (
         </p>
         <div className="mt-6 flex flex-wrap gap-3">
           <Button type="button" variant="primary" size="lg" onClick={() => onNavigate('demo')}>
-            Book a Demo
+            Try Demo
             <ArrowRight size={16} />
           </Button>
           <Button type="button" variant="secondary" size="lg" onClick={() => onNavigate('login')}>
