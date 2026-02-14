@@ -198,10 +198,12 @@ const HeroSection = ({ onNavigate }) => (
           BUILT FOR AI-NATIVE ENGINEERING TEAMS
         </div>
         <h1 className="text-5xl lg:text-6xl font-bold leading-tight mb-6">
-          Stop Screening for Yesterday&apos;s Skills
+          Stop hiring for yesterday&apos;s skills.
+          <br />
+          Start hiring with Taali.
         </h1>
         <p className="text-xl lg:text-2xl font-mono text-gray-700 mb-8 leading-relaxed">
-          Test how engineers actually work—with AI tools like Cursor and Claude—not outdated algorithm puzzles.
+          Assess how engineers actually work today&mdash;using Cursor, Claude Code, and OpenAI Codex&mdash;on real tasks, in real workflows.
         </p>
         <div className="flex flex-wrap gap-4">
           <button
