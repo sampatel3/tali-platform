@@ -13,8 +13,7 @@
   --taali-purple-hover: #7B00CC;
   --taali-purple-soft: #f3e6ff;
   --taali-radius: 0px;
-  --taali-font: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', 'Oxygen',
-    'Ubuntu', 'Cantarell', 'Fira Sans', 'Droid Sans', 'Helvetica Neue', sans-serif;
+  --taali-font: 'JetBrains Mono', 'Roboto Mono', 'Fira Code', 'Consolas', 'Courier New', monospace;
   --taali-font-mono: 'JetBrains Mono', 'Roboto Mono', 'Courier New', monospace;
   --taali-ring: rgba(157, 0, 255, 0.35);
   --taali-spacing: 8px;
@@ -33,6 +32,11 @@ body {
   background-color: var(--taali-bg);
   color: var(--taali-text);
   transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+/* Ensure all UI elements inherit the TAALI font (no system font drift) */
+h1, h2, h3, h4, h5, h6, button, input, select, textarea, table, th, td, label, span, p, a {
+  font-family: inherit;
 }
 
 code {
