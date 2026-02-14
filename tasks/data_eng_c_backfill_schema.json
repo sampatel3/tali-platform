@@ -2,7 +2,7 @@
   "task_id": "data_eng_c_backfill_schema",
   "name": "Historical Backfill and Schema Evolution",
   "role": "data_engineer",
-  "duration_minutes": 30,
+  "duration_minutes": 10,
   "scenario": "Two requests landed on your desk this week:\n\n1. **Compliance audit (due in 3 days):** Legal needs a complete transaction history from Jan 2023 to present. The current pipeline only has data from July 2023 when it was deployed. You need to backfill 6 months of historical data.\n\n2. **Schema changes keep breaking things:** The source API added new fields twice this quarter. Each time, the pipeline failed and someone had to manually add columns to the warehouse. Product says more fields are coming. Make it handle schema changes automatically.\n\nThe pipeline runs daily and is currently working (for incremental loads). Don't break what's working while adding these capabilities.",
   "repo_structure": {
     "name": "transaction-pipeline",

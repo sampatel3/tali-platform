@@ -2,7 +2,7 @@
   "task_id": "data_eng_b_cdc_fix",
   "name": "Fix the Broken Data Sync",
   "role": "data_engineer",
-  "duration_minutes": 15,
+  "duration_minutes": 10,
   "claude_budget_limit_usd": 5,
   "scenario": "The finance team reports that the analytics dashboard shows different numbers than the source system. They say 'the sync is broken' and need it fixed ASAP because month-end reporting is tomorrow.\n\nSomeone on the team built a CDC (Change Data Capture) sync 6 months ago. It mostly works but clearly something's wrong. The repo has the sync code, some comparison queries showing the discrepancies, and logs from recent runs.\n\nFind the bugs and fix them.",
   "repo_structure": {
