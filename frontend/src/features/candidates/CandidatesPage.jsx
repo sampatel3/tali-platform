@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Plus, UserPlus } from 'lucide-react';
 import * as apiClient from '../../shared/api';
-import { Button, PageContainer, PageHeader, Panel, Select, TableShell } from '../../shared/ui/TaaliPrimitives';
+import { Button, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
 
 import {
   CandidateSheet,
@@ -15,6 +15,8 @@ import {
   parseCollection,
   trimOrUndefined,
 } from './CandidatesUI';
+
+const UNASSIGNED_ROLE_ID = '__unassigned_role__';
 
 export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) => {
   const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
@@ -44,12 +46,51 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [creatingAssessmentId, setCreatingAssessmentId] = useState(null);
   const [viewingApplicationId, setViewingApplicationId] = useState(null);
   const [legacyAssessments, setLegacyAssessments] = useState([]);
-  const [loadingLegacyAssessments, setLoadingLegacyAssessments] = useState(true);
-  const [legacyAssessmentsError, setLegacyAssessmentsError] = useState('');
+
+  const unassignedRoleApplications = useMemo(() => {
+    const deduped = [];
+    const seen = new Set();
+    for (const assessment of legacyAssessments) {
+      if (assessment.application_id || assessment.role_id) continue;
+      const key = String(assessment.candidate_id || assessment.candidate_email || assessment.id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      deduped.push({
+        id: `unassigned-${assessment.id}`,
+        candidate_id: assessment.candidate_id,
+        candidate_email: assessment.candidate_email || '',
+        candidate_name: (assessment.candidate_name || assessment.candidate_email || '').trim() || 'Unknown',
+        candidate_position: assessment.role_name || '',
+        status: assessment.status || 'pending',
+        cv_filename: assessment.candidate_cv_filename || assessment.cv_filename || null,
+        cv_match_score: assessment.cv_job_match_score,
+        cv_match_details: assessment.cv_job_match_details || null,
+        created_at: assessment.created_at,
+        updated_at: assessment.updated_at || assessment.completed_at || assessment.created_at,
+        _sourceAssessment: assessment,
+      });
+    }
+    return deduped;
+  }, [legacyAssessments]);
+
+  const rolesWithUnassigned = useMemo(() => {
+    if (unassignedRoleApplications.length === 0) return roles;
+    return [
+      ...roles,
+      {
+        id: UNASSIGNED_ROLE_ID,
+        name: 'Unassigned role',
+        description: 'Candidates without an assigned role.',
+        job_spec_filename: null,
+        tasks_count: 0,
+        applications_count: unassignedRoleApplications.length,
+      },
+    ];
+  }, [roles, unassignedRoleApplications]);
 
   const selectedRole = useMemo(
-    () => roles.find((role) => String(role.id) === String(selectedRoleId)) || null,
-    [roles, selectedRoleId]
+    () => rolesWithUnassigned.find((role) => String(role.id) === String(selectedRoleId)) || null,
+    [rolesWithUnassigned, selectedRoleId]
   );
 
   const loadRoles = useCallback(async (preferredRoleId = null) => {
@@ -124,29 +165,14 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const loadLegacyAssessments = useCallback(async () => {
     if (!assessmentsApi?.list) {
       setLegacyAssessments([]);
-      setLoadingLegacyAssessments(false);
       return;
     }
-    setLoadingLegacyAssessments(true);
-    setLegacyAssessmentsError('');
     try {
       const res = await assessmentsApi.list({ limit: 200, offset: 0 });
       const items = parseCollection(res.data);
-      const deduped = [];
-      const seen = new Set();
-      for (const item of items) {
-        if (item.application_id) continue;
-        const key = `${item.role_id || 'none'}:${item.candidate_id || item.candidate_email || item.id}`;
-        if (seen.has(key)) continue;
-        seen.add(key);
-        deduped.push(item);
-      }
-      setLegacyAssessments(deduped);
+      setLegacyAssessments(items);
     } catch {
       setLegacyAssessments([]);
-      setLegacyAssessmentsError('Failed to load dashboard candidates.');
-    } finally {
-      setLoadingLegacyAssessments(false);
     }
   }, [assessmentsApi]);
 
@@ -157,8 +183,28 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   }, [loadRoles, loadTasks, loadLegacyAssessments]);
 
   useEffect(() => {
+    if (!selectedRoleId) {
+      loadRoleContext(selectedRoleId);
+      return;
+    }
+    if (String(selectedRoleId) === UNASSIGNED_ROLE_ID) {
+      setRoleTasks([]);
+      setRoleContextError('');
+      setLoadingRoleContext(false);
+      setRoleApplications(unassignedRoleApplications);
+      return;
+    }
     loadRoleContext(selectedRoleId);
-  }, [selectedRoleId, loadRoleContext]);
+  }, [selectedRoleId, loadRoleContext, unassignedRoleApplications]);
+
+  useEffect(() => {
+    setSelectedRoleId((current) => {
+      if (current && rolesWithUnassigned.some((role) => String(role.id) === String(current))) {
+        return current;
+      }
+      return rolesWithUnassigned.length > 0 ? String(rolesWithUnassigned[0].id) : '';
+    });
+  }, [rolesWithUnassigned]);
 
   const mapAssessmentForDetail = (assessment, fallbackApp) => ({
     id: assessment.id,
@@ -178,28 +224,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     token: assessment.token,
     _raw: assessment,
   });
-
-  const legacyCandidates = useMemo(() => {
-    const query = searchQuery.trim().toLowerCase();
-    return legacyAssessments.filter((assessment) => {
-      const matchesRole = !selectedRoleId
-        || !assessment.role_id
-        || String(assessment.role_id) === String(selectedRoleId);
-      if (!matchesRole) return false;
-      if (!query) return true;
-      const haystack = [
-        assessment.candidate_name,
-        assessment.candidate_email,
-        assessment.role_name,
-        assessment.status,
-        assessment.task_name,
-      ]
-        .filter(Boolean)
-        .join(' ')
-        .toLowerCase();
-      return haystack.includes(query);
-    });
-  }, [legacyAssessments, searchQuery, selectedRoleId]);
 
   const handleOpenRoleSheet = (mode) => {
     setRoleSheetMode(mode);
@@ -287,6 +311,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const handleViewFromApplication = async (application) => {
     setViewingApplicationId(application.id);
     try {
+      if (application?._sourceAssessment) {
+        onViewCandidate(mapAssessmentForDetail(application._sourceAssessment, application));
+        return;
+      }
       const res = await assessmentsApi.list({
         candidate_id: application.candidate_id,
         role_id: selectedRoleId,
@@ -307,6 +335,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   };
 
   const handleCreateAssessment = async (application, taskId) => {
+    if (String(selectedRoleId) === UNASSIGNED_ROLE_ID) {
+      alert('Assign this candidate to a role before creating an assessment.');
+      return false;
+    }
     if (!rolesApi?.createAssessment) return false;
     const taskNumber = Number(taskId);
     if (!taskNumber) {
@@ -327,71 +359,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
   };
 
-  const legacyCandidatesSection = (
-    <Panel className="p-4">
-      <div className="mb-3">
-        <h3 className="text-sm font-semibold uppercase tracking-[0.08em] text-gray-600">
-          Dashboard candidates
-        </h3>
-        <p className="mt-1 text-sm text-gray-600">
-          Candidates that exist from the assessment flow but are not attached to a role application.
-        </p>
-      </div>
-      {loadingLegacyAssessments ? (
-        <p className="text-sm text-gray-500">Loading dashboard candidates...</p>
-      ) : null}
-      {!loadingLegacyAssessments && legacyAssessmentsError ? (
-        <p className="text-sm text-red-700">{legacyAssessmentsError}</p>
-      ) : null}
-      {!loadingLegacyAssessments && !legacyAssessmentsError && legacyCandidates.length === 0 ? (
-        <p className="text-sm text-gray-500">No dashboard-only candidates found.</p>
-      ) : null}
-      {!loadingLegacyAssessments && !legacyAssessmentsError && legacyCandidates.length > 0 ? (
-        <TableShell>
-          <table className="min-w-[720px]">
-            <thead>
-              <tr className="text-left text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">
-                <th className="px-4 py-3">Name</th>
-                <th className="px-4 py-3">Email</th>
-                <th className="px-4 py-3">Role</th>
-                <th className="px-4 py-3">Status</th>
-                <th className="px-4 py-3">Last activity</th>
-                <th className="px-4 py-3">Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {legacyCandidates.map((assessment) => (
-                <tr key={assessment.id}>
-                  <td className="px-4 py-3 text-sm font-semibold text-gray-900">
-                    {(assessment.candidate_name || assessment.candidate_email || 'Unknown').trim()}
-                  </td>
-                  <td className="px-4 py-3 text-sm text-gray-700">{assessment.candidate_email || '—'}</td>
-                  <td className="px-4 py-3 text-sm text-gray-700">{assessment.role_name || 'Unassigned role'}</td>
-                  <td className="px-4 py-3 text-sm text-gray-700">{assessment.status || 'pending'}</td>
-                  <td className="px-4 py-3 text-sm text-gray-700">
-                    {assessment.updated_at
-                      ? new Date(assessment.updated_at).toLocaleString()
-                      : (assessment.created_at ? new Date(assessment.created_at).toLocaleString() : '—')}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Button
-                      type="button"
-                      variant="secondary"
-                      size="sm"
-                      onClick={() => onViewCandidate(mapAssessmentForDetail(assessment))}
-                    >
-                      View
-                    </Button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </TableShell>
-      ) : null}
-    </Panel>
-  );
-
   return (
     <div>
       <NavComponent currentPage="candidates" onNavigate={onNavigate} />
@@ -410,7 +377,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
               <Button
                 type="button"
                 variant="secondary"
-                disabled={!selectedRoleId}
+                disabled={!selectedRoleId || selectedRoleId === UNASSIGNED_ROLE_ID}
                 onClick={() => {
                   setCandidateSheetError('');
                   setCandidateSheetOpen(true);
@@ -431,10 +398,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 aria-label="Active role"
                 value={selectedRoleId}
                 onChange={(event) => setSelectedRoleId(event.target.value)}
-                disabled={loadingRoles || roles.length === 0}
+                disabled={loadingRoles || rolesWithUnassigned.length === 0}
               >
-                {roles.length === 0 ? <option value="">No roles</option> : null}
-                {roles.map((role) => (
+                {rolesWithUnassigned.length === 0 ? <option value="">No roles</option> : null}
+                {rolesWithUnassigned.map((role) => (
                   <option key={role.id} value={role.id}>{role.name}</option>
                 ))}
               </Select>
@@ -454,7 +421,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
 
         <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
           <RolesList
-            roles={roles}
+            roles={rolesWithUnassigned}
             selectedRoleId={selectedRoleId}
             loading={loadingRoles}
             error={rolesError}
@@ -464,17 +431,23 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
 
           <div className="space-y-4">
             {!selectedRole ? (
-              <>
-                <EmptyRoleDetail onCreateRole={() => handleOpenRoleSheet('create')} />
-                {legacyCandidatesSection}
-              </>
+              <EmptyRoleDetail onCreateRole={() => handleOpenRoleSheet('create')} />
             ) : (
               <>
-                <RoleSummaryHeader
-                  role={selectedRole}
-                  roleTasks={roleTasks}
-                  onEditRole={() => handleOpenRoleSheet('edit')}
-                />
+                {String(selectedRole.id) === UNASSIGNED_ROLE_ID ? (
+                  <Panel className="p-5">
+                    <h2 className="text-2xl font-bold tracking-tight text-[var(--taali-text)]">Unassigned role</h2>
+                    <p className="mt-1 text-sm text-[var(--taali-muted)]">
+                      Candidates that are not attached to a role application yet.
+                    </p>
+                  </Panel>
+                ) : (
+                  <RoleSummaryHeader
+                    role={selectedRole}
+                    roleTasks={roleTasks}
+                    onEditRole={() => handleOpenRoleSheet('edit')}
+                  />
+                )}
                 {loadingTasks ? (
                   <Panel className="px-4 py-3 text-sm text-gray-600 bg-[#faf8ff]">
                     Loading tasks catalog...
@@ -492,7 +465,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   error={roleContextError}
                   searchQuery={searchQuery}
                   roleTasks={roleTasks}
-                  canCreateAssessment={Boolean(rolesApi?.createAssessment)}
+                  canCreateAssessment={Boolean(rolesApi?.createAssessment) && selectedRoleId !== UNASSIGNED_ROLE_ID}
                   creatingAssessmentId={creatingAssessmentId}
                   viewingApplicationId={viewingApplicationId}
                   onAddCandidate={() => {
@@ -502,7 +475,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   onViewCandidate={handleViewFromApplication}
                   onCreateAssessment={handleCreateAssessment}
                 />
-                {legacyCandidatesSection}
               </>
             )}
           </div>
@@ -512,8 +484,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       <RoleSheet
         open={roleSheetOpen}
         mode={roleSheetMode}
-        role={roleSheetMode === 'edit' ? selectedRole : null}
-        roleTasks={roleSheetMode === 'edit' ? roleTasks : []}
+        role={roleSheetMode === 'edit' && selectedRole?.id !== UNASSIGNED_ROLE_ID ? selectedRole : null}
+        roleTasks={roleSheetMode === 'edit' && selectedRole?.id !== UNASSIGNED_ROLE_ID ? roleTasks : []}
         allTasks={allTasks}
         saving={savingRole}
         error={roleSheetError}

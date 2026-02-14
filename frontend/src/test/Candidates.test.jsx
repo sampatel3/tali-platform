@@ -414,13 +414,12 @@ describe('CandidatesPage', () => {
     });
   });
 
-  it('shows dashboard candidates when no roles exist', async () => {
+  it('shows unassigned role when candidates exist without role applications', async () => {
     rolesApi.list.mockResolvedValue({ data: [] });
     rolesApi.listApplications.mockResolvedValue({ data: [] });
     rolesApi.listTasks.mockResolvedValue({ data: [] });
     assessmentsApi.list
-      .mockResolvedValueOnce({ data: { items: [], total: 0 } })
-      .mockResolvedValueOnce({
+      .mockResolvedValue({
         data: {
           items: [
             {
@@ -432,6 +431,7 @@ describe('CandidatesPage', () => {
               status: 'pending',
               created_at: '2026-01-12T10:00:00Z',
               application_id: null,
+              role_id: null,
             },
           ],
           total: 1,
@@ -441,8 +441,9 @@ describe('CandidatesPage', () => {
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Dashboard candidates')).toBeInTheDocument();
+      expect(screen.getAllByText('Unassigned role').length).toBeGreaterThan(0);
       expect(screen.getByText('Legacy Candidate')).toBeInTheDocument();
+      expect(screen.queryByText('Dashboard candidates')).not.toBeInTheDocument();
     });
   });
 });
