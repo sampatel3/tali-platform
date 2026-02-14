@@ -45,12 +45,6 @@ const LandingNav = ({ onNavigate }) => {
         </Button>
 
         <div className="hidden items-center gap-2 md:flex">
-          <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => scrollTo('why-taali')}>
-            Why TAALI
-          </Button>
-          <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => scrollTo('how-taali')}>
-            How TAALI
-          </Button>
           <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => scrollTo('pricing')}>
             Pricing
           </Button>
@@ -66,12 +60,6 @@ const LandingNav = ({ onNavigate }) => {
       {mobileOpen ? (
         <div className="border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-6 py-3 md:hidden">
           <div className="grid gap-2">
-            <Button type="button" variant="ghost" size="sm" className="justify-start font-mono" onClick={() => scrollTo('why-taali')}>
-              Why TAALI
-            </Button>
-            <Button type="button" variant="ghost" size="sm" className="justify-start font-mono" onClick={() => scrollTo('how-taali')}>
-              How TAALI
-            </Button>
             <Button type="button" variant="ghost" size="sm" className="justify-start font-mono" onClick={() => scrollTo('pricing')}>
               Pricing
             </Button>
