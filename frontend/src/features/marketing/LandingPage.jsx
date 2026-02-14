@@ -10,7 +10,6 @@ import {
 } from 'recharts';
 
 import { BRAND } from '../../config/brand';
-import { ASSESSMENT_PRICE_AED, formatAed } from '../../lib/currency';
 import { dimensionOrder, getDimensionById } from '../../scoring/scoringDimensions';
 import { BrandGlyph, Logo } from '../../shared/ui/Branding';
 import {
@@ -314,22 +313,23 @@ const PricingSection = ({ onNavigate }) => (
     <PageContainer>
       <div className="mx-auto max-w-4xl text-center">
         <h2 className="text-4xl font-bold">Pricing That Scales with Hiring</h2>
-        <p className="mt-2 font-mono text-sm text-[var(--taali-muted)]">Clear plans, predictable costs, no hidden add-ons.</p>
+        <p className="mt-2 font-mono text-sm text-[var(--taali-muted)]">Simple per-assessment pricing, with enterprise support when you need it.</p>
       </div>
 
       <div className="mx-auto mt-8 grid max-w-4xl gap-5 md:grid-cols-2">
         <Panel className="relative p-6">
-          <span className="taali-badge taali-badge-purple absolute -top-3 left-5">Recommended</span>
-          <h3 className="mt-3 text-2xl font-bold">Pay-Per-Use</h3>
-          <p className="mt-1 text-5xl font-bold">{formatAed(ASSESSMENT_PRICE_AED)}</p>
-          <p className="font-mono text-sm text-[var(--taali-muted)]">per assessment</p>
+          <span className="taali-badge taali-badge-purple absolute -top-3 left-5">Most Flexible</span>
+          <h3 className="mt-3 text-2xl font-bold">Pay-As-You-Go</h3>
+          <p className="mt-1 text-4xl font-bold">AED 59 per assessment</p>
+          <p className="mt-2 font-mono text-sm text-[var(--taali-muted)]">
+            Run real, AI-native assessments with automated scoring and a downloadable report.
+          </p>
           <ul className="mt-4 grid gap-2">
             {[
               'Full coding environment',
               'Coding agents (Claude Code, Codex)',
-              'Automated scoring',
-              'Candidate reports',
-              'Workable sync',
+              'Automated scoring + rubric',
+              'Candidate report + evidence log',
               'Email support',
             ].map((feature) => (
               <li key={feature} className="flex items-center gap-2 font-mono text-sm text-[var(--taali-text)]">
@@ -339,31 +339,17 @@ const PricingSection = ({ onNavigate }) => (
             ))}
           </ul>
           <Button type="button" variant="primary" size="lg" className="mt-6 w-full" onClick={() => onNavigate('login')}>
-            Start Free Trial
+            Buy credits
           </Button>
         </Panel>
 
         <Panel className="p-6">
-          <h3 className="mt-3 text-2xl font-bold">Monthly</h3>
-          <p className="mt-1 text-5xl font-bold">{formatAed(300)}</p>
-          <p className="font-mono text-sm text-[var(--taali-muted)]">per month</p>
-          <ul className="mt-4 grid gap-2">
-            {[
-              'Everything in Pay-Per-Use',
-              'Unlimited assessments',
-              'Custom tasks',
-              'Priority support',
-              'Analytics dashboard',
-              'Team management',
-            ].map((feature) => (
-              <li key={feature} className="flex items-center gap-2 font-mono text-sm text-[var(--taali-text)]">
-                <Check size={16} className="text-[var(--taali-purple)]" />
-                {feature}
-              </li>
-            ))}
-          </ul>
+          <h3 className="mt-3 text-2xl font-bold">Teams / Agencies / Enterprise</h3>
+          <p className="mt-2 font-mono text-sm text-[var(--taali-muted)]">
+            Need volume pricing, custom tasks, Workable/ATS integrations, invoicing, or SLAs?
+          </p>
           <Button type="button" variant="secondary" size="lg" className="mt-6 w-full" onClick={() => onNavigate('demo')}>
-            Book Demo
+            Contact sales
           </Button>
         </Panel>
       </div>
