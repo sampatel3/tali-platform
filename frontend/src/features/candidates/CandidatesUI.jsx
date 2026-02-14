@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   BriefcaseBusiness,
   CheckCircle2,
@@ -9,11 +9,22 @@ import {
   Search,
   UploadCloud,
   UserPlus,
-  X,
 } from 'lucide-react';
+import {
+  Badge,
+  Button,
+  Card,
+  EmptyState,
+  Input,
+  Panel,
+  Select,
+  Sheet,
+  TableShell,
+  Textarea,
+  cx,
+} from '../../shared/ui/TaaliPrimitives';
 
 export const parseCollection = (data) => (Array.isArray(data) ? data : (data?.items || []));
-
 const formatDateTime = (value) => (value ? new Date(value).toLocaleString() : '—');
 
 export const trimOrUndefined = (value) => {
@@ -21,18 +32,12 @@ export const trimOrUndefined = (value) => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
-const statusPillClass = (status) => {
+const statusVariant = (status) => {
   const normalized = String(status || '').toLowerCase();
-  if (normalized.includes('interview') || normalized.includes('review')) {
-    return 'bg-blue-50 border-blue-200 text-blue-700';
-  }
-  if (normalized.includes('reject') || normalized.includes('decline')) {
-    return 'bg-red-50 border-red-200 text-red-700';
-  }
-  if (normalized.includes('offer') || normalized.includes('hired')) {
-    return 'bg-green-50 border-green-200 text-green-700';
-  }
-  return 'bg-amber-50 border-amber-200 text-amber-700';
+  if (normalized.includes('interview') || normalized.includes('review')) return 'purple';
+  if (normalized.includes('reject') || normalized.includes('decline')) return 'warning';
+  if (normalized.includes('offer') || normalized.includes('hired')) return 'success';
+  return 'muted';
 };
 
 export const getErrorMessage = (err, fallback) => err?.response?.data?.detail || fallback;
@@ -40,159 +45,52 @@ export const getErrorMessage = (err, fallback) => err?.response?.data?.detail ||
 export const SearchInput = ({ value, onChange, placeholder }) => (
   <div className="relative">
     <Search size={15} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-    <input
+    <Input
       type="text"
       value={value}
       onChange={onChange}
       placeholder={placeholder}
-      className="w-full rounded-md border border-gray-300 bg-white py-2 pl-9 pr-3 text-sm focus:border-black focus:outline-none"
+      className="pl-9"
     />
   </div>
 );
 
-const FOCUSABLE_SELECTOR = [
-  'a[href]',
-  'button:not([disabled])',
-  'textarea:not([disabled])',
-  'input:not([disabled])',
-  'select:not([disabled])',
-  '[tabindex]:not([tabindex="-1"])',
-].join(',');
-
-const Sheet = ({ open, onClose, title, description, children, footer }) => {
-  const panelRef = useRef(null);
-  const previousFocusRef = useRef(null);
-
-  useEffect(() => {
-    if (!open) return undefined;
-
-    const previousOverflow = document.body.style.overflow;
-    previousFocusRef.current = document.activeElement;
-    document.body.style.overflow = 'hidden';
-
-    const focusables = panelRef.current?.querySelectorAll(FOCUSABLE_SELECTOR);
-    if (focusables && focusables.length > 0) {
-      focusables[0].focus();
-    } else {
-      panelRef.current?.focus();
-    }
-
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') {
-        event.preventDefault();
-        onClose();
-        return;
-      }
-      if (event.key !== 'Tab') return;
-      const items = panelRef.current?.querySelectorAll(FOCUSABLE_SELECTOR);
-      if (!items || items.length === 0) {
-        event.preventDefault();
-        return;
-      }
-      const first = items[0];
-      const last = items[items.length - 1];
-      if (event.shiftKey && document.activeElement === first) {
-        event.preventDefault();
-        last.focus();
-      } else if (!event.shiftKey && document.activeElement === last) {
-        event.preventDefault();
-        first.focus();
-      }
-    };
-
-    document.addEventListener('keydown', handleKeyDown);
-
-    return () => {
-      document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = previousOverflow;
-      if (previousFocusRef.current && typeof previousFocusRef.current.focus === 'function') {
-        previousFocusRef.current.focus();
-      }
-    };
-  }, [onClose, open]);
-
-  if (!open) return null;
-
-  return (
-    <div
-      className="fixed inset-0 z-50 bg-black/50 backdrop-blur-[1px]"
-      onMouseDown={(event) => {
-        if (event.target === event.currentTarget) onClose();
-      }}
-    >
-      <div
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
-        className="absolute inset-x-0 bottom-0 max-h-[92vh] rounded-t-2xl border border-gray-200 bg-white shadow-2xl focus:outline-none md:inset-y-0 md:right-0 md:left-auto md:h-full md:max-h-none md:w-[640px] md:rounded-none md:border-l"
-      >
-        <div className="sticky top-0 z-10 border-b border-gray-200 bg-white/95 px-5 py-4 backdrop-blur">
-          <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-bold tracking-tight">{title}</h2>
-              {description ? <p className="mt-1 text-sm text-gray-600">{description}</p> : null}
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-md border border-gray-200 p-1.5 text-gray-600 transition hover:bg-gray-100 hover:text-black"
-              aria-label="Close"
-            >
-              <X size={16} />
-            </button>
-          </div>
-        </div>
-        <div className="overflow-y-auto px-5 py-5" style={{ maxHeight: 'calc(92vh - 150px)' }}>
-          {children}
-        </div>
-        <div className="sticky bottom-0 border-t border-gray-200 bg-white px-5 py-4">{footer}</div>
-      </div>
-    </div>
-  );
-};
-
 export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole, onCreateRole }) => (
-  <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+  <Panel className="p-4">
     <div className="mb-4 flex items-center justify-between">
       <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-gray-600">Roles</h2>
-      <button
-        type="button"
-        onClick={onCreateRole}
-        className="inline-flex items-center gap-1.5 rounded-md border border-gray-200 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50"
-      >
+      <Button type="button" variant="ghost" size="sm" onClick={onCreateRole}>
         <Plus size={14} />
         New
-      </button>
+      </Button>
     </div>
 
     {loading ? (
-      <div className="flex items-center gap-2 rounded-lg border border-gray-200 px-3 py-4 text-sm text-gray-500">
-        <Loader2 size={14} className="animate-spin" />
-        Loading roles...
-      </div>
+      <Card className="px-3 py-4">
+        <div className="flex items-center gap-2 text-sm text-gray-600">
+          <Loader2 size={14} className="animate-spin" />
+          Loading roles...
+        </div>
+      </Card>
     ) : null}
 
     {!loading && error ? (
-      <div className="rounded-lg border border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+      <Card className="border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
         {error}
-      </div>
+      </Card>
     ) : null}
 
     {!loading && !error && roles.length === 0 ? (
-      <div className="rounded-xl border border-dashed border-gray-300 bg-gray-50 p-5 text-center">
-        <p className="text-sm font-medium text-gray-900">No roles yet</p>
-        <p className="mt-1 text-xs text-gray-500">Create your first role to start adding candidates.</p>
-        <button
-          type="button"
-          onClick={onCreateRole}
-          className="mt-3 inline-flex items-center gap-1.5 rounded-md border border-black bg-black px-3 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800"
-        >
-          <Plus size={14} />
-          Create your first role
-        </button>
-      </div>
+      <EmptyState
+        title="No roles yet"
+        description="Create your first role to start adding candidates."
+        action={(
+          <Button type="button" variant="primary" size="sm" onClick={onCreateRole}>
+            <Plus size={14} />
+            Create your first role
+          </Button>
+        )}
+      />
     ) : null}
 
     {!loading && !error && roles.length > 0 ? (
@@ -204,11 +102,12 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
               <button
                 type="button"
                 onClick={() => onSelectRole(String(role.id))}
-                className={`w-full rounded-xl border px-3 py-3 text-left transition ${
+                className={cx(
+                  'w-full text-left border-2 rounded-[var(--taali-radius)] px-3 py-3 transition',
                   selected
-                    ? 'border-black bg-gray-100 shadow-sm'
-                    : 'border-gray-200 bg-white hover:border-gray-300 hover:bg-gray-50'
-                }`}
+                    ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)]'
+                    : 'border-[var(--taali-border-muted)] bg-white hover:border-[var(--taali-border)]'
+                )}
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
@@ -220,18 +119,10 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
                   <ChevronsUpDown size={14} className="mt-0.5 shrink-0 text-gray-400" />
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  <span
-                    className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${
-                      role.job_spec_filename
-                        ? 'border-green-200 bg-green-50 text-green-700'
-                        : 'border-amber-200 bg-amber-50 text-amber-700'
-                    }`}
-                  >
+                  <Badge variant={role.job_spec_filename ? 'success' : 'warning'}>
                     {role.job_spec_filename ? 'Spec uploaded' : 'No spec'}
-                  </span>
-                  <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
-                    Tasks: {role.tasks_count || 0}
-                  </span>
+                  </Badge>
+                  <Badge variant="purple">Tasks: {role.tasks_count || 0}</Badge>
                 </div>
               </button>
             </li>
@@ -239,27 +130,23 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
         })}
       </ul>
     ) : null}
-  </section>
+  </Panel>
 );
 
 export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
   if (!role) return null;
   return (
-    <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
+    <Panel className="p-5">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
           <h2 className="text-2xl font-bold tracking-tight text-gray-900">{role.name}</h2>
           {role.description ? <p className="text-sm text-gray-600">{role.description}</p> : null}
         </div>
-        <button
-          type="button"
-          onClick={onEditRole}
-          className="inline-flex items-center gap-1.5 rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-50"
-        >
+        <Button type="button" variant="secondary" size="sm" onClick={onEditRole}>
           Edit role
-        </button>
+        </Button>
       </div>
-      <div className="mt-4 rounded-xl border border-gray-200 bg-gray-50 p-4">
+      <Card className="mt-4 p-3 bg-[#faf8ff]">
         <div className="flex flex-wrap items-center gap-5">
           <div className="inline-flex items-center gap-2 text-sm text-gray-700">
             <FileText size={15} className="text-gray-500" />
@@ -272,12 +159,7 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
             {roleTasks.length > 0 ? (
               <div className="flex flex-wrap gap-1.5">
                 {roleTasks.map((task) => (
-                  <span
-                    key={task.id}
-                    className="rounded-full border border-gray-200 bg-white px-2 py-0.5 text-xs text-gray-700"
-                  >
-                    {task.name}
-                  </span>
+                  <Badge key={task.id} variant="muted">{task.name}</Badge>
                 ))}
               </div>
             ) : (
@@ -285,8 +167,8 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
             )}
           </div>
         </div>
-      </div>
-    </section>
+      </Card>
+    </Panel>
   );
 };
 
@@ -329,47 +211,43 @@ export const CandidatesTable = ({
 
   if (loading) {
     return (
-      <div className="rounded-2xl border border-gray-200 bg-white px-4 py-10 text-center text-sm text-gray-500 shadow-sm">
+      <Panel className="px-4 py-10 text-center text-sm text-gray-500">
         <div className="inline-flex items-center gap-2">
           <Loader2 size={15} className="animate-spin" />
           Loading candidates...
         </div>
-      </div>
+      </Panel>
     );
   }
 
   if (error) {
     return (
-      <div className="rounded-2xl border border-red-200 bg-red-50 px-4 py-10 text-center text-sm text-red-700 shadow-sm">
+      <Panel className="px-4 py-10 text-center text-sm border-red-200 bg-red-50 text-red-700">
         {error}
-      </div>
+      </Panel>
     );
   }
 
   if (filtered.length === 0) {
     return (
-      <div className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 px-5 py-14 text-center">
-        <h3 className="text-lg font-semibold text-gray-900">No candidates yet</h3>
-        <p className="mt-1 text-sm text-gray-600">
-          Add your first candidate to this role and start assessments.
-        </p>
-        <button
-          type="button"
-          onClick={onAddCandidate}
-          className="mt-4 inline-flex items-center gap-1.5 rounded-md border border-black bg-black px-3 py-2 text-sm font-semibold text-white transition hover:bg-gray-800"
-        >
-          <UserPlus size={15} />
-          Add candidate
-        </button>
-      </div>
+      <EmptyState
+        title="No candidates yet"
+        description="Add your first candidate to this role and start assessments."
+        action={(
+          <Button type="button" variant="primary" size="sm" onClick={onAddCandidate}>
+            <UserPlus size={15} />
+            Add candidate
+          </Button>
+        )}
+      />
     );
   }
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
-      <table className="w-full min-w-[760px]">
+    <TableShell>
+      <table className="min-w-[760px]">
         <thead>
-          <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+          <tr className="text-left text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">
             <th className="px-4 py-3">Name</th>
             <th className="px-4 py-3">Email</th>
             <th className="px-4 py-3">Position</th>
@@ -382,33 +260,35 @@ export const CandidatesTable = ({
           {filtered.map((app) => {
             const selectedTask = taskByApplication[app.id] || (roleTasks.length === 1 ? String(roleTasks[0].id) : '');
             const canOpenComposer = Boolean(canCreateAssessment && app.cv_filename && roleTasks.length > 0);
+
             return (
               <React.Fragment key={app.id}>
-                <tr className="border-b border-gray-100 align-top">
+                <tr className="align-top">
                   <td className="px-4 py-3 text-sm font-semibold text-gray-900">
                     {app.candidate_name || app.candidate_email}
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-700">{app.candidate_email}</td>
                   <td className="px-4 py-3 text-sm text-gray-700">{app.candidate_position || '—'}</td>
                   <td className="px-4 py-3">
-                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-medium ${statusPillClass(app.status)}`}>
-                      {app.status || 'applied'}
-                    </span>
+                    <Badge variant={statusVariant(app.status)}>{app.status || 'applied'}</Badge>
                   </td>
                   <td className="px-4 py-3 text-sm text-gray-700">{formatDateTime(app.updated_at || app.created_at)}</td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap items-center gap-2">
-                      <button
+                      <Button
                         type="button"
+                        variant="secondary"
+                        size="sm"
                         onClick={() => onViewCandidate(app)}
                         disabled={viewingApplicationId === app.id}
-                        className="rounded-md border border-gray-300 px-2.5 py-1.5 text-xs font-medium text-gray-700 transition hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-60"
                       >
                         {viewingApplicationId === app.id ? 'Loading...' : 'View'}
-                      </button>
+                      </Button>
                       {canCreateAssessment ? (
-                        <button
+                        <Button
                           type="button"
+                          variant="primary"
+                          size="sm"
                           onClick={() => {
                             if (composerApplicationId === app.id) {
                               setComposerApplicationId(null);
@@ -420,10 +300,9 @@ export const CandidatesTable = ({
                             setComposerApplicationId(app.id);
                           }}
                           disabled={!canOpenComposer}
-                          className="rounded-md border border-black bg-black px-2.5 py-1.5 text-xs font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:border-gray-300 disabled:bg-gray-200 disabled:text-gray-500"
                         >
                           Create assessment
-                        </button>
+                        </Button>
                       ) : null}
                     </div>
                     {!app.cv_filename ? (
@@ -434,40 +313,43 @@ export const CandidatesTable = ({
                     ) : null}
                   </td>
                 </tr>
+
                 {composerApplicationId === app.id ? (
-                  <tr className="border-b border-gray-100 bg-gray-50">
+                  <tr className="bg-[#faf8ff]">
                     <td colSpan={6} className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
-                        <select
+                        <Select
                           value={selectedTask}
                           onChange={(event) => {
                             setTaskByApplication((prev) => ({ ...prev, [app.id]: event.target.value }));
                           }}
-                          className="min-w-[240px] rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-black focus:outline-none"
+                          className="min-w-[240px]"
                         >
                           <option value="">Select task...</option>
                           {roleTasks.map((task) => (
                             <option key={task.id} value={task.id}>{task.name}</option>
                           ))}
-                        </select>
-                        <button
+                        </Select>
+                        <Button
                           type="button"
+                          variant="primary"
+                          size="sm"
                           onClick={async () => {
                             const success = await onCreateAssessment(app, selectedTask);
                             if (success) setComposerApplicationId(null);
                           }}
                           disabled={!selectedTask || creatingAssessmentId === app.id}
-                          className="rounded-md border border-black bg-black px-3 py-2 text-xs font-semibold uppercase tracking-wide text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:border-gray-300 disabled:bg-gray-200 disabled:text-gray-500"
                         >
                           {creatingAssessmentId === app.id ? 'Creating...' : 'Send assessment'}
-                        </button>
-                        <button
+                        </Button>
+                        <Button
                           type="button"
+                          variant="ghost"
+                          size="sm"
                           onClick={() => setComposerApplicationId(null)}
-                          className="rounded-md border border-gray-300 px-3 py-2 text-xs font-medium text-gray-700 transition hover:bg-gray-100"
                         >
                           Cancel
-                        </button>
+                        </Button>
                       </div>
                     </td>
                   </tr>
@@ -477,7 +359,7 @@ export const CandidatesTable = ({
           })}
         </tbody>
       </table>
-    </div>
+    </TableShell>
   );
 };
 
@@ -530,38 +412,27 @@ export const RoleSheet = ({
       description={isEdit ? 'Update role details, job spec, and linked tasks.' : 'Set up a role in three quick steps.'}
       footer={(
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100"
-          >
-            Cancel
-          </button>
+          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
           <div className="flex items-center gap-2">
             {step > 1 ? (
-              <button
-                type="button"
-                onClick={() => setStep((value) => Math.max(1, value - 1))}
-                className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100"
-              >
-                Back
-              </button>
+              <Button type="button" variant="ghost" onClick={() => setStep((value) => Math.max(1, value - 1))}>Back</Button>
             ) : null}
             {step < 3 ? (
-              <button
+              <Button
                 type="button"
+                variant="primary"
                 onClick={() => {
                   if (step === 1) setNameTouched(true);
                   if (step === 1 && !hasValidName) return;
                   setStep((value) => Math.min(3, value + 1));
                 }}
-                className="rounded-md border border-black bg-black px-3 py-2 text-sm font-semibold text-white transition hover:bg-gray-800"
               >
                 Next
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button
                 type="button"
+                variant="primary"
                 disabled={!canSave}
                 onClick={() => {
                   setNameTouched(true);
@@ -573,10 +444,9 @@ export const RoleSheet = ({
                     taskIds: selectedTaskIds,
                   });
                 }}
-                className="rounded-md border border-black bg-black px-3 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:border-gray-300 disabled:bg-gray-200 disabled:text-gray-500"
               >
                 {saving ? 'Saving...' : 'Save role'}
-              </button>
+              </Button>
             )}
           </div>
         </div>
@@ -588,44 +458,35 @@ export const RoleSheet = ({
           const current = stepNumber === step;
           const complete = stepNumber < step;
           return (
-            <div
+            <Badge
               key={stepLabel}
-              className={`inline-flex items-center gap-2 rounded-full border px-3 py-1 text-xs font-medium ${
-                current
-                  ? 'border-black bg-black text-white'
-                  : complete
-                    ? 'border-green-200 bg-green-50 text-green-700'
-                    : 'border-gray-200 bg-white text-gray-500'
-              }`}
+              variant={current ? 'purple' : (complete ? 'success' : 'muted')}
+              className="gap-1.5 px-2.5 py-1 text-xs"
             >
-              {complete ? <CheckCircle2 size={13} /> : <span>{stepNumber}</span>}
+              {complete ? <CheckCircle2 size={12} /> : <span>{stepNumber}</span>}
               {stepLabel}
-            </div>
+            </Badge>
           );
         })}
       </div>
 
       {error ? (
-        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <Card className="mb-4 border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
-        </div>
+        </Card>
       ) : null}
 
       {step === 1 ? (
         <div className="space-y-4">
           <label className="block">
             <span className="mb-1 block text-sm font-semibold text-gray-800">Role name *</span>
-            <input
+            <Input
               type="text"
               value={name}
               onBlur={() => setNameTouched(true)}
               onChange={(event) => setName(event.target.value)}
               placeholder="e.g. Senior Backend Engineer"
-              className={`w-full rounded-md border px-3 py-2 text-sm focus:outline-none ${
-                !hasValidName && nameTouched
-                  ? 'border-red-300 bg-red-50'
-                  : 'border-gray-300 bg-white focus:border-black'
-              }`}
+              className={!hasValidName && nameTouched ? '!border-red-400 !bg-red-50' : ''}
             />
             {!hasValidName && nameTouched ? (
               <span className="mt-1 block text-xs text-red-700">Role name is required.</span>
@@ -633,11 +494,11 @@ export const RoleSheet = ({
           </label>
           <label className="block">
             <span className="mb-1 block text-sm font-semibold text-gray-800">Description</span>
-            <textarea
+            <Textarea
               value={description}
               onChange={(event) => setDescription(event.target.value)}
               placeholder="Optional summary for recruiters."
-              className="min-h-[110px] w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-black focus:outline-none"
+              className="min-h-[110px]"
             />
           </label>
         </div>
@@ -645,18 +506,18 @@ export const RoleSheet = ({
 
       {step === 2 ? (
         <div className="space-y-4">
-          <div className="rounded-lg border border-gray-200 bg-gray-50 p-4">
+          <Card className="bg-[#faf8ff] p-4">
             <p className="text-sm font-medium text-gray-900">Upload job spec (optional but recommended)</p>
             <p className="mt-1 text-xs text-gray-600">
               Adding a spec now lets recruiters add candidates without friction.
             </p>
-          </div>
+          </Card>
           {role?.job_spec_filename ? (
-            <div className="rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-gray-700">
+            <Card className="px-3 py-2 text-sm text-gray-700">
               Current file: <span className="font-medium">{role.job_spec_filename}</span>
-            </div>
+            </Card>
           ) : null}
-          <label className="block rounded-xl border border-dashed border-gray-300 p-5 text-center transition hover:border-gray-400">
+          <label className="block rounded-[var(--taali-radius)] border-2 border-dashed border-[var(--taali-border-muted)] p-5 text-center transition hover:border-[var(--taali-border)]">
             <UploadCloud size={20} className="mx-auto text-gray-500" />
             <span className="mt-2 block text-sm font-medium text-gray-700">
               {jobSpecFile ? jobSpecFile.name : 'Choose a job specification file'}
@@ -679,9 +540,11 @@ export const RoleSheet = ({
             <p className="text-xs text-gray-500">{selectedTaskIds.length} selected</p>
           </div>
           {allTasks.length === 0 ? (
-            <div className="rounded-md border border-dashed border-gray-300 bg-gray-50 px-3 py-4 text-sm text-gray-600">
-              No tasks available yet. Create tasks first and come back to link them.
-            </div>
+            <EmptyState
+              title="No tasks available"
+              description="Create tasks first and come back to link them."
+              className="py-8"
+            />
           ) : (
             <div className="max-h-[300px] space-y-2 overflow-y-auto pr-1">
               {allTasks.map((task) => {
@@ -689,9 +552,12 @@ export const RoleSheet = ({
                 return (
                   <label
                     key={task.id}
-                    className={`flex cursor-pointer items-start gap-3 rounded-lg border px-3 py-2 ${
-                      checked ? 'border-black bg-gray-100' : 'border-gray-200 bg-white'
-                    }`}
+                    className={cx(
+                      'flex cursor-pointer items-start gap-3 rounded-[var(--taali-radius)] border-2 px-3 py-2',
+                      checked
+                        ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)]'
+                        : 'border-[var(--taali-border-muted)] bg-white'
+                    )}
                   >
                     <input
                       type="checkbox"
@@ -766,15 +632,10 @@ export const CandidateSheet = ({
       description="Create a role application and upload the candidate CV."
       footer={(
         <div className="flex items-center justify-between gap-2">
-          <button
+          <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
+          <Button
             type="button"
-            onClick={onClose}
-            className="rounded-md border border-gray-300 px-3 py-2 text-sm font-medium text-gray-700 transition hover:bg-gray-100"
-          >
-            Cancel
-          </button>
-          <button
-            type="button"
+            variant="primary"
             disabled={!canSave}
             onClick={() => {
               setTouched({ email: true, name: true, cv: true });
@@ -786,43 +647,38 @@ export const CandidateSheet = ({
                 cvFile,
               });
             }}
-            className="rounded-md border border-black bg-black px-3 py-2 text-sm font-semibold text-white transition hover:bg-gray-800 disabled:cursor-not-allowed disabled:border-gray-300 disabled:bg-gray-200 disabled:text-gray-500"
           >
             {saving ? 'Saving...' : 'Add candidate'}
-          </button>
+          </Button>
         </div>
       )}
     >
       {error ? (
-        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <Card className="mb-4 border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
           {error}
-        </div>
+        </Card>
       ) : null}
 
       <div className="space-y-4">
-        <div className="rounded-lg border border-gray-200 bg-gray-50 px-3 py-2 text-sm text-gray-700">
+        <Card className="bg-[#faf8ff] px-3 py-2 text-sm text-gray-700">
           <span className="font-medium">Role:</span> {role?.name || 'No role selected'}
-        </div>
+        </Card>
 
         {!hasRoleSpec ? (
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          <Card className="border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
             Upload a role job spec before adding candidates.
-          </div>
+          </Card>
         ) : null}
 
         <label className="block">
           <span className="mb-1 block text-sm font-semibold text-gray-800">Email *</span>
-          <input
+          <Input
             type="email"
             value={email}
             onBlur={() => setTouched((prev) => ({ ...prev, email: true }))}
             onChange={(event) => setEmail(event.target.value)}
             placeholder="candidate@company.com"
-            className={`w-full rounded-md border px-3 py-2 text-sm focus:outline-none ${
-              touched.email && !validEmail
-                ? 'border-red-300 bg-red-50'
-                : 'border-gray-300 bg-white focus:border-black'
-            }`}
+            className={touched.email && !validEmail ? '!border-red-400 !bg-red-50' : ''}
           />
           {touched.email && !validEmail ? (
             <span className="mt-1 block text-xs text-red-700">Candidate email is required.</span>
@@ -831,17 +687,13 @@ export const CandidateSheet = ({
 
         <label className="block">
           <span className="mb-1 block text-sm font-semibold text-gray-800">Candidate name *</span>
-          <input
+          <Input
             type="text"
             value={name}
             onBlur={() => setTouched((prev) => ({ ...prev, name: true }))}
             onChange={(event) => setName(event.target.value)}
             placeholder="Jane Doe"
-            className={`w-full rounded-md border px-3 py-2 text-sm focus:outline-none ${
-              touched.name && !validName
-                ? 'border-red-300 bg-red-50'
-                : 'border-gray-300 bg-white focus:border-black'
-            }`}
+            className={touched.name && !validName ? '!border-red-400 !bg-red-50' : ''}
           />
           {touched.name && !validName ? (
             <span className="mt-1 block text-xs text-red-700">Candidate name is required.</span>
@@ -850,12 +702,11 @@ export const CandidateSheet = ({
 
         <label className="block">
           <span className="mb-1 block text-sm font-semibold text-gray-800">Candidate position</span>
-          <input
+          <Input
             type="text"
             value={position}
             onChange={(event) => setPosition(event.target.value)}
             placeholder="Defaults to role title"
-            className="w-full rounded-md border border-gray-300 bg-white px-3 py-2 text-sm focus:border-black focus:outline-none"
           />
         </label>
 
@@ -875,9 +726,12 @@ export const CandidateSheet = ({
               setDragActive(false);
             }}
             onDrop={onDropFile}
-            className={`block rounded-xl border border-dashed p-5 text-center transition ${
-              dragActive ? 'border-black bg-gray-100' : 'border-gray-300 bg-white hover:border-gray-400'
-            }`}
+            className={cx(
+              'block rounded-[var(--taali-radius)] border-2 border-dashed p-5 text-center transition',
+              dragActive
+                ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)]'
+                : 'border-[var(--taali-border-muted)] bg-white hover:border-[var(--taali-border)]'
+            )}
           >
             <UploadCloud size={20} className="mx-auto text-gray-500" />
             <span className="mt-2 block text-sm font-medium text-gray-700">
@@ -904,16 +758,14 @@ export const CandidateSheet = ({
 };
 
 export const EmptyRoleDetail = ({ onCreateRole }) => (
-  <section className="rounded-2xl border border-dashed border-gray-300 bg-gray-50 px-6 py-16 text-center">
-    <h2 className="text-xl font-semibold text-gray-900">No role selected</h2>
-    <p className="mt-1 text-sm text-gray-600">Create a role to start managing candidates.</p>
-    <button
-      type="button"
-      onClick={onCreateRole}
-      className="mt-4 inline-flex items-center gap-1.5 rounded-md border border-black bg-black px-3 py-2 text-sm font-semibold text-white transition hover:bg-gray-800"
-    >
-      <Plus size={15} />
-      Create your first role
-    </button>
-  </section>
+  <EmptyState
+    title="No role selected"
+    description="Create a role to start managing candidates."
+    action={(
+      <Button type="button" variant="primary" size="sm" onClick={onCreateRole}>
+        <Plus size={15} />
+        Create your first role
+      </Button>
+    )}
+  />
 );

@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, CheckCircle, Menu, X, XCircle } from 'lucide-react';
+import { ArrowRight, Check, CheckCircle, Menu, X, XCircle } from 'lucide-react';
 import {
   RadarChart,
   PolarGrid,
@@ -13,6 +13,13 @@ import { BRAND } from '../../config/brand';
 import { ASSESSMENT_PRICE_AED, formatAed } from '../../lib/currency';
 import { dimensionOrder, getDimensionById } from '../../scoring/scoringDimensions';
 import { BrandGlyph, Logo } from '../../shared/ui/Branding';
+import {
+  Button,
+  Card,
+  PageContainer,
+  Panel,
+} from '../../shared/ui/TaaliPrimitives';
+import { ScoringCardGrid } from '../../shared/ui/ScoringCardGrid';
 
 const LandingNav = ({ onNavigate }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -23,107 +30,115 @@ const LandingNav = ({ onNavigate }) => {
   };
 
   return (
-    <nav className="border-b-2 border-black bg-white">
-      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
+    <nav className="taali-nav sticky top-0 z-40">
+      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-4">
         <Logo onClick={() => onNavigate('landing')} />
-        <button
-          className="md:hidden border-2 border-black p-2 hover:bg-black hover:text-white transition-colors"
-          onClick={() => setMobileOpen(!mobileOpen)}
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="md:hidden !px-2 !py-2"
+          onClick={() => setMobileOpen((open) => !open)}
+          aria-label="Toggle navigation"
         >
-          {mobileOpen ? <X size={20} /> : <Menu size={20} />}
-        </button>
-        <div className="hidden md:flex items-center gap-6">
-          <button className="font-mono text-sm hover:underline" onClick={() => scrollTo('why-taali')}>Why TAALI</button>
-          <button className="font-mono text-sm hover:underline" onClick={() => scrollTo('how-taali')}>How TAALI</button>
-          <button className="font-mono text-sm hover:underline" onClick={() => scrollTo('pricing')}>Pricing</button>
-          <button className="font-mono text-sm hover:underline" onClick={() => alert('Documentation coming soon')}>Docs</button>
-          <button
-            className="border-2 border-black px-4 py-2 font-mono text-sm hover:bg-black hover:text-white transition-colors"
-            onClick={() => onNavigate('login')}
-          >
+          {mobileOpen ? <X size={18} /> : <Menu size={18} />}
+        </Button>
+
+        <div className="hidden items-center gap-2 md:flex">
+          <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => scrollTo('why-taali')}>
+            Why TAALI
+          </Button>
+          <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => scrollTo('how-taali')}>
+            How TAALI
+          </Button>
+          <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => scrollTo('pricing')}>
+            Pricing
+          </Button>
+          <Button type="button" variant="secondary" size="sm" className="font-mono" onClick={() => onNavigate('login')}>
             Sign In
-          </button>
-          <button
-            className="border-2 border-black px-4 py-2 font-mono text-sm text-white hover:bg-black transition-colors"
-            style={{ backgroundColor: '#9D00FF' }}
-            onClick={() => onNavigate('login')}
-          >
+          </Button>
+          <Button type="button" variant="primary" size="sm" className="font-mono" onClick={() => onNavigate('login')}>
             Start Free Trial
-          </button>
+          </Button>
         </div>
       </div>
-      {mobileOpen && (
-        <div className="md:hidden border-t-2 border-black bg-white px-6 py-4 space-y-3">
-          <button className="block w-full text-left font-mono text-sm py-2 hover:underline" onClick={() => scrollTo('why-taali')}>Why TAALI</button>
-          <button className="block w-full text-left font-mono text-sm py-2 hover:underline" onClick={() => scrollTo('how-taali')}>How TAALI</button>
-          <button className="block w-full text-left font-mono text-sm py-2 hover:underline" onClick={() => scrollTo('pricing')}>Pricing</button>
-          <button className="block w-full text-left font-mono text-sm py-2 hover:underline" onClick={() => alert('Documentation coming soon')}>Docs</button>
-          <button
-            className="block w-full border-2 border-black px-4 py-2 font-mono text-sm hover:bg-black hover:text-white transition-colors text-center"
-            onClick={() => {
-              setMobileOpen(false);
-              onNavigate('login');
-            }}
-          >
-            Sign In
-          </button>
-          <button
-            className="block w-full border-2 border-black px-4 py-2 font-mono text-sm text-white hover:bg-black transition-colors text-center"
-            style={{ backgroundColor: '#9D00FF' }}
-            onClick={() => {
-              setMobileOpen(false);
-              onNavigate('login');
-            }}
-          >
-            Start Free Trial
-          </button>
+
+      {mobileOpen ? (
+        <div className="border-t-2 border-[var(--taali-border)] bg-white px-6 py-3 md:hidden">
+          <div className="grid gap-2">
+            <Button type="button" variant="ghost" size="sm" className="justify-start font-mono" onClick={() => scrollTo('why-taali')}>
+              Why TAALI
+            </Button>
+            <Button type="button" variant="ghost" size="sm" className="justify-start font-mono" onClick={() => scrollTo('how-taali')}>
+              How TAALI
+            </Button>
+            <Button type="button" variant="ghost" size="sm" className="justify-start font-mono" onClick={() => scrollTo('pricing')}>
+              Pricing
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              className="font-mono"
+              onClick={() => {
+                setMobileOpen(false);
+                onNavigate('login');
+              }}
+            >
+              Sign In
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className="font-mono"
+              onClick={() => {
+                setMobileOpen(false);
+                onNavigate('login');
+              }}
+            >
+              Start Free Trial
+            </Button>
+          </div>
         </div>
-      )}
+      ) : null}
     </nav>
   );
 };
 
 const HeroSection = ({ onNavigate }) => (
-  <section className="border-b-2 border-black bg-white">
-    <div className="max-w-7xl mx-auto px-6 py-20 grid md:grid-cols-2 gap-12 items-center">
+  <section className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-bg)]">
+    <PageContainer className="grid items-center gap-8 lg:grid-cols-[1.2fr_1fr]">
       <div>
-        <div
-          className="inline-block px-4 py-2 text-xs font-mono font-bold text-white border-2 border-black mb-8"
-          style={{ backgroundColor: '#9D00FF' }}
-        >
+        <span className="taali-badge taali-badge-purple mb-4 inline-flex px-3 py-1 font-mono text-xs">
           BUILT FOR AI-NATIVE ENGINEERING TEAMS
-        </div>
-        <h1 className="text-5xl lg:text-6xl font-bold leading-tight mb-6">
+        </span>
+        <h1 className="text-4xl font-bold leading-tight text-gray-900 md:text-6xl">
           Stop hiring for yesterday&apos;s skills.
           <br />
-          {' '}Start hiring with TAALI.
+          Start hiring with TAALI.
         </h1>
-        <p className="text-xl lg:text-2xl font-mono text-gray-700 mb-8 leading-relaxed">
+        <p className="mt-4 max-w-2xl font-mono text-base text-gray-700 md:text-xl">
           Assess how engineers actually work today using Cursor, Claude Code, and OpenAI Codex on real tasks, in real workflows.
         </p>
-        <div className="flex flex-wrap gap-4">
-          <button
-            className="border-2 border-black px-8 py-4 font-bold text-lg text-white hover:bg-black transition-colors"
-            style={{ backgroundColor: '#9D00FF' }}
-            onClick={() => onNavigate('login')}
-          >
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Button type="button" variant="primary" size="lg" onClick={() => onNavigate('login')}>
             Book a Demo
-          </button>
-          <button
-            className="border-2 border-black bg-white px-8 py-4 font-bold text-lg hover:bg-black hover:text-white transition-colors"
-            onClick={() => onNavigate('login')}
-          >
+            <ArrowRight size={16} />
+          </Button>
+          <Button type="button" variant="secondary" size="lg" onClick={() => onNavigate('login')}>
             Start Free Trial
-          </button>
+          </Button>
         </div>
       </div>
-      <div className="grid grid-cols-2 gap-4">
-        <div className="border-2 border-black bg-gray-100 p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <XCircle size={18} className="text-red-500" />
+
+      <Panel className="grid grid-cols-2 gap-3 p-4">
+        <Card className="bg-gray-50 p-3">
+          <div className="mb-2 flex items-center gap-2">
+            <XCircle size={16} className="text-red-500" />
             <span className="font-mono text-xs font-bold text-gray-500">LEGACY TEST</span>
           </div>
-          <pre className="font-mono text-xs text-gray-600 leading-relaxed">{`function reverseList(head) {
+          <pre className="overflow-auto font-mono text-xs text-gray-600">{`function reverseList(head) {
   let prev = null;
   let curr = head;
   while (curr) {
@@ -134,13 +149,14 @@ const HeroSection = ({ onNavigate }) => (
   }
   return prev;
 }`}</pre>
-        </div>
-        <div className="border-2 border-black bg-black p-4">
-          <div className="flex items-center gap-2 mb-3">
-            <CheckCircle size={18} style={{ color: '#9D00FF' }} />
-            <span className="font-mono text-xs font-bold" style={{ color: '#9D00FF' }}>{BRAND.name} FLOW</span>
+        </Card>
+
+        <Card className="bg-[var(--taali-purple)] p-3 text-white">
+          <div className="mb-2 flex items-center gap-2">
+            <CheckCircle size={16} className="text-white" />
+            <span className="font-mono text-xs font-bold">TAALI FLOW</span>
           </div>
-          <pre className="font-mono text-xs leading-relaxed" style={{ color: '#9D00FF' }}>{`> Ask Codex for a
+          <pre className="font-mono text-xs text-white/95">{`> Ask Codex for a
   test scaffold
 
 > Use Claude Code to
@@ -148,62 +164,75 @@ const HeroSection = ({ onNavigate }) => (
 
 > Ship fix with
   green tests`}</pre>
-        </div>
-        <div className="border-2 border-black bg-gray-100 p-4">
-          <div className="font-mono text-xs text-gray-500 mb-2">TESTS FOR:</div>
-          <div className="font-mono text-sm text-gray-700">Algorithm recall</div>
-          <div className="font-mono text-sm text-gray-700">Interview theatrics</div>
-          <div className="font-mono text-sm text-red-500 mt-2 font-bold">NOT delivery quality</div>
-        </div>
-        <div className="border-2 border-black bg-black p-4">
-          <div className="font-mono text-xs mb-2" style={{ color: '#9D00FF' }}>TESTS FOR:</div>
-          <div className="font-mono text-sm text-white">Agent collaboration</div>
-          <div className="font-mono text-sm text-white">Debugging in context</div>
-          <div className="font-mono text-sm font-bold mt-2" style={{ color: '#9D00FF' }}>ACTUAL execution</div>
-        </div>
-      </div>
-    </div>
+        </Card>
+
+        <Card className="bg-gray-50 p-3">
+          <p className="font-mono text-xs text-gray-500">TESTS FOR:</p>
+          <p className="mt-1 font-mono text-sm text-gray-700">Algorithm recall</p>
+          <p className="font-mono text-sm text-gray-700">Interview theatrics</p>
+          <p className="mt-2 font-mono text-sm font-bold text-red-600">NOT delivery quality</p>
+        </Card>
+
+        <Card className="bg-gray-900 p-3 text-white">
+          <p className="font-mono text-xs text-[var(--taali-purple)]">TESTS FOR:</p>
+          <p className="mt-1 font-mono text-sm">Agent collaboration</p>
+          <p className="font-mono text-sm">Debugging in context</p>
+          <p className="mt-2 font-mono text-sm font-bold text-[var(--taali-purple)]">ACTUAL execution</p>
+        </Card>
+      </Panel>
+    </PageContainer>
   </section>
 );
 
 const WhyTaaliSection = () => (
-  <section id="why-taali" className="border-b-2 border-black bg-white">
-    <div className="max-w-7xl mx-auto px-6 py-20">
-      <h2 className="text-4xl font-bold text-center mb-4">Why {BRAND.name}</h2>
-      <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">Engineering changed. Hiring didn&apos;t.</p>
-      <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">
-        Modern engineers don&apos;t work in a blank editor. They work in real repos, with modern coding agents, through fast
-        iteration and validation. {BRAND.name} helps teams hire for that reality.
-      </p>
-      <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">
-        We believe modern engineering hiring should measure how people think and collaborate with AI, not how well they perform in
-        artificial interview formats.
-      </p>
-      <p className="text-center font-mono text-gray-600 mb-12 max-w-4xl mx-auto">
-        Our mission is to help teams hire engineers who can prompt well, reason clearly, and ship reliable outcomes with coding agents.
-      </p>
-
-      <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
-        {[
-          ['Prompting is a core skill', 'As agents automate more implementation work, prompt strategy increasingly determines output quality.'],
-          ['Conversation is signal', 'Agent conversations reveal collaboration quality, ownership, and communication maturity.'],
-          ['Prompting exposes thinking', 'How candidates frame requests surfaces critical thinking, design judgment, and tradeoff awareness.'],
-          ['Efficiency shows experience', 'Strong candidates get better outcomes with fewer, sharper prompts and tighter iteration loops.'],
-        ].map(([title, description]) => (
-          <div key={title} className="border-2 border-black bg-gray-50 p-6">
-            <h3 className="text-lg font-bold mb-2">{title}</h3>
-            <p className="font-mono text-sm text-gray-700">{description}</p>
-          </div>
-        ))}
+  <section id="why-taali" className="border-b-2 border-[var(--taali-border)] bg-white">
+    <PageContainer>
+      <div className="mx-auto max-w-4xl text-center">
+        <h2 className="text-4xl font-bold">Why TAALI</h2>
+        <p className="mt-3 font-mono text-sm text-gray-700">Engineering changed. Hiring didn&apos;t.</p>
+        <p className="mt-2 font-mono text-sm text-gray-700">
+          Modern engineers do not work in a blank editor. They work in real repos, with modern coding agents, through fast
+          iteration and validation. TAALI helps teams hire for that reality.
+        </p>
       </div>
-    </div>
+
+      <ScoringCardGrid
+        className="mt-8 md:grid-cols-2 lg:grid-cols-4"
+        items={[
+          {
+            key: 'prompting-core-skill',
+            title: 'Prompting is a core skill',
+            description: 'As agents automate more implementation work, prompt strategy increasingly determines output quality.',
+          },
+          {
+            key: 'conversation-signal',
+            title: 'Conversation is signal',
+            description: 'Agent conversations reveal collaboration quality, ownership, and communication maturity.',
+          },
+          {
+            key: 'prompting-thinking',
+            title: 'Prompting exposes thinking',
+            description: 'How candidates frame requests surfaces critical thinking, design judgment, and tradeoff awareness.',
+          },
+          {
+            key: 'efficiency-experience',
+            title: 'Efficiency shows experience',
+            description: 'Strong candidates get better outcomes with fewer, sharper prompts and tighter iteration loops.',
+          },
+        ]}
+      />
+    </PageContainer>
   </section>
 );
 
 const HowTaaliSection = () => {
   const dimensions = dimensionOrder.map((id) => {
     const definition = getDimensionById(id);
-    return [definition.label, definition.shortDescription];
+    return {
+      key: id,
+      title: definition.label,
+      description: definition.shortDescription,
+    };
   });
 
   const personaScoreMap = {
@@ -225,173 +254,166 @@ const HowTaaliSection = () => {
   }));
 
   return (
-    <section id="how-taali" className="border-b-2 border-black bg-white">
-      <div className="max-w-7xl mx-auto px-6 py-20">
-        <h2 className="text-4xl font-bold text-center mb-4">How {BRAND.name} Evaluates Candidates</h2>
-        <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">Real session behavior -&gt; structured scorecard</p>
-        <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">
-          We convert real session behavior into a structured scorecard so hiring teams can evaluate strengths and risks with confidence.
-        </p>
-        <p className="text-center font-mono text-gray-600 mb-12 max-w-4xl mx-auto">
-          Candidates are evaluated across multiple dimensions through a proprietary scoring model calibrated to role and seniority.
-        </p>
-
-        <h3 className="text-2xl font-bold mb-4">What we score</h3>
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-          {dimensions.map(([title, description]) => (
-            <div key={title} className="border-2 border-black bg-white p-6">
-              <h3 className="text-lg font-bold mb-2">{title}</h3>
-              <p className="font-mono text-sm text-gray-700">{description}</p>
-            </div>
-          ))}
+    <section id="how-taali" className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-bg)]">
+      <PageContainer>
+        <div className="mx-auto max-w-4xl text-center">
+          <h2 className="text-4xl font-bold">How TAALI Evaluates Candidates</h2>
+          <p className="mt-3 font-mono text-sm text-gray-700">Real session behavior to structured scorecard.</p>
         </div>
 
-        <div className="border-2 border-black bg-gray-50 p-6">
-          <h3 className="text-2xl font-bold mb-2">Example candidate persona comparison</h3>
-          <p className="font-mono text-sm text-gray-700 mb-2">Same task. Very different signal.</p>
-          <p className="font-mono text-sm text-gray-700 mb-5">
-            Two candidates can both &quot;complete the task.&quot; {BRAND.name} shows how they got there and whether they can repeat
-            it reliably with modern coding agents.
+        <Panel className="mt-8 p-6">
+          <h3 className="text-2xl font-bold">What we score</h3>
+          <ScoringCardGrid className="mt-4" items={dimensions} />
+        </Panel>
+
+        <Panel className="mt-6 p-6">
+          <h3 className="text-2xl font-bold">Example candidate persona comparison</h3>
+          <p className="mt-2 font-mono text-sm text-gray-700">
+            Same task, very different signal. TAALI shows how candidates reached outcomes and whether performance is repeatable.
           </p>
-          <div className="grid lg:grid-cols-[2fr_1fr] gap-6">
-            <div className="border-2 border-black bg-white p-3 h-[340px]">
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-[2fr_1fr]">
+            <Card className="h-[340px] p-3">
               <ResponsiveContainer width="100%" height="100%">
                 <RadarChart data={demoComparison} outerRadius="72%">
-                  <PolarGrid />
-                  <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11 }} />
+                  <PolarGrid stroke="rgba(157, 0, 255, 0.22)" />
+                  <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'monospace' }} />
                   <PolarRadiusAxis domain={[0, 100]} tickCount={6} />
-                  <Radar name="AI-Native Product Engineer" dataKey="candidateA" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.14} />
-                  <Radar name="Code-Strong Backend Engineer" dataKey="candidateB" stroke="#111827" fill="#111827" fillOpacity={0.06} />
+                  <Radar name="AI-Native Product Engineer" dataKey="candidateA" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.16} />
+                  <Radar name="Code-Strong Backend Engineer" dataKey="candidateB" stroke="#3f3f56" fill="#3f3f56" fillOpacity={0.08} />
                 </RadarChart>
               </ResponsiveContainer>
-            </div>
-            <div className="space-y-3">
-              {[
-                [
-                  'AI-Native Product Engineer (Prompt-Strong + Outcome-Driven)',
-                  'High Task completion, Prompt clarity, Context provision, and Response utilization. Keeps strong Independence & efficiency while communicating decisions clearly.',
-                ],
-                [
-                  'Code-Strong Backend Engineer (Prompt-Weak + Slower Loops)',
-                  'Strong Debugging & design and baseline Role fit (CV ↔ Job), but lower Prompt clarity, Context provision, and Independence & efficiency. More retries and slower iteration loops.',
-                ],
-              ].map(([title, description]) => (
-                <div key={title} className="border-2 border-black bg-white p-4">
-                  <h4 className="font-bold mb-1">{title}</h4>
-                  <p className="font-mono text-sm text-gray-700">{description}</p>
-                </div>
-              ))}
+            </Card>
+
+            <div className="grid gap-3">
+              <Card className="p-4">
+                <h4 className="font-bold">AI-Native Product Engineer</h4>
+                <p className="mt-1 font-mono text-sm text-gray-700">
+                  High Task completion, Prompt clarity, Context provision, and Response utilization with clear communication.
+                </p>
+              </Card>
+              <Card className="p-4">
+                <h4 className="font-bold">Code-Strong Backend Engineer</h4>
+                <p className="mt-1 font-mono text-sm text-gray-700">
+                  Strong Debugging and design plus Role fit, but lower Prompt clarity and slower iteration loops.
+                </p>
+              </Card>
             </div>
           </div>
-        </div>
-      </div>
+        </Panel>
+      </PageContainer>
     </section>
   );
 };
 
 const PricingSection = ({ onNavigate }) => (
-  <section id="pricing" className="border-b-2 border-black bg-gray-50">
-    <div className="max-w-7xl mx-auto px-6 py-20">
-      <h2 className="text-4xl font-bold text-center mb-4">Pricing That Scales with Hiring</h2>
-      <p className="text-center font-mono text-gray-600 mb-12">Clear plans, predictable costs, no hidden add-ons.</p>
-      <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
-        <div className="relative border-2 bg-white p-8" style={{ borderColor: '#9D00FF' }}>
-          <div
-            className="absolute -top-4 left-8 px-4 py-1 text-white border-2 border-black font-bold text-sm"
-            style={{ backgroundColor: '#9D00FF' }}
-          >
-            RECOMMENDED
-          </div>
-          <h3 className="text-2xl font-bold mt-4 mb-2">Pay-Per-Use</h3>
-          <div className="text-5xl font-bold mb-1">{formatAed(ASSESSMENT_PRICE_AED)}</div>
-          <div className="font-mono text-sm text-gray-500 mb-6">per assessment</div>
-          <ul className="space-y-3 mb-8">
-            {['Full coding environment', 'Coding agents (Claude Code, Codex)', 'Automated scoring', 'Candidate reports', 'Workable sync', 'Email support'].map((feature) => (
-              <li key={feature} className="flex items-center gap-2 font-mono text-sm">
-                <Check size={16} style={{ color: '#9D00FF' }} /> {feature}
-              </li>
-            ))}
-          </ul>
-          <button
-            className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors"
-            style={{ backgroundColor: '#9D00FF' }}
-            onClick={() => onNavigate('login')}
-          >
-            Start Free Trial
-          </button>
-        </div>
-        <div className="border-2 border-black bg-white p-8">
-          <h3 className="text-2xl font-bold mt-4 mb-2">Monthly</h3>
-          <div className="text-5xl font-bold mb-1">{formatAed(300)}</div>
-          <div className="font-mono text-sm text-gray-500 mb-6">per month</div>
-          <ul className="space-y-3 mb-8">
-            {['Everything in Pay-Per-Use', 'Unlimited assessments', 'Custom tasks', 'Priority support', 'Analytics dashboard', 'Team management'].map((feature) => (
-              <li key={feature} className="flex items-center gap-2 font-mono text-sm">
-                <Check size={16} style={{ color: '#9D00FF' }} /> {feature}
-              </li>
-            ))}
-          </ul>
-          <button
-            className="w-full border-2 border-black bg-white py-3 font-bold hover:bg-black hover:text-white transition-colors"
-            onClick={() => onNavigate('login')}
-          >
-            Book Demo
-          </button>
-        </div>
+  <section id="pricing" className="border-b-2 border-[var(--taali-border)] bg-white">
+    <PageContainer>
+      <div className="mx-auto max-w-4xl text-center">
+        <h2 className="text-4xl font-bold">Pricing That Scales with Hiring</h2>
+        <p className="mt-2 font-mono text-sm text-gray-600">Clear plans, predictable costs, no hidden add-ons.</p>
       </div>
-    </div>
+
+      <div className="mx-auto mt-8 grid max-w-4xl gap-5 md:grid-cols-2">
+        <Panel className="relative p-6">
+          <span className="taali-badge taali-badge-purple absolute -top-3 left-5">Recommended</span>
+          <h3 className="mt-3 text-2xl font-bold">Pay-Per-Use</h3>
+          <p className="mt-1 text-5xl font-bold">{formatAed(ASSESSMENT_PRICE_AED)}</p>
+          <p className="font-mono text-sm text-gray-500">per assessment</p>
+          <ul className="mt-4 grid gap-2">
+            {[
+              'Full coding environment',
+              'Coding agents (Claude Code, Codex)',
+              'Automated scoring',
+              'Candidate reports',
+              'Workable sync',
+              'Email support',
+            ].map((feature) => (
+              <li key={feature} className="flex items-center gap-2 font-mono text-sm text-gray-700">
+                <Check size={16} className="text-[var(--taali-purple)]" />
+                {feature}
+              </li>
+            ))}
+          </ul>
+          <Button type="button" variant="primary" size="lg" className="mt-6 w-full" onClick={() => onNavigate('login')}>
+            Start Free Trial
+          </Button>
+        </Panel>
+
+        <Panel className="p-6">
+          <h3 className="mt-3 text-2xl font-bold">Monthly</h3>
+          <p className="mt-1 text-5xl font-bold">{formatAed(300)}</p>
+          <p className="font-mono text-sm text-gray-500">per month</p>
+          <ul className="mt-4 grid gap-2">
+            {[
+              'Everything in Pay-Per-Use',
+              'Unlimited assessments',
+              'Custom tasks',
+              'Priority support',
+              'Analytics dashboard',
+              'Team management',
+            ].map((feature) => (
+              <li key={feature} className="flex items-center gap-2 font-mono text-sm text-gray-700">
+                <Check size={16} className="text-[var(--taali-purple)]" />
+                {feature}
+              </li>
+            ))}
+          </ul>
+          <Button type="button" variant="secondary" size="lg" className="mt-6 w-full" onClick={() => onNavigate('login')}>
+            Book Demo
+          </Button>
+        </Panel>
+      </div>
+    </PageContainer>
   </section>
 );
 
 const Footer = () => (
-  <footer className="bg-black text-white border-t-2 border-black">
-    <div className="max-w-7xl mx-auto px-6 py-16">
-      <div className="grid md:grid-cols-4 gap-8">
+  <footer className="border-t-2 border-[var(--taali-border)] bg-[#12031f] text-white">
+    <div className="mx-auto max-w-7xl px-6 py-14">
+      <div className="grid gap-8 md:grid-cols-4">
         <div>
-          <div className="flex items-center gap-2 mb-4">
+          <div className="mb-3 flex items-center gap-2">
             <BrandGlyph borderClass="border-white" />
             <span className="text-xl font-bold tracking-tight">{BRAND.name}</span>
           </div>
-          <p className="font-mono text-sm text-gray-400">{BRAND.productTagline}</p>
+          <p className="font-mono text-sm text-white/70">{BRAND.productTagline}</p>
         </div>
-        <div>
-          <h4 className="font-bold mb-4">Product</h4>
-          <ul className="space-y-2 font-mono text-sm text-gray-400">
-            <li className="hover:text-white cursor-pointer">Features</li>
-            <li className="hover:text-white cursor-pointer">Pricing</li>
-            <li className="hover:text-white cursor-pointer">Integrations</li>
-            <li className="hover:text-white cursor-pointer">Changelog</li>
-          </ul>
-        </div>
-        <div>
-          <h4 className="font-bold mb-4">Resources</h4>
-          <ul className="space-y-2 font-mono text-sm text-gray-400">
-            <li className="hover:text-white cursor-pointer">Documentation</li>
-            <li className="hover:text-white cursor-pointer">API Reference</li>
-            <li className="hover:text-white cursor-pointer">Blog</li>
-            <li className="hover:text-white cursor-pointer">Support</li>
-          </ul>
-        </div>
-        <div>
-          <h4 className="font-bold mb-4">Company</h4>
-          <ul className="space-y-2 font-mono text-sm text-gray-400">
-            <li className="hover:text-white cursor-pointer">About</li>
-            <li className="hover:text-white cursor-pointer">Careers</li>
-            <li className="hover:text-white cursor-pointer">Privacy</li>
-            <li className="hover:text-white cursor-pointer">Terms</li>
-          </ul>
-        </div>
+
+        {[
+          {
+            title: 'Product',
+            items: ['Features', 'Pricing', 'Integrations', 'Changelog'],
+          },
+          {
+            title: 'Resources',
+            items: ['Documentation', 'API Reference', 'Blog', 'Support'],
+          },
+          {
+            title: 'Company',
+            items: ['About', 'Careers', 'Privacy', 'Terms'],
+          },
+        ].map((column) => (
+          <div key={column.title}>
+            <h4 className="font-bold">{column.title}</h4>
+            <ul className="mt-3 space-y-1 font-mono text-sm text-white/70">
+              {column.items.map((item) => (
+                <li key={item}>{item}</li>
+              ))}
+            </ul>
+          </div>
+        ))}
       </div>
-      <div className="border-t border-gray-800 mt-12 pt-8 flex flex-wrap items-center justify-between">
-        <div className="font-mono text-xs text-gray-500">&copy; 2026 {BRAND.name}. All rights reserved.</div>
-        <div className="font-mono text-xs text-gray-500">Built with React + Vite + Tailwind CSS</div>
+
+      <div className="mt-10 border-t border-white/20 pt-6 font-mono text-xs text-white/55">
+        <div>&copy; 2026 {BRAND.name}. All rights reserved.</div>
       </div>
     </div>
   </footer>
 );
 
 export const LandingPage = ({ onNavigate }) => (
-  <div className="min-h-screen bg-white text-black">
+  <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
     <LandingNav onNavigate={onNavigate} />
     <HeroSection onNavigate={onNavigate} />
     <WhyTaaliSection />

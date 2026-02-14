@@ -2,6 +2,21 @@
 @tailwind components;
 @tailwind utilities;
 
+:root {
+  --taali-bg: #f5f4fa;
+  --taali-surface: #ffffff;
+  --taali-border: #232338;
+  --taali-border-muted: #d5d5e8;
+  --taali-text: #111827;
+  --taali-muted: #5b6472;
+  --taali-purple: #9D00FF;
+  --taali-purple-hover: #7B00CC;
+  --taali-purple-soft: #f3e6ff;
+  --taali-radius: 8px;
+  --taali-ring: rgba(157, 0, 255, 0.35);
+  --taali-spacing: 8px;
+}
+
 * {
   margin: 0;
   padding: 0;
@@ -14,13 +29,211 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
-  background-color: #ffffff;
-  color: #111827;
+  background-color: var(--taali-bg);
+  color: var(--taali-text);
   transition: background-color 0.2s ease, color 0.2s ease;
 }
 
 code {
   font-family: 'JetBrains Mono', 'Roboto Mono', 'Courier New', monospace;
+}
+
+.taali-page {
+  margin: 0 auto;
+  width: 100%;
+  max-width: 80rem;
+  padding: calc(var(--taali-spacing) * 3) calc(var(--taali-spacing) * 2);
+}
+
+@media (min-width: 768px) {
+  .taali-page {
+    padding: calc(var(--taali-spacing) * 4) calc(var(--taali-spacing) * 3);
+  }
+}
+
+.taali-panel {
+  border: 2px solid var(--taali-border);
+  border-radius: var(--taali-radius);
+  background: var(--taali-surface);
+}
+
+.taali-card {
+  border: 1.5px solid var(--taali-border-muted);
+  border-radius: var(--taali-radius);
+  background: var(--taali-surface);
+}
+
+.taali-page-header {
+  border: 2px solid var(--taali-border);
+  border-radius: var(--taali-radius);
+  background: var(--taali-surface);
+  padding: calc(var(--taali-spacing) * 2.5);
+}
+
+.taali-btn {
+  border: 2px solid var(--taali-border);
+  border-radius: var(--taali-radius);
+  font-weight: 600;
+  line-height: 1;
+  transition: all 0.15s ease;
+}
+
+.taali-btn:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: 0 0 0 3px var(--taali-ring);
+}
+
+.taali-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
+}
+
+.taali-btn-primary {
+  background: var(--taali-purple);
+  border-color: var(--taali-border);
+  color: #ffffff;
+}
+
+.taali-btn-primary:hover:not(:disabled) {
+  background: var(--taali-purple-hover);
+}
+
+.taali-btn-secondary {
+  background: var(--taali-surface);
+  border-color: var(--taali-border);
+  color: var(--taali-text);
+}
+
+.taali-btn-secondary:hover:not(:disabled) {
+  background: #f0eef8;
+}
+
+.taali-btn-ghost {
+  background: transparent;
+  border-color: var(--taali-border-muted);
+  color: var(--taali-text);
+}
+
+.taali-btn-ghost:hover:not(:disabled) {
+  background: #f4f2fb;
+  border-color: var(--taali-border);
+}
+
+.taali-btn-danger {
+  border-color: #b42330;
+  background: #fff5f6;
+  color: #b42330;
+}
+
+.taali-btn-danger:hover:not(:disabled) {
+  background: #b42330;
+  color: #ffffff;
+}
+
+.taali-input,
+.taali-select,
+.taali-textarea {
+  width: 100%;
+  border: 1.5px solid var(--taali-border);
+  border-radius: var(--taali-radius);
+  background: #ffffff;
+  color: var(--taali-text);
+  font-size: 0.875rem;
+  line-height: 1.25rem;
+}
+
+.taali-input,
+.taali-select {
+  min-height: 2.6rem;
+  padding: 0.5rem 0.75rem;
+}
+
+.taali-textarea {
+  padding: 0.6rem 0.75rem;
+}
+
+.taali-input::placeholder,
+.taali-textarea::placeholder {
+  color: #7a8495;
+}
+
+.taali-input:focus-visible,
+.taali-select:focus-visible,
+.taali-textarea:focus-visible {
+  outline: 2px solid transparent;
+  box-shadow: 0 0 0 3px var(--taali-ring);
+  border-color: var(--taali-purple);
+}
+
+.taali-badge {
+  display: inline-flex;
+  align-items: center;
+  border: 1.5px solid var(--taali-border-muted);
+  border-radius: 999px;
+  padding: 0.15rem 0.55rem;
+  font-size: 0.7rem;
+  line-height: 1.2;
+  font-weight: 600;
+}
+
+.taali-badge-purple {
+  border-color: #d0aaff;
+  background: var(--taali-purple-soft);
+  color: var(--taali-purple-hover);
+}
+
+.taali-badge-muted {
+  border-color: var(--taali-border-muted);
+  background: #f4f5f8;
+  color: #4b5563;
+}
+
+.taali-badge-success {
+  border-color: #8fd4ab;
+  background: #edf9f1;
+  color: #0f7a3c;
+}
+
+.taali-badge-warning {
+  border-color: #f0c787;
+  background: #fff7ec;
+  color: #9a5b00;
+}
+
+.taali-empty-state {
+  border: 1.5px dashed var(--taali-border-muted);
+  border-radius: var(--taali-radius);
+  background: #f9f8fd;
+}
+
+.taali-table-shell {
+  border: 2px solid var(--taali-border);
+  border-radius: var(--taali-radius);
+  overflow: hidden;
+  background: var(--taali-surface);
+}
+
+.taali-table-shell table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.taali-table-shell thead tr {
+  background: #f4f1fb;
+}
+
+.taali-table-shell th,
+.taali-table-shell td {
+  border-bottom: 1px solid #e7e3f4;
+}
+
+.taali-table-shell tbody tr:hover {
+  background: #faf8ff;
+}
+
+.taali-nav {
+  border-bottom: 2px solid var(--taali-border);
+  background: var(--taali-surface);
 }
 
 .dark {
