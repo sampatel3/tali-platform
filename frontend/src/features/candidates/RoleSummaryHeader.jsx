@@ -19,7 +19,7 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
 
   useEffect(() => {
     setFocusExpanded(true);
-  }, [role.id, role.interview_focus_generated_at]);
+  }, [role.id]);
 
   return (
     <Panel className="p-5">
@@ -57,39 +57,29 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
 
       {hasInterviewFocus ? (
         <Card className="mt-4 p-4">
-          <div className="flex items-start justify-between gap-3">
+          <button
+            type="button"
+            className="flex w-full items-start justify-between gap-3 text-left"
+            aria-expanded={focusExpanded}
+            aria-controls={focusPanelId}
+            onClick={() => setFocusExpanded((prev) => !prev)}
+          >
             <div>
               <p className="text-sm font-semibold text-gray-900">Interview focus</p>
               <p className="text-xs text-gray-500">Manual screening pointers from the job spec.</p>
             </div>
-            <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-2 text-xs text-gray-500">
               {role.interview_focus_generated_at ? (
                 <span className="text-[11px] text-gray-400">
                   Updated {new Date(role.interview_focus_generated_at).toLocaleDateString()}
                 </span>
               ) : null}
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                aria-expanded={focusExpanded}
-                aria-controls={focusPanelId}
-                onClick={() => setFocusExpanded((prev) => !prev)}
-              >
-                {focusExpanded ? (
-                  <>
-                    Collapse
-                    <ChevronUp size={14} />
-                  </>
-                ) : (
-                  <>
-                    Expand
-                    <ChevronDown size={14} />
-                  </>
-                )}
-              </Button>
+              <span className="inline-flex items-center gap-1.5 font-semibold text-gray-700">
+                {focusExpanded ? 'Collapse' : 'Expand'}
+                {focusExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+              </span>
             </div>
-          </div>
+          </button>
 
           {focusExpanded ? (
             <div id={focusPanelId}>

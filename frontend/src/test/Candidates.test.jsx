@@ -266,14 +266,14 @@ describe('CandidatesPage', () => {
       expect(screen.getByText(/Q1\./)).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Collapse/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Interview focus/i }));
 
     await waitFor(() => {
       expect(screen.queryByText(/Q1\./)).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Expand/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Interview focus/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Expand/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Interview focus/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/Q1\./)).toBeInTheDocument();
