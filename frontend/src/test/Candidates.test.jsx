@@ -1,7 +1,6 @@
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-// Mock the API module
 vi.mock('../lib/api.js', () => ({
   auth: {
     login: vi.fn(),
@@ -74,7 +73,6 @@ vi.mock('../lib/api.js', () => ({
   },
 }));
 
-// Mock recharts
 vi.mock('recharts', () => ({
   ResponsiveContainer: ({ children }) => <div>{children}</div>,
   RadarChart: () => <div data-testid="radar-chart" />,
@@ -90,12 +88,16 @@ vi.mock('recharts', () => ({
   Tooltip: () => <div />,
 }));
 
-// Mock monaco editor
 vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, candidates as candidatesApi, assessments as assessmentsApi, roles as rolesApi } from '../lib/api.js';
+import {
+  auth,
+  assessments as assessmentsApi,
+  roles as rolesApi,
+  tasks as tasksApi,
+} from '../lib/api.js';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -107,33 +109,14 @@ const mockUser = {
   role: 'admin',
 };
 
-const mockCandidates = [
+const baseRoles = [
   {
-    id: 100,
-    email: 'alice@example.com',
-    full_name: 'Alice Johnson',
-    position: 'Senior Engineer',
-    cv_filename: 'alice_cv.pdf',
-    job_spec_filename: null,
-    created_at: '2026-01-10T10:00:00Z',
-  },
-  {
-    id: 101,
-    email: 'bob@example.com',
-    full_name: 'Bob Smith',
-    position: 'Junior Developer',
-    cv_filename: null,
-    job_spec_filename: 'bob_jd.pdf',
-    created_at: '2026-01-12T10:00:00Z',
-  },
-  {
-    id: 102,
-    email: 'carol@example.com',
-    full_name: 'Carol White',
-    position: 'Staff Engineer',
-    cv_filename: 'carol_cv.pdf',
-    job_spec_filename: 'carol_jd.pdf',
-    created_at: '2026-01-15T10:00:00Z',
+    id: 9,
+    name: 'ML Engineer',
+    description: 'Own model serving reliability.',
+    job_spec_filename: 'ml-role-spec.pdf',
+    tasks_count: 1,
+    applications_count: 1,
   },
 ];
 
@@ -144,22 +127,17 @@ const setupAuthenticatedUser = () => {
 };
 
 const renderAppOnCandidatesPage = async () => {
-  // The app auto-redirects authenticated users to dashboard.
-  // We need to navigate to candidates via the nav.
   assessmentsApi.list.mockResolvedValue({ data: { items: [], total: 0 } });
-
   const result = render(
     <AuthProvider>
       <App />
     </AuthProvider>
   );
 
-  // Wait for dashboard to load
   await waitFor(() => {
     expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
   });
 
-  // Navigate to Candidates via nav link
   const candidatesNav = screen.getByText('Candidates', { selector: 'button' });
   await act(async () => {
     fireEvent.click(candidatesNav);
@@ -174,10 +152,25 @@ describe('CandidatesPage', () => {
     localStorage.clear();
     window.location.hash = '';
     setupAuthenticatedUser();
-    candidatesApi.list.mockResolvedValue({ data: { items: mockCandidates } });
-    rolesApi.list.mockResolvedValue({ data: [] });
-    rolesApi.listTasks.mockResolvedValue({ data: [] });
-    rolesApi.listApplications.mockResolvedValue({ data: [] });
+
+    rolesApi.list.mockResolvedValue({ data: baseRoles });
+    rolesApi.listTasks.mockResolvedValue({ data: [{ id: 700, name: 'Async Debugging Challenge' }] });
+    rolesApi.listApplications.mockResolvedValue({
+      data: [
+        {
+          id: 501,
+          candidate_id: 42,
+          candidate_email: 'apply@example.com',
+          candidate_name: 'Apply Person',
+          candidate_position: 'ML Engineer',
+          status: 'applied',
+          cv_filename: 'apply.pdf',
+          created_at: '2026-01-10T10:00:00Z',
+          updated_at: '2026-01-10T10:00:00Z',
+        },
+      ],
+    });
+    tasksApi.list.mockResolvedValue({ data: [{ id: 700, name: 'Async Debugging Challenge' }] });
   });
 
   afterEach(() => {
@@ -185,123 +178,141 @@ describe('CandidatesPage', () => {
     localStorage.clear();
   });
 
-  it('renders Candidates heading', async () => {
+  it('renders candidates header controls', async () => {
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
       expect(screen.getByText('Candidates', { selector: 'h1' })).toBeInTheDocument();
-      expect(screen.getByText('Search and manage candidate profiles')).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole('button', { name: 'New role' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Add candidate' })).toBeInTheDocument();
+    expect(screen.getByPlaceholderText('Search by name, email, position, or status')).toBeInTheDocument();
+  });
+
+  it('shows role list and role summary context', async () => {
+    await renderAppOnCandidatesPage();
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'ML Engineer', level: 2 })).toBeInTheDocument();
+      expect(screen.getByText('Job spec:')).toBeInTheDocument();
+      expect(screen.getByText('Tasks (1):')).toBeInTheDocument();
     });
   });
 
-  it('renders candidate list', async () => {
+  it('shows empty role state and disables Add candidate when there are no roles', async () => {
+    rolesApi.list.mockResolvedValue({ data: [] });
+    rolesApi.listApplications.mockResolvedValue({ data: [] });
+    rolesApi.listTasks.mockResolvedValue({ data: [] });
+
+    await renderAppOnCandidatesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('No roles yet')).toBeInTheDocument();
+    });
+
+    expect(screen.getByRole('button', { name: 'Add candidate' })).toBeDisabled();
+    expect(screen.getAllByRole('button', { name: 'Create your first role' }).length).toBeGreaterThan(0);
+  });
+
+  it('filters role candidates table by search text', async () => {
+    rolesApi.listApplications.mockResolvedValue({
+      data: [
+        {
+          id: 1,
+          candidate_id: 8,
+          candidate_email: 'alice@example.com',
+          candidate_name: 'Alice Johnson',
+          candidate_position: 'Senior Engineer',
+          status: 'applied',
+          cv_filename: 'alice.pdf',
+          created_at: '2026-01-10T10:00:00Z',
+          updated_at: '2026-01-10T10:00:00Z',
+        },
+        {
+          id: 2,
+          candidate_id: 9,
+          candidate_email: 'bob@example.com',
+          candidate_name: 'Bob Smith',
+          candidate_position: 'ML Engineer',
+          status: 'review',
+          cv_filename: 'bob.pdf',
+          created_at: '2026-01-11T10:00:00Z',
+          updated_at: '2026-01-11T10:00:00Z',
+        },
+      ],
+    });
+
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
       expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
       expect(screen.getByText('Bob Smith')).toBeInTheDocument();
-      expect(screen.getByText('Carol White')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('Search by name, email, position, or status'), {
+      target: { value: 'Alice' },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
+      expect(screen.queryByText('Bob Smith')).not.toBeInTheDocument();
     });
   });
 
-  it('renders candidate emails', async () => {
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('alice@example.com')).toBeInTheDocument();
-      expect(screen.getByText('bob@example.com')).toBeInTheDocument();
+  it('creates a role from the role sheet', async () => {
+    rolesApi.create.mockResolvedValue({
+      data: { id: 321, name: 'Platform Engineer', description: null },
     });
-  });
-
-  it('renders search input', async () => {
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Search by name or email')).toBeInTheDocument();
-    });
-  });
-
-  it('search input calls API with query parameter', async () => {
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('Search by name or email')).toBeInTheDocument();
+    rolesApi.list.mockResolvedValueOnce({ data: baseRoles });
+    rolesApi.list.mockResolvedValueOnce({
+      data: [
+        { id: 321, name: 'Platform Engineer', job_spec_filename: null, tasks_count: 0, applications_count: 0 },
+        ...baseRoles,
+      ],
     });
 
-    const searchInput = screen.getByPlaceholderText('Search by name or email');
-    fireEvent.change(searchInput, { target: { value: 'alice' } });
+    await renderAppOnCandidatesPage();
+    fireEvent.click(screen.getByRole('button', { name: 'New role' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'New role' });
+    fireEvent.change(within(dialog).getByPlaceholderText('e.g. Senior Backend Engineer'), {
+      target: { value: 'Platform Engineer' },
+    });
+
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Next' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Next' }));
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Save role' }));
 
     await waitFor(() => {
-      expect(candidatesApi.list).toHaveBeenCalledWith(
-        expect.objectContaining({ q: 'alice' })
+      expect(rolesApi.create).toHaveBeenCalledWith(
+        expect.objectContaining({ name: 'Platform Engineer' })
       );
     });
   });
 
-  it('renders Add Candidate section', async () => {
-    rolesApi.list.mockResolvedValue({
-      data: [{ id: 1, name: 'Backend Engineer', job_spec_filename: 'backend-role-spec.pdf' }],
-    });
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Add Candidate', { selector: 'div' })).toBeInTheDocument();
-      expect(screen.getByPlaceholderText('candidate@company.com')).toBeInTheDocument();
-      expect(screen.getByPlaceholderText('Candidate name')).toBeInTheDocument();
-      expect(screen.getByPlaceholderText('Candidate position')).toBeInTheDocument();
-    });
-  });
-
-  it('validates email required on role candidate create', async () => {
-    rolesApi.list.mockResolvedValue({
-      data: [{ id: 1, name: 'Backend Engineer', job_spec_filename: 'backend-role-spec.pdf' }],
-    });
-    // window.alert should be called with error
-    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
-
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Add Candidate' })).toBeInTheDocument();
-    });
-
-    // Click create without filling email
-    fireEvent.click(screen.getByRole('button', { name: 'Add Candidate' }));
-
-    await waitFor(() => {
-      expect(alertMock).toHaveBeenCalledWith('Candidate email is required');
-    });
-
-    alertMock.mockRestore();
-  });
-
-  it('creates role application and uploads CV', async () => {
-    rolesApi.list.mockResolvedValue({
-      data: [{ id: 9, name: 'ML Engineer', job_spec_filename: 'ml-role-spec.pdf' }],
-    });
+  it('creates role application and uploads CV from Add candidate sheet', async () => {
     rolesApi.createApplication.mockResolvedValue({ data: { id: 200 } });
     rolesApi.uploadApplicationCv.mockResolvedValue({ data: { success: true } });
 
-    await renderAppOnCandidatesPage();
+    const { container } = await renderAppOnCandidatesPage();
+    fireEvent.click(screen.getByRole('button', { name: 'Add candidate' }));
 
-    await waitFor(() => {
-      expect(screen.getByPlaceholderText('candidate@company.com')).toBeInTheDocument();
-    });
-
-    fireEvent.change(screen.getByPlaceholderText('candidate@company.com'), {
+    const dialog = await screen.findByRole('dialog', { name: 'Add candidate' });
+    fireEvent.change(within(dialog).getByPlaceholderText('candidate@company.com'), {
       target: { value: 'new@test.com' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Candidate name'), {
+    fireEvent.change(within(dialog).getByPlaceholderText('Jane Doe'), {
       target: { value: 'New Candidate' },
     });
-    fireEvent.change(screen.getByPlaceholderText('Candidate position'), {
+    fireEvent.change(within(dialog).getByPlaceholderText('Defaults to role title'), {
       target: { value: 'Mid Engineer' },
     });
-    const file = new File(['cv-content'], 'resume.pdf', { type: 'application/pdf' });
-    const fileInput = document.querySelector('input[type="file"][accept=".pdf,.docx,.doc"]');
-    fireEvent.change(fileInput, { target: { files: [file] } });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Add Candidate' }));
+    const file = new File(['cv-content'], 'resume.pdf', { type: 'application/pdf' });
+    const fileInput = container.querySelector('input[type="file"][accept=".pdf,.docx,.doc"]');
+    fireEvent.change(fileInput, { target: { files: [file] } });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Add candidate' }));
 
     await waitFor(() => {
       expect(rolesApi.createApplication).toHaveBeenCalledWith(
@@ -316,131 +327,65 @@ describe('CandidatesPage', () => {
     });
   });
 
-  it('renders Delete button for each candidate', async () => {
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      const deleteButtons = screen.getAllByText('Delete');
-      expect(deleteButtons.length).toBe(mockCandidates.length);
-    });
-  });
-
-  it('calls candidatesApi.remove when delete is confirmed', async () => {
-    const confirmMock = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    candidatesApi.remove.mockResolvedValue({ data: {} });
+  it('creates assessment from candidate row action', async () => {
+    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    rolesApi.createAssessment.mockResolvedValue({ data: { id: 1000 } });
 
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Create assessment' })).toBeInTheDocument();
     });
 
-    const deleteButtons = screen.getAllByText('Delete');
-    fireEvent.click(deleteButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: 'Create assessment' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Send assessment' }));
 
     await waitFor(() => {
-      expect(confirmMock).toHaveBeenCalledWith('Delete this candidate?');
-      expect(candidatesApi.remove).toHaveBeenCalledWith(100);
+      expect(rolesApi.createAssessment).toHaveBeenCalledWith(501, { task_id: 700 });
     });
 
-    confirmMock.mockRestore();
+    alertMock.mockRestore();
   });
 
-  it('shows document status badges with CV checkmark', async () => {
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      // Alice has CV uploaded, so should see "CV ✓"
-      const cvBadges = screen.getAllByText(/CV/);
-      expect(cvBadges.length).toBeGreaterThanOrEqual(1);
-    });
-  });
-
-  it('shows Upload Docs buttons', async () => {
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      const uploadButtons = screen.getAllByText('Upload Docs');
-      expect(uploadButtons.length).toBe(mockCandidates.length);
-    });
-  });
-
-  it('renders New Assessment action for role candidates', async () => {
+  it('switches active role from header selector and reloads role context', async () => {
     rolesApi.list.mockResolvedValue({
-      data: [{ id: 10, name: 'Platform Engineer', job_spec_filename: 'platform-spec.pdf' }],
+      data: [
+        { id: 1, name: 'Backend Engineer', job_spec_filename: 'backend.pdf', tasks_count: 1, applications_count: 1 },
+        { id: 2, name: 'Data Engineer', job_spec_filename: 'data.pdf', tasks_count: 1, applications_count: 1 },
+      ],
     });
-    rolesApi.listTasks.mockResolvedValue({
-      data: [{ id: 700, name: 'Async Debugging Challenge' }],
-    });
-    rolesApi.listApplications.mockResolvedValue({
-      data: [{ id: 501, candidate_email: 'apply@example.com', candidate_name: 'Apply Person', cv_filename: 'apply.pdf' }],
-    });
+    rolesApi.listTasks.mockImplementation((roleId) => (
+      Promise.resolve({ data: [{ id: Number(roleId) * 10, name: `Task ${roleId}` }] })
+    ));
+    rolesApi.listApplications.mockImplementation((roleId) => (
+      Promise.resolve({
+        data: [
+          {
+            id: Number(roleId) * 100,
+            candidate_id: Number(roleId) * 1000,
+            candidate_email: `candidate${roleId}@example.com`,
+            candidate_name: `Candidate ${roleId}`,
+            candidate_position: 'Engineer',
+            status: 'applied',
+            cv_filename: 'resume.pdf',
+            created_at: '2026-01-10T10:00:00Z',
+            updated_at: '2026-01-10T10:00:00Z',
+          },
+        ],
+      })
+    ));
 
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'New Assessment' })).toBeInTheDocument();
+      expect(screen.getByText('Candidate 1')).toBeInTheDocument();
     });
-  });
 
-  it('shows total candidates count', async () => {
-    await renderAppOnCandidatesPage();
+    fireEvent.change(screen.getByLabelText('Active role'), { target: { value: '2' } });
 
     await waitFor(() => {
-      expect(screen.getByText('3 total')).toBeInTheDocument();
+      expect(screen.getByText('Candidate 2')).toBeInTheDocument();
+      expect(screen.queryByText('Candidate 1')).not.toBeInTheDocument();
     });
-  });
-
-  it('renders table headers', async () => {
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Name')).toBeInTheDocument();
-      expect(screen.getByText('Email')).toBeInTheDocument();
-      expect(screen.getByText('Position')).toBeInTheDocument();
-      expect(screen.getByText('Documents')).toBeInTheDocument();
-      expect(screen.getByText('Created')).toBeInTheDocument();
-      expect(screen.getByText('Actions')).toBeInTheDocument();
-    });
-  });
-
-  it('shows no candidates message when list is empty', async () => {
-    candidatesApi.list.mockResolvedValue({ data: { items: [] } });
-
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('No candidates found.')).toBeInTheDocument();
-    });
-  });
-
-  it('disables Add Candidate until selected role has job spec', async () => {
-    rolesApi.list.mockResolvedValue({
-      data: [{ id: 1, name: 'Backend Engineer', job_spec_filename: null }],
-    });
-
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Role Setup')).toBeInTheDocument();
-    });
-
-    const addApplicationBtn = screen.getByRole('button', { name: 'Add Candidate' });
-    expect(addApplicationBtn).toBeDisabled();
-  });
-
-  it('enables Add Candidate when selected role has job spec', async () => {
-    rolesApi.list.mockResolvedValue({
-      data: [{ id: 2, name: 'ML Engineer', job_spec_filename: 'ml-role-spec.pdf' }],
-    });
-
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Role Setup')).toBeInTheDocument();
-    });
-
-    const addApplicationBtn = screen.getByRole('button', { name: 'Add Candidate' });
-    expect(addApplicationBtn).not.toBeDisabled();
   });
 });
