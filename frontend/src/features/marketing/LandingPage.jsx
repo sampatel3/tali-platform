@@ -139,7 +139,7 @@ const HeroSection = ({ onNavigate }) => (
 }`}</pre>
         </Card>
 
-        <Card className="bg-[var(--taali-purple)] p-3 text-white">
+        <Card className="!bg-[var(--taali-purple)] p-3 text-white">
           <div className="mb-2 flex items-center gap-2">
             <CheckCircle size={16} className="text-white" />
             <span className="font-mono text-xs font-bold">TAALI FLOW</span>
@@ -161,7 +161,7 @@ const HeroSection = ({ onNavigate }) => (
           <p className="mt-2 font-mono text-sm font-bold text-red-600">NOT delivery quality</p>
         </Card>
 
-        <Card className="bg-gray-900 p-3 text-white">
+        <Card className="!bg-gray-900 p-3 text-white">
           <p className="font-mono text-xs text-[var(--taali-purple)]">TESTS FOR:</p>
           <p className="mt-1 font-mono text-sm">Agent collaboration</p>
           <p className="font-mono text-sm">Debugging in context</p>
