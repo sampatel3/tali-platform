@@ -1,4 +1,4 @@
-"""Regression checks for the destructive role-first reset migration contract."""
+"""Regression checks for the role-first migration contract."""
 
 from pathlib import Path
 
@@ -23,15 +23,15 @@ def test_role_first_reset_migration_contract():
     assert 'down_revision = "014_add_completed_due_to_timeout"' in source
 
     # New role-first schema
-    assert 'op.create_table(\n        "roles"' in source
-    assert 'op.create_table(\n        "candidate_applications"' in source
-    assert 'op.create_table(\n        "role_tasks"' in source
+    assert '"roles"' in source
+    assert '"candidate_applications"' in source
+    assert '"role_tasks"' in source
     assert 'op.add_column("assessments", sa.Column("role_id"' in source
     assert 'op.add_column("assessments", sa.Column("application_id"' in source
 
-    # Destructive reset contract
-    assert "IRREVERSIBLE RESET" in source
-    assert "2026-02-13-role-first-hardening" in source
-    assert 'op.execute(sa.text("DELETE FROM assessments"))' in source
-    assert 'op.execute(sa.text("DELETE FROM candidate_applications"))' in source
-    assert 'op.execute(sa.text("DELETE FROM candidates"))' in source
+    # Backfill contract (non-destructive)
+    assert "_backfill_legacy_role_data" in source
+    assert "_normalize_role_name" in source
+    assert "DELETE FROM assessments" not in source
+    assert "DELETE FROM candidate_applications" not in source
+    assert "DELETE FROM candidates" not in source
