@@ -280,8 +280,15 @@ const WhyTaaliSection = () => (
     <div className="max-w-7xl mx-auto px-6 py-20">
       <h2 className="text-4xl font-bold text-center mb-4">Why {BRAND.name}</h2>
       <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">
-        We believe modern engineering hiring should measure how people think and collaborate with AI, not how well they perform
-        in puzzle interviews.
+        Engineering changed. Hiring didn&apos;t.
+      </p>
+      <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">
+        Modern engineers don&apos;t work in a blank editor. They work in real repos, with modern coding agents, through fast
+        iteration and validation. {BRAND.name} helps teams hire for that reality.
+      </p>
+      <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">
+        We believe modern engineering hiring should measure how people think and collaborate with AI, not how well they perform in
+        artificial interview formats.
       </p>
       <p className="text-center font-mono text-gray-600 mb-12 max-w-4xl mx-auto">
         Our mission is to help teams hire engineers who can prompt well, reason clearly, and ship reliable outcomes with coding agents.
@@ -289,10 +296,10 @@ const WhyTaaliSection = () => (
 
       <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6">
         {[
-          ['Prompting Is a Core Skill', 'As agents automate more implementation work, prompt quality increasingly determines engineering output quality.'],
-          ['Conversation Is Signal', 'Agent conversations reveal subtle cues about collaboration, ownership, and communication maturity.'],
-          ['Prompting Exposes Thinking', 'How candidates frame requests surfaces critical thinking, design judgment, and tradeoff awareness.'],
-          ['Efficiency Shows Experience', 'Strong candidates get better outcomes with fewer, sharper prompts and tighter iteration loops.'],
+          ['Prompting is a core skill', 'As agents automate more implementation work, prompt quality increasingly determines engineering output quality.'],
+          ['Conversation is signal', 'Agent conversations reveal subtle cues about collaboration, ownership, and communication maturity.'],
+          ['Prompting exposes thinking', 'How candidates frame requests surfaces critical thinking, design judgment, and tradeoff awareness.'],
+          ['Efficiency shows experience', 'Strong candidates get better outcomes with fewer, sharper prompts and tighter iteration loops.'],
         ].map(([title, description]) => (
           <div key={title} className="border-2 border-black bg-gray-50 p-6">
             <h3 className="text-lg font-bold mb-2">{title}</h3>
@@ -318,18 +325,21 @@ const HowTaaliSection = () => {
   ];
 
   const demoComparison = [
-    { dimension: 'Prompt Quality', candidateA: 92, candidateB: 64, candidateC: 81, fullMark: 100 },
-    { dimension: 'Prompt Efficiency', candidateA: 89, candidateB: 58, candidateC: 76, fullMark: 100 },
-    { dimension: 'Design Thinking', candidateA: 84, candidateB: 72, candidateC: 79, fullMark: 100 },
-    { dimension: 'Debugging', candidateA: 86, candidateB: 69, candidateC: 74, fullMark: 100 },
-    { dimension: 'Code Quality', candidateA: 80, candidateB: 77, candidateC: 72, fullMark: 100 },
-    { dimension: 'Communication', candidateA: 90, candidateB: 61, candidateC: 83, fullMark: 100 },
+    { dimension: 'Prompt quality', candidateA: 92, candidateB: 64, fullMark: 100 },
+    { dimension: 'Prompt efficiency', candidateA: 89, candidateB: 58, fullMark: 100 },
+    { dimension: 'Design thinking', candidateA: 84, candidateB: 72, fullMark: 100 },
+    { dimension: 'Debugging strategy', candidateA: 86, candidateB: 69, fullMark: 100 },
+    { dimension: 'Code quality', candidateA: 80, candidateB: 77, fullMark: 100 },
+    { dimension: 'Communication', candidateA: 90, candidateB: 61, fullMark: 100 },
   ];
 
   return (
     <section id="how-taali" className="border-b-2 border-black bg-white">
       <div className="max-w-7xl mx-auto px-6 py-20">
         <h2 className="text-4xl font-bold text-center mb-4">How {BRAND.name} Evaluates Candidates</h2>
+        <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">
+          Real session behavior -&gt; structured scorecard
+        </p>
         <p className="text-center font-mono text-gray-700 mb-3 max-w-4xl mx-auto">
           We convert real session behavior into a structured scorecard so hiring teams can evaluate strengths and risks with confidence.
         </p>
@@ -342,7 +352,7 @@ const HowTaaliSection = () => {
           <div className="grid md:grid-cols-3 gap-4 mt-4">
             {[
               ['Evidence capture', 'Prompt/response logs, code edits, tests, execution traces, and time-sequenced interaction data.'],
-              ['Dimension review', 'Each dimension is evaluated against consistent behavioral rubrics instead of subjective interviewer feel.'],
+              ['Rubric-based scoring', 'Each dimension is evaluated against consistent behavioral rubrics, not subjective interviewer feel.'],
               ['Role calibration', 'Assessments are tuned for role type, seniority, and hiring priorities.'],
             ].map(([title, description]) => (
               <div key={title} className="border-2 border-black bg-white p-4">
@@ -353,6 +363,7 @@ const HowTaaliSection = () => {
           </div>
         </div>
 
+        <h3 className="text-2xl font-bold mb-4">What we score</h3>
         <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
           {dimensions.map(([title, description]) => (
             <div key={title} className="border-2 border-black bg-white p-6">
@@ -363,9 +374,11 @@ const HowTaaliSection = () => {
         </div>
 
         <div className="border-2 border-black bg-gray-50 p-6">
-          <h3 className="text-2xl font-bold mb-2">Example Role Persona Comparison (Demo)</h3>
+          <h3 className="text-2xl font-bold mb-2">Example candidate persona comparison</h3>
+          <p className="font-mono text-sm text-gray-700 mb-2">Same task. Very different signal.</p>
           <p className="font-mono text-sm text-gray-700 mb-5">
-            Teams can compare candidate profiles against role-oriented personas to quickly spot fit gaps in prompting, reasoning, and execution.
+            Two candidates can both &quot;complete the task.&quot; {BRAND.name} shows how they got there and whether they can repeat
+            it reliably with modern coding agents.
           </p>
           <div className="grid lg:grid-cols-[2fr_1fr] gap-6">
             <div className="border-2 border-black bg-white p-3 h-[340px]">
@@ -375,17 +388,21 @@ const HowTaaliSection = () => {
                   <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11 }} />
                   <PolarRadiusAxis domain={[0, 100]} tickCount={6} />
                   <Radar name="AI-Native Product Engineer" dataKey="candidateA" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.14} />
-                  <Radar name="Execution-Heavy Backend Engineer" dataKey="candidateB" stroke="#111827" fill="#111827" fillOpacity={0.06} />
-                  <Radar name="Balanced Systems Engineer" dataKey="candidateC" stroke="#0ea5e9" fill="#0ea5e9" fillOpacity={0.10} />
+                  <Radar name="Code-Strong Backend Engineer" dataKey="candidateB" stroke="#111827" fill="#111827" fillOpacity={0.06} />
                   <Tooltip />
                 </RadarChart>
               </ResponsiveContainer>
             </div>
             <div className="space-y-3">
               {[
-                ['AI-Native Product Engineer', 'Strong prompt discipline and communication, with high agent-collaboration signal across workflow decisions.'],
-                ['Execution-Heavy Backend Engineer', 'Strong implementation fundamentals but less effective prompt strategy and slower agent iteration loops.'],
-                ['Balanced Systems Engineer', 'Consistent across technical and collaboration dimensions, with room to improve prompt sharpness.'],
+                [
+                  'AI-Native Product Engineer (Prompt-Strong + Outcome-Driven)',
+                  'Clear constraints. Tight iteration loops. Strong validation discipline. Communicates tradeoffs and next steps. Directs agents effectively to ship reliable outcomes.',
+                ],
+                [
+                  'Code-Strong Backend Engineer (Prompt-Weak + Slower Loops)',
+                  'Strong implementation fundamentals, but weaker prompt strategy. More churn and retries. Less effective use of context and tooling. Slower path to a verified, production-ready result.',
+                ],
               ].map(([title, description]) => (
                 <div key={title} className="border-2 border-black bg-white p-4">
                   <h4 className="font-bold mb-1">{title}</h4>
