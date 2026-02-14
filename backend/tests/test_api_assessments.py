@@ -175,34 +175,62 @@ def test_start_assessment_invalid_token(client):
 
 
 def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
-    task = Task(
+    backend_task = Task(
         organization_id=None,
-        name="Demo task",
-        description="Demo task description",
+        name="Backend demo task",
+        description="Backend demo task description",
         task_type="python",
         difficulty="medium",
         duration_minutes=30,
         starter_code="print('demo')",
         test_code="def test_placeholder():\n    assert True\n",
+        task_key="taali_demo_backend_reliability",
     )
-    db.add(task)
+    frontend_task = Task(
+        organization_id=None,
+        name="Frontend demo task",
+        description="Frontend demo task description",
+        task_type="javascript",
+        difficulty="medium",
+        duration_minutes=20,
+        starter_code="console.log('demo')",
+        test_code="",
+        task_key="taali_demo_frontend_debugging",
+    )
+    data_task = Task(
+        organization_id=None,
+        name="Data demo task",
+        description="Data demo task description",
+        task_type="python",
+        difficulty="hard",
+        duration_minutes=30,
+        starter_code="print('demo')",
+        test_code="",
+        task_key="taali_demo_data_pipeline",
+    )
+    db.add(backend_task)
+    db.add(frontend_task)
+    db.add(data_task)
     db.commit()
-    db.refresh(task)
+    db.refresh(backend_task)
+    db.refresh(frontend_task)
+    db.refresh(data_task)
 
     def fake_start_or_resume(assessment, _db):
+        selected_task = _db.query(Task).filter(Task.id == assessment.task_id).first()
         return {
             "assessment_id": assessment.id,
             "token": assessment.token,
             "sandbox_id": "sandbox-demo",
             "task": {
-                "name": task.name,
-                "description": task.description,
-                "starter_code": task.starter_code,
+                "name": selected_task.name if selected_task else "Unknown task",
+                "description": selected_task.description if selected_task else "",
+                "starter_code": selected_task.starter_code if selected_task else "",
                 "duration_minutes": assessment.duration_minutes,
-                "task_key": task.task_key,
-                "role": task.role,
-                "scenario": task.scenario,
-                "repo_structure": task.repo_structure,
+                "task_key": selected_task.task_key if selected_task else None,
+                "role": selected_task.role if selected_task else None,
+                "scenario": selected_task.scenario if selected_task else None,
+                "repo_structure": selected_task.repo_structure if selected_task else None,
                 "rubric_categories": [],
                 "evaluation_rubric": None,
                 "extra_data": None,
@@ -253,8 +281,91 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     assert assessment is not None
     assert assessment.is_demo is True
     assert assessment.demo_track == "backend-reliability"
+    assert assessment.task_id == backend_task.id
     assert assessment.demo_profile["work_email"] == "demo-user@company.com"
     assert assessment.demo_profile["marketing_consent"] is True
+    assert body["task"]["task_key"] == "taali_demo_backend_reliability"
+
+
+def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
+    backend_task = Task(
+        organization_id=None,
+        name="Backend demo task",
+        description="Backend demo task description",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=30,
+        starter_code="print('demo')",
+        test_code="",
+        task_key="taali_demo_backend_reliability",
+    )
+    frontend_task = Task(
+        organization_id=None,
+        name="Frontend demo task",
+        description="Frontend demo task description",
+        task_type="javascript",
+        difficulty="medium",
+        duration_minutes=20,
+        starter_code="console.log('demo')",
+        test_code="",
+        task_key="taali_demo_frontend_debugging",
+    )
+    db.add(backend_task)
+    db.add(frontend_task)
+    db.commit()
+    db.refresh(backend_task)
+    db.refresh(frontend_task)
+
+    def fake_start_or_resume(assessment, _db):
+        selected_task = _db.query(Task).filter(Task.id == assessment.task_id).first()
+        return {
+            "assessment_id": assessment.id,
+            "token": assessment.token,
+            "sandbox_id": "sandbox-demo",
+            "task": {
+                "name": selected_task.name if selected_task else "Unknown task",
+                "description": selected_task.description if selected_task else "",
+                "starter_code": selected_task.starter_code if selected_task else "",
+                "duration_minutes": assessment.duration_minutes,
+                "task_key": selected_task.task_key if selected_task else None,
+                "role": selected_task.role if selected_task else None,
+                "scenario": selected_task.scenario if selected_task else None,
+                "repo_structure": selected_task.repo_structure if selected_task else None,
+                "rubric_categories": [],
+                "evaluation_rubric": None,
+                "extra_data": None,
+                "calibration_prompt": None,
+                "proctoring_enabled": False,
+                "claude_budget_limit_usd": None,
+            },
+            "claude_budget": {"enabled": False},
+            "time_remaining": 1200,
+            "is_timer_paused": False,
+            "pause_reason": None,
+            "total_paused_seconds": 0,
+        }
+
+    monkeypatch.setattr(candidate_runtime_module, "start_or_resume_assessment", fake_start_or_resume)
+
+    payload = {
+        "full_name": "Frontend Demo User",
+        "position": "Engineering Director",
+        "email": "frontend-demo@example.com",
+        "work_email": "frontend-demo@company.com",
+        "company_name": "Frontend Co",
+        "company_size": "11-50",
+        "assessment_track": "frontend-debugging",
+        "marketing_consent": True,
+    }
+    resp = client.post("/api/v1/assessments/demo/start", json=payload)
+    assert resp.status_code == 200, resp.text
+
+    body = resp.json()
+    assessment = db.query(Assessment).filter(Assessment.id == body["assessment_id"]).first()
+    assert assessment is not None
+    assert assessment.demo_track == "frontend-debugging"
+    assert assessment.task_id == frontend_task.id
+    assert body["task"]["task_key"] == "taali_demo_frontend_debugging"
 
 
 def test_demo_start_rejects_invalid_track(client):

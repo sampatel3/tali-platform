@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
-import { auth } from '../shared/api';
+import { assessments, auth } from '../shared/api';
 
 vi.mock('../shared/api', () => ({
   auth: {
@@ -27,16 +27,15 @@ vi.mock('../shared/api', () => ({
     postToWorkable: vi.fn(),
     startDemo: vi.fn().mockResolvedValue({
       data: {
-        assessment_id: 901,
+        assessment_id: 321,
         token: 'demo-token',
         sandbox_id: 'sandbox-demo',
         task: {
           name: 'Demo task',
-          description: 'Demo task',
-          starter_code: 'print("demo")',
+          description: 'Demo description',
           duration_minutes: 30,
-          scenario: 'Demo scenario',
-          repo_structure: { files: { 'main.py': 'print("demo")' } },
+          starter_code: "print('hello')",
+          repo_structure: { files: { 'main.py': "print('hello')" } },
           rubric_categories: [],
           proctoring_enabled: false,
         },
@@ -97,6 +96,45 @@ describe('Demo flow', () => {
     localStorage.clear();
     window.history.replaceState(null, '', '/');
     auth.me.mockRejectedValue(new Error('Not authenticated'));
+    assessments.startDemo.mockResolvedValue({
+      data: {
+        assessment_id: 321,
+        token: 'demo-token',
+        sandbox_id: 'sandbox-demo',
+        task: {
+          name: 'Demo task',
+          description: 'Demo description',
+          duration_minutes: 30,
+          starter_code: "print('hello')",
+          repo_structure: { files: { 'main.py': "print('hello')" } },
+          rubric_categories: [],
+          proctoring_enabled: false,
+        },
+        claude_budget: { enabled: false },
+        time_remaining: 1800,
+        is_timer_paused: false,
+        pause_reason: null,
+        total_paused_seconds: 0,
+      },
+    });
+    assessments.submit.mockResolvedValue({
+      data: {
+        score: 7.4,
+        prompt_scores: {
+          prompt_clarity: 7.0,
+          prompt_efficiency: 6.8,
+          context_utilization: 7.2,
+          written_communication: 6.9,
+          requirement_comprehension: 7.1,
+          design_thinking: 7.3,
+          independence: 6.7,
+        },
+        component_scores: {
+          tests_score: 72,
+          time_efficiency: 68,
+        },
+      },
+    });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
     window.scrollTo = vi.fn();
     window.HTMLElement.prototype.scrollIntoView = vi.fn();

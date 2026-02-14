@@ -50,99 +50,16 @@ router = APIRouter()
 
 DEMO_ORG_SLUG = "taali-demo"
 DEMO_ORG_NAME = "TAALI Demo Leads"
-DEMO_TRACK_TASKS = {
-    "backend-reliability": {
-        "task_key": "taali_demo_backend_reliability",
-        "name": "TAALI Demo: Backend API Reliability",
-        "description": "Stabilize a flaky API endpoint and ship a safe patch with validation.",
-        "task_type": "python",
-        "difficulty": "medium",
-        "duration_minutes": 25,
-        "role": "ai_engineer",
-        "scenario": (
-            "An order sync endpoint occasionally duplicates records in production. "
-            "Patch the issue, explain the root cause, and add a regression test."
-        ),
-        "repo_structure": {
-            "files": {
-                "src/order_merge.py": (
-                    "def merge_order(existing, incoming):\n"
-                    "    \"\"\"Merge incoming payload into an existing order record.\"\"\"\n"
-                    "    if incoming.get(\"status\"):\n"
-                    "        existing[\"status\"] = incoming[\"status\"]\n"
-                    "    if incoming.get(\"items\"):\n"
-                    "        existing[\"items\"] += incoming[\"items\"]\n"
-                    "    return existing\n"
-                ),
-                "tests/test_order_merge.py": (
-                    "from src.order_merge import merge_order\n\n"
-                    "def test_merge_status():\n"
-                    "    existing = {\"status\": \"open\", \"items\": []}\n"
-                    "    incoming = {\"status\": \"closed\"}\n"
-                    "    assert merge_order(existing, incoming)[\"status\"] == \"closed\"\n"
-                ),
-            },
-        },
-    },
-    "frontend-debugging": {
-        "task_key": "taali_demo_frontend_debugging",
-        "name": "TAALI Demo: Frontend Bug Triage",
-        "description": "Investigate state overwrite issues and apply a robust fix.",
-        "task_type": "javascript",
-        "difficulty": "medium",
-        "duration_minutes": 20,
-        "role": "frontend_engineer",
-        "scenario": (
-            "A settings form resets local edits after slow API responses. "
-            "Fix stale response handling and explain your approach."
-        ),
-        "repo_structure": {
-            "files": {
-                "src/settingsMerge.js": (
-                    "export function mergeRemoteSettings(localDraft, remoteData) {\n"
-                    "  return { ...localDraft, ...remoteData };\n"
-                    "}\n"
-                ),
-                "src/hooks/useSettingsSync.js": (
-                    "export function shouldApplyServerPayload(lastEditedAt, payloadFetchedAt) {\n"
-                    "  return payloadFetchedAt >= lastEditedAt;\n"
-                    "}\n"
-                ),
-            },
-        },
-    },
-    "data-pipeline": {
-        "task_key": "taali_demo_data_pipeline",
-        "name": "TAALI Demo: Data Pipeline Incident",
-        "description": "Trace a transformation bug and restore safe downstream output.",
-        "task_type": "python",
-        "difficulty": "hard",
-        "duration_minutes": 30,
-        "role": "data_engineer",
-        "scenario": (
-            "A daily ETL run is dropping qualifying records. "
-            "Identify the transformation bug, patch it, and add validation coverage."
-        ),
-        "repo_structure": {
-            "files": {
-                "pipeline/transform.py": (
-                    "def normalize_record(record):\n"
-                    "    score = int(record.get(\"score\", 0))\n"
-                    "    if score < 50:\n"
-                    "        return None\n"
-                    "    record[\"score\"] = score\n"
-                    "    return record\n"
-                ),
-                "pipeline/tests/test_transform.py": (
-                    "from pipeline.transform import normalize_record\n\n"
-                    "def test_preserves_qualifying_rows():\n"
-                    "    assert normalize_record({\"score\": \"65\"})[\"score\"] == 65\n"
-                ),
-            },
-        },
-    },
+DEMO_TRACK_TASK_KEYS = {
+    "backend-reliability": "taali_demo_backend_reliability",
+    "frontend-debugging": "taali_demo_frontend_debugging",
+    "data-pipeline": "taali_demo_data_pipeline",
 }
-DEMO_TRACK_KEYS = set(DEMO_TRACK_TASKS.keys())
+DEMO_TRACK_KEYS = {
+    "backend-reliability",
+    "frontend-debugging",
+    "data-pipeline",
+}
 
 
 def _ensure_demo_org(db: Session) -> Organization:
@@ -166,69 +83,103 @@ def _ensure_demo_org(db: Session) -> Organization:
 
 
 def _resolve_demo_task(db: Session, org_id: int, track: str) -> Task | None:
-    track_def = DEMO_TRACK_TASKS.get(track)
-    if not track_def:
-        return None
+    task_key = DEMO_TRACK_TASK_KEYS.get(track)
+    if task_key:
+        org_task = (
+            db.query(Task)
+            .filter(
+                Task.is_active == True,  # noqa: E712
+                Task.organization_id == org_id,
+                Task.task_key == task_key,
+            )
+            .order_by(Task.id.asc())
+            .first()
+        )
+        if org_task:
+            return org_task
 
-    task_key = track_def["task_key"]
-    task = (
+        global_task = (
+            db.query(Task)
+            .filter(
+                Task.is_active == True,  # noqa: E712
+                Task.organization_id == None,  # noqa: E711
+                Task.task_key == task_key,
+            )
+            .order_by(Task.id.asc())
+            .first()
+        )
+        if global_task:
+            return global_task
+
+    # Backward-compatible fallback: if keyed demo tasks are not yet seeded,
+    # continue to use the first active task visible to the demo org.
+    fallback_task = (
         db.query(Task)
         .filter(
             Task.is_active == True,  # noqa: E712
-            Task.task_key == task_key,
-            Task.organization_id == org_id,
+            ((Task.organization_id == None) | (Task.organization_id == org_id)),  # noqa: E711
         )
         .order_by(Task.id.asc())
         .first()
     )
-    if task:
-        return task
+    if fallback_task:
+        return fallback_task
 
-    task = (
-        db.query(Task)
-        .filter(
-            Task.is_active == True,  # noqa: E712
-            Task.task_key == task_key,
-            Task.organization_id == None,  # noqa: E711
-        )
-        .order_by(Task.id.asc())
-        .first()
-    )
-    if task:
-        return task
-
-    evaluation_rubric = {
-        "task_completion": {"weight": 0.3},
-        "prompt_clarity": {"weight": 0.2},
-        "context_provision": {"weight": 0.2},
-        "independence_efficiency": {"weight": 0.2},
-        "written_communication": {"weight": 0.1},
-    }
-    task = Task(
+    seeded_task = Task(
         organization_id=org_id,
-        name=track_def["name"],
-        description=track_def["description"],
-        task_type=track_def["task_type"],
-        difficulty=track_def["difficulty"],
-        duration_minutes=track_def["duration_minutes"],
-        starter_code="",
+        name="TAALI Demo Assessment",
+        description="Debug and improve a small code path while explaining tradeoffs.",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=30,
+        starter_code=(
+            "def normalize_items(items):\n"
+            "    normalized = []\n"
+            "    for item in items:\n"
+            "        normalized.append(item.strip().lower())\n"
+            "    return normalized\n"
+        ),
         test_code="",
-        task_key=task_key,
-        role=track_def["role"],
-        scenario=track_def["scenario"],
-        repo_structure=track_def["repo_structure"],
-        evaluation_rubric=evaluation_rubric,
-        extra_data={"demo_track": track},
+        task_key=task_key or f"taali_demo_{track.replace('-', '_')}",
+        role="ai_engineer",
+        scenario=(
+            "A production ingestion step is creating duplicate, inconsistent records. "
+            "Tighten normalization logic and explain how you validated the fix."
+        ),
+        repo_structure={
+            "files": {
+                "main.py": (
+                    "def normalize_items(items):\n"
+                    "    normalized = []\n"
+                    "    for item in items:\n"
+                    "        normalized.append(item.strip().lower())\n"
+                    "    return normalized\n"
+                ),
+                "README.md": (
+                    "# TAALI Demo Assessment\n\n"
+                    "- Stabilize normalization behavior.\n"
+                    "- Prevent duplicate output rows.\n"
+                    "- Explain validation strategy.\n"
+                ),
+            },
+        },
+        evaluation_rubric={
+            "task_completion": {"weight": 0.3},
+            "prompt_clarity": {"weight": 0.2},
+            "context_provision": {"weight": 0.2},
+            "independence_efficiency": {"weight": 0.2},
+            "written_communication": {"weight": 0.1},
+        },
         is_active=True,
     )
-    db.add(task)
+    db.add(seeded_task)
     try:
         db.commit()
     except Exception:
         db.rollback()
         return None
-    db.refresh(task)
-    return task
+    db.refresh(seeded_task)
+    return seeded_task
 
 
 @router.post("/token/{token}/start", response_model=AssessmentStart)
