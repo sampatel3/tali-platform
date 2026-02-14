@@ -755,7 +755,7 @@ Backend:  FastAPI + SQLAlchemy + PostgreSQL
 
 Frontend: React 18 + Tailwind CSS + Monaco Editor + Recharts
           Single-file: src/App.jsx (now reduced; still primary composition surface)
-          API client: src/lib/api.js
+          API clients: src/shared/api/*
           Assessment: src/components/assessment/{AssessmentPage,ClaudeChat,CodeEditor}.jsx
 
 Feature flags: MVP_DISABLE_STRIPE, MVP_DISABLE_WORKABLE, MVP_DISABLE_CELERY,

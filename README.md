@@ -21,14 +21,14 @@ The core platform is implemented and deployable end-to-end, and active execution
 
 ### Frontend (Vercel)
 
-- **Stack:** Vite 5, React 18, Tailwind; hash routing (`#/...`), AuthContext, `src/lib/api.js`.
+- **Stack:** Vite 5, React 18, Tailwind; `react-router-dom` route modules, AuthContext, domain API clients in `src/shared/api/*`.
 - **Landing:** Hero, problem/solution, features, pricing (£25 pay-per-use, £300 monthly), nav, footer.
 - **Auth:** Login, register, forgot/reset password; protected routes.
 - **Dashboard:** Four stat cards (active assessments, completion rate, average score, cost this month); assessments table with Candidate, Task, Status, Score, Time, **Assessment link** (Copy link), View; filters and pagination; “Create Assessment” modal (select/create candidate, select task, send).
 - **Candidate detail (View):** Header, score card, tabs (Test Results, AI Usage, Timeline, Code Review), CV/Job Fit analysis, and recruiter action buttons (Download PDF, Post to Workable, Delete).
 - **Tasks:** List with View (all tasks, including templates) and Edit/Delete for non-templates.
-- **Settings:** Workable tab (Connect Workable, OAuth callback at `#/settings/workable/callback`); Billing tab (usage, “Add credits” → Stripe Checkout).
-- **Candidate flow:** `#/assess/{token}` → welcome → start → AssessmentPage (Monaco, Claude chat, Run Code, execute, submit) → results.
+- **Settings:** Workable tab (Connect Workable, OAuth callback at `/settings/workable/callback`); Billing tab (usage, “Add credits” → Stripe Checkout).
+- **Candidate flow:** `/assess/{token}` → welcome → start → AssessmentPage (Monaco, Claude chat, Run Code, execute, submit) → results.
 
 ### Deployment
 
@@ -60,9 +60,9 @@ taali-platform/
 │   └── requirements.txt
 ├── frontend/                # Vite + React
 │   ├── src/
-│   │   ├── App.jsx          # Hash routing, all main views
+│   │   ├── App.jsx          # Route shell and lazy feature page composition
 │   │   ├── context/AuthContext.jsx
-│   │   ├── lib/api.js       # Axios client (VITE_API_URL)
+│   │   ├── shared/api/*     # Domain API clients (VITE_API_URL)
 │   │   └── components/assessment/
 │   ├── package.json
 │   └── vite.config.js
@@ -105,7 +105,7 @@ taali-platform/
 
 - Production smoke tests hit live infrastructure and are intentionally separated from the default backend run (`pytest -m "production"`).
 - Frontend tests currently pass with residual React `act(...)` warnings in some suites; behavior is validated but cleanup is still recommended.
-- Frontend bundle size warning remains (~768KB main JS chunk), so additional code-splitting is still advised.
+- Frontend is code-split by route/module; largest remaining vendor chunk is `charts_vendor` (Recharts-heavy) and should stay monitored.
 
 ---
 
@@ -125,7 +125,7 @@ taali-platform/
 | Layer      | Technology |
 |-----------|------------|
 | Backend   | FastAPI, Python 3.11+, PostgreSQL 15, SQLAlchemy 2, Alembic, Redis, Celery, JWT |
-| Frontend  | Vite 5, React 18, Tailwind CSS, Monaco Editor, hash routing |
+| Frontend  | Vite 5, React 18, Tailwind CSS, Monaco Editor, react-router-dom routing |
 | Execution | E2B Code Interpreter SDK |
 | AI        | Anthropic Claude (environment-tiered: Haiku non-prod, configurable production) |
 | ATS       | Workable (OAuth + webhooks) |

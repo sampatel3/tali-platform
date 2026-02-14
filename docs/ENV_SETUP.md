@@ -127,7 +127,8 @@ CLAUDE_MODEL=claude-3-5-haiku-latest
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `ASSESSMENT_PRICE_PENCE` | No | `2500` | Price per assessment (in pence) used by billing and Stripe flows. |
+| `ASSESSMENT_PRICE_MINOR` | No | `2500` | Price per assessment in minor currency units (e.g. cents/fils) used by billing and Stripe flows. |
+| `ASSESSMENT_PRICE_PENCE` | No | `2500` | Deprecated alias for `ASSESSMENT_PRICE_MINOR`; kept for compatibility and scheduled for removal on April 15, 2026. |
 | `ASSESSMENT_EXPIRY_DAYS` | No | `7` | Number of days before an assessment invite link expires. |
 | `EMAIL_FROM` | No | `TAALI <noreply@taali.ai>` | Sender address used by all transactional emails. |
 | `SCORE_WEIGHTS` | No | JSON defaults | JSON string for composite scoring weights (tests, code_quality, prompt_quality, etc.). |
@@ -167,4 +168,4 @@ These are compile-time variables injected by Vite. They must be prefixed with `V
 - `VITE_API_URL`: your Railway backend URL
 - `VITE_STRIPE_PUBLISHABLE_KEY`: [Stripe Dashboard](https://dashboard.stripe.com) → Developers → API keys → Publishable key
 
-**Important (Vercel):** When setting `VITE_API_URL` in the Vercel dashboard, ensure there is **no trailing newline or space**. A literal `\n` at the end can break API requests. The frontend `api.js` strips whitespace defensively, but fix the value at the source.
+**Important (Vercel):** When setting `VITE_API_URL` in the Vercel dashboard, ensure there is **no trailing newline or space**. A literal `\n` at the end can break API requests. The frontend shared API client strips whitespace defensively, but fix the value at the source.

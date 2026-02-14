@@ -265,10 +265,11 @@ def build_breakdown(assessment: Assessment) -> Dict[str, Any]:
 def assessment_to_response(assessment: Assessment, db: Optional[Session] = None) -> Dict[str, Any]:
     """Serialize assessment to response dict.
 
-    SECURITY: Never expose `assessment.token` (the secret candidate link) or
-    the raw server filesystem path (`cv_file_url`) in recruiter-facing
-    responses. Candidates receive their token only through the dedicated
-    start_or_resume_assessment flow.
+    SECURITY POLICY:
+    - Never expose raw server filesystem paths (`cv_file_url`).
+    - Expose `assessment.token` only to authenticated recruiter/admin APIs so
+      they can generate candidate assessment links.
+    - Candidate runtime endpoints continue validating token possession.
     """
     candidate_name = ""
     candidate_email = ""

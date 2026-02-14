@@ -37,7 +37,7 @@ def test_claude_failure_pauses_timer_and_locks_actions(client, db, monkeypatch):
             "output_tokens": 0,
         }
 
-    monkeypatch.setattr("app.api.v1.assessments.ClaudeService.chat", _failed_chat)
+    monkeypatch.setattr("app.domains.integrations_notifications.adapters.ClaudeService.chat", _failed_chat)
 
     claude_resp = client.post(
         f"/api/v1/assessments/{assessment.id}/claude",
@@ -99,7 +99,7 @@ def test_claude_retry_resumes_timer(client, db, monkeypatch):
             "output_tokens": 2,
         }
 
-    monkeypatch.setattr("app.api.v1.assessments.ClaudeService.chat", _healthy_chat)
+    monkeypatch.setattr("app.domains.integrations_notifications.adapters.ClaudeService.chat", _healthy_chat)
 
     retry_resp = client.post(
         f"/api/v1/assessments/{assessment.id}/claude/retry",

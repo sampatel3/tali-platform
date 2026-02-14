@@ -1,14 +1,8 @@
-from fastapi import APIRouter, Depends
+"""Thin router wrapper for scoring metadata domain.
 
-from ...components.scoring.metadata import scoring_metadata_payload
-from ...deps import get_current_user
-from ...models.user import User
+TODO(2026-04-30): Remove this compatibility module after import migration.
+"""
 
-router = APIRouter(prefix="/scoring", tags=["Scoring"])
+from ...domains.assessments_runtime.scoring_routes import router
 
-
-@router.get("/metadata")
-def get_scoring_metadata(
-    current_user: User = Depends(get_current_user),
-):
-    return scoring_metadata_payload()
+__all__ = ["router"]

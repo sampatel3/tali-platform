@@ -40,7 +40,7 @@ Auth has been migrated from custom code to **FastAPI-Users**.
 
 ### Frontend
 
-1. **API** (`frontend/src/lib/api.js`)
+1. **API** (`frontend/src/shared/api/*`)
    - Login: `/auth/login` → `/auth/jwt/login`
    - Me: `/auth/me` → `/users/me`
    - Verify: `GET /auth/verify-email?token=` → `POST /auth/verify` with `{token}`

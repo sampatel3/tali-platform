@@ -1,7 +1,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
-vi.mock('../lib/api.js', () => ({
+vi.mock('../shared/api', () => ({
   auth: {
     login: vi.fn(),
     register: vi.fn(),
@@ -97,7 +97,7 @@ import {
   assessments as assessmentsApi,
   roles as rolesApi,
   tasks as tasksApi,
-} from '../lib/api.js';
+} from '../shared/api';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 

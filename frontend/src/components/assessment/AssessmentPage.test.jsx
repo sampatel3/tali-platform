@@ -8,7 +8,7 @@ const mockClaudeRetry = vi.fn();
 const mockSubmit = vi.fn();
 let lastClaudeReply = '';
 
-vi.mock('../../lib/api', () => ({
+vi.mock('../../shared/api', () => ({
   assessments: {
     start: vi.fn(),
     execute: vi.fn(),

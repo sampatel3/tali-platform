@@ -1,7 +1,19 @@
 from pydantic_settings import BaseSettings
+from dataclasses import dataclass
 from typing import Optional
 
 from .brand import brand_email_from
+
+
+@dataclass(frozen=True)
+class MvpFeatureFlags:
+    disable_stripe: bool
+    disable_workable: bool
+    disable_celery: bool
+    disable_claude_scoring: bool
+    disable_calibration: bool
+    disable_proctoring: bool
+    scoring_v2_enabled: bool
 
 
 class Settings(BaseSettings):
@@ -93,7 +105,8 @@ class Settings(BaseSettings):
     ASSESSMENT_PRICE_CURRENCY: str = "aed"
     ASSESSMENT_PRICE_MAJOR: int = 25
     ASSESSMENT_PRICE_MINOR: int = 2500
-    # Backward-compatible alias; retained for existing deployments/tests.
+    # Deprecated alias (sunset target: 2026-04-15). Keep until clients fully
+    # migrate to ASSESSMENT_PRICE_MINOR.
     ASSESSMENT_PRICE_PENCE: int = 2500
     ASSESSMENT_EXPIRY_DAYS: int = 7
     EMAIL_FROM: str = brand_email_from()
@@ -114,6 +127,18 @@ class Settings(BaseSettings):
     MVP_DISABLE_CALIBRATION: bool = True
     MVP_DISABLE_PROCTORING: bool = True
     SCORING_V2_ENABLED: bool = False
+
+    @property
+    def mvp_flags(self) -> MvpFeatureFlags:
+        return MvpFeatureFlags(
+            disable_stripe=self.MVP_DISABLE_STRIPE,
+            disable_workable=self.MVP_DISABLE_WORKABLE,
+            disable_celery=self.MVP_DISABLE_CELERY,
+            disable_claude_scoring=self.MVP_DISABLE_CLAUDE_SCORING,
+            disable_calibration=self.MVP_DISABLE_CALIBRATION,
+            disable_proctoring=self.MVP_DISABLE_PROCTORING,
+            scoring_v2_enabled=self.SCORING_V2_ENABLED,
+        )
 
     model_config = {
         "env_file": ".env",

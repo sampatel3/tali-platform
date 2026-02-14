@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Mock the API module
-vi.mock('../lib/api.js', () => ({
+vi.mock('../shared/api', () => ({
   auth: {
     login: vi.fn(),
     register: vi.fn(),
@@ -85,7 +85,7 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, assessments as assessmentsApi, tasks as tasksApi, roles as rolesApi } from '../lib/api.js';
+import { auth, assessments as assessmentsApi, tasks as tasksApi, roles as rolesApi } from '../shared/api';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 

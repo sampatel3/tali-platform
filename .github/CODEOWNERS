@@ -1,0 +1,21 @@
+# Default owner
+* @sampatel
+
+# Backend domains
+/backend/app/domains/identity_access/ @sampatel
+/backend/app/domains/assessments_runtime/ @sampatel
+/backend/app/domains/tasks_repository/ @sampatel
+/backend/app/domains/candidates_documents/ @sampatel
+/backend/app/domains/billing_webhooks/ @sampatel
+/backend/app/domains/integrations_notifications/ @sampatel
+/backend/app/platform/ @sampatel
+/backend/app/api/v1/ @sampatel
+
+# Frontend areas
+/frontend/src/app/ @sampatel
+/frontend/src/features/ @sampatel
+/frontend/src/shared/ @sampatel
+
+# Architecture controls
+/docs/architecture/ @sampatel
+/docs/adr/ @sampatel

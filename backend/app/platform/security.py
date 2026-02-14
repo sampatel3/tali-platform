@@ -8,7 +8,8 @@ from sqlalchemy.orm import Session
 from ..platform.config import settings
 from ..platform.database import get_db
 
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/login")
+# Keep OAuth metadata aligned with active FastAPI-Users JWT login route.
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/v1/auth/jwt/login")
 
 
 def _truncate_password_72(password: str) -> str:

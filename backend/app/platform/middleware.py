@@ -7,8 +7,9 @@ from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
 from .request_context import set_request_id
+from ..domains.identity_access.access_policy import evaluate_login_access
 
-logger = logging.getLogger("taali.middleware")
+logger = logging.getLogger("tali.middleware")
 
 # In-memory rate limit: key -> list of request timestamps (pruned to last window_sec)
 _rate_limit_store = defaultdict(list)
@@ -23,7 +24,12 @@ def _get_client_ip(request: Request) -> str:
 
 
 def _rate_limit_key(ip: str, path: str) -> str:
-    if "/api/v1/auth/login" in path or "/api/v1/auth/register" in path or "/api/v1/auth/forgot-password" in path:
+    if (
+        "/api/v1/auth/login" in path
+        or "/api/v1/auth/jwt/login" in path
+        or "/api/v1/auth/register" in path
+        or "/api/v1/auth/forgot-password" in path
+    ):
         return f"auth:{ip}"
     # Token-based candidate endpoints (start, upload-cv) — tighter limit
     if "/api/v1/assessments/token/" in path:
@@ -138,10 +144,15 @@ class EnterpriseAccessMiddleware(BaseHTTPMiddleware):
             if not user or not user.organization_id:
                 return await call_next(request)
             org = db.query(Organization).filter(Organization.id == user.organization_id).first()
-            if org and getattr(org, "sso_enforced", False):
+            decision = evaluate_login_access(
+                email=email,
+                sso_enforced=bool(getattr(org, "sso_enforced", False)) if org else False,
+                organization_id=user.organization_id,
+            )
+            if not decision.allowed:
                 return JSONResponse(
                     status_code=403,
-                    content={"detail": "Organization enforces SSO. Use enterprise sign-in."},
+                    content={"detail": decision.reason or "Access denied by organization policy."},
                 )
         finally:
             db.close()

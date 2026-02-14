@@ -4,7 +4,7 @@ import pytest
 from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock
 
-from app.services.prompt_analytics import (
+from app.components.scoring.analytics import (
     compute_time_to_first_prompt,
     compute_prompt_speed,
     compute_prompt_frequency,

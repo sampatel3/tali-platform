@@ -29,6 +29,15 @@ jobs:
         run: python -m compileall app
       - name: Run backend tests with coverage threshold
         run: pytest -q --cov=app --cov-fail-under=50
+      - name: Generate dead code candidate report
+        run: |
+          mkdir -p ../artifacts
+          python ../scripts/dead_code_candidates.py --backend-root app --output ../artifacts/dead_code_candidates.json
+      - name: Upload dead code candidate artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dead-code-candidates
+          path: artifacts/dead_code_candidates.json
 
   frontend:
     runs-on: ubuntu-latest
@@ -48,6 +57,8 @@ jobs:
         run: npm ci
       - name: Validate package manifest
         run: node -e "JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json OK')"
+      - name: Frontend architecture gates
+        run: npm run check:architecture
       - name: Run frontend tests
         run: npm test -- --run
       - name: Build frontend

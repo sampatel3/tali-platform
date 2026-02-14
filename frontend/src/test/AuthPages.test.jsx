@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Mock the API module
-vi.mock('../lib/api.js', () => ({
+vi.mock('../shared/api', () => ({
   auth: {
     login: vi.fn(),
     register: vi.fn(),
@@ -63,7 +63,7 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth } from '../lib/api.js';
+import { auth } from '../shared/api';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -79,13 +79,13 @@ describe('AuthPages', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    window.location.hash = '';
+    window.history.replaceState(null, '', '/');
     // Ensure auth.me rejects by default so we stay unauthenticated
     auth.me.mockRejectedValue(new Error('Not authenticated'));
   });
 
   afterEach(() => {
-    window.location.hash = '';
+    window.history.replaceState(null, '', '/');
   });
 
   // ============================================================
@@ -434,7 +434,7 @@ describe('AuthPages', () => {
 
     it('shows success after submit', async () => {
       // ForgotPasswordPage uses dynamic import, mock the module resolution
-      const apiModule = await import('../lib/api.js');
+      const apiModule = await import('../shared/api');
       apiModule.auth.forgotPassword.mockResolvedValue({ data: {} });
 
       await navigateToForgotPassword();
@@ -469,7 +469,7 @@ describe('AuthPages', () => {
   // ============================================================
   describe('ResetPasswordPage', () => {
     it('shows invalid link message when no token is present', async () => {
-      window.location.hash = '#/reset-password';
+      window.history.replaceState(null, '', '/reset-password');
       renderApp();
 
       await waitFor(() => {
@@ -478,7 +478,7 @@ describe('AuthPages', () => {
     });
 
     it('renders password fields when token is present', async () => {
-      window.location.hash = '#/reset-password?token=valid-token-123';
+      window.history.replaceState(null, '', '/reset-password?token=valid-token-123');
       renderApp();
 
       await waitFor(() => {
@@ -489,7 +489,7 @@ describe('AuthPages', () => {
     });
 
     it('validates password confirmation mismatch', async () => {
-      window.location.hash = '#/reset-password?token=valid-token-123';
+      window.history.replaceState(null, '', '/reset-password?token=valid-token-123');
       renderApp();
 
       await waitFor(() => {
@@ -509,7 +509,7 @@ describe('AuthPages', () => {
     });
 
     it('validates password minimum length', async () => {
-      window.location.hash = '#/reset-password?token=valid-token-123';
+      window.history.replaceState(null, '', '/reset-password?token=valid-token-123');
       renderApp();
 
       await waitFor(() => {

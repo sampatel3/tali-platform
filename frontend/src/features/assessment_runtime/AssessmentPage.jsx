@@ -3,7 +3,7 @@ import { Clock, ChevronRight, ChevronDown, FileText, Folder } from 'lucide-react
 import CodeEditor from '../../components/assessment/CodeEditor';
 import ClaudeChat from '../../components/assessment/ClaudeChat';
 import { BRAND } from '../../config/brand';
-import { assessments } from '../../lib/api';
+import { assessments } from '../../shared/api';
 
 /** Normalize API start response to assessment shape used by this component */
 function normalizeStartData(startData) {

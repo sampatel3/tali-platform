@@ -8,10 +8,10 @@ logger = logging.getLogger(__name__)
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def send_assessment_email(self, candidate_email: str, candidate_name: str, token: str, org_name: str, position: str, assessment_id: int | None = None, request_id: str | None = None):
     """Send assessment invitation email to candidate."""
-    from ..services.email_service import EmailService
+    from ..domains.integrations_notifications.adapters import build_email_adapter
 
     try:
-        email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
+        email_svc = build_email_adapter()
         result = email_svc.send_assessment_invite(
             candidate_email=candidate_email,
             candidate_name=candidate_name,
@@ -33,10 +33,10 @@ def send_assessment_email(self, candidate_email: str, candidate_name: str, token
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
 def send_results_email(self, user_email: str, candidate_name: str, score: float, assessment_id: int, request_id: str | None = None):
     """Notify hiring manager that assessment is complete."""
-    from ..services.email_service import EmailService
+    from ..domains.integrations_notifications.adapters import build_email_adapter
 
     try:
-        email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
+        email_svc = build_email_adapter()
         result = email_svc.send_results_notification(
             user_email=user_email,
             candidate_name=candidate_name,
@@ -56,10 +56,10 @@ def send_results_email(self, user_email: str, candidate_name: str, score: float,
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=120)
 def post_results_to_workable(self, access_token: str, subdomain: str, candidate_id: str, assessment_data: dict, request_id: str | None = None):
     """Post assessment results to Workable candidate profile."""
-    from ..services.workable_service import WorkableService
+    from ..domains.integrations_notifications.adapters import build_workable_adapter
 
     try:
-        workable_svc = WorkableService(access_token=access_token, subdomain=subdomain)
+        workable_svc = build_workable_adapter(access_token=access_token, subdomain=subdomain)
         result = workable_svc.post_assessment_result(candidate_id=candidate_id, assessment_data=assessment_data)
         if not result["success"]:
             raise Exception(result.get("error", "Workable post failed"))
