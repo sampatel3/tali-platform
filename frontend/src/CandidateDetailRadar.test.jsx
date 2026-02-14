@@ -10,7 +10,7 @@ vi.mock('./context/AuthContext', () => ({
   }),
 }));
 
-vi.mock('./lib/api', () => ({
+vi.mock('./shared/api', () => ({
   assessments: {
     downloadReport: vi.fn(),
     postToWorkable: vi.fn(),
@@ -83,7 +83,7 @@ describe('CandidateDetailPage radar chart', () => {
     fireEvent.click(screen.getByRole('button', { name: 'AI Usage' }));
 
     // Check for elements in the redesigned AI Usage tab
-    expect(await screen.findByText(/Avg Prompt Quality/)).toBeInTheDocument();
-    expect(screen.getByText(/Prompt Quality Progression/)).toBeInTheDocument();
+    expect(await screen.findByText(/Avg Prompt clarity/)).toBeInTheDocument();
+    expect(screen.getByText(/Prompt clarity progression/)).toBeInTheDocument();
   });
 });

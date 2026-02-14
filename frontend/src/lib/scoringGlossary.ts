@@ -1,3 +1,5 @@
+import { DIMENSIONS, toCanonicalId } from '../scoring/scoringDimensions';
+
 type ScoringMeta = {
   label: string;
   description: string;
@@ -5,40 +7,18 @@ type ScoringMeta = {
 
 type ScoringGlossary = Record<string, ScoringMeta>;
 
-export const SCORING_CATEGORY_GLOSSARY: ScoringGlossary = {
-  task_completion: {
-    label: 'Task Completion',
-    description: 'Measures delivery outcomes under the assessment constraints: passing tests and finishing within the expected time window.',
-  },
-  prompt_clarity: {
-    label: 'Prompt Clarity',
-    description: 'Evaluates how clear, specific, and actionable the candidate\'s AI prompts are.',
-  },
-  context_provision: {
-    label: 'Context Provision',
-    description: 'Checks whether the candidate gives AI enough technical context (code snippets, errors, references, and prior attempts).',
-  },
-  independence: {
-    label: 'Independence & Efficiency',
-    description: 'Looks at self-directed problem solving and efficient AI use instead of over-reliance.',
-  },
-  utilization: {
-    label: 'Response Utilization',
-    description: 'Assesses whether AI responses are used thoughtfully and iteratively improved rather than copied blindly.',
-  },
-  communication: {
-    label: 'Communication Quality',
-    description: 'Assesses written clarity, tone, and readability while collaborating with AI.',
-  },
-  approach: {
-    label: 'Debugging & Design',
-    description: 'Measures evidence of structured debugging and architecture-level reasoning.',
-  },
-  cv_match: {
-    label: 'CV-Job Fit',
-    description: 'Estimates baseline alignment between candidate background and role requirements.',
-  },
+type MetadataPayload = {
+  categories?: Record<string, { label?: string; description?: string }>;
+  metrics?: Record<string, { label?: string; description?: string }>;
 };
+
+export const SCORING_CATEGORY_GLOSSARY: ScoringGlossary = DIMENSIONS.reduce((acc, dimension) => {
+  acc[dimension.id] = {
+    label: dimension.label,
+    description: dimension.longDescription,
+  };
+  return acc;
+}, {} as ScoringGlossary);
 
 export const SCORING_METRIC_GLOSSARY: ScoringGlossary = {
   tests_passed_ratio: { label: 'Tests Passed', description: 'How many required tests passed out of the total test suite.' },
@@ -86,9 +66,9 @@ export const getMetricMeta = (metricKey: string): ScoringMeta => {
 };
 
 export const buildGlossaryFromMetadata = (
-  metadata: { categories?: Record<string, { label?: string; description?: string }>; metrics?: Record<string, { label?: string; description?: string }> } | null | undefined
+  metadata: MetadataPayload | null | undefined
 ): { categories: ScoringGlossary; metrics: ScoringGlossary } => {
-  if (!metadata || !metadata.categories || !metadata.metrics) {
+  if (!metadata || !metadata.metrics) {
     return {
       categories: SCORING_CATEGORY_GLOSSARY,
       metrics: SCORING_METRIC_GLOSSARY,
@@ -96,10 +76,12 @@ export const buildGlossaryFromMetadata = (
   }
 
   const categories: ScoringGlossary = { ...SCORING_CATEGORY_GLOSSARY };
-  Object.entries(metadata.categories).forEach(([key, value]) => {
-    categories[key] = {
-      label: value?.label || key.replace(/_/g, ' '),
-      description: value?.description || SCORING_CATEGORY_GLOSSARY[key]?.description || 'No category description yet.',
+  Object.entries(metadata.categories || {}).forEach(([key, value]) => {
+    const canonicalId = toCanonicalId(key);
+    if (!canonicalId) return;
+    categories[canonicalId] = {
+      label: SCORING_CATEGORY_GLOSSARY[canonicalId]?.label || key.replace(/_/g, ' '),
+      description: value?.description || SCORING_CATEGORY_GLOSSARY[canonicalId]?.description || 'No category description yet.',
     };
   });
 

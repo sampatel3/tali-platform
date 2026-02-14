@@ -2,7 +2,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Mock the API module
-vi.mock('../lib/api.js', () => ({
+vi.mock('../shared/api', () => ({
   auth: {
     login: vi.fn(),
     register: vi.fn(),
@@ -80,7 +80,7 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, assessments as assessmentsApi, analytics as analyticsApi, candidates as candidatesApi } from '../lib/api.js';
+import { auth, assessments as assessmentsApi, analytics as analyticsApi, candidates as candidatesApi } from '../shared/api';
 import { CandidateDetailPage } from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -267,11 +267,11 @@ describe('CandidateDetailPage', () => {
   it('renders category scores in results tab', async () => {
     await renderCandidateDetail();
     // Category names appear in the expandable sections
-    const taskCompletionElements = screen.getAllByText('Task Completion');
+    const taskCompletionElements = screen.getAllByText('Task completion');
     expect(taskCompletionElements.length).toBeGreaterThanOrEqual(1);
-    const promptClarityElements = screen.getAllByText('Prompt Clarity');
+    const promptClarityElements = screen.getAllByText('Prompt clarity');
     expect(promptClarityElements.length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('Independence & Efficiency').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Independence & efficiency').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders radar chart in results tab', async () => {
@@ -286,7 +286,7 @@ describe('CandidateDetailPage', () => {
     fireEvent.click(aiUsageTab);
 
     await waitFor(() => {
-      expect(screen.getByText('Avg Prompt Quality')).toBeInTheDocument();
+      expect(screen.getByText('Avg Prompt clarity')).toBeInTheDocument();
       expect(screen.getByText('Time to First Prompt')).toBeInTheDocument();
       expect(screen.getByText('Browser Focus')).toBeInTheDocument();
     });
@@ -444,8 +444,8 @@ describe('CandidateDetailPage', () => {
     await renderCandidateDetail();
 
     expect(screen.getByText('Scoring Glossary')).toBeInTheDocument();
-    expect(screen.getAllByText('Task Completion').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText(/Measures delivery outcomes under the assessment constraints/i)).toBeInTheDocument();
+    expect(screen.getAllByText('Task completion').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText(/Measures delivery outcomes under assessment constraints/i)).toBeInTheDocument();
   });
 
   it('renders Post to Workable button', async () => {
