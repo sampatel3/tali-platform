@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
@@ -27,6 +28,7 @@ from ...schemas.role import (
     AssessmentFromApplicationCreate,
 )
 from ...services.document_service import process_document_upload
+from ...services.fit_matching_service import calculate_cv_job_match_sync
 from .role_support import (
     application_to_response,
     get_application,
@@ -35,6 +37,39 @@ from .role_support import (
 )
 
 router = APIRouter(tags=["Roles"])
+logger = logging.getLogger("taali.applications")
+
+
+def _compute_cv_match_for_application(app: CandidateApplication, *, reset_if_unavailable: bool) -> bool:
+    """Compute and persist CV-to-job-spec fit score on a role application."""
+    role = app.role
+    cv_text = (app.cv_text or "").strip()
+    job_spec_text = ((role.job_spec_text if role else None) or "").strip()
+
+    if not cv_text or not job_spec_text:
+        if reset_if_unavailable:
+            app.cv_match_score = None
+            app.cv_match_details = None
+            app.cv_match_scored_at = None
+        return False
+
+    if not settings.ANTHROPIC_API_KEY:
+        if reset_if_unavailable:
+            app.cv_match_score = None
+            app.cv_match_details = {"error": "CV match unavailable: Anthropic API key is not configured"}
+            app.cv_match_scored_at = None
+        return False
+
+    result = calculate_cv_job_match_sync(
+        cv_text=cv_text,
+        job_spec_text=job_spec_text,
+        api_key=settings.ANTHROPIC_API_KEY,
+        model=settings.resolved_claude_model,
+    )
+    app.cv_match_score = result.get("cv_job_match_score")
+    app.cv_match_details = result.get("match_details", {})
+    app.cv_match_scored_at = datetime.now(timezone.utc)
+    return True
 
 
 @router.post("/roles/{role_id}/applications", response_model=ApplicationResponse, status_code=status.HTTP_201_CREATED)
@@ -104,7 +139,7 @@ def list_role_applications(
     get_role(role_id, current_user.organization_id, db)
     apps = (
         db.query(CandidateApplication)
-        .options(joinedload(CandidateApplication.candidate))
+        .options(joinedload(CandidateApplication.candidate), joinedload(CandidateApplication.role))
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
             CandidateApplication.role_id == role_id,
@@ -112,6 +147,23 @@ def list_role_applications(
         .order_by(CandidateApplication.created_at.desc())
         .all()
     )
+
+    updated = False
+    for app in apps:
+        if app.cv_match_score is not None:
+            continue
+        if not app.cv_text:
+            continue
+        try:
+            updated = _compute_cv_match_for_application(app, reset_if_unavailable=False) or updated
+        except Exception:
+            logger.exception("Failed to backfill cv_match_score for application_id=%s", app.id)
+    if updated:
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to persist backfilled cv_match_score values")
     return [application_to_response(app) for app in apps]
 
 
@@ -166,6 +218,13 @@ def upload_application_cv(
         app.candidate.cv_filename = result["filename"]
         app.candidate.cv_text = result["extracted_text"]
         app.candidate.cv_uploaded_at = now
+    try:
+        _compute_cv_match_for_application(app, reset_if_unavailable=True)
+    except Exception:
+        logger.exception("Failed to compute cv_match_score for application_id=%s", app.id)
+        app.cv_match_score = None
+        app.cv_match_details = {"error": "Failed to compute CV match score"}
+        app.cv_match_scored_at = None
     try:
         db.commit()
     except Exception:

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Plus, UserPlus } from 'lucide-react';
 import * as apiClient from '../../shared/api';
-import { Button, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
+import { Button, PageContainer, PageHeader, Panel, Select, TableShell } from '../../shared/ui/TaaliPrimitives';
 
 import {
   CandidateSheet,
@@ -43,6 +43,9 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [candidateSheetError, setCandidateSheetError] = useState('');
   const [creatingAssessmentId, setCreatingAssessmentId] = useState(null);
   const [viewingApplicationId, setViewingApplicationId] = useState(null);
+  const [legacyAssessments, setLegacyAssessments] = useState([]);
+  const [loadingLegacyAssessments, setLoadingLegacyAssessments] = useState(true);
+  const [legacyAssessmentsError, setLegacyAssessmentsError] = useState('');
 
   const selectedRole = useMemo(
     () => roles.find((role) => String(role.id) === String(selectedRoleId)) || null,
@@ -118,10 +121,40 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
   }, [tasksApi]);
 
+  const loadLegacyAssessments = useCallback(async () => {
+    if (!assessmentsApi?.list) {
+      setLegacyAssessments([]);
+      setLoadingLegacyAssessments(false);
+      return;
+    }
+    setLoadingLegacyAssessments(true);
+    setLegacyAssessmentsError('');
+    try {
+      const res = await assessmentsApi.list({ limit: 200, offset: 0 });
+      const items = parseCollection(res.data);
+      const deduped = [];
+      const seen = new Set();
+      for (const item of items) {
+        if (item.application_id) continue;
+        const key = `${item.role_id || 'none'}:${item.candidate_id || item.candidate_email || item.id}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        deduped.push(item);
+      }
+      setLegacyAssessments(deduped);
+    } catch {
+      setLegacyAssessments([]);
+      setLegacyAssessmentsError('Failed to load dashboard candidates.');
+    } finally {
+      setLoadingLegacyAssessments(false);
+    }
+  }, [assessmentsApi]);
+
   useEffect(() => {
     loadRoles();
     loadTasks();
-  }, [loadRoles, loadTasks]);
+    loadLegacyAssessments();
+  }, [loadRoles, loadTasks, loadLegacyAssessments]);
 
   useEffect(() => {
     loadRoleContext(selectedRoleId);
@@ -135,7 +168,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     status: assessment.status || 'pending',
     score: assessment.score ?? assessment.overall_score ?? null,
     time: assessment.duration_taken ? `${Math.round(assessment.duration_taken / 60)}m` : '—',
-    position: fallbackApp?.candidate_position || '',
+    position: fallbackApp?.candidate_position || assessment.role_name || '',
     completedDate: assessment.completed_at ? new Date(assessment.completed_at).toLocaleDateString() : null,
     breakdown: assessment.breakdown || null,
     prompts: assessment.prompt_count ?? 0,
@@ -145,6 +178,28 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     token: assessment.token,
     _raw: assessment,
   });
+
+  const legacyCandidates = useMemo(() => {
+    const query = searchQuery.trim().toLowerCase();
+    return legacyAssessments.filter((assessment) => {
+      const matchesRole = !selectedRoleId
+        || !assessment.role_id
+        || String(assessment.role_id) === String(selectedRoleId);
+      if (!matchesRole) return false;
+      if (!query) return true;
+      const haystack = [
+        assessment.candidate_name,
+        assessment.candidate_email,
+        assessment.role_name,
+        assessment.status,
+        assessment.task_name,
+      ]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      return haystack.includes(query);
+    });
+  }, [legacyAssessments, searchQuery, selectedRoleId]);
 
   const handleOpenRoleSheet = (mode) => {
     setRoleSheetMode(mode);
@@ -272,6 +327,71 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
   };
 
+  const legacyCandidatesSection = (
+    <Panel className="p-4">
+      <div className="mb-3">
+        <h3 className="text-sm font-semibold uppercase tracking-[0.08em] text-gray-600">
+          Dashboard candidates
+        </h3>
+        <p className="mt-1 text-sm text-gray-600">
+          Candidates that exist from the assessment flow but are not attached to a role application.
+        </p>
+      </div>
+      {loadingLegacyAssessments ? (
+        <p className="text-sm text-gray-500">Loading dashboard candidates...</p>
+      ) : null}
+      {!loadingLegacyAssessments && legacyAssessmentsError ? (
+        <p className="text-sm text-red-700">{legacyAssessmentsError}</p>
+      ) : null}
+      {!loadingLegacyAssessments && !legacyAssessmentsError && legacyCandidates.length === 0 ? (
+        <p className="text-sm text-gray-500">No dashboard-only candidates found.</p>
+      ) : null}
+      {!loadingLegacyAssessments && !legacyAssessmentsError && legacyCandidates.length > 0 ? (
+        <TableShell>
+          <table className="min-w-[720px]">
+            <thead>
+              <tr className="text-left text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">
+                <th className="px-4 py-3">Name</th>
+                <th className="px-4 py-3">Email</th>
+                <th className="px-4 py-3">Role</th>
+                <th className="px-4 py-3">Status</th>
+                <th className="px-4 py-3">Last activity</th>
+                <th className="px-4 py-3">Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {legacyCandidates.map((assessment) => (
+                <tr key={assessment.id}>
+                  <td className="px-4 py-3 text-sm font-semibold text-gray-900">
+                    {(assessment.candidate_name || assessment.candidate_email || 'Unknown').trim()}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-700">{assessment.candidate_email || '—'}</td>
+                  <td className="px-4 py-3 text-sm text-gray-700">{assessment.role_name || 'Unassigned role'}</td>
+                  <td className="px-4 py-3 text-sm text-gray-700">{assessment.status || 'pending'}</td>
+                  <td className="px-4 py-3 text-sm text-gray-700">
+                    {assessment.updated_at
+                      ? new Date(assessment.updated_at).toLocaleString()
+                      : (assessment.created_at ? new Date(assessment.created_at).toLocaleString() : '—')}
+                  </td>
+                  <td className="px-4 py-3">
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => onViewCandidate(mapAssessmentForDetail(assessment))}
+                    >
+                      View
+                    </Button>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </TableShell>
+      ) : null}
+    </Panel>
+  );
+
   return (
     <div>
       <NavComponent currentPage="candidates" onNavigate={onNavigate} />
@@ -344,7 +464,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
 
           <div className="space-y-4">
             {!selectedRole ? (
-              <EmptyRoleDetail onCreateRole={() => handleOpenRoleSheet('create')} />
+              <>
+                <EmptyRoleDetail onCreateRole={() => handleOpenRoleSheet('create')} />
+                {legacyCandidatesSection}
+              </>
             ) : (
               <>
                 <RoleSummaryHeader
@@ -379,6 +502,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   onViewCandidate={handleViewFromApplication}
                   onCreateAssessment={handleCreateAssessment}
                 />
+                {legacyCandidatesSection}
               </>
             )}
           </div>

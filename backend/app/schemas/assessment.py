@@ -73,6 +73,8 @@ class AssessmentResponse(BaseModel):
     cv_uploaded: Optional[bool] = None
     cv_filename: Optional[str] = None
     cv_uploaded_at: Optional[datetime] = None
+    cv_job_match_score: Optional[float] = None
+    cv_job_match_details: Optional[Dict[str, Any]] = None
     final_score: Optional[float] = None
     score_breakdown: Optional[Dict[str, Any]] = None
     score_weights_used: Optional[Dict[str, float]] = None

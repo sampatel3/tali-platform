@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -23,6 +23,9 @@ class CandidateApplication(Base):
     cv_filename = Column(String, nullable=True)
     cv_text = Column(Text, nullable=True)
     cv_uploaded_at = Column(DateTime(timezone=True), nullable=True)
+    cv_match_score = Column(Float, nullable=True)
+    cv_match_details = Column(JSON, nullable=True)
+    cv_match_scored_at = Column(DateTime(timezone=True), nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

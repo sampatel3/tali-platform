@@ -60,6 +60,9 @@ class ApplicationResponse(BaseModel):
     candidate_position: Optional[str] = None
     cv_filename: Optional[str] = None
     cv_uploaded_at: Optional[datetime] = None
+    cv_match_score: Optional[float] = None
+    cv_match_details: Optional[dict] = None
+    cv_match_scored_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

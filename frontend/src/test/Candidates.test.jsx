@@ -127,7 +127,6 @@ const setupAuthenticatedUser = () => {
 };
 
 const renderAppOnCandidatesPage = async () => {
-  assessmentsApi.list.mockResolvedValue({ data: { items: [], total: 0 } });
   const result = render(
     <AuthProvider>
       <App />
@@ -260,6 +259,32 @@ describe('CandidatesPage', () => {
     });
   });
 
+  it('shows CV match score in role candidates table', async () => {
+    rolesApi.listApplications.mockResolvedValue({
+      data: [
+        {
+          id: 11,
+          candidate_id: 101,
+          candidate_email: 'match@example.com',
+          candidate_name: 'Match Candidate',
+          candidate_position: 'Backend Engineer',
+          status: 'applied',
+          cv_filename: 'match.pdf',
+          cv_match_score: 8.2,
+          created_at: '2026-01-10T10:00:00Z',
+          updated_at: '2026-01-10T10:00:00Z',
+        },
+      ],
+    });
+
+    await renderAppOnCandidatesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Match Candidate')).toBeInTheDocument();
+      expect(screen.getByText('8.2/10')).toBeInTheDocument();
+    });
+  });
+
   it('creates a role from the role sheet', async () => {
     rolesApi.create.mockResolvedValue({
       data: { id: 321, name: 'Platform Engineer', description: null },
@@ -386,6 +411,38 @@ describe('CandidatesPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Candidate 2')).toBeInTheDocument();
       expect(screen.queryByText('Candidate 1')).not.toBeInTheDocument();
+    });
+  });
+
+  it('shows dashboard candidates when no roles exist', async () => {
+    rolesApi.list.mockResolvedValue({ data: [] });
+    rolesApi.listApplications.mockResolvedValue({ data: [] });
+    rolesApi.listTasks.mockResolvedValue({ data: [] });
+    assessmentsApi.list
+      .mockResolvedValueOnce({ data: { items: [], total: 0 } })
+      .mockResolvedValueOnce({
+        data: {
+          items: [
+            {
+              id: 301,
+              candidate_id: 88,
+              candidate_name: 'Legacy Candidate',
+              candidate_email: 'legacy@example.com',
+              role_name: null,
+              status: 'pending',
+              created_at: '2026-01-12T10:00:00Z',
+              application_id: null,
+            },
+          ],
+          total: 1,
+        },
+      });
+
+    await renderAppOnCandidatesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Dashboard candidates')).toBeInTheDocument();
+      expect(screen.getByText('Legacy Candidate')).toBeInTheDocument();
     });
   });
 });

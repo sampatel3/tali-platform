@@ -2,6 +2,7 @@
 
 import io
 
+from app.domains.assessments_runtime import applications_routes
 from tests.conftest import auth_headers, create_task_via_api
 
 
@@ -225,3 +226,50 @@ def test_reject_unlink_role_task_when_assessment_exists(client):
     unlink_resp = client.delete(f"/api/v1/roles/{role['id']}/tasks/{task['id']}", headers=headers)
     assert unlink_resp.status_code == 400
     assert "already has assessments" in unlink_resp.json()["detail"].lower()
+
+
+def test_application_cv_match_score_is_returned(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    role = client.post("/api/v1/roles", json={"name": "CV match role"}, headers=headers).json()
+    job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Python backend API SQL role"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
+
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "fit@example.com", "candidate_name": "Fit Candidate"},
+        headers=headers,
+    ).json()
+
+    monkeypatch.setattr(applications_routes.settings, "ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(
+        applications_routes,
+        "process_document_upload",
+        lambda **_: {
+            "file_url": "/tmp/mock-resume.pdf",
+            "filename": "resume.pdf",
+            "extracted_text": "Python SQL backend API",
+            "text_preview": "Python SQL backend API",
+        },
+    )
+    monkeypatch.setattr(
+        applications_routes,
+        "calculate_cv_job_match_sync",
+        lambda **_: {
+            "cv_job_match_score": 8.4,
+            "skills_match": 8.0,
+            "experience_relevance": 8.8,
+            "match_details": {"summary": "Strong API and SQL alignment."},
+        },
+    )
+
+    cv_file = {"file": ("resume.pdf", io.BytesIO(b"%PDF-1.4 python sql backend api"), "application/pdf")}
+    upload_resp = client.post(f"/api/v1/applications/{app['id']}/upload-cv", files=cv_file, headers=headers)
+    assert upload_resp.status_code == 200, upload_resp.text
+
+    list_resp = client.get(f"/api/v1/roles/{role['id']}/applications", headers=headers)
+    assert list_resp.status_code == 200, list_resp.text
+    apps = list_resp.json()
+    assert len(apps) == 1
+    assert apps[0]["cv_match_score"] == 8.4
+    assert apps[0]["cv_match_details"]["summary"] == "Strong API and SQL alignment."
+    assert apps[0]["cv_match_scored_at"] is not None

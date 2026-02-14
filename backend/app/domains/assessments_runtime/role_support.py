@@ -63,6 +63,9 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
         candidate_position=(candidate.position if candidate else None),
         cv_filename=app.cv_filename,
         cv_uploaded_at=app.cv_uploaded_at,
+        cv_match_score=app.cv_match_score,
+        cv_match_details=app.cv_match_details,
+        cv_match_scored_at=app.cv_match_scored_at,
         created_at=app.created_at,
         updated_at=app.updated_at,
     )
