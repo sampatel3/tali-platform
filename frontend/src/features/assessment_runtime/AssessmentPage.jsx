@@ -60,7 +60,6 @@ export default function AssessmentPage({
     contextWindow: false,
     taskContext: false,
     rubric: false,
-    repoContext: false,
     repoTree: false,
   });
   const [collapsedRepoDirs, setCollapsedRepoDirs] = useState({});
@@ -226,9 +225,6 @@ export default function AssessmentPage({
     selectedRepoFile && repoFiles.some((file) => file.path === selectedRepoFile)
       ? selectedRepoFile
       : repoFiles[0]?.path || null;
-  const selectedRepoContent = repoFiles.find(
-    (file) => file.path === selectedRepoPath,
-  )?.content;
   const repoFileTree = buildRepoFileTree(repoFiles);
   const hasRepoStructure = repoFiles.length > 0;
   const aiMode = assessment?.ai_mode || (assessment?.terminal_mode ? 'claude_cli_terminal' : 'legacy_chat');
@@ -740,10 +736,6 @@ export default function AssessmentPage({
         taskContext={taskContext}
         rubricCategories={rubricCategories}
         cloneCommand={assessment?.clone_command}
-        repoFiles={repoFiles}
-        selectedRepoPath={selectedRepoPath}
-        selectedRepoContent={selectedRepoContent}
-        onSelectRepoFile={handleSelectRepoFile}
       />
 
       <AssessmentWorkspace

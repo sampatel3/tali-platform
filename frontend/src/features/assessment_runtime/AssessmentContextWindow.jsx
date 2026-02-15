@@ -7,10 +7,6 @@ export const AssessmentContextWindow = ({
   taskContext,
   rubricCategories,
   cloneCommand,
-  repoFiles,
-  selectedRepoPath,
-  selectedRepoContent,
-  onSelectRepoFile,
 }) => (
   <div className="border-b-2 border-black bg-gray-50">
     <button
@@ -24,7 +20,7 @@ export const AssessmentContextWindow = ({
 
     {!collapsedSections.contextWindow && (
       <div className="p-4 border-t border-gray-200 max-h-[34vh] overflow-y-auto">
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-3 md:grid-cols-2">
           <div className="border border-black bg-white">
             <button
               type="button"
@@ -74,42 +70,6 @@ export const AssessmentContextWindow = ({
                   <div className="font-mono text-[11px] text-gray-600 mt-2 break-all">
                     Workspace clone command: <code>{cloneCommand}</code>
                   </div>
-                )}
-              </div>
-            )}
-          </div>
-
-          <div className="border border-black bg-white">
-            <button
-              type="button"
-              className="w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold text-gray-700 hover:bg-gray-100"
-              onClick={() => toggleSection('repoContext')}
-            >
-              <span>Repository Context</span>
-              {collapsedSections.repoContext ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
-            </button>
-            {!collapsedSections.repoContext && (
-              <div className="border-t border-gray-200 px-3 py-2">
-                {repoFiles.length === 0 ? (
-                  <p className="font-mono text-xs text-gray-600">No repository files provided for this assessment.</p>
-                ) : (
-                  <>
-                    <div className="flex flex-wrap gap-2 mb-2 max-h-16 overflow-auto pr-1">
-                      {repoFiles.map((file) => (
-                        <button
-                          key={file.path}
-                          type="button"
-                          className={`border px-2 py-1 font-mono text-xs ${selectedRepoPath === file.path ? 'border-black bg-black text-white' : 'border-gray-400 bg-white'}`}
-                          onClick={() => onSelectRepoFile(file.path)}
-                        >
-                          {file.path}
-                        </button>
-                      ))}
-                    </div>
-                    <pre className="bg-black text-gray-200 p-2 text-xs overflow-auto max-h-32 border-2 border-black">
-                      {selectedRepoContent || 'No file content available.'}
-                    </pre>
-                  </>
                 )}
               </div>
             )}

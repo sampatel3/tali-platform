@@ -15,6 +15,7 @@ import {
   parseCollection,
   trimOrUndefined,
 } from './CandidatesUI';
+import { AssessmentInviteSheet } from './AssessmentInviteSheet';
 
 export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) => {
   const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
@@ -49,6 +50,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [candidateSheetError, setCandidateSheetError] = useState('');
   const [creatingAssessmentId, setCreatingAssessmentId] = useState(null);
   const [viewingApplicationId, setViewingApplicationId] = useState(null);
+  const [inviteSheetOpen, setInviteSheetOpen] = useState(false);
+  const [inviteDraft, setInviteDraft] = useState(null);
 
   const selectedRole = useMemo(
     () => roles.find((role) => String(role.id) === String(selectedRoleId)) || null,
@@ -274,9 +277,39 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
     setCreatingAssessmentId(application.id);
     try {
-      await rolesApi.createAssessment(application.id, { task_id: taskNumber });
+      const res = await rolesApi.createAssessment(application.id, { task_id: taskNumber });
       await loadRoleContext(selectedRoleId);
-      alert('Assessment created and invite sent.');
+      const created = res?.data || {};
+      const candidateEmail = created.candidate_email || application?.candidate_email || '';
+      const candidateName = created.candidate_name || application?.candidate_name || '';
+      const taskName = (
+        roleTasks.find((task) => Number(task.id) === taskNumber)?.name
+        || created.task_name
+        || selectedRole?.name
+        || 'Technical assessment'
+      );
+      let link = '';
+      if (created.id && created.token) {
+        link = `${window.location.origin}/assessment/${created.id}?token=${created.token}`;
+      } else if (created.token) {
+        link = `${window.location.origin}/assess/${created.token}`;
+      }
+      const subject = `Technical Assessment Invitation — ${taskName}`;
+      const body = (
+        `Hi ${candidateName || 'there'},\n\n`
+        + `You've been invited to complete a technical assessment (${taskName}).\n\n`
+        + `Start here:\n${link}\n\n`
+        + `Thanks,\n${selectedRole?.name || 'TAALI'}\n`
+      );
+      setInviteDraft({
+        to: candidateEmail,
+        subject,
+        body,
+        link,
+        inviteChannel: created.invite_channel || null,
+        inviteSentAt: created.invite_sent_at || null,
+      });
+      setInviteSheetOpen(true);
       return true;
     } catch (err) {
       alert(getErrorMessage(err, 'Failed to create assessment.'));
@@ -492,6 +525,12 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         error={candidateSheetError}
         onClose={() => setCandidateSheetOpen(false)}
         onSubmit={handleCandidateSubmit}
+      />
+
+      <AssessmentInviteSheet
+        open={inviteSheetOpen}
+        onClose={() => setInviteSheetOpen(false)}
+        draft={inviteDraft}
       />
     </div>
   );

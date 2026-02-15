@@ -126,7 +126,7 @@ describe('AssessmentPage tracking metadata', () => {
   });
 
 
-  it('renders task and repository context when provided', async () => {
+  it('renders task context and repository tree when provided', async () => {
     const startData = {
       assessment_id: 12,
       token: 'tok2',
@@ -150,9 +150,10 @@ describe('AssessmentPage tracking metadata', () => {
 
     expect(await screen.findByText('Task Context')).toBeInTheDocument();
     expect(screen.getByText(/migration left historical records incomplete/i)).toBeInTheDocument();
-    expect(screen.getByText('Repository Context')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'src/backfill.py' })).toBeInTheDocument();
-    expect(screen.getByText(/def run\(\):/)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Repository/i })).toBeInTheDocument();
+    expect(screen.getByText('src/')).toBeInTheDocument();
+    expect(screen.getByText('backfill.py')).toBeInTheDocument();
+    expect(screen.getByText('README.md')).toBeInTheDocument();
   });
 
   it('shows fallback context copy when task metadata is missing', async () => {
@@ -171,8 +172,7 @@ describe('AssessmentPage tracking metadata', () => {
 
     expect(await screen.findByText('Task Context')).toBeInTheDocument();
     expect(screen.getByText('Task context has not been provided yet.')).toBeInTheDocument();
-    expect(screen.getByText('Repository Context')).toBeInTheDocument();
-    expect(screen.getByText('No repository files provided for this assessment.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Repository/i })).not.toBeInTheDocument();
   });
 
 
@@ -226,27 +226,21 @@ describe('AssessmentPage tracking metadata', () => {
 
     const taskToggle = await screen.findByRole('button', { name: /Task Context/i });
     const rubricToggle = screen.getByRole('button', { name: /How you'll be assessed/i });
-    const repoToggle = screen.getByRole('button', { name: /Repository Context/i });
 
     expect(screen.getByText(/Investigate and patch the backfill job/i)).toBeInTheDocument();
     expect(screen.getByText(/Rubric categories will be shown when available/i)).toBeInTheDocument();
-    expect(screen.getByText(/def run_job\(\):/i)).toBeInTheDocument();
 
     fireEvent.click(taskToggle);
     fireEvent.click(rubricToggle);
-    fireEvent.click(repoToggle);
 
     expect(screen.queryByText(/Investigate and patch the backfill job/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Rubric categories will be shown when available/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/def run_job\(\):/i)).not.toBeInTheDocument();
 
     fireEvent.click(taskToggle);
     fireEvent.click(rubricToggle);
-    fireEvent.click(repoToggle);
 
     expect(screen.getByText(/Investigate and patch the backfill job/i)).toBeInTheDocument();
     expect(screen.getByText(/Rubric categories will be shown when available/i)).toBeInTheDocument();
-    expect(screen.getByText(/def run_job\(\):/i)).toBeInTheDocument();
   });
 
   it('uses canonical response field from Claude payload', async () => {
