@@ -224,8 +224,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const creditsBalance = Number(billingCredits?.credits_balance ?? orgData?.credits_balance ?? 0);
   const packCatalog = billingCredits?.packs || {
     starter_5: { label: 'Starter (5 credits)', credits: 5 },
-    growth_15: { label: 'Growth (15 credits)', credits: 15 },
-    scale_50: { label: 'Scale (50 credits)', credits: 50 },
+    growth_10: { label: 'Growth (10 credits)', credits: 10 },
+    scale_20: { label: 'Scale (20 credits)', credits: 20 },
   };
   const usageHistory = billingUsage?.usage ?? [];
   const monthlyAssessments = usageHistory.length;

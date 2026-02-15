@@ -96,8 +96,8 @@ class Settings(BaseSettings):
     # {"starter_5":{"variant_id":"12345","credits":5,"label":"Starter (5 credits)"}, ...}
     LEMON_PACKS_JSON: str = (
         '{"starter_5":{"variant_id":"0","credits":5,"label":"Starter (5 credits)"},'
-        '"growth_15":{"variant_id":"0","credits":15,"label":"Growth (15 credits)"},'
-        '"scale_50":{"variant_id":"0","credits":50,"label":"Scale (50 credits)"}}'
+        '"growth_10":{"variant_id":"0","credits":10,"label":"Growth (10 credits)"},'
+        '"scale_20":{"variant_id":"0","credits":20,"label":"Scale (20 credits)"}}'
     )
 
     # Resend

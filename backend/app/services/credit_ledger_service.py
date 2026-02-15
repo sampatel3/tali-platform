@@ -34,7 +34,21 @@ def lemon_pack_catalog() -> dict[str, dict[str, Any]]:
 
 
 def resolve_pack(pack_id: str) -> dict[str, Any] | None:
-    return lemon_pack_catalog().get(str(pack_id))
+    catalog = lemon_pack_catalog()
+    key = str(pack_id)
+    pack = catalog.get(key)
+    if pack:
+        return pack
+
+    # Backwards-compat: legacy pack ids used before we standardized on 5/10/20.
+    legacy_aliases = {
+        "growth_15": "growth_10",
+        "scale_50": "scale_20",
+    }
+    alias = legacy_aliases.get(key)
+    if alias:
+        return catalog.get(alias)
+    return None
 
 
 def resolve_pack_by_variant(variant_id: str) -> tuple[str, dict[str, Any]] | None:
