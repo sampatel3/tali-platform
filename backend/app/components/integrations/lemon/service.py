@@ -71,9 +71,8 @@ class LemonService:
         )
         if not checkout_url:
             raise ValueError("Lemon checkout URL missing")
-        if cancel_url:
-            separator = "&" if "?" in checkout_url else "?"
-            checkout_url = f"{checkout_url}{separator}checkout[cancel_url]={cancel_url}"
+        # Do not mutate Lemon's signed URL with extra query params. Doing so
+        # invalidates the signature and yields a 403 on the hosted checkout page.
         return checkout_url
 
     @staticmethod
