@@ -338,8 +338,9 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
     sandbox = None
     sandbox_id = None
     was_pending = assessment.status == AssessmentStatus.PENDING
+    is_demo = bool(getattr(assessment, "is_demo", False))
     # Demo assessments should remain free to start (no credit consumption).
-    if was_pending and not settings.MVP_DISABLE_LEMON and not bool(getattr(assessment, "is_demo", False)):
+    if was_pending and not settings.MVP_DISABLE_LEMON and not is_demo:
         org = (
             db.query(Organization)
             .filter(Organization.id == assessment.organization_id)
@@ -409,7 +410,8 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         except Exception:
             db.rollback()
             logger.exception("Failed to create assessment repository branch")
-            if not settings.GITHUB_MOCK_MODE:
+            # GitHub integration should not block demos (they run from repo_structure in E2B).
+            if not settings.GITHUB_MOCK_MODE and not is_demo:
                 raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
 
     try:
@@ -417,6 +419,7 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         if not cloned:
             if (
                 not settings.GITHUB_MOCK_MODE
+                and not is_demo
                 and getattr(assessment, "assessment_repo_url", None)
                 and getattr(assessment, "assessment_branch", None)
             ):
@@ -424,7 +427,7 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
             _materialize_task_repository(sandbox, task)
     except Exception:
         logger.exception("Failed to initialize task repository in sandbox")
-        if not settings.GITHUB_MOCK_MODE:
+        if not settings.GITHUB_MOCK_MODE and not is_demo:
             raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
 
     resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
