@@ -46,15 +46,15 @@ router.include_router(candidate_terminal_router)
 DEMO_ORG_SLUG = "taali-demo"
 DEMO_ORG_NAME = "TAALI Demo Leads"
 DEMO_TRACK_TASK_KEYS = {
-    "backend-reliability": "taali_demo_backend_reliability",
-    "frontend-debugging": "taali_demo_frontend_debugging",
-    "data-pipeline": "taali_demo_data_pipeline",
+    # Primary demo tracks: match the task keys that are live on the platform.
+    "data_eng_b_cdc_fix": "data_eng_b_cdc_fix",
+    "data_eng_c_backfill_schema": "data_eng_c_backfill_schema",
+    # Backward-compatible legacy demo tracks (map to a live task key).
+    "backend-reliability": "data_eng_b_cdc_fix",
+    "frontend-debugging": "data_eng_b_cdc_fix",
+    "data-pipeline": "data_eng_c_backfill_schema",
 }
-DEMO_TRACK_KEYS = {
-    "backend-reliability",
-    "frontend-debugging",
-    "data-pipeline",
-}
+DEMO_TRACK_KEYS = set(DEMO_TRACK_TASK_KEYS.keys())
 
 
 def _ensure_demo_org(db: Session):

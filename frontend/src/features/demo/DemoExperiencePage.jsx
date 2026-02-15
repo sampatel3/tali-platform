@@ -125,7 +125,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
           </div>
           <h1 className="text-4xl font-bold">Try a candidate assessment</h1>
           <p className="mt-3 max-w-4xl font-mono text-sm text-[var(--taali-muted)]">
-            Complete this short intake, choose one of three demo tasks, and run through the same assessment runtime candidates use.
+            Complete this short intake, choose one of two demo tasks, and run through the same assessment runtime candidates use.
             At the end, you&apos;ll see a short signal summary chart.
           </p>
           <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
@@ -208,7 +208,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
           <Panel className="p-5">
             <h2 className="text-2xl font-bold">Choose a demo assessment</h2>
             <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
-              Backend API Reliability currently mirrors our production flow most closely. The other tracks are guided previews.
+              These demo tracks are aligned to the tasks currently live on the platform.
             </p>
             <div className="mt-4 grid gap-3">
               {DEMO_ASSESSMENTS.map((assessment) => {

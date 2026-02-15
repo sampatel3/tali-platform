@@ -338,7 +338,8 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
     sandbox = None
     sandbox_id = None
     was_pending = assessment.status == AssessmentStatus.PENDING
-    if was_pending and not settings.MVP_DISABLE_LEMON:
+    # Demo assessments should remain free to start (no credit consumption).
+    if was_pending and not settings.MVP_DISABLE_LEMON and not bool(getattr(assessment, "is_demo", False)):
         org = (
             db.query(Organization)
             .filter(Organization.id == assessment.organization_id)
