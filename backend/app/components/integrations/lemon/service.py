@@ -32,13 +32,15 @@ class LemonService:
         custom: dict[str, Any],
         test_mode: bool = False,
     ) -> str:
+        # Lemon expects `checkout_data.custom` values to be strings.
+        custom_safe = {str(k): ("" if v is None else str(v)) for k, v in (custom or {}).items()}
         payload = {
             "data": {
                 "type": "checkouts",
                 "attributes": {
                     "checkout_data": {
                         "email": email,
-                        "custom": custom,
+                        "custom": custom_safe,
                     },
                     "product_options": {
                         "redirect_url": success_url,
