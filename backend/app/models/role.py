@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Table, Text
+from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -15,11 +15,17 @@ role_tasks = Table(
 
 class Role(Base):
     __tablename__ = "roles"
+    __table_args__ = (
+        UniqueConstraint("organization_id", "workable_job_id", name="uq_roles_org_workable_job"),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), index=True, nullable=False)
     name = Column(String, nullable=False)
     description = Column(Text, nullable=True)
+    source = Column(String, default="manual", nullable=False)
+    workable_job_id = Column(String, nullable=True, index=True)
+    workable_job_data = Column(JSON, nullable=True)
     job_spec_file_url = Column(String, nullable=True)
     job_spec_filename = Column(String, nullable=True)
     job_spec_text = Column(Text, nullable=True)

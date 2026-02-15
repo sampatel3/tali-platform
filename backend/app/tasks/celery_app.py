@@ -16,6 +16,12 @@ celery_app.conf.update(
     task_track_started=True,
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    beat_schedule={
+        "workable-sync-every-30-minutes": {
+            "task": "app.tasks.assessment_tasks.sync_workable_orgs",
+            "schedule": 1800.0,
+        },
+    },
 )
 
 # Auto-discover tasks

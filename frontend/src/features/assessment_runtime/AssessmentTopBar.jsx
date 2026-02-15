@@ -7,6 +7,8 @@ export const AssessmentTopBar = ({
   brandName,
   taskName,
   claudeBudget,
+  aiMode,
+  terminalCapabilities,
   formatUsd,
   isTimeLow,
   timeLeft,
@@ -24,6 +26,14 @@ export const AssessmentTopBar = ({
       <span className="font-mono text-sm font-bold">
         {taskName}
       </span>
+      <span className="border border-black px-2 py-0.5 font-mono text-[11px] uppercase">
+        AI Mode: {aiMode === 'claude_cli_terminal' ? 'Claude CLI' : 'Claude Chat'}
+      </span>
+      {aiMode === 'claude_cli_terminal' ? (
+        <span className="font-mono text-[11px] text-gray-600">
+          Permission: {terminalCapabilities?.permission_mode || 'default'}
+        </span>
+      ) : null}
     </div>
     <div className="flex items-center gap-4">
       {claudeBudget?.enabled && (

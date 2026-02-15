@@ -169,6 +169,7 @@ from .api.v1.candidates import router as candidates_router
 from .api.v1.roles import router as roles_router
 from .api.v1.scoring import router as scoring_router
 from .api.v1.users import router as users_router
+from .api.v1.workable import router as workable_router
 
 # FastAPI-Users auth routers
 app.include_router(
@@ -207,6 +208,7 @@ app.include_router(billing_router, prefix="/api/v1")
 app.include_router(candidates_router, prefix="/api/v1")
 app.include_router(roles_router, prefix="/api/v1")
 app.include_router(scoring_router, prefix="/api/v1")
+app.include_router(workable_router, prefix="/api/v1")
 
 
 @app.on_event("startup")

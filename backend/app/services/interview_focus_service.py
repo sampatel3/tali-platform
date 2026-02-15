@@ -32,7 +32,6 @@ Return valid JSON with EXACTLY this structure (no markdown):
 Rules:
 - Provide exactly 3 distinct questions.
 - Focus on practical verification of experience, scope, ownership, and seniority fit.
-- Include at least one question that validates seniority or compensation alignment using scope/impact evidence.
 - Keep each list concise (2-3 items).
 - Avoid illegal or discriminatory questions.
 - Do not include any prose outside JSON.
@@ -62,14 +61,14 @@ _DEFAULT_QUESTIONS = [
         ],
     },
     {
-        "question": "How do you set your compensation expectations for roles like this, and what outcomes justify that level?",
+        "question": "How would you ramp up in the first 60 days for this role?",
         "what_to_listen_for": [
-            "Compensation reasoning tied to scope, ownership, and measurable impact",
-            "Realistic understanding of role level and market context",
+            "Prioritized plan tied to role outcomes",
+            "Practical communication and stakeholder alignment",
         ],
         "concerning_signals": [
-            "Compensation anchored only to title or tenure",
-            "No evidence of outcomes that match stated level",
+            "Generic onboarding response not tied to the role",
+            "No concrete milestones or success indicators",
         ],
     },
 ]

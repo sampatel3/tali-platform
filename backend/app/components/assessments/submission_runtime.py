@@ -85,16 +85,46 @@ def submit_assessment_impl(
         assessment.git_evidence = evidence
         assessment.final_repo_state = evidence.get("head_sha")
         if evidence.get("status_porcelain"):
-            sandbox.run_code(
-                "import subprocess,pathlib\n"
+            branch_name = (getattr(assessment, "assessment_branch", None) or "").strip()
+            push_target = f"HEAD:{branch_name}" if branch_name else "HEAD"
+            push_result = sandbox.run_code(
+                "import json,subprocess,pathlib\n"
                 f"repo=pathlib.Path({repo_root!r})\n"
-                "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True)\n"
-                "subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','submit: candidate'],cwd=repo,check=False,capture_output=True)\n"
-                "subprocess.run(['git','push','origin','HEAD'],cwd=repo,check=False,capture_output=True)\n"
+                "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True,text=True)\n"
+                "commit=subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','submit: candidate'],cwd=repo,check=False,capture_output=True,text=True)\n"
+                f"push=subprocess.run(['git','push','origin',{push_target!r}],cwd=repo,check=False,capture_output=True,text=True)\n"
+                "payload={\n"
+                " 'commit_returncode': commit.returncode,\n"
+                " 'commit_stderr': (commit.stderr or '')[-500:],\n"
+                " 'push_returncode': push.returncode,\n"
+                " 'push_stderr': (push.stderr or '')[-500:],\n"
+                "}\n"
+                "print(json.dumps(payload))\n"
             )
+            push_payload: Dict[str, Any] = {}
+            try:
+                out = (push_result.get("stdout") or "").strip().splitlines()
+                if out:
+                    push_payload = json.loads(out[-1])
+            except Exception:
+                push_payload = {}
+
+            push_rc = int(push_payload.get("push_returncode", 0) or 0)
+            if push_rc != 0:
+                evidence["push_returncode"] = push_rc
+                evidence["push_stderr"] = push_payload.get("push_stderr", "")
+                assessment.git_evidence = evidence
+                if not bool(getattr(settings_obj, "GITHUB_MOCK_MODE", True)):
+                    raise HTTPException(status_code=500, detail="Failed to push candidate branch updates")
+
             evidence = collect_git_evidence_fn(sandbox, repo_root)
+            evidence["push_returncode"] = push_payload.get("push_returncode", 0)
+            if push_payload.get("push_stderr"):
+                evidence["push_stderr"] = push_payload.get("push_stderr", "")
             assessment.git_evidence = evidence
             assessment.final_repo_state = evidence.get("head_sha")
+    except HTTPException:
+        raise
     except Exception:
         import logging as _logging
 

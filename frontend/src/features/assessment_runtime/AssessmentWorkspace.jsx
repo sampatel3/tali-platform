@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight, FileText, Folder } from 'lucide-react';
 
 import CodeEditor from '../../components/assessment/CodeEditor';
 import ClaudeChat from '../../components/assessment/ClaudeChat';
+import { AssessmentTerminal } from './AssessmentTerminal';
 
 export const AssessmentWorkspace = ({
   hasRepoStructure,
@@ -23,6 +24,15 @@ export const AssessmentWorkspace = ({
   isTimerPaused,
   onSendClaudeMessage,
   onPasteDetected,
+  aiMode,
+  showTerminal,
+  terminalConnected,
+  terminalStatusText,
+  terminalEvents,
+  onTerminalInput,
+  onTerminalResize,
+  onTerminalStop,
+  terminalStopping,
   claudeBudget,
   isClaudeBudgetExhausted,
   output,
@@ -100,13 +110,26 @@ export const AssessmentWorkspace = ({
 
     <div className="w-[35%] flex flex-col">
       <div className="h-[60%] border-b-2 border-black">
-        <ClaudeChat
-          onSendMessage={onSendClaudeMessage}
-          onPaste={onPasteDetected}
-          budget={claudeBudget}
-          disabled={isTimerPaused || isClaudeBudgetExhausted}
-          disabledReason={isTimerPaused ? 'timer_paused' : (isClaudeBudgetExhausted ? 'budget_exhausted' : null)}
-        />
+        {showTerminal ? (
+          <AssessmentTerminal
+            events={terminalEvents}
+            connected={terminalConnected}
+            statusText={terminalStatusText}
+            disabled={isTimerPaused}
+            onInput={onTerminalInput}
+            onResize={onTerminalResize}
+            onStop={onTerminalStop}
+            stopping={terminalStopping}
+          />
+        ) : (
+          <ClaudeChat
+            onSendMessage={onSendClaudeMessage}
+            onPaste={onPasteDetected}
+            budget={claudeBudget}
+            disabled={isTimerPaused || isClaudeBudgetExhausted}
+            disabledReason={isTimerPaused ? 'timer_paused' : (isClaudeBudgetExhausted ? 'budget_exhausted' : null)}
+          />
+        )}
       </div>
 
       <div className="h-[40%] bg-black text-white p-4 font-mono text-sm overflow-y-auto">

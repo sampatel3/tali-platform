@@ -1,4 +1,6 @@
 from tests.conftest import verify_user
+from app.models.organization import Organization
+from app.models.user import User
 
 def _register_and_login(client):
     client.post("/api/v1/auth/register", json={
@@ -106,6 +108,88 @@ def test_candidate_can_resume_in_progress_assessment(client, monkeypatch):
     second_body = second.json()
     assert second_body["assessment_id"] == a["id"]
     assert second_body["time_remaining"] >= 0
+
+
+def test_start_assessment_consumes_credit_once(client, db, monkeypatch):
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _create_assessment(client, headers, task["id"])
+
+    owner = db.query(User).filter(User.email == "ops@example.com").first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.credits_balance = 2
+    db.commit()
+
+    import app.domains.assessments_runtime.routes as assessments_api
+    import app.components.assessments.service as assessments_svc
+
+    class FakeSandbox:
+        def __init__(self, sid):
+            self.sandbox_id = sid
+
+    class FakeE2BService:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def create_sandbox(self):
+            return FakeSandbox("credit-sandbox")
+
+        def connect_sandbox(self, sandbox_id):
+            return FakeSandbox(sandbox_id)
+
+        def get_sandbox_id(self, sandbox):
+            return sandbox.sandbox_id
+
+        def close_sandbox(self, sandbox):
+            return None
+
+    monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+    monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+
+    first = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    assert first.status_code == 200, first.text
+    db.refresh(org)
+    assert org.credits_balance == 1
+
+    second = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    assert second.status_code == 200, second.text
+    db.refresh(org)
+    assert org.credits_balance == 1
+
+
+def test_start_assessment_requires_credit_when_lemon_enabled(client, db, monkeypatch):
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _create_assessment(client, headers, task["id"])
+
+    owner = db.query(User).filter(User.email == "ops@example.com").first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.credits_balance = 0
+    db.commit()
+
+    import app.domains.assessments_runtime.routes as assessments_api
+    import app.components.assessments.service as assessments_svc
+
+    class FakeE2BService:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def create_sandbox(self):
+            raise AssertionError("Should not create sandbox without credits")
+
+    monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+    monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+
+    resp = client.post(f"/api/v1/assessments/token/{a['token']}/start")
+    assert resp.status_code == 402
 
 
 def test_timeline_telemetry_records_execute_and_prompt_events(client, monkeypatch):

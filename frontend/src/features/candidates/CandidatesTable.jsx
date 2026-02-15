@@ -90,7 +90,10 @@ export const CandidatesTable = ({
             <th className="px-4 py-3">Name</th>
             <th className="px-4 py-3">Email</th>
             <th className="px-4 py-3">Position</th>
+            <th className="px-4 py-3">Rank</th>
+            <th className="px-4 py-3">Workable</th>
             <th className="px-4 py-3">CV match</th>
+            <th className="px-4 py-3">Source</th>
             <th className="px-4 py-3">Status</th>
             <th className="px-4 py-3">Last activity</th>
             <th className="px-4 py-3">Actions</th>
@@ -110,6 +113,16 @@ export const CandidatesTable = ({
                   <td className="px-4 py-3 text-sm text-gray-700">{app.candidate_email}</td>
                   <td className="px-4 py-3 text-sm text-gray-700">{app.candidate_position || '—'}</td>
                   <td className="px-4 py-3 text-sm text-gray-700">
+                    {typeof app.rank_score === 'number'
+                      ? `${app.rank_score.toFixed(1)}/10`
+                      : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-700">
+                    {typeof app.workable_score === 'number'
+                      ? `${app.workable_score.toFixed(1)}/10`
+                      : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-sm text-gray-700">
                     {typeof app.cv_match_score === 'number'
                       ? `${app.cv_match_score.toFixed(1)}/10`
                       : (
@@ -118,6 +131,7 @@ export const CandidatesTable = ({
                           : '—'
                       )}
                   </td>
+                  <td className="px-4 py-3 text-sm text-gray-700">{app.source || 'manual'}</td>
                   <td className="px-4 py-3">
                     <Badge variant={statusVariant(app.status)}>{app.status || 'applied'}</Badge>
                   </td>
@@ -165,7 +179,7 @@ export const CandidatesTable = ({
 
                 {composerApplicationId === app.id ? (
                   <tr className="bg-[#faf8ff]">
-                    <td colSpan={7} className="px-4 py-3">
+                    <td colSpan={10} className="px-4 py-3">
                       <div className="flex flex-wrap items-center gap-2">
                         <Select
                           value={selectedTask}

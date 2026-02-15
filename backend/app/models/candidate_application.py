@@ -17,6 +17,14 @@ class CandidateApplication(Base):
     role_id = Column(Integer, ForeignKey("roles.id"), index=True, nullable=False)
     status = Column(String, default="applied", nullable=False)
     notes = Column(Text, nullable=True)
+    source = Column(String, default="manual", nullable=False)
+    workable_candidate_id = Column(String, nullable=True, index=True)
+    workable_stage = Column(String, nullable=True)
+    workable_score_raw = Column(Float, nullable=True)
+    workable_score = Column(Float, nullable=True)
+    workable_score_source = Column(String, nullable=True)
+    rank_score = Column(Float, nullable=True)
+    last_synced_at = Column(DateTime(timezone=True), nullable=True)
 
     # Candidate CV scoped to this role application
     cv_file_url = Column(String, nullable=True)

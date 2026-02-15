@@ -4,12 +4,13 @@ import logging
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from sqlalchemy import asc, desc
 from sqlalchemy.orm import Session, joinedload
 
 from ...components.assessments.repository import assessment_to_response, utcnow
-from ...components.notifications.service import send_assessment_invite_sync
 from ...deps import get_current_user
+from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
 from ...models.assessment import Assessment
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
@@ -19,7 +20,6 @@ from ...models.task import Task
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
-from ...platform.request_context import get_request_id
 from ...schemas.role import (
     ApplicationCreate,
     ApplicationCvUploadResponse,
@@ -29,6 +29,10 @@ from ...schemas.role import (
 )
 from ...services.document_service import process_document_upload
 from ...services.fit_matching_service import calculate_cv_job_match_sync
+from ...services.assessment_repository_service import (
+    AssessmentRepositoryError,
+    AssessmentRepositoryService,
+)
 from .role_support import (
     application_to_response,
     get_application,
@@ -38,6 +42,10 @@ from .role_support import (
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
+
+
+def _refresh_rank_score(app: CandidateApplication) -> None:
+    app.rank_score = app.workable_score if app.workable_score is not None else app.cv_match_score
 
 
 def _compute_cv_match_for_application(app: CandidateApplication, *, reset_if_unavailable: bool) -> bool:
@@ -69,6 +77,7 @@ def _compute_cv_match_for_application(app: CandidateApplication, *, reset_if_una
     app.cv_match_score = result.get("cv_job_match_score")
     app.cv_match_details = result.get("match_details", {})
     app.cv_match_scored_at = datetime.now(timezone.utc)
+    _refresh_rank_score(app)
     return True
 
 
@@ -133,31 +142,54 @@ def create_application(
 @router.get("/roles/{role_id}/applications")
 def list_role_applications(
     role_id: int,
+    sort_by: str = Query(default="created_at", pattern="^(rank_score|workable_score|cv_match_score|created_at)$"),
+    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    min_rank_score: float | None = Query(default=None),
+    min_workable_score: float | None = Query(default=None),
+    min_cv_match_score: float | None = Query(default=None),
+    source: str | None = Query(default=None, pattern="^(manual|workable)$"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     get_role(role_id, current_user.organization_id, db)
-    apps = (
+    query = (
         db.query(CandidateApplication)
         .options(joinedload(CandidateApplication.candidate), joinedload(CandidateApplication.role))
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
             CandidateApplication.role_id == role_id,
         )
-        .order_by(CandidateApplication.created_at.desc())
-        .all()
     )
+    if source:
+        query = query.filter(CandidateApplication.source == source)
+    if min_rank_score is not None:
+        query = query.filter(CandidateApplication.rank_score >= min_rank_score)
+    if min_workable_score is not None:
+        query = query.filter(CandidateApplication.workable_score >= min_workable_score)
+    if min_cv_match_score is not None:
+        query = query.filter(CandidateApplication.cv_match_score >= min_cv_match_score)
+
+    sort_map = {
+        "created_at": CandidateApplication.created_at,
+        "rank_score": CandidateApplication.rank_score,
+        "workable_score": CandidateApplication.workable_score,
+        "cv_match_score": CandidateApplication.cv_match_score,
+    }
+    sort_column = sort_map.get(sort_by, CandidateApplication.created_at)
+    sort_fn = asc if sort_order == "asc" else desc
+    apps = query.order_by(sort_fn(sort_column), CandidateApplication.created_at.desc()).all()
 
     updated = False
     for app in apps:
-        if app.cv_match_score is not None:
-            continue
-        if not app.cv_text:
-            continue
         try:
-            updated = _compute_cv_match_for_application(app, reset_if_unavailable=False) or updated
+            if app.cv_match_score is None and app.cv_text:
+                updated = _compute_cv_match_for_application(app, reset_if_unavailable=False) or updated
+            old_rank = app.rank_score
+            _refresh_rank_score(app)
+            if app.rank_score != old_rank:
+                updated = True
         except Exception:
-            logger.exception("Failed to backfill cv_match_score for application_id=%s", app.id)
+            logger.exception("Failed to update scoring fields for application_id=%s", app.id)
     if updated:
         try:
             db.commit()
@@ -225,6 +257,7 @@ def upload_application_cv(
         app.cv_match_score = None
         app.cv_match_details = {"error": "Failed to compute CV match score"}
         app.cv_match_scored_at = None
+    _refresh_rank_score(app)
     try:
         db.commit()
     except Exception:
@@ -275,9 +308,30 @@ def create_assessment_for_application(
         token=token,
         duration_minutes=data.duration_minutes,
         expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
+        workable_candidate_id=app.workable_candidate_id,
+        workable_job_id=role.workable_job_id,
     )
     db.add(assessment)
     try:
+        db.flush()
+
+        try:
+            repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
+            branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
+            assessment.assessment_repo_url = branch_ctx.repo_url
+            assessment.assessment_branch = branch_ctx.branch_name
+            assessment.clone_command = branch_ctx.clone_command
+        except AssessmentRepositoryError:
+            logger.exception(
+                "Assessment repository provisioning failed for assessment_id=%s; continuing without branch metadata",
+                assessment.id,
+            )
+        except Exception:
+            logger.exception(
+                "Unexpected repository provisioning failure for assessment_id=%s; continuing without branch metadata",
+                assessment.id,
+            )
+
         db.commit()
         db.refresh(assessment)
     except Exception:
@@ -292,31 +346,23 @@ def create_assessment_for_application(
     )
 
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    org_name = org.name if org else "Your recruiter"
     candidate_email = app.candidate.email if app.candidate else None
     if not candidate_email:
         raise HTTPException(status_code=400, detail="Application has no candidate email")
     candidate_name = app.candidate.full_name or app.candidate.email
 
-    if settings.MVP_DISABLE_CELERY:
-        send_assessment_invite_sync(
+    if org:
+        dispatch_assessment_invite(
+            assessment=assessment,
+            org=org,
             candidate_email=candidate_email,
             candidate_name=candidate_name,
-            token=token,
-            assessment_id=assessment.id,
-            org_name=org_name,
             position=task.name or "Technical assessment",
         )
-    else:
-        from ...tasks.assessment_tasks import send_assessment_email
-
-        send_assessment_email.delay(
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            token=token,
-            org_name=org_name,
-            position=task.name or "Technical assessment",
-            assessment_id=assessment.id,
-            request_id=get_request_id(),
-        )
+        try:
+            db.commit()
+            db.refresh(assessment)
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to persist invite metadata for assessment_id=%s", assessment.id)
     return assessment_to_response(assessment, db)

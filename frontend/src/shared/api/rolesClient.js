@@ -16,7 +16,7 @@ export const roles = {
   listTasks: (roleId) => api.get(`/roles/${roleId}/tasks`),
   addTask: (roleId, taskId) => api.post(`/roles/${roleId}/tasks`, { task_id: taskId }),
   removeTask: (roleId, taskId) => api.delete(`/roles/${roleId}/tasks/${taskId}`),
-  listApplications: (roleId) => api.get(`/roles/${roleId}/applications`),
+  listApplications: (roleId, params = {}) => api.get(`/roles/${roleId}/applications`, { params }),
   createApplication: (roleId, data) => api.post(`/roles/${roleId}/applications`, data),
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),
   uploadApplicationCv: (applicationId, file) => {

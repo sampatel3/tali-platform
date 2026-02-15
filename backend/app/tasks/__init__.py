@@ -4,6 +4,7 @@ from .assessment_tasks import (
     send_results_email,
     post_results_to_workable,
     cleanup_expired_assessments,
+    sync_workable_orgs,
 )
 
 __all__ = [
@@ -12,4 +13,5 @@ __all__ = [
     "send_results_email",
     "post_results_to_workable",
     "cleanup_expired_assessments",
+    "sync_workable_orgs",
 ]

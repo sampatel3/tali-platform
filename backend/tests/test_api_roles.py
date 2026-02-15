@@ -4,6 +4,7 @@ import io
 
 from app.domains.assessments_runtime import applications_routes
 from app.domains.assessments_runtime import roles_management_routes
+from app.models.candidate_application import CandidateApplication
 from tests.conftest import auth_headers, create_task_via_api
 
 
@@ -357,3 +358,50 @@ def test_job_spec_upload_returns_interview_focus_error_when_api_key_missing(clie
     assert payload["interview_focus_generated"] is False
     assert payload["interview_focus"] is None
     assert "not configured" in (payload["interview_focus_error"] or "").lower()
+
+
+def test_list_role_applications_supports_score_sort_and_source_filter(client, db):
+    headers, _ = auth_headers(client)
+    role = client.post("/api/v1/roles", json={"name": "Rank role"}, headers=headers).json()
+    spec = {"file": ("job-spec.txt", io.BytesIO(b"Role requirements"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec, headers=headers).status_code == 200
+
+    app_manual = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "manual-rank@example.com", "candidate_name": "Manual Rank"},
+        headers=headers,
+    ).json()
+    app_workable = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "workable-rank@example.com", "candidate_name": "Workable Rank"},
+        headers=headers,
+    ).json()
+
+    row_manual = db.query(CandidateApplication).filter(CandidateApplication.id == app_manual["id"]).first()
+    row_workable = db.query(CandidateApplication).filter(CandidateApplication.id == app_workable["id"]).first()
+    row_manual.source = "manual"
+    row_manual.cv_match_score = 6.2
+    row_manual.rank_score = 6.2
+    row_workable.source = "workable"
+    row_workable.workable_score = 8.7
+    row_workable.rank_score = 8.7
+    db.commit()
+
+    ranked = client.get(
+        f"/api/v1/roles/{role['id']}/applications?sort_by=rank_score&sort_order=desc",
+        headers=headers,
+    )
+    assert ranked.status_code == 200, ranked.text
+    data = ranked.json()
+    assert len(data) == 2
+    assert data[0]["rank_score"] >= data[1]["rank_score"]
+    assert data[0]["source"] == "workable"
+
+    workable_only = client.get(
+        f"/api/v1/roles/{role['id']}/applications?source=workable&min_workable_score=8",
+        headers=headers,
+    )
+    assert workable_only.status_code == 200, workable_only.text
+    filtered = workable_only.json()
+    assert len(filtered) == 1
+    assert filtered[0]["source"] == "workable"

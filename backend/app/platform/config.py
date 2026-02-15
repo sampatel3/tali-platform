@@ -8,6 +8,7 @@ from .brand import brand_email_from
 @dataclass(frozen=True)
 class MvpFeatureFlags:
     disable_stripe: bool
+    disable_lemon: bool
     disable_workable: bool
     disable_celery: bool
     disable_claude_scoring: bool
@@ -30,6 +31,7 @@ class Settings(BaseSettings):
 
     # E2B
     E2B_API_KEY: str = ""
+    E2B_TEMPLATE: Optional[str] = None
 
     # Claude / Anthropic
     ANTHROPIC_API_KEY: str = ""
@@ -39,6 +41,13 @@ class Settings(BaseSettings):
     CLAUDE_MODEL_NON_PROD: str = "claude-3-5-haiku-latest"
     CLAUDE_MODEL_PRODUCTION: str = "claude-3-5-sonnet-20241022"
     MAX_TOKENS_PER_RESPONSE: int = 1024
+    # Terminal-native Claude Code runtime
+    ASSESSMENT_TERMINAL_ENABLED: bool = False
+    ASSESSMENT_TERMINAL_DEFAULT_MODE: str = "legacy_chat"  # "legacy_chat" | "claude_cli_terminal"
+    CLAUDE_CLI_PERMISSION_MODE_DEFAULT: str = "default"
+    CLAUDE_CLI_COMMAND: str = "claude"
+    # Allow global API key fallback when org-specific key is not configured.
+    ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK: bool = True
 
     # Cost model defaults (all overridable via environment)
     CLAUDE_INPUT_COST_PER_MILLION_USD: float = 0.25
@@ -77,6 +86,19 @@ class Settings(BaseSettings):
     # Stripe
     STRIPE_API_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
+
+    # Lemon Squeezy
+    LEMON_API_KEY: str = ""
+    LEMON_STORE_ID: str = ""
+    LEMON_WEBHOOK_SECRET: str = ""
+    LEMON_TEST_MODE: bool = False
+    # JSON object keyed by UI pack id:
+    # {"starter_5":{"variant_id":"12345","credits":5,"label":"Starter (5 credits)"}, ...}
+    LEMON_PACKS_JSON: str = (
+        '{"starter_5":{"variant_id":"0","credits":5,"label":"Starter (5 credits)"},'
+        '"growth_15":{"variant_id":"0","credits":15,"label":"Growth (15 credits)"},'
+        '"scale_50":{"variant_id":"0","credits":50,"label":"Scale (50 credits)"}}'
+    )
 
     # Resend
     RESEND_API_KEY: str = ""
@@ -121,6 +143,7 @@ class Settings(BaseSettings):
 
     # MVP feature flags (default to MVP-safe behavior)
     MVP_DISABLE_STRIPE: bool = True
+    MVP_DISABLE_LEMON: bool = True
     MVP_DISABLE_WORKABLE: bool = True
     MVP_DISABLE_CELERY: bool = True
     MVP_DISABLE_CLAUDE_SCORING: bool = True
@@ -132,6 +155,7 @@ class Settings(BaseSettings):
     def mvp_flags(self) -> MvpFeatureFlags:
         return MvpFeatureFlags(
             disable_stripe=self.MVP_DISABLE_STRIPE,
+            disable_lemon=self.MVP_DISABLE_LEMON,
             disable_workable=self.MVP_DISABLE_WORKABLE,
             disable_celery=self.MVP_DISABLE_CELERY,
             disable_claude_scoring=self.MVP_DISABLE_CLAUDE_SCORING,

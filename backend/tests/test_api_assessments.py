@@ -1,6 +1,7 @@
 """API tests for assessment endpoints (/api/v1/assessments/)."""
 
 import uuid
+from types import SimpleNamespace
 
 from app.domains.assessments_runtime import candidate_runtime_routes as candidate_runtime_module
 from app.models.assessment import Assessment
@@ -29,6 +30,39 @@ def test_create_assessment_success(client):
     data = resp.json()
     assert "id" in data
     assert data["task_id"] == task["id"]
+
+
+def test_create_assessment_creates_branch_on_assignment(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers, task_id="prod_branch_task").json()
+    captured = {}
+
+    class StubRepoService:
+        def __init__(self, github_org=None, github_token=None):
+            captured["github_org"] = github_org
+
+        def create_assessment_branch(self, task_obj, assessment_id):
+            captured["task_key"] = task_obj.task_key
+            captured["assessment_id"] = assessment_id
+            return SimpleNamespace(
+                repo_url="https://github.com/taali-assessments/prod_branch_task.git",
+                branch_name=f"assessment/{assessment_id}",
+                clone_command=f"git clone --branch assessment/{assessment_id} https://github.com/taali-assessments/prod_branch_task.git",
+            )
+
+    monkeypatch.setattr(
+        "app.domains.assessments_runtime.recruiter_management_routes.AssessmentRepositoryService",
+        StubRepoService,
+    )
+
+    resp = create_assessment_via_api(client, headers, task["id"])
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["assessment_branch"] == f"assessment/{body['id']}"
+    assert body["assessment_repo_url"] == "https://github.com/taali-assessments/prod_branch_task.git"
+    assert "git clone --branch" in body["clone_command"]
+    assert captured["task_key"] == "prod_branch_task"
+    assert captured["assessment_id"] == body["id"]
 
 
 def test_create_assessment_generates_unique_token(client):

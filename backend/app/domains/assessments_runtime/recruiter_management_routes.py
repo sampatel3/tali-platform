@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import secrets
 from datetime import timedelta
 from typing import Optional
@@ -9,9 +10,9 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 
 from ...components.assessments.repository import assessment_to_response, utcnow
-from ...components.notifications.service import send_assessment_invite_sync
 from ...deps import get_current_user
 from ...domains.integrations_notifications.adapters import build_workable_adapter
+from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
 from ...models.assessment import Assessment
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
@@ -21,10 +22,14 @@ from ...models.task import Task
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
-from ...platform.request_context import get_request_id
 from ...schemas.assessment import AssessmentCreate, AssessmentResponse
+from ...services.assessment_repository_service import (
+    AssessmentRepositoryError,
+    AssessmentRepositoryService,
+)
 
 router = APIRouter()
+logger = logging.getLogger("taali.assessments")
 
 
 @router.post("/", response_model=AssessmentResponse, status_code=status.HTTP_201_CREATED)
@@ -39,6 +44,7 @@ def create_assessment(
 
     candidate = None
     application = None
+    resolved_role = None
     resolved_role_id = data.role_id
     candidate_email = None
     candidate_name = None
@@ -80,6 +86,7 @@ def create_assessment(
                 raise HTTPException(status_code=404, detail="Role not found")
             if not any(t.id == task.id for t in (role.tasks or [])):
                 raise HTTPException(status_code=400, detail="Task is not linked to the selected role")
+            resolved_role = role
             candidate_email = candidate.email
             candidate_name = candidate.full_name or candidate.email
         else:
@@ -111,6 +118,7 @@ def create_assessment(
                     raise HTTPException(status_code=404, detail="Role not found")
                 if not any(t.id == task.id for t in (role.tasks or [])):
                     raise HTTPException(status_code=400, detail="Task is not linked to the selected role")
+                resolved_role = role
             candidate_email = candidate.email
             candidate_name = candidate.full_name or candidate.email
 
@@ -124,8 +132,31 @@ def create_assessment(
             token=token,
             duration_minutes=data.duration_minutes,
             expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
+            workable_candidate_id=(
+                application.workable_candidate_id if application else getattr(candidate, "workable_candidate_id", None)
+            ),
+            workable_job_id=(resolved_role.workable_job_id if resolved_role else None),
         )
         db.add(assessment)
+        db.flush()
+
+        try:
+            repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
+            branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
+            assessment.assessment_repo_url = branch_ctx.repo_url
+            assessment.assessment_branch = branch_ctx.branch_name
+            assessment.clone_command = branch_ctx.clone_command
+        except AssessmentRepositoryError:
+            logger.exception(
+                "Assessment repository provisioning failed for assessment_id=%s; continuing without branch metadata",
+                assessment.id,
+            )
+        except Exception:
+            logger.exception(
+                "Unexpected repository provisioning failure for assessment_id=%s; continuing without branch metadata",
+                assessment.id,
+            )
+
         db.commit()
         db.refresh(assessment)
     except HTTPException:
@@ -133,9 +164,7 @@ def create_assessment(
         raise
     except Exception:
         db.rollback()
-        import logging as _logging
-
-        _logging.getLogger("taali.assessments").exception("Failed to create assessment")
+        logger.exception("Failed to create assessment")
         raise HTTPException(status_code=500, detail="Failed to create assessment")
 
     assessment = (
@@ -151,28 +180,19 @@ def create_assessment(
     )
 
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    org_name = org.name if org else "Your recruiter"
-    if settings.MVP_DISABLE_CELERY:
-        send_assessment_invite_sync(
+    if org:
+        dispatch_assessment_invite(
+            assessment=assessment,
+            org=org,
             candidate_email=candidate_email,
             candidate_name=candidate_name,
-            token=token,
-            assessment_id=assessment.id,
-            org_name=org_name,
             position=task.name or "Technical assessment",
         )
-    else:
-        from ...tasks.assessment_tasks import send_assessment_email
-
-        send_assessment_email.delay(
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            token=token,
-            org_name=org_name,
-            position=task.name or "Technical assessment",
-            assessment_id=assessment.id,
-            request_id=get_request_id(),
-        )
+        try:
+            db.commit()
+            db.refresh(assessment)
+        except Exception:
+            db.rollback()
     return assessment_to_response(assessment, db)
 
 
@@ -288,28 +308,15 @@ def resend_assessment_invite(
         raise HTTPException(status_code=400, detail="Assessment has no candidate")
 
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    org_name = org.name if org else "Your recruiter"
-    if settings.MVP_DISABLE_CELERY:
-        send_assessment_invite_sync(
+    if org:
+        dispatch_assessment_invite(
+            assessment=assessment,
+            org=org,
             candidate_email=assessment.candidate.email,
             candidate_name=assessment.candidate.full_name or assessment.candidate.email,
-            token=assessment.token,
-            assessment_id=assessment.id,
-            org_name=org_name,
             position=(assessment.task.name if assessment.task else "Technical assessment"),
         )
-    else:
-        from ...tasks.assessment_tasks import send_assessment_email
-
-        send_assessment_email.delay(
-            candidate_email=assessment.candidate.email,
-            candidate_name=assessment.candidate.full_name or assessment.candidate.email,
-            token=assessment.token,
-            org_name=org_name,
-            position=(assessment.task.name if assessment.task else "Technical assessment"),
-            assessment_id=assessment.id,
-            request_id=get_request_id(),
-        )
+        db.commit()
     return {"success": True}
 
 

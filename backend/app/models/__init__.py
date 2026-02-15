@@ -6,6 +6,7 @@ from .candidate_application import CandidateApplication
 from .role import Role, role_tasks
 from .task import Task
 from .session import AssessmentSession
+from .billing_credit_ledger import BillingCreditLedger
 
 __all__ = [
     "User",
@@ -18,4 +19,5 @@ __all__ = [
     "role_tasks",
     "Task",
     "AssessmentSession",
+    "BillingCreditLedger",
 ]

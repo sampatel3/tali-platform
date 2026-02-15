@@ -6,9 +6,11 @@ assessment code and test suites via the E2B platform.
 """
 
 import logging
+import os
 import re
 
 from e2b_code_interpreter import Sandbox  # v1.x
+from e2b.sandbox.commands.command_handle import PtySize
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +18,7 @@ logger = logging.getLogger(__name__)
 class E2BService:
     """Service for executing code in E2B sandboxed environments."""
 
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str, template: str | None = None):
         """
         Initialise the E2B service.
 
@@ -24,6 +26,7 @@ class E2BService:
             api_key: E2B platform API key.
         """
         self.api_key = api_key
+        self.template = template or os.getenv("E2B_TEMPLATE")
 
     def get_sandbox_id(self, sandbox: Sandbox) -> str:
         """
@@ -47,7 +50,10 @@ class E2BService:
         """
         try:
             logger.info("Creating new E2B sandbox")
-            sandbox = Sandbox(api_key=self.api_key)
+            if self.template:
+                sandbox = Sandbox(api_key=self.api_key, template=self.template)
+            else:
+                sandbox = Sandbox(api_key=self.api_key)
             logger.info("E2B sandbox created successfully (id=%s)", self.get_sandbox_id(sandbox))
             return sandbox
         except Exception as e:
@@ -135,6 +141,75 @@ class E2BService:
                 "error": str(e),
                 "results": [],
             }
+
+    def create_pty(
+        self,
+        sandbox: Sandbox,
+        *,
+        rows: int = 30,
+        cols: int = 120,
+        cwd: str | None = None,
+        envs: dict[str, str] | None = None,
+    ):
+        """
+        Create an interactive PTY session in the sandbox.
+        """
+        return sandbox.pty.create(
+            size=PtySize(rows=rows, cols=cols),
+            cwd=cwd,
+            envs=envs,
+            timeout=0,
+        )
+
+    def connect_process(self, sandbox: Sandbox, pid: int):
+        """
+        Connect to an existing running process/PTY by PID.
+        """
+        return sandbox.commands.connect(pid=pid, timeout=0)
+
+    def send_pty_input(self, sandbox: Sandbox, pid: int, data: str | bytes) -> None:
+        """
+        Send input bytes to an active PTY session.
+        """
+        payload = data.encode("utf-8") if isinstance(data, str) else data
+        sandbox.pty.send_stdin(pid=pid, data=payload)
+
+    def resize_pty(self, sandbox: Sandbox, pid: int, *, rows: int, cols: int) -> None:
+        """
+        Resize an active PTY session.
+        """
+        sandbox.pty.resize(pid=pid, size=PtySize(rows=rows, cols=cols))
+
+    def kill_process(self, sandbox: Sandbox, pid: int) -> bool:
+        """
+        Kill a running process/PTY by PID.
+        """
+        try:
+            return bool(sandbox.pty.kill(pid=pid))
+        except Exception:
+            try:
+                return bool(sandbox.commands.kill(pid=pid))
+            except Exception:
+                return False
+
+    def run_command(
+        self,
+        sandbox: Sandbox,
+        command: str,
+        *,
+        cwd: str | None = None,
+        envs: dict[str, str] | None = None,
+        timeout: float = 30,
+    ):
+        """
+        Run a shell command in the sandbox and wait for completion.
+        """
+        return sandbox.commands.run(
+            command,
+            cwd=cwd,
+            envs=envs,
+            timeout=timeout,
+        )
 
     def run_tests(self, sandbox: Sandbox, test_code: str) -> dict:
         """

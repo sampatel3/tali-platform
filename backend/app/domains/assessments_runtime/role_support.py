@@ -68,6 +68,13 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
         cv_match_score=app.cv_match_score,
         cv_match_details=app.cv_match_details,
         cv_match_scored_at=app.cv_match_scored_at,
+        source=app.source,
+        workable_candidate_id=app.workable_candidate_id,
+        workable_stage=app.workable_stage,
+        workable_score_raw=app.workable_score_raw,
+        workable_score=app.workable_score,
+        workable_score_source=app.workable_score_source,
+        rank_score=app.rank_score,
         created_at=app.created_at,
         updated_at=app.updated_at,
     )

@@ -1,11 +1,15 @@
 """API tests for organization, billing, analytics, and team endpoints."""
 
+import hashlib
+import hmac
+import json
 import uuid
 from datetime import datetime, timezone
 
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.organization import Organization
 from app.models.user import User
+from app.domains.billing_webhooks import billing_routes, webhook_routes
 from tests.conftest import auth_headers, register_user, verify_user
 
 
@@ -140,6 +144,70 @@ def test_billing_costs_success(client, db):
 def test_billing_costs_no_auth_401(client):
     resp = client.get('/api/v1/billing/costs')
     assert resp.status_code == 401
+
+
+def test_billing_credits_success(client):
+    headers, _ = auth_headers(client)
+    resp = client.get("/api/v1/billing/credits", headers=headers)
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert "credits_balance" in payload
+    assert "entries" in payload
+    assert isinstance(payload["entries"], list)
+
+
+def test_lemon_webhook_idempotent_crediting(client, db, monkeypatch):
+    headers, email = auth_headers(client, email="lemon-owner@example.com", organization_name="Lemon Org")
+    owner = db.query(User).filter(User.email == email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+
+    monkeypatch.setattr(webhook_routes.settings, "MVP_DISABLE_LEMON", False)
+    monkeypatch.setattr(webhook_routes.settings, "LEMON_WEBHOOK_SECRET", "test-lemon-secret")
+
+    payload = {
+        "meta": {"event_name": "order_created"},
+        "data": {
+            "id": "order_123",
+            "attributes": {
+                "status": "paid",
+                "custom_data": {
+                    "org_id": str(org.id),
+                    "credits": 7,
+                    "pack_id": "starter_5",
+                },
+            },
+        },
+    }
+    raw = json.dumps(payload).encode("utf-8")
+    signature = hmac.new(b"test-lemon-secret", raw, hashlib.sha256).hexdigest()
+
+    first = client.post("/api/v1/webhooks/lemon", data=raw, headers={"X-Signature": signature, "Content-Type": "application/json"})
+    assert first.status_code == 200, first.text
+    assert first.json()["credited"] is True
+
+    second = client.post("/api/v1/webhooks/lemon", data=raw, headers={"X-Signature": signature, "Content-Type": "application/json"})
+    assert second.status_code == 200, second.text
+    assert second.json()["credited"] is False
+
+    db.refresh(org)
+    assert org.credits_balance == 7
+
+
+def test_checkout_session_accepts_pack_id(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    monkeypatch.setattr(billing_routes.settings, "MVP_DISABLE_LEMON", True)
+    resp = client.post(
+        "/api/v1/billing/checkout-session",
+        json={
+            "success_url": "https://example.com/success",
+            "cancel_url": "https://example.com/cancel",
+            "pack_id": "starter_5",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 503
 
 
 # ---------------------------------------------------------------------------

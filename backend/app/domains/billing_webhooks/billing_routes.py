@@ -1,4 +1,4 @@
-"""Billing: usage history, cost observability, and Stripe checkout for assessments."""
+"""Billing: usage history, cost observability, and Lemon credit checkout."""
 from datetime import datetime, timedelta, timezone
 import json
 
@@ -6,12 +6,15 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 
+from ...components.integrations.lemon.service import LemonService
 from ...platform.database import get_db
 from ...deps import get_current_user
 from ...platform.config import settings
+from ...models.billing_credit_ledger import BillingCreditLedger
 from ...models.user import User
 from ...models.organization import Organization
 from ...models.assessment import Assessment, AssessmentStatus
+from ...services.credit_ledger_service import lemon_pack_catalog, resolve_pack
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
 
@@ -19,6 +22,7 @@ router = APIRouter(prefix="/billing", tags=["Billing"])
 class CheckoutSessionCreate(BaseModel):
     success_url: str
     cancel_url: str
+    pack_id: str = "starter_5"
 
 
 def _safe_json_size_bytes(payload) -> int:
@@ -93,6 +97,19 @@ def _compute_assessment_cost_usd(assessment: Assessment) -> dict:
         "input_tokens": input_tokens,
         "output_tokens": output_tokens,
         "estimated_storage_bytes": stored_bytes,
+    }
+
+
+def _serialize_ledger_entry(entry: BillingCreditLedger) -> dict:
+    return {
+        "id": entry.id,
+        "delta": entry.delta,
+        "balance_after": entry.balance_after,
+        "reason": entry.reason,
+        "external_ref": entry.external_ref,
+        "assessment_id": entry.assessment_id,
+        "metadata": entry.entry_metadata or {},
+        "created_at": entry.created_at.isoformat() if entry.created_at else None,
     }
 
 
@@ -227,58 +244,66 @@ def get_costs(
     }
 
 
+@router.get("/credits")
+def get_credits(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    entries = (
+        db.query(BillingCreditLedger)
+        .filter(BillingCreditLedger.organization_id == org.id)
+        .order_by(BillingCreditLedger.created_at.desc(), BillingCreditLedger.id.desc())
+        .limit(50)
+        .all()
+    )
+    return {
+        "billing_provider": org.billing_provider or "lemon",
+        "credits_balance": int(org.credits_balance or 0),
+        "packs": lemon_pack_catalog(),
+        "entries": [_serialize_ledger_entry(entry) for entry in entries],
+    }
+
+
 @router.post("/checkout-session")
 def create_checkout_session(
     body: CheckoutSessionCreate,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Create a Stripe Checkout Session for one assessment in configured currency."""
-    if settings.MVP_DISABLE_STRIPE:
+    """Create a Lemon checkout session URL for a selected credit pack."""
+    if settings.MVP_DISABLE_LEMON:
         raise HTTPException(status_code=503, detail="Billing is disabled for MVP pilot")
-    import stripe
-    if not settings.STRIPE_API_KEY or not settings.STRIPE_API_KEY.startswith("sk_"):
-        raise HTTPException(status_code=503, detail="Stripe is not configured")
-    stripe.api_key = settings.STRIPE_API_KEY
-
+    if not settings.LEMON_API_KEY or not settings.LEMON_STORE_ID:
+        raise HTTPException(status_code=503, detail="Lemon billing is not configured")
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
-
-    customer_id = org.stripe_customer_id
-    if not customer_id:
-        customer = stripe.Customer.create(
-            email=current_user.email,
-            name=current_user.full_name or current_user.email,
-            metadata={"org_id": str(org.id), "platform": "taali"},
-        )
-        customer_id = customer.id
-        org.stripe_customer_id = customer_id
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-            raise HTTPException(status_code=500, detail="Failed to store Stripe customer")
+    pack = resolve_pack(body.pack_id)
+    if not pack:
+        raise HTTPException(status_code=400, detail="Invalid pack_id")
 
     try:
-        session = stripe.checkout.Session.create(
-            customer=customer_id,
-            payment_method_types=["card"],
-            line_items=[{
-                "price_data": {
-                    "currency": (settings.ASSESSMENT_PRICE_CURRENCY or "aed").lower(),
-                    "product_data": {"name": "TAALI Assessment", "description": "One technical assessment"},
-                    "unit_amount": int(settings.ASSESSMENT_PRICE_MINOR or 2500),
-                },
-                "quantity": 1,
-            }],
-            mode="payment",
+        lemon = LemonService(api_key=settings.LEMON_API_KEY, store_id=settings.LEMON_STORE_ID)
+        checkout_url = lemon.create_checkout(
+            variant_id=str(pack["variant_id"]),
             success_url=body.success_url,
             cancel_url=body.cancel_url,
-            metadata={"org_id": str(org.id), "type": "assessment"},
+            email=current_user.email,
+            test_mode=bool(settings.LEMON_TEST_MODE),
+            custom={
+                "org_id": str(org.id),
+                "pack_id": body.pack_id,
+                "credits": int(pack["credits"]),
+                "source": "taali",
+            },
         )
-        return {"url": session.url}
+        org.billing_provider = "lemon"
+        db.commit()
+        return {"url": checkout_url}
     except Exception:
         import logging as _logging
-        _logging.getLogger("taali.billing").exception("Stripe checkout session error")
+        _logging.getLogger("taali.billing").exception("Lemon checkout session error")
         raise HTTPException(status_code=502, detail="Payment service error. Please try again.")

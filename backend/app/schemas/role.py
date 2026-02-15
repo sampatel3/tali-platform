@@ -77,6 +77,13 @@ class ApplicationResponse(BaseModel):
     cv_match_score: Optional[float] = None
     cv_match_details: Optional[dict] = None
     cv_match_scored_at: Optional[datetime] = None
+    source: Optional[str] = "manual"
+    workable_candidate_id: Optional[str] = None
+    workable_stage: Optional[str] = None
+    workable_score_raw: Optional[float] = None
+    workable_score: Optional[float] = None
+    workable_score_source: Optional[str] = None
+    rank_score: Optional[float] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

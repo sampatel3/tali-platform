@@ -24,7 +24,7 @@ vi.mock('../shared/api', () => ({
     postToWorkable: vi.fn(),
     updateManualEvaluation: vi.fn(),
   },
-  billing: { usage: vi.fn() },
+  billing: { usage: vi.fn(), costs: vi.fn(), credits: vi.fn(), createCheckoutSession: vi.fn() },
   organizations: { get: vi.fn(), update: vi.fn() },
   analytics: { get: vi.fn().mockResolvedValue({ data: {} }) },
   tasks: {

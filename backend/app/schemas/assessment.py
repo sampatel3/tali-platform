@@ -82,6 +82,9 @@ class AssessmentResponse(BaseModel):
     scored_at: Optional[datetime] = None
     posted_to_workable: Optional[bool] = None
     posted_to_workable_at: Optional[datetime] = None
+    invite_channel: Optional[str] = None
+    invite_sent_at: Optional[datetime] = None
+    credit_consumed_at: Optional[datetime] = None
     candidate_cv_filename: Optional[str] = None
     candidate_job_spec_filename: Optional[str] = None
     candidate_cv_uploaded_at: Optional[datetime] = None
@@ -97,6 +100,12 @@ class AssessmentResponse(BaseModel):
     pause_reason: Optional[str] = None
     total_paused_seconds: Optional[int] = None
     completed_due_to_timeout: Optional[bool] = None
+    ai_mode: Optional[str] = None
+    cli_session_pid: Optional[int] = None
+    cli_session_state: Optional[str] = None
+    cli_session_started_at: Optional[datetime] = None
+    cli_session_last_seen_at: Optional[datetime] = None
+    cli_transcript: Optional[List[Dict[str, Any]]] = None
     final_repo_state: Optional[str] = None
     git_evidence: Optional[Dict[str, Any]] = None
     assessment_repo_url: Optional[str] = None
@@ -123,6 +132,9 @@ class AssessmentStart(BaseModel):
     is_timer_paused: bool = False
     pause_reason: Optional[str] = None
     total_paused_seconds: int = 0
+    ai_mode: str = "legacy_chat"
+    terminal_mode: bool = False
+    terminal_capabilities: Dict[str, Any] = Field(default_factory=dict)
 
 
 class CodeExecutionRequest(BaseModel):

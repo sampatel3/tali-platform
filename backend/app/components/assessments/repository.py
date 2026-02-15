@@ -354,6 +354,12 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "pause_reason": getattr(assessment, "pause_reason", None),
         "total_paused_seconds": getattr(assessment, "total_paused_seconds", 0),
         "completed_due_to_timeout": getattr(assessment, "completed_due_to_timeout", False),
+        "ai_mode": getattr(assessment, "ai_mode", "legacy_chat"),
+        "cli_session_pid": getattr(assessment, "cli_session_pid", None),
+        "cli_session_state": getattr(assessment, "cli_session_state", None),
+        "cli_session_started_at": getattr(assessment, "cli_session_started_at", None),
+        "cli_session_last_seen_at": getattr(assessment, "cli_session_last_seen_at", None),
+        "cli_transcript": getattr(assessment, "cli_transcript", None),
         "final_repo_state": getattr(assessment, "final_repo_state", None),
         "git_evidence": getattr(assessment, "git_evidence", None),
         "assessment_repo_url": getattr(assessment, "assessment_repo_url", None),
@@ -361,6 +367,9 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "clone_command": getattr(assessment, "clone_command", None),
         "posted_to_workable": assessment.posted_to_workable,
         "posted_to_workable_at": assessment.posted_to_workable_at,
+        "invite_channel": getattr(assessment, "invite_channel", None),
+        "invite_sent_at": getattr(assessment, "invite_sent_at", None),
+        "credit_consumed_at": getattr(assessment, "credit_consumed_at", None),
         "candidate_cv_filename": (
             assessment.application.cv_filename if getattr(assessment, "application", None) and assessment.application.cv_filename
             else (assessment.candidate.cv_filename if assessment.candidate else None)

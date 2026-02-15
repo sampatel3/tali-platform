@@ -3,7 +3,7 @@ import { AlertTriangle, CheckCircle, CreditCard, Loader2 } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
-import { ASSESSMENT_PRICE_AED, formatAed } from '../../lib/currency';
+import { formatAed } from '../../lib/currency';
 
 export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableButton }) => {
   const { user } = useAuth();
@@ -12,7 +12,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [orgLoading, setOrgLoading] = useState(true);
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingCosts, setBillingCosts] = useState(null);
+  const [billingCredits, setBillingCredits] = useState(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [workableSaving, setWorkableSaving] = useState(false);
+  const [workableSyncLoading, setWorkableSyncLoading] = useState(false);
   const [teamMembers, setTeamMembers] = useState([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
@@ -24,6 +27,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     ssoEnforced: false,
     samlEnabled: false,
     samlMetadataUrl: '',
+  });
+  const [workableForm, setWorkableForm] = useState({
+    workflowMode: 'manual',
+    emailMode: 'manual_taali',
+    syncIntervalMinutes: 30,
+    inviteStageName: 'TAALI Assessment Requested',
   });
 
   useEffect(() => {
@@ -49,10 +58,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     let cancelled = false;
     const fetchUsage = async () => {
       try {
-        const [usageRes, costsRes] = await Promise.all([billingApi.usage(), billingApi.costs()]);
+        const [usageRes, costsRes, creditsRes] = await Promise.all([billingApi.usage(), billingApi.costs(), billingApi.credits()]);
         if (!cancelled) {
           setBillingUsage(usageRes.data);
           setBillingCosts(costsRes.data);
+          setBillingCredits(creditsRes.data);
         }
       } catch (err) {
         console.warn('Failed to fetch billing usage:', err.message);
@@ -89,27 +99,76 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   useEffect(() => {
     if (!orgData) return;
     const domains = Array.isArray(orgData.allowed_email_domains) ? orgData.allowed_email_domains.join(', ') : '';
+    const cfg = orgData.workable_config || {};
     setEnterpriseForm({
       allowedEmailDomains: domains,
       ssoEnforced: Boolean(orgData.sso_enforced),
       samlEnabled: Boolean(orgData.saml_enabled),
       samlMetadataUrl: orgData.saml_metadata_url || '',
     });
+    setWorkableForm({
+      workflowMode: cfg.workflow_mode || 'manual',
+      emailMode: cfg.email_mode || 'manual_taali',
+      syncIntervalMinutes: Number(cfg.sync_interval_minutes || 30),
+      inviteStageName: cfg.invite_stage_name || 'TAALI Assessment Requested',
+    });
   }, [orgData]);
 
-  const handleAddCredits = async () => {
+  const handleAddCredits = async (packId) => {
     const base = `${window.location.origin}/settings`;
     setCheckoutLoading(true);
     try {
       const res = await billingApi.createCheckoutSession({
         success_url: `${base}?payment=success`,
         cancel_url: base,
+        pack_id: packId,
       });
       if (res.data?.url) window.location.href = res.data.url;
       else setCheckoutLoading(false);
     } catch (err) {
       console.warn('Checkout failed:', err?.response?.data?.detail || err.message);
       setCheckoutLoading(false);
+    }
+  };
+
+  const handleSyncWorkableNow = async () => {
+    setWorkableSyncLoading(true);
+    try {
+      const res = await orgsApi.syncWorkable({ full_resync: false });
+      setOrgData((prev) => ({
+        ...(prev || {}),
+        workable_last_sync_at: res.data?.workable_last_sync_at || new Date().toISOString(),
+        workable_last_sync_status: res.data?.workable_last_sync_status || 'success',
+        workable_last_sync_summary: res.data?.summary || {},
+      }));
+      alert('Workable sync completed.');
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Workable sync failed');
+    } finally {
+      setWorkableSyncLoading(false);
+    }
+  };
+
+  const handleSaveWorkable = async () => {
+    setWorkableSaving(true);
+    try {
+      const res = await orgsApi.update({
+        workable_config: {
+          workflow_mode: workableForm.workflowMode,
+          email_mode: workableForm.emailMode,
+          sync_model: 'scheduled_pull_only',
+          sync_scope: 'open_jobs_active_candidates',
+          score_precedence: 'workable_first',
+          sync_interval_minutes: Number(workableForm.syncIntervalMinutes || 30),
+          invite_stage_name: workableForm.inviteStageName || 'TAALI Assessment Requested',
+        },
+      });
+      setOrgData(res.data);
+      alert('Workable workflow settings saved.');
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to save Workable settings');
+    } finally {
+      setWorkableSaving(false);
     }
   };
 
@@ -157,8 +216,17 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const connectedSince = orgData?.workable_connected_at
     ? new Date(orgData.workable_connected_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })
     : '—';
+  const lastSyncAt = orgData?.workable_last_sync_at
+    ? new Date(orgData.workable_last_sync_at).toLocaleString()
+    : 'Never';
+  const lastSyncStatus = orgData?.workable_last_sync_status || 'not_started';
   const billingPlan = orgData?.plan || 'Pay-Per-Use';
-  const costPerAssessment = ASSESSMENT_PRICE_AED;
+  const creditsBalance = Number(billingCredits?.credits_balance ?? orgData?.credits_balance ?? 0);
+  const packCatalog = billingCredits?.packs || {
+    starter_5: { label: 'Starter (5 credits)', credits: 5 },
+    growth_15: { label: 'Growth (15 credits)', credits: 15 },
+    scale_50: { label: 'Scale (50 credits)', credits: 50 },
+  };
   const usageHistory = billingUsage?.usage ?? [];
   const monthlyAssessments = usageHistory.length;
   const monthlyCost = Number(billingUsage?.total_cost ?? 0);
@@ -238,20 +306,75 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <div className="font-mono text-xs text-gray-500 mb-1">Connected Since</div>
                     <div className="font-mono">{workableConnected ? connectedSince : '—'}</div>
                   </div>
+                  <div>
+                    <div className="font-mono text-xs text-gray-500 mb-1">Last Sync</div>
+                    <div className="font-mono">{lastSyncAt} ({lastSyncStatus})</div>
+                  </div>
                   <hr className="border-black" />
                   <div>
-                    <div className="font-bold mb-3">Workflow Automation</div>
-                    <div className="space-y-3">
-                      {[
-                        'Auto-send assessments when candidate reaches "Technical Screen" stage',
-                        'Sync assessment results back to Workable candidate profile',
-                        'Auto-advance candidates scoring 8+ to next stage',
-                      ].map((item, i) => (
-                        <label key={i} className="flex items-start gap-3 cursor-pointer">
-                          <input type="checkbox" defaultChecked={workableConnected} className="mt-1 w-4 h-4 accent-purple-600" />
-                          <span className="font-mono text-sm">{item}</span>
-                        </label>
-                      ))}
+                    <div className="font-bold mb-3">Workflow Settings</div>
+                    <div className="grid md:grid-cols-2 gap-3">
+                      <label className="block">
+                        <span className="font-mono text-xs text-gray-500 mb-1 block">Workflow mode</span>
+                        <select
+                          className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                          value={workableForm.workflowMode}
+                          onChange={(e) => setWorkableForm((prev) => ({ ...prev, workflowMode: e.target.value }))}
+                        >
+                          <option value="manual">Manual</option>
+                          <option value="workable_hybrid">Workable hybrid</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="font-mono text-xs text-gray-500 mb-1 block">Email mode</span>
+                        <select
+                          className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                          value={workableForm.emailMode}
+                          onChange={(e) => setWorkableForm((prev) => ({ ...prev, emailMode: e.target.value }))}
+                        >
+                          <option value="manual_taali">Manual via TAALI</option>
+                          <option value="workable_preferred_fallback_manual">Hybrid with fallback</option>
+                        </select>
+                      </label>
+                      <label className="block">
+                        <span className="font-mono text-xs text-gray-500 mb-1 block">Sync interval (minutes)</span>
+                        <input
+                          type="number"
+                          min={5}
+                          max={1440}
+                          className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                          value={workableForm.syncIntervalMinutes}
+                          onChange={(e) => setWorkableForm((prev) => ({ ...prev, syncIntervalMinutes: e.target.value }))}
+                        />
+                      </label>
+                      <label className="block">
+                        <span className="font-mono text-xs text-gray-500 mb-1 block">Invite stage name</span>
+                        <input
+                          type="text"
+                          className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                          value={workableForm.inviteStageName}
+                          onChange={(e) => setWorkableForm((prev) => ({ ...prev, inviteStageName: e.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <div className="mt-4 flex flex-wrap gap-3">
+                      <button
+                        type="button"
+                        disabled={workableSaving}
+                        className="border-2 border-black px-4 py-2 font-mono text-sm font-bold text-white"
+                        style={{ backgroundColor: '#9D00FF' }}
+                        onClick={handleSaveWorkable}
+                      >
+                        {workableSaving ? 'Saving…' : 'Save Workable Settings'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={workableSyncLoading || !workableConnected}
+                        className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
+                        onClick={handleSyncWorkableNow}
+                      >
+                        {workableSyncLoading ? 'Syncing…' : 'Sync Now'}
+                      </button>
                     </div>
                   </div>
                 </div>
@@ -265,22 +388,34 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <div>
                       <div className="font-mono text-xs text-gray-500 mb-1">Current Plan</div>
                       <div className="text-2xl font-bold">{billingPlan}</div>
-                      <div className="font-mono text-sm text-gray-600 mt-1">{formatAed(costPerAssessment)} per assessment</div>
+                      <div className="font-mono text-sm text-gray-600 mt-1">Billing provider: Lemon</div>
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-xs text-gray-500 mb-1">Total usage</div>
                       <div className="text-3xl font-bold" style={{ color: '#9D00FF' }}>{formatAed(monthlyCost)}</div>
                       <div className="font-mono text-xs text-gray-500">{monthlyAssessments} assessments</div>
                     </div>
-                    <button
-                      type="button"
-                      onClick={handleAddCredits}
-                      disabled={checkoutLoading}
-                      className="flex items-center gap-2 px-6 py-3 font-mono text-sm font-bold border-2 border-black bg-black text-white hover:bg-gray-800 disabled:opacity-60 disabled:cursor-not-allowed"
-                    >
-                      {checkoutLoading ? <Loader2 size={18} className="animate-spin" /> : <CreditCard size={18} />}
-                      {checkoutLoading ? 'Redirecting…' : `Add credits (${formatAed(costPerAssessment)})`}
-                    </button>
+                    <div className="text-right">
+                      <div className="font-mono text-xs text-gray-500 mb-1">Credits balance</div>
+                      <div className="text-3xl font-bold" style={{ color: '#9D00FF' }}>{creditsBalance}</div>
+                    </div>
+                  </div>
+                  <div className="mt-5 grid md:grid-cols-3 gap-3">
+                    {Object.entries(packCatalog).map(([packId, pack]) => (
+                      <button
+                        key={packId}
+                        type="button"
+                        onClick={() => handleAddCredits(packId)}
+                        disabled={checkoutLoading}
+                        className="flex items-center justify-between gap-2 px-4 py-3 font-mono text-sm font-bold border-2 border-black bg-black text-white hover:bg-gray-800 disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        <span>{pack.label || packId}</span>
+                        <span className="inline-flex items-center gap-1">
+                          {checkoutLoading ? <Loader2 size={14} className="animate-spin" /> : <CreditCard size={14} />}
+                          +{pack.credits || 0}
+                        </span>
+                      </button>
+                    ))}
                   </div>
                 </div>
 
@@ -327,7 +462,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                             <td className="px-6 py-3 font-mono text-sm">{row.date}</td>
                             <td className="px-6 py-3 text-sm">{row.candidate}</td>
                             <td className="px-6 py-3 font-mono text-sm">{row.task}</td>
-                            <td className="px-6 py-3 font-mono text-sm text-right font-bold">{toAedLabel(row.cost, costPerAssessment)}</td>
+                            <td className="px-6 py-3 font-mono text-sm text-right font-bold">{toAedLabel(row.cost)}</td>
                           </tr>
                         ))
                       )}

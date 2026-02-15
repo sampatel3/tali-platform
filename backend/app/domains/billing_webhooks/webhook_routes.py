@@ -1,24 +1,39 @@
 # Canonical webhook routes for integrations and billing events.
-from fastapi import APIRouter, Request, HTTPException, Depends
-from sqlalchemy.orm import Session
-import hmac
+from __future__ import annotations
+
 import hashlib
+import hmac
+from typing import Any
+
 import stripe
-from ...platform.database import get_db
-from ...platform.config import settings
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
+
+from ...components.integrations.lemon.service import LemonService
 from ...models.organization import Organization
-from ...models.candidate import Candidate
-from ...models.assessment import Assessment
-from ...models.task import Task
-import secrets
-from datetime import datetime, timedelta, timezone
+from ...platform.config import settings
+from ...platform.database import get_db
+from ...services.credit_ledger_service import (
+    append_credit_ledger_entry,
+    resolve_pack,
+    resolve_pack_by_variant,
+)
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
 
+def _nested_get(payload: dict[str, Any], *path: str) -> Any:
+    current: Any = payload
+    for key in path:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
 @router.post("/workable")
 async def workable_webhook(request: Request, db: Session = Depends(get_db)):
-    """Handle incoming Workable webhooks."""
+    """Handle incoming Workable webhooks (signature verification + receipt ack)."""
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     if not settings.WORKABLE_WEBHOOK_SECRET:
@@ -31,55 +46,108 @@ async def workable_webhook(request: Request, db: Session = Depends(get_db)):
         body,
         hashlib.sha256,
     ).hexdigest()
-
     if not hmac.compare_digest(signature, expected):
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
+    payload = await request.json()
+    return {"status": "received", "event_type": payload.get("type")}
 
-    data = await request.json()
-    event_type = data.get("type")
 
-    if event_type == "candidate_stage_changed":
-        subdomain = data.get("account", {}).get("subdomain")
-        org = db.query(Organization).filter(Organization.workable_subdomain == subdomain).first()
-        if org and org.workable_config and org.workable_config.get("auto_send_on_stage"):
-            target_stage = org.workable_config.get("auto_send_stage")
-            if data.get("stage") == target_stage:
-                candidate_payload = data.get("candidate") or {}
-                email = candidate_payload.get("email")
-                name = candidate_payload.get("name") or candidate_payload.get("firstname")
-                if email:
-                    candidate = db.query(Candidate).filter(
-                        Candidate.organization_id == org.id,
-                        Candidate.email == email,
-                    ).first()
-                    if not candidate:
-                        candidate = Candidate(
-                            organization_id=org.id,
-                            email=email,
-                            full_name=name or email,
-                            workable_candidate_id=str(candidate_payload.get("id") or ""),
-                            workable_data=candidate_payload,
-                        )
-                        db.add(candidate)
-                        db.flush()
-                    task = db.query(Task).filter(
-                        Task.organization_id == org.id,
-                        Task.is_active == True,  # noqa: E712
-                    ).first()
-                    if task:
-                        assessment = Assessment(
-                            organization_id=org.id,
-                            candidate_id=candidate.id,
-                            task_id=task.id,
-                            token=secrets.token_urlsafe(32),
-                            duration_minutes=task.duration_minutes or 30,
-                            expires_at=datetime.now(timezone.utc) + timedelta(days=7),
-                            workable_candidate_id=str(candidate_payload.get("id") or ""),
-                        )
-                        db.add(assessment)
-                        db.commit()
+@router.post("/lemon")
+async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
+    """Handle incoming Lemon Squeezy webhooks and credit org balances."""
+    if settings.MVP_DISABLE_LEMON:
+        raise HTTPException(status_code=503, detail="Lemon integration is disabled for MVP")
+    if not settings.LEMON_WEBHOOK_SECRET:
+        raise HTTPException(status_code=503, detail="Lemon webhook secret is not configured")
 
-    return {"status": "received"}
+    payload_raw = await request.body()
+    signature = request.headers.get("X-Signature", "")
+    if not LemonService.verify_signature(payload=payload_raw, signature=signature, secret=settings.LEMON_WEBHOOK_SECRET):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature")
+
+    payload = await request.json()
+    event_name = _nested_get(payload, "meta", "event_name") or payload.get("event_name")
+    data = payload.get("data") or {}
+    attributes = data.get("attributes") or {}
+
+    # Process payment-complete style events only.
+    status = str(attributes.get("status") or "").lower()
+    if event_name not in {"order_created", "order_paid"} and status not in {"paid"}:
+        return {"status": "ignored", "event_name": event_name}
+
+    custom = (
+        attributes.get("custom_data")
+        or _nested_get(attributes, "checkout_data", "custom")
+        or _nested_get(payload, "meta", "custom_data")
+        or {}
+    )
+    org_id_raw = custom.get("org_id")
+    if not org_id_raw:
+        # Fallback: infer from first order item custom payloads if present.
+        first_item = _nested_get(attributes, "first_order_item") or {}
+        org_id_raw = (
+            _nested_get(first_item, "custom_data", "org_id")
+            or _nested_get(first_item, "checkout_data", "custom", "org_id")
+        )
+    if not org_id_raw:
+        raise HTTPException(status_code=400, detail="org_id missing in webhook payload")
+
+    try:
+        org_id = int(org_id_raw)
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail="Invalid org_id in webhook payload") from exc
+
+    org = db.query(Organization).filter(Organization.id == org_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    pack_id = custom.get("pack_id")
+    credits_raw = custom.get("credits")
+    credits: int | None = None
+    if credits_raw is not None:
+        try:
+            credits = int(credits_raw)
+        except Exception:
+            credits = None
+    if credits is None and pack_id:
+        pack = resolve_pack(str(pack_id))
+        if pack:
+            credits = int(pack["credits"])
+    if credits is None:
+        variant_id = (
+            _nested_get(attributes, "first_order_item", "variant_id")
+            or _nested_get(data, "relationships", "variant", "data", "id")
+        )
+        if variant_id:
+            resolved = resolve_pack_by_variant(str(variant_id))
+            if resolved:
+                pack_id, pack = resolved
+                credits = int(pack["credits"])
+    if not credits or credits <= 0:
+        raise HTTPException(status_code=400, detail="Unable to resolve credits for webhook event")
+
+    order_ref = str(data.get("id") or _nested_get(payload, "meta", "event_id") or "")
+    if not order_ref:
+        order_ref = str(_nested_get(attributes, "identifier") or "")
+    if not order_ref:
+        raise HTTPException(status_code=400, detail="Unable to resolve webhook order reference")
+    external_ref = f"lemon:order:{order_ref}"
+
+    _, created = append_credit_ledger_entry(
+        db,
+        organization=org,
+        delta=credits,
+        reason="lemon_purchase",
+        external_ref=external_ref,
+        metadata={
+            "event_name": event_name,
+            "pack_id": pack_id,
+            "credits": credits,
+        },
+    )
+    if created:
+        db.commit()
+    return {"status": "received", "credited": bool(created), "credits": credits}
 
 
 @router.post("/stripe")
@@ -109,8 +177,6 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
             if org:
                 org.assessments_used = max((org.assessments_used or 0) - 1, 0)
                 db.commit()
-    elif event_type == "payment_intent.payment_failed":
-        pass
     elif event_type == "customer.subscription.deleted":
         customer_id = data.get("customer")
         if customer_id:

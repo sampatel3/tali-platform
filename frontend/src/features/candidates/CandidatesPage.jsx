@@ -27,6 +27,12 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [roleApplications, setRoleApplications] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState('rank_score');
+  const [sortOrder, setSortOrder] = useState('desc');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [minRankScore, setMinRankScore] = useState('');
+  const [minWorkableScore, setMinWorkableScore] = useState('');
+  const [minCvMatchScore, setMinCvMatchScore] = useState('');
 
   const [loadingRoles, setLoadingRoles] = useState(true);
   const [loadingRoleContext, setLoadingRoleContext] = useState(false);
@@ -86,9 +92,17 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     setLoadingRoleContext(true);
     setRoleContextError('');
     try {
+      const appParams = {
+        sort_by: sortBy,
+        sort_order: sortOrder,
+      };
+      if (sourceFilter !== 'all') appParams.source = sourceFilter;
+      if (minRankScore !== '') appParams.min_rank_score = Number(minRankScore);
+      if (minWorkableScore !== '') appParams.min_workable_score = Number(minWorkableScore);
+      if (minCvMatchScore !== '') appParams.min_cv_match_score = Number(minCvMatchScore);
       const [tasksRes, applicationsRes] = await Promise.all([
         rolesApi?.listTasks ? rolesApi.listTasks(roleId) : Promise.resolve({ data: [] }),
-        rolesApi?.listApplications ? rolesApi.listApplications(roleId) : Promise.resolve({ data: [] }),
+        rolesApi?.listApplications ? rolesApi.listApplications(roleId, appParams) : Promise.resolve({ data: [] }),
       ]);
       setRoleTasks(tasksRes.data || []);
       setRoleApplications(applicationsRes.data || []);
@@ -99,7 +113,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     } finally {
       setLoadingRoleContext(false);
     }
-  }, [rolesApi]);
+  }, [rolesApi, sortBy, sortOrder, sourceFilter, minRankScore, minWorkableScore, minCvMatchScore]);
 
   const loadTasks = useCallback(async () => {
     if (!tasksApi?.list) {
@@ -327,6 +341,80 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder="Search by name, email, position, or status"
+              />
+            </label>
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-6">
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                Sort by
+              </span>
+              <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+                <option value="rank_score">Rank score</option>
+                <option value="workable_score">Workable score</option>
+                <option value="cv_match_score">CV match score</option>
+                <option value="created_at">Created at</option>
+              </Select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                Order
+              </span>
+              <Select aria-label="Sort order" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
+                <option value="desc">Descending</option>
+                <option value="asc">Ascending</option>
+              </Select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                Source
+              </span>
+              <Select aria-label="Source filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+                <option value="all">All</option>
+                <option value="manual">Manual</option>
+                <option value="workable">Workable</option>
+              </Select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                Min rank
+              </span>
+              <input
+                type="number"
+                min="0"
+                max="10"
+                step="0.1"
+                value={minRankScore}
+                onChange={(event) => setMinRankScore(event.target.value)}
+                className="w-full border border-[var(--taali-border-muted)] rounded-lg px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                Min Workable
+              </span>
+              <input
+                type="number"
+                min="0"
+                max="10"
+                step="0.1"
+                value={minWorkableScore}
+                onChange={(event) => setMinWorkableScore(event.target.value)}
+                className="w-full border border-[var(--taali-border-muted)] rounded-lg px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="block">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                Min CV
+              </span>
+              <input
+                type="number"
+                min="0"
+                max="10"
+                step="0.1"
+                value={minCvMatchScore}
+                onChange={(event) => setMinCvMatchScore(event.target.value)}
+                className="w-full border border-[var(--taali-border-muted)] rounded-lg px-3 py-2 text-sm"
               />
             </label>
           </div>

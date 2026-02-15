@@ -51,6 +51,11 @@ export default function AssessmentPage({
   const [demoSaveCount, setDemoSaveCount] = useState(0);
   const [demoPromptMessages, setDemoPromptMessages] = useState([]);
   const [demoSummary, setDemoSummary] = useState(null);
+  const [terminalEvents, setTerminalEvents] = useState([]);
+  const [terminalConnected, setTerminalConnected] = useState(false);
+  const [terminalStatusText, setTerminalStatusText] = useState('Initializing terminal...');
+  const [terminalStopping, setTerminalStopping] = useState(false);
+  const [terminalFallbackChat, setTerminalFallbackChat] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState({
     contextWindow: false,
     taskContext: false,
@@ -61,6 +66,10 @@ export default function AssessmentPage({
   const [collapsedRepoDirs, setCollapsedRepoDirs] = useState({});
   const codeRef = useRef("");
   const timerRef = useRef(null);
+  const terminalWsRef = useRef(null);
+  const terminalReconnectTimerRef = useRef(null);
+  const terminalEventSeqRef = useRef(0);
+  const terminalManualCloseRef = useRef(false);
 
   useEffect(() => {
     setSubmitted(false);
@@ -68,6 +77,11 @@ export default function AssessmentPage({
     setDemoSaveCount(0);
     setDemoPromptMessages([]);
     setDemoSummary(null);
+    setTerminalEvents([]);
+    setTerminalConnected(false);
+    setTerminalStatusText('Initializing terminal...');
+    setTerminalStopping(false);
+    setTerminalFallbackChat(false);
 
     if (startData) {
       const normalized = normalizeStartData(startData);
@@ -217,6 +231,9 @@ export default function AssessmentPage({
   )?.content;
   const repoFileTree = buildRepoFileTree(repoFiles);
   const hasRepoStructure = repoFiles.length > 0;
+  const aiMode = assessment?.ai_mode || (assessment?.terminal_mode ? 'claude_cli_terminal' : 'legacy_chat');
+  const terminalCapabilities = assessment?.terminal_capabilities || {};
+  const showTerminal = aiMode === 'claude_cli_terminal' && !terminalFallbackChat;
 
   const toggleSection = useCallback((sectionKey) => {
     setCollapsedSections((prev) => ({
@@ -255,6 +272,189 @@ export default function AssessmentPage({
     setEditorContent(value ?? "");
     codeRef.current = value ?? "";
   }, []);
+
+  const appendTerminalEvent = useCallback((event) => {
+    terminalEventSeqRef.current += 1;
+    setTerminalEvents((prev) => [
+      ...prev,
+      { id: terminalEventSeqRef.current, ...event },
+    ]);
+  }, []);
+
+  const sendTerminalPayload = useCallback((payload) => {
+    const ws = terminalWsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    try {
+      ws.send(JSON.stringify(payload));
+      return true;
+    } catch {
+      return false;
+    }
+  }, []);
+
+  const handleTerminalInput = useCallback((data) => {
+    sendTerminalPayload({ type: 'input', data });
+  }, [sendTerminalPayload]);
+
+  const handleTerminalResize = useCallback((rows, cols) => {
+    sendTerminalPayload({ type: 'resize', rows, cols });
+  }, [sendTerminalPayload]);
+
+  const handleTerminalStop = useCallback(async () => {
+    const id = assessment?.id || assessmentId;
+    if (!id || terminalStopping) return;
+    setTerminalStopping(true);
+    try {
+      await assessments.terminalStop(id, assessmentTokenForApi);
+      sendTerminalPayload({ type: 'stop' });
+      setTerminalStatusText('Terminal stopped.');
+    } catch (err) {
+      const detail = err?.response?.data?.detail || err?.message || 'Failed to stop terminal.';
+      appendTerminalEvent({ type: 'error', message: String(detail) });
+      setTerminalStatusText(String(detail));
+    } finally {
+      setTerminalStopping(false);
+    }
+  }, [assessment, assessmentId, assessmentTokenForApi, terminalStopping, appendTerminalEvent, sendTerminalPayload]);
+
+  useEffect(() => {
+    if (!showTerminal || demoMode || loading || submitted || isTimerPaused) return undefined;
+    const id = assessment?.id || assessmentId;
+    if (!id || !assessmentTokenForApi) return undefined;
+
+    let disposed = false;
+    let reconnectAttempts = 0;
+    let heartbeatInterval = null;
+    terminalManualCloseRef.current = false;
+
+    const scheduleReconnect = () => {
+      if (disposed || terminalManualCloseRef.current || submitted) return;
+      reconnectAttempts += 1;
+      const waitMs = Math.min(1000 * (2 ** reconnectAttempts), 8000);
+      setTerminalStatusText(`Disconnected. Reconnecting in ${Math.round(waitMs / 1000)}s...`);
+      terminalReconnectTimerRef.current = setTimeout(() => {
+        connect();
+      }, waitMs);
+    };
+
+    const clearHeartbeat = () => {
+      if (heartbeatInterval) {
+        clearInterval(heartbeatInterval);
+        heartbeatInterval = null;
+      }
+    };
+
+    const connect = () => {
+      if (disposed) return;
+      const wsUrl = assessments.terminalWsUrl(id, assessmentTokenForApi);
+      setTerminalStatusText('Connecting Claude Code terminal...');
+      const ws = new WebSocket(wsUrl);
+      terminalWsRef.current = ws;
+
+      ws.onopen = () => {
+        if (disposed) return;
+        reconnectAttempts = 0;
+        setTerminalConnected(true);
+        setTerminalStatusText('Connected to Claude Code CLI terminal.');
+        ws.send(JSON.stringify({ type: 'init' }));
+        clearHeartbeat();
+        heartbeatInterval = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: 'heartbeat' }));
+          }
+        }, 15000);
+      };
+
+      ws.onmessage = (event) => {
+        if (disposed) return;
+        let payload = null;
+        try {
+          payload = JSON.parse(event.data);
+        } catch {
+          return;
+        }
+        if (!payload || typeof payload !== 'object') return;
+
+        if (payload.type === 'ready') {
+          setTerminalStatusText(`Terminal ready (PID ${payload.pid}).`);
+          appendTerminalEvent({ type: 'status', message: `Terminal ready (PID ${payload.pid}).` });
+          return;
+        }
+
+        if (payload.type === 'status') {
+          const message = payload.message || `Terminal state: ${payload.state || 'running'}`;
+          setTerminalStatusText(String(message));
+          appendTerminalEvent({ type: 'status', message: String(message) });
+          return;
+        }
+
+        if (payload.type === 'output') {
+          appendTerminalEvent({
+            type: 'output',
+            data: String(payload.data || ''),
+            stream: payload.stream || 'pty',
+          });
+          return;
+        }
+
+        if (payload.type === 'error') {
+          const message = String(payload.message || 'Terminal error');
+          setTerminalStatusText(message);
+          appendTerminalEvent({ type: 'error', message });
+          if (payload.fallback_chat) {
+            setTerminalFallbackChat(true);
+          }
+          return;
+        }
+
+        if (payload.type === 'exit') {
+          const message = 'Terminal exited.';
+          setTerminalStatusText(message);
+          appendTerminalEvent({ type: 'exit', message });
+        }
+      };
+
+      ws.onerror = () => {
+        if (disposed) return;
+        setTerminalStatusText('Terminal connection error.');
+      };
+
+      ws.onclose = () => {
+        if (disposed) return;
+        setTerminalConnected(false);
+        clearHeartbeat();
+        scheduleReconnect();
+      };
+    };
+
+    connect();
+
+    return () => {
+      disposed = true;
+      clearHeartbeat();
+      clearTimeout(terminalReconnectTimerRef.current);
+      terminalReconnectTimerRef.current = null;
+      terminalManualCloseRef.current = true;
+      if (terminalWsRef.current) {
+        try {
+          terminalWsRef.current.close();
+        } catch {
+          // noop
+        }
+      }
+      terminalWsRef.current = null;
+    };
+  }, [
+    showTerminal,
+    demoMode,
+    loading,
+    submitted,
+    isTimerPaused,
+    assessment,
+    assessmentId,
+    assessmentTokenForApi,
+    appendTerminalEvent,
+  ]);
 
   const handleExecute = useCallback(
     async (code) => {
@@ -327,6 +527,7 @@ export default function AssessmentPage({
         assessmentTokenForApi,
         {
           code_context: codeRef.current,
+          selected_file_path: selectedRepoPath,
           paste_detected: wasPasted,
           browser_focused: proctoringEnabled ? browserFocused : true,
           time_since_last_prompt_ms: timeSinceLastMs,
@@ -350,6 +551,9 @@ export default function AssessmentPage({
       if (payload.requires_budget_top_up) {
         setOutput(payload.response || payload.message || "Claude budget limit reached for this task.");
       }
+      if (payload.requires_terminal) {
+        setTerminalFallbackChat(true);
+      }
       return (
         payload.response || payload.content || payload.message || "No response from Claude."
       );
@@ -364,10 +568,17 @@ export default function AssessmentPage({
       proctoringEnabled,
       isTimerPaused,
       demoMode,
+      selectedRepoPath,
     ],
   );
 
   const handleRetryClaude = useCallback(async () => {
+    if (demoMode) {
+      setIsTimerPaused(false);
+      setPauseReason(null);
+      setPauseMessage("");
+      return;
+    }
     const id = assessment?.id || assessmentId;
     if (!id) return;
     setRetryingClaude(true);
@@ -393,7 +604,7 @@ export default function AssessmentPage({
     } finally {
       setRetryingClaude(false);
     }
-  }, [assessment, assessmentId, assessmentTokenForApi]);
+  }, [assessment, assessmentId, assessmentTokenForApi, demoMode]);
 
   const handleSubmit = useCallback(
     async (autoSubmit = false) => {
@@ -415,6 +626,13 @@ export default function AssessmentPage({
 
       try {
         const id = assessment?.id || assessmentId;
+        if (showTerminal) {
+          try {
+            await assessments.terminalStop(id, assessmentTokenForApi);
+          } catch {
+            // Best effort: submission can continue even if terminal stop fails.
+          }
+        }
         const res = await assessments.submit(id, codeRef.current, assessmentTokenForApi, {
           tab_switch_count: proctoringEnabled ? tabSwitchCount : 0,
         });
@@ -461,6 +679,7 @@ export default function AssessmentPage({
       timeLeft,
       proctoringEnabled,
       assessment?.duration_minutes,
+      showTerminal,
     ],
   );
 
@@ -505,6 +724,8 @@ export default function AssessmentPage({
         brandName={BRAND.name}
         taskName={assessment?.task_name || 'Assessment'}
         claudeBudget={claudeBudget}
+        aiMode={aiMode}
+        terminalCapabilities={terminalCapabilities}
         formatUsd={formatUsd}
         isTimeLow={isTimeLow}
         timeLeft={timeLeft}
@@ -544,6 +765,15 @@ export default function AssessmentPage({
         isTimerPaused={isTimerPaused}
         onSendClaudeMessage={handleClaudeMessage}
         onPasteDetected={() => setPasteDetected(true)}
+        aiMode={aiMode}
+        showTerminal={showTerminal}
+        terminalConnected={terminalConnected}
+        terminalStatusText={terminalStatusText}
+        terminalEvents={terminalEvents}
+        onTerminalInput={handleTerminalInput}
+        onTerminalResize={handleTerminalResize}
+        onTerminalStop={handleTerminalStop}
+        terminalStopping={terminalStopping}
         claudeBudget={claudeBudget}
         isClaudeBudgetExhausted={isClaudeBudgetExhausted}
         output={output}

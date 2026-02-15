@@ -15,15 +15,18 @@ from sqlalchemy.orm import Session
 
 from ...platform.config import settings
 from ...models.assessment import Assessment, AssessmentStatus
+from ...models.organization import Organization
 from ...models.candidate import Candidate
 from ...models.task import Task
 from ...components.integrations.e2b.service import E2BService
 from ...components.integrations.claude.service import ClaudeService
 from ...services.document_service import process_document_upload
 from ...services.assessment_repository_service import AssessmentRepositoryService
+from ...services.credit_ledger_service import append_credit_ledger_entry
 from ...services.task_spec_loader import candidate_rubric_view
 from .claude_budget import build_claude_budget_snapshot
 from .submission_runtime import submit_assessment_impl
+from .terminal_runtime import resolve_ai_mode, terminal_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -71,20 +74,21 @@ def _workspace_repo_root(task: Task) -> str:
 
 
 def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment, task: Task) -> bool:
-    clone_command = getattr(assessment, "clone_command", None)
     repo_url = getattr(assessment, "assessment_repo_url", None)
-    if not clone_command or not repo_url or str(repo_url).startswith("mock://"):
+    branch_name = getattr(assessment, "assessment_branch", None)
+    if not repo_url or not branch_name or str(repo_url).startswith("mock://"):
         return False
 
+    repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
+    clone_url = repo_service.authenticated_repo_url(str(repo_url))
     repo_root = _workspace_repo_root(task)
     result = sandbox.run_code(
-        "import json, pathlib, subprocess, shlex\n"
+        "import json, pathlib, subprocess\n"
         f"repo_root=pathlib.Path({repo_root!r})\n"
         "repo_root.parent.mkdir(parents=True, exist_ok=True)\n"
         "subprocess.run(['rm','-rf',str(repo_root)], check=False, capture_output=True)\n"
-        f"cmd={clone_command!r}\n"
-        "args=shlex.split(cmd)\n"
-        "p=subprocess.run(args + [str(repo_root)], capture_output=True, text=True)\n"
+        f"args=['git','clone','--branch',{branch_name!r},{clone_url!r},str(repo_root)]\n"
+        "p=subprocess.run(args, capture_output=True, text=True)\n"
         "payload={'returncode': p.returncode, 'stderr': p.stderr[-500:]}\n"
         "print(json.dumps(payload))\n"
     )
@@ -174,14 +178,27 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
         assessment.git_evidence = evidence
         assessment.final_repo_state = evidence.get("head_sha")
         if evidence.get("status_porcelain"):
-            sandbox.run_code(
-                "import subprocess,pathlib\n"
+            branch_name = (getattr(assessment, "assessment_branch", None) or "").strip()
+            push_target = f"HEAD:{branch_name}" if branch_name else "HEAD"
+            push_result = sandbox.run_code(
+                "import json,subprocess,pathlib\n"
                 f"repo=pathlib.Path({repo_root!r})\n"
-                "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True)\n"
-                "subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','auto-submit: time expired'],cwd=repo,check=False,capture_output=True)\n"
-                "subprocess.run(['git','push','origin','HEAD'],cwd=repo,check=False,capture_output=True)\n"
+                "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True,text=True)\n"
+                "commit=subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','auto-submit: time expired'],cwd=repo,check=False,capture_output=True,text=True)\n"
+                f"push=subprocess.run(['git','push','origin',{push_target!r}],cwd=repo,check=False,capture_output=True,text=True)\n"
+                "print(json.dumps({'commit_returncode': commit.returncode, 'push_returncode': push.returncode, 'push_stderr': (push.stderr or '')[-500:]}))\n"
             )
+            push_payload: Dict[str, Any] = {}
+            try:
+                out = (push_result.get("stdout") or "").strip().splitlines()
+                if out:
+                    push_payload = json.loads(out[-1])
+            except Exception:
+                push_payload = {}
             evidence = _collect_git_evidence_from_sandbox(sandbox, repo_root)
+            evidence["push_returncode"] = push_payload.get("push_returncode")
+            if push_payload.get("push_stderr"):
+                evidence["push_stderr"] = push_payload.get("push_stderr")
             assessment.git_evidence = evidence
             assessment.final_repo_state = evidence.get("head_sha")
     except Exception:
@@ -321,6 +338,29 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
     sandbox = None
     sandbox_id = None
     was_pending = assessment.status == AssessmentStatus.PENDING
+    if was_pending and not settings.MVP_DISABLE_LEMON:
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == assessment.organization_id)
+            .with_for_update()
+            .first()
+        )
+        if not org:
+            raise HTTPException(status_code=404, detail="Organization not found")
+        if getattr(assessment, "credit_consumed_at", None) is None:
+            available_credits = int(org.credits_balance or 0)
+            if available_credits <= 0:
+                raise HTTPException(status_code=402, detail="Insufficient credits. Purchase credits to start this assessment.")
+            append_credit_ledger_entry(
+                db,
+                organization=org,
+                delta=-1,
+                reason="assessment_started",
+                external_ref=f"assessment_start:{assessment.id}",
+                assessment_id=assessment.id,
+                metadata={"assessment_id": assessment.id, "reason": "assessment_started"},
+            )
+            assessment.credit_consumed_at = utcnow()
     try:
         e2b = E2BService(settings.E2B_API_KEY)
         if assessment.status == AssessmentStatus.IN_PROGRESS and assessment.e2b_session_id:
@@ -340,6 +380,8 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         assessment.status = AssessmentStatus.IN_PROGRESS
         if was_pending or not assessment.started_at:
             assessment.started_at = utcnow()
+        if was_pending or not getattr(assessment, "ai_mode", None):
+            assessment.ai_mode = resolve_ai_mode()
         assessment.e2b_session_id = sandbox_id
         db.commit()
     except Exception:
@@ -366,13 +408,23 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         except Exception:
             db.rollback()
             logger.exception("Failed to create assessment repository branch")
+            if not settings.GITHUB_MOCK_MODE:
+                raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
 
     try:
         cloned = _clone_assessment_branch_into_workspace(sandbox, assessment, task)
         if not cloned:
+            if (
+                not settings.GITHUB_MOCK_MODE
+                and getattr(assessment, "assessment_repo_url", None)
+                and getattr(assessment, "assessment_branch", None)
+            ):
+                raise HTTPException(status_code=500, detail="Failed to clone assessment repository")
             _materialize_task_repository(sandbox, task)
     except Exception:
         logger.exception("Failed to initialize task repository in sandbox")
+        if not settings.GITHUB_MOCK_MODE:
+            raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
 
     resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
 
@@ -405,6 +457,9 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         "is_timer_paused": bool(getattr(assessment, "is_timer_paused", False)),
         "pause_reason": getattr(assessment, "pause_reason", None),
         "total_paused_seconds": int(getattr(assessment, "total_paused_seconds", 0) or 0),
+        "ai_mode": getattr(assessment, "ai_mode", "legacy_chat"),
+        "terminal_mode": getattr(assessment, "ai_mode", "legacy_chat") == "claude_cli_terminal",
+        "terminal_capabilities": terminal_capabilities(),
         "repo_url": getattr(assessment, "assessment_repo_url", None),
         "branch_name": getattr(assessment, "assessment_branch", None),
         "clone_command": getattr(assessment, "clone_command", None),

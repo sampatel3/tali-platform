@@ -4,11 +4,33 @@ from ...platform.database import get_db
 from ...deps import get_current_user
 from ...models.user import User
 from ...models.organization import Organization
-from ...schemas.organization import OrgResponse, OrgUpdate, WorkableConnect
+from ...schemas.organization import (
+    OrgResponse,
+    OrgUpdate,
+    WorkableConfigBase,
+    WorkableConnect,
+)
 from ...platform.config import settings
 from .access_policy import normalize_allowed_domains
 
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
+
+
+def _default_workable_config() -> dict:
+    return WorkableConfigBase().model_dump()
+
+
+def _resolved_workable_config(org: Organization) -> dict:
+    raw = org.workable_config if isinstance(org.workable_config, dict) else {}
+    return WorkableConfigBase(**{**_default_workable_config(), **raw}).model_dump()
+
+
+def _merge_workable_config(org: Organization, incoming: OrgUpdate) -> dict:
+    base = _resolved_workable_config(org)
+    if incoming.workable_config is None:
+        return base
+    updates = incoming.workable_config.model_dump(exclude_none=True)
+    return WorkableConfigBase(**{**base, **updates}).model_dump()
 
 
 @router.get("/me", response_model=OrgResponse)
@@ -22,6 +44,7 @@ def get_my_org(
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
+    org.workable_config = _resolved_workable_config(org)
     return org
 
 
@@ -36,8 +59,7 @@ def update_my_org(
         raise HTTPException(status_code=404, detail="Organization not found")
     if data.name is not None:
         org.name = data.name
-    if data.workable_config is not None:
-        org.workable_config = data.workable_config
+    org.workable_config = _merge_workable_config(org, data)
     if data.allowed_email_domains is not None:
         org.allowed_email_domains = normalize_allowed_domains(data.allowed_email_domains)
     if data.sso_enforced is not None:
@@ -56,6 +78,7 @@ def update_my_org(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update organization")
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
+    org.workable_config = _resolved_workable_config(org)
     return org
 
 
@@ -117,6 +140,7 @@ def connect_workable(
     org.workable_refresh_token = token_data.get("refresh_token")
     org.workable_subdomain = token_data.get("subdomain", "")
     org.workable_connected = True
+    org.workable_config = _resolved_workable_config(org)
     try:
         db.commit()
     except Exception:

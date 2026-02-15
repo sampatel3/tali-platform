@@ -52,7 +52,7 @@ vi.mock('../shared/api', () => ({
     claudeRetry: vi.fn(),
     submit: vi.fn(),
   },
-  billing: { usage: vi.fn() },
+  billing: { usage: vi.fn(), costs: vi.fn(), credits: vi.fn(), createCheckoutSession: vi.fn() },
   organizations: { get: vi.fn(), update: vi.fn() },
   analytics: { get: vi.fn().mockResolvedValue({ data: {} }) },
   tasks: { list: vi.fn().mockResolvedValue({ data: [] }), get: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), generate: vi.fn() },
@@ -144,15 +144,15 @@ describe('Demo flow', () => {
     renderApp();
     fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
 
-    await waitFor(() => {
-      expect(screen.getByText('Try a candidate assessment')).toBeInTheDocument();
-    });
+    expect(
+      await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 })
+    ).toBeInTheDocument();
   });
 
   it('requires credential fields before starting demo', async () => {
     renderApp();
     fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
-    await screen.findByText('Try a candidate assessment');
+    await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 });
 
     fireEvent.click(screen.getByRole('button', { name: 'Start demo assessment' }));
 
@@ -164,7 +164,7 @@ describe('Demo flow', () => {
   it('shows demo summary after submit', async () => {
     renderApp();
     fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
-    await screen.findByText('Try a candidate assessment');
+    await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 });
 
     fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'Jane Doe' } });
     fireEvent.change(screen.getByLabelText('Position'), { target: { value: 'Engineering Manager' } });

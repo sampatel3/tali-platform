@@ -6,6 +6,8 @@ import AssessmentPage from '../../features/assessment_runtime/AssessmentPage';
 const mockClaude = vi.fn();
 const mockClaudeRetry = vi.fn();
 const mockSubmit = vi.fn();
+const mockTerminalStatus = vi.fn();
+const mockTerminalStop = vi.fn();
 let lastClaudeReply = '';
 
 vi.mock('../../shared/api', () => ({
@@ -14,6 +16,9 @@ vi.mock('../../shared/api', () => ({
     execute: vi.fn(),
     claude: (...args) => mockClaude(...args),
     claudeRetry: (...args) => mockClaudeRetry(...args),
+    terminalStatus: (...args) => mockTerminalStatus(...args),
+    terminalStop: (...args) => mockTerminalStop(...args),
+    terminalWsUrl: (id, token) => `ws://localhost/api/v1/assessments/${id}/terminal/ws?token=${token}`,
     submit: (...args) => mockSubmit(...args),
   },
 }));
@@ -43,14 +48,30 @@ vi.mock('./ClaudeChat', () => ({
   ),
 }));
 
+vi.mock('../../features/assessment_runtime/AssessmentTerminal', () => ({
+  AssessmentTerminal: ({ statusText }) => (
+    <div data-testid="assessment-terminal">
+      terminal:{statusText}
+    </div>
+  ),
+}));
+
 describe('AssessmentPage tracking metadata', () => {
+  const originalWebSocket = global.WebSocket;
+
   beforeEach(() => {
     vi.clearAllMocks();
     lastClaudeReply = '';
     mockClaude.mockResolvedValue({ data: { response: 'ok' } });
     mockClaudeRetry.mockResolvedValue({ data: { success: true, is_timer_paused: false } });
+    mockTerminalStatus.mockResolvedValue({ data: { state: 'running' } });
+    mockTerminalStop.mockResolvedValue({ data: { success: true } });
     mockSubmit.mockResolvedValue({ data: { success: true } });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
+  });
+
+  afterEach(() => {
+    global.WebSocket = originalWebSocket;
   });
 
   it('sends prompt metadata and submit tab_switch_count', async () => {
@@ -358,6 +379,55 @@ describe('AssessmentPage tracking metadata', () => {
 
     await waitFor(() => {
       expect(screen.getByTestId('claude-budget-remaining')).toHaveTextContent('3.8');
+    });
+  });
+
+  it('renders terminal pane in Claude CLI mode and initializes websocket', async () => {
+    const sentMessages = [];
+    class MockWebSocket {
+      static OPEN = 1;
+
+      constructor() {
+        this.readyState = MockWebSocket.OPEN;
+        setTimeout(() => {
+          this.onopen?.();
+        }, 0);
+      }
+
+      send(data) {
+        sentMessages.push(JSON.parse(data));
+      }
+
+      close() {
+        this.readyState = 3;
+        this.onclose?.();
+      }
+    }
+    global.WebSocket = MockWebSocket;
+
+    const startData = {
+      assessment_id: 21,
+      token: 'tok-terminal',
+      time_remaining: 1200,
+      ai_mode: 'claude_cli_terminal',
+      terminal_mode: true,
+      terminal_capabilities: {
+        permission_mode: 'default',
+      },
+      task: {
+        name: 'CLI mode task',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+      },
+    };
+
+    render(<AssessmentPage token="tok-terminal" startData={startData} />);
+
+    expect(await screen.findByTestId('assessment-terminal')).toBeInTheDocument();
+    expect(screen.queryByText('send-claude')).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(sentMessages.some((message) => message.type === 'init')).toBe(true);
     });
   });
 

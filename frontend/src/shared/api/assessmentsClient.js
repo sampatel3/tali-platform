@@ -1,5 +1,13 @@
 import api from './httpClient';
 
+const buildTerminalWsUrl = (assessmentId, assessmentToken) => {
+  const rawApi = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
+  const origin = rawApi || (typeof window !== 'undefined' ? window.location.origin : '');
+  const wsOrigin = origin.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
+  const token = encodeURIComponent(assessmentToken || '');
+  return `${wsOrigin}/api/v1/assessments/${assessmentId}/terminal/ws?token=${token}`;
+};
+
 export const assessments = {
   list: (params = {}) => api.get('/assessments/', { params }),
   get: (id) => api.get(`/assessments/${id}`),
@@ -22,6 +30,15 @@ export const assessments = {
     api.post(`/assessments/${id}/claude/retry`, {}, {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
+  terminalStatus: (id, assessmentToken) =>
+    api.get(`/assessments/${id}/terminal/status`, {
+      headers: { 'X-Assessment-Token': assessmentToken },
+    }),
+  terminalStop: (id, assessmentToken) =>
+    api.post(`/assessments/${id}/terminal/stop`, {}, {
+      headers: { 'X-Assessment-Token': assessmentToken },
+    }),
+  terminalWsUrl: (id, assessmentToken) => buildTerminalWsUrl(id, assessmentToken),
   submit: (id, finalCode, assessmentToken, metadata = {}) =>
     api.post(`/assessments/${id}/submit`, { final_code: finalCode, ...metadata }, {
       headers: { 'X-Assessment-Token': assessmentToken },

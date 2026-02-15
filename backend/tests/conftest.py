@@ -1,6 +1,12 @@
 import os
 # Override DATABASE_URL before any app imports to avoid PostgreSQL driver requirement
 os.environ["DATABASE_URL"] = "sqlite:///./test.db"
+# Keep external integrations disabled by default for unit/API tests. Individual
+# tests can opt-in by monkeypatching settings.
+os.environ["MVP_DISABLE_LEMON"] = "true"
+os.environ["MVP_DISABLE_WORKABLE"] = "true"
+os.environ["MVP_DISABLE_STRIPE"] = "true"
+os.environ["MVP_DISABLE_CELERY"] = "true"
 
 import uuid
 import pytest

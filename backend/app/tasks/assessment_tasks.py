@@ -110,3 +110,65 @@ def cleanup_expired_assessments():
         db.rollback()
     finally:
         db.close()
+
+
+@celery_app.task
+def sync_workable_orgs():
+    """Periodic task: sync Workable jobs/candidates for hybrid-workflow orgs."""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy.orm import Session
+
+    from ..components.integrations.workable.service import WorkableService
+    from ..components.integrations.workable.sync_service import WorkableSyncService
+    from ..models.organization import Organization
+    from ..platform.database import SessionLocal
+
+    if settings.MVP_DISABLE_WORKABLE:
+        return {"status": "skipped", "reason": "workable_disabled"}
+
+    db: Session = SessionLocal()
+    synced = 0
+    skipped = 0
+    failed = 0
+    try:
+        orgs = (
+            db.query(Organization)
+            .filter(
+                Organization.workable_connected == True,  # noqa: E712
+                Organization.workable_access_token != None,  # noqa: E711
+                Organization.workable_subdomain != None,  # noqa: E711
+            )
+            .all()
+        )
+        for org in orgs:
+            config = org.workable_config if isinstance(org.workable_config, dict) else {}
+            workflow_mode = str(config.get("workflow_mode") or "manual")
+            sync_model = str(config.get("sync_model") or "scheduled_pull_only")
+            try:
+                sync_interval_minutes = int(config.get("sync_interval_minutes") or 30)
+            except Exception:
+                sync_interval_minutes = 30
+            if workflow_mode != "workable_hybrid" or sync_model != "scheduled_pull_only":
+                skipped += 1
+                continue
+            last_sync = getattr(org, "workable_last_sync_at", None)
+            if last_sync is not None:
+                effective_last_sync = last_sync if last_sync.tzinfo else last_sync.replace(tzinfo=timezone.utc)
+                if effective_last_sync >= datetime.now(timezone.utc) - timedelta(minutes=max(sync_interval_minutes, 5)):
+                    skipped += 1
+                    continue
+            try:
+                service = WorkableSyncService(
+                    WorkableService(
+                        access_token=org.workable_access_token,
+                        subdomain=org.workable_subdomain,
+                    )
+                )
+                service.sync_org(db, org, full_resync=False)
+                synced += 1
+            except Exception:
+                failed += 1
+                logger.exception("Workable sync task failed for org_id=%s", org.id)
+        return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
+    finally:
+        db.close()
