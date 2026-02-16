@@ -214,12 +214,16 @@ code {
 .taali-table-shell {
   border: 2px solid var(--taali-border);
   border-radius: var(--taali-radius);
-  overflow: hidden;
+  overflow-x: auto;
+  overflow-y: auto;
+  max-width: 100%;
+  overscroll-behavior: contain;
   background: var(--taali-surface);
 }
 
 .taali-table-shell table {
-  width: 100%;
+  width: max-content;
+  min-width: 100%;
   border-collapse: collapse;
 }
 

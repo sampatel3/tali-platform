@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { AlertCircle, Plus, UserPlus } from 'lucide-react';
 import * as apiClient from '../../shared/api';
-import { Button, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
+import { Button, Input, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
 
 import {
   CandidateSheet,
@@ -31,6 +31,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [sortBy, setSortBy] = useState('rank_score');
   const [sortOrder, setSortOrder] = useState('desc');
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState('all');
   const [minRankScore, setMinRankScore] = useState('');
   const [minWorkableScore, setMinWorkableScore] = useState('');
   const [minCvMatchScore, setMinCvMatchScore] = useState('');
@@ -57,6 +58,36 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     () => roles.find((role) => String(role.id) === String(selectedRoleId)) || null,
     [roles, selectedRoleId]
   );
+
+  const statusOptions = useMemo(() => {
+    const statuses = new Set();
+    roleApplications.forEach((application) => {
+      statuses.add((application.status || 'applied').toLowerCase());
+    });
+    return ['all', ...Array.from(statuses).sort()];
+  }, [roleApplications]);
+
+  const activeFilterCount = useMemo(() => (
+    [
+      searchQuery.trim() !== '',
+      sortBy !== 'rank_score',
+      sortOrder !== 'desc',
+      sourceFilter !== 'all',
+      statusFilter !== 'all',
+      minRankScore !== '',
+      minWorkableScore !== '',
+      minCvMatchScore !== '',
+    ].filter(Boolean).length
+  ), [
+    searchQuery,
+    sortBy,
+    sortOrder,
+    sourceFilter,
+    statusFilter,
+    minRankScore,
+    minWorkableScore,
+    minCvMatchScore,
+  ]);
 
   const loadRoles = useCallback(async (preferredRoleId = null) => {
     if (!rolesApi?.list) {
@@ -143,6 +174,30 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   useEffect(() => {
     loadRoleContext(selectedRoleId);
   }, [selectedRoleId, loadRoleContext]);
+
+  useEffect(() => {
+    if (statusFilter === 'all') return;
+    const hasSelectedStatus = roleApplications.some(
+      (application) => (application.status || 'applied').toLowerCase() === statusFilter
+    );
+    if (!hasSelectedStatus) setStatusFilter('all');
+  }, [roleApplications, statusFilter]);
+
+  const resetFilters = useCallback(() => {
+    setSearchQuery('');
+    setSortBy('rank_score');
+    setSortOrder('desc');
+    setSourceFilter('all');
+    setStatusFilter('all');
+    setMinRankScore('');
+    setMinWorkableScore('');
+    setMinCvMatchScore('');
+  }, []);
+
+  const handleSortChange = useCallback((nextSortBy, nextSortOrder) => {
+    setSortBy(nextSortBy);
+    setSortOrder(nextSortOrder);
+  }, []);
 
   const mapAssessmentForDetail = (assessment, fallbackApp) => ({
     id: assessment.id,
@@ -377,79 +432,118 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
               />
             </label>
           </div>
-          <div className="mt-3 grid gap-3 md:grid-cols-6">
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
-                Sort by
-              </span>
-              <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-                <option value="rank_score">Rank score</option>
-                <option value="workable_score">Workable score</option>
-                <option value="cv_match_score">CV match score</option>
-                <option value="created_at">Created at</option>
-              </Select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
-                Order
-              </span>
-              <Select aria-label="Sort order" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
-                <option value="desc">Descending</option>
-                <option value="asc">Ascending</option>
-              </Select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
-                Source
-              </span>
-              <Select aria-label="Source filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
-                <option value="all">All</option>
-                <option value="manual">Manual</option>
-                <option value="workable">Workable</option>
-              </Select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
-                Min rank
-              </span>
-              <input
-                type="number"
-                min="0"
-                max="10"
-                step="0.1"
-                value={minRankScore}
-                onChange={(event) => setMinRankScore(event.target.value)}
-                className="w-full border border-[var(--taali-border-muted)] rounded-lg px-3 py-2 text-sm"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
-                Min Workable
-              </span>
-              <input
-                type="number"
-                min="0"
-                max="10"
-                step="0.1"
-                value={minWorkableScore}
-                onChange={(event) => setMinWorkableScore(event.target.value)}
-                className="w-full border border-[var(--taali-border-muted)] rounded-lg px-3 py-2 text-sm"
-              />
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
-                Min CV
-              </span>
-              <input
-                type="number"
-                min="0"
-                max="10"
-                step="0.1"
-                value={minCvMatchScore}
-                onChange={(event) => setMinCvMatchScore(event.target.value)}
-                className="w-full border border-[var(--taali-border-muted)] rounded-lg px-3 py-2 text-sm"
-              />
-            </label>
+          <div className="mt-3 border border-[var(--taali-border-muted)] bg-[#faf8ff] p-3">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">
+                Sorting and filters
+              </p>
+              <div className="flex items-center gap-2 text-xs text-gray-500">
+                <span>{activeFilterCount > 0 ? `${activeFilterCount} active` : 'Default view'}</span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={resetFilters}
+                  disabled={activeFilterCount === 0}
+                >
+                  Reset
+                </Button>
+              </div>
+            </div>
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Sort by
+                </span>
+                <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+                  <option value="rank_score">Rank score</option>
+                  <option value="workable_score">Workable score</option>
+                  <option value="cv_match_score">CV match score</option>
+                  <option value="created_at">Created at</option>
+                </Select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Order
+                </span>
+                <Select aria-label="Sort order" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
+                  <option value="desc">Descending</option>
+                  <option value="asc">Ascending</option>
+                </Select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Source
+                </span>
+                <Select aria-label="Source filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+                  <option value="all">All</option>
+                  <option value="manual">Manual</option>
+                  <option value="workable">Workable</option>
+                </Select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Status
+                </span>
+                <Select aria-label="Status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                  {statusOptions.map((status) => (
+                    <option key={status} value={status}>
+                      {status === 'all'
+                        ? 'All'
+                        : status
+                          .split(/[_\s-]+/)
+                          .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
+                          .join(' ')}
+                    </option>
+                  ))}
+                </Select>
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Min rank
+                </span>
+                <Input
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  aria-label="Minimum rank score"
+                  placeholder="0.0"
+                  value={minRankScore}
+                  onChange={(event) => setMinRankScore(event.target.value)}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Min workable
+                </span>
+                <Input
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  aria-label="Minimum workable score"
+                  placeholder="0.0"
+                  value={minWorkableScore}
+                  onChange={(event) => setMinWorkableScore(event.target.value)}
+                />
+              </label>
+              <label className="block">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                  Min CV
+                </span>
+                <Input
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="0.1"
+                  aria-label="Minimum CV match score"
+                  placeholder="0.0"
+                  value={minCvMatchScore}
+                  onChange={(event) => setMinCvMatchScore(event.target.value)}
+                />
+              </label>
+            </div>
           </div>
         </PageHeader>
 
@@ -489,10 +583,14 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   loading={loadingRoleContext}
                   error={roleContextError}
                   searchQuery={searchQuery}
+                  statusFilter={statusFilter}
+                  sortBy={sortBy}
+                  sortOrder={sortOrder}
                   roleTasks={roleTasks}
                   canCreateAssessment={Boolean(rolesApi?.createAssessment)}
                   creatingAssessmentId={creatingAssessmentId}
                   viewingApplicationId={viewingApplicationId}
+                  onChangeSort={handleSortChange}
                   onAddCandidate={() => {
                     setCandidateSheetError('');
                     setCandidateSheetOpen(true);
