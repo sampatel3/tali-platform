@@ -181,7 +181,7 @@ describe('Demo flow', () => {
     await waitFor(() => {
       expect(screen.getByText('TAALI PROFILE')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Join TAALI' })).toBeInTheDocument();
-      expect(screen.getByTestId('radar-chart')).toBeInTheDocument();
+      expect(screen.getByText('Compared with successful candidates')).toBeInTheDocument();
     });
   });
 });
