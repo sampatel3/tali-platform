@@ -16,6 +16,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [workableSaving, setWorkableSaving] = useState(false);
   const [workableSyncLoading, setWorkableSyncLoading] = useState(false);
+  const [workableAuthorizeUrl, setWorkableAuthorizeUrl] = useState('');
+  const [workableSetupError, setWorkableSetupError] = useState('');
   const [teamMembers, setTeamMembers] = useState([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
@@ -86,6 +88,27 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       }
     };
     fetchTeam();
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsTab]);
+
+  useEffect(() => {
+    if (settingsTab !== 'workable') return;
+    let cancelled = false;
+    const fetchAuthorizeUrl = async () => {
+      try {
+        const res = await orgsApi.getWorkableAuthorizeUrl();
+        if (cancelled) return;
+        setWorkableAuthorizeUrl(res.data?.url || '');
+        setWorkableSetupError('');
+      } catch (err) {
+        if (cancelled) return;
+        setWorkableAuthorizeUrl('');
+        setWorkableSetupError(err?.response?.data?.detail || err.message || 'Unable to load Workable OAuth settings');
+      }
+    };
+    fetchAuthorizeUrl();
     return () => {
       cancelled = true;
     };
@@ -221,6 +244,20 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     : 'Never';
   const lastSyncStatus = orgData?.workable_last_sync_status || 'not_started';
   const billingPlan = orgData?.plan || 'Pay-Per-Use';
+  const apiBaseUrl = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/$/, '');
+  const workableWebhookUrl = `${apiBaseUrl}/api/v1/webhooks/workable`;
+  let workableCallbackUrl = `${window.location.origin}/settings/workable/callback`;
+  let workableScopes = 'r_jobs r_candidates w_candidates';
+  if (workableAuthorizeUrl) {
+    try {
+      const parsed = new URL(workableAuthorizeUrl);
+      workableCallbackUrl = parsed.searchParams.get('redirect_uri') || workableCallbackUrl;
+      const scopeRaw = parsed.searchParams.get('scope');
+      if (scopeRaw) workableScopes = scopeRaw.replace(/\+/g, ' ');
+    } catch {
+      // Ignore parse errors and keep defaults.
+    }
+  }
   const creditsBalance = Number(billingCredits?.credits_balance ?? orgData?.credits_balance ?? 0);
   const packCatalog = billingCredits?.packs || {
     starter_5: { label: 'Starter (5 credits)', credits: 5 },
@@ -290,7 +327,47 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       </div>
                     </div>
                   </div>
-                  {!workableConnected && ConnectWorkableButton ? <ConnectWorkableButton /> : null}
+                  {!workableConnected && ConnectWorkableButton ? (
+                    <ConnectWorkableButton
+                      authorizeUrl={workableAuthorizeUrl}
+                      setupError={workableSetupError}
+                    />
+                  ) : null}
+                </div>
+
+                <div className="border-2 border-black p-6 mb-8 bg-white">
+                  <div className="font-bold text-lg mb-2">Workable Setup Checklist</div>
+                  <div className="font-mono text-xs text-gray-500 mb-4">Configure these once, then click Connect Workable above.</div>
+                  <div className="grid md:grid-cols-2 gap-4">
+                    <div className="border border-black p-3">
+                      <div className="font-mono text-xs text-gray-500 mb-1">Workable OAuth App</div>
+                      <div className="font-mono text-sm">Add callback URL</div>
+                      <div className="font-mono text-xs break-all mt-1">{workableCallbackUrl}</div>
+                    </div>
+                    <div className="border border-black p-3">
+                      <div className="font-mono text-xs text-gray-500 mb-1">Workable OAuth App</div>
+                      <div className="font-mono text-sm">Enable scopes</div>
+                      <div className="font-mono text-xs mt-1">{workableScopes}</div>
+                    </div>
+                    <div className="border border-black p-3">
+                      <div className="font-mono text-xs text-gray-500 mb-1">Railway Backend Env</div>
+                      <div className="font-mono text-sm">WORKABLE_CLIENT_ID</div>
+                      <div className="font-mono text-xs mt-1">From Workable Developer/OAuth app credentials.</div>
+                    </div>
+                    <div className="border border-black p-3">
+                      <div className="font-mono text-xs text-gray-500 mb-1">Railway Backend Env</div>
+                      <div className="font-mono text-sm">WORKABLE_CLIENT_SECRET</div>
+                      <div className="font-mono text-xs mt-1">From the same Workable OAuth app credentials.</div>
+                    </div>
+                  </div>
+                  <div className="font-mono text-xs text-gray-600 mt-4">
+                    Optional webhook secret: WORKABLE_WEBHOOK_SECRET with endpoint {workableWebhookUrl}
+                  </div>
+                  {workableSetupError ? (
+                    <div className="font-mono text-xs text-red-700 mt-3">
+                      Current backend setup issue: {workableSetupError}
+                    </div>
+                  ) : null}
                 </div>
 
                 <div className="border-2 border-black p-6 space-y-4">

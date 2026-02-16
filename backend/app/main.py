@@ -45,6 +45,11 @@ app = FastAPI(
 _val_logger = _logging.getLogger("taali.validation")
 
 
+def _is_configured_secret(value: str | None) -> bool:
+    cleaned = (value or "").strip().lower()
+    return cleaned not in {"", "skip", "changeme"}
+
+
 def _sanitize_errors(errors: list) -> list:
     """Ensure validation error details are JSON-serializable."""
 
@@ -237,10 +242,10 @@ def health_check():
         redis_ok = False
 
     integrations = {
-        "e2b_configured": bool((settings.E2B_API_KEY or "").strip()),
-        "claude_configured": bool((settings.ANTHROPIC_API_KEY or "").strip()),
-        "workable_configured": bool((settings.WORKABLE_CLIENT_ID or "").strip() and (settings.WORKABLE_CLIENT_SECRET or "").strip()),
-        "stripe_configured": bool((settings.STRIPE_API_KEY or "").strip()),
+        "e2b_configured": _is_configured_secret(settings.E2B_API_KEY),
+        "claude_configured": _is_configured_secret(settings.ANTHROPIC_API_KEY),
+        "workable_configured": _is_configured_secret(settings.WORKABLE_CLIENT_ID) and _is_configured_secret(settings.WORKABLE_CLIENT_SECRET),
+        "stripe_configured": _is_configured_secret(settings.STRIPE_API_KEY),
     }
 
     status_str = "healthy" if db_ok and redis_ok else "degraded"

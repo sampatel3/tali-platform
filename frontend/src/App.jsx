@@ -342,7 +342,14 @@ function AppContent() {
 
       <Route
         path="/settings/workable/callback"
-        element={<WorkableCallbackPage code={searchParams.get('code')} onNavigate={navigateToPage} />}
+        element={(
+          <WorkableCallbackPage
+            code={searchParams.get('code')}
+            error={searchParams.get('error')}
+            errorDescription={searchParams.get('error_description')}
+            onNavigate={navigateToPage}
+          />
+        )}
       />
 
       <Route path="/assess/:token" element={<CandidateWelcomeRoute />} />

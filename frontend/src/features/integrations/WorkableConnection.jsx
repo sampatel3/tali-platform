@@ -3,19 +3,43 @@ import { AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
 
 import { organizations as orgsApi } from '../../shared/api';
 
-export const ConnectWorkableButton = () => {
+const normalizeWorkableError = (input) => {
+  const raw = (input || '').toString();
+  const lower = raw.toLowerCase();
+  if (lower.includes('not configured')) {
+    return 'Workable OAuth is not configured. Add WORKABLE_CLIENT_ID and WORKABLE_CLIENT_SECRET in backend environment variables first.';
+  }
+  if (lower.includes('disabled for mvp')) {
+    return 'Workable integration is currently disabled by environment flag.';
+  }
+  if (lower.includes('oauth failed')) {
+    return 'Workable OAuth failed. Verify callback URL and scopes in your Workable app, then try again.';
+  }
+  return raw || 'Failed to connect';
+};
+
+export const ConnectWorkableButton = ({ authorizeUrl = '', setupError = '' }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleClick = async () => {
     setLoading(true);
     setError('');
+    if (setupError) {
+      setError(normalizeWorkableError(setupError));
+      setLoading(false);
+      return;
+    }
+    if (authorizeUrl) {
+      window.location.href = authorizeUrl;
+      return;
+    }
     try {
       const res = await orgsApi.getWorkableAuthorizeUrl();
       if (res.data?.url) window.location.href = res.data.url;
       else setError('Could not get authorization URL');
     } catch (err) {
-      setError(err?.response?.data?.detail || err.message || 'Failed to connect');
+      setError(normalizeWorkableError(err?.response?.data?.detail || err.message));
     } finally {
       setLoading(false);
     }
@@ -32,19 +56,30 @@ export const ConnectWorkableButton = () => {
         {loading ? <Loader2 size={18} className="animate-spin" /> : null}
         {loading ? 'Redirecting…' : 'Connect Workable'}
       </button>
+      {setupError && !error && <p className="font-mono text-sm text-red-600 mt-2">{normalizeWorkableError(setupError)}</p>}
       {error && <p className="font-mono text-sm text-red-600 mt-2">{error}</p>}
     </div>
   );
 };
 
-export const WorkableCallbackPage = ({ code, onNavigate }) => {
+export const WorkableCallbackPage = ({
+  code,
+  error,
+  errorDescription,
+  onNavigate,
+}) => {
   const [status, setStatus] = useState('connecting');
   const [message, setMessage] = useState('');
 
   useEffect(() => {
+    if (error) {
+      setStatus('error');
+      setMessage(errorDescription || `Workable returned an OAuth error: ${error}`);
+      return;
+    }
     if (!code) {
       setStatus('error');
-      setMessage('Missing authorization code');
+      setMessage('Missing authorization code from Workable callback.');
       return;
     }
     let cancelled = false;
@@ -58,14 +93,14 @@ export const WorkableCallbackPage = ({ code, onNavigate }) => {
       } catch (err) {
         if (!cancelled) {
           setStatus('error');
-          setMessage(err?.response?.data?.detail || err.message || 'Connection failed');
+          setMessage(normalizeWorkableError(err?.response?.data?.detail || err.message));
         }
       }
     })();
     return () => {
       cancelled = true;
     };
-  }, [code, onNavigate]);
+  }, [code, error, errorDescription, onNavigate]);
 
   return (
     <div className="min-h-screen flex items-center justify-center p-6">

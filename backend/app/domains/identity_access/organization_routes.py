@@ -16,6 +16,19 @@ from .access_policy import normalize_allowed_domains
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
 
 
+def _is_workable_oauth_configured() -> bool:
+    placeholders = {
+        "",
+        "skip",
+        "changeme",
+        "your-workable-client-id",
+        "your-workable-client-secret",
+    }
+    client_id = (settings.WORKABLE_CLIENT_ID or "").strip()
+    client_secret = (settings.WORKABLE_CLIENT_SECRET or "").strip()
+    return client_id.lower() not in placeholders and client_secret.lower() not in placeholders
+
+
 def _default_workable_config() -> dict:
     return WorkableConfigBase().model_dump()
 
@@ -87,8 +100,11 @@ def get_workable_authorize_url(current_user: User = Depends(get_current_user)):
     """Return the Workable OAuth authorize URL for the frontend to redirect to."""
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
-    if not settings.WORKABLE_CLIENT_ID:
-        raise HTTPException(status_code=503, detail="Workable integration is not configured")
+    if not _is_workable_oauth_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Workable OAuth is not configured. Set WORKABLE_CLIENT_ID and WORKABLE_CLIENT_SECRET.",
+        )
     redirect_uri = f"{settings.FRONTEND_URL}/settings/workable/callback"
     scope = "r_jobs r_candidates w_candidates"
     url = (
@@ -111,6 +127,11 @@ def connect_workable(
     """Exchange Workable OAuth code for access token."""
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
+    if not _is_workable_oauth_configured():
+        raise HTTPException(
+            status_code=503,
+            detail="Workable OAuth is not configured. Set WORKABLE_CLIENT_ID and WORKABLE_CLIENT_SECRET.",
+        )
     import httpx
 
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
