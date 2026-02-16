@@ -350,10 +350,126 @@ async def terminal_ws(
         ws_task = asyncio.create_task(websocket.receive_text())
         out_task = asyncio.create_task(output_queue.get())
         while True:
-            done, pending = await asyncio.wait(
+            done, _pending = await asyncio.wait(
                 {ws_task, out_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
+
+            should_break = False
+
+            # Always process websocket input first so outbound PTY spam does not starve user keystrokes.
+            if ws_task in done:
+                raw = ws_task.result()
+                try:
+                    payload = json.loads(raw)
+                except Exception:
+                    ws_task = asyncio.create_task(websocket.receive_text())
+                    payload = None
+
+                if payload is not None:
+                    msg_type = str(payload.get("type") or "").strip().lower()
+                    if msg_type in {"init", "heartbeat"}:
+                        touch_terminal_session(assessment)
+                        db.commit()
+                    elif msg_type == "resize":
+                        rows = int(payload.get("rows") or 30)
+                        cols = int(payload.get("cols") or 120)
+                        rows = max(10, min(rows, 300))
+                        cols = max(20, min(cols, 600))
+                        e2b.resize_pty(session.sandbox, session.pid, rows=rows, cols=cols)
+                    elif msg_type == "input":
+                        data = str(payload.get("data") or "")
+                        if data:
+                            # Prevent shell escape controls (Ctrl-C/Z/D) so the terminal remains repo-scoped.
+                            if not any(ctrl in data for ctrl in ("\u0003", "\u001a", "\u0004")):
+                                e2b.send_pty_input(session.sandbox, session.pid, data)
+                                input_token_estimate = _estimate_tokens_from_text(data)
+                                input_tokens_used += input_token_estimate
+                                append_assessment_timeline_event(
+                                    assessment,
+                                    "terminal_input",
+                                    {"pid": session.pid, "chars": len(data)},
+                                )
+                                append_cli_transcript(
+                                    assessment,
+                                    "terminal_input",
+                                    {
+                                        "pid": session.pid,
+                                        "data": data[:1000],
+                                        "token_estimate": input_token_estimate,
+                                    },
+                                )
+                                touch_terminal_session(assessment)
+                                db.commit()
+                                budget_snapshot = _cli_budget_snapshot(
+                                    effective_budget_limit,
+                                    input_tokens_used,
+                                    output_tokens_used,
+                                )
+                                if budget_snapshot["enabled"] and budget_snapshot["is_exhausted"]:
+                                    killed = e2b.kill_process(session.sandbox, session.pid)
+                                    append_assessment_timeline_event(
+                                        assessment,
+                                        "terminal_exit",
+                                        {
+                                            "pid": session.pid,
+                                            "reason": "budget_exhausted",
+                                            "killed": bool(killed),
+                                            "used_usd": budget_snapshot["used_usd"],
+                                            "limit_usd": budget_snapshot["limit_usd"],
+                                        },
+                                    )
+                                    append_cli_transcript(
+                                        assessment,
+                                        "terminal_exit",
+                                        {
+                                            "pid": session.pid,
+                                            "reason": "budget_exhausted",
+                                            "killed": bool(killed),
+                                            "used_usd": budget_snapshot["used_usd"],
+                                            "limit_usd": budget_snapshot["limit_usd"],
+                                        },
+                                    )
+                                    stop_terminal_session(assessment)
+                                    db.commit()
+                                    await _ws_send_json(
+                                        websocket,
+                                        {
+                                            "type": "error",
+                                            "message": "Claude budget limit reached for this assessment.",
+                                            "requires_budget_top_up": True,
+                                            "claude_budget": budget_snapshot,
+                                            "fallback_chat": True,
+                                        },
+                                    )
+                                    await _ws_send_json(
+                                        websocket,
+                                        {"type": "exit", "pid": session.pid, "killed": bool(killed)},
+                                    )
+                                    should_break = True
+                    elif msg_type == "stop":
+                        killed = e2b.kill_process(session.sandbox, session.pid)
+                        append_assessment_timeline_event(
+                            assessment,
+                            "terminal_exit",
+                            {"pid": session.pid, "reason": "ws_stop", "killed": bool(killed)},
+                        )
+                        append_cli_transcript(
+                            assessment,
+                            "terminal_exit",
+                            {"pid": session.pid, "reason": "ws_stop", "killed": bool(killed)},
+                        )
+                        stop_terminal_session(assessment)
+                        db.commit()
+                        await _ws_send_json(
+                            websocket,
+                            {"type": "exit", "pid": session.pid, "killed": bool(killed)},
+                        )
+                        should_break = True
+
+                if should_break:
+                    break
+                ws_task = asyncio.create_task(websocket.receive_text())
 
             if out_task in done:
                 message = out_task.result()
@@ -416,7 +532,10 @@ async def terminal_ws(
                                     "fallback_chat": True,
                                 },
                             )
-                            await _ws_send_json(websocket, {"type": "exit", "pid": session.pid, "killed": bool(killed)})
+                            await _ws_send_json(
+                                websocket,
+                                {"type": "exit", "pid": session.pid, "killed": bool(killed)},
+                            )
                             break
                     await _ws_send_json(websocket, message)
                     out_task = asyncio.create_task(output_queue.get())
@@ -455,128 +574,6 @@ async def terminal_ws(
                     await _ws_send_json(websocket, {"type": "exit", "pid": session.pid})
                     break
                 out_task = asyncio.create_task(output_queue.get())
-
-            if ws_task in done:
-                raw = ws_task.result()
-                try:
-                    payload = json.loads(raw)
-                except Exception:
-                    ws_task = asyncio.create_task(websocket.receive_text())
-                    continue
-
-                msg_type = str(payload.get("type") or "").strip().lower()
-                if msg_type == "init":
-                    touch_terminal_session(assessment)
-                    db.commit()
-                    ws_task = asyncio.create_task(websocket.receive_text())
-                    continue
-
-                if msg_type == "heartbeat":
-                    touch_terminal_session(assessment)
-                    db.commit()
-                    ws_task = asyncio.create_task(websocket.receive_text())
-                    continue
-
-                if msg_type == "resize":
-                    rows = int(payload.get("rows") or 30)
-                    cols = int(payload.get("cols") or 120)
-                    rows = max(10, min(rows, 300))
-                    cols = max(20, min(cols, 600))
-                    e2b.resize_pty(session.sandbox, session.pid, rows=rows, cols=cols)
-                    ws_task = asyncio.create_task(websocket.receive_text())
-                    continue
-
-                if msg_type == "input":
-                    data = str(payload.get("data") or "")
-                    if not data:
-                        ws_task = asyncio.create_task(websocket.receive_text())
-                        continue
-                    # Prevent shell escape controls (Ctrl-C/Z/D) so the terminal remains repo-scoped.
-                    if any(ctrl in data for ctrl in ("\u0003", "\u001a", "\u0004")):
-                        ws_task = asyncio.create_task(websocket.receive_text())
-                        continue
-                    e2b.send_pty_input(session.sandbox, session.pid, data)
-                    input_token_estimate = _estimate_tokens_from_text(data)
-                    input_tokens_used += input_token_estimate
-                    append_assessment_timeline_event(
-                        assessment,
-                        "terminal_input",
-                        {"pid": session.pid, "chars": len(data)},
-                    )
-                    append_cli_transcript(
-                        assessment,
-                        "terminal_input",
-                        {
-                            "pid": session.pid,
-                            "data": data[:1000],
-                            "token_estimate": input_token_estimate,
-                        },
-                    )
-                    touch_terminal_session(assessment)
-                    db.commit()
-                    budget_snapshot = _cli_budget_snapshot(
-                        effective_budget_limit,
-                        input_tokens_used,
-                        output_tokens_used,
-                    )
-                    if budget_snapshot["enabled"] and budget_snapshot["is_exhausted"]:
-                        killed = e2b.kill_process(session.sandbox, session.pid)
-                        append_assessment_timeline_event(
-                            assessment,
-                            "terminal_exit",
-                            {
-                                "pid": session.pid,
-                                "reason": "budget_exhausted",
-                                "killed": bool(killed),
-                                "used_usd": budget_snapshot["used_usd"],
-                                "limit_usd": budget_snapshot["limit_usd"],
-                            },
-                        )
-                        append_cli_transcript(
-                            assessment,
-                            "terminal_exit",
-                            {
-                                "pid": session.pid,
-                                "reason": "budget_exhausted",
-                                "killed": bool(killed),
-                                "used_usd": budget_snapshot["used_usd"],
-                                "limit_usd": budget_snapshot["limit_usd"],
-                            },
-                        )
-                        stop_terminal_session(assessment)
-                        db.commit()
-                        await _ws_send_json(
-                            websocket,
-                            {
-                                "type": "error",
-                                "message": "Claude budget limit reached for this assessment.",
-                                "requires_budget_top_up": True,
-                                "claude_budget": budget_snapshot,
-                                "fallback_chat": True,
-                            },
-                        )
-                        await _ws_send_json(websocket, {"type": "exit", "pid": session.pid, "killed": bool(killed)})
-                        break
-                    ws_task = asyncio.create_task(websocket.receive_text())
-                    continue
-
-                if msg_type == "stop":
-                    killed = e2b.kill_process(session.sandbox, session.pid)
-                    append_assessment_timeline_event(
-                        assessment,
-                        "terminal_exit",
-                        {"pid": session.pid, "reason": "ws_stop", "killed": bool(killed)},
-                    )
-                    append_cli_transcript(
-                        assessment,
-                        "terminal_exit",
-                        {"pid": session.pid, "reason": "ws_stop", "killed": bool(killed)},
-                    )
-                    stop_terminal_session(assessment)
-                    db.commit()
-                    await _ws_send_json(websocket, {"type": "exit", "pid": session.pid, "killed": bool(killed)})
-                    break
-                ws_task = asyncio.create_task(websocket.receive_text())
     except WebSocketDisconnect:
         touch_terminal_session(assessment)
         db.commit()
