@@ -14,6 +14,7 @@ import { formatDateTime, statusVariant } from './candidatesUiUtils';
 const COLUMN_STORAGE_KEY = 'taali_candidates_table_columns_v1';
 
 const DEFAULT_COLUMN_PREFS = {
+  workable_ai: true,
   workable_stage: true,
   added: true,
   email: false,
@@ -115,7 +116,6 @@ export const CandidatesTable = ({
     if (key === 'candidate') return true;
     if (key === 'taali_ai') return true;
     if (key === 'send') return true;
-    if (key === 'workable_ai') return true;
     if (key === 'status') return true;
     return Boolean(columnPrefs[key]);
   };
@@ -123,8 +123,8 @@ export const CandidatesTable = ({
   const visibleColumnOrder = useMemo(() => (
     [
       'candidate',
-      'taali_ai',
       'send',
+      'taali_ai',
       'workable_ai',
       'workable_stage',
       'status',
@@ -214,6 +214,14 @@ export const CandidatesTable = ({
               Show columns
             </p>
             <div className="mt-2 grid gap-2">
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={Boolean(columnPrefs.workable_ai)}
+                  onChange={() => togglePref('workable_ai')}
+                />
+                Workable AI score
+              </label>
               <label className="flex items-center gap-2 text-sm text-gray-700">
                 <input
                   type="checkbox"
