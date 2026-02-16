@@ -35,12 +35,12 @@ def terminal_mode_enabled() -> bool:
 
 
 def resolve_ai_mode() -> str:
-    mode = (settings.ASSESSMENT_TERMINAL_DEFAULT_MODE or "legacy_chat").strip().lower()
+    mode = (settings.ASSESSMENT_TERMINAL_DEFAULT_MODE or "").strip().lower()
     if not terminal_mode_enabled():
-        return "legacy_chat"
-    if mode not in {"legacy_chat", "claude_cli_terminal"}:
-        return "legacy_chat"
-    return mode
+        raise RuntimeError("Assessment terminal mode is disabled by configuration")
+    if mode != "claude_cli_terminal":
+        raise RuntimeError("Invalid assessment AI mode; only claude_cli_terminal is supported")
+    return "claude_cli_terminal"
 
 
 def terminal_capabilities() -> dict:
@@ -48,7 +48,6 @@ def terminal_capabilities() -> dict:
     return {
         "enabled": terminal_mode_enabled(),
         "ws_protocol": "v1",
-        "fallback_chat": True,
         "permission_mode": settings.CLAUDE_CLI_PERMISSION_MODE_DEFAULT,
         "command": settings.CLAUDE_CLI_COMMAND,
         "active_mode": ai_mode,
@@ -202,7 +201,7 @@ def ensure_terminal_session(
             cli_available=False,
             error_message=(
                 "Claude CLI authentication is not configured for this workspace. "
-                "Set an organization Claude API key (or enable approved fallback) before starting terminal mode."
+                "Set an organization Claude API key before starting terminal mode."
             ),
         )
 
@@ -241,18 +240,22 @@ def ensure_terminal_session(
         cli_available = False
         error_message = (
             f"Claude CLI is not available in this coding environment. "
-            f"Install `{settings.CLAUDE_CLI_COMMAND}` in the sandbox template or use legacy chat."
+            f"Install `{settings.CLAUDE_CLI_COMMAND}` in the sandbox template."
         )
 
     if cli_available:
         cli_cmd = _build_claude_cli_command(repo_root=repo_root)
+        # Keep candidates at an interactive shell prompt and provide a guarded Claude wrapper.
+        # Auto-exec into Claude can leave sessions looking frozen if the CLI is waiting silently.
         e2b_service.send_pty_input(
             sandbox,
             pid,
             (
                 f"export HOME={shlex.quote(repo_root)}\n"
                 f"cd {shlex.quote(repo_root)}\n"
-                f"exec {cli_cmd}\n"
+                f"taali_claude() {{ command {cli_cmd} \"$@\"; }}\n"
+                "alias claude='taali_claude'\n"
+                "echo 'Claude Code CLI ready. Type: claude \"<your prompt>\"'\n"
             ),
         )
 
