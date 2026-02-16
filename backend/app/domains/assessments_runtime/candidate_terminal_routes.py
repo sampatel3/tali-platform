@@ -344,16 +344,16 @@ async def terminal_ws(
     pump_thread = threading.Thread(target=_pump_output, daemon=True)
     pump_thread.start()
 
+    ws_task: asyncio.Task | None = None
+    out_task: asyncio.Task | None = None
     try:
+        ws_task = asyncio.create_task(websocket.receive_text())
+        out_task = asyncio.create_task(output_queue.get())
         while True:
-            ws_task = asyncio.create_task(websocket.receive_text())
-            out_task = asyncio.create_task(output_queue.get())
             done, pending = await asyncio.wait(
                 {ws_task, out_task},
                 return_when=asyncio.FIRST_COMPLETED,
             )
-            for task_item in pending:
-                task_item.cancel()
 
             if out_task in done:
                 message = out_task.result()
@@ -419,6 +419,7 @@ async def terminal_ws(
                             await _ws_send_json(websocket, {"type": "exit", "pid": session.pid, "killed": bool(killed)})
                             break
                     await _ws_send_json(websocket, message)
+                    out_task = asyncio.create_task(output_queue.get())
                     continue
 
                 if msg_type == "error":
@@ -435,6 +436,7 @@ async def terminal_ws(
                     assessment.cli_session_state = "error"
                     db.commit()
                     await _ws_send_json(websocket, message)
+                    out_task = asyncio.create_task(output_queue.get())
                     continue
 
                 if msg_type == "exit":
@@ -452,23 +454,27 @@ async def terminal_ws(
                     db.commit()
                     await _ws_send_json(websocket, {"type": "exit", "pid": session.pid})
                     break
+                out_task = asyncio.create_task(output_queue.get())
 
             if ws_task in done:
                 raw = ws_task.result()
                 try:
                     payload = json.loads(raw)
                 except Exception:
+                    ws_task = asyncio.create_task(websocket.receive_text())
                     continue
 
                 msg_type = str(payload.get("type") or "").strip().lower()
                 if msg_type == "init":
                     touch_terminal_session(assessment)
                     db.commit()
+                    ws_task = asyncio.create_task(websocket.receive_text())
                     continue
 
                 if msg_type == "heartbeat":
                     touch_terminal_session(assessment)
                     db.commit()
+                    ws_task = asyncio.create_task(websocket.receive_text())
                     continue
 
                 if msg_type == "resize":
@@ -477,14 +483,17 @@ async def terminal_ws(
                     rows = max(10, min(rows, 300))
                     cols = max(20, min(cols, 600))
                     e2b.resize_pty(session.sandbox, session.pid, rows=rows, cols=cols)
+                    ws_task = asyncio.create_task(websocket.receive_text())
                     continue
 
                 if msg_type == "input":
                     data = str(payload.get("data") or "")
                     if not data:
+                        ws_task = asyncio.create_task(websocket.receive_text())
                         continue
                     # Prevent shell escape controls (Ctrl-C/Z/D) so the terminal remains repo-scoped.
                     if any(ctrl in data for ctrl in ("\u0003", "\u001a", "\u0004")):
+                        ws_task = asyncio.create_task(websocket.receive_text())
                         continue
                     e2b.send_pty_input(session.sandbox, session.pid, data)
                     input_token_estimate = _estimate_tokens_from_text(data)
@@ -548,6 +557,7 @@ async def terminal_ws(
                         )
                         await _ws_send_json(websocket, {"type": "exit", "pid": session.pid, "killed": bool(killed)})
                         break
+                    ws_task = asyncio.create_task(websocket.receive_text())
                     continue
 
                 if msg_type == "stop":
@@ -566,10 +576,14 @@ async def terminal_ws(
                     db.commit()
                     await _ws_send_json(websocket, {"type": "exit", "pid": session.pid, "killed": bool(killed)})
                     break
+                ws_task = asyncio.create_task(websocket.receive_text())
     except WebSocketDisconnect:
         touch_terminal_session(assessment)
         db.commit()
     finally:
+        for task_item in (ws_task, out_task):
+            if task_item is not None and not task_item.done():
+                task_item.cancel()
         stop_pump.set()
         if session.handle is not None:
             try:
