@@ -1,16 +1,9 @@
 const demoTasks = [
   {
-    id: 'data_eng_b_cdc_fix',
-    title: 'Fix the Broken Data Sync',
-    description: 'Debug a CDC sync that is creating duplicates, missing updates, and never deleting removed rows.',
-    durationLabel: '10 min',
-    difficulty: 'Intermediate',
-  },
-  {
-    id: 'data_eng_c_backfill_schema',
-    title: 'Historical Backfill + Schema Evolution',
-    description: 'Add a safe backfill mode and automatic schema evolution without breaking the working incremental pipeline.',
-    durationLabel: '10 min',
+    id: 'data_eng_a_pipeline_reliability',
+    title: 'Orders Pipeline Reliability Sprint',
+    description: 'Deliver one production-safe patch for dedupe, hard deletes, schema drift, and idempotent backfills.',
+    durationLabel: '35 min',
     difficulty: 'Advanced',
   },
 ];

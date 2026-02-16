@@ -125,7 +125,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
           </div>
           <h1 className="text-4xl font-bold">Try a candidate assessment</h1>
           <p className="mt-3 max-w-4xl font-mono text-sm text-[var(--taali-muted)]">
-            Complete this short intake, choose one of two demo tasks, and run through the same assessment runtime candidates use.
+            Complete this short intake, review the demo task, and run through the same assessment runtime candidates use.
             At the end, you&apos;ll see a short TAALI profile summary.
           </p>
           <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
@@ -206,9 +206,9 @@ export const DemoExperiencePage = ({ onNavigate }) => {
           </Panel>
 
           <Panel className="p-5">
-            <h2 className="text-2xl font-bold">Choose a demo assessment</h2>
+            <h2 className="text-2xl font-bold">Demo assessment task</h2>
             <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
-              These demo tracks are aligned to the tasks currently live on the platform.
+              This demo task is aligned to the task currently live on the platform.
             </p>
             <div className="mt-4 grid gap-3">
               {DEMO_ASSESSMENTS.map((assessment) => {

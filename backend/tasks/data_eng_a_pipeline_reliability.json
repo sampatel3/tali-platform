@@ -1,0 +1,83 @@
+{
+  "task_id": "data_eng_a_pipeline_reliability",
+  "name": "Orders Pipeline Reliability Sprint",
+  "role": "data_engineer",
+  "duration_minutes": 35,
+  "claude_budget_limit_usd": 8,
+  "scenario": "You are the on-call data engineer for the orders domain. Finance found revenue mismatches, and compliance needs historical completeness for an audit.\n\nYou must deliver one production-ready patch that makes the pipeline reliable end-to-end:\n1. Incremental sync must dedupe correctly and reconcile hard deletes.\n2. Schema drift must be handled automatically before writes.\n3. Historical backfill must be idempotent and must not move incremental checkpoints.\n\nThe repository includes a deterministic in-memory harness and failing tests. The expected output is working code: all tests passing without modifying the tests.",
+  "repo_structure": {
+    "name": "orders-pipeline-recovery",
+    "files": {
+      "README.md": "# Orders Pipeline Reliability Sprint\n\n## Mission\nFix the pipeline so it is safe for finance reporting and compliance backfills.\n\n## Success Criteria\n- `pytest -q` passes with no test changes.\n- Incremental logic handles dedupe + hard deletes correctly.\n- Schema drift is auto-applied with correct type mapping.\n- Backfill is idempotent and independent from incremental checkpointing.\n\n## Constraints\n- Keep changes focused in `pipeline/pipeline.py` and `pipeline/schema.py` unless needed.\n- Do not delete tests.\n- Treat this as production code: correctness first, then clarity.\n",
+      "pipeline/__init__.py": "",
+      "pipeline/schema.py": "from __future__ import annotations\n\nfrom typing import Dict\n\n\nSOURCE_TO_WAREHOUSE_TYPE = {\n    \"string\": \"varchar\",\n    \"decimal\": \"numeric\",\n    \"timestamp\": \"timestamp\",\n    \"json\": \"jsonb\",\n    \"boolean\": \"boolean\",\n    # BUG: float and integer mappings are missing.\n}\n\n\ndef map_source_type(source_type: str) -> str:\n    \"\"\"Map source API types to warehouse types.\"\"\"\n    return SOURCE_TO_WAREHOUSE_TYPE.get(source_type, \"varchar\")\n\n\ndef columns_missing_in_target(source_schema: Dict[str, str], target_schema: Dict[str, str]) -> Dict[str, str]:\n    missing: Dict[str, str] = {}\n    for column_name, source_type in source_schema.items():\n        if column_name not in target_schema:\n            missing[column_name] = map_source_type(source_type)\n    return missing\n",
+      "pipeline/state.py": "from __future__ import annotations\n\nfrom dataclasses import dataclass, field\nfrom datetime import date\nfrom typing import Any, Dict, List\n\n\n@dataclass\nclass InMemoryWarehouse:\n    schema: Dict[str, str] = field(\n        default_factory=lambda: {\n            \"order_id\": \"varchar\",\n            \"amount\": \"numeric\",\n            \"status\": \"varchar\",\n            \"updated_at\": \"timestamp\",\n        }\n    )\n    orders_table: Dict[str, Dict[str, Any]] = field(default_factory=dict)\n    history_partitions: Dict[date, List[Dict[str, Any]]] = field(default_factory=dict)\n    schema_change_log: List[Dict[str, str]] = field(default_factory=list)\n\n    def add_column(self, column_name: str, warehouse_type: str) -> None:\n        self.schema[column_name] = warehouse_type\n        self.schema_change_log.append({\"column\": column_name, \"warehouse_type\": warehouse_type})\n\n    def upsert_orders(self, records: List[Dict[str, Any]], key_column: str = \"order_id\") -> None:\n        for record in records:\n            self.orders_table[record[key_column]] = dict(record)\n\n    def delete_orders(self, keys_to_delete: List[str]) -> None:\n        for key in keys_to_delete:\n            self.orders_table.pop(key, None)\n\n    def append_partition(self, partition_date: date, records: List[Dict[str, Any]]) -> None:\n        self.history_partitions.setdefault(partition_date, [])\n        self.history_partitions[partition_date].extend(dict(row) for row in records)\n\n    def replace_partition(self, partition_date: date, records: List[Dict[str, Any]]) -> None:\n        self.history_partitions[partition_date] = [dict(row) for row in records]\n\n    def partition_count(self, partition_date: date) -> int:\n        return len(self.history_partitions.get(partition_date, []))\n\n\n@dataclass\nclass PipelineState:\n    incremental_checkpoint: date | None = None\n    backfill_checkpoint: date | None = None\n",
+      "pipeline/pipeline.py": "from __future__ import annotations\n\nfrom datetime import date, timedelta\nfrom typing import Any, Dict, List\n\nfrom pipeline.schema import columns_missing_in_target\nfrom pipeline.state import InMemoryWarehouse, PipelineState\n\n\nclass OrdersPipeline:\n    def __init__(self, warehouse: InMemoryWarehouse, state: PipelineState):\n        self.warehouse = warehouse\n        self.state = state\n\n    def run_incremental(\n        self,\n        changed_records: List[Dict[str, Any]],\n        source_all_keys: List[str],\n        source_schema: Dict[str, str],\n        processed_date: date,\n    ) -> Dict[str, Any]:\n        self._evolve_schema(source_schema)\n\n        # BUG: keeps first-seen record per key, not the latest update.\n        deduped = self._dedupe_by_key(changed_records, key_column=\"order_id\")\n        self.warehouse.upsert_orders(deduped)\n\n        # BUG: hard deletes are never reconciled.\n        self.state.incremental_checkpoint = processed_date\n        return {\"upserts\": len(deduped), \"deletes\": 0, \"checkpoint\": processed_date.isoformat()}\n\n    def run_backfill(\n        self,\n        records_by_date: Dict[date, List[Dict[str, Any]]],\n        source_schema: Dict[str, str],\n        start_date: date,\n        end_date: date,\n    ) -> Dict[str, Any]:\n        if start_date > end_date:\n            raise ValueError(\"start_date must be before or equal to end_date\")\n\n        self._evolve_schema(source_schema)\n\n        total_loaded = 0\n        current = start_date\n        while current <= end_date:\n            batch = records_by_date.get(current, [])\n\n            # BUG: append causes duplicate history rows on retries.\n            self.warehouse.append_partition(current, batch)\n            total_loaded += len(batch)\n\n            self.state.backfill_checkpoint = current\n            # BUG: backfill should not mutate incremental checkpoint.\n            self.state.incremental_checkpoint = current\n            current += timedelta(days=1)\n\n        return {\n            \"records_loaded\": total_loaded,\n            \"start_date\": start_date.isoformat(),\n            \"end_date\": end_date.isoformat(),\n            \"backfill_checkpoint\": (\n                self.state.backfill_checkpoint.isoformat() if self.state.backfill_checkpoint else None\n            ),\n        }\n\n    def _evolve_schema(self, source_schema: Dict[str, str]) -> None:\n        missing = columns_missing_in_target(source_schema, self.warehouse.schema)\n        for column_name, warehouse_type in missing.items():\n            self.warehouse.add_column(column_name, warehouse_type)\n\n    def _dedupe_by_key(self, records: List[Dict[str, Any]], key_column: str) -> List[Dict[str, Any]]:\n        deduped: Dict[str, Dict[str, Any]] = {}\n        for record in records:\n            key = record[key_column]\n            if key not in deduped:\n                deduped[key] = record\n        return list(deduped.values())\n",
+      "tests/__init__.py": "",
+      "tests/test_pipeline.py": "from datetime import date\n\nfrom pipeline.pipeline import OrdersPipeline\nfrom pipeline.state import InMemoryWarehouse, PipelineState\n\n\ndef _source_schema():\n    return {\n        \"order_id\": \"string\",\n        \"amount\": \"decimal\",\n        \"status\": \"string\",\n        \"updated_at\": \"timestamp\",\n        \"risk_score\": \"float\",\n        \"attempt_count\": \"integer\",\n    }\n\n\ndef _build_pipeline():\n    warehouse = InMemoryWarehouse(\n        orders_table={\n            \"ORD-100\": {\"order_id\": \"ORD-100\", \"amount\": 120.0, \"status\": \"paid\", \"updated_at\": \"2024-01-10T09:00:00\"},\n            \"ORD-200\": {\"order_id\": \"ORD-200\", \"amount\": 80.0, \"status\": \"pending\", \"updated_at\": \"2024-01-10T10:00:00\"},\n            \"ORD-300\": {\"order_id\": \"ORD-300\", \"amount\": 50.0, \"status\": \"paid\", \"updated_at\": \"2024-01-10T11:00:00\"},\n        }\n    )\n    state = PipelineState(incremental_checkpoint=date(2024, 1, 10), backfill_checkpoint=None)\n    return OrdersPipeline(warehouse, state), warehouse, state\n\n\ndef test_incremental_dedupes_by_latest_updated_at():\n    pipeline, warehouse, _ = _build_pipeline()\n\n    changed_records = [\n        {\"order_id\": \"ORD-400\", \"amount\": 99.0, \"status\": \"pending\", \"updated_at\": \"2024-01-11T09:00:00\"},\n        {\"order_id\": \"ORD-400\", \"amount\": 150.0, \"status\": \"paid\", \"updated_at\": \"2024-01-11T10:00:00\"},\n        {\"order_id\": \"ORD-200\", \"amount\": 82.5, \"status\": \"settled\", \"updated_at\": \"2024-01-11T09:30:00\"},\n    ]\n\n    result = pipeline.run_incremental(\n        changed_records=changed_records,\n        source_all_keys=[\"ORD-100\", \"ORD-200\", \"ORD-300\", \"ORD-400\"],\n        source_schema=_source_schema(),\n        processed_date=date(2024, 1, 11),\n    )\n\n    assert result[\"upserts\"] == 2\n    assert warehouse.orders_table[\"ORD-400\"][\"amount\"] == 150.0\n    assert warehouse.orders_table[\"ORD-200\"][\"status\"] == \"settled\"\n\n\ndef test_incremental_reconciles_hard_deletes():\n    pipeline, warehouse, _ = _build_pipeline()\n\n    result = pipeline.run_incremental(\n        changed_records=[],\n        source_all_keys=[\"ORD-100\", \"ORD-200\"],\n        source_schema=_source_schema(),\n        processed_date=date(2024, 1, 11),\n    )\n\n    assert result[\"deletes\"] == 1\n    assert \"ORD-300\" not in warehouse.orders_table\n\n\ndef test_schema_evolution_adds_missing_columns_with_expected_types():\n    pipeline, warehouse, _ = _build_pipeline()\n\n    pipeline.run_incremental(\n        changed_records=[],\n        source_all_keys=[\"ORD-100\", \"ORD-200\", \"ORD-300\"],\n        source_schema=_source_schema(),\n        processed_date=date(2024, 1, 11),\n    )\n\n    assert warehouse.schema[\"risk_score\"] == \"double precision\"\n    assert warehouse.schema[\"attempt_count\"] == \"integer\"\n\n\ndef test_backfill_is_idempotent_when_rerun():\n    pipeline, warehouse, _ = _build_pipeline()\n\n    records_by_date = {\n        date(2023, 1, 1): [\n            {\"order_id\": \"BF-1\", \"amount\": 10.0},\n            {\"order_id\": \"BF-2\", \"amount\": 12.0},\n        ],\n        date(2023, 1, 2): [\n            {\"order_id\": \"BF-3\", \"amount\": 20.0},\n        ],\n    }\n\n    pipeline.run_backfill(records_by_date, _source_schema(), date(2023, 1, 1), date(2023, 1, 2))\n    pipeline.run_backfill(records_by_date, _source_schema(), date(2023, 1, 1), date(2023, 1, 2))\n\n    assert warehouse.partition_count(date(2023, 1, 1)) == 2\n    assert warehouse.partition_count(date(2023, 1, 2)) == 1\n\n\ndef test_backfill_does_not_move_incremental_checkpoint():\n    pipeline, _, state = _build_pipeline()\n    original_incremental_checkpoint = state.incremental_checkpoint\n\n    pipeline.run_backfill(\n        records_by_date={date(2023, 1, 1): [{\"order_id\": \"BF-1\", \"amount\": 10.0}]},\n        source_schema=_source_schema(),\n        start_date=date(2023, 1, 1),\n        end_date=date(2023, 1, 1),\n    )\n\n    assert state.incremental_checkpoint == original_incremental_checkpoint\n    assert state.backfill_checkpoint == date(2023, 1, 1)\n\n\ndef test_backfill_rejects_invalid_ranges():\n    pipeline, _, _ = _build_pipeline()\n\n    try:\n        pipeline.run_backfill(\n            records_by_date={},\n            source_schema=_source_schema(),\n            start_date=date(2023, 1, 3),\n            end_date=date(2023, 1, 1),\n        )\n    except ValueError:\n        pass\n    else:\n        raise AssertionError(\"Expected ValueError for invalid date range\")\n",
+      "requirements.txt": "pytest>=7.0.0"
+    }
+  },
+  "evaluation_rubric": {
+    "requirements_decomposition": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Quickly identifies all reliability goals and constraints (incremental correctness, schema drift handling, idempotent backfill, checkpoint isolation) and sequences work to reduce risk.",
+        "good": "Identifies most core requirements and ships a mostly coherent plan.",
+        "poor": "Misses core constraints or works on low-impact changes first."
+      }
+    },
+    "system_design_tradeoffs": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Makes explicit tradeoffs (dedupe strategy, delete reconciliation scope, backfill idempotency approach, schema mapping policy) and chooses pragmatic defaults.",
+        "good": "Makes reasonable design choices with limited tradeoff articulation.",
+        "poor": "Implements ad-hoc fixes without a coherent design rationale."
+      }
+    },
+    "implementation_correctness": {
+      "weight": 0.3,
+      "criteria": {
+        "excellent": "All provided tests pass and implementation handles dedupe by latest timestamp, hard deletes, schema evolution type mapping, and checkpoint isolation correctly.",
+        "good": "Most behaviors work, with minor edge-case issues.",
+        "poor": "Key reliability behaviors remain broken."
+      }
+    },
+    "validation_and_quality": {
+      "weight": 0.15,
+      "criteria": {
+        "excellent": "Uses tests iteratively, verifies regressions, and keeps code simple and readable.",
+        "good": "Runs tests and validates main paths.",
+        "poor": "Little or no validation; changes are hard to trust."
+      }
+    },
+    "ai_collaboration_signal": {
+      "weight": 0.15,
+      "criteria": {
+        "excellent": "Prompts show clear context framing, decomposition, and verification loops rather than blind code generation.",
+        "good": "Uses AI effectively for part of the task.",
+        "poor": "Prompts are vague, low-context, or not used to drive reliable outcomes."
+      }
+    }
+  },
+  "expected_outcomes": [
+    "All tests pass via `pytest -q` without editing tests",
+    "Incremental path dedupes by latest `updated_at` and deletes records missing from source keys",
+    "New source columns are added with expected warehouse types (`float` -> `double precision`, `integer` -> `integer`)",
+    "Backfill reruns are idempotent and do not change incremental checkpoint"
+  ],
+  "interviewer_signals": {
+    "high_signal_behaviors": [
+      "Starts by reading tests and identifying failing contracts before coding",
+      "Uses AI prompts that include concrete constraints and asks for verification steps",
+      "Implements in small increments and reruns targeted tests",
+      "Explains tradeoffs between full reconciliation and performance"
+    ],
+    "risk_flags": [
+      "Edits tests to force green instead of fixing behavior",
+      "Overwrites incremental checkpoint during backfill",
+      "Adds schema columns with lossy or incorrect types",
+      "No delete reconciliation strategy"
+    ]
+  }
+}
