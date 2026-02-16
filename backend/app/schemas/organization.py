@@ -11,7 +11,7 @@ class WorkableConfigBase(BaseModel):
     sync_scope: Literal["open_jobs_active_candidates"] = "open_jobs_active_candidates"
     score_precedence: Literal["workable_first"] = "workable_first"
     sync_interval_minutes: int = Field(default=30, ge=5, le=1440)
-    invite_stage_name: str = Field(default="TAALI Assessment Requested", min_length=1, max_length=200)
+    invite_stage_name: str = Field(default="", min_length=0, max_length=200)
 
 
 class WorkableConfigUpdate(BaseModel):
@@ -21,7 +21,7 @@ class WorkableConfigUpdate(BaseModel):
     sync_scope: Optional[Literal["open_jobs_active_candidates"]] = None
     score_precedence: Optional[Literal["workable_first"]] = None
     sync_interval_minutes: Optional[int] = Field(default=None, ge=5, le=1440)
-    invite_stage_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
+    invite_stage_name: Optional[str] = Field(default=None, min_length=0, max_length=200)
 
 
 class OrgResponse(BaseModel):

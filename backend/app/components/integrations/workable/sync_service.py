@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -29,6 +30,25 @@ def _now() -> datetime:
 def _is_terminal_stage(stage_value: str | None) -> bool:
     stage = (stage_value or "").strip().lower()
     return stage in TERMINAL_STAGES
+
+
+def _is_terminal_candidate(payload: dict) -> bool:
+    stage_kind = str(payload.get("stage_kind") or "").strip().lower()
+    if stage_kind and stage_kind in TERMINAL_STAGES:
+        return True
+    stage = (
+        payload.get("stage")
+        or payload.get("stage_name")
+        or payload.get("status")
+        or ""
+    )
+    if _is_terminal_stage(str(stage)):
+        return True
+    if payload.get("disqualified") is True:
+        return True
+    if payload.get("hired_at"):
+        return True
+    return False
 
 
 def _candidate_email(payload: dict) -> str | None:
@@ -68,6 +88,7 @@ def _rank_score_for_application(app: CandidateApplication) -> float | None:
 class WorkableSyncService:
     def __init__(self, client: WorkableService):
         self.client = client
+        self._job_details_cache: dict[str, dict] = {}
 
     def sync_org(self, db: Session, org: Organization, *, full_resync: bool = False) -> dict:
         summary = {
@@ -91,10 +112,7 @@ class WorkableSyncService:
                     if created_role:
                         summary["jobs_upserted"] += 1
 
-                    job_identifier = str(job.get("shortcode") or job.get("id") or role.workable_job_id or "")
-                    if not job_identifier:
-                        continue
-                    candidates = self.client.list_job_candidates(job_identifier)
+                    candidates = self._list_job_candidates_for_job(job=job, role=role, full_resync=full_resync)
                     for candidate_ref in candidates:
                         summary["candidates_seen"] += 1
                         synced = self._sync_candidate_for_role(
@@ -104,6 +122,7 @@ class WorkableSyncService:
                             job=job,
                             candidate_ref=candidate_ref,
                             now=now,
+                            enrich=bool(full_resync),
                         )
                         summary["candidates_upserted"] += synced.get("candidate_upserted", 0)
                         summary["applications_upserted"] += synced.get("application_upserted", 0)
@@ -129,13 +148,60 @@ class WorkableSyncService:
             db.commit()
             raise
 
+    def _job_identifiers(self, job: dict, role: Role | None = None) -> list[str]:
+        identifiers: list[str] = []
+        # SPI v3 in this account resolves job details/candidates by shortcode.
+        for value in (
+            job.get("shortcode"),
+            role.workable_job_id if role else None,
+        ):
+            identifier = str(value or "").strip()
+            if identifier and identifier not in identifiers:
+                identifiers.append(identifier)
+        # Some payloads expose a numeric code in application_url (/jobs/<code>).
+        application_url = str(job.get("application_url") or "")
+        match = re.search(r"/jobs/([0-9]+)", application_url)
+        if match:
+            code = match.group(1)
+            if code not in identifiers:
+                identifiers.append(code)
+        # Last fallback for accounts that resolve endpoints by id.
+        raw_id = str(job.get("id") or "").strip()
+        if raw_id and raw_id not in identifiers:
+            identifiers.append(raw_id)
+        return identifiers
+
+    def _list_job_candidates_for_job(self, *, job: dict, role: Role, full_resync: bool) -> list[dict]:
+        for identifier in self._job_identifiers(job, role):
+            candidates = self.client.list_job_candidates(identifier, paginate=bool(full_resync))
+            if candidates:
+                return candidates
+        return []
+
+    def _job_details_for_role(self, *, job: dict, role: Role | None = None) -> dict:
+        for identifier in self._job_identifiers(job, role):
+            if identifier in self._job_details_cache:
+                cached = self._job_details_cache.get(identifier) or {}
+                if cached:
+                    return cached
+                continue
+            details = self.client.get_job_details(identifier)
+            self._job_details_cache[identifier] = details or {}
+            if details:
+                return details
+        return {}
+
     def _upsert_role(self, db: Session, org: Organization, job: dict) -> tuple[Role, bool]:
         job_id = str(job.get("id") or job.get("shortcode") or "").strip()
         title = str(job.get("title") or job.get("name") or f"Workable role {job_id or 'unknown'}").strip()
+        details = self._job_details_for_role(job=job)
         description = (
-            job.get("description")
-            or job.get("requirements")
+            details.get("description")
+            or details.get("full_description")
+            or details.get("requirements")
+            or job.get("description")
             or job.get("full_description")
+            or job.get("requirements")
             or ""
         )
         role = None
@@ -157,7 +223,7 @@ class WorkableSyncService:
             created = True
         role.source = "workable"
         role.workable_job_id = job_id or role.workable_job_id
-        role.workable_job_data = job
+        role.workable_job_data = {**job, "details": details} if details else job
         role.name = title
         role.description = description or role.description
         if isinstance(description, str) and description.strip():
@@ -174,6 +240,7 @@ class WorkableSyncService:
         job: dict,
         candidate_ref: dict,
         now: datetime,
+        enrich: bool,
     ) -> dict:
         counters = {
             "candidate_upserted": 0,
@@ -185,14 +252,16 @@ class WorkableSyncService:
         if not candidate_id:
             return counters
 
-        candidate_payload = self.client.get_candidate(candidate_id) or candidate_ref
+        candidate_payload = candidate_ref
+        if enrich:
+            candidate_payload = self.client.get_candidate(candidate_id) or candidate_ref
         stage = (
             candidate_payload.get("stage")
             or candidate_ref.get("stage")
             or candidate_ref.get("stage_name")
             or ""
         )
-        if _is_terminal_stage(stage):
+        if _is_terminal_candidate(candidate_payload) or _is_terminal_candidate(candidate_ref):
             return counters
 
         email = _candidate_email(candidate_payload) or _candidate_email(candidate_ref)
@@ -259,35 +328,36 @@ class WorkableSyncService:
         app.workable_candidate_id = candidate_id
         app.workable_stage = str(stage or "")
         app.last_synced_at = now
-        ratings_payload = self.client.get_candidate_ratings(candidate_id)
-        raw_score, normalized_score, score_source = self.client.extract_workable_score(
-            candidate_payload=candidate_payload,
-            ratings_payload=ratings_payload,
-        )
-        app.workable_score_raw = raw_score
-        app.workable_score = normalized_score
-        app.workable_score_source = score_source
+        if enrich:
+            ratings_payload = self.client.get_candidate_ratings(candidate_id)
+            raw_score, normalized_score, score_source = self.client.extract_workable_score(
+                candidate_payload=candidate_payload,
+                ratings_payload=ratings_payload,
+            )
+            app.workable_score_raw = raw_score
+            app.workable_score = normalized_score
+            app.workable_score_source = score_source
 
-        downloaded = self.client.download_candidate_resume(candidate_payload)
-        if downloaded:
-            filename, content = downloaded
-            ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
-            if ext in {"pdf", "docx", "txt"}:
-                try:
-                    path = save_file_locally(content=content, directory="cv", prefix=f"cv-{app.id or candidate.id}", ext=ext)
-                    extracted = extract_text(content, ext)
-                    if extracted:
-                        app.cv_file_url = path
-                        app.cv_filename = filename
-                        app.cv_text = extracted
-                        app.cv_uploaded_at = now
-                        candidate.cv_file_url = path
-                        candidate.cv_filename = filename
-                        candidate.cv_text = extracted
-                        candidate.cv_uploaded_at = now
-                        counters["cv_downloaded"] += 1
-                except Exception:
-                    logger.exception("Failed processing downloaded CV")
+            downloaded = self.client.download_candidate_resume(candidate_payload)
+            if downloaded:
+                filename, content = downloaded
+                ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
+                if ext in {"pdf", "docx", "txt"}:
+                    try:
+                        path = save_file_locally(content=content, directory="cv", prefix=f"cv-{app.id or candidate.id}", ext=ext)
+                        extracted = extract_text(content, ext)
+                        if extracted:
+                            app.cv_file_url = path
+                            app.cv_filename = filename
+                            app.cv_text = extracted
+                            app.cv_uploaded_at = now
+                            candidate.cv_file_url = path
+                            candidate.cv_filename = filename
+                            candidate.cv_text = extracted
+                            candidate.cv_uploaded_at = now
+                            counters["cv_downloaded"] += 1
+                    except Exception:
+                        logger.exception("Failed processing downloaded CV")
 
         cv_matched = self._compute_cv_match(app=app, role=role, now=now)
         if cv_matched:

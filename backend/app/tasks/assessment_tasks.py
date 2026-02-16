@@ -142,13 +142,12 @@ def sync_workable_orgs():
         )
         for org in orgs:
             config = org.workable_config if isinstance(org.workable_config, dict) else {}
-            workflow_mode = str(config.get("workflow_mode") or "manual")
             sync_model = str(config.get("sync_model") or "scheduled_pull_only")
             try:
                 sync_interval_minutes = int(config.get("sync_interval_minutes") or 30)
             except Exception:
                 sync_interval_minutes = 30
-            if workflow_mode != "workable_hybrid" or sync_model != "scheduled_pull_only":
+            if sync_model != "scheduled_pull_only":
                 skipped += 1
                 continue
             last_sync = getattr(org, "workable_last_sync_at", None)

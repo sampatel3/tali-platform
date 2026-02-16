@@ -66,10 +66,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     samlMetadataUrl: '',
   });
   const [workableForm, setWorkableForm] = useState({
-    workflowMode: 'manual',
     emailMode: 'manual_taali',
     syncIntervalMinutes: 30,
-    inviteStageName: 'TAALI Assessment Requested',
+    inviteStageName: '',
   });
 
   useEffect(() => {
@@ -144,10 +143,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       samlMetadataUrl: orgData.saml_metadata_url || '',
     });
     setWorkableForm({
-      workflowMode: cfg.workflow_mode || 'manual',
       emailMode: cfg.email_mode || 'manual_taali',
       syncIntervalMinutes: Number(cfg.sync_interval_minutes || 30),
-      inviteStageName: cfg.invite_stage_name || 'TAALI Assessment Requested',
+      inviteStageName: cfg.invite_stage_name || '',
     });
     setWorkableSelectedScopes({
       r_jobs: true,
@@ -196,21 +194,26 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const handleSaveWorkable = async () => {
+    const emailMode = workableForm.emailMode || 'manual_taali';
+    const inviteStageName = (workableForm.inviteStageName || '').trim();
+    if (emailMode === 'workable_preferred_fallback_manual' && !inviteStageName) {
+      alert('Invite stage name is required when email mode is Automated via Workable.');
+      return;
+    }
     setWorkableSaving(true);
     try {
       const res = await orgsApi.update({
         workable_config: {
-          workflow_mode: workableForm.workflowMode,
-          email_mode: workableForm.emailMode,
+          email_mode: emailMode,
           sync_model: 'scheduled_pull_only',
           sync_scope: 'open_jobs_active_candidates',
           score_precedence: 'workable_first',
           sync_interval_minutes: Number(workableForm.syncIntervalMinutes || 30),
-          invite_stage_name: workableForm.inviteStageName || 'TAALI Assessment Requested',
+          invite_stage_name: emailMode === 'workable_preferred_fallback_manual' ? inviteStageName : '',
         },
       });
       setOrgData(res.data);
-      alert('Workable workflow settings saved.');
+      alert('Workable sync settings saved.');
     } catch (err) {
       alert(err?.response?.data?.detail || 'Failed to save Workable settings');
     } finally {
@@ -367,8 +370,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     : 'Never';
   const lastSyncStatus = orgData?.workable_last_sync_status || 'not_started';
   const billingPlan = orgData?.plan || 'Pay-Per-Use';
-  const apiBaseUrl = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/$/, '');
-  const workableWebhookUrl = `${apiBaseUrl}/api/v1/webhooks/workable`;
   const workableCallbackUrl = `${window.location.origin}/settings/workable/callback`;
   const workableScopes = selectedWorkableScopes.join(' ') || 'none';
   const workableWriteScopeEnabled = selectedWorkableScopes.includes('w_candidates');
@@ -456,39 +457,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   ) : null}
                 </div>
 
-                <div className="border-2 border-black p-6 mb-8 bg-white">
-                  <div className="font-bold text-lg mb-2">Workable Setup Checklist</div>
-                  <div className="font-mono text-xs text-gray-500 mb-4">Configure these once, then click Connect Workable above.</div>
-                  <div className="grid md:grid-cols-2 gap-4">
-                    <div className="border border-black p-3">
-                      <div className="font-mono text-xs text-gray-500 mb-1">Workable OAuth App</div>
-                      <div className="font-mono text-sm">Add callback URL</div>
-                      <div className="font-mono text-xs break-all mt-1">{workableCallbackUrl}</div>
-                    </div>
-                    <div className="border border-black p-3">
-                      <div className="font-mono text-xs text-gray-500 mb-1">Workable OAuth App</div>
-                      <div className="font-mono text-sm">Enable scopes</div>
-                      <div className="font-mono text-xs mt-1">{workableScopes}</div>
-                    </div>
-                    <div className="border border-black p-3">
-                      <div className="font-mono text-xs text-gray-500 mb-1">Railway Backend Env</div>
-                      <div className="font-mono text-sm">WORKABLE_CLIENT_ID</div>
-                      <div className="font-mono text-xs mt-1">From Workable Developer/OAuth app credentials.</div>
-                    </div>
-                    <div className="border border-black p-3">
-                      <div className="font-mono text-xs text-gray-500 mb-1">Railway Backend Env</div>
-                      <div className="font-mono text-sm">WORKABLE_CLIENT_SECRET</div>
-                      <div className="font-mono text-xs mt-1">From the same Workable OAuth app credentials.</div>
-                    </div>
-                  </div>
-                  <div className="font-mono text-xs text-gray-600 mt-4">
-                    Optional webhook secret: WORKABLE_WEBHOOK_SECRET with endpoint {workableWebhookUrl}
-                  </div>
-                  <div className="font-mono text-xs text-gray-600 mt-2">
-                    Click "Connect Workable" to open the connection sidebar and choose OAuth or token mode.
-                  </div>
-                </div>
-
                 <div className="border-2 border-black p-6 space-y-4">
                   <div>
                     <div className="font-mono text-xs text-gray-500 mb-1">Organization</div>
@@ -508,29 +476,28 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </div>
                   <hr className="border-black" />
                   <div>
-                    <div className="font-bold mb-3">Workflow Settings</div>
+                    <div className="font-bold mb-3">Sync + Invite Settings</div>
                     <div className="grid md:grid-cols-2 gap-3">
-                      <label className="block">
-                        <span className="font-mono text-xs text-gray-500 mb-1 block">Workflow mode</span>
-                        <select
-                          className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
-                          value={workableForm.workflowMode}
-                          onChange={(e) => setWorkableForm((prev) => ({ ...prev, workflowMode: e.target.value }))}
-                        >
-                          <option value="manual">Manual</option>
-                          <option value="workable_hybrid">Workable hybrid</option>
-                        </select>
-                      </label>
                       <label className="block">
                         <span className="font-mono text-xs text-gray-500 mb-1 block">Email mode</span>
                         <select
                           className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
                           value={workableForm.emailMode}
-                          onChange={(e) => setWorkableForm((prev) => ({ ...prev, emailMode: e.target.value }))}
+                          onChange={(e) => {
+                            const nextMode = e.target.value;
+                            setWorkableForm((prev) => ({
+                              ...prev,
+                              emailMode: nextMode,
+                              inviteStageName: nextMode === 'workable_preferred_fallback_manual' ? prev.inviteStageName : '',
+                            }));
+                          }}
                         >
-                          <option value="manual_taali">Manual via TAALI</option>
-                          <option value="workable_preferred_fallback_manual">Hybrid with fallback</option>
+                          <option value="manual_taali">Manual</option>
+                          <option value="workable_preferred_fallback_manual">Automated via Workable</option>
                         </select>
+                        <span className="font-mono text-xs text-gray-500 mt-1 block">
+                          Automated mode requires `w_candidates` scope and a Workable stage name.
+                        </span>
                       </label>
                       <label className="block">
                         <span className="font-mono text-xs text-gray-500 mb-1 block">Sync interval (minutes)</span>
@@ -543,15 +510,21 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                           onChange={(e) => setWorkableForm((prev) => ({ ...prev, syncIntervalMinutes: e.target.value }))}
                         />
                       </label>
-                      <label className="block">
-                        <span className="font-mono text-xs text-gray-500 mb-1 block">Invite stage name</span>
-                        <input
-                          type="text"
-                          className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
-                          value={workableForm.inviteStageName}
-                          onChange={(e) => setWorkableForm((prev) => ({ ...prev, inviteStageName: e.target.value }))}
-                        />
-                      </label>
+                      {workableForm.emailMode === 'workable_preferred_fallback_manual' ? (
+                        <label className="block md:col-span-2">
+                          <span className="font-mono text-xs text-gray-500 mb-1 block">Invite stage name</span>
+                          <input
+                            type="text"
+                            className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                            placeholder="Enter exact Workable stage name"
+                            value={workableForm.inviteStageName}
+                            onChange={(e) => setWorkableForm((prev) => ({ ...prev, inviteStageName: e.target.value }))}
+                          />
+                          <span className="font-mono text-xs text-gray-500 mt-1 block">
+                            Keep this blank in manual mode. For automated mode, enter the exact stage already configured in Workable.
+                          </span>
+                        </label>
+                      ) : null}
                     </div>
                     <div className="mt-4 flex flex-wrap gap-3">
                       <button

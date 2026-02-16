@@ -16,9 +16,8 @@ logger = logging.getLogger(__name__)
 def _workable_config(org: Organization) -> dict:
     config = org.workable_config if isinstance(org.workable_config, dict) else {}
     return {
-        "workflow_mode": str(config.get("workflow_mode") or "manual"),
         "email_mode": str(config.get("email_mode") or "manual_taali"),
-        "invite_stage_name": str(config.get("invite_stage_name") or "TAALI Assessment Requested"),
+        "invite_stage_name": str(config.get("invite_stage_name") or "").strip(),
     }
 
 
@@ -64,14 +63,13 @@ def dispatch_assessment_invite(
 ) -> str:
     """Dispatch invite via Workable-first hybrid flow with manual fallback."""
     config = _workable_config(org)
-    workflow_mode = config["workflow_mode"]
     email_mode = config["email_mode"]
     stage_name = config["invite_stage_name"]
     attempted_workable = False
 
     if (
-        workflow_mode == "workable_hybrid"
-        and email_mode == "workable_preferred_fallback_manual"
+        email_mode == "workable_preferred_fallback_manual"
+        and bool(stage_name)
         and not settings.MVP_DISABLE_WORKABLE
         and org.workable_connected
         and org.workable_access_token

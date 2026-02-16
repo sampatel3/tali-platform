@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any
+from urllib.parse import parse_qsl, urlparse
 
 import httpx
 
@@ -39,6 +40,7 @@ class WorkableService:
             "Authorization": f"Bearer {access_token}",
             "Content-Type": "application/json",
         }
+        self._ratings_supported: bool | None = None
 
     def _request(self, method: str, path: str, *, json: dict | None = None, params: dict | None = None) -> dict:
         url = f"{self.base_url}{path}"
@@ -79,22 +81,91 @@ class WorkableService:
         # A simple authenticated read endpoint to validate token + subdomain.
         self._request("GET", "/jobs", params={"state": "published"})
 
-    def list_job_candidates(self, job_identifier: str) -> list[dict]:
-        payload = self._request_optional("GET", f"/jobs/{job_identifier}/candidates")
-        candidates = payload.get("candidates")
-        if isinstance(candidates, list):
-            return [candidate for candidate in candidates if isinstance(candidate, dict)]
-        if isinstance(payload, list):
-            return [candidate for candidate in payload if isinstance(candidate, dict)]
-        return []
+    def list_job_candidates(
+        self,
+        job_identifier: str,
+        *,
+        paginate: bool = False,
+        max_pages: int | None = None,
+    ) -> list[dict]:
+        if not job_identifier:
+            return []
+
+        candidates: list[dict] = []
+        seen_ids: set[str] = set()
+        path = f"/jobs/{job_identifier}/candidates"
+        params: dict[str, str] | None = None
+        pages = 0
+
+        while path:
+            pages += 1
+            payload = self._request_optional("GET", path, params=params)
+            if isinstance(payload, dict):
+                batch = payload.get("candidates")
+                paging = payload.get("paging") if isinstance(payload.get("paging"), dict) else {}
+                next_url = paging.get("next") if isinstance(paging, dict) else None
+            elif isinstance(payload, list):
+                batch = payload
+                next_url = None
+            else:
+                batch = []
+                next_url = None
+
+            if isinstance(batch, list):
+                for candidate in batch:
+                    if not isinstance(candidate, dict):
+                        continue
+                    candidate_id = str(candidate.get("id") or "").strip()
+                    if candidate_id and candidate_id in seen_ids:
+                        continue
+                    if candidate_id:
+                        seen_ids.add(candidate_id)
+                    candidates.append(candidate)
+
+            if not paginate:
+                break
+            if max_pages is not None and pages >= max_pages:
+                break
+            if not isinstance(next_url, str) or not next_url:
+                break
+            parsed = urlparse(next_url)
+            parsed_path = parsed.path or ""
+            if parsed_path.startswith("/spi/v3"):
+                parsed_path = parsed_path[len("/spi/v3"):]
+            path = parsed_path if parsed_path else path
+            params = dict(parse_qsl(parsed.query))
+
+        return candidates
+
+    def get_job_details(self, job_identifier: str) -> dict:
+        if not job_identifier:
+            return {}
+        payload = self._request_optional("GET", f"/jobs/{job_identifier}")
+        return payload if isinstance(payload, dict) else {}
 
     def get_candidate(self, candidate_id: str) -> dict:
         payload = self._request_optional("GET", f"/candidates/{candidate_id}")
         return payload if isinstance(payload, dict) else {}
 
     def get_candidate_ratings(self, candidate_id: str) -> dict:
-        payload = self._request_optional("GET", f"/candidates/{candidate_id}/ratings")
-        return payload if isinstance(payload, dict) else {}
+        if self._ratings_supported is False:
+            return {}
+
+        try:
+            payload = self._request("GET", f"/candidates/{candidate_id}/ratings")
+            self._ratings_supported = True
+            return payload if isinstance(payload, dict) else {}
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code if exc.response else None
+            if status_code in {403, 404}:
+                self._ratings_supported = False
+                logger.info("Workable ratings endpoint unavailable (status=%s); skipping ratings fetches", status_code)
+                return {}
+            logger.exception("Failed fetching candidate ratings")
+            return {}
+        except Exception:
+            logger.exception("Failed fetching candidate ratings")
+            return {}
 
     def post_candidate_activity(self, candidate_id: str, body: str) -> dict:
         try:
