@@ -85,7 +85,13 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, assessments as assessmentsApi, tasks as tasksApi, roles as rolesApi } from '../shared/api';
+import {
+  auth,
+  assessments as assessmentsApi,
+  tasks as tasksApi,
+  roles as rolesApi,
+  organizations as organizationsApi,
+} from '../shared/api';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -188,6 +194,7 @@ describe('DashboardPage', () => {
     window.location.hash = '';
     window.history.pushState({}, '', '/');
     setupAuthenticatedUser();
+    organizationsApi.get.mockResolvedValue({ data: { id: 1, name: 'Acme Labs' } });
     tasksApi.list.mockResolvedValue({ data: mockTasks });
     rolesApi.list.mockResolvedValue({ data: mockRoles });
   });
@@ -214,6 +221,16 @@ describe('DashboardPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
       expect(screen.getByText('Welcome back, Admin')).toBeInTheDocument();
+    });
+  });
+
+  it('shows signed-in user and organization in the top-right nav', async () => {
+    assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
+    renderApp();
+
+    await waitFor(() => {
+      expect(screen.getByText('Admin User')).toBeInTheDocument();
+      expect(screen.getByText('Acme Labs')).toBeInTheDocument();
     });
   });
 

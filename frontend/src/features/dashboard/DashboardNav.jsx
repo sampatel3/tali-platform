@@ -1,13 +1,61 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { LogOut } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
+import { organizations as organizationsApi } from '../../shared/api';
 import { Logo } from '../../shared/ui/Branding';
 import { Button } from '../../shared/ui/TaaliPrimitives';
 
+const pickUserName = (user) => {
+  const directName = (user?.full_name || user?.name || '').trim();
+  if (directName) return directName;
+  const emailLocalPart = (user?.email || '').split('@')[0]?.trim();
+  return emailLocalPart || '';
+};
+
+const pickOrganizationName = (user) => String(
+  user?.organization?.name
+  || user?.organization_name
+  || user?.company_name
+  || ''
+).trim();
+
 export const DashboardNav = ({ currentPage, onNavigate }) => {
   const { user, logout } = useAuth();
-  const orgName = user?.organization?.name || '--';
-  const initials = orgName.split(' ').map((w) => w[0]).join('').slice(0, 2).toUpperCase();
+  const userName = pickUserName(user);
+  const fallbackOrgName = pickOrganizationName(user);
+  const [resolvedOrgName, setResolvedOrgName] = useState(fallbackOrgName);
+
+  useEffect(() => {
+    setResolvedOrgName(fallbackOrgName);
+  }, [fallbackOrgName]);
+
+  useEffect(() => {
+    if (!user || fallbackOrgName) return;
+    let cancelled = false;
+    const loadOrganizationName = async () => {
+      try {
+        const response = await organizationsApi.get();
+        const orgName = (response?.data?.name || '').trim();
+        if (!cancelled && orgName) {
+          setResolvedOrgName(orgName);
+        }
+      } catch {
+        // Ignore org lookup failures; keep existing fallback label.
+      }
+    };
+    loadOrganizationName();
+    return () => {
+      cancelled = true;
+    };
+  }, [fallbackOrgName, user]);
+
+  const orgName = resolvedOrgName || 'No company';
+  const displayName = userName || 'User';
+  const initials = useMemo(() => {
+    const seed = `${displayName} ${orgName}`.trim();
+    const letters = seed.split(/\s+/).filter(Boolean).map((w) => w[0]).join('');
+    return letters.slice(0, 2).toUpperCase() || 'U';
+  }, [displayName, orgName]);
 
   const handleLogout = () => {
     logout();
@@ -40,7 +88,10 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
           </div>
         </div>
         <div className="flex items-center gap-4">
-          <span className="font-mono text-sm hidden sm:inline">{orgName}</span>
+          <div className="hidden sm:flex flex-col text-right leading-tight">
+            <span className="font-mono text-sm">{displayName}</span>
+            <span className="font-mono text-xs text-gray-600">{orgName}</span>
+          </div>
           <div
             className="w-9 h-9 border-2 border-black flex items-center justify-center text-white font-bold text-sm"
             style={{ backgroundColor: 'var(--taali-purple)' }}
