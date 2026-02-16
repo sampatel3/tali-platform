@@ -425,6 +425,55 @@ describe('AssessmentPage tracking metadata', () => {
     });
   });
 
+  it('initializes terminal websocket in demo mode when Claude CLI mode is enabled', async () => {
+    const sentMessages = [];
+    class MockWebSocket {
+      static OPEN = 1;
+
+      constructor() {
+        this.readyState = MockWebSocket.OPEN;
+        setTimeout(() => {
+          this.onopen?.();
+        }, 0);
+      }
+
+      send(data) {
+        sentMessages.push(JSON.parse(data));
+      }
+
+      close() {
+        this.readyState = 3;
+        this.onclose?.();
+      }
+    }
+    global.WebSocket = MockWebSocket;
+
+    const startData = {
+      assessment_id: 22,
+      token: 'tok-terminal-demo',
+      time_remaining: 1200,
+      ai_mode: 'claude_cli_terminal',
+      terminal_mode: true,
+      terminal_capabilities: {
+        permission_mode: 'default',
+      },
+      task: {
+        name: 'Demo CLI mode task',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+      },
+    };
+
+    render(<AssessmentPage token="tok-terminal-demo" startData={startData} demoMode />);
+
+    expect(await screen.findByTestId('assessment-terminal')).toBeInTheDocument();
+    expect(screen.queryByText('send-claude')).not.toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(sentMessages.some((message) => message.type === 'init')).toBe(true);
+    });
+  });
+
   it('disables Claude when task budget is exhausted', async () => {
     const startData = {
       assessment_id: 19,

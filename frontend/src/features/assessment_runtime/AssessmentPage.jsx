@@ -314,7 +314,8 @@ export default function AssessmentPage({
   }, [assessment, assessmentId, assessmentTokenForApi, terminalStopping, appendTerminalEvent, sendTerminalPayload]);
 
   useEffect(() => {
-    if (!showTerminal || demoMode || loading || submitted || isTimerPaused) return undefined;
+    // Demo sessions use the same terminal transport; do not skip websocket init in demo mode.
+    if (!showTerminal || loading || submitted || isTimerPaused) return undefined;
     const id = assessment?.id || assessmentId;
     if (!id || !assessmentTokenForApi) return undefined;
 
