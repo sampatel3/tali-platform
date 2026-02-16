@@ -41,6 +41,7 @@ class WorkableService:
     """Service for interacting with the Workable API (SPI v3)."""
 
     SCORE_KEYWORDS = ("score", "rating", "match")
+    DEFAULT_PAGE_LIMIT = 100
 
     def __init__(self, access_token: str, subdomain: str):
         self.base_url = f"https://{subdomain}.workable.com/spi/v3"
@@ -72,10 +73,10 @@ class WorkableService:
             return {}
 
     def _download(self, url: str) -> bytes:
-        with httpx.Client(timeout=30.0) as client:
+        with httpx.Client(timeout=30.0, follow_redirects=True) as client:
             response = client.get(url, headers=self.headers)
-            # Workable sometimes returns a presigned URL for resumes; these may reject auth headers.
-            if response.status_code == 403:
+            # Workable often returns a presigned URL for resumes; these reject extra auth headers.
+            if response.status_code in {400, 401, 403}:
                 response = client.get(url)
         response.raise_for_status()
         return response.content
@@ -112,7 +113,7 @@ class WorkableService:
         candidates: list[dict] = []
         seen_ids: set[str] = set()
         path = f"/jobs/{job_identifier}/candidates"
-        params: dict[str, str] | None = None
+        params: dict[str, str] | None = {"limit": str(self.DEFAULT_PAGE_LIMIT)}
         pages = 0
 
         while path:
@@ -154,6 +155,46 @@ class WorkableService:
             params = dict(parse_qsl(parsed.query))
 
         return candidates
+
+    def get_job_candidates_page(
+        self,
+        job_identifier: str,
+        *,
+        since_id: str | None = None,
+        limit: int | None = None,
+    ) -> tuple[list[dict], str | None, bool]:
+        """Fetch a single page of job candidates.
+
+        Returns: (candidates, next_since_id, ok)
+        """
+        if not job_identifier:
+            return [], None, False
+
+        page_limit = self.DEFAULT_PAGE_LIMIT if limit is None else int(limit)
+        params: dict[str, str] = {"limit": str(page_limit)}
+        if since_id:
+            params["since_id"] = str(since_id)
+
+        payload = self._request_optional("GET", f"/jobs/{job_identifier}/candidates", params=params)
+        if isinstance(payload, dict) and isinstance(payload.get("candidates"), list):
+            batch = [item for item in payload.get("candidates") or [] if isinstance(item, dict)]
+            paging = payload.get("paging") if isinstance(payload.get("paging"), dict) else {}
+            next_url = paging.get("next") if isinstance(paging, dict) else None
+            next_since = None
+            if isinstance(next_url, str) and next_url:
+                try:
+                    parsed = urlparse(next_url)
+                    next_params = dict(parse_qsl(parsed.query))
+                    next_since = (next_params.get("since_id") or "").strip() or None
+                except Exception:
+                    next_since = None
+            return batch, next_since, True
+
+        if isinstance(payload, list):
+            batch = [item for item in payload if isinstance(item, dict)]
+            return batch, None, True
+
+        return [], None, False
 
     def get_job_details(self, job_identifier: str) -> dict:
         if not job_identifier:

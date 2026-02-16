@@ -15,13 +15,51 @@ from ....models.organization import Organization
 from ....models.role import Role
 from ....platform.config import settings
 from ....services.document_service import extract_text, save_file_locally
+
+def _format_job_spec_from_api(job_data: dict) -> str:
+    """Build a well-formatted job spec string from full Workable job API data."""
+    if not job_data:
+        return ""
+    # Unwrap if API returned {"job": {...}} or use as-is
+    merged = job_data.get("job") if isinstance(job_data.get("job"), dict) else dict(job_data)
+    details = merged.get("details") if isinstance(merged.get("details"), dict) else {}
+    merged = {**merged, **details}
+    merged.pop("details", None)
+    lines: list[str] = []
+
+    title = merged.get("title") or merged.get("name") or merged.get("headline") or "Job"
+    lines.append(f"# {title}")
+    lines.append("")
+
+    for key, label in (
+        ("department", "Department"),
+        ("location", "Location"),
+        ("employment_type", "Employment type"),
+        ("application_url", "Apply"),
+        ("state", "State"),
+        ("full_title", "Full title"),
+    ):
+        value = merged.get(key)
+        if value is not None and str(value).strip():
+            lines.append(f"**{label}:** {value}")
+    lines.append("")
+
+    for key in ("description", "full_description", "requirements", "benefits"):
+        value = merged.get(key)
+        if isinstance(value, str) and value.strip():
+            label = key.replace("_", " ").title()
+            lines.append(f"## {label}")
+            lines.append("")
+            lines.append(value.strip())
+            lines.append("")
+
+    return "\n".join(lines).strip()
 from ....services.fit_matching_service import calculate_cv_job_match_sync
 from .service import WorkableRateLimitError, WorkableService
 
 logger = logging.getLogger(__name__)
 
 TERMINAL_STAGES = {"hired", "rejected", "withdrawn", "disqualified", "declined", "archived"}
-DEFAULT_MAX_CANDIDATE_PAGES = 20
 
 
 def _now() -> datetime:
@@ -130,7 +168,7 @@ class WorkableSyncService:
                     if created_role:
                         summary["jobs_upserted"] += 1
 
-                    candidates = self._list_job_candidates_for_job(job=job, role=role, full_resync=full_resync)
+                    candidates = self._list_job_candidates_for_job(job=job, role=role)
                     for candidate_ref in candidates:
                         summary["candidates_seen"] += 1
                         synced = self._sync_candidate_for_role(
@@ -140,7 +178,7 @@ class WorkableSyncService:
                             job=job,
                             candidate_ref=candidate_ref,
                             now=now,
-                            enrich=bool(full_resync),
+                            enrich=True,  # always fetch full candidate + CV
                         )
                         summary["candidates_upserted"] += synced.get("candidate_upserted", 0)
                         summary["applications_upserted"] += synced.get("application_upserted", 0)
@@ -193,10 +231,14 @@ class WorkableSyncService:
             identifiers.append(raw_id)
         return identifiers
 
-    def _list_job_candidates_for_job(self, *, job: dict, role: Role, full_resync: bool) -> list[dict]:
+    def _list_job_candidates_for_job(self, *, job: dict, role: Role) -> list[dict]:
+        """Fetch all candidates for the job, paginating through every page."""
         for identifier in self._job_identifiers(job, role):
-            max_pages = None if full_resync else DEFAULT_MAX_CANDIDATE_PAGES
-            candidates = self.client.list_job_candidates(identifier, paginate=True, max_pages=max_pages)
+            candidates = self.client.list_job_candidates(
+                identifier,
+                paginate=True,
+                max_pages=None,  # no limit — fetch all pages
+            )
             if candidates:
                 return candidates
         return []
@@ -248,10 +290,31 @@ class WorkableSyncService:
         role.workable_job_id = job_id or role.workable_job_id
         role.workable_job_data = {**job, "details": details} if details else job
         role.name = title
-        role.description = description or role.description
-        if isinstance(description, str) and description.strip():
-            role.job_spec_text = description.strip()
+        # Build one formatted spec from full API data for display and attachment
+        formatted_spec = _format_job_spec_from_api(role.workable_job_data or {})
+        if formatted_spec:
+            role.job_spec_text = formatted_spec
+            role.description = formatted_spec
+        else:
+            role.description = description or role.description
+            if isinstance(description, str) and description.strip():
+                role.job_spec_text = description.strip()
         db.flush()
+        # Save job spec as an attachment (file) for download and consistent display
+        if (role.job_spec_text or "").strip():
+            try:
+                spec_content = (role.job_spec_text or "").strip().encode("utf-8")
+                path = save_file_locally(
+                    content=spec_content,
+                    directory="job_spec",
+                    prefix=f"job-spec-{role.id}",
+                    ext="txt",
+                )
+                role.job_spec_file_url = path
+                role.job_spec_filename = f"job-spec-{role.name or role.id}.txt".replace("/", "-")
+                role.job_spec_uploaded_at = _now()
+            except Exception:
+                logger.exception("Failed saving Workable job spec file for role_id=%s", role.id)
         return role, created
 
     def _sync_candidate_for_role(
