@@ -50,6 +50,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [candidateSheetError, setCandidateSheetError] = useState('');
   const [creatingAssessmentId, setCreatingAssessmentId] = useState(null);
   const [viewingApplicationId, setViewingApplicationId] = useState(null);
+  const [generatingTaaliId, setGeneratingTaaliId] = useState(null);
   const [inviteSheetOpen, setInviteSheetOpen] = useState(false);
   const [inviteDraft, setInviteDraft] = useState(null);
 
@@ -369,6 +370,19 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
   };
 
+  const handleGenerateTaaliCvAi = useCallback(async (application) => {
+    if (!rolesApi?.generateTaaliCvAi) return;
+    setGeneratingTaaliId(application.id);
+    try {
+      await rolesApi.generateTaaliCvAi(application.id);
+      await loadRoleContext(selectedRoleId);
+    } catch (err) {
+      alert(getErrorMessage(err, 'Failed to generate TAALI score.'));
+    } finally {
+      setGeneratingTaaliId(null);
+    }
+  }, [rolesApi, loadRoleContext, selectedRoleId]);
+
   return (
     <div>
       <NavComponent currentPage="candidates" onNavigate={onNavigate} />
@@ -569,6 +583,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   canCreateAssessment={Boolean(rolesApi?.createAssessment)}
                   creatingAssessmentId={creatingAssessmentId}
                   viewingApplicationId={viewingApplicationId}
+                  generatingTaaliId={generatingTaaliId}
                   onChangeSort={handleSortChange}
                   onAddCandidate={() => {
                     setCandidateSheetError('');
@@ -576,6 +591,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   }}
                   onViewCandidate={handleViewFromApplication}
                   onCreateAssessment={handleCreateAssessment}
+                  onGenerateTaaliCvAi={handleGenerateTaaliCvAi}
                 />
               </>
             )}

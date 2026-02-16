@@ -26,5 +26,6 @@ export const roles = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+  generateTaaliCvAi: (applicationId) => api.post(`/applications/${applicationId}/generate-taali-cv-ai`),
   createAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments`, data),
 };

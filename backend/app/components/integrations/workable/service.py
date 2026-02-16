@@ -3,12 +3,20 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+_NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
+
+
+class WorkableRateLimitError(RuntimeError):
+    """Raised when Workable returns HTTP 429."""
+
 
 
 def _normalize_score(value: float | int | None) -> float | None:
@@ -52,6 +60,13 @@ class WorkableService:
     def _request_optional(self, method: str, path: str, *, json: dict | None = None, params: dict | None = None) -> dict:
         try:
             return self._request(method, path, json=json, params=params)
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code if exc.response else None
+            if status_code == 429:
+                logger.warning("Workable rate limited (429) for %s %s", method, path)
+                raise WorkableRateLimitError("Workable API rate limited (429)")
+            logger.exception("Workable request failed: %s %s", method, path)
+            return {}
         except Exception:
             logger.exception("Workable request failed: %s %s", method, path)
             return {}
@@ -59,6 +74,9 @@ class WorkableService:
     def _download(self, url: str) -> bytes:
         with httpx.Client(timeout=30.0) as client:
             response = client.get(url, headers=self.headers)
+            # Workable sometimes returns a presigned URL for resumes; these may reject auth headers.
+            if response.status_code == 403:
+                response = client.get(url)
         response.raise_for_status()
         return response.content
 
@@ -145,7 +163,12 @@ class WorkableService:
 
     def get_candidate(self, candidate_id: str) -> dict:
         payload = self._request_optional("GET", f"/candidates/{candidate_id}")
-        return payload if isinstance(payload, dict) else {}
+        if not isinstance(payload, dict):
+            return {}
+        wrapped = payload.get("candidate")
+        if isinstance(wrapped, dict):
+            return wrapped
+        return payload
 
     def get_candidate_ratings(self, candidate_id: str) -> dict:
         if self._ratings_supported is False:
@@ -157,6 +180,8 @@ class WorkableService:
             return payload if isinstance(payload, dict) else {}
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code if exc.response else None
+            if status_code == 429:
+                raise WorkableRateLimitError("Workable API rate limited (429)") from exc
             if status_code in {403, 404}:
                 self._ratings_supported = False
                 logger.info("Workable ratings endpoint unavailable (status=%s); skipping ratings fetches", status_code)
@@ -200,6 +225,25 @@ class WorkableService:
             return {"success": False, "response": {"error": str(exc)}}
 
     def download_candidate_resume(self, candidate_payload: dict) -> tuple[str, bytes] | None:
+        resume_url = candidate_payload.get("resume_url")
+        if isinstance(resume_url, str) and resume_url.strip():
+            metadata = candidate_payload.get("resume_metadata")
+            filename = None
+            if isinstance(metadata, dict):
+                filename = metadata.get("filename") or metadata.get("name")
+            if not filename:
+                parsed = urlparse(resume_url)
+                url_name = (parsed.path or "").rsplit("/", 1)[-1]
+                if url_name and "." in url_name:
+                    filename = url_name
+            filename = str(filename or "resume.pdf")
+            try:
+                content = self._download(resume_url)
+                if content:
+                    return filename, content
+            except Exception:
+                logger.exception("Failed downloading candidate resume_url")
+
         attachments = []
         for key in ("attachments", "files", "documents"):
             value = candidate_payload.get(key)
@@ -266,6 +310,13 @@ class WorkableService:
                 key_lower = str(key).lower()
                 if isinstance(value, (int, float)) and any(token in key_lower for token in self.SCORE_KEYWORDS):
                     output.append((float(value), path))
+                elif isinstance(value, str) and any(token in key_lower for token in self.SCORE_KEYWORDS):
+                    candidate = value.strip()
+                    if candidate and _NUMERIC_RE.match(candidate):
+                        try:
+                            output.append((float(candidate), path))
+                        except Exception:
+                            pass
                 self._collect_score_candidates(value, prefix=path, output=output)
         elif isinstance(payload, list):
             for idx, value in enumerate(payload):

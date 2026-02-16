@@ -3,24 +3,22 @@ FastAPI-Users configuration: user manager, auth backend, schemas, Resend hooks.
 """
 
 import logging
+import re
 from datetime import datetime
 from typing import Optional
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, Request
 from fastapi_users import BaseUserManager, FastAPIUsers, IntegerIDMixin, InvalidPasswordException
 from fastapi_users.authentication import AuthenticationBackend, BearerTransport, JWTStrategy
 from fastapi_users.db import SQLAlchemyUserDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from ...models.user import User
 from ...models.organization import Organization
 from ...platform.config import settings
 from ...platform.database import get_async_db
 from ...domains.integrations_notifications.adapters import build_email_adapter
-from .access_policy import (
-    is_email_allowed_for_domains,
-    normalize_allowed_domains,
-)
 
 logger = logging.getLogger("taali.auth")
 
@@ -59,6 +57,24 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
         if len(password.encode("utf-8")) > 72:
             raise InvalidPasswordException(reason="Password must be at most 72 bytes (bcrypt limit)")
 
+    async def _create_signup_org(self, session: AsyncSession, organization_name: str) -> Organization:
+        """Always create a fresh organization for self-signup with a unique slug."""
+        base_slug = re.sub(r"[^a-z0-9]+", "-", organization_name.lower()).strip("-") or "organization"
+        slug = base_slug
+        suffix = 2
+
+        while True:
+            existing = await session.execute(select(Organization.id).where(Organization.slug == slug))
+            if existing.scalar_one_or_none() is None:
+                break
+            slug = f"{base_slug}-{suffix}"
+            suffix += 1
+
+        org = Organization(name=organization_name, slug=slug)
+        session.add(org)
+        await session.flush()
+        return org
+
     async def create(self, user_create, safe: bool = False, request: Optional[Request] = None) -> User:
         await self.validate_password(user_create.password, user_create)
 
@@ -83,25 +99,7 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
         org_id = None
         if organization_name:
             session: AsyncSession = self.user_db.session
-            slug = organization_name.lower().replace(" ", "-")
-            from sqlalchemy import select
-
-            result = await session.execute(select(Organization).where(Organization.slug == slug))
-            org = result.scalar_one_or_none()
-            if org and getattr(org, "sso_enforced", False):
-                raise HTTPException(status_code=403, detail="Organization enforces SSO. Use enterprise sign-in.")
-            if org and not is_email_allowed_for_domains(
-                user_create.email,
-                normalize_allowed_domains(getattr(org, "allowed_email_domains", None)),
-            ):
-                raise HTTPException(
-                    status_code=400,
-                    detail="Email domain is not allowed for this organization",
-                )
-            if not org:
-                org = Organization(name=organization_name, slug=slug)
-                session.add(org)
-                await session.flush()
+            org = await self._create_signup_org(session, organization_name.strip())
             org_id = org.id
         user_dict["organization_id"] = org_id
         # Remove any field not on User model (e.g. organization_name) before create

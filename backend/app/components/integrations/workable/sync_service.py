@@ -16,11 +16,12 @@ from ....models.role import Role
 from ....platform.config import settings
 from ....services.document_service import extract_text, save_file_locally
 from ....services.fit_matching_service import calculate_cv_job_match_sync
-from .service import WorkableService
+from .service import WorkableRateLimitError, WorkableService
 
 logger = logging.getLogger(__name__)
 
 TERMINAL_STAGES = {"hired", "rejected", "withdrawn", "disqualified", "declined", "archived"}
+DEFAULT_MAX_CANDIDATE_PAGES = 20
 
 
 def _now() -> datetime:
@@ -54,6 +55,20 @@ def _is_terminal_candidate(payload: dict) -> bool:
 def _candidate_email(payload: dict) -> str | None:
     for key in ("email", "work_email", "candidate_email"):
         value = payload.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    # Workable sometimes provides a list of emails.
+    emails = payload.get("emails")
+    if isinstance(emails, list):
+        for item in emails:
+            if not isinstance(item, dict):
+                continue
+            value = item.get("value") or item.get("email") or item.get("address")
+            if isinstance(value, str) and value.strip():
+                return value.strip().lower()
+    contact = payload.get("contact")
+    if isinstance(contact, dict):
+        value = contact.get("email")
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
     return None
@@ -106,7 +121,10 @@ class WorkableSyncService:
         try:
             jobs = self.client.list_open_jobs()
             summary["jobs_seen"] = len(jobs)
+            rate_limited = False
             for job in jobs:
+                if rate_limited:
+                    break
                 try:
                     role, created_role = self._upsert_role(db, org, job)
                     if created_role:
@@ -128,6 +146,10 @@ class WorkableSyncService:
                         summary["applications_upserted"] += synced.get("application_upserted", 0)
                         summary["cv_downloaded"] += synced.get("cv_downloaded", 0)
                         summary["cv_matched"] += synced.get("cv_matched", 0)
+                except WorkableRateLimitError as exc:
+                    logger.warning("Workable sync rate-limited; stopping early for org_id=%s", org.id)
+                    summary["errors"].append(str(exc))
+                    rate_limited = True
                 except Exception as exc:
                     logger.exception("Failed syncing job")
                     summary["errors"].append(str(exc))
@@ -173,7 +195,8 @@ class WorkableSyncService:
 
     def _list_job_candidates_for_job(self, *, job: dict, role: Role, full_resync: bool) -> list[dict]:
         for identifier in self._job_identifiers(job, role):
-            candidates = self.client.list_job_candidates(identifier, paginate=bool(full_resync))
+            max_pages = None if full_resync else DEFAULT_MAX_CANDIDATE_PAGES
+            candidates = self.client.list_job_candidates(identifier, paginate=True, max_pages=max_pages)
             if candidates:
                 return candidates
         return []
@@ -328,16 +351,20 @@ class WorkableSyncService:
         app.workable_candidate_id = candidate_id
         app.workable_stage = str(stage or "")
         app.last_synced_at = now
+
+        ratings_payload = None
         if enrich:
             ratings_payload = self.client.get_candidate_ratings(candidate_id)
-            raw_score, normalized_score, score_source = self.client.extract_workable_score(
-                candidate_payload=candidate_payload,
-                ratings_payload=ratings_payload,
-            )
+        raw_score, normalized_score, score_source = self.client.extract_workable_score(
+            candidate_payload=candidate_payload,
+            ratings_payload=ratings_payload,
+        )
+        # Only overwrite when we successfully extracted a score.
+        if raw_score is not None or normalized_score is not None:
             app.workable_score_raw = raw_score
             app.workable_score = normalized_score
             app.workable_score_source = score_source
-
+        if enrich:
             downloaded = self.client.download_candidate_resume(candidate_payload)
             if downloaded:
                 filename, content = downloaded

@@ -52,6 +52,12 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
       <ul className="space-y-2">
         {roles.map((role) => {
           const selected = String(role.id) === String(selectedRoleId);
+          const specReady = Boolean(role.job_spec_present || role.job_spec_filename);
+          const specLabel = specReady
+            ? (role.job_spec_filename
+              ? 'Spec uploaded'
+              : (role.source === 'workable' ? 'Spec imported' : 'Spec ready'))
+            : 'No spec';
           return (
             <li key={role.id}>
               <button
@@ -74,8 +80,8 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
                   <ChevronsUpDown size={14} className="mt-0.5 shrink-0 text-gray-400" />
                 </div>
                 <div className="mt-2 flex flex-wrap gap-1.5">
-                  <Badge variant={role.job_spec_filename ? 'success' : 'warning'}>
-                    {role.job_spec_filename ? 'Spec uploaded' : 'No spec'}
+                  <Badge variant={specReady ? 'success' : 'warning'}>
+                    {specLabel}
                   </Badge>
                   <Badge variant="purple">Tasks: {role.tasks_count || 0}</Badge>
                 </div>

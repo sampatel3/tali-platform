@@ -63,14 +63,14 @@ def test_register_duplicate_email_400(client):
     assert "already" in detail.lower() or "exists" in detail.lower()
 
 
-def test_register_duplicate_org_slug_reuses_org(client):
-    """Two users registering with the same org name should share the org."""
+def test_register_duplicate_org_name_creates_fresh_org(client):
+    """Self-registration should create a fresh org even when names collide."""
     org_name = "Shared Corp"
     r1 = register_user(client, email="user1@test.com", organization_name=org_name)
     r2 = register_user(client, email="user2@test.com", organization_name=org_name)
     assert r1.status_code == 201
     assert r2.status_code == 201
-    assert r1.json()["organization_id"] == r2.json()["organization_id"]
+    assert r1.json()["organization_id"] != r2.json()["organization_id"]
 
 
 def test_register_short_password_422(client):

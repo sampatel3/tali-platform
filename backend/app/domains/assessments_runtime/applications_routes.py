@@ -27,7 +27,8 @@ from ...schemas.role import (
     ApplicationUpdate,
     AssessmentFromApplicationCreate,
 )
-from ...services.document_service import process_document_upload
+from ...components.integrations.workable.service import WorkableRateLimitError, WorkableService
+from ...services.document_service import MAX_FILE_SIZE, extract_text, process_document_upload, save_file_locally
 from ...services.fit_matching_service import calculate_cv_job_match_sync
 from ...services.assessment_repository_service import (
     AssessmentRepositoryError,
@@ -269,6 +270,118 @@ def upload_application_cv(
         text_preview=result["text_preview"],
         uploaded_at=now,
     )
+
+
+@router.post("/applications/{application_id}/generate-taali-cv-ai", response_model=ApplicationResponse)
+def generate_taali_cv_ai(
+    application_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Generate TAALI CV-vs-job fit score for an application.
+
+    - If the application already has CV text, we just (re)compute the match.
+    - If the application is linked to Workable and no CV is present, we attempt to download the resume
+      from Workable, extract text, then compute the match.
+    """
+    app = get_application(application_id, current_user.organization_id, db)
+    role = app.role
+    if not role or not role_has_job_spec(role):
+        raise HTTPException(status_code=400, detail="Upload job spec before generating TAALI score")
+
+    # If the candidate already has a CV stored, reuse it.
+    if (not (app.cv_text or "").strip()) and app.candidate and (app.candidate.cv_text or "").strip():
+        app.cv_file_url = app.candidate.cv_file_url
+        app.cv_filename = app.candidate.cv_filename
+        app.cv_text = app.candidate.cv_text
+        app.cv_uploaded_at = app.candidate.cv_uploaded_at
+
+    if not (app.cv_text or "").strip():
+        org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+        if not org or not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
+            raise HTTPException(status_code=400, detail="No CV found for this application (and Workable is not connected)")
+        candidate_id = str(app.workable_candidate_id or "").strip()
+        if not candidate_id:
+            raise HTTPException(status_code=400, detail="No CV found for this application (and it is not linked to a Workable candidate)")
+
+        workable = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
+        try:
+            candidate_payload = workable.get_candidate(candidate_id)
+        except WorkableRateLimitError:
+            raise HTTPException(status_code=502, detail="Workable rate limited. Please try again shortly.")
+
+        if not candidate_payload:
+            raise HTTPException(status_code=502, detail="Failed to fetch Workable candidate profile")
+
+        downloaded = workable.download_candidate_resume(candidate_payload)
+        if not downloaded:
+            raise HTTPException(status_code=404, detail="No resume found on the Workable candidate profile")
+
+        filename, content = downloaded
+        if not content:
+            raise HTTPException(status_code=404, detail="Downloaded resume was empty")
+        if len(content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Resume must be {MAX_FILE_SIZE // (1024 * 1024)}MB or smaller",
+            )
+
+        ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
+        if ext not in {"pdf", "docx", "txt"}:
+            raise HTTPException(status_code=400, detail="Only PDF, DOCX, or TXT resumes are supported")
+
+        now = datetime.now(timezone.utc)
+        local_path = save_file_locally(content=content, directory="cv", prefix=f"cv-{application_id}", ext=ext)
+
+        file_url = local_path
+        try:
+            from ...services.s3_service import generate_s3_key, upload_to_s3
+
+            s3_key = generate_s3_key("cv", application_id, filename)
+            s3_url = upload_to_s3(local_path, s3_key)
+            if s3_url:
+                file_url = s3_url
+        except Exception as exc:
+            logger.warning("S3 upload skipped for Workable CV import (falling back to local): %s", exc)
+
+        extracted = extract_text(content, ext)
+        if not extracted:
+            raise HTTPException(status_code=400, detail="Could not extract text from resume. Try uploading the CV manually.")
+
+        app.cv_file_url = file_url
+        app.cv_filename = filename
+        app.cv_text = extracted
+        app.cv_uploaded_at = now
+        if app.candidate:
+            app.candidate.cv_file_url = file_url
+            app.candidate.cv_filename = filename
+            app.candidate.cv_text = extracted
+            app.candidate.cv_uploaded_at = now
+
+        # Best-effort Workable score extraction from candidate payload.
+        raw_score, normalized_score, score_source = workable.extract_workable_score(candidate_payload=candidate_payload)
+        if raw_score is not None or normalized_score is not None:
+            app.workable_score_raw = raw_score
+            app.workable_score = normalized_score
+            app.workable_score_source = score_source
+
+    try:
+        _compute_cv_match_for_application(app, reset_if_unavailable=True)
+    except Exception:
+        logger.exception("Failed to compute cv_match_score for application_id=%s", app.id)
+        app.cv_match_score = None
+        app.cv_match_details = {"error": "Failed to compute CV match score"}
+        app.cv_match_scored_at = None
+    _refresh_rank_score(app)
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to generate TAALI score")
+
+    app = get_application(app.id, current_user.organization_id, db)
+    return application_to_response(app)
 
 
 @router.post("/applications/{application_id}/assessments", status_code=status.HTTP_201_CREATED)

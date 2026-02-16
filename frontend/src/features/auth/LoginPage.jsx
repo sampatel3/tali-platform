@@ -6,6 +6,38 @@ import { auth } from '../../shared/api';
 import { BRAND } from '../../config/brand';
 import { Logo } from '../../shared/ui/Branding';
 
+const LOGIN_ERROR_MESSAGES = {
+  LOGIN_BAD_CREDENTIALS: 'Incorrect email or password. Please try again.',
+  INVALID_CREDENTIALS: 'Incorrect email or password. Please try again.',
+};
+
+const getLoginErrorMessage = (err) => {
+  const detail = err?.response?.data?.detail;
+  const message = err?.message;
+
+  if (typeof detail === 'string') {
+    const normalizedDetail = detail.trim();
+    const mappedMessage = LOGIN_ERROR_MESSAGES[normalizedDetail.toUpperCase()];
+    return mappedMessage || normalizedDetail;
+  }
+
+  if (Array.isArray(detail) && detail.length > 0) {
+    const joined = detail
+      .map((item) => (typeof item?.msg === 'string' ? item.msg : String(item)))
+      .join(' · ')
+      .trim();
+    if (joined) return joined;
+  }
+
+  if (typeof message === 'string' && message.trim()) {
+    const normalizedMessage = message.trim();
+    const mappedMessage = LOGIN_ERROR_MESSAGES[normalizedMessage.toUpperCase()];
+    return mappedMessage || normalizedMessage;
+  }
+
+  return 'Unable to sign in. Please try again.';
+};
+
 export const LoginPage = ({ onNavigate }) => {
   const { login } = useAuth();
   const [email, setEmail] = useState('');
@@ -25,11 +57,11 @@ export const LoginPage = ({ onNavigate }) => {
       onNavigate('dashboard');
     } catch (err) {
       const status = err.response?.status;
-      const msg = err.response?.data?.detail || err.message || 'Login failed';
-      if (status === 403 && typeof msg === 'string' && msg.toLowerCase().includes('verify')) {
+      const rawDetail = err.response?.data?.detail;
+      if (status === 403 && typeof rawDetail === 'string' && rawDetail.toLowerCase().includes('verify')) {
         setNeedsVerification(true);
       }
-      setError(typeof msg === 'string' ? msg : 'Invalid credentials');
+      setError(getLoginErrorMessage(err));
     } finally {
       setLoading(false);
     }
@@ -59,14 +91,17 @@ export const LoginPage = ({ onNavigate }) => {
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
           {error && (
-            <div className="border-2 border-red-500 bg-red-50 p-4 mb-6">
-              <div className="flex items-center gap-2">
-                <AlertTriangle size={18} className="text-red-500 flex-shrink-0" />
-                <span className="font-mono text-sm text-red-700">{error}</span>
+            <div className="mb-6 border border-red-300 bg-red-50 p-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle size={18} className="text-red-500 mt-0.5 flex-shrink-0" />
+                <div>
+                  <p className="text-sm font-semibold text-red-800">Sign-in failed</p>
+                  <p className="text-sm text-red-700">{error}</p>
+                </div>
               </div>
               {needsVerification && (
                 <button
-                  className="mt-3 w-full border border-red-300 py-2 font-mono text-sm font-bold text-red-700 hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+                  className="mt-3 w-full border border-red-300 py-2 text-sm font-semibold text-red-800 hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
                   onClick={handleResendVerification}
                   disabled={resending}
                 >

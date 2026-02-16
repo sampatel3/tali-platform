@@ -78,11 +78,13 @@ class TestRegistration:
         # Either 400 (duplicate) or 201 (separate account) is acceptable but should be consistent
         assert r.status_code in [201, 400]
 
-    def test_register_reuse_existing_org_slug(self, client):
-        """If org name resolves to same slug, should reuse org."""
-        _register(client, email="a@example.com", org_name="Acme")
-        r = _register(client, email="b@example.com", org_name="Acme")
-        assert r.status_code == 201
+    def test_register_same_org_name_creates_new_org(self, client):
+        """Self-registration should not attach to an existing org by name."""
+        r1 = _register(client, email="a@example.com", org_name="Acme")
+        r2 = _register(client, email="b@example.com", org_name="Acme")
+        assert r1.status_code == 201
+        assert r2.status_code == 201
+        assert r1.json()["organization_id"] != r2.json()["organization_id"]
 
     def test_register_password_too_short(self, client):
         r = _register(client, password="short")

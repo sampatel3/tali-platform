@@ -15,10 +15,36 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
   const focusTriggers = Array.isArray(focus?.manual_screening_triggers) ? focus.manual_screening_triggers : [];
   const hasInterviewFocus = focusQuestions.length > 0;
   const [focusExpanded, setFocusExpanded] = useState(true);
+  const [specExpanded, setSpecExpanded] = useState(false);
   const focusPanelId = `interview-focus-panel-${role.id || 'active'}`;
+  const specPanelId = `role-spec-panel-${role.id || 'active'}`;
+
+  const toPlainText = (value) => {
+    if (!value) return '';
+    const raw = String(value);
+    try {
+      if (typeof window !== 'undefined' && window.DOMParser) {
+        const doc = new window.DOMParser().parseFromString(raw, 'text/html');
+        const text = (doc?.body?.textContent || '').trim();
+        return text || raw;
+      }
+    } catch {
+      // ignore parsing failures
+    }
+    return raw.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+  };
+
+  const roleText = toPlainText(role.description);
+  const rolePreview = roleText.length > 180 ? `${roleText.slice(0, 180)}…` : roleText;
+  const jobSpecReady = Boolean(role.job_spec_present || role.job_spec_filename);
+  const jobSpecLabel = role.job_spec_filename
+    || (jobSpecReady
+      ? (role.source === 'workable' ? 'Imported from Workable' : 'Ready')
+      : 'Not uploaded');
 
   useEffect(() => {
     setFocusExpanded(true);
+    setSpecExpanded(false);
   }, [role.id]);
 
   return (
@@ -26,19 +52,42 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
           <h2 className="text-2xl font-bold tracking-tight text-[var(--taali-text)]">{role.name}</h2>
-          {role.description ? <p className="text-sm text-[var(--taali-muted)]">{role.description}</p> : null}
+          {rolePreview ? <p className="text-sm text-[var(--taali-muted)]">{rolePreview}</p> : null}
         </div>
         <Button type="button" variant="secondary" size="sm" onClick={onEditRole}>
           Edit role
         </Button>
       </div>
       <Card className="mt-4 p-3 bg-[#faf8ff]">
-        <div className="flex flex-wrap items-center gap-5">
-          <div className="inline-flex items-center gap-2 text-sm text-gray-700">
-            <FileText size={15} className="text-gray-500" />
-            <span className="font-medium">Job spec:</span>
-            <span>{role.job_spec_filename || 'Not uploaded'}</span>
+        <div className="flex flex-col gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="inline-flex items-center gap-2 text-sm text-gray-700">
+              <FileText size={15} className="text-gray-500" />
+              <span className="font-medium">Job spec:</span>
+              <span className="text-gray-600">{jobSpecLabel}</span>
+            </div>
+            {jobSpecReady ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                aria-expanded={specExpanded}
+                aria-controls={specPanelId}
+                onClick={() => setSpecExpanded((prev) => !prev)}
+              >
+                {specExpanded ? 'Hide details' : 'Details'}
+              </Button>
+            ) : null}
           </div>
+
+          {specExpanded ? (
+            <div id={specPanelId} className="border border-[var(--taali-border-muted)] bg-white p-3">
+              <pre className="max-h-[280px] overflow-auto whitespace-pre-wrap text-xs leading-relaxed text-gray-800">
+                {roleText || '—'}
+              </pre>
+            </div>
+          ) : null}
+
           <div className="inline-flex items-center gap-2 text-sm text-gray-700">
             <BriefcaseBusiness size={15} className="text-gray-500" />
             <span className="font-medium">Tasks ({roleTasks.length}):</span>

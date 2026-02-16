@@ -196,10 +196,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const handleSaveWorkable = async () => {
     const emailMode = workableForm.emailMode || 'manual_taali';
     const inviteStageName = (workableForm.inviteStageName || '').trim();
-    if (emailMode === 'workable_preferred_fallback_manual' && !inviteStageName) {
-      alert('Invite stage name is required when email mode is Automated via Workable.');
-      return;
-    }
     setWorkableSaving(true);
     try {
       const res = await orgsApi.update({

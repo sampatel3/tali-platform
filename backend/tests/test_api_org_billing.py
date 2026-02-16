@@ -353,7 +353,7 @@ def test_team_invite_rejects_email_outside_allowed_domains(client, db):
     assert "Email domain is not allowed" in resp.json()["detail"]
 
 
-def test_register_rejects_disallowed_domain_for_existing_org(client, db):
+def test_register_same_org_name_creates_new_org_even_if_existing_org_has_domain_policy(client, db):
     first = register_user(
         client,
         email="admin@acme.com",
@@ -378,8 +378,8 @@ def test_register_rejects_disallowed_domain_for_existing_org(client, db):
         full_name="Outsider",
         organization_name="Acme Locked Org",
     )
-    assert second.status_code == 400
-    assert "Email domain is not allowed" in second.text
+    assert second.status_code == 201, second.text
+    assert second.json()["organization_id"] != owner.organization_id
 
 
 def test_jwt_login_blocked_when_org_enforces_sso(client, db):

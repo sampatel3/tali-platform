@@ -205,6 +205,32 @@ describe('AuthPages', () => {
       });
     });
 
+    it('maps raw backend bad-credentials code to a readable message', async () => {
+      auth.login.mockRejectedValue({
+        response: { status: 401, data: { detail: 'LOGIN_BAD_CREDENTIALS' } },
+      });
+
+      await navigateToLogin();
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText('you@company.com')).toBeInTheDocument();
+      });
+
+      fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
+        target: { value: 'wrong@test.com' },
+      });
+      fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+        target: { value: 'wrong' },
+      });
+
+      const signInButton = screen.getByRole('button', { name: 'Sign In' });
+      fireEvent.click(signInButton);
+
+      await waitFor(() => {
+        expect(screen.getByText('Incorrect email or password. Please try again.')).toBeInTheDocument();
+      });
+    });
+
     it('shows "needs verification" message on 403 with verify detail', async () => {
       auth.login.mockRejectedValue({
         response: { status: 403, data: { detail: 'Please verify your email before logging in' } },

@@ -98,8 +98,8 @@ class TestRegistrationToLogin:
         else:
             assert "password" in str(detail).lower() or len(detail) > 0
 
-    def test_register_duplicate_org_reuses(self, client):
-        """register user1 with org 'TestCo' → register user2 with same org → same org_id"""
+    def test_register_duplicate_org_name_creates_new_org(self, client):
+        """register user1/org name + user2/same name → different org_id"""
         email1 = "dup-org-1@test.com"
         email2 = "dup-org-2@test.com"
 
@@ -113,7 +113,7 @@ class TestRegistrationToLogin:
         org_id_2 = reg2.json()["organization_id"]
         assert org_id_2 is not None
 
-        assert org_id_1 == org_id_2, "Both users should share the same org"
+        assert org_id_1 != org_id_2, "Self-registration should create a fresh org"
 
     def test_unverified_login_then_verify(self, client):
         """Unverified user may get 200 or 403 depending on require_verification."""
@@ -191,8 +191,8 @@ class TestRegistrationToLogin:
         ids = [a["id"] for a in list_resp.json()["items"]]
         assert assessment_id in ids
 
-    def test_two_users_same_org(self, client):
-        """register both with org 'SharedOrg' → verify both → login both → both see same org_id"""
+    def test_two_users_same_org_name_isolated(self, client):
+        """register both with same org name → each user gets an isolated org"""
         email1 = "shared1@test.com"
         email2 = "shared2@test.com"
 
@@ -204,7 +204,7 @@ class TestRegistrationToLogin:
         assert reg2.status_code == 201
         org_id_2 = reg2.json()["organization_id"]
 
-        assert org_id_1 == org_id_2
+        assert org_id_1 != org_id_2
 
         verify_user(email1)
         verify_user(email2)
@@ -222,4 +222,4 @@ class TestRegistrationToLogin:
 
         assert me1.status_code == 200
         assert me2.status_code == 200
-        assert me1.json()["organization_id"] == me2.json()["organization_id"]
+        assert me1.json()["organization_id"] != me2.json()["organization_id"]

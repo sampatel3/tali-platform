@@ -37,10 +37,12 @@ export const CandidatesTable = ({
   canCreateAssessment,
   creatingAssessmentId,
   viewingApplicationId,
+  generatingTaaliId,
   onChangeSort,
   onAddCandidate,
   onViewCandidate,
   onCreateAssessment,
+  onGenerateTaaliCvAi,
 }) => {
   const [composerApplicationId, setComposerApplicationId] = useState(null);
   const [detailsApplicationId, setDetailsApplicationId] = useState(null);
@@ -671,6 +673,24 @@ export const CandidatesTable = ({
                           <p className="mt-1 text-sm text-gray-800">{renderTaaliScore(app)}</p>
                           {app.cv_match_details?.error ? (
                             <p className="mt-1 text-xs text-amber-700">{app.cv_match_details.error}</p>
+                          ) : null}
+                          {typeof app.cv_match_score !== 'number' && typeof onGenerateTaaliCvAi === 'function' ? (
+                            <div className="mt-2">
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => onGenerateTaaliCvAi(app)}
+                                disabled={generatingTaaliId === app.id}
+                              >
+                                {generatingTaaliId === app.id ? 'Generating…' : 'Generate TAALI CV AI'}
+                              </Button>
+                              {app.source === 'workable' && !app.cv_filename ? (
+                                <p className="mt-1 text-xs text-gray-500">
+                                  This will import the CV from Workable (if available) and compute the match.
+                                </p>
+                              ) : null}
+                            </div>
                           ) : null}
                         </div>
                         <div>
