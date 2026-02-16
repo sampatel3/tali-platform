@@ -36,17 +36,19 @@ export const AssessmentRuntimeAlerts = ({
     {isTimerPaused && (
       <div className="border-b-2 border-black bg-red-50 px-4 py-2 flex items-center justify-between gap-3">
         <div className="font-mono text-xs text-red-700">
-          Assessment paused: Claude is currently unavailable{pauseReason ? ` (${pauseReason})` : ''}.
+          Assessment paused{pauseReason ? ` (${pauseReason})` : ''}.
           {pauseMessage ? ` ${pauseMessage}` : ''}
         </div>
-        <button
-          type="button"
-          className="border-2 border-black px-3 py-1 font-mono text-xs font-bold bg-white hover:bg-black hover:text-white disabled:opacity-60"
-          onClick={onRetryClaude}
-          disabled={retryingClaude}
-        >
-          {retryingClaude ? 'Retrying...' : 'Retry Claude'}
-        </button>
+        {onRetryClaude && (
+          <button
+            type="button"
+            className="border-2 border-black px-3 py-1 font-mono text-xs font-bold bg-white hover:bg-black hover:text-white disabled:opacity-60"
+            onClick={onRetryClaude}
+            disabled={retryingClaude}
+          >
+            {retryingClaude ? 'Retrying...' : 'Retry Claude'}
+          </button>
+        )}
       </div>
     )}
 

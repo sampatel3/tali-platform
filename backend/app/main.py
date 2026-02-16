@@ -29,6 +29,24 @@ if _is_production and settings.SECRET_KEY in _INSECURE_DEFAULTS:
     )
 
 # ---------------------------------------------------------------------------
+# Claude/assessment runtime policy enforcement
+# ---------------------------------------------------------------------------
+if not (settings.CLAUDE_MODEL or "").strip():
+    raise RuntimeError(
+        "CRITICAL: CLAUDE_MODEL is not configured. "
+        "Set CLAUDE_MODEL explicitly (for example, claude-3-5-haiku-latest)."
+    )
+if not settings.ASSESSMENT_TERMINAL_ENABLED:
+    raise RuntimeError(
+        "CRITICAL: ASSESSMENT_TERMINAL_ENABLED must be true. "
+        "Assessments are terminal-only (Claude CLI) in production mode."
+    )
+if (settings.ASSESSMENT_TERMINAL_DEFAULT_MODE or "").strip().lower() != "claude_cli_terminal":
+    raise RuntimeError(
+        "CRITICAL: ASSESSMENT_TERMINAL_DEFAULT_MODE must be claude_cli_terminal."
+    )
+
+# ---------------------------------------------------------------------------
 # Disable interactive API docs in production (information disclosure)
 # ---------------------------------------------------------------------------
 _docs_url = None if _is_production else "/api/docs"

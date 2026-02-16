@@ -30,7 +30,6 @@ from .scoring_core import (
     _score_task_completion,
     _score_utilization,
 )
-from .v2_stubs import v2_placeholder
 
 
 def calculate_mvp_score(
@@ -55,6 +54,11 @@ def calculate_mvp_score(
     - component_scores (legacy 12-metric dict for backward compat)
     - weights_used, soft_signals, metric_details
     """
+    if v2_enabled:
+        raise RuntimeError(
+            "SCORING_V2_ENABLED is set, but no production scoring v2 integration is configured."
+        )
+
     prompts = interactions or []
     total_prompts = len(prompts)
     duration_minutes = total_duration_seconds / 60.0 if total_duration_seconds else 0.0
@@ -261,5 +265,4 @@ def calculate_mvp_score(
         "metric_details": metric_details,
         "fraud": fraud,
         "soft_signals": soft_signals,
-        "v2": v2_placeholder(enabled=v2_enabled),
     }

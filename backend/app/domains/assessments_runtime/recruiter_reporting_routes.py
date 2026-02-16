@@ -253,4 +253,7 @@ def ai_eval_suggestions(
         "git_evidence": getattr(assessment, "git_evidence", {}) or {},
         "test_results": assessment.test_results or {},
     }
-    return generate_ai_suggestions(payload)
+    try:
+        return generate_ai_suggestions(payload)
+    except RuntimeError as exc:
+        raise HTTPException(status_code=501, detail=str(exc)) from exc

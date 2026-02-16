@@ -132,7 +132,7 @@ class AssessmentStart(BaseModel):
     is_timer_paused: bool = False
     pause_reason: Optional[str] = None
     total_paused_seconds: int = 0
-    ai_mode: str = "legacy_chat"
+    ai_mode: str = "claude_cli_terminal"
     terminal_mode: bool = False
     terminal_capabilities: Dict[str, Any] = Field(default_factory=dict)
 

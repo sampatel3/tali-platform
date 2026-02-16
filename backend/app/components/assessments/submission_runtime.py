@@ -30,6 +30,20 @@ from .repository import (
 )
 
 
+def _terminal_usage_totals(assessment: Assessment) -> tuple[int, int]:
+    """Aggregate provider usage emitted by the Claude CLI terminal transcript."""
+    input_tokens = 0
+    output_tokens = 0
+    for entry in list(getattr(assessment, "cli_transcript", None) or []):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("event_type") or "") != "terminal_usage":
+            continue
+        input_tokens += max(0, int(entry.get("input_tokens") or 0))
+        output_tokens += max(0, int(entry.get("output_tokens") or 0))
+    return input_tokens, output_tokens
+
+
 def submit_assessment_impl(
     assessment: Assessment,
     final_code: str,
@@ -114,7 +128,7 @@ def submit_assessment_impl(
                 evidence["push_returncode"] = push_rc
                 evidence["push_stderr"] = push_payload.get("push_stderr", "")
                 assessment.git_evidence = evidence
-                if not bool(getattr(settings_obj, "GITHUB_MOCK_MODE", True)):
+                if not bool(getattr(settings_obj, "GITHUB_MOCK_MODE", False)):
                     raise HTTPException(status_code=500, detail="Failed to push candidate branch updates")
 
             evidence = collect_git_evidence_fn(sandbox, repo_root)
@@ -378,8 +392,19 @@ def submit_assessment_impl(
     assessment.scored_at = utcnow()
     assessment.total_duration_seconds = duration_seconds
     assessment.total_prompts = len(interactions)
-    assessment.total_input_tokens = sum(it.get("input_tokens", 0) for it in interactions)
-    assessment.total_output_tokens = sum(it.get("output_tokens", 0) for it in interactions)
+    prompt_input_tokens = sum(max(0, int(it.get("input_tokens", 0) or 0)) for it in interactions)
+    prompt_output_tokens = sum(max(0, int(it.get("output_tokens", 0) or 0)) for it in interactions)
+    terminal_input_tokens, terminal_output_tokens = _terminal_usage_totals(assessment)
+    computed_input_tokens = prompt_input_tokens + terminal_input_tokens
+    computed_output_tokens = prompt_output_tokens + terminal_output_tokens
+    assessment.total_input_tokens = max(
+        int(getattr(assessment, "total_input_tokens", 0) or 0),
+        computed_input_tokens,
+    )
+    assessment.total_output_tokens = max(
+        int(getattr(assessment, "total_output_tokens", 0) or 0),
+        computed_output_tokens,
+    )
 
     fraud_flags = [
         {"type": f, "confidence": 1.0, "evidence": f, "prompt_index": None}

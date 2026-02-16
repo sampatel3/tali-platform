@@ -12,6 +12,8 @@ from urllib.parse import quote
 
 import httpx
 
+from ..platform.config import settings
+
 
 class AssessmentRepositoryError(RuntimeError):
     """Raised when repository provisioning fails."""
@@ -30,7 +32,11 @@ class AssessmentRepositoryService:
     def __init__(self, github_org: str | None = None, github_token: str | None = None):
         self.github_org = github_org or os.getenv("GITHUB_ORG", "taali-assessments")
         self.github_token = github_token or os.getenv("GITHUB_TOKEN", "")
-        self.mock_mode = os.getenv("GITHUB_MOCK_MODE", "true").lower() in {"1", "true", "yes"}
+        mock_mode_env = os.getenv("GITHUB_MOCK_MODE")
+        if mock_mode_env is None:
+            self.mock_mode = bool(getattr(settings, "GITHUB_MOCK_MODE", False))
+        else:
+            self.mock_mode = mock_mode_env.lower() in {"1", "true", "yes"}
         self.mock_root = Path(os.getenv("GITHUB_MOCK_ROOT", "/tmp/taali_github_mock"))
         self.api_base = os.getenv("GITHUB_API_BASE_URL", "https://api.github.com").rstrip("/")
         self.clone_base = os.getenv("GITHUB_CLONE_BASE_URL", "https://github.com").rstrip("/")

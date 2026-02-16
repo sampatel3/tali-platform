@@ -3,8 +3,6 @@ import {
   Code,
   Eye,
   Loader2,
-  Pencil,
-  Trash2,
 } from 'lucide-react';
 
 const difficultyColors = {
@@ -14,7 +12,7 @@ const difficultyColors = {
   staff: '#FF0033',
 };
 
-const TaskCard = ({ task, deletingId, onViewTask, onEditTask, onDeleteTask }) => (
+const TaskCard = ({ task, onViewTask }) => (
   <div key={task.id} className="border-2 border-black p-6 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-shadow">
     <div className="flex items-center justify-between mb-3">
       <span
@@ -56,27 +54,6 @@ const TaskCard = ({ task, deletingId, onViewTask, onEditTask, onDeleteTask }) =>
         {task.is_template && (
           <span className="font-mono text-xs text-gray-400">template</span>
         )}
-        {!task.is_template && (
-          <>
-            <button
-              type="button"
-              className="border-2 border-black p-2 hover:bg-black hover:text-white transition-colors"
-              title="Edit task"
-              onClick={() => onEditTask(task)}
-            >
-              <Pencil size={14} />
-            </button>
-            <button
-              type="button"
-              className="border-2 border-red-600 text-red-600 p-2 hover:bg-red-600 hover:text-white transition-colors disabled:opacity-50"
-              title="Delete task"
-              disabled={deletingId === task.id}
-              onClick={() => onDeleteTask(task)}
-            >
-              {deletingId === task.id ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
-            </button>
-          </>
-        )}
       </div>
     </div>
   </div>
@@ -85,25 +62,14 @@ const TaskCard = ({ task, deletingId, onViewTask, onEditTask, onDeleteTask }) =>
 export const TasksListView = ({
   loading,
   tasksList,
-  deletingId,
-  onCreateTask,
   onViewTask,
-  onEditTask,
-  onDeleteTask,
 }) => (
   <div className="hidden md:block max-w-7xl mx-auto px-6 py-8">
     <div className="flex items-center justify-between mb-8">
       <div>
         <h1 className="text-3xl font-bold">Tasks</h1>
-        <p className="font-mono text-sm text-gray-600 mt-1">Manage assessment task templates</p>
+        <p className="font-mono text-sm text-gray-600 mt-1">Backend-authored assessment task catalog</p>
       </div>
-      <button
-        className="border-2 border-black px-6 py-3 font-bold text-white hover:bg-black transition-colors flex items-center gap-2"
-        style={{ backgroundColor: '#9D00FF' }}
-        onClick={onCreateTask}
-      >
-        <Code size={18} /> New Task
-      </button>
     </div>
 
     {loading ? (
@@ -114,15 +80,8 @@ export const TasksListView = ({
     ) : tasksList.length === 0 ? (
       <div className="border-2 border-black p-16 text-center">
         <Code size={48} className="mx-auto mb-4 text-gray-300" />
-        <h3 className="text-xl font-bold mb-2">No tasks yet</h3>
-        <p className="font-mono text-sm text-gray-500 mb-6">Create your first task template to start assessing candidates</p>
-        <button
-          className="border-2 border-black px-6 py-3 font-bold text-white hover:bg-black transition-colors"
-          style={{ backgroundColor: '#9D00FF' }}
-          onClick={onCreateTask}
-        >
-          Create Task
-        </button>
+        <h3 className="text-xl font-bold mb-2">No tasks available</h3>
+        <p className="font-mono text-sm text-gray-500 mb-6">Add task specs in the backend to populate this catalog.</p>
       </div>
     ) : (
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -130,10 +89,7 @@ export const TasksListView = ({
           <TaskCard
             key={task.id}
             task={task}
-            deletingId={deletingId}
             onViewTask={onViewTask}
-            onEditTask={onEditTask}
-            onDeleteTask={onDeleteTask}
           />
         ))}
       </div>

@@ -14,6 +14,8 @@ from ...models.billing_credit_ledger import BillingCreditLedger
 from ...models.user import User
 from ...models.organization import Organization
 from ...models.assessment import Assessment, AssessmentStatus
+from ...models.candidate_application import CandidateApplication
+from ...models.role import Role
 from ...services.credit_ledger_service import lemon_pack_catalog, resolve_pack
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
@@ -50,9 +52,26 @@ def _duration_hours(assessment: Assessment) -> float:
     return 0.0
 
 
+def _assessment_token_totals(assessment: Assessment) -> tuple[int, int]:
+    input_tokens = max(0, int(assessment.total_input_tokens or 0))
+    output_tokens = max(0, int(assessment.total_output_tokens or 0))
+    if input_tokens > 0 or output_tokens > 0:
+        return input_tokens, output_tokens
+
+    transcript_input = 0
+    transcript_output = 0
+    for entry in list(getattr(assessment, "cli_transcript", None) or []):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("event_type") or "") != "terminal_usage":
+            continue
+        transcript_input += max(0, int(entry.get("input_tokens") or 0))
+        transcript_output += max(0, int(entry.get("output_tokens") or 0))
+    return transcript_input, transcript_output
+
+
 def _compute_assessment_cost_usd(assessment: Assessment) -> dict:
-    input_tokens = int(assessment.total_input_tokens or 0)
-    output_tokens = int(assessment.total_output_tokens or 0)
+    input_tokens, output_tokens = _assessment_token_totals(assessment)
 
     claude_input_cost = (
         input_tokens / 1_000_000.0
@@ -113,6 +132,30 @@ def _serialize_ledger_entry(entry: BillingCreditLedger) -> dict:
     }
 
 
+def _extract_claude_usage(payload: dict | None) -> dict:
+    if not isinstance(payload, dict):
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "request_cost_usd": 0.0,
+        }
+    usage = payload.get("_claude_usage")
+    if not isinstance(usage, dict):
+        return {
+            "input_tokens": 0,
+            "output_tokens": 0,
+            "request_cost_usd": 0.0,
+        }
+    input_tokens = max(0, int(usage.get("input_tokens") or 0))
+    output_tokens = max(0, int(usage.get("output_tokens") or 0))
+    request_cost_usd = max(0.0, float(usage.get("request_cost_usd") or 0.0))
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "request_cost_usd": request_cost_usd,
+    }
+
+
 @router.get("/usage")
 def get_usage(
     db: Session = Depends(get_db),
@@ -169,6 +212,9 @@ def get_costs(
                 "daily_spend_usd": 0,
                 "cost_per_completed_assessment_usd": 0,
                 "completed_assessments": 0,
+                "non_assessment_claude_cost_usd": 0,
+                "non_assessment_input_tokens": 0,
+                "non_assessment_output_tokens": 0,
             },
             "thresholds": {
                 "daily_spend_usd": settings.COST_ALERT_DAILY_SPEND_USD,
@@ -188,12 +234,28 @@ def get_costs(
         .limit(500)
         .all()
     )
+    role_focus_payloads = (
+        db.query(Role.interview_focus)
+        .filter(Role.organization_id == org_id, Role.interview_focus != None)  # noqa: E711
+        .all()
+    )
+    app_match_payloads = (
+        db.query(CandidateApplication.cv_match_details)
+        .filter(
+            CandidateApplication.organization_id == org_id,
+            CandidateApplication.cv_match_details != None,  # noqa: E711
+        )
+        .all()
+    )
 
     rows = []
     tenant_total = 0.0
     daily_spend = 0.0
     completed = 0
     now = datetime.now(timezone.utc)
+    non_assessment_input_tokens = 0
+    non_assessment_output_tokens = 0
+    non_assessment_cost_usd = 0.0
 
     for a in assessments:
         cost = _compute_assessment_cost_usd(a)
@@ -220,6 +282,18 @@ def get_costs(
             }
         )
 
+    for (payload,) in role_focus_payloads:
+        usage = _extract_claude_usage(payload)
+        non_assessment_input_tokens += usage["input_tokens"]
+        non_assessment_output_tokens += usage["output_tokens"]
+        non_assessment_cost_usd += usage["request_cost_usd"]
+
+    for (payload,) in app_match_payloads:
+        usage = _extract_claude_usage(payload)
+        non_assessment_input_tokens += usage["input_tokens"]
+        non_assessment_output_tokens += usage["output_tokens"]
+        non_assessment_cost_usd += usage["request_cost_usd"]
+
     cost_per_completed = (tenant_total / completed) if completed else 0.0
     thresholds = {
         "daily_spend_usd": settings.COST_ALERT_DAILY_SPEND_USD,
@@ -235,6 +309,9 @@ def get_costs(
             "daily_spend_usd": round(daily_spend, 6),
             "cost_per_completed_assessment_usd": round(cost_per_completed, 6),
             "completed_assessments": completed,
+            "non_assessment_claude_cost_usd": round(non_assessment_cost_usd, 6),
+            "non_assessment_input_tokens": non_assessment_input_tokens,
+            "non_assessment_output_tokens": non_assessment_output_tokens,
         },
         "thresholds": thresholds,
         "alerts": {

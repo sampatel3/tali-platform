@@ -1,4 +1,5 @@
 from tests.conftest import verify_user
+from types import SimpleNamespace
 
 
 def _register_and_login(client):
@@ -90,6 +91,7 @@ def test_start_payload_exposes_terminal_mode_contract(client, monkeypatch):
     monkeypatch.setattr(terminal_runtime.settings, "ASSESSMENT_TERMINAL_DEFAULT_MODE", "claude_cli_terminal")
     monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc, "_clone_assessment_branch_into_workspace", lambda *_args, **_kwargs: True)
 
     start = client.post(f"/api/v1/assessments/token/{assessment['token']}/start")
     assert start.status_code == 200
@@ -143,6 +145,7 @@ def test_claude_endpoint_returns_terminal_hint_in_cli_mode(client, monkeypatch):
     monkeypatch.setattr(terminal_runtime.settings, "ASSESSMENT_TERMINAL_DEFAULT_MODE", "claude_cli_terminal")
     monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc, "_clone_assessment_branch_into_workspace", lambda *_args, **_kwargs: True)
 
     start = client.post(f"/api/v1/assessments/token/{assessment['token']}/start")
     assert start.status_code == 200
@@ -153,10 +156,11 @@ def test_claude_endpoint_returns_terminal_hint_in_cli_mode(client, monkeypatch):
         json={"message": "help", "conversation_history": []},
         headers={"x-assessment-token": assessment["token"]},
     )
-    assert claude.status_code == 200
+    assert claude.status_code == 501
     payload = claude.json()
-    assert payload["requires_terminal"] is True
-    assert payload["ai_mode"] == "claude_cli_terminal"
+    detail = payload["detail"]
+    assert detail["requires_terminal"] is True
+    assert "terminal-only" in detail["message"]
 
 
 def test_terminal_ws_rejects_invalid_token(client, monkeypatch):
@@ -203,6 +207,7 @@ def test_terminal_ws_rejects_invalid_token(client, monkeypatch):
     monkeypatch.setattr(terminal_runtime.settings, "ASSESSMENT_TERMINAL_DEFAULT_MODE", "claude_cli_terminal")
     monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc, "_clone_assessment_branch_into_workspace", lambda *_args, **_kwargs: True)
 
     start = client.post(f"/api/v1/assessments/token/{assessment['token']}/start")
     assert start.status_code == 200
@@ -212,3 +217,37 @@ def test_terminal_ws_rejects_invalid_token(client, monkeypatch):
         payload = websocket.receive_json()
         assert payload["type"] == "error"
         assert "Invalid assessment token" in payload["message"]
+
+
+def test_clone_assessment_branch_supports_execution_log_shape(monkeypatch):
+    import app.components.assessments.service as assessments_svc
+
+    class FakeRepoService:
+        mock_root = None
+
+        def __init__(self, _org, _token):
+            pass
+
+        def authenticated_repo_url(self, raw_repo_url):
+            return raw_repo_url
+
+    class FakeLogs:
+        stdout = ['{"returncode": 0, "stderr": ""}']
+
+    class FakeExecution:
+        logs = FakeLogs()
+
+    class FakeSandbox:
+        def run_code(self, _code):
+            return FakeExecution()
+
+    monkeypatch.setattr(assessments_svc, "AssessmentRepositoryService", FakeRepoService)
+
+    assessment = SimpleNamespace(
+        id=123,
+        assessment_repo_url="https://github.com/taali-ai/data_eng_a_pipeline_reliability.git",
+        assessment_branch="assessment/123",
+    )
+    task = SimpleNamespace(id=1, task_key="data_eng_a_pipeline_reliability")
+
+    assert assessments_svc._clone_assessment_branch_into_workspace(FakeSandbox(), assessment, task) is True

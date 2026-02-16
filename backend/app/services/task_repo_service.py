@@ -65,17 +65,20 @@ def build_default_repo_structure(
         [
             "## Files",
             "- `src/task.py`: starter implementation for candidates",
-            "- `tests/test_task.py`: pytest suite used for evaluation",
-            "",
         ]
     )
+    if test_code:
+        readme_lines.append("- `tests/test_task.py`: pytest suite used for evaluation")
+    readme_lines.append("")
+    files = {
+        "README.md": "\n".join(readme_lines),
+        "src/task.py": starter_code or "# Starter code\n",
+    }
+    if test_code:
+        files["tests/test_task.py"] = test_code
     return {
         "name": _slug(name),
-        "files": {
-            "README.md": "\n".join(readme_lines),
-            "src/task.py": starter_code or "# Starter code\n",
-            "tests/test_task.py": test_code or "def test_placeholder():\n    assert True\n",
-        },
+        "files": files,
     }
 
 

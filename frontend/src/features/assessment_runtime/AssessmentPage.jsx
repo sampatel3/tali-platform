@@ -33,16 +33,12 @@ export default function AssessmentPage({
   const [executing, setExecuting] = useState(false);
   const [timeLeft, setTimeLeft] = useState(0);
   const [submitted, setSubmitted] = useState(false);
-  const [pasteDetected, setPasteDetected] = useState(false);
-  const [browserFocused, setBrowserFocused] = useState(true);
   const [tabSwitchCount, setTabSwitchCount] = useState(0);
-  const [lastPromptTime, setLastPromptTime] = useState(null);
   const [proctoringEnabled, setProctoringEnabled] = useState(false);
   const [showTabWarning, setShowTabWarning] = useState(false);
   const [isTimerPaused, setIsTimerPaused] = useState(false);
   const [pauseReason, setPauseReason] = useState(null);
   const [pauseMessage, setPauseMessage] = useState("");
-  const [retryingClaude, setRetryingClaude] = useState(false);
   const [claudeBudget, setClaudeBudget] = useState(null);
   const [selectedRepoFile, setSelectedRepoFile] = useState(null);
   const [repoFileEdits, setRepoFileEdits] = useState({});
@@ -54,7 +50,6 @@ export default function AssessmentPage({
   const [terminalEvents, setTerminalEvents] = useState([]);
   const [terminalConnected, setTerminalConnected] = useState(false);
   const [terminalStopping, setTerminalStopping] = useState(false);
-  const [terminalFallbackChat, setTerminalFallbackChat] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState({
     contextWindow: false,
     taskContext: false,
@@ -78,7 +73,6 @@ export default function AssessmentPage({
     setTerminalEvents([]);
     setTerminalConnected(false);
     setTerminalStopping(false);
-    setTerminalFallbackChat(false);
 
     if (startData) {
       const normalized = normalizeStartData(startData);
@@ -179,33 +173,24 @@ export default function AssessmentPage({
   useEffect(() => {
     if (!proctoringEnabled) return undefined;
 
-    const handleFocus = () => setBrowserFocused(true);
-    const handleBlur = () => setBrowserFocused(false);
     const handleVisibilityChange = () => {
       if (
         typeof document !== "undefined" &&
         document.visibilityState === "hidden"
       ) {
         setTabSwitchCount((prev) => prev + 1);
-        setBrowserFocused(false);
         if (proctoringEnabled) {
           setShowTabWarning(true);
           setTimeout(() => setShowTabWarning(false), 3000);
         }
-      } else {
-        setBrowserFocused(true);
       }
     };
 
-    window.addEventListener("focus", handleFocus);
-    window.addEventListener("blur", handleBlur);
     if (typeof document !== "undefined" && "visibilityState" in document) {
       document.addEventListener("visibilitychange", handleVisibilityChange);
     }
 
     return () => {
-      window.removeEventListener("focus", handleFocus);
-      window.removeEventListener("blur", handleBlur);
       if (typeof document !== "undefined") {
         document.removeEventListener(
           "visibilitychange",
@@ -224,9 +209,9 @@ export default function AssessmentPage({
       : repoFiles[0]?.path || null;
   const repoFileTree = buildRepoFileTree(repoFiles);
   const hasRepoStructure = repoFiles.length > 0;
-  const aiMode = assessment?.ai_mode || (assessment?.terminal_mode ? 'claude_cli_terminal' : 'legacy_chat');
+  const aiMode = assessment?.ai_mode || 'claude_cli_terminal';
   const terminalCapabilities = assessment?.terminal_capabilities || {};
-  const showTerminal = aiMode === 'claude_cli_terminal' && !terminalFallbackChat;
+  const showTerminal = aiMode === 'claude_cli_terminal';
 
   const toggleSection = useCallback((sectionKey) => {
     setCollapsedSections((prev) => ({
@@ -385,9 +370,6 @@ export default function AssessmentPage({
         if (payload.type === 'error') {
           const message = String(payload.message || 'Terminal error');
           appendTerminalEvent({ type: 'error', message });
-          if (payload.fallback_chat) {
-            setTerminalFallbackChat(true);
-          }
           return;
         }
 
@@ -479,111 +461,6 @@ export default function AssessmentPage({
     }
     setOutput("Code saved.");
   }, [demoMode]);
-
-  const handleClaudeMessage = useCallback(
-    async (message, history) => {
-      if (isTimerPaused) {
-        return "Assessment is paused while Claude is unavailable. Use Retry to resume.";
-      }
-
-      if (demoMode) {
-        setDemoPromptMessages((prev) => [...prev, message]);
-      }
-
-      const id = assessment?.id || assessmentId;
-
-      const now = Date.now();
-      const timeSinceLastMs = lastPromptTime ? now - lastPromptTime : null;
-      setLastPromptTime(now);
-
-      const wasPasted = pasteDetected;
-      setPasteDetected(false);
-
-      const res = await assessments.claude(
-        id,
-        message,
-        history,
-        assessmentTokenForApi,
-        {
-          code_context: codeRef.current,
-          selected_file_path: selectedRepoPath,
-          paste_detected: wasPasted,
-          browser_focused: proctoringEnabled ? browserFocused : true,
-          time_since_last_prompt_ms: timeSinceLastMs,
-        },
-      );
-      const payload = res.data || {};
-      if (payload.claude_budget) {
-        setClaudeBudget(payload.claude_budget);
-      }
-      if (typeof payload.time_remaining_seconds === "number") {
-        setTimeLeft(payload.time_remaining_seconds);
-      }
-      if (payload.is_timer_paused) {
-        setIsTimerPaused(true);
-        setPauseReason(payload.pause_reason || "claude_outage");
-        setPauseMessage(payload.response || payload.message || "Claude is unavailable and your timer is paused.");
-      } else {
-        setIsTimerPaused(false);
-        setPauseReason(null);
-      }
-      if (payload.requires_budget_top_up) {
-        setOutput(payload.response || payload.message || "Claude budget limit reached for this task.");
-      }
-      if (payload.requires_terminal) {
-        setTerminalFallbackChat(true);
-      }
-      return (
-        payload.response || payload.content || payload.message || "No response from Claude."
-      );
-    },
-    [
-      assessment,
-      assessmentId,
-      assessmentTokenForApi,
-      lastPromptTime,
-      pasteDetected,
-      browserFocused,
-      proctoringEnabled,
-      isTimerPaused,
-      demoMode,
-      selectedRepoPath,
-    ],
-  );
-
-  const handleRetryClaude = useCallback(async () => {
-    if (demoMode) {
-      setIsTimerPaused(false);
-      setPauseReason(null);
-      setPauseMessage("");
-      return;
-    }
-    const id = assessment?.id || assessmentId;
-    if (!id) return;
-    setRetryingClaude(true);
-    try {
-      const res = await assessments.claudeRetry(id, assessmentTokenForApi);
-      const payload = res.data || {};
-      if (payload.success && !payload.is_timer_paused) {
-        setIsTimerPaused(false);
-        setPauseReason(null);
-        setPauseMessage("");
-        if (typeof payload.time_remaining_seconds === "number") {
-          setTimeLeft(payload.time_remaining_seconds);
-        }
-        setOutput("Claude recovered. Assessment resumed.");
-      } else {
-        setIsTimerPaused(true);
-        setPauseReason(payload.pause_reason || "claude_outage");
-        setPauseMessage(payload.message || "Claude is still unavailable.");
-      }
-    } catch (err) {
-      setIsTimerPaused(true);
-      setPauseMessage(err?.response?.data?.detail?.message || "Claude is still unavailable.");
-    } finally {
-      setRetryingClaude(false);
-    }
-  }, [assessment, assessmentId, assessmentTokenForApi, demoMode]);
 
   const handleSubmit = useCallback(
     async (autoSubmit = false) => {
@@ -693,8 +570,8 @@ export default function AssessmentPage({
         isTimerPaused={isTimerPaused}
         pauseReason={pauseReason}
         pauseMessage={pauseMessage}
-        onRetryClaude={handleRetryClaude}
-        retryingClaude={retryingClaude}
+        onRetryClaude={null}
+        retryingClaude={false}
         isClaudeBudgetExhausted={isClaudeBudgetExhausted}
         claudeBudget={claudeBudget}
         formatUsd={formatUsd}
@@ -739,9 +616,6 @@ export default function AssessmentPage({
         editorLanguage={hasRepoStructure ? languageFromPath(selectedRepoPath) : (assessment?.language || 'python')}
         editorFilename={selectedRepoPath || assessment?.filename || 'main'}
         isTimerPaused={isTimerPaused}
-        onSendClaudeMessage={handleClaudeMessage}
-        onPasteDetected={() => setPasteDetected(true)}
-        aiMode={aiMode}
         showTerminal={showTerminal}
         terminalConnected={terminalConnected}
         terminalEvents={terminalEvents}
@@ -749,8 +623,6 @@ export default function AssessmentPage({
         onTerminalResize={handleTerminalResize}
         onTerminalStop={handleTerminalStop}
         terminalStopping={terminalStopping}
-        claudeBudget={claudeBudget}
-        isClaudeBudgetExhausted={isClaudeBudgetExhausted}
         output={output}
         executing={executing}
       />

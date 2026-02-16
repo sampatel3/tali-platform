@@ -76,11 +76,17 @@ def _workspace_repo_root(task: Task) -> str:
 def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment, task: Task) -> bool:
     repo_url = getattr(assessment, "assessment_repo_url", None)
     branch_name = getattr(assessment, "assessment_branch", None)
-    if not repo_url or not branch_name or str(repo_url).startswith("mock://"):
+    if not repo_url or not branch_name:
         return False
 
     repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-    clone_url = repo_service.authenticated_repo_url(str(repo_url))
+    raw_repo_url = str(repo_url)
+    if raw_repo_url.startswith("mock://"):
+        # In explicit mock mode, clone from the local mock mirror instead of using a network URL.
+        mock_rel = raw_repo_url.replace("mock://", "", 1).strip("/")
+        clone_url = str((repo_service.mock_root / mock_rel).resolve())
+    else:
+        clone_url = repo_service.authenticated_repo_url(raw_repo_url)
     repo_root = _workspace_repo_root(task)
     result = sandbox.run_code(
         "import json, pathlib, subprocess\n"
@@ -355,6 +361,10 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         raise HTTPException(status_code=400, detail="Assessment link has expired")
     if not (settings.E2B_API_KEY or "").strip():
         raise HTTPException(status_code=503, detail="Code environment is not configured. Please try again later.")
+    try:
+        required_ai_mode = resolve_ai_mode()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"Assessment AI runtime is not configured: {exc}") from exc
 
     sandbox = None
     sandbox_id = None
@@ -403,8 +413,8 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         assessment.status = AssessmentStatus.IN_PROGRESS
         if was_pending or not assessment.started_at:
             assessment.started_at = utcnow()
-        if was_pending or not getattr(assessment, "ai_mode", None):
-            assessment.ai_mode = resolve_ai_mode()
+        # Assessments are terminal-only.
+        assessment.ai_mode = required_ai_mode
         assessment.e2b_session_id = sandbox_id
         db.commit()
     except Exception:
@@ -431,25 +441,15 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         except Exception:
             db.rollback()
             logger.exception("Failed to create assessment repository branch")
-            # GitHub integration should not block demos (they run from repo_structure in E2B).
-            if not settings.GITHUB_MOCK_MODE and not is_demo:
-                raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
+            raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
 
     try:
         cloned = _clone_assessment_branch_into_workspace(sandbox, assessment, task)
         if not cloned:
-            if (
-                not settings.GITHUB_MOCK_MODE
-                and not is_demo
-                and getattr(assessment, "assessment_repo_url", None)
-                and getattr(assessment, "assessment_branch", None)
-            ):
-                raise HTTPException(status_code=500, detail="Failed to clone assessment repository")
-            _materialize_task_repository(sandbox, task)
+            raise HTTPException(status_code=500, detail="Failed to clone assessment repository")
     except Exception:
         logger.exception("Failed to initialize task repository in sandbox")
-        if not settings.GITHUB_MOCK_MODE and not is_demo:
-            raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
+        raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
 
     resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
 
@@ -486,8 +486,8 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         "is_timer_paused": bool(getattr(assessment, "is_timer_paused", False)),
         "pause_reason": getattr(assessment, "pause_reason", None),
         "total_paused_seconds": int(getattr(assessment, "total_paused_seconds", 0) or 0),
-        "ai_mode": getattr(assessment, "ai_mode", "legacy_chat"),
-        "terminal_mode": getattr(assessment, "ai_mode", "legacy_chat") == "claude_cli_terminal",
+        "ai_mode": getattr(assessment, "ai_mode", "claude_cli_terminal"),
+        "terminal_mode": getattr(assessment, "ai_mode", "claude_cli_terminal") == "claude_cli_terminal",
         "terminal_capabilities": terminal_capabilities(),
         "repo_url": getattr(assessment, "assessment_repo_url", None),
         "branch_name": getattr(assessment, "assessment_branch", None),

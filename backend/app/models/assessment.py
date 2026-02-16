@@ -45,7 +45,7 @@ class Assessment(Base):
     final_repo_state = Column(String, nullable=True)
     git_evidence = Column(JSON, nullable=True)
     completed_due_to_timeout = Column(Boolean, default=False)
-    ai_mode = Column(String, default="legacy_chat", nullable=False)
+    ai_mode = Column(String, default="claude_cli_terminal", nullable=False)
     cli_session_pid = Column(Integer, nullable=True)
     cli_session_state = Column(String, nullable=True)
     cli_session_started_at = Column(DateTime(timezone=True), nullable=True)

@@ -181,7 +181,7 @@ describe('TasksPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Tasks', { selector: 'h1' })).toBeInTheDocument();
-      expect(screen.getByText('Manage assessment task templates')).toBeInTheDocument();
+      expect(screen.getByText('Backend-authored assessment task catalog')).toBeInTheDocument();
     });
   });
 
@@ -224,38 +224,14 @@ describe('TasksPage', () => {
     });
   });
 
-  it('renders New Task button', async () => {
-    await renderAppOnTasksPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('New Task')).toBeInTheDocument();
-    });
-  });
-
-  it('New Task button opens create modal with GenAI prompt step', async () => {
-    await renderAppOnTasksPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('New Task')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByText('New Task'));
-
-    await waitFor(() => {
-      expect(screen.getByText('Generate Task with AI')).toBeInTheDocument();
-      expect(screen.getByText('GenAI-first creation is enabled')).toBeInTheDocument();
-      expect(screen.getByText('Use Standard Prompt Template')).toBeInTheDocument();
-    });
-  });
-
   it('shows empty state when no tasks exist', async () => {
     tasksApi.list.mockResolvedValue({ data: [] });
 
     await renderAppOnTasksPage();
 
     await waitFor(() => {
-      expect(screen.getByText('No tasks yet')).toBeInTheDocument();
-      expect(screen.getByText('Create your first task template to start assessing candidates')).toBeInTheDocument();
+      expect(screen.getByText('No tasks available')).toBeInTheDocument();
+      expect(screen.getByText('Add task specs in the backend to populate this catalog.')).toBeInTheDocument();
     });
   });
 
@@ -288,27 +264,16 @@ describe('TasksPage', () => {
     });
   });
 
-  it('delete button calls tasksApi.delete after confirmation', async () => {
-    const confirmMock = vi.spyOn(window, 'confirm').mockReturnValue(true);
-    tasksApi.delete.mockResolvedValue({ data: {} });
-
+  it('task authoring actions are hidden in read-only mode', async () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
       expect(screen.getByText('Async Pipeline Debugging')).toBeInTheDocument();
     });
 
-    // Find delete buttons (only non-template tasks have them)
-    // The delete button has a Trash2 icon, we find it by title
-    const deleteButtons = screen.getAllByTitle('Delete task');
-    fireEvent.click(deleteButtons[0]);
-
-    await waitFor(() => {
-      expect(confirmMock).toHaveBeenCalled();
-      expect(tasksApi.delete).toHaveBeenCalledWith(10);
-    });
-
-    confirmMock.mockRestore();
+    expect(screen.queryByText('New Task')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Delete task')).not.toBeInTheDocument();
+    expect(screen.queryByTitle('Edit task')).not.toBeInTheDocument();
   });
 
   it('shows task type badges', async () => {

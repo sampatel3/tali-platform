@@ -18,18 +18,6 @@ export const assessments = {
     api.post(`/assessments/${id}/execute`, { code }, {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
-  claude: (id, message, conversationHistory, assessmentToken, metadata = {}) =>
-    api.post(`/assessments/${id}/claude`, {
-      message,
-      conversation_history: conversationHistory,
-      ...metadata,
-    }, {
-      headers: { 'X-Assessment-Token': assessmentToken },
-    }),
-  claudeRetry: (id, assessmentToken) =>
-    api.post(`/assessments/${id}/claude/retry`, {}, {
-      headers: { 'X-Assessment-Token': assessmentToken },
-    }),
   terminalStatus: (id, assessmentToken) =>
     api.get(`/assessments/${id}/terminal/status`, {
       headers: { 'X-Assessment-Token': assessmentToken },

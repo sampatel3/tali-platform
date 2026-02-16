@@ -15,6 +15,8 @@ from ..platform.config import settings
 
 logger = logging.getLogger("taali.fit_matching")
 
+_TOKENS_PER_MILLION = 1_000_000.0
+
 CV_MATCH_PROMPT = """Analyze the match between this candidate's CV and the job specification.
 
 CV:
@@ -95,6 +97,7 @@ async def calculate_cv_job_match(
             system="You are an expert recruiter. Respond ONLY with valid JSON.",
             messages=[{"role": "user", "content": prompt}],
         )
+        usage_ledger = _build_usage_ledger(response=response, model=resolved_model)
 
         raw_text = response.content[0].text
 
@@ -111,7 +114,10 @@ async def calculate_cv_job_match(
                     "cv_job_match_score": None,
                     "skills_match": None,
                     "experience_relevance": None,
-                    "match_details": {"error": "Failed to parse Claude response"},
+                    "match_details": {
+                        "error": "Failed to parse Claude response",
+                        "_claude_usage": usage_ledger,
+                    },
                 }
 
         overall = _clamp_score(result.get("overall_match_score"))
@@ -135,6 +141,7 @@ async def calculate_cv_job_match(
                 "experience_highlights": result.get("experience_highlights", []),
                 "concerns": result.get("concerns", []),
                 "summary": result.get("summary", ""),
+                "_claude_usage": usage_ledger,
             },
         }
 
@@ -186,3 +193,26 @@ def _clamp_score(val: Any) -> float | None:
         return max(0.0, min(10.0, round(v, 1)))
     except (TypeError, ValueError):
         return None
+
+
+def _build_usage_ledger(*, response: Any, model: str) -> Dict[str, Any]:
+    usage = getattr(response, "usage", None)
+    input_tokens = getattr(usage, "input_tokens", None) if usage is not None else None
+    output_tokens = getattr(usage, "output_tokens", None) if usage is not None else None
+    if input_tokens is None or output_tokens is None:
+        raise RuntimeError("Anthropic response is missing usage token metadata")
+
+    safe_input = max(0, int(input_tokens or 0))
+    safe_output = max(0, int(output_tokens or 0))
+    request_cost_usd = (
+        (safe_input / _TOKENS_PER_MILLION) * float(settings.CLAUDE_INPUT_COST_PER_MILLION_USD)
+        + (safe_output / _TOKENS_PER_MILLION) * float(settings.CLAUDE_OUTPUT_COST_PER_MILLION_USD)
+    )
+    return {
+        "provider": "anthropic",
+        "model": model,
+        "input_tokens": safe_input,
+        "output_tokens": safe_output,
+        "tokens_used": safe_input + safe_output,
+        "request_cost_usd": round(float(request_cost_usd), 6),
+    }

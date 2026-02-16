@@ -354,7 +354,7 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "pause_reason": getattr(assessment, "pause_reason", None),
         "total_paused_seconds": getattr(assessment, "total_paused_seconds", 0),
         "completed_due_to_timeout": getattr(assessment, "completed_due_to_timeout", False),
-        "ai_mode": getattr(assessment, "ai_mode", "legacy_chat"),
+        "ai_mode": getattr(assessment, "ai_mode", "claude_cli_terminal"),
         "cli_session_pid": getattr(assessment, "cli_session_pid", None),
         "cli_session_state": getattr(assessment, "cli_session_state", None),
         "cli_session_started_at": getattr(assessment, "cli_session_started_at", None),

@@ -3,19 +3,14 @@ import { vi } from 'vitest';
 
 import AssessmentPage from '../../features/assessment_runtime/AssessmentPage';
 
-const mockClaude = vi.fn();
-const mockClaudeRetry = vi.fn();
 const mockSubmit = vi.fn();
 const mockTerminalStatus = vi.fn();
 const mockTerminalStop = vi.fn();
-let lastClaudeReply = '';
 
 vi.mock('../../shared/api', () => ({
   assessments: {
     start: vi.fn(),
     execute: vi.fn(),
-    claude: (...args) => mockClaude(...args),
-    claudeRetry: (...args) => mockClaudeRetry(...args),
     terminalStatus: (...args) => mockTerminalStatus(...args),
     terminalStop: (...args) => mockTerminalStop(...args),
     terminalWsUrl: (id, token) => `ws://localhost/api/v1/assessments/${id}/terminal/ws?token=${token}`,
@@ -25,27 +20,6 @@ vi.mock('../../shared/api', () => ({
 
 vi.mock('./CodeEditor', () => ({
   default: ({ initialCode }) => <div data-testid="code-editor">editor:{initialCode}</div>,
-}));
-
-vi.mock('./ClaudeChat', () => ({
-  default: ({ onSendMessage, onPaste, disabled = false, budget = null, disabledReason = null }) => (
-    <div>
-      <button type="button" onClick={() => onPaste?.()}>paste</button>
-      <button
-        type="button"
-        disabled={disabled}
-        onClick={async () => {
-          lastClaudeReply = await onSendMessage('Help me debug this', []);
-        }}
-      >
-        send-claude
-      </button>
-      <div data-testid="claude-disabled">{disabled ? 'true' : 'false'}</div>
-      <div data-testid="claude-reply">{lastClaudeReply}</div>
-      <div data-testid="claude-budget-remaining">{budget?.remaining_usd ?? 'none'}</div>
-      <div data-testid="claude-disabled-reason">{disabledReason || 'none'}</div>
-    </div>
-  ),
 }));
 
 vi.mock('../../features/assessment_runtime/AssessmentTerminal', () => ({
@@ -61,9 +35,6 @@ describe('AssessmentPage tracking metadata', () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    lastClaudeReply = '';
-    mockClaude.mockResolvedValue({ data: { response: 'ok' } });
-    mockClaudeRetry.mockResolvedValue({ data: { success: true, is_timer_paused: false } });
     mockTerminalStatus.mockResolvedValue({ data: { state: 'running' } });
     mockTerminalStop.mockResolvedValue({ data: { success: true } });
     mockSubmit.mockResolvedValue({ data: { success: true } });
@@ -74,7 +45,7 @@ describe('AssessmentPage tracking metadata', () => {
     global.WebSocket = originalWebSocket;
   });
 
-  it('sends prompt metadata and submit tab_switch_count', async () => {
+  it('sends submit tab_switch_count metadata', async () => {
     const startData = {
       assessment_id: 10,
       token: 'tok',
@@ -88,25 +59,6 @@ describe('AssessmentPage tracking metadata', () => {
     };
 
     render(<AssessmentPage token="tok" startData={startData} />);
-
-    await act(async () => {
-      fireEvent.click(screen.getByText('paste'));
-    });
-
-    await act(async () => {
-      fireEvent.click(screen.getByText('send-claude'));
-    });
-
-    await waitFor(() => expect(mockClaude).toHaveBeenCalledTimes(1));
-    const claudeArgs = mockClaude.mock.calls[0];
-    expect(claudeArgs[0]).toBe(10);
-    expect(claudeArgs[1]).toBe('Help me debug this');
-    expect(claudeArgs[3]).toBe('tok');
-    expect(claudeArgs[4]).toMatchObject({
-      code_context: 'print("hi")',
-      paste_detected: true,
-      browser_focused: true,
-    });
 
     Object.defineProperty(document, 'visibilityState', {
       configurable: true,
@@ -245,139 +197,6 @@ describe('AssessmentPage tracking metadata', () => {
     expect(screen.getByText(/Read the task context and inspect repository files before editing/i)).toBeInTheDocument();
   });
 
-  it('uses canonical response field from Claude payload', async () => {
-    mockClaude.mockResolvedValueOnce({
-      data: {
-        success: true,
-        response: 'canonical response text',
-        content: 'legacy content fallback',
-      },
-    });
-
-    const startData = {
-      assessment_id: 16,
-      token: 'tok6',
-      time_remaining: 1200,
-      task: {
-        name: 'Response contract task',
-        starter_code: 'print("start")',
-        duration_minutes: 30,
-      },
-    };
-
-    render(<AssessmentPage token="tok6" startData={startData} />);
-
-    await act(async () => {
-      fireEvent.click(screen.getByText('send-claude'));
-    });
-
-    await waitFor(() => {
-      expect(lastClaudeReply).toBe('canonical response text');
-    });
-    expect(screen.getByTestId('claude-reply')).toHaveTextContent('canonical response text');
-  });
-
-  it('pauses interaction on Claude outage and resumes on retry', async () => {
-    mockClaude.mockResolvedValueOnce({
-      data: {
-        success: false,
-        response: 'Claude is temporarily unavailable. Your timer is paused. Please retry in a moment.',
-        is_timer_paused: true,
-        pause_reason: 'claude_outage',
-      },
-    });
-    mockClaudeRetry.mockResolvedValueOnce({
-      data: {
-        success: true,
-        is_timer_paused: false,
-        message: 'Claude recovered and assessment resumed',
-      },
-    });
-
-    const startData = {
-      assessment_id: 17,
-      token: 'tok7',
-      time_remaining: 1200,
-      task: {
-        name: 'Claude outage pause task',
-        starter_code: 'print("start")',
-        duration_minutes: 30,
-      },
-    };
-
-    render(<AssessmentPage token="tok7" startData={startData} />);
-
-    await act(async () => {
-      fireEvent.click(screen.getByText('send-claude'));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText(/Assessment paused: Claude is currently unavailable/i)).toBeInTheDocument();
-    });
-    expect(screen.getByRole('button', { name: 'Submit' })).toBeDisabled();
-    expect(screen.getByText('send-claude')).toBeDisabled();
-    expect(screen.getByTestId('claude-disabled')).toHaveTextContent('true');
-
-    await act(async () => {
-      fireEvent.click(screen.getByRole('button', { name: 'Retry Claude' }));
-    });
-
-    await waitFor(() => {
-      expect(screen.queryByText(/Assessment paused: Claude is currently unavailable/i)).not.toBeInTheDocument();
-    });
-    expect(screen.getByRole('button', { name: 'Submit' })).not.toBeDisabled();
-    expect(screen.getByText('send-claude')).not.toBeDisabled();
-    expect(screen.getByTestId('claude-disabled')).toHaveTextContent('false');
-  });
-
-  it('updates Claude budget from API payload', async () => {
-    mockClaude.mockResolvedValueOnce({
-      data: {
-        success: true,
-        response: 'budgeted response',
-        claude_budget: {
-          enabled: true,
-          limit_usd: 5,
-          used_usd: 1.2,
-          remaining_usd: 3.8,
-          tokens_used: 123,
-          is_exhausted: false,
-        },
-      },
-    });
-
-    const startData = {
-      assessment_id: 18,
-      token: 'tok8',
-      time_remaining: 1200,
-      claude_budget: {
-        enabled: true,
-        limit_usd: 5,
-        used_usd: 0,
-        remaining_usd: 5,
-        tokens_used: 0,
-        is_exhausted: false,
-      },
-      task: {
-        name: 'Budget task',
-        starter_code: 'print("start")',
-        duration_minutes: 30,
-      },
-    };
-
-    render(<AssessmentPage token="tok8" startData={startData} />);
-
-    expect(await screen.findByTestId('claude-budget-remaining')).toHaveTextContent('5');
-
-    await act(async () => {
-      fireEvent.click(screen.getByText('send-claude'));
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId('claude-budget-remaining')).toHaveTextContent('3.8');
-    });
-  });
-
   it('renders terminal pane in Claude CLI mode and initializes websocket', async () => {
     const sentMessages = [];
     class MockWebSocket {
@@ -476,7 +295,7 @@ describe('AssessmentPage tracking metadata', () => {
     });
   });
 
-  it('disables Claude when task budget is exhausted', async () => {
+  it('shows budget exhausted alert when Claude budget is depleted', async () => {
     const startData = {
       assessment_id: 19,
       token: 'tok9',
@@ -499,9 +318,6 @@ describe('AssessmentPage tracking metadata', () => {
     render(<AssessmentPage token="tok9" startData={startData} />);
 
     expect(await screen.findByText(/Claude budget exhausted for this task/i)).toBeInTheDocument();
-    expect(screen.getByText('send-claude')).toBeDisabled();
-    expect(screen.getByTestId('claude-disabled')).toHaveTextContent('true');
-    expect(screen.getByTestId('claude-disabled-reason')).toHaveTextContent('budget_exhausted');
   });
 
 });

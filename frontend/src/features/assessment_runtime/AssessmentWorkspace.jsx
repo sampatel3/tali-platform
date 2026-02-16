@@ -2,7 +2,6 @@ import React from 'react';
 import { ChevronDown, ChevronRight, FileText, Folder } from 'lucide-react';
 
 import CodeEditor from '../../components/assessment/CodeEditor';
-import ClaudeChat from '../../components/assessment/ClaudeChat';
 import { AssessmentTerminal } from './AssessmentTerminal';
 
 export const AssessmentWorkspace = ({
@@ -22,9 +21,6 @@ export const AssessmentWorkspace = ({
   editorLanguage,
   editorFilename,
   isTimerPaused,
-  onSendClaudeMessage,
-  onPasteDetected,
-  aiMode,
   showTerminal,
   terminalConnected,
   terminalEvents,
@@ -32,8 +28,6 @@ export const AssessmentWorkspace = ({
   onTerminalResize,
   onTerminalStop,
   terminalStopping,
-  claudeBudget,
-  isClaudeBudgetExhausted,
   output,
   executing,
 }) => (
@@ -120,13 +114,14 @@ export const AssessmentWorkspace = ({
             stopping={terminalStopping}
           />
         ) : (
-          <ClaudeChat
-            onSendMessage={onSendClaudeMessage}
-            onPaste={onPasteDetected}
-            budget={claudeBudget}
-            disabled={isTimerPaused || isClaudeBudgetExhausted}
-            disabledReason={isTimerPaused ? 'timer_paused' : (isClaudeBudgetExhausted ? 'budget_exhausted' : null)}
-          />
+          <div className="h-full bg-gray-50 border-l-2 border-black p-4 flex items-center justify-center">
+            <div className="border-2 border-red-400 bg-red-50 p-4 max-w-sm text-center">
+              <div className="font-mono text-sm font-bold text-red-700 mb-1">Terminal runtime unavailable</div>
+              <div className="font-mono text-xs text-red-700">
+                This assessment requires Claude CLI terminal mode. Contact support if this persists.
+              </div>
+            </div>
+          </div>
         )}
       </div>
 

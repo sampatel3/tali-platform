@@ -11,6 +11,8 @@ from ..platform.config import settings
 
 logger = logging.getLogger("taali.interview_focus")
 
+_TOKENS_PER_MILLION = 1_000_000.0
+
 INTERVIEW_FOCUS_PROMPT = """You are helping a recruiter manually screen candidates before full interviews.
 
 Job specification:
@@ -102,6 +104,7 @@ def generate_interview_focus_sync(
             system="You are an expert recruiter. Respond ONLY with valid JSON.",
             messages=[{"role": "user", "content": prompt}],
         )
+        usage_ledger = _build_usage_ledger(response=response, model=resolved_model)
 
         parsed = _parse_json(response.content[0].text)
         if not isinstance(parsed, dict):
@@ -109,6 +112,7 @@ def generate_interview_focus_sync(
             return None
 
         normalized = _normalize_focus(parsed)
+        normalized["_claude_usage"] = usage_ledger
         if not normalized.get("questions"):
             return None
         return normalized
@@ -200,3 +204,26 @@ def _clip_text(value: Any, *, max_len: int) -> str:
     if not text:
         return ""
     return text[:max_len]
+
+
+def _build_usage_ledger(*, response: Any, model: str) -> Dict[str, Any]:
+    usage = getattr(response, "usage", None)
+    input_tokens = getattr(usage, "input_tokens", None) if usage is not None else None
+    output_tokens = getattr(usage, "output_tokens", None) if usage is not None else None
+    if input_tokens is None or output_tokens is None:
+        raise RuntimeError("Anthropic response is missing usage token metadata")
+
+    safe_input = max(0, int(input_tokens or 0))
+    safe_output = max(0, int(output_tokens or 0))
+    request_cost_usd = (
+        (safe_input / _TOKENS_PER_MILLION) * float(settings.CLAUDE_INPUT_COST_PER_MILLION_USD)
+        + (safe_output / _TOKENS_PER_MILLION) * float(settings.CLAUDE_OUTPUT_COST_PER_MILLION_USD)
+    )
+    return {
+        "provider": "anthropic",
+        "model": model,
+        "input_tokens": safe_input,
+        "output_tokens": safe_output,
+        "tokens_used": safe_input + safe_output,
+        "request_cost_usd": round(float(request_cost_usd), 6),
+    }

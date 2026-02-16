@@ -35,25 +35,23 @@ class Settings(BaseSettings):
 
     # Claude / Anthropic
     ANTHROPIC_API_KEY: str = ""
-    # Model overrides (AGENT E / Phase P6)
-    # Precedence: CLAUDE_MODEL (explicit) > env-derived default below
-    CLAUDE_MODEL: Optional[str] = None
-    CLAUDE_MODEL_NON_PROD: str = "claude-3-5-haiku-latest"
-    CLAUDE_MODEL_PRODUCTION: str = "claude-3-5-sonnet-20241022"
+    # Explicit model must be configured via environment.
+    CLAUDE_MODEL: str = ""
     MAX_TOKENS_PER_RESPONSE: int = 1024
     # Terminal-native Claude Code runtime
-    ASSESSMENT_TERMINAL_ENABLED: bool = False
-    ASSESSMENT_TERMINAL_DEFAULT_MODE: str = "legacy_chat"  # "legacy_chat" | "claude_cli_terminal"
+    ASSESSMENT_TERMINAL_ENABLED: bool = True
+    ASSESSMENT_TERMINAL_DEFAULT_MODE: str = "claude_cli_terminal"  # "claude_cli_terminal"
     CLAUDE_CLI_PERMISSION_MODE_DEFAULT: str = "acceptEdits"
     CLAUDE_CLI_COMMAND: str = "claude"
     CLAUDE_CLI_DISALLOWED_TOOLS: str = "Bash"
-    # Allow global API key fallback when org-specific key is not configured.
-    ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK: bool = True
+    # Strict production posture: no global key fallback for candidate sessions.
+    ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK: bool = False
     # Budget controls
     DEMO_CLAUDE_BUDGET_LIMIT_USD: float = 1.0
     ASSESSMENT_CLAUDE_BUDGET_DEFAULT_USD: float | None = 5.0
-    # Approximation used when estimating CLI token usage from streamed transcript text.
-    CLAUDE_CLI_CHARS_PER_TOKEN_ESTIMATE: float = 4.0
+    # Require provider-reported usage in CLI transcript for cost/budget enforcement.
+    CLAUDE_CLI_REQUIRE_PROVIDER_USAGE: bool = True
+    CLAUDE_CLI_PROVIDER_USAGE_GRACE_OUTPUT_EVENTS: int = 40
 
     # Cost model defaults (all overridable via environment)
     CLAUDE_INPUT_COST_PER_MILLION_USD: float = 0.25
@@ -67,19 +65,20 @@ class Settings(BaseSettings):
 
     @property
     def resolved_claude_model(self) -> str:
-        """Resolve the Claude model for the current environment."""
-        if self.CLAUDE_MODEL:
-            return self.CLAUDE_MODEL
-        env = (self.DEPLOYMENT_ENV or "").lower()
-        if env in {"prod", "production"}:
-            return self.CLAUDE_MODEL_PRODUCTION
-        return self.CLAUDE_MODEL_NON_PROD
+        """Resolve the required Claude model from explicit environment config."""
+        model = (self.CLAUDE_MODEL or "").strip()
+        if not model:
+            raise RuntimeError("CLAUDE_MODEL is required and must be explicitly configured")
+        return model
 
 
     # GitHub assessment repository integration
     GITHUB_TOKEN: str = ""
     GITHUB_ORG: str = "taali-assessments"
-    GITHUB_MOCK_MODE: bool = True
+    GITHUB_MOCK_MODE: bool = False
+
+    # Task authoring API guardrail (tasks are backend-authored by default).
+    TASK_AUTHORING_API_ENABLED: bool = False
 
     # V2 AI-assisted evaluator (suggestions only)
     AI_ASSISTED_EVAL_ENABLED: bool = False

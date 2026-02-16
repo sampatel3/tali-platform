@@ -19,7 +19,7 @@ export function normalizeStartData(startData) {
     claude_budget_limit_usd: task.claude_budget_limit_usd ?? null,
     is_timer_paused: Boolean(startData.is_timer_paused),
     pause_reason: startData.pause_reason || null,
-    ai_mode: startData.ai_mode || task.ai_mode || 'legacy_chat',
+    ai_mode: startData.ai_mode || task.ai_mode || 'claude_cli_terminal',
     terminal_mode: Boolean(startData.terminal_mode),
     terminal_capabilities: startData.terminal_capabilities || {},
   };

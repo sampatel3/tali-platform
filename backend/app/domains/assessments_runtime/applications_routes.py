@@ -314,26 +314,18 @@ def create_assessment_for_application(
     db.add(assessment)
     try:
         db.flush()
-
-        try:
-            repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-            branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
-            assessment.assessment_repo_url = branch_ctx.repo_url
-            assessment.assessment_branch = branch_ctx.branch_name
-            assessment.clone_command = branch_ctx.clone_command
-        except AssessmentRepositoryError:
-            logger.exception(
-                "Assessment repository provisioning failed for assessment_id=%s; continuing without branch metadata",
-                assessment.id,
-            )
-        except Exception:
-            logger.exception(
-                "Unexpected repository provisioning failure for assessment_id=%s; continuing without branch metadata",
-                assessment.id,
-            )
+        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
+        branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
+        assessment.assessment_repo_url = branch_ctx.repo_url
+        assessment.assessment_branch = branch_ctx.branch_name
+        assessment.clone_command = branch_ctx.clone_command
 
         db.commit()
         db.refresh(assessment)
+    except AssessmentRepositoryError:
+        db.rollback()
+        logger.exception("Assessment repository provisioning failed for assessment_id=%s", assessment.id)
+        raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create assessment")

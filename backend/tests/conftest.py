@@ -7,6 +7,10 @@ os.environ["MVP_DISABLE_LEMON"] = "true"
 os.environ["MVP_DISABLE_WORKABLE"] = "true"
 os.environ["MVP_DISABLE_STRIPE"] = "true"
 os.environ["MVP_DISABLE_CELERY"] = "true"
+os.environ["CLAUDE_MODEL"] = "claude-3-5-haiku-latest"
+# Preserve test fixtures that create/update/delete tasks through API helpers.
+os.environ["TASK_AUTHORING_API_ENABLED"] = "true"
+os.environ["GITHUB_MOCK_MODE"] = "true"
 
 import uuid
 import pytest

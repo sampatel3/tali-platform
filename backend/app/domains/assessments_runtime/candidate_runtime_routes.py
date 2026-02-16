@@ -109,75 +109,7 @@ def _resolve_demo_task(db: Session, org_id: int, track: str) -> Task | None:
         if global_task:
             return global_task
 
-    # Backward-compatible fallback: if keyed demo tasks are not yet seeded,
-    # continue to use the first active task visible to the demo org.
-    fallback_task = (
-        db.query(Task)
-        .filter(
-            Task.is_active == True,  # noqa: E712
-            ((Task.organization_id == None) | (Task.organization_id == org_id)),  # noqa: E711
-        )
-        .order_by(Task.id.asc())
-        .first()
-    )
-    if fallback_task:
-        return fallback_task
-
-    seeded_task = Task(
-        organization_id=org_id,
-        name="TAALI Demo Assessment",
-        description="Debug and improve a small code path while explaining tradeoffs.",
-        task_type="python",
-        difficulty="medium",
-        duration_minutes=30,
-        starter_code=(
-            "def normalize_items(items):\n"
-            "    normalized = []\n"
-            "    for item in items:\n"
-            "        normalized.append(item.strip().lower())\n"
-            "    return normalized\n"
-        ),
-        test_code="",
-        task_key=task_key or f"taali_demo_{track.replace('-', '_')}",
-        role="ai_engineer",
-        scenario=(
-            "A production ingestion step is creating duplicate, inconsistent records. "
-            "Tighten normalization logic and explain how you validated the fix."
-        ),
-        repo_structure={
-            "files": {
-                "main.py": (
-                    "def normalize_items(items):\n"
-                    "    normalized = []\n"
-                    "    for item in items:\n"
-                    "        normalized.append(item.strip().lower())\n"
-                    "    return normalized\n"
-                ),
-                "README.md": (
-                    "# TAALI Demo Assessment\n\n"
-                    "- Stabilize normalization behavior.\n"
-                    "- Prevent duplicate output rows.\n"
-                    "- Explain validation strategy.\n"
-                ),
-            },
-        },
-        evaluation_rubric={
-            "task_completion": {"weight": 0.3},
-            "prompt_clarity": {"weight": 0.2},
-            "context_provision": {"weight": 0.2},
-            "independence_efficiency": {"weight": 0.2},
-            "written_communication": {"weight": 0.1},
-        },
-        is_active=True,
-    )
-    db.add(seeded_task)
-    try:
-        db.commit()
-    except Exception:
-        db.rollback()
-        return None
-    db.refresh(seeded_task)
-    return seeded_task
+    return None
 
 
 @router.post("/token/{token}/start", response_model=AssessmentStart)
@@ -344,6 +276,9 @@ def execute_code(
         db.commit()
     except Exception:
         db.rollback()
+    return result
+
+
 @router.post("/{assessment_id}/submit")
 def submit_assessment_endpoint(
     assessment_id: int,
