@@ -204,6 +204,9 @@ async def terminal_ws(
     stop_pump = threading.Event()
 
     def _pump_output() -> None:
+        if session.handle is None:
+            loop.call_soon_threadsafe(output_queue.put_nowait, {"type": "exit"})
+            return
         try:
             for stdout, stderr, pty in session.handle:
                 if stop_pump.is_set():
@@ -309,28 +312,11 @@ async def terminal_ws(
                 if msg_type == "init":
                     touch_terminal_session(assessment)
                     db.commit()
-                    await _ws_send_json(
-                        websocket,
-                        {
-                            "type": "status",
-                            "pid": session.pid,
-                            "state": assessment.cli_session_state or "running",
-                            "ai_mode": "claude_cli_terminal",
-                        },
-                    )
                     continue
 
                 if msg_type == "heartbeat":
                     touch_terminal_session(assessment)
                     db.commit()
-                    await _ws_send_json(
-                        websocket,
-                        {
-                            "type": "status",
-                            "pid": session.pid,
-                            "state": assessment.cli_session_state or "running",
-                        },
-                    )
                     continue
 
                 if msg_type == "resize":
@@ -381,8 +367,8 @@ async def terminal_ws(
         db.commit()
     finally:
         stop_pump.set()
-        try:
-            session.handle.disconnect()
-        except Exception:
-            pass
-
+        if session.handle is not None:
+            try:
+                session.handle.disconnect()
+            except Exception:
+                pass

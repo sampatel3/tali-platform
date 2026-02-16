@@ -7,7 +7,6 @@ import '@xterm/xterm/css/xterm.css';
 export const AssessmentTerminal = ({
   events,
   connected,
-  statusText,
   disabled = false,
   onInput,
   onResize,
@@ -112,11 +111,6 @@ export const AssessmentTerminal = ({
         continue;
       }
 
-      if (event.type === 'status') {
-        term.writeln(`\r\n[status] ${String(event.message || '')}`);
-        continue;
-      }
-
       if (event.type === 'error') {
         term.writeln(`\r\n[error] ${String(event.message || 'Terminal error')}`);
         continue;
@@ -140,9 +134,6 @@ export const AssessmentTerminal = ({
           </span>
         </div>
         <div className="flex items-center gap-2">
-          <span className="font-mono text-[11px] text-gray-400">
-            {statusText || 'Initializing terminal...'}
-          </span>
           <button
             type="button"
             className="border border-red-700 px-2 py-1 font-mono text-[11px] text-red-200 hover:bg-red-900/40 disabled:opacity-50"

@@ -5,7 +5,6 @@ const demoTasks = [
     description: 'Debug a CDC sync that is creating duplicates, missing updates, and never deleting removed rows.',
     durationLabel: '10 min',
     difficulty: 'Intermediate',
-    availability: 'full',
   },
   {
     id: 'data_eng_c_backfill_schema',
@@ -13,7 +12,6 @@ const demoTasks = [
     description: 'Add a safe backfill mode and automatic schema evolution without breaking the working incremental pipeline.',
     durationLabel: '10 min',
     difficulty: 'Advanced',
-    availability: 'full',
   },
 ];
 
@@ -28,4 +26,3 @@ const demoAssessmentMap = DEMO_ASSESSMENTS.reduce((acc, assessment) => {
 export const getDemoAssessmentById = (assessmentId) => (
   demoAssessmentMap[assessmentId] || demoAssessmentMap[DEFAULT_DEMO_ASSESSMENT_ID]
 );
-

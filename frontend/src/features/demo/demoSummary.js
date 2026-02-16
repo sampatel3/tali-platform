@@ -5,37 +5,54 @@ const containsAny = (text, patterns) => patterns.some((pattern) => pattern.test(
 const categoryPlaybook = {
   problem_framing: {
     label: 'Problem Framing',
-    positive: 'Scoped the task clearly and focused on root cause.',
-    improvement: 'State assumptions earlier and define success criteria up front.',
   },
   execution_rigor: {
     label: 'Execution Rigor',
-    positive: 'Maintained steady progress with practical implementation steps.',
-    improvement: 'Increase iterative checks while coding to reduce late surprises.',
   },
   testing_validation: {
     label: 'Testing & Validation',
-    positive: 'Showed clear validation intent and quality checks.',
-    improvement: 'Strengthen explicit test coverage and edge-case verification.',
   },
   ai_collaboration: {
     label: 'AI Collaboration',
-    positive: 'Used assistant prompts to unblock efficiently and move forward.',
-    improvement: 'Ask more precise AI prompts with concrete context and constraints.',
   },
   technical_communication: {
     label: 'Technical Communication',
-    positive: 'Communicated decisions with clear technical context.',
-    improvement: 'Explain tradeoffs and reasoning more explicitly in writing.',
   },
   delivery_momentum: {
     label: 'Delivery Momentum',
-    positive: 'Kept momentum while balancing speed and quality.',
-    improvement: 'Tighten iteration cadence and prioritize highest-impact fixes first.',
   },
 };
 
-export const signalLabelForLevel = (level) => {
+const successfulCandidateBenchmarks = {
+  data_eng_b_cdc_fix: {
+    problem_framing: 3.7,
+    execution_rigor: 3.8,
+    testing_validation: 3.5,
+    ai_collaboration: 3.6,
+    technical_communication: 3.4,
+    delivery_momentum: 3.8,
+  },
+  data_eng_c_backfill_schema: {
+    problem_framing: 3.8,
+    execution_rigor: 3.6,
+    testing_validation: 3.7,
+    ai_collaboration: 3.5,
+    technical_communication: 3.6,
+    delivery_momentum: 3.5,
+  },
+  default: {
+    problem_framing: 3.6,
+    execution_rigor: 3.6,
+    testing_validation: 3.5,
+    ai_collaboration: 3.5,
+    technical_communication: 3.4,
+    delivery_momentum: 3.6,
+  },
+};
+
+const levelToScore = (level) => Math.round((clamp(Number(level) || 0, 0, 5) / 5) * 100);
+
+export const profileBandForLevel = (level) => {
   if (level >= 5) return 'Very strong';
   if (level >= 4) return 'Strong';
   if (level >= 3) return 'Developing';
@@ -50,6 +67,7 @@ export const buildDemoSummary = ({
   finalCode = '',
   timeSpentSeconds = 0,
   tabSwitchCount = 0,
+  taskKey = null,
 }) => {
   const promptCount = promptMessages.length;
   const promptCorpus = promptMessages.join(' ').toLowerCase();
@@ -97,27 +115,42 @@ export const buildDemoSummary = ({
   ].map((entry) => ({
     ...entry,
     label: categoryPlaybook[entry.key].label,
-    signal: signalLabelForLevel(entry.level),
+    band: profileBandForLevel(entry.level),
   }));
 
-  const sorted = [...categories].sort((a, b) => b.level - a.level);
-  const highlights = sorted.slice(0, 3).map((entry) => ({
-    key: entry.key,
-    label: entry.label,
-    signal: entry.signal,
-    text: categoryPlaybook[entry.key].positive,
-  }));
-  const opportunities = [...sorted].reverse().slice(0, 2).map((entry) => ({
-    key: entry.key,
-    label: entry.label,
-    signal: entry.signal,
-    text: categoryPlaybook[entry.key].improvement,
-  }));
+  const benchmarkByCategory = successfulCandidateBenchmarks[taskKey] || successfulCandidateBenchmarks.default;
+  const comparisonCategories = categories.map((entry) => {
+    const benchmarkLevel = clamp(
+      Number(benchmarkByCategory[entry.key] ?? successfulCandidateBenchmarks.default[entry.key] ?? 3.5),
+      1,
+      5,
+    );
+    const deltaLevel = Number((entry.level - benchmarkLevel).toFixed(1));
+    return {
+      key: entry.key,
+      label: entry.label,
+      candidateLevel: entry.level,
+      benchmarkLevel,
+      deltaLevel,
+      candidateScore: levelToScore(entry.level),
+      benchmarkScore: levelToScore(benchmarkLevel),
+    };
+  });
+
+  const candidateAvgLevel = categories.reduce((acc, entry) => acc + entry.level, 0) / Math.max(categories.length, 1);
+  const benchmarkAvgLevel = comparisonCategories.reduce((acc, entry) => acc + entry.benchmarkLevel, 0) / Math.max(comparisonCategories.length, 1);
+  const candidateScore = levelToScore(candidateAvgLevel);
+  const benchmarkScore = levelToScore(benchmarkAvgLevel);
 
   return {
     categories,
-    highlights,
-    opportunities,
+    comparison: {
+      candidateScore,
+      benchmarkScore,
+      deltaScore: candidateScore - benchmarkScore,
+      categories: comparisonCategories,
+      benchmarkLabel: 'Successful-candidate average',
+    },
     meta: {
       promptCount,
       runCount,
@@ -127,3 +160,4 @@ export const buildDemoSummary = ({
     },
   };
 };
+

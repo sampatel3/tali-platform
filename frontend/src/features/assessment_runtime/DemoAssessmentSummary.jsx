@@ -48,10 +48,10 @@ export const DemoAssessmentSummary = ({
       <div className="mx-auto max-w-6xl px-6 py-10">
         <Panel className="p-6">
           <div className="mb-2 inline-flex border-2 border-black bg-[var(--taali-purple)] px-3 py-1 font-mono text-xs font-bold text-white">
-            DEMO SUMMARY
+            TAALI PROFILE
           </div>
           <h1 className="text-3xl font-bold">
-            {profile?.fullName ? `${profile.fullName}'s` : 'Your'} signal profile
+            {profile?.fullName ? `${profile.fullName}'s` : 'Your'} TAALI profile
           </h1>
           <p className="mt-2 font-mono text-sm text-[var(--taali-muted)]">
             Assessment: {assessmentName || 'Demo task'}
@@ -68,7 +68,7 @@ export const DemoAssessmentSummary = ({
                   <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'var(--taali-font)' }} />
                   <PolarRadiusAxis domain={[0, 5]} tick={false} axisLine={false} />
                   <Radar
-                    name="Signal profile"
+                    name="TAALI profile"
                     dataKey="level"
                     stroke="#9D00FF"
                     fill="#9D00FF"
@@ -80,24 +80,34 @@ export const DemoAssessmentSummary = ({
 
             <div className="grid gap-3">
               <Card className="p-4">
-                <h3 className="text-lg font-bold">Strength highlights</h3>
-                <ul className="mt-2 space-y-1">
-                  {(summary?.highlights || []).map((item) => (
-                    <li key={item.key} className="font-mono text-sm text-[var(--taali-text)]">
-                      • <span className="font-bold">{item.label}:</span> {item.text}
-                    </li>
+                <h3 className="text-lg font-bold">Compared with successful candidates</h3>
+                <div className="mt-3 grid gap-2 font-mono text-sm">
+                  <div>
+                    <span className="text-[var(--taali-muted)]">Your TAALI profile:</span>{' '}
+                    <span className="font-bold">{summary?.comparison?.candidateScore ?? 0}/100</span>
+                  </div>
+                  <div>
+                    <span className="text-[var(--taali-muted)]">{summary?.comparison?.benchmarkLabel || 'Successful-candidate average'}:</span>{' '}
+                    <span className="font-bold">{summary?.comparison?.benchmarkScore ?? 0}/100</span>
+                  </div>
+                  <div>
+                    <span className="text-[var(--taali-muted)]">Difference:</span>{' '}
+                    <span className={`font-bold ${(summary?.comparison?.deltaScore || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+                      {(summary?.comparison?.deltaScore || 0) >= 0 ? '+' : ''}
+                      {summary?.comparison?.deltaScore || 0}
+                    </span>
+                  </div>
+                </div>
+                <div className="mt-4 space-y-1.5">
+                  {(summary?.comparison?.categories || []).map((entry) => (
+                    <div key={entry.key} className="flex items-center justify-between gap-3 font-mono text-xs">
+                      <span className="text-[var(--taali-muted)]">{entry.label}</span>
+                      <span>
+                        {entry.candidateScore}/100 vs {entry.benchmarkScore}/100
+                      </span>
+                    </div>
                   ))}
-                </ul>
-              </Card>
-              <Card className="p-4">
-                <h3 className="text-lg font-bold">Growth areas</h3>
-                <ul className="mt-2 space-y-1">
-                  {(summary?.opportunities || []).map((item) => (
-                    <li key={item.key} className="font-mono text-sm text-[var(--taali-text)]">
-                      • <span className="font-bold">{item.label}:</span> {item.text}
-                    </li>
-                  ))}
-                </ul>
+                </div>
               </Card>
             </div>
           </div>

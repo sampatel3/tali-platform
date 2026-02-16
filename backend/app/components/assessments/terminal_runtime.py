@@ -22,7 +22,7 @@ MAX_TRANSCRIPT_EVENTS = 2000
 @dataclass
 class TerminalSession:
     sandbox: Any
-    handle: Any
+    handle: Any | None
     pid: int
     is_new: bool
     cli_available: bool
@@ -76,8 +76,15 @@ def _resolve_claude_api_key(org: Organization | None) -> str:
 def terminal_env(org: Organization | None) -> dict[str, str]:
     key = (_resolve_claude_api_key(org) or "").strip()
     envs: dict[str, str] = {}
+    # Never allow interactive login prompts in candidate sessions.
+    envs["CLAUDE_CODE_SKIP_AUTH_LOGIN"] = "1"
     if key:
+        # Keep both env names for CLI compatibility across Claude Code versions.
         envs["ANTHROPIC_API_KEY"] = key
+        envs["CLAUDE_API_KEY"] = key
+    model = (settings.resolved_claude_model or "").strip()
+    if model:
+        envs["ANTHROPIC_MODEL"] = model
     return envs
 
 
@@ -152,6 +159,31 @@ def ensure_terminal_session(
 
     repo_root = workspace_repo_root(task)
     envs = terminal_env(org)
+    if not (envs.get("ANTHROPIC_API_KEY") or "").strip():
+        _mark_terminal_session(assessment, pid=None, state="error")
+        append_assessment_timeline_event(
+            assessment,
+            "terminal_error",
+            {"reason": "missing_claude_api_key"},
+        )
+        append_cli_transcript(
+            assessment,
+            "terminal_error",
+            {"reason": "missing_claude_api_key"},
+        )
+        db.commit()
+        return TerminalSession(
+            sandbox=sandbox,
+            handle=None,
+            pid=0,
+            is_new=True,
+            cli_available=False,
+            error_message=(
+                "Claude CLI authentication is not configured for this workspace. "
+                "Set an organization Claude API key (or enable approved fallback) before starting terminal mode."
+            ),
+        )
+
     handle = e2b_service.create_pty(
         sandbox,
         cwd=repo_root,
@@ -195,8 +227,10 @@ def ensure_terminal_session(
             sandbox,
             pid,
             (
+                f"export HOME={repo_root}\n"
                 f"{settings.CLAUDE_CLI_COMMAND} "
                 f"--permission-mode {settings.CLAUDE_CLI_PERMISSION_MODE_DEFAULT}\n"
+                "exit\n"
             ),
         )
 

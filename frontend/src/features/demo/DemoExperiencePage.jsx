@@ -126,7 +126,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
           <h1 className="text-4xl font-bold">Try a candidate assessment</h1>
           <p className="mt-3 max-w-4xl font-mono text-sm text-[var(--taali-muted)]">
             Complete this short intake, choose one of two demo tasks, and run through the same assessment runtime candidates use.
-            At the end, you&apos;ll see a short signal summary chart.
+            At the end, you&apos;ll see a short TAALI profile summary.
           </p>
           <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
             Note: this is a product demo and does not generate a full production report.
@@ -226,12 +226,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-lg font-bold">{assessment.title}</h3>
-                          <span className="border border-black px-2 py-0.5 font-mono text-[10px] uppercase">
-                            {assessment.availability === 'full' ? 'Live demo' : 'Preview'}
-                          </span>
-                        </div>
+                        <h3 className="text-lg font-bold">{assessment.title}</h3>
                         <p className="mt-1 font-mono text-sm text-[var(--taali-muted)]">{assessment.description}</p>
                       </div>
                       {isSelected ? (

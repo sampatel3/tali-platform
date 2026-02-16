@@ -27,7 +27,6 @@ export const AssessmentWorkspace = ({
   aiMode,
   showTerminal,
   terminalConnected,
-  terminalStatusText,
   terminalEvents,
   onTerminalInput,
   onTerminalResize,
@@ -114,7 +113,6 @@ export const AssessmentWorkspace = ({
           <AssessmentTerminal
             events={terminalEvents}
             connected={terminalConnected}
-            statusText={terminalStatusText}
             disabled={isTimerPaused}
             onInput={onTerminalInput}
             onResize={onTerminalResize}

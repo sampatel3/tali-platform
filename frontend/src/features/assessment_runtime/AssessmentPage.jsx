@@ -53,7 +53,6 @@ export default function AssessmentPage({
   const [demoSummary, setDemoSummary] = useState(null);
   const [terminalEvents, setTerminalEvents] = useState([]);
   const [terminalConnected, setTerminalConnected] = useState(false);
-  const [terminalStatusText, setTerminalStatusText] = useState('Initializing terminal...');
   const [terminalStopping, setTerminalStopping] = useState(false);
   const [terminalFallbackChat, setTerminalFallbackChat] = useState(false);
   const [collapsedSections, setCollapsedSections] = useState({
@@ -78,7 +77,6 @@ export default function AssessmentPage({
     setDemoSummary(null);
     setTerminalEvents([]);
     setTerminalConnected(false);
-    setTerminalStatusText('Initializing terminal...');
     setTerminalStopping(false);
     setTerminalFallbackChat(false);
 
@@ -303,11 +301,9 @@ export default function AssessmentPage({
     try {
       await assessments.terminalStop(id, assessmentTokenForApi);
       sendTerminalPayload({ type: 'stop' });
-      setTerminalStatusText('Terminal stopped.');
     } catch (err) {
       const detail = err?.response?.data?.detail || err?.message || 'Failed to stop terminal.';
       appendTerminalEvent({ type: 'error', message: String(detail) });
-      setTerminalStatusText(String(detail));
     } finally {
       setTerminalStopping(false);
     }
@@ -328,7 +324,6 @@ export default function AssessmentPage({
       if (disposed || terminalManualCloseRef.current || submitted) return;
       reconnectAttempts += 1;
       const waitMs = Math.min(1000 * (2 ** reconnectAttempts), 8000);
-      setTerminalStatusText(`Disconnected. Reconnecting in ${Math.round(waitMs / 1000)}s...`);
       terminalReconnectTimerRef.current = setTimeout(() => {
         connect();
       }, waitMs);
@@ -344,7 +339,6 @@ export default function AssessmentPage({
     const connect = () => {
       if (disposed) return;
       const wsUrl = assessments.terminalWsUrl(id, assessmentTokenForApi);
-      setTerminalStatusText('Connecting Claude Code terminal...');
       const ws = new WebSocket(wsUrl);
       terminalWsRef.current = ws;
 
@@ -352,7 +346,6 @@ export default function AssessmentPage({
         if (disposed) return;
         reconnectAttempts = 0;
         setTerminalConnected(true);
-        setTerminalStatusText('Connected to Claude Code CLI terminal.');
         ws.send(JSON.stringify({ type: 'init' }));
         clearHeartbeat();
         heartbeatInterval = setInterval(() => {
@@ -373,15 +366,12 @@ export default function AssessmentPage({
         if (!payload || typeof payload !== 'object') return;
 
         if (payload.type === 'ready') {
-          setTerminalStatusText(`Terminal ready (PID ${payload.pid}).`);
           appendTerminalEvent({ type: 'status', message: `Terminal ready (PID ${payload.pid}).` });
           return;
         }
 
         if (payload.type === 'status') {
-          const message = payload.message || `Terminal state: ${payload.state || 'running'}`;
-          setTerminalStatusText(String(message));
-          appendTerminalEvent({ type: 'status', message: String(message) });
+          // Intentionally not rendered to candidates to keep terminal output clean.
           return;
         }
 
@@ -396,7 +386,6 @@ export default function AssessmentPage({
 
         if (payload.type === 'error') {
           const message = String(payload.message || 'Terminal error');
-          setTerminalStatusText(message);
           appendTerminalEvent({ type: 'error', message });
           if (payload.fallback_chat) {
             setTerminalFallbackChat(true);
@@ -405,16 +394,11 @@ export default function AssessmentPage({
         }
 
         if (payload.type === 'exit') {
-          const message = 'Terminal exited.';
-          setTerminalStatusText(message);
-          appendTerminalEvent({ type: 'exit', message });
+          appendTerminalEvent({ type: 'exit', message: 'Terminal exited.' });
         }
       };
 
-      ws.onerror = () => {
-        if (disposed) return;
-        setTerminalStatusText('Terminal connection error.');
-      };
+      ws.onerror = () => {};
 
       ws.onclose = () => {
         if (disposed) return;
@@ -642,6 +626,7 @@ export default function AssessmentPage({
             finalCode: codeRef.current,
             timeSpentSeconds: spentSeconds,
             tabSwitchCount: proctoringEnabled ? tabSwitchCount : 0,
+            taskKey: assessment?.task?.task_key || null,
             submissionResult: res?.data || null,
           });
           setDemoSummary(summary);
@@ -761,7 +746,6 @@ export default function AssessmentPage({
         aiMode={aiMode}
         showTerminal={showTerminal}
         terminalConnected={terminalConnected}
-        terminalStatusText={terminalStatusText}
         terminalEvents={terminalEvents}
         onTerminalInput={handleTerminalInput}
         onTerminalResize={handleTerminalResize}

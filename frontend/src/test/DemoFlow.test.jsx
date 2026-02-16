@@ -179,7 +179,7 @@ describe('Demo flow', () => {
     fireEvent.click(submitButton);
 
     await waitFor(() => {
-      expect(screen.getByText('DEMO SUMMARY')).toBeInTheDocument();
+      expect(screen.getByText('TAALI PROFILE')).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Join TAALI' })).toBeInTheDocument();
       expect(screen.getByTestId('radar-chart')).toBeInTheDocument();
     });
