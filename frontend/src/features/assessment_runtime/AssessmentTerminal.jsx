@@ -16,7 +16,7 @@ export const AssessmentTerminal = ({
   const hostRef = useRef(null);
   const terminalRef = useRef(null);
   const fitAddonRef = useRef(null);
-  const dataDisposableRef = useRef(null);
+  const keyDisposableRef = useRef(null);
   const eventCursorRef = useRef(0);
   const resizeObserverRef = useRef(null);
   const disabledRef = useRef(disabled);
@@ -63,9 +63,9 @@ export const AssessmentTerminal = ({
       onResize?.(term.rows, term.cols);
     };
 
-    const dataDisposable = term.onData((data) => {
+    const keyDisposable = term.onKey(({ key }) => {
       if (disabledRef.current) return;
-      onInput?.(data);
+      onInput?.(key);
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -76,7 +76,7 @@ export const AssessmentTerminal = ({
 
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
-    dataDisposableRef.current = dataDisposable;
+    keyDisposableRef.current = keyDisposable;
     resizeObserverRef.current = resizeObserver;
 
     return () => {
@@ -86,7 +86,7 @@ export const AssessmentTerminal = ({
         // noop
       }
       try {
-        dataDisposable.dispose();
+        keyDisposable.dispose();
       } catch {
         // noop
       }
@@ -96,7 +96,7 @@ export const AssessmentTerminal = ({
         // noop
       }
       resizeObserverRef.current = null;
-      dataDisposableRef.current = null;
+      keyDisposableRef.current = null;
       terminalRef.current = null;
       fitAddonRef.current = null;
       eventCursorRef.current = 0;
@@ -170,12 +170,20 @@ export const AssessmentTerminal = ({
       <div
         ref={hostRef}
         className="flex-1 overflow-hidden"
+        tabIndex={0}
         onMouseDown={() => {
           try {
             terminalRef.current?.focus();
           } catch {
             // noop
           }
+        }}
+        onPaste={(event) => {
+          if (disabledRef.current) return;
+          const text = event.clipboardData?.getData('text');
+          if (!text) return;
+          event.preventDefault();
+          onInput?.(text);
         }}
       />
     </div>
