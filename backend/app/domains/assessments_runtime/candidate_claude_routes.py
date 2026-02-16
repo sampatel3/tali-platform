@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 from ...components.assessments.claude_budget import (
     build_claude_budget_snapshot,
     compute_claude_cost_usd,
+    resolve_effective_budget_limit_usd,
 )
 from ...components.assessments.repository import (
     append_assessment_timeline_event,
@@ -48,6 +49,11 @@ def chat_with_claude(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
+    effective_budget_limit = resolve_effective_budget_limit_usd(
+        is_demo=bool(getattr(assessment, "is_demo", False)),
+        task_budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
+    )
+
     if getattr(assessment, "ai_mode", "legacy_chat") == "claude_cli_terminal":
         return {
             "success": False,
@@ -61,14 +67,14 @@ def chat_with_claude(
             "ai_mode": getattr(assessment, "ai_mode", "legacy_chat"),
             "terminal_capabilities": terminal_capabilities(),
             "claude_budget": build_claude_budget_snapshot(
-                budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
+                budget_limit_usd=effective_budget_limit,
                 prompts=assessment.ai_prompts or [],
             ),
             "budget_exhausted": False,
         }
 
     claude_budget = build_claude_budget_snapshot(
-        budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
+        budget_limit_usd=effective_budget_limit,
         prompts=assessment.ai_prompts or [],
     )
     if claude_budget["enabled"] and claude_budget["is_exhausted"]:
@@ -141,7 +147,7 @@ def chat_with_claude(
 
     prompts.append(prompt_record)
     updated_budget = build_claude_budget_snapshot(
-        budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
+        budget_limit_usd=effective_budget_limit,
         prompts=prompts,
     )
     prompts[-1] = {
@@ -260,4 +266,3 @@ def retry_claude_after_outage(
         "is_timer_paused": False,
         "time_remaining_seconds": time_remaining_seconds(assessment),
     }
-

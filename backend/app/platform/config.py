@@ -44,10 +44,16 @@ class Settings(BaseSettings):
     # Terminal-native Claude Code runtime
     ASSESSMENT_TERMINAL_ENABLED: bool = False
     ASSESSMENT_TERMINAL_DEFAULT_MODE: str = "legacy_chat"  # "legacy_chat" | "claude_cli_terminal"
-    CLAUDE_CLI_PERMISSION_MODE_DEFAULT: str = "default"
+    CLAUDE_CLI_PERMISSION_MODE_DEFAULT: str = "acceptEdits"
     CLAUDE_CLI_COMMAND: str = "claude"
+    CLAUDE_CLI_DISALLOWED_TOOLS: str = "Bash"
     # Allow global API key fallback when org-specific key is not configured.
     ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK: bool = True
+    # Budget controls
+    DEMO_CLAUDE_BUDGET_LIMIT_USD: float = 1.0
+    ASSESSMENT_CLAUDE_BUDGET_DEFAULT_USD: float | None = 5.0
+    # Approximation used when estimating CLI token usage from streamed transcript text.
+    CLAUDE_CLI_CHARS_PER_TOKEN_ESTIMATE: float = 4.0
 
     # Cost model defaults (all overridable via environment)
     CLAUDE_INPUT_COST_PER_MILLION_USD: float = 0.25

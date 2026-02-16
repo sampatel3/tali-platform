@@ -24,7 +24,7 @@ from ...services.document_service import process_document_upload
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.credit_ledger_service import append_credit_ledger_entry
 from ...services.task_spec_loader import candidate_rubric_view
-from .claude_budget import build_claude_budget_snapshot
+from .claude_budget import build_claude_budget_snapshot, resolve_effective_budget_limit_usd
 from .submission_runtime import submit_assessment_impl
 from .terminal_runtime import resolve_ai_mode, terminal_capabilities
 
@@ -432,8 +432,12 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
 
     resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
 
+    effective_budget_limit = resolve_effective_budget_limit_usd(
+        is_demo=bool(getattr(assessment, "is_demo", False)),
+        task_budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
+    )
     claude_budget = build_claude_budget_snapshot(
-        budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
+        budget_limit_usd=effective_budget_limit,
         prompts=assessment.ai_prompts or [],
     )
     return {
@@ -454,7 +458,7 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
             "extra_data": None,
             "calibration_prompt": None if settings.MVP_DISABLE_CALIBRATION else (task.calibration_prompt if task else None),
             "proctoring_enabled": False if settings.MVP_DISABLE_PROCTORING else (task.proctoring_enabled if task else False),
-            "claude_budget_limit_usd": getattr(task, "claude_budget_limit_usd", None),
+            "claude_budget_limit_usd": effective_budget_limit,
         },
         "claude_budget": claude_budget,
         "time_remaining": time_remaining_seconds(assessment),

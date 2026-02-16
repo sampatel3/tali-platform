@@ -50,6 +50,29 @@ def _token_estimate_for_budget(remaining_usd: float, per_token_cost: float) -> i
     return max(0, int(remaining_usd / per_token_cost))
 
 
+def resolve_effective_budget_limit_usd(
+    *,
+    is_demo: bool,
+    task_budget_limit_usd: float | None,
+) -> float | None:
+    """Resolve effective Claude budget cap for an assessment session."""
+    task_limit = None if task_budget_limit_usd is None else max(0.0, float(task_budget_limit_usd))
+
+    if is_demo:
+        demo_cap = max(0.0, float(settings.DEMO_CLAUDE_BUDGET_LIMIT_USD))
+        if task_limit is None:
+            return demo_cap
+        return min(task_limit, demo_cap)
+
+    assessment_default = settings.ASSESSMENT_CLAUDE_BUDGET_DEFAULT_USD
+    if assessment_default is None:
+        return task_limit
+    assessment_cap = max(0.0, float(assessment_default))
+    if task_limit is None:
+        return assessment_cap
+    return min(task_limit, assessment_cap)
+
+
 def build_claude_budget_snapshot(
     budget_limit_usd: float | None,
     prompts: List[Dict[str, Any]] | None,

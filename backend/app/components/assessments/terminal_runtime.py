@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import dataclass
 from typing import Any
 
@@ -86,6 +87,27 @@ def terminal_env(org: Organization | None) -> dict[str, str]:
     if model:
         envs["ANTHROPIC_MODEL"] = model
     return envs
+
+
+def _build_claude_cli_command(*, repo_root: str) -> str:
+    repo_guard_prompt = (
+        "You are operating in a TAALI assessment sandbox. "
+        f"Only read, create, and modify files under {repo_root}. "
+        "Do not access paths outside this repository."
+    )
+    parts = [
+        settings.CLAUDE_CLI_COMMAND,
+        "--permission-mode",
+        settings.CLAUDE_CLI_PERMISSION_MODE_DEFAULT,
+        "--add-dir",
+        repo_root,
+        "--append-system-prompt",
+        repo_guard_prompt,
+    ]
+    disallowed_tools = (settings.CLAUDE_CLI_DISALLOWED_TOOLS or "").strip()
+    if disallowed_tools:
+        parts.extend(["--disallowedTools", disallowed_tools])
+    return " ".join(shlex.quote(str(part)) for part in parts if str(part).strip())
 
 
 def append_cli_transcript(assessment: Assessment, event_type: str, payload: dict) -> None:
@@ -223,14 +245,14 @@ def ensure_terminal_session(
         )
 
     if cli_available:
+        cli_cmd = _build_claude_cli_command(repo_root=repo_root)
         e2b_service.send_pty_input(
             sandbox,
             pid,
             (
-                f"export HOME={repo_root}\n"
-                f"{settings.CLAUDE_CLI_COMMAND} "
-                f"--permission-mode {settings.CLAUDE_CLI_PERMISSION_MODE_DEFAULT}\n"
-                "exit\n"
+                f"export HOME={shlex.quote(repo_root)}\n"
+                f"cd {shlex.quote(repo_root)}\n"
+                f"exec {cli_cmd}\n"
             ),
         )
 

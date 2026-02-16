@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import math
 import secrets
 import threading
 
 from fastapi import APIRouter, Depends, Header, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
 
+from ...components.assessments.claude_budget import (
+    compute_claude_cost_usd,
+    resolve_effective_budget_limit_usd,
+)
 from ...components.assessments.repository import (
     append_assessment_timeline_event,
     get_active_assessment,
@@ -29,6 +34,58 @@ from ...platform.config import settings
 from ...platform.database import get_db
 
 router = APIRouter()
+
+
+def _estimate_tokens_from_text(text: str) -> int:
+    chars = len(text or "")
+    if chars <= 0:
+        return 0
+    chars_per_token = max(1.0, float(getattr(settings, "CLAUDE_CLI_CHARS_PER_TOKEN_ESTIMATE", 4.0) or 4.0))
+    return max(1, int(math.ceil(chars / chars_per_token)))
+
+
+def _seed_cli_usage_from_transcript(transcript: list[dict] | None) -> tuple[int, int]:
+    input_tokens = 0
+    output_tokens = 0
+    for entry in transcript or []:
+        if not isinstance(entry, dict):
+            continue
+        event_type = str(entry.get("event_type") or "")
+        token_estimate = max(0, int(entry.get("token_estimate") or 0))
+        text = str(entry.get("data") or "")
+        if event_type == "terminal_input":
+            input_tokens += token_estimate if token_estimate > 0 else _estimate_tokens_from_text(text)
+        elif event_type == "terminal_output":
+            output_tokens += token_estimate if token_estimate > 0 else _estimate_tokens_from_text(text)
+    return input_tokens, output_tokens
+
+
+def _cli_budget_snapshot(budget_limit_usd: float | None, input_tokens: int, output_tokens: int) -> dict:
+    if budget_limit_usd is None:
+        return {
+            "enabled": False,
+            "limit_usd": None,
+            "used_usd": round(compute_claude_cost_usd(input_tokens=input_tokens, output_tokens=output_tokens), 6),
+            "remaining_usd": None,
+            "input_tokens_used": max(0, int(input_tokens or 0)),
+            "output_tokens_used": max(0, int(output_tokens or 0)),
+            "tokens_used": max(0, int(input_tokens or 0)) + max(0, int(output_tokens or 0)),
+            "is_exhausted": False,
+        }
+
+    safe_limit = max(0.0, float(budget_limit_usd))
+    used = float(compute_claude_cost_usd(input_tokens=input_tokens, output_tokens=output_tokens))
+    remaining = max(0.0, safe_limit - used)
+    return {
+        "enabled": True,
+        "limit_usd": round(safe_limit, 6),
+        "used_usd": round(used, 6),
+        "remaining_usd": round(remaining, 6),
+        "input_tokens_used": max(0, int(input_tokens or 0)),
+        "output_tokens_used": max(0, int(output_tokens or 0)),
+        "tokens_used": max(0, int(input_tokens or 0)) + max(0, int(output_tokens or 0)),
+        "is_exhausted": remaining <= 1e-9,
+    }
 
 
 def _extract_ws_token(websocket: WebSocket) -> str:
@@ -146,6 +203,14 @@ async def terminal_ws(
         await websocket.close(code=4404)
         return
 
+    effective_budget_limit = resolve_effective_budget_limit_usd(
+        is_demo=bool(getattr(assessment, "is_demo", False)),
+        task_budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
+    )
+    input_tokens_used, output_tokens_used = _seed_cli_usage_from_transcript(
+        list(getattr(assessment, "cli_transcript", None) or [])
+    )
+
     org = db.query(Organization).filter(Organization.id == assessment.organization_id).first()
     e2b = build_sandbox_adapter()
 
@@ -187,6 +252,46 @@ async def terminal_ws(
         await websocket.close(code=1011)
         return
 
+    budget_snapshot = _cli_budget_snapshot(effective_budget_limit, input_tokens_used, output_tokens_used)
+    if budget_snapshot["enabled"] and budget_snapshot["is_exhausted"]:
+        killed = e2b.kill_process(session.sandbox, session.pid)
+        append_assessment_timeline_event(
+            assessment,
+            "terminal_error",
+            {
+                "pid": session.pid,
+                "reason": "budget_exhausted",
+                "killed": bool(killed),
+                "used_usd": budget_snapshot["used_usd"],
+                "limit_usd": budget_snapshot["limit_usd"],
+            },
+        )
+        append_cli_transcript(
+            assessment,
+            "terminal_error",
+            {
+                "pid": session.pid,
+                "reason": "budget_exhausted",
+                "killed": bool(killed),
+                "used_usd": budget_snapshot["used_usd"],
+                "limit_usd": budget_snapshot["limit_usd"],
+            },
+        )
+        stop_terminal_session(assessment)
+        db.commit()
+        await _ws_send_json(
+            websocket,
+            {
+                "type": "error",
+                "message": "Claude budget limit reached for this assessment.",
+                "requires_budget_top_up": True,
+                "claude_budget": budget_snapshot,
+                "fallback_chat": True,
+            },
+        )
+        await websocket.close(code=4402)
+        return
+
     await _ws_send_json(
         websocket,
         {
@@ -195,6 +300,7 @@ async def terminal_ws(
             "is_new": session.is_new,
             "ai_mode": "claude_cli_terminal",
             "permission_mode": settings.CLAUDE_CLI_PERMISSION_MODE_DEFAULT,
+            "claude_budget": budget_snapshot,
             "terminal_capabilities": terminal_capabilities(),
         },
     )
@@ -256,16 +362,62 @@ async def terminal_ws(
                 if msg_type == "output":
                     output_text = str(message.get("data") or "")
                     if output_text:
+                        output_token_estimate = _estimate_tokens_from_text(output_text)
+                        output_tokens_used += output_token_estimate
                         append_cli_transcript(
                             assessment,
                             "terminal_output",
                             {
                                 "stream": message.get("stream"),
                                 "data": output_text[:4000],
+                                "token_estimate": output_token_estimate,
                             },
                         )
                         touch_terminal_session(assessment)
                         db.commit()
+                        budget_snapshot = _cli_budget_snapshot(
+                            effective_budget_limit,
+                            input_tokens_used,
+                            output_tokens_used,
+                        )
+                        if budget_snapshot["enabled"] and budget_snapshot["is_exhausted"]:
+                            killed = e2b.kill_process(session.sandbox, session.pid)
+                            append_assessment_timeline_event(
+                                assessment,
+                                "terminal_exit",
+                                {
+                                    "pid": session.pid,
+                                    "reason": "budget_exhausted",
+                                    "killed": bool(killed),
+                                    "used_usd": budget_snapshot["used_usd"],
+                                    "limit_usd": budget_snapshot["limit_usd"],
+                                },
+                            )
+                            append_cli_transcript(
+                                assessment,
+                                "terminal_exit",
+                                {
+                                    "pid": session.pid,
+                                    "reason": "budget_exhausted",
+                                    "killed": bool(killed),
+                                    "used_usd": budget_snapshot["used_usd"],
+                                    "limit_usd": budget_snapshot["limit_usd"],
+                                },
+                            )
+                            stop_terminal_session(assessment)
+                            db.commit()
+                            await _ws_send_json(
+                                websocket,
+                                {
+                                    "type": "error",
+                                    "message": "Claude budget limit reached for this assessment.",
+                                    "requires_budget_top_up": True,
+                                    "claude_budget": budget_snapshot,
+                                    "fallback_chat": True,
+                                },
+                            )
+                            await _ws_send_json(websocket, {"type": "exit", "pid": session.pid, "killed": bool(killed)})
+                            break
                     await _ws_send_json(websocket, message)
                     continue
 
@@ -331,7 +483,12 @@ async def terminal_ws(
                     data = str(payload.get("data") or "")
                     if not data:
                         continue
+                    # Prevent shell escape controls (Ctrl-C/Z/D) so the terminal remains repo-scoped.
+                    if any(ctrl in data for ctrl in ("\u0003", "\u001a", "\u0004")):
+                        continue
                     e2b.send_pty_input(session.sandbox, session.pid, data)
+                    input_token_estimate = _estimate_tokens_from_text(data)
+                    input_tokens_used += input_token_estimate
                     append_assessment_timeline_event(
                         assessment,
                         "terminal_input",
@@ -340,10 +497,57 @@ async def terminal_ws(
                     append_cli_transcript(
                         assessment,
                         "terminal_input",
-                        {"pid": session.pid, "data": data[:1000]},
+                        {
+                            "pid": session.pid,
+                            "data": data[:1000],
+                            "token_estimate": input_token_estimate,
+                        },
                     )
                     touch_terminal_session(assessment)
                     db.commit()
+                    budget_snapshot = _cli_budget_snapshot(
+                        effective_budget_limit,
+                        input_tokens_used,
+                        output_tokens_used,
+                    )
+                    if budget_snapshot["enabled"] and budget_snapshot["is_exhausted"]:
+                        killed = e2b.kill_process(session.sandbox, session.pid)
+                        append_assessment_timeline_event(
+                            assessment,
+                            "terminal_exit",
+                            {
+                                "pid": session.pid,
+                                "reason": "budget_exhausted",
+                                "killed": bool(killed),
+                                "used_usd": budget_snapshot["used_usd"],
+                                "limit_usd": budget_snapshot["limit_usd"],
+                            },
+                        )
+                        append_cli_transcript(
+                            assessment,
+                            "terminal_exit",
+                            {
+                                "pid": session.pid,
+                                "reason": "budget_exhausted",
+                                "killed": bool(killed),
+                                "used_usd": budget_snapshot["used_usd"],
+                                "limit_usd": budget_snapshot["limit_usd"],
+                            },
+                        )
+                        stop_terminal_session(assessment)
+                        db.commit()
+                        await _ws_send_json(
+                            websocket,
+                            {
+                                "type": "error",
+                                "message": "Claude budget limit reached for this assessment.",
+                                "requires_budget_top_up": True,
+                                "claude_budget": budget_snapshot,
+                                "fallback_chat": True,
+                            },
+                        )
+                        await _ws_send_json(websocket, {"type": "exit", "pid": session.pid, "killed": bool(killed)})
+                        break
                     continue
 
                 if msg_type == "stop":
