@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 import shlex
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from ...models.organization import Organization
 from ...models.task import Task
 from ...platform.config import settings
 from ...platform.secrets import decrypt_text
+from ...services.assessment_repository_service import AssessmentRepositoryService
 from .repository import append_assessment_timeline_event, utcnow
 
 
@@ -136,6 +138,51 @@ def _has_legacy_auto_exec_bootstrap(assessment: Assessment) -> bool:
     return False
 
 
+def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment, task: Task) -> bool:
+    repo_url = getattr(assessment, "assessment_repo_url", None)
+    branch_name = getattr(assessment, "assessment_branch", None)
+    if not repo_url or not branch_name:
+        return False
+
+    repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
+    raw_repo_url = str(repo_url)
+    if raw_repo_url.startswith("mock://"):
+        mock_rel = raw_repo_url.replace("mock://", "", 1).strip("/")
+        clone_url = str((repo_service.mock_root / mock_rel).resolve())
+    else:
+        clone_url = repo_service.authenticated_repo_url(raw_repo_url)
+
+    repo_root = workspace_repo_root(task)
+    result = sandbox.run_code(
+        "import json, pathlib, subprocess\n"
+        f"repo_root=pathlib.Path({repo_root!r})\n"
+        "repo_root.parent.mkdir(parents=True, exist_ok=True)\n"
+        "subprocess.run(['rm','-rf',str(repo_root)], check=False, capture_output=True)\n"
+        f"args=['git','clone','--branch',{branch_name!r},{clone_url!r},str(repo_root)]\n"
+        "p=subprocess.run(args, capture_output=True, text=True)\n"
+        "payload={'returncode': p.returncode, 'stderr': p.stderr[-500:]}\n"
+        "print(json.dumps(payload))\n"
+    )
+    try:
+        stdout_text = ""
+        if isinstance(result, dict):
+            stdout_text = str(result.get("stdout") or "")
+        else:
+            logs = getattr(result, "logs", None)
+            raw_stdout = getattr(logs, "stdout", None) if logs is not None else None
+            if isinstance(raw_stdout, list):
+                stdout_text = "\n".join(str(item) for item in raw_stdout)
+            elif raw_stdout is not None:
+                stdout_text = str(raw_stdout)
+            else:
+                stdout_text = str(getattr(result, "stdout", "") or "")
+        lines = stdout_text.strip().splitlines()
+        payload = json.loads(lines[-1]) if lines else {}
+        return int(payload.get("returncode", 1)) == 0
+    except Exception:
+        return False
+
+
 def _mark_terminal_session(
     assessment: Assessment,
     *,
@@ -172,7 +219,35 @@ def ensure_terminal_session(
     if not assessment.e2b_session_id:
         raise RuntimeError("Assessment sandbox session is not initialized")
 
-    sandbox = e2b_service.connect_sandbox(assessment.e2b_session_id)
+    try:
+        sandbox = e2b_service.connect_sandbox(assessment.e2b_session_id)
+        try:
+            e2b_service.touch_sandbox(sandbox)
+        except Exception:
+            pass
+    except Exception:
+        # Recover from expired/deleted sandbox by creating a fresh one and re-cloning assessment repo.
+        sandbox = e2b_service.create_sandbox()
+        assessment.e2b_session_id = e2b_service.get_sandbox_id(sandbox)
+        _mark_terminal_session(assessment, pid=None, state="stopped")
+        append_assessment_timeline_event(
+            assessment,
+            "terminal_sandbox_recovered",
+            {"sandbox_id": assessment.e2b_session_id},
+        )
+        append_cli_transcript(
+            assessment,
+            "terminal_sandbox_recovered",
+            {"sandbox_id": assessment.e2b_session_id},
+        )
+        if not _clone_assessment_branch_into_workspace(sandbox, assessment, task):
+            assessment.cli_session_state = "error"
+            db.commit()
+            raise RuntimeError(
+                "Assessment sandbox expired and could not be restored automatically. "
+                "Please restart the assessment session."
+            )
+        db.commit()
     pid = int(assessment.cli_session_pid or 0)
     if pid > 0:
         if _has_legacy_auto_exec_bootstrap(assessment):

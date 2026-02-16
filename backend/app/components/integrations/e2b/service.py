@@ -28,9 +28,11 @@ class E2BService:
         self.api_key = api_key
         self.template = template or os.getenv("E2B_TEMPLATE")
         try:
-            self.sandbox_timeout_seconds = max(300, int(os.getenv("E2B_SANDBOX_TIMEOUT_SECONDS", "7200")))
+            requested_timeout = int(os.getenv("E2B_SANDBOX_TIMEOUT_SECONDS", "3600"))
+            # E2B enforces maximum timeout of 1 hour.
+            self.sandbox_timeout_seconds = max(300, min(3600, requested_timeout))
         except Exception:
-            self.sandbox_timeout_seconds = 7200
+            self.sandbox_timeout_seconds = 3600
 
     def _apply_sandbox_timeout(self, sandbox: Sandbox) -> None:
         timeout_seconds = int(getattr(self, "sandbox_timeout_seconds", 0) or 0)
