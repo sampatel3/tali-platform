@@ -1,5 +1,8 @@
+import re
+
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
+from ...components.integrations.workable.service import WorkableService
 from ...platform.database import get_db
 from ...deps import get_current_user
 from ...models.user import User
@@ -9,11 +12,13 @@ from ...schemas.organization import (
     OrgUpdate,
     WorkableConfigBase,
     WorkableConnect,
+    WorkableTokenConnect,
 )
 from ...platform.config import settings
 from .access_policy import normalize_allowed_domains
 
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
+_SUBDOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 
 
 def _is_workable_oauth_configured() -> bool:
@@ -44,6 +49,21 @@ def _merge_workable_config(org: Organization, incoming: OrgUpdate) -> dict:
         return base
     updates = incoming.workable_config.model_dump(exclude_none=True)
     return WorkableConfigBase(**{**base, **updates}).model_dump()
+
+
+def _normalized_workable_subdomain(value: str) -> str:
+    subdomain = (value or "").strip().lower()
+    if subdomain.endswith(".workable.com"):
+        subdomain = subdomain[: -len(".workable.com")]
+    return subdomain
+
+
+def _workable_oauth_scope(org: Organization) -> str:
+    config = _resolved_workable_config(org)
+    email_mode = str(config.get("email_mode") or "manual_taali")
+    if email_mode == "workable_preferred_fallback_manual":
+        return "r_jobs r_candidates w_candidates"
+    return "r_jobs r_candidates"
 
 
 @router.get("/me", response_model=OrgResponse)
@@ -96,7 +116,10 @@ def update_my_org(
 
 
 @router.get("/workable/authorize-url")
-def get_workable_authorize_url(current_user: User = Depends(get_current_user)):
+def get_workable_authorize_url(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """Return the Workable OAuth authorize URL for the frontend to redirect to."""
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
@@ -105,8 +128,11 @@ def get_workable_authorize_url(current_user: User = Depends(get_current_user)):
             status_code=503,
             detail="Workable OAuth is not configured. Set WORKABLE_CLIENT_ID and WORKABLE_CLIENT_SECRET.",
         )
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
     redirect_uri = f"{settings.FRONTEND_URL}/settings/workable/callback"
-    scope = "r_jobs r_candidates w_candidates"
+    scope = _workable_oauth_scope(org)
     url = (
         "https://www.workable.com/oauth/authorize"
         f"?client_id={settings.WORKABLE_CLIENT_ID}"
@@ -115,7 +141,11 @@ def get_workable_authorize_url(current_user: User = Depends(get_current_user)):
         "&response_type=code"
         f"&scope={scope.replace(' ', '+')}"
     )
-    return {"url": url}
+    return {
+        "url": url,
+        "scope": scope,
+        "redirect_uri": redirect_uri,
+    }
 
 
 @router.post("/workable/connect")
@@ -169,3 +199,59 @@ def connect_workable(
         raise HTTPException(status_code=500, detail="Failed to store Workable connection")
 
     return {"success": True, "subdomain": org.workable_subdomain}
+
+
+@router.post("/workable/connect-token")
+def connect_workable_token(
+    data: WorkableTokenConnect,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Connect Workable directly via access token + subdomain (read-only default)."""
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
+
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    subdomain = _normalized_workable_subdomain(data.subdomain)
+    if not _SUBDOMAIN_RE.match(subdomain):
+        raise HTTPException(status_code=400, detail="Invalid Workable subdomain")
+
+    access_token = (data.access_token or "").strip()
+    if len(access_token) < 20:
+        raise HTTPException(status_code=400, detail="Invalid Workable access token")
+
+    try:
+        WorkableService(access_token=access_token, subdomain=subdomain).verify_access()
+    except Exception:
+        raise HTTPException(
+            status_code=400,
+            detail="Unable to verify Workable token/subdomain. Check token scopes and subdomain.",
+        )
+
+    config = _resolved_workable_config(org)
+    config["workflow_mode"] = "workable_hybrid"
+    config["sync_model"] = "scheduled_pull_only"
+    config["sync_scope"] = "open_jobs_active_candidates"
+    if data.read_only:
+        config["email_mode"] = "manual_taali"
+
+    org.workable_access_token = access_token
+    org.workable_refresh_token = None
+    org.workable_subdomain = subdomain
+    org.workable_connected = True
+    org.workable_config = WorkableConfigBase(**config).model_dump()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to store Workable connection")
+
+    return {
+        "success": True,
+        "subdomain": subdomain,
+        "mode": "api_token",
+        "read_only": bool(data.read_only),
+    }

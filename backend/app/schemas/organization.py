@@ -59,3 +59,9 @@ class OrgUpdate(BaseModel):
 
 class WorkableConnect(BaseModel):
     code: str
+
+
+class WorkableTokenConnect(BaseModel):
+    access_token: str = Field(min_length=20, max_length=1000)
+    subdomain: str = Field(min_length=1, max_length=100)
+    read_only: bool = True

@@ -18,6 +18,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [workableSyncLoading, setWorkableSyncLoading] = useState(false);
   const [workableAuthorizeUrl, setWorkableAuthorizeUrl] = useState('');
   const [workableSetupError, setWorkableSetupError] = useState('');
+  const [workableTokenSaving, setWorkableTokenSaving] = useState(false);
+  const [workableTokenForm, setWorkableTokenForm] = useState({
+    subdomain: '',
+    accessToken: '',
+  });
   const [teamMembers, setTeamMembers] = useState([]);
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
@@ -135,6 +140,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       syncIntervalMinutes: Number(cfg.sync_interval_minutes || 30),
       inviteStageName: cfg.invite_stage_name || 'TAALI Assessment Requested',
     });
+    setWorkableTokenForm((prev) => ({
+      ...prev,
+      subdomain: prev.subdomain || orgData.workable_subdomain || '',
+    }));
   }, [orgData]);
 
   const handleAddCredits = async (packId) => {
@@ -192,6 +201,43 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       alert(err?.response?.data?.detail || 'Failed to save Workable settings');
     } finally {
       setWorkableSaving(false);
+    }
+  };
+
+  const handleConnectWorkableToken = async (event) => {
+    event.preventDefault();
+    const subdomain = workableTokenForm.subdomain.trim();
+    const accessToken = workableTokenForm.accessToken.trim();
+    if (!subdomain || !accessToken) {
+      alert('Enter Workable subdomain and API access token.');
+      return;
+    }
+    setWorkableTokenSaving(true);
+    try {
+      const res = await orgsApi.connectWorkableToken({
+        subdomain,
+        access_token: accessToken,
+        read_only: true,
+      });
+      setOrgData((prev) => ({
+        ...(prev || {}),
+        workable_connected: true,
+        workable_subdomain: res.data?.subdomain || subdomain,
+        workable_config: {
+          ...((prev && prev.workable_config) || {}),
+          workflow_mode: 'workable_hybrid',
+          email_mode: 'manual_taali',
+          sync_model: 'scheduled_pull_only',
+          sync_scope: 'open_jobs_active_candidates',
+        },
+      }));
+      setWorkableTokenForm((prev) => ({ ...prev, accessToken: '' }));
+      setWorkableSetupError('');
+      alert('Workable connected in read-only mode. Sync is enabled, TAALI email flow remains manual.');
+    } catch (err) {
+      alert(err?.response?.data?.detail || 'Failed to connect Workable token');
+    } finally {
+      setWorkableTokenSaving(false);
     }
   };
 
@@ -363,6 +409,35 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   <div className="font-mono text-xs text-gray-600 mt-4">
                     Optional webhook secret: WORKABLE_WEBHOOK_SECRET with endpoint {workableWebhookUrl}
                   </div>
+                  <form className="mt-4 border border-black p-4 bg-gray-50" onSubmit={handleConnectWorkableToken}>
+                    <div className="font-bold mb-2">Read-Only Connection (No Write Scope)</div>
+                    <div className="font-mono text-xs text-gray-600 mb-3">
+                      Use API Access Token with scopes `r_jobs r_candidates` only.
+                    </div>
+                    <div className="grid md:grid-cols-3 gap-3">
+                      <input
+                        type="text"
+                        placeholder="Workable subdomain (e.g. acme)"
+                        className="border-2 border-black px-3 py-2 font-mono text-sm"
+                        value={workableTokenForm.subdomain}
+                        onChange={(e) => setWorkableTokenForm((prev) => ({ ...prev, subdomain: e.target.value }))}
+                      />
+                      <input
+                        type="password"
+                        placeholder="Workable API access token"
+                        className="border-2 border-black px-3 py-2 font-mono text-sm"
+                        value={workableTokenForm.accessToken}
+                        onChange={(e) => setWorkableTokenForm((prev) => ({ ...prev, accessToken: e.target.value }))}
+                      />
+                      <button
+                        type="submit"
+                        disabled={workableTokenSaving}
+                        className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
+                      >
+                        {workableTokenSaving ? 'Connecting…' : 'Connect Read-Only'}
+                      </button>
+                    </div>
+                  </form>
                   {workableSetupError ? (
                     <div className="font-mono text-xs text-red-700 mt-3">
                       Current backend setup issue: {workableSetupError}

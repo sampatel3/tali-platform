@@ -75,6 +75,10 @@ class WorkableService:
                     break
         return [job for job in candidates if isinstance(job, dict)]
 
+    def verify_access(self) -> None:
+        # A simple authenticated read endpoint to validate token + subdomain.
+        self._request("GET", "/jobs", params={"state": "published"})
+
     def list_job_candidates(self, job_identifier: str) -> list[dict]:
         payload = self._request_optional("GET", f"/jobs/{job_identifier}/candidates")
         candidates = payload.get("candidates")
