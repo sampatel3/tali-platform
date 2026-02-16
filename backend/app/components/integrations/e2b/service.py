@@ -27,6 +27,19 @@ class E2BService:
         """
         self.api_key = api_key
         self.template = template or os.getenv("E2B_TEMPLATE")
+        try:
+            self.sandbox_timeout_seconds = max(300, int(os.getenv("E2B_SANDBOX_TIMEOUT_SECONDS", "7200")))
+        except Exception:
+            self.sandbox_timeout_seconds = 7200
+
+    def _apply_sandbox_timeout(self, sandbox: Sandbox) -> None:
+        timeout_seconds = int(getattr(self, "sandbox_timeout_seconds", 0) or 0)
+        if timeout_seconds <= 0:
+            return
+        try:
+            sandbox.set_timeout(timeout_seconds)
+        except Exception as exc:
+            logger.debug("Failed to extend E2B sandbox timeout: %s", str(exc))
 
     def get_sandbox_id(self, sandbox: Sandbox) -> str:
         """
@@ -50,10 +63,24 @@ class E2BService:
         """
         try:
             logger.info("Creating new E2B sandbox")
-            if self.template:
-                sandbox = Sandbox(api_key=self.api_key, template=self.template)
-            else:
-                sandbox = Sandbox(api_key=self.api_key)
+            try:
+                if self.template:
+                    sandbox = Sandbox(
+                        api_key=self.api_key,
+                        template=self.template,
+                        timeout=self.sandbox_timeout_seconds,
+                    )
+                else:
+                    sandbox = Sandbox(
+                        api_key=self.api_key,
+                        timeout=self.sandbox_timeout_seconds,
+                    )
+            except TypeError:
+                if self.template:
+                    sandbox = Sandbox(api_key=self.api_key, template=self.template)
+                else:
+                    sandbox = Sandbox(api_key=self.api_key)
+            self._apply_sandbox_timeout(sandbox)
             logger.info("E2B sandbox created successfully (id=%s)", self.get_sandbox_id(sandbox))
             return sandbox
         except Exception as e:
@@ -73,6 +100,7 @@ class E2BService:
         try:
             logger.info("Connecting to existing E2B sandbox (id=%s)", sandbox_id)
             sandbox = Sandbox(api_key=self.api_key, sandbox_id=sandbox_id)
+            self._apply_sandbox_timeout(sandbox)
             logger.info("Connected to E2B sandbox (id=%s)", sandbox_id)
             return sandbox
         except TypeError:
@@ -85,6 +113,12 @@ class E2BService:
         except Exception as e:
             logger.error("Failed to connect to E2B sandbox (id=%s): %s", sandbox_id, str(e))
             raise
+
+    def touch_sandbox(self, sandbox: Sandbox) -> None:
+        """
+        Best-effort keepalive by extending sandbox timeout.
+        """
+        self._apply_sandbox_timeout(sandbox)
 
     def execute_code(self, sandbox: Sandbox, code: str) -> dict:
         """

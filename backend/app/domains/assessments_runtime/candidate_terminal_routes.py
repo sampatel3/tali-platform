@@ -431,6 +431,11 @@ async def terminal_ws(
                 if payload is not None:
                     msg_type = str(payload.get("type") or "").strip().lower()
                     if msg_type in {"init", "heartbeat"}:
+                        try:
+                            e2b.touch_sandbox(session.sandbox)
+                        except Exception:
+                            # Keepalive refresh is best-effort.
+                            pass
                         touch_terminal_session(assessment)
                         db.commit()
                     elif msg_type == "resize":
