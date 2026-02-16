@@ -176,14 +176,15 @@ describe('AssessmentPage tracking metadata', () => {
   });
 
 
-  it('shows rubric categories and hides criteria text', async () => {
+  it('shows instructions and clone command in context window', async () => {
     const startData = {
       assessment_id: 14,
       token: 'tok4',
       time_remaining: 1200,
+      ai_mode: 'claude_cli_terminal',
       clone_command: 'git clone --branch assessment/14 mock://repo',
       task: {
-        name: 'Rubric task',
+        name: 'Instruction task',
         starter_code: 'print("start")',
         duration_minutes: 30,
         rubric_categories: [
@@ -198,9 +199,10 @@ describe('AssessmentPage tracking metadata', () => {
 
     render(<AssessmentPage token="tok4" startData={startData} />);
 
-    expect(await screen.findByText(/How you'll be assessed/i)).toBeInTheDocument();
-    expect(screen.getByText('exploration')).toBeInTheDocument();
-    expect(screen.getByText('25%')).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Instructions/i })).toBeInTheDocument();
+    expect(screen.getByText(/Use Claude CLI in the terminal for guidance/i)).toBeInTheDocument();
+    expect(screen.getByText(/Workspace clone command/i)).toBeInTheDocument();
+    expect(screen.queryByText('exploration')).not.toBeInTheDocument();
     expect(screen.queryByText(/should never render/i)).not.toBeInTheDocument();
   });
 
@@ -225,22 +227,22 @@ describe('AssessmentPage tracking metadata', () => {
     render(<AssessmentPage token="tok5" startData={startData} />);
 
     const taskToggle = await screen.findByRole('button', { name: /Task Context/i });
-    const rubricToggle = screen.getByRole('button', { name: /How you'll be assessed/i });
+    const instructionsToggle = screen.getByRole('button', { name: /Instructions/i });
 
     expect(screen.getByText(/Investigate and patch the backfill job/i)).toBeInTheDocument();
-    expect(screen.getByText(/Rubric categories will be shown when available/i)).toBeInTheDocument();
+    expect(screen.getByText(/Read the task context and inspect repository files before editing/i)).toBeInTheDocument();
 
     fireEvent.click(taskToggle);
-    fireEvent.click(rubricToggle);
+    fireEvent.click(instructionsToggle);
 
     expect(screen.queryByText(/Investigate and patch the backfill job/i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/Rubric categories will be shown when available/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Read the task context and inspect repository files before editing/i)).not.toBeInTheDocument();
 
     fireEvent.click(taskToggle);
-    fireEvent.click(rubricToggle);
+    fireEvent.click(instructionsToggle);
 
     expect(screen.getByText(/Investigate and patch the backfill job/i)).toBeInTheDocument();
-    expect(screen.getByText(/Rubric categories will be shown when available/i)).toBeInTheDocument();
+    expect(screen.getByText(/Read the task context and inspect repository files before editing/i)).toBeInTheDocument();
   });
 
   it('uses canonical response field from Claude payload', async () => {

@@ -58,7 +58,7 @@ export default function AssessmentPage({
   const [collapsedSections, setCollapsedSections] = useState({
     contextWindow: false,
     taskContext: false,
-    rubric: false,
+    instructions: false,
     repoTree: false,
   });
   const [collapsedRepoDirs, setCollapsedRepoDirs] = useState({});
@@ -218,7 +218,6 @@ export default function AssessmentPage({
   const assessmentTokenForApi = assessment?.token ?? token;
   const taskContext = assessment?.scenario || assessment?.description || "";
   const repoFiles = extractRepoFiles(assessment?.repo_structure);
-  const rubricCategories = assessment?.rubric_categories || assessment?.task?.rubric_categories || [];
   const selectedRepoPath =
     selectedRepoFile && repoFiles.some((file) => file.path === selectedRepoFile)
       ? selectedRepoFile
@@ -719,7 +718,7 @@ export default function AssessmentPage({
         collapsedSections={collapsedSections}
         toggleSection={toggleSection}
         taskContext={taskContext}
-        rubricCategories={rubricCategories}
+        aiMode={aiMode}
         cloneCommand={assessment?.clone_command}
       />
 
