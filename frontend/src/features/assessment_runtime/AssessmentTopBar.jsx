@@ -38,7 +38,7 @@ export const AssessmentTopBar = ({
     <div className="flex items-center gap-4">
       {claudeBudget?.enabled && (
         <div className="border-2 border-black px-3 py-1.5 font-mono text-xs bg-amber-50">
-          Claude left: {formatUsd(claudeBudget.remaining_usd)} / {formatUsd(claudeBudget.limit_usd)}
+          Claude Credit: {formatUsd(claudeBudget.remaining_usd)} left of {formatUsd(claudeBudget.limit_usd)}
         </div>
       )}
       <div

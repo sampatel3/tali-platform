@@ -74,10 +74,10 @@ export default function ClaudeChat({ onSendMessage, onPaste, disabled = false, b
   const budgetEnabled = Boolean(budget?.enabled);
   const budgetExhausted = Boolean(budget?.is_exhausted);
   const headerBudgetText = budgetEnabled
-    ? `Budget left ${formatUsd(budget?.remaining_usd)} / ${formatUsd(budget?.limit_usd)}`
-    : `Tokens used ${formatInt(budget?.tokens_used || 0)}`;
+    ? `Claude Credit left ${formatUsd(budget?.remaining_usd)} / ${formatUsd(budget?.limit_usd)}`
+    : `Claude Credit used ${formatInt(budget?.tokens_used || 0)}`;
   const headerTokenEstimate = budgetEnabled && typeof budget?.remaining_total_tokens_estimate === 'number'
-    ? `~${formatInt(budget.remaining_total_tokens_estimate)} tokens left`
+    ? `~${formatInt(budget.remaining_total_tokens_estimate)} credits left (est.)`
     : null;
   const inputPlaceholder =
     disabledReason === 'budget_exhausted'
@@ -101,7 +101,7 @@ export default function ClaudeChat({ onSendMessage, onPaste, disabled = false, b
         </div>
         {(budgetEnabled || budget?.tokens_used) && (
           <div className="mt-1 font-mono text-[11px] text-gray-500">
-            Tokens used: {formatInt(budget?.tokens_used || 0)}
+            Claude Credit used: {formatInt(budget?.tokens_used || 0)}
             {headerTokenEstimate ? ` • ${headerTokenEstimate}` : ''}
           </div>
         )}

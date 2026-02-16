@@ -366,7 +366,6 @@ export default function AssessmentPage({
         if (!payload || typeof payload !== 'object') return;
 
         if (payload.type === 'ready') {
-          appendTerminalEvent({ type: 'status', message: `Terminal ready (PID ${payload.pid}).` });
           return;
         }
 

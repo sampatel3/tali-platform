@@ -19,6 +19,11 @@ export const AssessmentTerminal = ({
   const dataDisposableRef = useRef(null);
   const eventCursorRef = useRef(0);
   const resizeObserverRef = useRef(null);
+  const disabledRef = useRef(disabled);
+
+  useEffect(() => {
+    disabledRef.current = disabled;
+  }, [disabled]);
 
   const connectionBadge = useMemo(
     () => (connected ? 'CONNECTED' : 'RECONNECTING'),
@@ -46,6 +51,7 @@ export const AssessmentTerminal = ({
     term.loadAddon(fitAddon);
     term.open(hostRef.current);
     fitAddon.fit();
+    term.focus();
     term.writeln('Starting Claude Code CLI terminal...');
 
     const sendResize = () => {
@@ -58,7 +64,7 @@ export const AssessmentTerminal = ({
     };
 
     const dataDisposable = term.onData((data) => {
-      if (disabled) return;
+      if (disabledRef.current) return;
       onInput?.(data);
     });
 
@@ -95,7 +101,21 @@ export const AssessmentTerminal = ({
       fitAddonRef.current = null;
       eventCursorRef.current = 0;
     };
-  }, [disabled, onInput, onResize]);
+  }, [onInput, onResize]);
+
+  useEffect(() => {
+    if (!connected) return;
+    const term = terminalRef.current;
+    if (!term) return;
+    const timer = setTimeout(() => {
+      try {
+        term.focus();
+      } catch {
+        // noop
+      }
+    }, 0);
+    return () => clearTimeout(timer);
+  }, [connected]);
 
   useEffect(() => {
     const term = terminalRef.current;
@@ -147,7 +167,17 @@ export const AssessmentTerminal = ({
           </button>
         </div>
       </div>
-      <div ref={hostRef} className="flex-1 overflow-hidden" />
+      <div
+        ref={hostRef}
+        className="flex-1 overflow-hidden"
+        onMouseDown={() => {
+          try {
+            terminalRef.current?.focus();
+          } catch {
+            // noop
+          }
+        }}
+      />
     </div>
   );
 };
