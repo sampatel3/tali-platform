@@ -32,6 +32,7 @@ class Role(Base):
     job_spec_uploaded_at = Column(DateTime(timezone=True), nullable=True)
     interview_focus = Column(JSON, nullable=True)
     interview_focus_generated_at = Column(DateTime(timezone=True), nullable=True)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

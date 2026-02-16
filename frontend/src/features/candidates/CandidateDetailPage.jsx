@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import * as apiClient from '../../shared/api';
+import { useToast } from '../../context/ToastContext';
 import { getMetricMeta, buildGlossaryFromMetadata } from '../../lib/scoringGlossary';
 import { dimensionOrder, getDimensionById, normalizeScores } from '../../scoring/scoringDimensions';
 import {
@@ -20,6 +21,7 @@ import {
 import { CandidateEvaluateTab, CandidateResultsTab } from './CandidateDetailPrimaryTabs';
 
 export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAdded, NavComponent = null }) => {
+  const { showToast } = useToast();
   const assessmentsApi = apiClient.assessments;
   const analyticsApi = apiClient.analytics;
   const candidatesApi = apiClient.candidates;
@@ -185,7 +187,7 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
       a.remove();
       URL.revokeObjectURL(url);
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to download report');
+      showToast(err?.response?.data?.detail || 'Failed to download report', 'error');
     } finally {
       setBusyAction('');
     }
@@ -198,9 +200,9 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
       const res = await assessmentsApi.postToWorkable(assessmentId);
       const postedAt = res?.data?.posted_to_workable_at || new Date().toISOString();
       setWorkableStatus({ posted: true, postedAt });
-      alert(res?.data?.already_posted ? 'Already posted to Workable' : 'Posted to Workable');
+      showToast(res?.data?.already_posted ? 'Already posted to Workable' : 'Posted to Workable', 'success');
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to post to Workable');
+      showToast(err?.response?.data?.detail || 'Failed to post to Workable', 'error');
     } finally {
       setBusyAction('');
     }
@@ -212,9 +214,9 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
     try {
       const res = await assessmentsApi.aiEvalSuggestions(assessmentId);
       setAiEvalSuggestion(res.data);
-      alert('AI suggestions generated. Human reviewer must confirm final scores.');
+      showToast('AI suggestions generated. Human reviewer must confirm final scores.', 'success');
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to generate AI suggestions');
+      showToast(err?.response?.data?.detail || 'Failed to generate AI suggestions', 'error');
     } finally {
       setBusyAction('');
     }
@@ -229,7 +231,7 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
       if (onDeleted) onDeleted();
       onNavigate('dashboard');
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to delete assessment');
+      showToast(err?.response?.data?.detail || 'Failed to delete assessment', 'error');
     } finally {
       setBusyAction('');
     }
@@ -251,7 +253,7 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
       a.remove();
       URL.revokeObjectURL(url);
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to download document');
+      showToast(err?.response?.data?.detail || 'Failed to download document', 'error');
     }
   };
 
@@ -264,9 +266,9 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
         onNoteAdded(res.data.timeline);
       }
       setNoteText('');
-      alert('Note added');
+      showToast('Note added', 'success');
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to add note');
+      showToast(err?.response?.data?.detail || 'Failed to add note', 'error');
     } finally {
       setBusyAction('');
     }

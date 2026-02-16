@@ -1,5 +1,6 @@
 import React from 'react';
 
+import { useToast } from '../../context/ToastContext';
 import {
   Badge,
   Button,
@@ -26,6 +27,7 @@ export const CandidateEvaluateTab = ({
   toEvidenceTextareaValue,
   assessmentsApi,
 }) => {
+  const { showToast } = useToast();
   const assessment = candidate._raw || {};
   const rubric = assessment.evaluation_rubric || {};
   const categories = Object.entries(rubric).filter(([, v]) => v && typeof v === 'object');
@@ -38,7 +40,7 @@ export const CandidateEvaluateTab = ({
       const score = String(value?.score || '').trim().toLowerCase();
       const evidenceList = toLineList(value?.evidence);
       if (score && evidenceList.length === 0) {
-        alert(`Evidence is required for "${String(key).replace(/_/g, ' ')}".`);
+        showToast(`Evidence is required for "${String(key).replace(/_/g, ' ')}".`, 'info');
         return;
       }
       payloadScores[key] = { score: score || null, evidence: evidenceList };
@@ -66,9 +68,9 @@ export const CandidateEvaluateTab = ({
         setManualEvalImprovements(Array.isArray(saved.improvements) ? saved.improvements.join('\n') : '');
         setManualEvalSummary(saved);
       }
-      alert('Manual evaluation saved.');
+      showToast('Manual evaluation saved.', 'success');
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to save');
+      showToast(err?.response?.data?.detail || 'Failed to save', 'error');
     } finally {
       setManualEvalSaving(false);
     }

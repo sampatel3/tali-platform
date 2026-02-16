@@ -69,7 +69,10 @@ def list_roles(
     roles = (
         db.query(Role)
         .options(joinedload(Role.tasks), joinedload(Role.applications))
-        .filter(Role.organization_id == current_user.organization_id)
+        .filter(
+            Role.organization_id == current_user.organization_id,
+            Role.deleted_at.is_(None),
+        )
         .order_by(Role.created_at.desc())
         .all()
     )

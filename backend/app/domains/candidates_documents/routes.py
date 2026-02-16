@@ -33,7 +33,10 @@ def list_candidates(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = db.query(Candidate).filter(Candidate.organization_id == current_user.organization_id)
+    query = db.query(Candidate).filter(
+        Candidate.organization_id == current_user.organization_id,
+        Candidate.deleted_at.is_(None),
+    )
     if q:
         like = f"%{q}%"
         query = query.filter((Candidate.full_name.ilike(like)) | (Candidate.email.ilike(like)))

@@ -3,6 +3,7 @@ import { AlertCircle, Plus, UserPlus } from 'lucide-react';
 import * as apiClient from '../../shared/api';
 import { Button, Input, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
 
+import { useToast } from '../../context/ToastContext';
 import {
   CandidateSheet,
   CandidatesTable,
@@ -18,6 +19,7 @@ import {
 import { AssessmentInviteSheet } from './AssessmentInviteSheet';
 
 export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) => {
+  const { showToast } = useToast();
   const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
   const tasksApi = apiClient.tasks;
   const assessmentsApi = apiClient.assessments;
@@ -308,12 +310,12 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       });
       const items = parseCollection(res.data);
       if (items.length === 0) {
-        alert('No assessments found for this candidate yet.');
+        showToast('No assessments found for this candidate yet.', 'info');
         return;
       }
       onViewCandidate(mapAssessmentForDetail(items[0], application));
     } catch (err) {
-      alert(getErrorMessage(err, 'Failed to load candidate details.'));
+      showToast(getErrorMessage(err, 'Failed to load candidate details.'), 'error');
     } finally {
       setViewingApplicationId(null);
     }
@@ -323,7 +325,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     if (!rolesApi?.createAssessment) return false;
     const taskNumber = Number(taskId);
     if (!taskNumber) {
-      alert('Select a task first.');
+      showToast('Select a task first.', 'info');
       return false;
     }
     setCreatingAssessmentId(application.id);
@@ -363,7 +365,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       setInviteSheetOpen(true);
       return true;
     } catch (err) {
-      alert(getErrorMessage(err, 'Failed to create assessment.'));
+      showToast(getErrorMessage(err, 'Failed to create assessment.'), 'error');
       return false;
     } finally {
       setCreatingAssessmentId(null);
@@ -377,11 +379,12 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       await rolesApi.generateTaaliCvAi(application.id);
       await loadRoleContext(selectedRoleId);
     } catch (err) {
-      alert(getErrorMessage(err, 'Failed to generate TAALI score.'));
+      const msg = getErrorMessage(err, 'Failed to generate TAALI score.');
+      showToast(msg, err?.response?.status === 404 ? 'info' : 'error');
     } finally {
       setGeneratingTaaliId(null);
     }
-  }, [rolesApi, loadRoleContext, selectedRoleId]);
+  }, [rolesApi, loadRoleContext, selectedRoleId, showToast]);
 
   return (
     <div>

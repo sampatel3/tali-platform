@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { AlertTriangle, CheckCircle, CreditCard, Loader2 } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
 import { formatAed } from '../../lib/currency';
 
@@ -30,6 +31,7 @@ const normalizeWorkableError = (input) => {
 
 export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableButton }) => {
   const { user } = useAuth();
+  const { showToast } = useToast();
   const [settingsTab, setSettingsTab] = useState('workable');
   const [orgData, setOrgData] = useState(null);
   const [orgLoading, setOrgLoading] = useState(true);
@@ -70,6 +72,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     syncIntervalMinutes: 30,
     inviteStageName: '',
   });
+  const [clearWorkableModalOpen, setClearWorkableModalOpen] = useState(false);
+  const [clearWorkableLoading, setClearWorkableLoading] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -175,19 +179,40 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
-  const handleSyncWorkableNow = async () => {
+  const handleClearWorkableData = async () => {
+    setClearWorkableLoading(true);
+    try {
+      const res = await orgsApi.clearWorkableData();
+      const data = res.data || {};
+      showToast(
+        `Removed ${data.roles_soft_deleted ?? 0} roles, ${data.applications_soft_deleted ?? 0} applications, ${data.candidates_soft_deleted ?? 0} candidates.`,
+        'success'
+      );
+      setClearWorkableModalOpen(false);
+    } catch (err) {
+      showToast(err?.response?.data?.detail || 'Failed to clear Workable data', 'error');
+    } finally {
+      setClearWorkableLoading(false);
+    }
+  };
+
+  const handleSyncWorkableNow = async (fullResync = false) => {
     setWorkableSyncLoading(true);
     try {
-      const res = await orgsApi.syncWorkable({ full_resync: false });
+      const res = await orgsApi.syncWorkable({ full_resync: fullResync });
       setOrgData((prev) => ({
         ...(prev || {}),
         workable_last_sync_at: res.data?.workable_last_sync_at || new Date().toISOString(),
         workable_last_sync_status: res.data?.workable_last_sync_status || 'success',
         workable_last_sync_summary: res.data?.summary || {},
       }));
-      alert('Workable sync completed.');
+      const summary = res.data?.summary || {};
+      const msg = fullResync
+        ? `Full sync completed. Jobs: ${summary.jobs_upserted ?? 0}, Candidates: ${summary.candidates_upserted ?? 0}, CVs: ${summary.cv_downloaded ?? 0}.`
+        : 'Workable sync completed.';
+      showToast(msg, 'success');
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Workable sync failed');
+      showToast(err?.response?.data?.detail || 'Workable sync failed', 'error');
     } finally {
       setWorkableSyncLoading(false);
     }
@@ -209,9 +234,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         },
       });
       setOrgData(res.data);
-      alert('Workable sync settings saved.');
+      showToast('Workable sync settings saved.', 'success');
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to save Workable settings');
+      showToast(err?.response?.data?.detail || 'Failed to save Workable settings', 'error');
     } finally {
       setWorkableSaving(false);
     }
@@ -307,9 +332,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       }));
       setWorkableTokenForm((prev) => ({ ...prev, accessToken: '' }));
       closeWorkableDrawer();
-      alert(readOnly
-        ? 'Workable connected in read-only mode. Sync is enabled and TAALI email flow remains manual.'
-        : 'Workable connected with write scope. You can use Workable-first invite mode.');
+      showToast(
+        readOnly
+          ? 'Workable connected in read-only mode. Sync is enabled and TAALI email flow remains manual.'
+          : 'Workable connected with write scope. You can use Workable-first invite mode.',
+        'success'
+      );
     } catch (err) {
       setWorkableConnectError(normalizeWorkableError(err?.response?.data?.detail || err.message));
     } finally {
@@ -327,7 +355,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       setInviteEmail('');
       setInviteName('');
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to invite team member');
+      showToast(err?.response?.data?.detail || 'Failed to invite team member', 'error');
     } finally {
       setInviteLoading(false);
     }
@@ -347,9 +375,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         saml_metadata_url: enterpriseForm.samlMetadataUrl || null,
       });
       setOrgData(res.data);
-      alert('Enterprise access controls updated.');
+      showToast('Enterprise access controls updated.', 'success');
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to save enterprise settings');
+      showToast(err?.response?.data?.detail || 'Failed to save enterprise settings', 'error');
     } finally {
       setEnterpriseSaving(false);
     }
@@ -470,6 +498,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <div className="font-mono text-xs text-gray-500 mb-1">Last Sync</div>
                     <div className="font-mono">{lastSyncAt} ({lastSyncStatus})</div>
                   </div>
+                  <div className="rounded-lg border-2 border-gray-300 bg-gray-50 p-3 text-sm text-gray-700">
+                    <div className="font-semibold mb-1">What happens when you sync</div>
+                    <ul className="list-disc list-inside space-y-0.5">
+                      <li>Open jobs from Workable are imported as roles; job specs are saved as attachments.</li>
+                      <li>All candidates for each job are fetched (no 50-candidate limit).</li>
+                      <li>For each candidate we fetch full profile data and try to download their CV from Workable.</li>
+                      <li>CV–job match scores are computed when both CV and job spec are present.</li>
+                    </ul>
+                    <p className="mt-2 text-xs text-gray-600">
+                      <strong>Full sync</strong> re-fetches everything. Use it to get all candidates and CVs after connecting or if counts look wrong.
+                    </p>
+                  </div>
                   <hr className="border-black" />
                   <div>
                     <div className="font-bold mb-3">Sync + Invite Settings</div>
@@ -536,12 +576,72 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         type="button"
                         disabled={workableSyncLoading || !workableConnected}
                         className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
-                        onClick={handleSyncWorkableNow}
+                        onClick={() => handleSyncWorkableNow(false)}
                       >
                         {workableSyncLoading ? 'Syncing…' : 'Sync Now'}
                       </button>
+                      <button
+                        type="button"
+                        disabled={workableSyncLoading || !workableConnected}
+                        className="border-2 border-black px-4 py-2 font-mono text-sm font-bold disabled:opacity-60"
+                        title="Re-fetch all jobs, all candidates, and all CVs from Workable"
+                        onClick={() => handleSyncWorkableNow(true)}
+                      >
+                        {workableSyncLoading ? 'Syncing…' : 'Full sync'}
+                      </button>
                     </div>
                   </div>
+
+                  <div className="border-2 border-red-300 bg-red-50 p-6 mt-6 rounded-lg">
+                    <div className="font-bold text-red-900 mb-1">Remove all Workable data</div>
+                    <p className="text-sm text-red-800 mb-3">
+                      This will hide all roles, candidates, and applications that were imported from Workable.
+                      Data is not permanently deleted; it is marked as removed and can be re-imported with a full sync.
+                    </p>
+                    <button
+                      type="button"
+                      disabled={clearWorkableLoading}
+                      className="border-2 border-red-600 px-4 py-2 font-mono text-sm font-bold text-red-700 bg-white hover:bg-red-100 disabled:opacity-60"
+                      onClick={() => setClearWorkableModalOpen(true)}
+                    >
+                      {clearWorkableLoading ? 'Removing…' : 'Remove all candidates and roles'}
+                    </button>
+                  </div>
+
+                  {clearWorkableModalOpen ? (
+                    <div
+                      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
+                      role="dialog"
+                      aria-modal="true"
+                      aria-labelledby="clear-workable-title"
+                    >
+                      <div className="bg-white border-2 border-black rounded-lg shadow-xl max-w-md w-full p-6">
+                        <h2 id="clear-workable-title" className="text-lg font-bold mb-2">Remove all Workable data?</h2>
+                        <p className="text-sm text-gray-700 mb-4">
+                          This will remove all roles, candidates, and applications imported from Workable from this account.
+                          Nothing is permanently deleted; records are marked as removed. You can run a full sync later to re-import from Workable.
+                        </p>
+                        <div className="flex gap-3 justify-end">
+                          <button
+                            type="button"
+                            className="border-2 border-black px-4 py-2 font-mono text-sm font-bold"
+                            disabled={clearWorkableLoading}
+                            onClick={() => setClearWorkableModalOpen(false)}
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            className="border-2 border-red-600 px-4 py-2 font-mono text-sm font-bold text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-60"
+                            disabled={clearWorkableLoading}
+                            onClick={handleClearWorkableData}
+                          >
+                            {clearWorkableLoading ? 'Removing…' : 'Remove all data'}
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               </div>
             )}

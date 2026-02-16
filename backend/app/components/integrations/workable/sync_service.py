@@ -286,6 +286,7 @@ class WorkableSyncService:
             )
             db.add(role)
             created = True
+        role.deleted_at = None  # restore if was soft-deleted
         role.source = "workable"
         role.workable_job_id = job_id or role.workable_job_id
         role.workable_job_data = {**job, "details": details} if details else job
@@ -380,6 +381,7 @@ class WorkableSyncService:
             db.add(candidate)
             created_candidate = True
 
+        candidate.deleted_at = None  # restore if was soft-deleted
         candidate.email = email
         candidate.full_name = _candidate_name(candidate_payload, fallback=candidate.full_name or email)
         candidate.position = _candidate_position(candidate_payload, role.name)
@@ -409,6 +411,7 @@ class WorkableSyncService:
             db.add(app)
             created_app = True
 
+        app.deleted_at = None  # restore if was soft-deleted
         app.source = "workable"
         app.status = str(stage or app.status or "applied")
         app.workable_candidate_id = candidate_id

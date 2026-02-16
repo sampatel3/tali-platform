@@ -12,6 +12,7 @@ import {
 import { Loader2 } from 'lucide-react';
 
 import { useAuth } from './context/AuthContext';
+import { ToastProvider } from './context/ToastContext';
 import { assessments as assessmentsApi } from './shared/api';
 import { pathForPage } from './app/routing';
 
@@ -364,7 +365,9 @@ function AppContent() {
 function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <AppContent />
+      <ToastProvider>
+        <AppContent />
+      </ToastProvider>
     </BrowserRouter>
   );
 }

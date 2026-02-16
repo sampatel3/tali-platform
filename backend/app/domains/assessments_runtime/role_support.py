@@ -13,7 +13,15 @@ def role_has_job_spec(role: Role) -> bool:
 
 
 def get_role(role_id: int, org_id: int, db: Session) -> Role:
-    role = db.query(Role).filter(Role.id == role_id, Role.organization_id == org_id).first()
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == org_id,
+            Role.deleted_at.is_(None),
+        )
+        .first()
+    )
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
     return role
@@ -26,6 +34,7 @@ def get_application(application_id: int, org_id: int, db: Session) -> CandidateA
         .filter(
             CandidateApplication.id == application_id,
             CandidateApplication.organization_id == org_id,
+            CandidateApplication.deleted_at.is_(None),
         )
         .first()
     )
@@ -48,7 +57,7 @@ def role_to_response(role: Role) -> RoleResponse:
         interview_focus=role.interview_focus,
         interview_focus_generated_at=role.interview_focus_generated_at,
         tasks_count=len(role.tasks or []),
-        applications_count=len(role.applications or []),
+        applications_count=len([a for a in (role.applications or []) if getattr(a, "deleted_at", None) is None]),
         created_at=role.created_at,
         updated_at=role.updated_at,
     )

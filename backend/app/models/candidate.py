@@ -32,6 +32,7 @@ class Candidate(Base):
     job_spec_text = Column(Text, nullable=True)
     job_spec_uploaded_at = Column(DateTime(timezone=True), nullable=True)
 
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     applications = relationship("CandidateApplication", back_populates="candidate", cascade="all, delete-orphan")

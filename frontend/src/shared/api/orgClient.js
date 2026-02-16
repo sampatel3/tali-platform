@@ -13,4 +13,5 @@ export const organizations = {
     api.post('/organizations/workable/connect-token', { access_token, subdomain, read_only }),
   syncWorkable: (data = {}) => api.post('/workable/sync', data),
   getWorkableSyncStatus: () => api.get('/workable/sync/status'),
+  clearWorkableData: () => api.post('/workable/clear'),
 };

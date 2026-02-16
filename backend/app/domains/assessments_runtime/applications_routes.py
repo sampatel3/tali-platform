@@ -159,6 +159,7 @@ def list_role_applications(
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
             CandidateApplication.role_id == role_id,
+            CandidateApplication.deleted_at.is_(None),
         )
     )
     if source:
