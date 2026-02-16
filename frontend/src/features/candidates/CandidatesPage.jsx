@@ -28,11 +28,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [roleApplications, setRoleApplications] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState('rank_score');
+  const [sortBy, setSortBy] = useState('workable_score');
   const [sortOrder, setSortOrder] = useState('desc');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [minRankScore, setMinRankScore] = useState('');
   const [minWorkableScore, setMinWorkableScore] = useState('');
   const [minCvMatchScore, setMinCvMatchScore] = useState('');
 
@@ -70,11 +69,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const activeFilterCount = useMemo(() => (
     [
       searchQuery.trim() !== '',
-      sortBy !== 'rank_score',
+      sortBy !== 'workable_score',
       sortOrder !== 'desc',
       sourceFilter !== 'all',
       statusFilter !== 'all',
-      minRankScore !== '',
       minWorkableScore !== '',
       minCvMatchScore !== '',
     ].filter(Boolean).length
@@ -84,7 +82,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     sortOrder,
     sourceFilter,
     statusFilter,
-    minRankScore,
     minWorkableScore,
     minCvMatchScore,
   ]);
@@ -131,7 +128,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         sort_order: sortOrder,
       };
       if (sourceFilter !== 'all') appParams.source = sourceFilter;
-      if (minRankScore !== '') appParams.min_rank_score = Number(minRankScore);
       if (minWorkableScore !== '') appParams.min_workable_score = Number(minWorkableScore);
       if (minCvMatchScore !== '') appParams.min_cv_match_score = Number(minCvMatchScore);
       const [tasksRes, applicationsRes] = await Promise.all([
@@ -147,7 +143,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     } finally {
       setLoadingRoleContext(false);
     }
-  }, [rolesApi, sortBy, sortOrder, sourceFilter, minRankScore, minWorkableScore, minCvMatchScore]);
+  }, [rolesApi, sortBy, sortOrder, sourceFilter, minWorkableScore, minCvMatchScore]);
 
   const loadTasks = useCallback(async () => {
     if (!tasksApi?.list) {
@@ -185,11 +181,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
 
   const resetFilters = useCallback(() => {
     setSearchQuery('');
-    setSortBy('rank_score');
+    setSortBy('workable_score');
     setSortOrder('desc');
     setSourceFilter('all');
     setStatusFilter('all');
-    setMinRankScore('');
     setMinWorkableScore('');
     setMinCvMatchScore('');
   }, []);
@@ -450,16 +445,15 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 </Button>
               </div>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7">
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
                   Sort by
                 </span>
                 <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-                  <option value="rank_score">Rank score</option>
-                  <option value="workable_score">Workable score</option>
-                  <option value="cv_match_score">CV match score</option>
-                  <option value="created_at">Created at</option>
+                  <option value="workable_score">Workable AI</option>
+                  <option value="cv_match_score">Taali AI (CV match)</option>
+                  <option value="created_at">Added</option>
                 </Select>
               </label>
               <label className="block">
@@ -500,21 +494,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
-                  Min rank
-                </span>
-                <Input
-                  type="number"
-                  min="0"
-                  max="10"
-                  step="0.1"
-                  aria-label="Minimum rank score"
-                  placeholder="0.0"
-                  value={minRankScore}
-                  onChange={(event) => setMinRankScore(event.target.value)}
-                />
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
                   Min workable
                 </span>
                 <Input
@@ -530,7 +509,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
-                  Min CV
+                  Min taali
                 </span>
                 <Input
                   type="number"

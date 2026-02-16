@@ -440,11 +440,12 @@ describe('CandidatesPage', () => {
     await renderAppOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Create assessment' })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Send assessment' })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Create assessment' }));
+    // First click opens the task picker, second click actually sends.
     fireEvent.click(screen.getByRole('button', { name: 'Send assessment' }));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Send assessment' })[1]);
 
     await waitFor(() => {
       expect(rolesApi.createAssessment).toHaveBeenCalledWith(501, { task_id: 700 });
