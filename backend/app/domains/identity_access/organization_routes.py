@@ -1,6 +1,6 @@
 import re
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from ...components.integrations.workable.service import WorkableService
 from ...platform.database import get_db
@@ -19,6 +19,7 @@ from .access_policy import normalize_allowed_domains
 
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
 _SUBDOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+_ALLOWED_WORKABLE_SCOPES = ("r_jobs", "r_candidates", "w_candidates")
 
 
 def _is_workable_oauth_configured() -> bool:
@@ -64,6 +65,28 @@ def _workable_oauth_scope(org: Organization) -> str:
     if email_mode == "workable_preferred_fallback_manual":
         return "r_jobs r_candidates w_candidates"
     return "r_jobs r_candidates"
+
+
+def _parsed_scope_tokens(raw_scopes: str | None) -> list[str] | None:
+    if raw_scopes is None:
+        return None
+    tokens = [token.strip() for token in re.split(r"[,\s]+", raw_scopes) if token.strip()]
+    if not tokens:
+        raise HTTPException(status_code=400, detail="No scopes provided")
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if token not in _ALLOWED_WORKABLE_SCOPES:
+            raise HTTPException(status_code=400, detail=f"Unsupported scope: {token}")
+        if token not in seen:
+            normalized.append(token)
+            seen.add(token)
+
+    required_missing = {"r_jobs", "r_candidates"} - set(normalized)
+    if required_missing:
+        raise HTTPException(status_code=400, detail="Scopes must include r_jobs and r_candidates")
+    return normalized
 
 
 @router.get("/me", response_model=OrgResponse)
@@ -119,6 +142,7 @@ def update_my_org(
 def get_workable_authorize_url(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
+    scopes: str | None = Query(default=None, description="Comma or space separated scopes"),
 ):
     """Return the Workable OAuth authorize URL for the frontend to redirect to."""
     if settings.MVP_DISABLE_WORKABLE:
@@ -132,7 +156,9 @@ def get_workable_authorize_url(
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
     redirect_uri = f"{settings.FRONTEND_URL}/settings/workable/callback"
-    scope = _workable_oauth_scope(org)
+    default_scopes = _workable_oauth_scope(org).split()
+    scope_tokens = _parsed_scope_tokens(scopes) if scopes is not None else default_scopes
+    scope = " ".join(scope_tokens)
     url = (
         "https://www.workable.com/oauth/authorize"
         f"?client_id={settings.WORKABLE_CLIENT_ID}"
@@ -144,6 +170,7 @@ def get_workable_authorize_url(
     return {
         "url": url,
         "scope": scope,
+        "scope_tokens": scope_tokens,
         "redirect_uri": redirect_uri,
     }
 
@@ -235,8 +262,11 @@ def connect_workable_token(
     config["workflow_mode"] = "workable_hybrid"
     config["sync_model"] = "scheduled_pull_only"
     config["sync_scope"] = "open_jobs_active_candidates"
-    if data.read_only:
-        config["email_mode"] = "manual_taali"
+    config["email_mode"] = (
+        "manual_taali"
+        if data.read_only
+        else "workable_preferred_fallback_manual"
+    )
 
     org.workable_access_token = access_token
     org.workable_refresh_token = None

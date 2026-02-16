@@ -18,11 +18,15 @@ const normalizeWorkableError = (input) => {
   return raw || 'Failed to connect';
 };
 
-export const ConnectWorkableButton = ({ authorizeUrl = '', setupError = '' }) => {
+export const ConnectWorkableButton = ({ authorizeUrl = '', setupError = '', onClick = null }) => {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
 
   const handleClick = async () => {
+    if (onClick) {
+      onClick();
+      return;
+    }
     setLoading(true);
     setError('');
     if (setupError) {

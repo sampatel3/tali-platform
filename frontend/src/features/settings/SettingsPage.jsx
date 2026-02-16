@@ -5,6 +5,29 @@ import { useAuth } from '../../context/AuthContext';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
 import { formatAed } from '../../lib/currency';
 
+const WORKABLE_SCOPE_OPTIONS = [
+  { id: 'r_jobs', label: 'r_jobs', description: 'Read jobs and roles from Workable.' },
+  { id: 'r_candidates', label: 'r_candidates', description: 'Read candidate profiles and stages.' },
+  { id: 'w_candidates', label: 'w_candidates', description: 'Write candidate stage/activity for invite + notes.' },
+];
+
+const WORKABLE_REQUIRED_SCOPES = ['r_jobs', 'r_candidates'];
+
+const normalizeWorkableError = (input) => {
+  const raw = (input || '').toString();
+  const lower = raw.toLowerCase();
+  if (lower.includes('not configured')) {
+    return 'Workable OAuth is not configured. Add WORKABLE_CLIENT_ID and WORKABLE_CLIENT_SECRET in backend environment variables first.';
+  }
+  if (lower.includes('disabled for mvp')) {
+    return 'Workable integration is currently disabled by environment flag.';
+  }
+  if (lower.includes('oauth failed')) {
+    return 'Workable OAuth failed. Verify callback URL and scopes in your Workable app, then try again.';
+  }
+  return raw || 'Workable connection failed.';
+};
+
 export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableButton }) => {
   const { user } = useAuth();
   const [settingsTab, setSettingsTab] = useState('workable');
@@ -16,9 +39,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [workableSaving, setWorkableSaving] = useState(false);
   const [workableSyncLoading, setWorkableSyncLoading] = useState(false);
-  const [workableAuthorizeUrl, setWorkableAuthorizeUrl] = useState('');
-  const [workableSetupError, setWorkableSetupError] = useState('');
+  const [workableDrawerOpen, setWorkableDrawerOpen] = useState(false);
+  const [workableConnectMode, setWorkableConnectMode] = useState('oauth');
+  const [workableOAuthLoading, setWorkableOAuthLoading] = useState(false);
   const [workableTokenSaving, setWorkableTokenSaving] = useState(false);
+  const [workableConnectError, setWorkableConnectError] = useState('');
+  const [workableSelectedScopes, setWorkableSelectedScopes] = useState({
+    r_jobs: true,
+    r_candidates: true,
+    w_candidates: false,
+  });
   const [workableTokenForm, setWorkableTokenForm] = useState({
     subdomain: '',
     accessToken: '',
@@ -99,27 +129,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   }, [settingsTab]);
 
   useEffect(() => {
-    if (settingsTab !== 'workable') return;
-    let cancelled = false;
-    const fetchAuthorizeUrl = async () => {
-      try {
-        const res = await orgsApi.getWorkableAuthorizeUrl();
-        if (cancelled) return;
-        setWorkableAuthorizeUrl(res.data?.url || '');
-        setWorkableSetupError('');
-      } catch (err) {
-        if (cancelled) return;
-        setWorkableAuthorizeUrl('');
-        setWorkableSetupError(err?.response?.data?.detail || err.message || 'Unable to load Workable OAuth settings');
-      }
-    };
-    fetchAuthorizeUrl();
-    return () => {
-      cancelled = true;
-    };
-  }, [settingsTab]);
-
-  useEffect(() => {
     localStorage.setItem('taali_dark_mode', darkMode ? '1' : '0');
     document.documentElement.classList.toggle('dark', darkMode);
   }, [darkMode]);
@@ -139,6 +148,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       emailMode: cfg.email_mode || 'manual_taali',
       syncIntervalMinutes: Number(cfg.sync_interval_minutes || 30),
       inviteStageName: cfg.invite_stage_name || 'TAALI Assessment Requested',
+    });
+    setWorkableSelectedScopes({
+      r_jobs: true,
+      r_candidates: true,
+      w_candidates: (cfg.email_mode || 'manual_taali') === 'workable_preferred_fallback_manual',
     });
     setWorkableTokenForm((prev) => ({
       ...prev,
@@ -204,20 +218,81 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
+  const toggleWorkableScope = (scopeId) => {
+    setWorkableSelectedScopes((prev) => ({
+      ...prev,
+      [scopeId]: !prev[scopeId],
+    }));
+  };
+
+  const openWorkableDrawer = () => {
+    setWorkableConnectError('');
+    setWorkableDrawerOpen(true);
+  };
+
+  const closeWorkableDrawer = () => {
+    setWorkableConnectError('');
+    setWorkableDrawerOpen(false);
+  };
+
+  const selectedWorkableScopes = WORKABLE_SCOPE_OPTIONS
+    .filter((scope) => workableSelectedScopes[scope.id])
+    .map((scope) => scope.id);
+
+  const missingRequiredWorkableScopes = WORKABLE_REQUIRED_SCOPES.filter((scope) => !selectedWorkableScopes.includes(scope));
+
+  const handleConnectWorkableOAuth = async () => {
+    if (missingRequiredWorkableScopes.length > 0) {
+      setWorkableConnectError('OAuth requires at least r_jobs and r_candidates scopes.');
+      return;
+    }
+    setWorkableOAuthLoading(true);
+    setWorkableConnectError('');
+    try {
+      const hasWriteScope = selectedWorkableScopes.includes('w_candidates');
+      await orgsApi.update({
+        workable_config: {
+          email_mode: hasWriteScope ? 'workable_preferred_fallback_manual' : 'manual_taali',
+        },
+      });
+      setWorkableForm((prev) => ({
+        ...prev,
+        emailMode: hasWriteScope ? 'workable_preferred_fallback_manual' : 'manual_taali',
+      }));
+      const res = await orgsApi.getWorkableAuthorizeUrl({ scopes: selectedWorkableScopes });
+      if (res.data?.url) {
+        window.location.href = res.data.url;
+        return;
+      }
+      setWorkableConnectError('Could not get Workable authorization URL.');
+    } catch (err) {
+      setWorkableConnectError(normalizeWorkableError(err?.response?.data?.detail || err.message));
+    } finally {
+      setWorkableOAuthLoading(false);
+    }
+  };
+
   const handleConnectWorkableToken = async (event) => {
     event.preventDefault();
     const subdomain = workableTokenForm.subdomain.trim();
     const accessToken = workableTokenForm.accessToken.trim();
     if (!subdomain || !accessToken) {
-      alert('Enter Workable subdomain and API access token.');
+      setWorkableConnectError('Enter Workable subdomain and API access token.');
       return;
     }
+    if (missingRequiredWorkableScopes.length > 0) {
+      setWorkableConnectError('Token connect requires at least r_jobs and r_candidates scopes.');
+      return;
+    }
+    const hasWriteScope = selectedWorkableScopes.includes('w_candidates');
+    const readOnly = !hasWriteScope;
     setWorkableTokenSaving(true);
+    setWorkableConnectError('');
     try {
       const res = await orgsApi.connectWorkableToken({
         subdomain,
         access_token: accessToken,
-        read_only: true,
+        read_only: readOnly,
       });
       setOrgData((prev) => ({
         ...(prev || {}),
@@ -226,16 +301,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         workable_config: {
           ...((prev && prev.workable_config) || {}),
           workflow_mode: 'workable_hybrid',
-          email_mode: 'manual_taali',
+          email_mode: readOnly ? 'manual_taali' : 'workable_preferred_fallback_manual',
           sync_model: 'scheduled_pull_only',
           sync_scope: 'open_jobs_active_candidates',
         },
       }));
       setWorkableTokenForm((prev) => ({ ...prev, accessToken: '' }));
-      setWorkableSetupError('');
-      alert('Workable connected in read-only mode. Sync is enabled, TAALI email flow remains manual.');
+      closeWorkableDrawer();
+      alert(readOnly
+        ? 'Workable connected in read-only mode. Sync is enabled and TAALI email flow remains manual.'
+        : 'Workable connected with write scope. You can use Workable-first invite mode.');
     } catch (err) {
-      alert(err?.response?.data?.detail || 'Failed to connect Workable token');
+      setWorkableConnectError(normalizeWorkableError(err?.response?.data?.detail || err.message));
     } finally {
       setWorkableTokenSaving(false);
     }
@@ -292,18 +369,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const billingPlan = orgData?.plan || 'Pay-Per-Use';
   const apiBaseUrl = (import.meta.env.VITE_API_URL || window.location.origin).replace(/\/$/, '');
   const workableWebhookUrl = `${apiBaseUrl}/api/v1/webhooks/workable`;
-  let workableCallbackUrl = `${window.location.origin}/settings/workable/callback`;
-  let workableScopes = 'r_jobs r_candidates w_candidates';
-  if (workableAuthorizeUrl) {
-    try {
-      const parsed = new URL(workableAuthorizeUrl);
-      workableCallbackUrl = parsed.searchParams.get('redirect_uri') || workableCallbackUrl;
-      const scopeRaw = parsed.searchParams.get('scope');
-      if (scopeRaw) workableScopes = scopeRaw.replace(/\+/g, ' ');
-    } catch {
-      // Ignore parse errors and keep defaults.
-    }
-  }
+  const workableCallbackUrl = `${window.location.origin}/settings/workable/callback`;
+  const workableScopes = selectedWorkableScopes.join(' ') || 'none';
+  const workableWriteScopeEnabled = selectedWorkableScopes.includes('w_candidates');
   const creditsBalance = Number(billingCredits?.credits_balance ?? orgData?.credits_balance ?? 0);
   const packCatalog = billingCredits?.packs || {
     starter_5: { label: 'Starter (5 credits)', credits: 5 },
@@ -373,11 +441,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       </div>
                     </div>
                   </div>
-                  {!workableConnected && ConnectWorkableButton ? (
-                    <ConnectWorkableButton
-                      authorizeUrl={workableAuthorizeUrl}
-                      setupError={workableSetupError}
-                    />
+                  {!workableConnected ? (
+                    ConnectWorkableButton ? (
+                      <ConnectWorkableButton onClick={openWorkableDrawer} />
+                    ) : (
+                      <button
+                        type="button"
+                        className="px-4 py-2 font-mono text-sm font-bold border-2 border-black bg-black text-white hover:bg-gray-800"
+                        onClick={openWorkableDrawer}
+                      >
+                        Connect Workable
+                      </button>
+                    )
                   ) : null}
                 </div>
 
@@ -409,40 +484,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   <div className="font-mono text-xs text-gray-600 mt-4">
                     Optional webhook secret: WORKABLE_WEBHOOK_SECRET with endpoint {workableWebhookUrl}
                   </div>
-                  <form className="mt-4 border border-black p-4 bg-gray-50" onSubmit={handleConnectWorkableToken}>
-                    <div className="font-bold mb-2">Read-Only Connection (No Write Scope)</div>
-                    <div className="font-mono text-xs text-gray-600 mb-3">
-                      Use API Access Token with scopes `r_jobs r_candidates` only.
-                    </div>
-                    <div className="grid md:grid-cols-3 gap-3">
-                      <input
-                        type="text"
-                        placeholder="Workable subdomain (e.g. acme)"
-                        className="border-2 border-black px-3 py-2 font-mono text-sm"
-                        value={workableTokenForm.subdomain}
-                        onChange={(e) => setWorkableTokenForm((prev) => ({ ...prev, subdomain: e.target.value }))}
-                      />
-                      <input
-                        type="password"
-                        placeholder="Workable API access token"
-                        className="border-2 border-black px-3 py-2 font-mono text-sm"
-                        value={workableTokenForm.accessToken}
-                        onChange={(e) => setWorkableTokenForm((prev) => ({ ...prev, accessToken: e.target.value }))}
-                      />
-                      <button
-                        type="submit"
-                        disabled={workableTokenSaving}
-                        className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
-                      >
-                        {workableTokenSaving ? 'Connecting…' : 'Connect Read-Only'}
-                      </button>
-                    </div>
-                  </form>
-                  {workableSetupError ? (
-                    <div className="font-mono text-xs text-red-700 mt-3">
-                      Current backend setup issue: {workableSetupError}
-                    </div>
-                  ) : null}
+                  <div className="font-mono text-xs text-gray-600 mt-2">
+                    Click "Connect Workable" to open the connection sidebar and choose OAuth or token mode.
+                  </div>
                 </div>
 
                 <div className="border-2 border-black p-6 space-y-4">
@@ -756,6 +800,131 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
           </>
         )}
       </div>
+      {workableDrawerOpen && settingsTab === 'workable' ? (
+        <div className="fixed inset-0 z-50">
+          <button
+            type="button"
+            className="absolute inset-0 bg-black/50"
+            onClick={closeWorkableDrawer}
+            aria-label="Close Workable connection drawer"
+          />
+          <aside className="absolute right-0 top-0 h-full w-full max-w-xl bg-white border-l-2 border-black shadow-xl overflow-y-auto">
+            <div className="p-6 border-b-2 border-black flex items-center justify-between">
+              <div>
+                <div className="text-xl font-bold">Connect Workable</div>
+                <div className="font-mono text-xs text-gray-600">Choose connection mode and rights before connecting.</div>
+              </div>
+              <button
+                type="button"
+                className="border-2 border-black px-3 py-1 font-mono text-xs font-bold hover:bg-gray-100"
+                onClick={closeWorkableDrawer}
+              >
+                Close
+              </button>
+            </div>
+
+            <div className="p-6 space-y-5">
+              <div className="grid grid-cols-2 border-2 border-black">
+                <button
+                  type="button"
+                  className={`px-4 py-2 font-mono text-sm font-bold border-r-2 border-black ${workableConnectMode === 'oauth' ? 'bg-black text-white' : 'bg-white hover:bg-gray-100'}`}
+                  onClick={() => {
+                    setWorkableConnectMode('oauth');
+                    setWorkableConnectError('');
+                  }}
+                >
+                  OAuth
+                </button>
+                <button
+                  type="button"
+                  className={`px-4 py-2 font-mono text-sm font-bold ${workableConnectMode === 'token' ? 'bg-black text-white' : 'bg-white hover:bg-gray-100'}`}
+                  onClick={() => {
+                    setWorkableConnectMode('token');
+                    setWorkableConnectError('');
+                  }}
+                >
+                  API Token
+                </button>
+              </div>
+
+              <div className="border-2 border-black p-4 space-y-3">
+                <div className="font-bold">Token Rights / Scopes</div>
+                {WORKABLE_SCOPE_OPTIONS.map((scope) => (
+                  <label key={scope.id} className="flex items-start gap-3 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 w-4 h-4 accent-purple-600"
+                      checked={Boolean(workableSelectedScopes[scope.id])}
+                      onChange={() => toggleWorkableScope(scope.id)}
+                    />
+                    <span>
+                      <span className="font-mono text-sm font-bold">{scope.label}</span>
+                      <span className="font-mono text-xs text-gray-600 block">{scope.description}</span>
+                    </span>
+                  </label>
+                ))}
+                <div className="font-mono text-xs text-gray-600">
+                  Selected scopes: {workableScopes}
+                </div>
+                <div className="font-mono text-xs text-gray-600">
+                  Mode after connect: {workableWriteScopeEnabled ? 'Write-enabled (Workable invite path possible)' : 'Read-only (manual TAALI invites only)'}
+                </div>
+              </div>
+
+              {workableConnectMode === 'oauth' ? (
+                <div className="border-2 border-black p-4 space-y-3">
+                  <div className="font-bold">OAuth Setup</div>
+                  <div className="font-mono text-xs text-gray-600">Callback URL: {workableCallbackUrl}</div>
+                  <button
+                    type="button"
+                    disabled={workableOAuthLoading}
+                    onClick={handleConnectWorkableOAuth}
+                    className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
+                  >
+                    {workableOAuthLoading ? 'Redirecting…' : 'Continue with Workable OAuth'}
+                  </button>
+                </div>
+              ) : (
+                <form className="border-2 border-black p-4 space-y-3" onSubmit={handleConnectWorkableToken}>
+                  <div className="font-bold">API Token Setup</div>
+                  <input
+                    type="text"
+                    placeholder="Workable subdomain (e.g. acme)"
+                    className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                    value={workableTokenForm.subdomain}
+                    onChange={(e) => setWorkableTokenForm((prev) => ({ ...prev, subdomain: e.target.value }))}
+                  />
+                  <input
+                    type="password"
+                    placeholder="Workable API access token"
+                    className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                    value={workableTokenForm.accessToken}
+                    onChange={(e) => setWorkableTokenForm((prev) => ({ ...prev, accessToken: e.target.value }))}
+                  />
+                  <button
+                    type="submit"
+                    disabled={workableTokenSaving}
+                    className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
+                  >
+                    {workableTokenSaving ? 'Connecting…' : 'Connect via API Token'}
+                  </button>
+                </form>
+              )}
+
+              {missingRequiredWorkableScopes.length > 0 ? (
+                <div className="font-mono text-xs text-red-700">
+                  Missing required scopes: {missingRequiredWorkableScopes.join(', ')}
+                </div>
+              ) : null}
+              {workableConnectError ? (
+                <div className="font-mono text-xs text-red-700">
+                  {workableConnectError}
+                </div>
+              ) : null}
+            </div>
+          </aside>
+        </div>
+      ) : null}
     </div>
   );
 };
