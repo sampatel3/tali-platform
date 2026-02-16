@@ -123,6 +123,19 @@ def append_cli_transcript(assessment: Assessment, event_type: str, payload: dict
     assessment.cli_transcript = transcript
 
 
+def _has_legacy_auto_exec_bootstrap(assessment: Assessment) -> bool:
+    transcript = list(getattr(assessment, "cli_transcript", None) or [])
+    for entry in reversed(transcript[-500:]):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("event_type") or "") != "terminal_output":
+            continue
+        data = str(entry.get("data") or "")
+        if "exec claude --permission-mode" in data:
+            return True
+    return False
+
+
 def _mark_terminal_session(
     assessment: Assessment,
     *,
@@ -162,21 +175,39 @@ def ensure_terminal_session(
     sandbox = e2b_service.connect_sandbox(assessment.e2b_session_id)
     pid = int(assessment.cli_session_pid or 0)
     if pid > 0:
-        try:
-            handle = e2b_service.connect_process(sandbox, pid)
-            _mark_terminal_session(assessment, pid=pid, state="running")
-            touch_terminal_session(assessment)
-            db.commit()
-            return TerminalSession(
-                sandbox=sandbox,
-                handle=handle,
-                pid=pid,
-                is_new=False,
-                cli_available=True,
+        if _has_legacy_auto_exec_bootstrap(assessment):
+            try:
+                e2b_service.kill_process(sandbox, pid)
+            except Exception:
+                pass
+            append_assessment_timeline_event(
+                assessment,
+                "terminal_exit",
+                {"pid": pid, "reason": "legacy_session_refresh"},
             )
-        except Exception:
+            append_cli_transcript(
+                assessment,
+                "terminal_exit",
+                {"pid": pid, "reason": "legacy_session_refresh"},
+            )
             _mark_terminal_session(assessment, pid=None, state="stopped")
             db.commit()
+        else:
+            try:
+                handle = e2b_service.connect_process(sandbox, pid)
+                _mark_terminal_session(assessment, pid=pid, state="running")
+                touch_terminal_session(assessment)
+                db.commit()
+                return TerminalSession(
+                    sandbox=sandbox,
+                    handle=handle,
+                    pid=pid,
+                    is_new=False,
+                    cli_available=True,
+                )
+            except Exception:
+                _mark_terminal_session(assessment, pid=None, state="stopped")
+                db.commit()
 
     repo_root = workspace_repo_root(task)
     envs = terminal_env(org)

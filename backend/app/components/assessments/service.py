@@ -93,10 +93,31 @@ def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment
         "print(json.dumps(payload))\n"
     )
     try:
-        lines = (result.get("stdout") or "").strip().splitlines()
+        stdout_text = ""
+        if isinstance(result, dict):
+            stdout_text = str(result.get("stdout") or "")
+        else:
+            logs = getattr(result, "logs", None)
+            raw_stdout = getattr(logs, "stdout", None) if logs is not None else None
+            if isinstance(raw_stdout, list):
+                stdout_text = "\n".join(str(item) for item in raw_stdout)
+            elif raw_stdout is not None:
+                stdout_text = str(raw_stdout)
+            else:
+                stdout_text = str(getattr(result, "stdout", "") or "")
+        lines = stdout_text.strip().splitlines()
         payload = json.loads(lines[-1]) if lines else {}
-        return int(payload.get("returncode", 1)) == 0
+        ok = int(payload.get("returncode", 1)) == 0
+        if not ok:
+            logger.error(
+                "Failed to clone assessment branch into sandbox repo_root=%s branch=%s stderr=%s",
+                repo_root,
+                branch_name,
+                str(payload.get("stderr") or ""),
+            )
+        return ok
     except Exception:
+        logger.exception("Failed to parse clone command output for assessment=%s", getattr(assessment, "id", None))
         return False
 
 

@@ -16,7 +16,7 @@ export const AssessmentTerminal = ({
   const hostRef = useRef(null);
   const terminalRef = useRef(null);
   const fitAddonRef = useRef(null);
-  const keyDisposableRef = useRef(null);
+  const dataDisposableRef = useRef(null);
   const eventCursorRef = useRef(0);
   const resizeObserverRef = useRef(null);
   const disabledRef = useRef(disabled);
@@ -63,9 +63,9 @@ export const AssessmentTerminal = ({
       onResize?.(term.rows, term.cols);
     };
 
-    const keyDisposable = term.onKey(({ key }) => {
+    const dataDisposable = term.onData((data) => {
       if (disabledRef.current) return;
-      onInput?.(key);
+      onInput?.(data);
     });
 
     const resizeObserver = new ResizeObserver(() => {
@@ -76,7 +76,7 @@ export const AssessmentTerminal = ({
 
     terminalRef.current = term;
     fitAddonRef.current = fitAddon;
-    keyDisposableRef.current = keyDisposable;
+    dataDisposableRef.current = dataDisposable;
     resizeObserverRef.current = resizeObserver;
 
     return () => {
@@ -86,7 +86,7 @@ export const AssessmentTerminal = ({
         // noop
       }
       try {
-        keyDisposable.dispose();
+        dataDisposable.dispose();
       } catch {
         // noop
       }
@@ -96,7 +96,7 @@ export const AssessmentTerminal = ({
         // noop
       }
       resizeObserverRef.current = null;
-      keyDisposableRef.current = null;
+      dataDisposableRef.current = null;
       terminalRef.current = null;
       fitAddonRef.current = null;
       eventCursorRef.current = 0;
