@@ -49,6 +49,18 @@ def _seed_cli_usage_from_transcript(transcript: list[dict] | None) -> tuple[int,
     return input_tokens, output_tokens
 
 
+TOKEN_ESTIMATE_CHARS_PER_TOKEN = 4
+
+
+def _estimate_token_delta(text: str, remainder_chars: int) -> tuple[int, int]:
+    raw_text = str(text or "")
+    if not raw_text:
+        return 0, max(0, int(remainder_chars or 0))
+    total_chars = max(0, int(remainder_chars or 0)) + len(raw_text.encode("utf-8"))
+    tokens = total_chars // TOKEN_ESTIMATE_CHARS_PER_TOKEN
+    return max(0, int(tokens)), max(0, int(total_chars % TOKEN_ESTIMATE_CHARS_PER_TOKEN))
+
+
 def _extract_provider_usage(text: str) -> dict | None:
     """Extract provider-reported usage metrics from terminal output."""
     content = str(text or "")
@@ -254,15 +266,14 @@ async def terminal_ws(
     input_tokens_used, output_tokens_used = _seed_cli_usage_from_transcript(
         list(getattr(assessment, "cli_transcript", None) or [])
     )
-    provider_usage_required = bool(getattr(settings, "CLAUDE_CLI_REQUIRE_PROVIDER_USAGE", True))
-    grace_output_events = max(1, int(getattr(settings, "CLAUDE_CLI_PROVIDER_USAGE_GRACE_OUTPUT_EVENTS", 40) or 40))
     provider_usage_events_seen = sum(
         1
         for entry in (getattr(assessment, "cli_transcript", None) or [])
         if isinstance(entry, dict) and str(entry.get("event_type") or "") == "terminal_usage"
     )
-    output_events_seen = 0
-    input_events_seen = 0
+    using_provider_usage = provider_usage_events_seen > 0
+    input_token_remainder_chars = 0
+    output_token_remainder_chars = 0
 
     org = db.query(Organization).filter(Organization.id == assessment.organization_id).first()
     e2b = build_sandbox_adapter()
@@ -434,7 +445,6 @@ async def terminal_ws(
                             # Prevent shell escape controls (Ctrl-C/Z/D) so the terminal remains repo-scoped.
                             if not any(ctrl in data for ctrl in ("\u0003", "\u001a", "\u0004")):
                                 e2b.send_pty_input(session.sandbox, session.pid, data)
-                                input_events_seen += 1
                                 append_assessment_timeline_event(
                                     assessment,
                                     "terminal_input",
@@ -449,58 +459,39 @@ async def terminal_ws(
                                     },
                                 )
                                 touch_terminal_session(assessment)
+                                if not using_provider_usage:
+                                    estimated_input_tokens, input_token_remainder_chars = _estimate_token_delta(
+                                        data,
+                                        input_token_remainder_chars,
+                                    )
+                                    if estimated_input_tokens > 0:
+                                        input_tokens_used += estimated_input_tokens
+                                        assessment.total_input_tokens = int(getattr(assessment, "total_input_tokens", 0) or 0) + estimated_input_tokens
+                                        append_cli_transcript(
+                                            assessment,
+                                            "terminal_usage",
+                                            {
+                                                "pid": session.pid,
+                                                "input_tokens": estimated_input_tokens,
+                                                "output_tokens": 0,
+                                                "request_cost_usd": float(
+                                                    round(
+                                                        compute_claude_cost_usd(
+                                                            input_tokens=estimated_input_tokens,
+                                                            output_tokens=0,
+                                                        ),
+                                                        6,
+                                                    )
+                                                ),
+                                                "source": "estimated_input",
+                                            },
+                                        )
                                 db.commit()
                                 budget_snapshot = _cli_budget_snapshot(
                                     effective_budget_limit,
                                     input_tokens_used,
                                     output_tokens_used,
                                 )
-                                if (
-                                    budget_snapshot["enabled"]
-                                    and provider_usage_required
-                                    and input_events_seen > 0
-                                    and provider_usage_events_seen == 0
-                                    and output_events_seen >= grace_output_events
-                                ):
-                                    killed = e2b.kill_process(session.sandbox, session.pid)
-                                    append_assessment_timeline_event(
-                                        assessment,
-                                        "terminal_error",
-                                        {
-                                            "pid": session.pid,
-                                            "reason": "missing_provider_usage_metrics",
-                                            "killed": bool(killed),
-                                        },
-                                    )
-                                    append_cli_transcript(
-                                        assessment,
-                                        "terminal_error",
-                                        {
-                                            "pid": session.pid,
-                                            "reason": "missing_provider_usage_metrics",
-                                            "message": "Provider usage metrics unavailable for Claude CLI session.",
-                                        },
-                                    )
-                                    stop_terminal_session(assessment)
-                                    db.commit()
-                                    await _ws_send_json(
-                                        websocket,
-                                        {
-                                            "type": "error",
-                                            "message": (
-                                                "Claude CLI usage metrics are unavailable; "
-                                                "cannot enforce budget without provider-reported usage."
-                                            ),
-                                            "reason": "missing_provider_usage_metrics",
-                                        },
-                                    )
-                                    await _ws_send_json(
-                                        websocket,
-                                        {"type": "exit", "pid": session.pid, "killed": bool(killed)},
-                                    )
-                                    should_break = True
-                                    if should_break:
-                                        break
                                 if budget_snapshot["enabled"] and budget_snapshot["is_exhausted"]:
                                     killed = e2b.kill_process(session.sandbox, session.pid)
                                     append_assessment_timeline_event(
@@ -572,7 +563,6 @@ async def terminal_ws(
                 if msg_type == "output":
                     output_text = str(message.get("data") or "")
                     if output_text:
-                        output_events_seen += 1
                         append_cli_transcript(
                             assessment,
                             "terminal_output",
@@ -587,6 +577,7 @@ async def terminal_ws(
                             usage_output_tokens = max(0, int(usage.get("output_tokens") or 0))
                             usage_cost_usd = float(usage.get("request_cost_usd") or 0.0)
                             provider_usage_events_seen += 1
+                            using_provider_usage = True
                             input_tokens_used += usage_input_tokens
                             output_tokens_used += usage_output_tokens
                             assessment.total_input_tokens = int(getattr(assessment, "total_input_tokens", 0) or 0) + usage_input_tokens
@@ -613,6 +604,33 @@ async def terminal_ws(
                                     "source": usage.get("source") or "provider",
                                 },
                             )
+                        elif not using_provider_usage:
+                            estimated_output_tokens, output_token_remainder_chars = _estimate_token_delta(
+                                output_text,
+                                output_token_remainder_chars,
+                            )
+                            if estimated_output_tokens > 0:
+                                output_tokens_used += estimated_output_tokens
+                                assessment.total_output_tokens = int(getattr(assessment, "total_output_tokens", 0) or 0) + estimated_output_tokens
+                                append_cli_transcript(
+                                    assessment,
+                                    "terminal_usage",
+                                    {
+                                        "pid": session.pid,
+                                        "input_tokens": 0,
+                                        "output_tokens": estimated_output_tokens,
+                                        "request_cost_usd": float(
+                                            round(
+                                                compute_claude_cost_usd(
+                                                    input_tokens=0,
+                                                    output_tokens=estimated_output_tokens,
+                                                ),
+                                                6,
+                                            )
+                                        ),
+                                        "source": "estimated_output",
+                                    },
+                                )
                         touch_terminal_session(assessment)
                         db.commit()
                         budget_snapshot = _cli_budget_snapshot(
@@ -620,50 +638,6 @@ async def terminal_ws(
                             input_tokens_used,
                             output_tokens_used,
                         )
-                        if (
-                            budget_snapshot["enabled"]
-                            and provider_usage_required
-                            and input_events_seen > 0
-                            and provider_usage_events_seen == 0
-                            and output_events_seen >= grace_output_events
-                        ):
-                            killed = e2b.kill_process(session.sandbox, session.pid)
-                            append_assessment_timeline_event(
-                                assessment,
-                                "terminal_error",
-                                {
-                                    "pid": session.pid,
-                                    "reason": "missing_provider_usage_metrics",
-                                    "killed": bool(killed),
-                                },
-                            )
-                            append_cli_transcript(
-                                assessment,
-                                "terminal_error",
-                                {
-                                    "pid": session.pid,
-                                    "reason": "missing_provider_usage_metrics",
-                                    "message": "Provider usage metrics unavailable for Claude CLI session.",
-                                },
-                            )
-                            stop_terminal_session(assessment)
-                            db.commit()
-                            await _ws_send_json(
-                                websocket,
-                                {
-                                    "type": "error",
-                                    "message": (
-                                        "Claude CLI usage metrics are unavailable; "
-                                        "cannot enforce budget without provider-reported usage."
-                                    ),
-                                    "reason": "missing_provider_usage_metrics",
-                                },
-                            )
-                            await _ws_send_json(
-                                websocket,
-                                {"type": "exit", "pid": session.pid, "killed": bool(killed)},
-                            )
-                            break
                         if budget_snapshot["enabled"] and budget_snapshot["is_exhausted"]:
                             killed = e2b.kill_process(session.sandbox, session.pid)
                             append_assessment_timeline_event(
