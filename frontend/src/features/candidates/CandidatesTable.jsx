@@ -15,7 +15,10 @@ const COLUMN_STORAGE_KEY = 'taali_candidates_table_columns_v1';
 
 const DEFAULT_COLUMN_PREFS = {
   workable_ai: true,
+  workable_raw: false,
+  workable_score_source: false,
   workable_stage: true,
+  workable_candidate_id: false,
   added: true,
   email: false,
   position: false,
@@ -126,7 +129,10 @@ export const CandidatesTable = ({
       'send',
       'taali_ai',
       'workable_ai',
+      'workable_raw',
+      'workable_score_source',
       'workable_stage',
+      'workable_candidate_id',
       'status',
       'added',
       'email',
@@ -146,6 +152,12 @@ export const CandidatesTable = ({
       ? `${value.toFixed(1)}/10`
       : '—'
   );
+
+  const formatWorkableRaw = (value) => {
+    if (typeof value !== 'number') return '—';
+    if (Number.isInteger(value)) return String(value);
+    return value.toFixed(2);
+  };
 
   const renderTaaliScore = (app) => {
     if (typeof app.cv_match_score === 'number') return formatScore(app.cv_match_score);
@@ -225,10 +237,34 @@ export const CandidatesTable = ({
               <label className="flex items-center gap-2 text-sm text-gray-700">
                 <input
                   type="checkbox"
+                  checked={Boolean(columnPrefs.workable_raw)}
+                  onChange={() => togglePref('workable_raw')}
+                />
+                Workable raw score
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={Boolean(columnPrefs.workable_score_source)}
+                  onChange={() => togglePref('workable_score_source')}
+                />
+                Workable score source
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
                   checked={Boolean(columnPrefs.workable_stage)}
                   onChange={() => togglePref('workable_stage')}
                 />
                 Workable stage
+              </label>
+              <label className="flex items-center gap-2 text-sm text-gray-700">
+                <input
+                  type="checkbox"
+                  checked={Boolean(columnPrefs.workable_candidate_id)}
+                  onChange={() => togglePref('workable_candidate_id')}
+                />
+                Workable candidate id
               </label>
               <label className="flex items-center gap-2 text-sm text-gray-700">
                 <input
@@ -285,7 +321,10 @@ export const CandidatesTable = ({
                 taali_ai: 'w-[110px]',
                 send: 'w-[170px]',
                 workable_ai: 'w-[110px]',
+                workable_raw: 'w-[120px]',
+                workable_score_source: 'w-[220px]',
                 workable_stage: 'w-[150px]',
+                workable_candidate_id: 'w-[200px]',
                 status: 'w-[140px]',
                 added: 'w-[140px]',
                 email: 'w-[220px]',
@@ -358,7 +397,10 @@ export const CandidatesTable = ({
 
               const label = {
                 send: 'Send assessment',
+                workable_raw: 'Workable raw',
+                workable_score_source: 'Workable score src',
                 workable_stage: 'Workable stage',
+                workable_candidate_id: 'Workable id',
                 status: 'Status',
                 email: 'Email',
                 position: 'Position',
@@ -466,10 +508,34 @@ export const CandidatesTable = ({
                       );
                     }
 
+                    if (column === 'workable_raw') {
+                      return (
+                        <td key={column} className="px-3 py-2 text-sm text-gray-700 text-right tabular-nums whitespace-nowrap">
+                          {formatWorkableRaw(app.workable_score_raw)}
+                        </td>
+                      );
+                    }
+
+                    if (column === 'workable_score_source') {
+                      return (
+                        <td key={column} className="px-3 py-2 text-sm text-gray-700 break-words">
+                          {app.workable_score_source || '—'}
+                        </td>
+                      );
+                    }
+
                     if (column === 'workable_stage') {
                       return (
                         <td key={column} className="px-3 py-2 text-sm text-gray-700 break-words">
                           {app.workable_stage || '—'}
+                        </td>
+                      );
+                    }
+
+                    if (column === 'workable_candidate_id') {
+                      return (
+                        <td key={column} className="px-3 py-2 text-sm text-gray-700 break-all">
+                          {app.workable_candidate_id || '—'}
                         </td>
                       );
                     }
@@ -562,7 +628,14 @@ export const CandidatesTable = ({
                 {detailsApplicationId === app.id ? (
                   <tr className="bg-[#faf8ff]">
                     <td colSpan={columnCount} className="px-3 py-3">
+                      <p className="mb-3 text-xs text-gray-500">
+                        Status is TAALI&apos;s application status; Workable stage is the pipeline step from Workable. For Workable-imported candidates they may match.
+                      </p>
                       <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Status</p>
+                          <p className="mt-1 text-sm text-gray-800">{app.status || 'applied'}</p>
+                        </div>
                         <div>
                           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Email</p>
                           <p className="mt-1 text-sm text-gray-800 break-all">{app.candidate_email || '—'}</p>
@@ -576,6 +649,10 @@ export const CandidatesTable = ({
                           <p className="mt-1 text-sm text-gray-800">{app.source || 'manual'}</p>
                         </div>
                         <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Workable candidate id</p>
+                          <p className="mt-1 text-sm text-gray-800 break-all">{app.workable_candidate_id || '—'}</p>
+                        </div>
+                        <div>
                           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Workable stage</p>
                           <p className="mt-1 text-sm text-gray-800 break-words">{app.workable_stage || '—'}</p>
                         </div>
@@ -583,7 +660,7 @@ export const CandidatesTable = ({
                           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Workable score</p>
                           <p className="mt-1 text-sm text-gray-800">
                             {typeof app.workable_score === 'number' ? formatScore(app.workable_score) : '—'}
-                            {typeof app.workable_score_raw === 'number' ? ` (raw: ${app.workable_score_raw})` : ''}
+                            {typeof app.workable_score_raw === 'number' ? ` (raw: ${formatWorkableRaw(app.workable_score_raw)})` : ''}
                           </p>
                           {app.workable_score_source ? (
                             <p className="mt-1 text-xs text-gray-500 break-all">{app.workable_score_source}</p>
