@@ -2,9 +2,9 @@
   "task_id": "data_eng_a_pipeline_reliability",
   "name": "Orders Pipeline Reliability Sprint",
   "role": "data_engineer",
-  "duration_minutes": 35,
+  "duration_minutes": 15,
   "claude_budget_limit_usd": 8,
-  "scenario": "You are the on-call data engineer for the orders domain. Finance found revenue mismatches, and compliance needs historical completeness for an audit.\n\nYou must deliver one production-ready patch that makes the pipeline reliable end-to-end:\n1. Incremental sync must dedupe correctly and reconcile hard deletes.\n2. Schema drift must be handled automatically before writes.\n3. Historical backfill must be idempotent and must not move incremental checkpoints.\n\nThe repository includes a deterministic in-memory harness and failing tests. The expected output is working code: all tests passing without modifying the tests.",
+  "scenario": "You are the on-call data engineer for the orders domain. Finance found revenue mismatches, and compliance needs historical completeness for an audit.\n\nYou must deliver one production-ready patch that makes the pipeline reliable end-to-end:\n1. Incremental sync must dedupe correctly and reconcile hard deletes.\n2. Schema drift must be handled automatically before writes.\n3. Historical backfill must be idempotent and must not move incremental checkpoints.\n\nThe repository includes a deterministic in-memory harness and failing tests. The expected output is working code: all tests passing without modifying the tests.\n\nTiming expectation: strong candidates should be able to complete the core fix path in about 10 minutes with AI assistance. Assessment hard cap is 15 minutes.",
   "repo_structure": {
     "name": "orders-pipeline-recovery",
     "files": {

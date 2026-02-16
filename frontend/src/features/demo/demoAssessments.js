@@ -1,9 +1,10 @@
 const demoTasks = [
   {
-    id: 'data_eng_a_pipeline_reliability',
+    // Keep legacy track id for backwards compatibility with older backend deploys.
+    id: 'data_eng_b_cdc_fix',
     title: 'Orders Pipeline Reliability Sprint',
-    description: 'Deliver one production-safe patch for dedupe, hard deletes, schema drift, and idempotent backfills.',
-    durationLabel: '35 min',
+    description: 'Deliver one production-safe patch for dedupe, hard deletes, schema drift, and idempotent backfills (target ~10 min, hard cap 15 min).',
+    durationLabel: '15 min',
     difficulty: 'Advanced',
   },
 ];
