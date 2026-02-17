@@ -20,6 +20,14 @@ from .service import WorkableRateLimitError, WorkableService
 
 logger = logging.getLogger(__name__)
 
+# Progress is persisted every N candidates to limit DB writes; UI still shows live counts.
+PROGRESS_BATCH_SIZE = 50
+
+
+class WorkableSyncCancelled(Exception):
+    """Raised when the user requested sync cancellation; sync should stop immediately."""
+
+
 
 def _format_job_spec_from_api(job_data: dict) -> str:
     """Build a well-formatted job spec string from full Workable job API data."""
@@ -145,6 +153,10 @@ class WorkableSyncService:
         self.client = client
         self._job_details_cache: dict[str, dict] = {}
 
+    def _is_cancel_requested(self, db: Session, org: Organization) -> bool:
+        db.refresh(org)
+        return org.workable_sync_cancel_requested_at is not None
+
     def sync_org(self, db: Session, org: Organization, *, full_resync: bool = False) -> dict:
         summary = {
             "jobs_seen": 0,
@@ -167,6 +179,15 @@ class WorkableSyncService:
                 logger.warning("Workable list_open_jobs returned 0 jobs for org_id=%s", org.id)
             org.workable_sync_progress = dict(summary)
             db.commit()
+            if self._is_cancel_requested(db, org):
+                summary["errors"].append("Sync cancelled by user")
+                org.workable_last_sync_at = now
+                org.workable_last_sync_status = "cancelled"
+                org.workable_last_sync_summary = {**summary, "cancelled": True}
+                org.workable_sync_progress = None
+                org.workable_sync_cancel_requested_at = None
+                db.commit()
+                return summary
             rate_limited = False
             for job in jobs:
                 db.refresh(org)
@@ -189,21 +210,37 @@ class WorkableSyncService:
                         job_title,
                         len(candidates),
                     )
+                    org.workable_sync_progress = dict(summary)
+                    db.commit()
                     for candidate_ref in candidates:
+                        db.refresh(org)
+                        if org.workable_sync_cancel_requested_at is not None:
+                            summary["errors"].append("Sync cancelled by user")
+                            break
                         summary["candidates_seen"] += 1
-                        synced = self._sync_candidate_for_role(
-                            db=db,
-                            org=org,
-                            role=role,
-                            job=job,
-                            candidate_ref=candidate_ref,
-                            now=now,
-                            enrich=True,  # always fetch full candidate + CV
-                        )
+                        try:
+                            synced = self._sync_candidate_for_role(
+                                db=db,
+                                org=org,
+                                role=role,
+                                job=job,
+                                candidate_ref=candidate_ref,
+                                now=now,
+                                enrich=True,  # always fetch full candidate + CV
+                            )
+                        except WorkableSyncCancelled:
+                            summary["errors"].append("Sync cancelled by user")
+                            logger.info("Workable sync cancelled by user for org_id=%s", org.id)
+                            break
                         summary["candidates_upserted"] += synced.get("candidate_upserted", 0)
                         summary["applications_upserted"] += synced.get("application_upserted", 0)
                         summary["cv_downloaded"] += synced.get("cv_downloaded", 0)
                         summary["cv_matched"] += synced.get("cv_matched", 0)
+                        if summary["candidates_seen"] % PROGRESS_BATCH_SIZE == 0:
+                            org.workable_sync_progress = dict(summary)
+                            db.commit()
+                    if any("cancelled" in (e or "").lower() for e in summary["errors"]):
+                        break
                 except WorkableRateLimitError as exc:
                     logger.warning("Workable sync rate-limited; stopping early for org_id=%s", org.id)
                     summary["errors"].append(str(exc))
@@ -356,6 +393,8 @@ class WorkableSyncService:
         now: datetime,
         enrich: bool,
     ) -> dict:
+        if self._is_cancel_requested(db, org):
+            raise WorkableSyncCancelled()
         counters = {
             "candidate_upserted": 0,
             "application_upserted": 0,
@@ -369,6 +408,8 @@ class WorkableSyncService:
         candidate_payload = candidate_ref
         if enrich:
             candidate_payload = self.client.get_candidate(candidate_id) or candidate_ref
+        if self._is_cancel_requested(db, org):
+            raise WorkableSyncCancelled()
         stage = (
             candidate_payload.get("stage")
             or candidate_ref.get("stage")
@@ -483,6 +524,8 @@ class WorkableSyncService:
                     except Exception:
                         logger.exception("Failed processing downloaded CV")
 
+        if self._is_cancel_requested(db, org):
+            raise WorkableSyncCancelled()
         cv_matched = self._compute_cv_match(app=app, role=role, now=now)
         if cv_matched:
             counters["cv_matched"] += 1

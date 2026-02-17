@@ -262,7 +262,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setWorkableSyncCancelLoading(true);
     try {
       await orgsApi.cancelWorkableSync();
-      showToast('Sync cancel requested. It will stop after the current job.', 'info');
+      showToast('Stop requested. Sync will stop within a few seconds.', 'info');
       fetchWorkableSyncStatus();
     } catch (err) {
       const status = err?.response?.status;

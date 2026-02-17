@@ -109,7 +109,7 @@ def cancel_workable_sync(
     now = datetime.now(timezone.utc)
     org.workable_sync_cancel_requested_at = now
     db.commit()
-    return {"status": "ok", "message": "Sync cancel requested. It will stop after the current job completes."}
+    return {"status": "ok", "message": "Stop requested. Sync will stop within a few seconds (after the current candidate)."}
 
 
 @router.post("/sync/clear-stuck")
