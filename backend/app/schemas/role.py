@@ -19,11 +19,13 @@ class InterviewFocus(BaseModel):
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=4000)
+    additional_requirements: Optional[str] = Field(default=None, max_length=4000)
 
 
 class RoleUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=4000)
+    additional_requirements: Optional[str] = Field(default=None, max_length=4000)
 
 
 class RoleResponse(BaseModel):
@@ -31,6 +33,7 @@ class RoleResponse(BaseModel):
     organization_id: int
     name: str
     description: Optional[str] = None
+    additional_requirements: Optional[str] = None
     source: Optional[str] = "manual"
     workable_job_id: Optional[str] = None
     job_spec_filename: Optional[str] = None

@@ -488,6 +488,7 @@ class WorkableSyncService:
                 job_spec_text=job_spec,
                 api_key=settings.ANTHROPIC_API_KEY,
                 model=settings.resolved_claude_model,
+                additional_requirements=(role.additional_requirements or "").strip() or None,
             )
             app.cv_match_score = result.get("cv_job_match_score")
             app.cv_match_details = result.get("match_details", {})

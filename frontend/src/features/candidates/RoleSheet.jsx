@@ -26,6 +26,7 @@ export const RoleSheet = ({
   const [step, setStep] = useState(1);
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [additionalRequirements, setAdditionalRequirements] = useState('');
   const [jobSpecFile, setJobSpecFile] = useState(null);
   const [selectedTaskIds, setSelectedTaskIds] = useState([]);
   const [nameTouched, setNameTouched] = useState(false);
@@ -35,6 +36,7 @@ export const RoleSheet = ({
     setStep(1);
     setName(role?.name || '');
     setDescription(role?.description || '');
+    setAdditionalRequirements(role?.additional_requirements || '');
     setJobSpecFile(null);
     setSelectedTaskIds((roleTasks || []).map((task) => Number(task.id)));
     setNameTouched(false);
@@ -89,6 +91,7 @@ export const RoleSheet = ({
                   onSubmit({
                     name: name.trim(),
                     description: description.trim(),
+                    additionalRequirements: additionalRequirements.trim() || undefined,
                     jobSpecFile,
                     taskIds: selectedTaskIds,
                   });
@@ -149,6 +152,18 @@ export const RoleSheet = ({
               placeholder="Optional summary for recruiters."
               className="min-h-[110px]"
             />
+          </label>
+          <label className="block">
+            <span className="mb-1 block text-sm font-semibold text-gray-800">Additional requirements (for CV scoring)</span>
+            <Textarea
+              value={additionalRequirements}
+              onChange={(event) => setAdditionalRequirements(event.target.value)}
+              placeholder="e.g. Large enterprise experience; production experience; holds XYZ passport; 30 days notice or less. Used by AI when scoring CVs against this role."
+              className="min-h-[100px]"
+            />
+            <span className="mt-1 block text-xs text-gray-500">
+              These are used alongside the job spec when we score how well a candidate&apos;s CV matches. Leave blank to score only on the job spec.
+            </span>
           </label>
         </div>
       ) : null}

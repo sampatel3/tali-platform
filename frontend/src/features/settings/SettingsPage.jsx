@@ -257,17 +257,17 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
   const handleSyncWorkable = async () => {
     setWorkableSyncLoading(true);
+    setWorkableSyncInProgress(true); // show "running in background" immediately
     try {
       await orgsApi.syncWorkable();
-      setWorkableSyncInProgress(true);
-      showToast('Sync started. You’ll see status below; this may take several minutes.', 'info');
+      showToast("Sync is running in the background. We'll notify you when it's done.", 'info');
     } catch (err) {
       const status = err?.response?.status;
       const detail = err?.response?.data?.detail ?? err?.message ?? String(err);
       if (status === 409) {
-        setWorkableSyncInProgress(true);
-        showToast('A sync is already in progress. Status will update below.', 'info');
+        showToast("A sync is already running in the background. We'll notify you when it's done.", 'info');
       } else {
+        setWorkableSyncInProgress(false);
         console.error('Workable sync failed:', err?.response?.data ?? err);
         showToast(detail || 'Workable sync failed', 'error');
       }
@@ -569,12 +569,14 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     </p>
                   </div>
                   {workableSyncInProgress && (
-                    <div className="rounded-lg border-2 border-black bg-amber-50 p-3 flex items-center gap-3 mt-3">
-                      <Loader2 size={20} className="animate-spin text-amber-700 flex-shrink-0" />
+                    <div className="rounded-lg border-2 border-black bg-amber-50 p-4 flex items-center gap-3 mt-3">
+                      <Loader2 size={24} className="animate-spin text-amber-700 flex-shrink-0" />
                       <div>
-                        <div className="font-semibold text-amber-900">Syncing…</div>
+                        <div className="font-semibold text-amber-900">
+                          {workableSyncLoading ? 'Starting…' : 'Running in background'}
+                        </div>
                         <div className="text-sm text-amber-800">
-                          Sync runs in the background and may take several minutes due to API rate limits. This page updates every 30 seconds.
+                          Sync is running in the background. We’ll notify you when it’s done. You can leave this page.
                         </div>
                       </div>
                     </div>
@@ -647,7 +649,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
                         onClick={handleSyncWorkable}
                       >
-                        {workableSyncLoading ? 'Starting…' : workableSyncInProgress ? 'Sync in progress' : 'Sync'}
+                        {workableSyncInProgress ? 'Running in background' : 'Sync'}
                       </button>
                     </div>
                   </div>

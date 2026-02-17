@@ -50,6 +50,7 @@ def create_role(
         organization_id=current_user.organization_id,
         name=data.name.strip(),
         description=(data.description or None),
+        additional_requirements=(data.additional_requirements or None),
     )
     db.add(role)
     try:
@@ -109,6 +110,8 @@ def update_role(
         role.name = updates["name"].strip()
     if "description" in updates:
         role.description = updates["description"] or None
+    if "additional_requirements" in updates:
+        role.additional_requirements = updates["additional_requirements"] or None
     try:
         db.commit()
         db.refresh(role)

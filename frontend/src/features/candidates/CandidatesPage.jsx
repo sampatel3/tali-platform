@@ -222,7 +222,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     setRoleSheetOpen(true);
   };
 
-  const handleRoleSubmit = async ({ name, description, jobSpecFile, taskIds }) => {
+  const handleRoleSubmit = async ({ name, description, additionalRequirements, jobSpecFile, taskIds }) => {
     if (!rolesApi) return;
     setSavingRole(true);
     setRoleSheetError('');
@@ -232,12 +232,14 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         const createRes = await rolesApi.create({
           name,
           description: trimOrUndefined(description),
+          additional_requirements: trimOrUndefined(additionalRequirements),
         });
         activeRoleId = String(createRes.data.id);
       } else if (rolesApi.update && selectedRoleId) {
         await rolesApi.update(selectedRoleId, {
           name,
           description: trimOrUndefined(description),
+          additional_requirements: trimOrUndefined(additionalRequirements),
         });
         activeRoleId = String(selectedRoleId);
       }

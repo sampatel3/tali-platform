@@ -24,6 +24,7 @@ CV:
 
 Job Specification:
 {job_spec_text}
+{additional_requirements_section}
 
 Provide a JSON response with EXACTLY this structure (no markdown, no explanation, ONLY valid JSON):
 {{
@@ -37,8 +38,21 @@ Provide a JSON response with EXACTLY this structure (no markdown, no explanation
     "summary": "2-3 sentence summary of fit"
 }}
 
-Be objective and base scores only on evidence in the documents.
-Score 5 as average/neutral, 7+ as good match, 9+ as exceptional.
+Scoring: Focus the overall_match_score on how well the CV meets the role requirements.
+(1) Job spec: match to the job specification above (skills, experience, role fit).
+(2) Additional criteria: if "Additional scoring criteria" is provided, treat those as must-consider requirements (e.g. large enterprise experience, notice period, passport, production experience). Only give high scores (7+) when the CV supports both the job spec and the additional criteria where they apply; otherwise reflect gaps in concerns and lower the overall score.
+Be objective and base scores only on evidence in the documents. Score 5 as average/neutral, 7+ as good match, 9+ as exceptional.
+"""
+
+
+def _format_additional_requirements_section(additional_requirements: Optional[str]) -> str:
+    if not additional_requirements or not additional_requirements.strip():
+        return ""
+    text = additional_requirements.strip()[:1500]
+    return f"""
+
+Additional scoring criteria (evaluate the CV against these; lower the overall score if the CV does not support them):
+{text}
 """
 
 
@@ -47,6 +61,7 @@ async def calculate_cv_job_match(
     job_spec_text: str,
     api_key: str,
     model: Optional[str] = None,
+    additional_requirements: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Analyse CV-to-job-spec fit with a single Claude call.
 
@@ -55,6 +70,8 @@ async def calculate_cv_job_match(
         job_spec_text: Extracted text from the job specification.
         api_key: Anthropic API key.
         model: Optional Claude model override. Uses env-resolved default when unset.
+        additional_requirements: Optional free-text criteria (e.g. "large enterprise experience",
+            "30 days notice", "XYZ passport") used when scoring; not part of the job spec.
 
     Returns:
         Dict with overall_match_score, skills_match_score,
@@ -76,10 +93,12 @@ async def calculate_cv_job_match(
         # Truncate to manage token costs
         cv_truncated = cv_text[:4000]
         js_truncated = job_spec_text[:2000]
+        additional_section = _format_additional_requirements_section(additional_requirements)
 
         prompt = CV_MATCH_PROMPT.format(
             cv_text=cv_truncated,
             job_spec_text=js_truncated,
+            additional_requirements_section=additional_section,
         )
 
         resolved_model = model or settings.resolved_claude_model
@@ -160,27 +179,36 @@ def calculate_cv_job_match_sync(
     job_spec_text: str,
     api_key: str,
     model: Optional[str] = None,
+    additional_requirements: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Synchronous wrapper for calculate_cv_job_match."""
     import asyncio
     try:
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            # Already in an async context — run directly
             import concurrent.futures
             with concurrent.futures.ThreadPoolExecutor() as pool:
                 future = pool.submit(
                     asyncio.run,
-                    calculate_cv_job_match(cv_text, job_spec_text, api_key, model),
+                    calculate_cv_job_match(
+                        cv_text, job_spec_text, api_key, model,
+                        additional_requirements=additional_requirements,
+                    ),
                 )
                 return future.result()
         else:
             return loop.run_until_complete(
-                calculate_cv_job_match(cv_text, job_spec_text, api_key, model)
+                calculate_cv_job_match(
+                    cv_text, job_spec_text, api_key, model,
+                    additional_requirements=additional_requirements,
+                )
             )
     except RuntimeError:
         return asyncio.run(
-            calculate_cv_job_match(cv_text, job_spec_text, api_key, model)
+            calculate_cv_job_match(
+                cv_text, job_spec_text, api_key, model,
+                additional_requirements=additional_requirements,
+            )
         )
 
 

@@ -49,6 +49,7 @@ def role_to_response(role: Role) -> RoleResponse:
         organization_id=role.organization_id,
         name=role.name,
         description=role.description,
+        additional_requirements=role.additional_requirements,
         source=role.source,
         workable_job_id=role.workable_job_id,
         job_spec_filename=role.job_spec_filename,

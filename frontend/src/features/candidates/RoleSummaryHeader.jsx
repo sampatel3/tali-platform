@@ -88,6 +88,13 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
             </div>
           ) : null}
 
+          {role.additional_requirements?.trim() ? (
+            <div className="text-sm text-gray-700">
+              <span className="font-medium">Additional requirements (for CV scoring):</span>
+              <p className="mt-1 text-xs text-gray-600 whitespace-pre-wrap">{role.additional_requirements.trim()}</p>
+            </div>
+          ) : null}
+
           <div className="inline-flex items-center gap-2 text-sm text-gray-700">
             <BriefcaseBusiness size={15} className="text-gray-500" />
             <span className="font-medium">Tasks ({roleTasks.length}):</span>

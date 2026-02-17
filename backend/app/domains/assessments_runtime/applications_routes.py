@@ -74,6 +74,7 @@ def _compute_cv_match_for_application(app: CandidateApplication, *, reset_if_una
         job_spec_text=job_spec_text,
         api_key=settings.ANTHROPIC_API_KEY,
         model=settings.resolved_claude_model,
+        additional_requirements=(role.additional_requirements or "").strip() or None,
     )
     app.cv_match_score = result.get("cv_job_match_score")
     app.cv_match_details = result.get("match_details", {})
