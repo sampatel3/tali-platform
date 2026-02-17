@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { FileText, X } from 'lucide-react';
+import { FileText, Loader2, X } from 'lucide-react';
 
 import { Badge, Button } from '../../shared/ui/TaaliPrimitives';
 import { statusVariant } from './candidatesUiUtils';
@@ -13,7 +13,7 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
-export function CandidateCvSidebar({ open, application, onClose }) {
+export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWorkable, fetchingCvApplicationId }) {
   const panelRef = useRef(null);
   const previousFocusRef = useRef(null);
 
@@ -108,8 +108,37 @@ export function CandidateCvSidebar({ open, application, onClose }) {
               </div>
             </div>
           ) : data ? (
-            <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
-              No CV text available for this candidate. Upload a CV or run a full Workable sync to see it here.
+            <div className="space-y-3">
+              <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
+                No CV text available for this candidate.
+              </div>
+              {data.source === 'workable' && onFetchCvFromWorkable ? (
+                <div>
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={fetchingCvApplicationId === data.id}
+                    onClick={() => onFetchCvFromWorkable(data)}
+                  >
+                    {fetchingCvApplicationId === data.id ? (
+                      <>
+                        <Loader2 size={14} className="animate-spin" />
+                        Fetching from Workable…
+                      </>
+                    ) : (
+                      'Fetch CV from Workable'
+                    )}
+                  </Button>
+                  <p className="mt-1.5 text-xs text-gray-500">
+                    Downloads the resume from Workable, extracts text, and updates the TAALI score.
+                  </p>
+                </div>
+              ) : (
+                <p className="text-xs text-gray-600">
+                  Upload a CV for this application, or run a full Workable sync (not candidates-only) to import CVs.
+                </p>
+              )}
             </div>
           ) : null}
         </div>

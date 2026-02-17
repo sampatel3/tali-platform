@@ -310,7 +310,7 @@ def upload_application_cv(
     )
 
 
-@router.post("/applications/{application_id}/generate-taali-cv-ai", response_model=ApplicationResponse)
+@router.post("/applications/{application_id}/generate-taali-cv-ai", response_model=ApplicationDetailResponse)
 def generate_taali_cv_ai(
     application_id: int,
     db: Session = Depends(get_db),
@@ -419,7 +419,13 @@ def generate_taali_cv_ai(
         raise HTTPException(status_code=500, detail="Failed to generate TAALI score")
 
     app = get_application(app.id, current_user.organization_id, db)
-    return application_to_response(app)
+    data = application_to_response(app)
+    payload = data.model_dump()
+    cv = (app.cv_text or "").strip()
+    if not cv and app.candidate:
+        cv = (app.candidate.cv_text or "").strip()
+    payload["cv_text"] = cv or None
+    return ApplicationDetailResponse(**payload)
 
 
 @router.post("/applications/{application_id}/assessments", status_code=status.HTTP_201_CREATED)

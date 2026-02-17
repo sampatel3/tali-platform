@@ -112,23 +112,28 @@ class WorkableService:
             return [j for j in payload if isinstance(j, dict)]
         if not isinstance(payload, dict):
             return []
-        jobs = payload.get("jobs")
-        if isinstance(jobs, list):
-            return [j for j in jobs if isinstance(j, dict)]
-        data = payload.get("data")
-        if isinstance(data, list):
-            return [j for j in data if isinstance(j, dict)]
-        if isinstance(data, dict):
-            jobs = data.get("jobs")
+        for key in ("jobs", "data", "results"):
+            jobs = payload.get(key)
             if isinstance(jobs, list):
-                return [j for j in jobs if isinstance(j, dict)]
+                out = [j for j in jobs if isinstance(j, dict)]
+                if out:
+                    return out
+            if isinstance(jobs, dict):
+                inner = jobs.get("jobs") or jobs.get("data")
+                if isinstance(inner, list):
+                    out = [j for j in inner if isinstance(j, dict)]
+                    if out:
+                        return out
         return []
 
     def list_open_jobs(self) -> list[dict]:
-        """Fetch open/published jobs. First request uses _request to surface auth errors."""
+        """Fetch all open/published jobs, with pagination and multiple state fallbacks."""
+        seen_shortcodes: set[str] = set()
+        all_jobs: list[dict] = []
         params_list = [
             {"state": "published", "limit": str(WORKABLE_JOBS_LIMIT)},
             {"state": "open", "limit": str(WORKABLE_JOBS_LIMIT)},
+            {"state": "draft", "limit": str(WORKABLE_JOBS_LIMIT)},
             {"limit": str(WORKABLE_JOBS_LIMIT)},
         ]
         for i, params in enumerate(params_list):
@@ -140,12 +145,30 @@ class WorkableService:
                 if i == 0:
                     raise
                 continue
-            jobs = self._parse_jobs_response(payload)
-            if jobs:
-                return jobs
-            if i == 0 and isinstance(payload, dict):
-                logger.info("Workable /jobs returned 0 jobs (keys=%s)", list(payload.keys())[:20])
-        return []
+            while True:
+                jobs = self._parse_jobs_response(payload)
+                if not jobs and isinstance(payload, dict) and not all_jobs:
+                    logger.info(
+                        "Workable /jobs state=%s returned 0 jobs (response keys=%s)",
+                        params.get("state", "none"),
+                        list(payload.keys())[:15],
+                    )
+                for j in jobs:
+                    if not isinstance(j, dict):
+                        continue
+                    shortcode = (j.get("shortcode") or j.get("id") or "").strip()
+                    if shortcode and shortcode not in seen_shortcodes:
+                        seen_shortcodes.add(shortcode)
+                        all_jobs.append(j)
+                paging = payload.get("paging") if isinstance(payload, dict) else None
+                next_url = paging.get("next") if isinstance(paging, dict) else None
+                if not isinstance(next_url, str) or not next_url.strip():
+                    break
+                self._throttle()
+                payload = self._get_next_page(next_url)
+            if all_jobs:
+                return all_jobs
+        return all_jobs
 
     def verify_access(self) -> None:
         # A simple authenticated read endpoint to validate token + subdomain.

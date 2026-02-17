@@ -38,17 +38,17 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
   const roleDescription = (role.description || '').trim();
   const roleText = toPlainText(role.description);
   const rolePreview = roleText.length > 180 ? `${roleText.slice(0, 180)}…` : roleText;
-  const looksLikeMarkdown = /^#|\n##|\n- |\n\d+\.|\*\*[^*]+\*\*|\[.+\]\(/.test(roleDescription);
-  const jobSpecReady = Boolean(role.job_spec_present || role.job_spec_filename);
+  const hasSpecContent = roleDescription.length > 0;
+  const jobSpecReady = Boolean(role.job_spec_present || role.job_spec_filename || hasSpecContent);
   const jobSpecLabel = role.job_spec_filename
     || (jobSpecReady
-      ? (role.source === 'workable' ? 'Imported from Workable' : 'Ready')
+      ? (role.source === 'workable' ? 'Imported from Workable' : hasSpecContent ? 'Job spec (text)' : 'Ready')
       : 'Not uploaded');
 
   useEffect(() => {
     setFocusExpanded(true);
-    setSpecExpanded(false);
-  }, [role.id]);
+    setSpecExpanded(Boolean(roleDescription));
+  }, [role.id, roleDescription]);
 
   return (
     <Panel className="p-5">
@@ -84,30 +84,25 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
           </div>
 
           {specExpanded ? (
-            <div id={specPanelId} className="border border-[var(--taali-border-muted)] bg-white rounded-lg p-4 max-h-[320px] overflow-auto">
+            <div id={specPanelId} className="border border-[var(--taali-border-muted)] bg-white rounded-lg p-5 max-h-[400px] overflow-auto">
               {roleDescription ? (
-                looksLikeMarkdown ? (
-                  <div className="prose prose-sm prose-slate max-w-none text-gray-800">
-                    <ReactMarkdown
-                      components={{
-                        h1: ({ node, ...p }) => <h1 className="text-base font-bold mt-2 mb-1 first:mt-0" {...p} />,
-                        h2: ({ node, ...p }) => <h2 className="text-sm font-bold mt-3 mb-1" {...p} />,
-                        h3: ({ node, ...p }) => <h3 className="text-sm font-semibold mt-2 mb-0.5" {...p} />,
-                        p: ({ node, ...p }) => <p className="text-xs my-1 leading-relaxed" {...p} />,
-                        ul: ({ node, ...p }) => <ul className="list-disc pl-4 my-1.5 text-xs space-y-0.5" {...p} />,
-                        ol: ({ node, ...p }) => <ol className="list-decimal pl-4 my-1.5 text-xs space-y-0.5" {...p} />,
-                        li: ({ node, ...p }) => <li className="leading-relaxed" {...p} />,
-                        strong: ({ node, ...p }) => <strong className="font-semibold" {...p} />,
-                      }}
-                    >
-                      {roleDescription}
-                    </ReactMarkdown>
-                  </div>
-                ) : (
-                  <pre className="whitespace-pre-wrap text-xs leading-relaxed text-gray-800 font-sans">
-                    {roleText}
-                  </pre>
-                )
+                <div className="job-spec-content text-sm text-gray-800 leading-relaxed">
+                  <ReactMarkdown
+                    components={{
+                      h1: ({ node, ...p }) => <h1 className="text-lg font-bold mt-4 mb-2 first:mt-0 border-b border-gray-200 pb-1" {...p} />,
+                      h2: ({ node, ...p }) => <h2 className="text-base font-bold mt-4 mb-2" {...p} />,
+                      h3: ({ node, ...p }) => <h3 className="text-sm font-semibold mt-3 mb-1" {...p} />,
+                      p: ({ node, ...p }) => <p className="my-2 leading-relaxed" {...p} />,
+                      ul: ({ node, ...p }) => <ul className="list-disc pl-5 my-2 space-y-1" {...p} />,
+                      ol: ({ node, ...p }) => <ol className="list-decimal pl-5 my-2 space-y-1" {...p} />,
+                      li: ({ node, ...p }) => <li className="leading-relaxed" {...p} />,
+                      strong: ({ node, ...p }) => <strong className="font-semibold text-gray-900" {...p} />,
+                      br: () => <br />,
+                    }}
+                  >
+                    {roleDescription}
+                  </ReactMarkdown>
+                </div>
               ) : (
                 <span className="text-gray-500">—</span>
               )}

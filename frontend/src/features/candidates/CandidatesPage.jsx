@@ -644,6 +644,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         open={cvSidebarApplicationId != null}
         application={roleApplications.find((a) => Number(a.id) === Number(cvSidebarApplicationId)) ?? null}
         onClose={() => setCvSidebarApplicationId(null)}
+        onFetchCvFromWorkable={handleGenerateTaaliCvAi}
+        fetchingCvApplicationId={generatingTaaliId}
       />
     </div>
   );

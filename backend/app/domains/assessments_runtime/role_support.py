@@ -9,7 +9,11 @@ from ...schemas.role import ApplicationResponse, RoleResponse
 
 
 def role_has_job_spec(role: Role) -> bool:
-    return bool((role.job_spec_file_url or "").strip() or (role.job_spec_text or "").strip())
+    return bool(
+        (role.job_spec_file_url or "").strip()
+        or (role.job_spec_text or "").strip()
+        or (role.description or "").strip()
+    )
 
 
 def get_role(role_id: int, org_id: int, db: Session) -> Role:

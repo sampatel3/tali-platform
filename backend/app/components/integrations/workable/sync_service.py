@@ -185,6 +185,9 @@ class WorkableSyncService:
             summary["last_request"] = "GET /jobs (done)" if jobs else "GET /jobs (0 jobs)"
             if not jobs:
                 logger.warning("Workable list_open_jobs returned 0 jobs for org_id=%s", org.id)
+                summary["errors"].append(
+                    "Workable returned 0 jobs. Ensure you have jobs in Published or Open state in Workable, and that your token has the 'Jobs' (r_jobs) scope."
+                )
             org.workable_sync_progress = dict(summary)
             db.commit()
             if self._is_cancel_requested(db, org):

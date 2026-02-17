@@ -239,10 +239,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       const data = await fetchWorkableSyncStatus();
       if (!data.sync_in_progress) {
         const s = data.workable_last_sync_summary || {};
-        showToast(
-          `Sync finished. Jobs: ${s.jobs_upserted ?? 0}, Candidates: ${s.candidates_upserted ?? 0}, CVs: ${s.cv_downloaded ?? 0}.`,
-          (data.workable_last_sync_status || '').toLowerCase() === 'success' ? 'success' : 'info'
-        );
+        const msg = Array.isArray(s.errors) && s.errors.length > 0
+          ? `${s.errors[0]}`
+          : `Sync finished. Jobs: ${s.jobs_upserted ?? 0}, Candidates: ${s.candidates_upserted ?? 0}, CVs: ${s.cv_downloaded ?? 0}.`;
+        showToast(msg, (data.workable_last_sync_status || '').toLowerCase() === 'success' ? 'success' : 'info');
       }
     };
     const firstDelay = setTimeout(poll, 2000);
@@ -581,6 +581,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   <div>
                     <div className="font-mono text-xs text-gray-500 mb-1">Last Sync</div>
                     <div className="font-mono">{lastSyncAt} ({lastSyncStatus})</div>
+                    {Array.isArray(orgData?.workable_last_sync_summary?.errors) && orgData.workable_last_sync_summary.errors.length > 0 && (
+                      <div className="mt-1 text-sm text-amber-800 font-mono">
+                        {orgData.workable_last_sync_summary.errors[0]}
+                      </div>
+                    )}
                   </div>
                   <div className="rounded-lg border-2 border-gray-300 bg-gray-50 p-3 text-sm text-gray-700">
                     <div className="font-semibold mb-1">What happens when you sync</div>
