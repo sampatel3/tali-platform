@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { AlertTriangle, CheckCircle, Loader2, Mail } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Mail } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../shared/api';
 import { BRAND } from '../../config/brand';
 import { Logo } from '../../shared/ui/Branding';
+import { Button, Input, Spinner } from '../../shared/ui/TaaliPrimitives';
 
 export const RegisterPage = ({ onNavigate }) => {
   const { register } = useAuth();
@@ -81,8 +82,8 @@ export const RegisterPage = ({ onNavigate }) => {
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
-      <nav className="border-b-2 border-black bg-white">
+    <div className="min-h-screen bg-[var(--taali-surface)] flex flex-col">
+      <nav className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <Logo onClick={() => onNavigate('landing')} />
         </div>
@@ -90,45 +91,41 @@ export const RegisterPage = ({ onNavigate }) => {
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
           {success ? (
-            <div className="border-2 border-black p-8 text-center">
-              <Mail size={48} className="mx-auto mb-4" style={{ color: '#9D00FF' }} />
+            <div className="border-2 border-[var(--taali-border)] p-8 text-center bg-[var(--taali-surface)]">
+              <Mail size={48} className="mx-auto mb-4 text-[var(--taali-purple)]" />
               <h2 className="text-2xl font-bold mb-2">Check your email</h2>
-              <p className="font-mono text-sm text-gray-600 mb-2">We sent a verification link to</p>
+              <p className="text-sm text-[var(--taali-muted)] mb-2">We sent a verification link to</p>
               <p className="font-mono text-sm font-bold mb-6">{form.email}</p>
-              <p className="font-mono text-xs text-gray-500 mb-6">
+              <p className="text-xs text-[var(--taali-muted)] mb-6">
                 Click the link in the email to activate your account. The link expires in 24 hours.
               </p>
-              <button
-                className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors mb-3"
-                style={{ backgroundColor: '#9D00FF' }}
-                onClick={() => onNavigate('login')}
-              >
+              <Button variant="primary" className="w-full mb-3" onClick={() => onNavigate('login')}>
                 Go to Sign In
-              </button>
-              <button
-                className="w-full border-2 border-black py-3 font-bold hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+              </Button>
+              <Button
+                variant="secondary"
+                className="w-full"
                 onClick={handleResend}
                 disabled={resending}
               >
-                {resending ? <><Loader2 size={16} className="animate-spin" /> Sending...</> : resent ? <><CheckCircle size={16} style={{ color: '#9D00FF' }} /> Sent!</> : 'Resend verification email'}
-              </button>
+                {resending ? <><Spinner size={16} /> Sending...</> : resent ? <><CheckCircle size={16} className="shrink-0 text-[var(--taali-purple)]" /> Sent!</> : 'Resend verification email'}
+              </Button>
             </div>
           ) : (
-            <div className="border-2 border-black p-8">
+            <div className="border-2 border-[var(--taali-border)] p-8 bg-[var(--taali-surface)]">
               <h2 className="text-3xl font-bold mb-2">Create Account</h2>
-              <p className="font-mono text-sm text-gray-600 mb-8">Start using {BRAND.name} for your team</p>
+              <p className="text-sm text-[var(--taali-muted)] mb-8">Start using {BRAND.name} for your team</p>
               {error && (
-                <div className="border-2 border-red-500 bg-red-50 p-4 mb-6 flex items-center gap-2">
-                  <AlertTriangle size={18} className="text-red-500 flex-shrink-0" />
-                  <span className="font-mono text-sm text-red-700">{error}</span>
+                <div className="border-2 border-[var(--taali-danger)] bg-[var(--taali-danger-soft)] p-4 mb-6 flex items-center gap-2">
+                  <AlertTriangle size={18} className="text-[var(--taali-danger)] flex-shrink-0" />
+                  <span className="text-sm text-[var(--taali-text)]">{error}</span>
                 </div>
               )}
               <div className="space-y-4">
                 <div>
                   <label className="block font-mono text-sm mb-1">Full Name *</label>
-                  <input
+                  <Input
                     type="text"
-                    className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
                     placeholder="Jane Smith"
                     value={form.full_name}
                     onChange={updateField('full_name')}
@@ -136,9 +133,8 @@ export const RegisterPage = ({ onNavigate }) => {
                 </div>
                 <div>
                   <label className="block font-mono text-sm mb-1">Email *</label>
-                  <input
+                  <Input
                     type="email"
-                    className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
                     placeholder="you@company.com"
                     value={form.email}
                     onChange={updateField('email')}
@@ -146,40 +142,37 @@ export const RegisterPage = ({ onNavigate }) => {
                 </div>
                 <div>
                   <label className="block font-mono text-sm mb-1">Password *</label>
-                  <input
+                  <Input
                     type="password"
-                    className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
                     placeholder="••••••••"
                     value={form.password}
                     onChange={updateField('password')}
                     onKeyDown={(e) => e.key === 'Enter' && handleRegister()}
                   />
-                  <p className="font-mono text-xs text-gray-500 mt-1">Minimum 8 characters</p>
+                  <p className="font-mono text-xs text-[var(--taali-muted)] mt-1">Minimum 8 characters</p>
                 </div>
                 <div>
                   <label className="block font-mono text-sm mb-1">Organization Name</label>
-                  <input
+                  <Input
                     type="text"
-                    className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
                     placeholder="Acme Corp"
                     value={form.organization_name}
                     onChange={updateField('organization_name')}
                   />
                 </div>
-                <button
-                  className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors mt-4 flex items-center justify-center gap-2"
-                  style={{ backgroundColor: '#9D00FF' }}
+                <Button
+                  variant="primary"
+                  className="w-full mt-4"
                   onClick={handleRegister}
                   disabled={loading}
                 >
-                  {loading ? <><Loader2 size={18} className="animate-spin" /> Creating account...</> : 'Create Account'}
-                </button>
+                  {loading ? <><Spinner size={18} /> Creating account...</> : 'Create Account'}
+                </Button>
               </div>
               <div className="mt-6 text-center">
-                <span className="font-mono text-sm text-gray-500">Already have an account? </span>
+                <span className="text-sm text-[var(--taali-muted)]">Already have an account? </span>
                 <button
-                  className="font-mono text-sm font-bold hover:underline"
-                  style={{ color: '#9D00FF' }}
+                  className="text-sm font-bold hover:underline text-[var(--taali-purple)]"
                   onClick={() => onNavigate('login')}
                 >
                   Sign In

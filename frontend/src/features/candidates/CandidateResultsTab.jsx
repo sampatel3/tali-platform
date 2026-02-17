@@ -29,9 +29,9 @@ const DIMENSION_VISUAL_CONFIG = {
 };
 
 const scoreColor = (score) => {
-  if (score >= 7) return '#16a34a';
-  if (score >= 5) return '#d97706';
-  return '#dc2626';
+  if (score >= 7) return 'var(--taali-success)';
+  if (score >= 5) return 'var(--taali-warning)';
+  return 'var(--taali-danger)';
 };
 
 const normalizeCategoryBucket = (rawBucket) => {
@@ -86,8 +86,8 @@ export const CandidateResultsTab = ({
 
   return (
     <div className="space-y-6">
-      <Card className="bg-[#faf8ff] px-3 py-2">
-        <p className="font-mono text-xs text-[var(--taali-muted)]">Compare this candidate with others from the Dashboard: select 2+ candidates there and use the comparison overlay.</p>
+      <Card className="bg-[var(--taali-purple-soft)] px-3 py-2">
+        <p className="text-xs text-[var(--taali-muted)]">Compare this candidate with others from the Dashboard: select 2+ candidates there and use the comparison overlay.</p>
       </Card>
 
       {hasAnyCategoryScore ? (
@@ -96,10 +96,10 @@ export const CandidateResultsTab = ({
           <div style={{ width: '100%', height: 350 }}>
             <ResponsiveContainer>
               <RadarChart data={radarData}>
-                <PolarGrid stroke="rgba(157, 0, 255, 0.24)" />
+                <PolarGrid stroke="var(--taali-purple-soft)" />
                 <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'var(--taali-font)', fill: 'var(--taali-muted)' }} />
-                <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10, fill: '#6b7280' }} />
-                <Radar name={candidate.name} dataKey="score" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.2} />
+                <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10, fill: 'var(--taali-muted)' }} />
+                <Radar name={candidate.name} dataKey="score" stroke="var(--taali-purple)" fill="var(--taali-purple)" fillOpacity={0.2} />
               </RadarChart>
             </ResponsiveContainer>
           </div>
@@ -119,7 +119,7 @@ export const CandidateResultsTab = ({
             <Panel key={cat.key} className="overflow-hidden">
               <button
                 type="button"
-                className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-[#faf8ff]"
+                className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-[var(--taali-purple-soft)]"
                 onClick={() => setExpandedCategory(isExpanded ? null : cat.key)}
               >
                 <div className="flex min-w-0 items-center gap-3">
@@ -138,7 +138,7 @@ export const CandidateResultsTab = ({
               </button>
 
               {isExpanded ? (
-                <div className="border-t border-[#e7e3f4] bg-[#fcfbff] px-4 py-3">
+                <div className="border-t border-[var(--taali-border-muted)] bg-[var(--taali-purple-soft)] px-4 py-3">
                   {Object.entries(metrics).map(([metricKey, metricVal]) => (
                     <div key={metricKey} className="mb-3 last:mb-0">
                       <div className="mb-1 flex items-center gap-3">
@@ -159,7 +159,7 @@ export const CandidateResultsTab = ({
                         </div>
                       </div>
                       {catExplanations[metricKey] ? (
-                        <div className="pl-44 font-mono text-xs text-gray-500">{catExplanations[metricKey]}</div>
+                        <div className="pl-44 text-xs text-[var(--taali-muted)]">{catExplanations[metricKey]}</div>
                       ) : null}
                     </div>
                   ))}
@@ -175,9 +175,9 @@ export const CandidateResultsTab = ({
       </div>
 
       {(Object.keys(catScores).length === 0 || Object.keys(detailedScores).length === 0) ? (
-        <Panel className="border-amber-300 bg-amber-50 p-4">
-          <div className="mb-1 font-bold text-amber-800">Partial scoring data</div>
-          <div className="font-mono text-xs text-amber-700">
+        <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
+          <div className="mb-1 font-bold text-[var(--taali-text)]">Partial scoring data</div>
+          <div className="text-xs text-[var(--taali-muted)]">
             Some scoring categories or detailed metrics are missing for this assessment. Available results are shown above, and missing components are still being processed or were unavailable.
           </div>
         </Panel>
@@ -223,7 +223,7 @@ export const CandidateResultsTab = ({
             <div className="mb-3 font-bold">Recruiter Insight Summary</div>
             <div className="grid gap-4 md:grid-cols-3">
               <div>
-                <div className="mb-2 font-mono text-xs text-green-700">Top strengths</div>
+                <div className="mb-2 font-mono text-xs text-[var(--taali-success)]">Top strengths</div>
                 <ul className="space-y-1">
                   {topStrengths.map((s) => (
                     <li key={s.key} className="font-mono text-sm">• {s.label} ({s.score}/10)</li>
@@ -231,7 +231,7 @@ export const CandidateResultsTab = ({
                 </ul>
               </div>
               <div>
-                <div className="mb-2 font-mono text-xs text-red-700">Top risks</div>
+                <div className="mb-2 font-mono text-xs text-[var(--taali-danger)]">Top risks</div>
                 <ul className="space-y-1">
                   {topRisks.map((r) => (
                     <li key={r.key} className="font-mono text-sm">• {r.label} ({r.score}/10)</li>
@@ -239,7 +239,7 @@ export const CandidateResultsTab = ({
                 </ul>
               </div>
               <div>
-                <div className="mb-2 font-mono text-xs text-purple-700">Suggested interview focus</div>
+                <div className="mb-2 font-mono text-xs text-[var(--taali-purple)]">Suggested interview focus</div>
                 <ul className="space-y-1">
                   {interviewFocus.map((q, idx) => (
                     <li key={idx} className="font-mono text-sm">• {q}</li>
@@ -254,20 +254,20 @@ export const CandidateResultsTab = ({
       <Panel className="p-4">
         <div className="mb-3 font-bold">Assessment Metadata</div>
         <div className="grid grid-cols-2 gap-3 font-mono text-sm md:grid-cols-3">
-          <div><span className="text-gray-500">Duration:</span> {assessment.total_duration_seconds ? `${Math.floor(assessment.total_duration_seconds / 60)}m ${assessment.total_duration_seconds % 60}s` : '—'}</div>
-          <div><span className="text-gray-500">Total Prompts:</span> {assessment.total_prompts ?? '—'}</div>
-          <div><span className="text-gray-500">Claude Credit Used:</span> {((assessment.total_input_tokens || 0) + (assessment.total_output_tokens || 0)).toLocaleString()}</div>
-          <div><span className="text-gray-500">Tests:</span> {assessment.tests_passed ?? 0}/{assessment.tests_total ?? 0}</div>
-          <div><span className="text-gray-500">Started:</span> {assessment.started_at ? new Date(assessment.started_at).toLocaleString() : '—'}</div>
-          <div><span className="text-gray-500">Submitted:</span> {assessment.completed_at ? new Date(assessment.completed_at).toLocaleString() : '—'}</div>
+          <div><span className="text-[var(--taali-muted)]">Duration:</span> {assessment.total_duration_seconds ? `${Math.floor(assessment.total_duration_seconds / 60)}m ${assessment.total_duration_seconds % 60}s` : '—'}</div>
+          <div><span className="text-[var(--taali-muted)]">Total Prompts:</span> {assessment.total_prompts ?? '—'}</div>
+          <div><span className="text-[var(--taali-muted)]">Claude Credit Used:</span> {((assessment.total_input_tokens || 0) + (assessment.total_output_tokens || 0)).toLocaleString()}</div>
+          <div><span className="text-[var(--taali-muted)]">Tests:</span> {assessment.tests_passed ?? 0}/{assessment.tests_total ?? 0}</div>
+          <div><span className="text-[var(--taali-muted)]">Started:</span> {assessment.started_at ? new Date(assessment.started_at).toLocaleString() : '—'}</div>
+          <div><span className="text-[var(--taali-muted)]">Submitted:</span> {assessment.completed_at ? new Date(assessment.completed_at).toLocaleString() : '—'}</div>
         </div>
       </Panel>
 
       {assessment.prompt_fraud_flags && assessment.prompt_fraud_flags.length > 0 ? (
-        <Panel className="border-red-300 bg-red-50 p-4">
-          <div className="mb-2 flex items-center gap-2 font-bold text-red-700"><AlertTriangle size={18} /> Fraud Flags Detected</div>
+        <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
+          <div className="mb-2 flex items-center gap-2 font-bold text-[var(--taali-danger)]"><AlertTriangle size={18} /> Fraud Flags Detected</div>
           {assessment.prompt_fraud_flags.map((flag, i) => (
-            <div key={i} className="mb-1 font-mono text-sm text-red-700">
+            <div key={i} className="mb-1 font-mono text-sm text-[var(--taali-danger)]">
               • {flag.type}: {flag.evidence} (confidence: {(flag.confidence * 100).toFixed(0)}%)
             </div>
           ))}
@@ -278,11 +278,11 @@ export const CandidateResultsTab = ({
         <div className="space-y-3">
           <div className="font-bold">Test Results</div>
           {candidate.results.map((r, i) => (
-            <Panel key={i} className="flex items-start gap-3 bg-green-50 p-4">
-              <CheckCircle size={20} style={{ color: '#9D00FF' }} className="mt-0.5 shrink-0" />
+            <Panel key={i} className="flex items-start gap-3 bg-[var(--taali-success-soft)] p-4">
+              <CheckCircle size={20} className="mt-0.5 shrink-0 text-[var(--taali-purple)]" />
               <div>
-                <div className="font-bold">{r.title} <span className="font-mono text-sm text-gray-500">({r.score})</span></div>
-                <p className="mt-1 font-mono text-sm text-gray-600">{r.description}</p>
+                <div className="font-bold text-[var(--taali-text)]">{r.title} <span className="font-mono text-sm text-[var(--taali-muted)]">({r.score})</span></div>
+                <p className="mt-1 text-sm text-[var(--taali-muted)]">{r.description}</p>
               </div>
             </Panel>
           ))}

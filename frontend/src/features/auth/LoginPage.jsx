@@ -1,10 +1,11 @@
 import React, { useState } from 'react';
-import { AlertTriangle, CheckCircle, Loader2, Mail } from 'lucide-react';
+import { AlertTriangle, CheckCircle, Mail } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../shared/api';
 import { BRAND } from '../../config/brand';
 import { Logo } from '../../shared/ui/Branding';
+import { Button, Input, Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const LOGIN_ERROR_MESSAGES = {
   LOGIN_BAD_CREDENTIALS: 'Incorrect email or password. Please try again.',
@@ -82,8 +83,8 @@ export const LoginPage = ({ onNavigate }) => {
   };
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
-      <nav className="border-b-2 border-black bg-white">
+    <div className="min-h-screen bg-[var(--taali-surface)] flex flex-col">
+      <nav className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <Logo onClick={() => onNavigate('landing')} />
         </div>
@@ -91,34 +92,34 @@ export const LoginPage = ({ onNavigate }) => {
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="w-full max-w-md">
           {error && (
-            <div className="mb-6 border border-red-300 bg-red-50 p-4">
+            <div className="mb-6 border-2 border-[var(--taali-danger)] bg-[var(--taali-danger-soft)] p-4">
               <div className="flex items-start gap-3">
-                <AlertTriangle size={18} className="text-red-500 mt-0.5 flex-shrink-0" />
+                <AlertTriangle size={18} className="text-[var(--taali-danger)] mt-0.5 flex-shrink-0" />
                 <div>
-                  <p className="text-sm font-semibold text-red-800">Sign-in failed</p>
-                  <p className="text-sm text-red-700">{error}</p>
+                  <p className="text-sm font-semibold text-[var(--taali-danger)]">Sign-in failed</p>
+                  <p className="text-sm text-[var(--taali-text)]">{error}</p>
                 </div>
               </div>
               {needsVerification && (
-                <button
-                  className="mt-3 w-full border border-red-300 py-2 text-sm font-semibold text-red-800 hover:bg-red-100 transition-colors flex items-center justify-center gap-2"
+                <Button
+                  variant="danger"
+                  className="mt-3 w-full"
                   onClick={handleResendVerification}
                   disabled={resending}
                 >
-                  {resending ? <><Loader2 size={14} className="animate-spin" /> Sending...</> : resent ? <><CheckCircle size={14} /> Verification email sent!</> : <><Mail size={14} /> Resend verification email</>}
-                </button>
+                  {resending ? <><Spinner size={14} /> Sending...</> : resent ? <><CheckCircle size={14} /> Verification email sent!</> : <><Mail size={14} /> Resend verification email</>}
+                </Button>
               )}
             </div>
           )}
-          <div className="border-2 border-black p-8">
+          <div className="border-2 border-[var(--taali-border)] p-8 bg-[var(--taali-surface)]">
             <h2 className="text-3xl font-bold mb-2">Sign In</h2>
-            <p className="font-mono text-sm text-gray-600 mb-8">Access your {BRAND.name} dashboard</p>
+            <p className="text-sm text-[var(--taali-muted)] mb-8">Access your {BRAND.name} dashboard</p>
             <div className="space-y-4">
               <div>
                 <label className="block font-mono text-sm mb-1">Email</label>
-                <input
+                <Input
                   type="email"
-                  className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
                   placeholder="you@company.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
@@ -126,38 +127,35 @@ export const LoginPage = ({ onNavigate }) => {
               </div>
               <div>
                 <label className="block font-mono text-sm mb-1">Password</label>
-                <input
+                <Input
                   type="password"
-                  className="w-full border-2 border-black px-4 py-3 font-mono text-sm focus:outline-none"
                   placeholder="••••••••"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
                 />
               </div>
-              <button
-                className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors mt-4 flex items-center justify-center gap-2"
-                style={{ backgroundColor: '#9D00FF' }}
+              <Button
+                variant="primary"
+                className="w-full mt-4"
                 onClick={handleLogin}
                 disabled={loading}
               >
-                {loading ? <><Loader2 size={18} className="animate-spin" /> Signing in...</> : 'Sign In'}
-              </button>
+                {loading ? <><Spinner size={18} /> Signing in...</> : 'Sign In'}
+              </Button>
             </div>
             <div className="mt-6 text-center space-y-2">
               <button
                 type="button"
-                className="font-mono text-sm hover:underline"
-                style={{ color: '#9D00FF' }}
+                className="text-sm hover:underline text-[var(--taali-purple)]"
                 onClick={() => onNavigate('forgot-password')}
               >
                 Forgot password?
               </button>
               <div>
-                <span className="font-mono text-sm text-gray-500">No account? </span>
+                <span className="text-sm text-[var(--taali-muted)]">No account? </span>
                 <button
-                  className="font-mono text-sm font-bold hover:underline"
-                  style={{ color: '#9D00FF' }}
+                  className="text-sm font-bold hover:underline text-[var(--taali-purple)]"
                   onClick={() => onNavigate('register')}
                 >
                   Register

@@ -1,14 +1,15 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Clipboard, DollarSign, CheckCircle, Eye, Loader2, Timer, Star, Users } from 'lucide-react';
-import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ResponsiveContainer, BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend } from 'recharts';
+import { Clipboard, DollarSign, CheckCircle, Eye, Timer, Star, Users } from 'lucide-react';
+import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ResponsiveContainer, Legend } from 'recharts';
 import { useAuth } from '../../context/AuthContext';
 import * as apiClient from '../../shared/api';
 import { COMPARISON_CATEGORY_CONFIG, getCategoryScoresFromAssessment } from '../../lib/comparisonCategories';
 import { ASSESSMENT_PRICE_AED, formatAed } from '../../lib/currency';
+import { Button, Select, Spinner, TableShell } from '../../shared/ui/TaaliPrimitives';
 
 const PAGE_SIZE = 10;
 const MAX_COMPARE = 5;
-const COMPARE_COLORS = ['#9D00FF', '#111827', '#16a34a', '#d97706', '#2563eb'];
+const COMPARE_COLORS = ['var(--taali-purple)', 'var(--taali-text)', 'var(--taali-success)', 'var(--taali-warning)', 'var(--taali-info)'];
 
 export const DashboardPage = ({
   onNavigate,
@@ -190,27 +191,23 @@ export const DashboardPage = ({
   return (
     <div>
       <NavComponent currentPage="dashboard" onNavigate={onNavigate} />
-      <div className="md:hidden p-8 text-center border-b-2 border-black">
-        <p className="font-mono text-sm">Desktop browser required for dashboard</p>
-      </div>
-      <div className="hidden md:block max-w-7xl mx-auto px-6 py-8">
+      <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="flex items-center justify-between mb-8">
           <div>
-            <h1 className="text-3xl font-bold">Assessments</h1>
-            <p className="font-mono text-sm text-gray-600 mt-1">Welcome back, {userName}</p>
+            <h1 className="text-3xl font-bold text-[var(--taali-text)]">Assessments</h1>
+            <p className="text-sm text-[var(--taali-muted)] mt-1">Welcome back, {userName}</p>
           </div>
-
         </div>
         <div className="flex flex-wrap items-center gap-3 mb-6">
-          <button className="border-2 border-black px-4 py-2 font-mono text-xs font-bold hover:bg-black hover:text-white" onClick={exportCsv}>Export CSV</button>
-          <button className="border-2 border-black px-4 py-2 font-mono text-xs font-bold hover:bg-black hover:text-white" onClick={exportJson}>Export JSON</button>
+          <Button variant="secondary" size="sm" onClick={exportCsv}>Export CSV</Button>
+          <Button variant="secondary" size="sm" onClick={exportJson}>Export JSON</Button>
         </div>
         {notifications.length > 0 && (
-          <div className="border-2 border-black p-4 mb-6">
-            <div className="font-mono text-xs text-gray-500 mb-2">Recent Notifications</div>
+          <div className="border-2 border-[var(--taali-border)] p-4 mb-6 bg-[var(--taali-surface)]">
+            <div className="font-mono text-xs text-[var(--taali-muted)] mb-2">Recent Notifications</div>
             <div className="space-y-1">
               {notifications.map((n) => (
-                <div key={n.id} className="font-mono text-sm">• {n.text}</div>
+                <div key={n.id} className="text-sm text-[var(--taali-text)]">• {n.text}</div>
               ))}
             </div>
           </div>
@@ -221,10 +218,10 @@ export const DashboardPage = ({
               <Users size={20} />
               <h3 className="font-bold text-lg">Candidate comparison</h3>
             </div>
-            <p className="font-mono text-xs text-gray-600 mb-4">Overlay by category and overall score. Compare up to {MAX_COMPARE} candidates.</p>
+            <p className="text-xs text-[var(--taali-muted)] mb-4">Overlay by category and overall score. Compare up to {MAX_COMPARE} candidates.</p>
             <div className="grid md:grid-cols-2 gap-8">
               <div>
-                <div className="font-mono text-xs font-bold uppercase text-gray-500 mb-2">Overall score</div>
+                <div className="font-mono text-xs font-bold uppercase text-[var(--taali-muted)] mb-2">Overall score</div>
                 <div className="space-y-2">
                   {compareAssessments.map((a, i) => (
                     <div key={a.id} className="flex items-center gap-3">
@@ -247,9 +244,9 @@ export const DashboardPage = ({
                     return point;
                   });
                   const hasAnyCategoryScore = radarData.some((row) => compareAssessments.some((_, i) => (row[candKey(i)] ?? 0) > 0));
-                  if (!hasAnyCategoryScore) return <div className="font-mono text-sm text-gray-500">No category scores available for overlay.</div>;
+                  if (!hasAnyCategoryScore) return <div className="text-sm text-[var(--taali-muted)]">No category scores available for overlay.</div>;
                   return (
-                    <div style={{ width: '100%', height: 320 }}>
+                    <div className="w-full h-[320px]">
                       <ResponsiveContainer>
                         <RadarChart data={radarData}>
                           <PolarGrid />
@@ -287,9 +284,9 @@ export const DashboardPage = ({
 
         {/* Filters: split by job role (task); recruiters hire for many roles */}
         <div className="flex flex-wrap items-center gap-4 mb-4">
-          <span className="font-mono text-sm font-bold">Filters:</span>
-          <select
-            className="border-2 border-black px-3 py-2 font-mono text-sm bg-white"
+          <span className="font-mono text-sm font-bold text-[var(--taali-text)]">Filters:</span>
+          <Select
+            className="w-auto min-w-[140px]"
             value={roleFilter}
             onChange={(e) => { setRoleFilter(e.target.value); setPage(0); }}
           >
@@ -297,9 +294,9 @@ export const DashboardPage = ({
             {rolesForFilter.map((role) => (
               <option key={role.id} value={role.id}>{role.name}</option>
             ))}
-          </select>
-          <select
-            className="border-2 border-black px-3 py-2 font-mono text-sm bg-white"
+          </Select>
+          <Select
+            className="w-auto min-w-[140px]"
             value={taskFilter}
             onChange={(e) => { setTaskFilter(e.target.value); setPage(0); }}
           >
@@ -307,9 +304,9 @@ export const DashboardPage = ({
             {tasksForFilter.map((t) => (
               <option key={t.id} value={t.id}>{t.name}</option>
             ))}
-          </select>
-          <select
-            className="border-2 border-black px-3 py-2 font-mono text-sm bg-white"
+          </Select>
+          <Select
+            className="w-auto min-w-[140px]"
             value={statusFilter}
             onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
           >
@@ -317,24 +314,24 @@ export const DashboardPage = ({
             <option value="pending">Pending</option>
             <option value="in_progress">In progress</option>
             <option value="completed">Completed</option>
-          </select>
+          </Select>
         </div>
-          <p className="font-mono text-xs text-gray-500 mb-2">Candidates are grouped by job role. A candidate can appear in multiple roles if they have assessments for different tasks.</p>
+        <p className="font-mono text-xs text-[var(--taali-muted)] mb-2">Candidates are grouped by job role. A candidate can appear in multiple roles if they have assessments for different tasks.</p>
 
         {/* Assessments Table */}
-        <div className="border-2 border-black">
-          <div className="border-b-2 border-black px-6 py-4 bg-black text-white flex items-center justify-between">
+        <TableShell>
+          <div className="border-b-2 border-[var(--taali-border)] px-6 py-4 bg-[var(--taali-border)] text-white flex items-center justify-between">
             <h2 className="font-bold text-lg">Recent Assessments</h2>
             {totalAssessmentsCount > 0 && (
-              <span className="font-mono text-sm text-gray-300">
+              <span className="font-mono text-sm text-white/80">
                 Showing {startRow}–{endRow} of {totalAssessmentsCount}
               </span>
             )}
           </div>
           {loading ? (
             <div className="flex items-center justify-center py-16 gap-3">
-              <Loader2 size={24} className="animate-spin" style={{ color: '#9D00FF' }} />
-              <span className="font-mono text-sm text-gray-500">Loading assessments...</span>
+              <Spinner size={24} />
+              <span className="font-mono text-sm text-[var(--taali-muted)]">Loading assessments...</span>
             </div>
           ) : (
             <table className="w-full">
@@ -353,7 +350,7 @@ export const DashboardPage = ({
               <tbody>
                 {displayCandidates.length === 0 ? (
                   <tr>
-                    <td colSpan={8} className="px-6 py-12 text-center font-mono text-sm text-gray-500">
+                    <td colSpan={8} className="px-6 py-12 text-center font-mono text-sm text-[var(--taali-muted)]">
                       No assessments yet. Create an assessment from the Candidates page.
                     </td>
                   </tr>
@@ -362,7 +359,7 @@ export const DashboardPage = ({
                     if (row._group) {
                       return (
                         <tr key={`role-${row._group}`} className="bg-[var(--taali-border-muted)]/30 border-b-2 border-[var(--taali-border)]">
-                          <td colSpan={8} className="px-6 py-2 font-mono text-sm font-bold uppercase text-gray-700">
+                          <td colSpan={8} className="px-6 py-2 font-mono text-sm font-bold uppercase text-[var(--taali-muted)]">
                             — {row._group} —
                           </td>
                         </tr>
@@ -371,7 +368,7 @@ export const DashboardPage = ({
                     const c = row;
                     const canCompare = (c.status === 'completed' || c.status === 'submitted' || c.status === 'graded') && (compareIds.length < MAX_COMPARE || compareIds.includes(c.id));
                     return (
-                      <tr key={c.id} className="border-b border-gray-200 hover:bg-gray-50 transition-colors">
+                      <tr key={c.id} className="border-b border-[var(--taali-border-muted)] hover:bg-[var(--taali-bg)] transition-colors">
                         <td className="px-2 py-4">
                           {canCompare ? (
                             <input
@@ -382,13 +379,13 @@ export const DashboardPage = ({
                               onChange={(e) => toggleCompare(c, e.target.checked)}
                             />
                           ) : (
-                            <span className="text-gray-300">—</span>
+                            <span className="text-[var(--taali-border-muted)]">—</span>
                           )}
                         </td>
                         <td className="px-6 py-4">
                           <div className="font-bold">{c.name}</div>
-                          <div className="font-mono text-xs text-gray-500">{c.email}</div>
-                          <div className="font-mono text-xs text-gray-500">Role: {c.role}</div>
+                          <div className="font-mono text-xs text-[var(--taali-muted)]">{c.email}</div>
+                          <div className="font-mono text-xs text-[var(--taali-muted)]">Role: {c.role}</div>
                         </td>
                         <td className="px-6 py-4 font-mono text-sm">{c.task}</td>
                         <td className="px-6 py-4"><StatusBadgeComponent status={c.status} /></td>
@@ -396,9 +393,10 @@ export const DashboardPage = ({
                         <td className="px-6 py-4 font-mono text-sm">{c.time}</td>
                         <td className="px-6 py-4">
                           {c.token ? (
-                            <button
-                              type="button"
-                              className="border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-3 py-1.5 font-mono text-xs font-bold hover:bg-[var(--taali-border)] hover:text-white transition-colors flex items-center gap-1"
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="font-mono"
                               onClick={() => {
                                 const link = c.assessmentLink || getAssessmentLink(c.token);
                                 navigator.clipboard?.writeText(link).then(() => { /* copied */ }).catch(() => {});
@@ -406,15 +404,17 @@ export const DashboardPage = ({
                               title={c.assessmentLink || getAssessmentLink(c.token)}
                             >
                               <Clipboard size={14} /> Copy link
-                            </button>
+                            </Button>
                           ) : (
-                            <span className="font-mono text-xs text-gray-400">—</span>
+                            <span className="font-mono text-xs text-[var(--taali-muted)]">—</span>
                           )}
                         </td>
                         <td className="px-6 py-4">
                           {c.status === 'completed' || c.status === 'submitted' || c.status === 'graded' ? (
-                            <button
-                              className="border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-4 py-2 font-mono text-sm font-bold hover:bg-[var(--taali-border)] hover:text-white transition-colors flex items-center gap-1 disabled:opacity-70"
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="font-mono"
                               disabled={loadingViewId === c.id}
                               onClick={async () => {
                                 setLoadingViewId(c.id);
@@ -438,15 +438,17 @@ export const DashboardPage = ({
                                 }
                               }}
                             >
-                              {loadingViewId === c.id ? <Loader2 size={14} className="animate-spin" /> : <Eye size={14} />} View
-                            </button>
+                              {loadingViewId === c.id ? <Spinner size={14} /> : <Eye size={14} />} View
+                            </Button>
                           ) : (
-                            <button
-                              className="border-2 border-gray-300 bg-gray-100 px-4 py-2 font-mono text-sm font-bold text-gray-400 cursor-not-allowed flex items-center gap-1"
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="opacity-50 cursor-not-allowed"
                               disabled
                             >
                               <Timer size={14} /> Pending
-                            </button>
+                            </Button>
                           )}
                         </td>
                       </tr>
@@ -457,27 +459,27 @@ export const DashboardPage = ({
             </table>
           )}
           {!loading && totalAssessmentsCount > PAGE_SIZE && (
-            <div className="border-t-2 border-black px-6 py-3 flex items-center justify-between bg-gray-50">
-              <button
-                type="button"
-                className="border-2 border-black px-4 py-2 font-mono text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-black hover:text-white transition-colors"
+            <div className="border-t-2 border-[var(--taali-border)] px-6 py-3 flex items-center justify-between bg-[var(--taali-bg)]">
+              <Button
+                variant="secondary"
+                size="sm"
                 disabled={page === 0}
                 onClick={() => setPage((p) => Math.max(0, p - 1))}
               >
                 Previous
-              </button>
-              <span className="font-mono text-sm">Page {page + 1} of {totalPages}</span>
-              <button
-                type="button"
-                className="border-2 border-black px-4 py-2 font-mono text-sm font-bold disabled:opacity-50 disabled:cursor-not-allowed hover:bg-black hover:text-white transition-colors"
+              </Button>
+              <span className="font-mono text-sm text-[var(--taali-text)]">Page {page + 1} of {totalPages}</span>
+              <Button
+                variant="secondary"
+                size="sm"
                 disabled={page >= totalPages - 1}
                 onClick={() => setPage((p) => p + 1)}
               >
                 Next
-              </button>
+              </Button>
             </div>
           )}
-        </div>
+        </TableShell>
       </div>
     </div>
   );

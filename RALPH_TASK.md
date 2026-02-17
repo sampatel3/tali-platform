@@ -219,3 +219,72 @@ railway run bash -c 'cd backend && .venv/bin/python ../scripts/seed_tasks_db.py'
 5. **G3.1** — Recruiter UI: display git_evidence.
 6. **G3.2, G3.3, G3.4** — Manual rubric UI + evidence notes + chat alongside git.
 7. **G4** — EvaluationResult model if desired.
+
+---
+
+## 8) UI/UX Modernization Plan
+
+> **Status:** COMPLETE
+> **Started:** 2026-02-17
+> **Goal:** Systematically adopt design system across all pages. Switch body font to Inter, eliminate inline styles, remove `!important` dark-mode hacks, and use `<Button>`, `<Input>`, `<Select>`, `<Badge>`, `<Spinner>`, `<Panel>`, `<TableShell>`, `<Sheet>` everywhere.
+
+### Key Principles
+1. **Never add border-radius** — 0px brutalist aesthetic preserved
+2. **`font-mono` is opt-in** — body font is Inter; add `font-mono` only to: table headers, code/data values, emails, technical labels, badge text
+3. **No `style={{}}` for colors** — every color through CSS variable or Tailwind class mapped to CSS variable
+4. **Dark mode is free** — CSS variables handle everything, no `!important` hacks
+5. **Components first** — always prefer primitives over raw HTML
+
+### Phase 1: Design Foundation (4 files) ✅
+- [x] `index.html` — Add Inter font from Google Fonts alongside JetBrains Mono
+- [x] `index.css` — Change `--taali-font` to Inter; add semantic colors (`--taali-success`, `--taali-warning`, `--taali-danger`, `--taali-info` + soft/border); add difficulty levels (`--taali-level-*`); dark mode overrides; remove 25+ `!important` hacks; fix input bg to `var(--taali-surface)`
+- [x] `tailwind.config.js` — Map semantic colors to CSS variables
+- [x] `TaaliPrimitives.jsx` — Add `Spinner`, `TabBar`, `danger`/`info` Badge variants; import `Loader2`
+
+### Phase 2: Auth Pages (5 files) ✅
+- [x] `LoginPage.jsx` — raw `<input>` → `<Input>`, raw `<button style>` → `<Button>`, `<Loader2 style>` → `<Spinner>`, hardcoded colors → CSS vars
+- [x] `RegisterPage.jsx` — same pattern
+- [x] `ForgotPasswordPage.jsx` — same pattern
+- [x] `ResetPasswordPage.jsx` — same pattern
+- [x] `VerifyEmailPage.jsx` — same pattern
+
+### Phase 3: Navigation & Shared Atoms (3 files) ✅
+- [x] `DashboardNav.jsx` — mobile hamburger menu, replace inline styles, CSS var classes
+- [x] `DashboardAtoms.jsx` — replace `border-black`, `bg-white`, `text-gray-*`; refactor `StatusBadge` → `<Badge>`
+- [x] `Branding.jsx` — replace `style={{ backgroundColor }}` with Tailwind class
+
+### Phase 4: Dashboard Page (1 file) ✅
+- [x] `DashboardPage.jsx` — remove mobile block, `<Select>`, `<Button>`, `<Spinner>`, `<TableShell>`, CSS vars, remove `font-mono` from subtitle
+
+### Phase 5: Settings Page (1 file) ✅
+- [x] `SettingsPage.jsx` — `<TabBar>`, `<Spinner>`, `<Input>`, `<Select>`, `<Button>`, `<Sheet>` for Workable drawer, `<Panel>`, CSS vars
+
+### Phase 6: Tasks Pages (3 files) ✅
+- [x] `TasksListView.jsx` — difficulty CSS vars, `<Spinner>`, `<Button>`, `<Badge>`, `<Panel>`
+- [x] `TasksPage.jsx` — (structure unchanged; uses TasksListView)
+- [x] `CreateTaskModal.jsx` — `<Panel>`, `<Button>`, CSS vars
+
+### Phase 7: Candidates Pages (7 files) ✅
+- [x] `CandidateResultsTab.jsx` — `scoreColor` → `var(--taali-success/warning/danger)`
+- [x] `CandidateDetailPage.jsx` — `getRecommendation` color map → CSS vars
+- [x] `CandidateDetailSecondaryTabs.jsx` — remove `font-mono` from narrative, CSS vars
+- [x] `CandidatesPage.jsx`, `CandidatesTable.jsx`, `CandidateSheet.jsx`, `AssessmentInviteSheet.jsx` — design system
+
+### Phase 8: Analytics & Landing (2 files) ✅
+- [x] `AnalyticsPage.jsx` — loaders, border/bg classes → design system
+- [x] `LandingPage.jsx` — inline purple → CSS vars, Inter for body, mono for code snippets
+
+### Phase 9: Assessment Runtime (4-6 files) ✅
+- [x] `AssessmentTopBar.jsx` — inline purple → CSS vars
+- [x] `CandidateWelcomePage.jsx` — same
+- [x] `AssessmentBrandGlyph.jsx` — same
+- [x] `AssessmentWorkspace.jsx` — same
+- [x] `ClaudeChat.jsx` — keep monospace for code/chat, CSS vars for colors
+- [x] `CodeEditor.jsx` — keep monospace for code, CSS vars for colors
+
+### Verification (after each phase)
+1. `npm run dev` — visually verify changed pages
+2. Toggle dark mode in Settings → Preferences
+3. Test mobile viewport (Chrome DevTools)
+4. `npm run build` — no build errors
+5. `npm test` — existing tests pass

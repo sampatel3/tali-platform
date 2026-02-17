@@ -92,7 +92,7 @@ export default function ClaudeChat({ onSendMessage, onPaste, disabled = false, b
       <div className="border-b-2 border-black px-4 py-2">
         <div className="flex items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <Bot size={18} style={{ color: '#9D00FF' }} />
+            <Bot size={18} className="text-[var(--taali-purple)]" />
             <span className="font-mono text-sm font-bold">Claude AI</span>
           </div>
           <span className={`font-mono text-[11px] ${budgetExhausted ? 'text-red-700 font-bold' : 'text-gray-600'}`}>
@@ -150,8 +150,7 @@ export default function ClaudeChat({ onSendMessage, onPaste, disabled = false, b
         <button
           onClick={handleSend}
           disabled={loading || !input.trim() || disabled}
-          className="border-2 border-black px-4 py-2 text-white font-bold flex items-center gap-1 hover:bg-black transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-          style={{ backgroundColor: '#9D00FF' }}
+          className="border-2 border-[var(--taali-border)] px-4 py-2 text-[var(--taali-surface)] font-bold flex items-center gap-1 bg-[var(--taali-purple)] hover:opacity-90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Send size={14} />
         </button>

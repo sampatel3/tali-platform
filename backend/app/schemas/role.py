@@ -90,6 +90,22 @@ class ApplicationResponse(BaseModel):
     workable_score: Optional[float] = None
     workable_score_source: Optional[str] = None
     rank_score: Optional[float] = None
+    # Rich candidate profile fields
+    candidate_headline: Optional[str] = None
+    candidate_image_url: Optional[str] = None
+    candidate_location: Optional[str] = None
+    candidate_phone: Optional[str] = None
+    candidate_profile_url: Optional[str] = None
+    candidate_social_profiles: Optional[list] = None
+    candidate_tags: Optional[list] = None
+    candidate_skills: Optional[list] = None
+    candidate_education: Optional[list] = None
+    candidate_experience: Optional[list] = None
+    candidate_summary: Optional[str] = None
+    candidate_workable_created_at: Optional[datetime] = None
+    workable_sourced: Optional[bool] = None
+    workable_profile_url: Optional[str] = None
+    workable_enriched: Optional[bool] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 

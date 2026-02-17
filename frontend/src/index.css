@@ -13,10 +13,34 @@
   --taali-purple-hover: #7B00CC;
   --taali-purple-soft: #f3e6ff;
   --taali-radius: 0px;
-  --taali-font: 'JetBrains Mono', 'Roboto Mono', 'Fira Code', 'Consolas', 'Courier New', monospace;
+  --taali-font: 'Inter', 'system-ui', sans-serif;
   --taali-font-mono: 'JetBrains Mono', 'Roboto Mono', 'Courier New', monospace;
   --taali-ring: rgba(157, 0, 255, 0.35);
   --taali-spacing: 8px;
+
+  /* Semantic colors */
+  --taali-success: #16a34a;
+  --taali-success-soft: #edf9f1;
+  --taali-success-border: #8fd4ab;
+  --taali-warning: #d97706;
+  --taali-warning-soft: #fff7ec;
+  --taali-warning-border: #f0c787;
+  --taali-danger: #b42330;
+  --taali-danger-soft: #fff5f6;
+  --taali-danger-border: #f5a3a9;
+  --taali-info: #2563eb;
+  --taali-info-soft: #eff6ff;
+  --taali-info-border: #93c5fd;
+
+  /* Difficulty level colors */
+  --taali-level-junior: #16a34a;
+  --taali-level-junior-soft: #edf9f1;
+  --taali-level-mid: #d97706;
+  --taali-level-mid-soft: #fff7ec;
+  --taali-level-senior: #dc2626;
+  --taali-level-senior-soft: #fef2f2;
+  --taali-level-staff: #7c3aed;
+  --taali-level-staff-soft: #f5f3ff;
 }
 
 * {
@@ -125,13 +149,13 @@ code {
 }
 
 .taali-btn-danger {
-  border-color: #b42330;
-  background: #fff5f6;
-  color: #b42330;
+  border-color: var(--taali-danger);
+  background: var(--taali-danger-soft);
+  color: var(--taali-danger);
 }
 
 .taali-btn-danger:hover:not(:disabled) {
-  background: #b42330;
+  background: var(--taali-danger);
   color: #ffffff;
 }
 
@@ -141,7 +165,7 @@ code {
   width: 100%;
   border: 1.5px solid var(--taali-border);
   border-radius: var(--taali-radius);
-  background: #ffffff;
+  background: var(--taali-surface);
   color: var(--taali-text);
   font-size: 0.875rem;
   line-height: 1.25rem;
@@ -159,7 +183,7 @@ code {
 
 .taali-input::placeholder,
 .taali-textarea::placeholder {
-  color: #7a8495;
+  color: var(--taali-muted);
 }
 
 .taali-input:focus-visible,
@@ -194,15 +218,27 @@ code {
 }
 
 .taali-badge-success {
-  border-color: #8fd4ab;
-  background: #edf9f1;
-  color: #0f7a3c;
+  border-color: var(--taali-success-border);
+  background: var(--taali-success-soft);
+  color: var(--taali-success);
 }
 
 .taali-badge-warning {
-  border-color: #f0c787;
-  background: #fff7ec;
-  color: #9a5b00;
+  border-color: var(--taali-warning-border);
+  background: var(--taali-warning-soft);
+  color: var(--taali-warning);
+}
+
+.taali-badge-danger {
+  border-color: var(--taali-danger-border);
+  background: var(--taali-danger-soft);
+  color: var(--taali-danger);
+}
+
+.taali-badge-info {
+  border-color: var(--taali-info-border);
+  background: var(--taali-info-soft);
+  color: var(--taali-info);
 }
 
 .taali-empty-state {
@@ -258,6 +294,30 @@ code {
   --taali-purple: #a855f7;
   --taali-purple-hover: #9333ea;
   --taali-purple-soft: #2e1065;
+
+  /* Semantic colors – dark mode */
+  --taali-success: #22c55e;
+  --taali-success-soft: #052e16;
+  --taali-success-border: #166534;
+  --taali-warning: #f59e0b;
+  --taali-warning-soft: #451a03;
+  --taali-warning-border: #92400e;
+  --taali-danger: #ef4444;
+  --taali-danger-soft: #450a0a;
+  --taali-danger-border: #991b1b;
+  --taali-info: #60a5fa;
+  --taali-info-soft: #1e3a5f;
+  --taali-info-border: #1e40af;
+
+  /* Difficulty level colors – dark mode */
+  --taali-level-junior: #22c55e;
+  --taali-level-junior-soft: #052e16;
+  --taali-level-mid: #f59e0b;
+  --taali-level-mid-soft: #451a03;
+  --taali-level-senior: #ef4444;
+  --taali-level-senior-soft: #450a0a;
+  --taali-level-staff: #a78bfa;
+  --taali-level-staff-soft: #2e1065;
 }
 
 .dark body {
@@ -265,58 +325,32 @@ code {
   color: var(--taali-text);
 }
 
-.dark .bg-white {
-  background-color: #111827 !important;
+.dark .taali-table-shell thead tr {
+  background: #1e293b;
 }
 
-.dark .bg-gray-50 {
-  background-color: #1f2937 !important;
+.dark .taali-table-shell th,
+.dark .taali-table-shell td {
+  border-bottom-color: var(--taali-border-muted);
 }
 
-.dark .bg-gray-100 {
-  background-color: #273449 !important;
+.dark .taali-table-shell tbody tr:hover {
+  background: #1e293b;
 }
 
-.dark .bg-black {
-  background-color: #020617 !important;
+.dark .taali-badge-muted {
+  background: #1e293b;
+  color: #cbd5e1;
 }
 
-.dark .text-black {
-  color: #f8fafc !important;
+.dark .taali-empty-state {
+  background: #1e293b;
 }
 
-.dark .text-gray-400 {
-  color: #cbd5e1 !important;
+.dark .taali-btn-secondary:hover:not(:disabled) {
+  background: #1e293b;
 }
 
-.dark .text-gray-500 {
-  color: #cbd5e1 !important;
-}
-
-.dark .text-gray-600 {
-  color: #e2e8f0 !important;
-}
-
-.dark .text-gray-700 {
-  color: #f1f5f9 !important;
-}
-
-.dark .border-black {
-  border-color: #475569 !important;
-}
-
-.dark .border-gray-200 {
-  border-color: #334155 !important;
-}
-
-.dark .border-gray-300 {
-  border-color: #475569 !important;
-}
-
-.dark .hover\:bg-black:hover {
-  background-color: #334155 !important;
-}
-
-.dark .hover\:text-white:hover {
-  color: #f8fafc !important;
+.dark .taali-btn-ghost:hover:not(:disabled) {
+  background: #1e293b;
 }

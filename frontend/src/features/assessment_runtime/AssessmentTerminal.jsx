@@ -41,7 +41,7 @@ export const AssessmentTerminal = ({
       theme: {
         background: '#000000',
         foreground: '#e5e7eb',
-        cursor: '#9D00FF',
+        cursor: 'var(--taali-purple)',
         selectionBackground: '#4b556399',
       },
       scrollback: 4000,

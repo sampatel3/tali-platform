@@ -120,7 +120,7 @@ const HeroSection = ({ onNavigate }) => (
           <br />
           Start hiring with TAALI.
         </h1>
-        <p className="mt-4 max-w-2xl text-base text-[var(--taali-text)] md:text-xl" style={{ opacity: 0.9 }}>
+        <p className="mt-4 max-w-2xl text-base text-[var(--taali-text)] md:text-xl opacity-90">
           Assess how engineers actually work today using Cursor, Claude Code, and OpenAI Codex on real tasks, in real workflows.
         </p>
         <div className="mt-6 flex flex-wrap gap-3">
@@ -137,7 +137,7 @@ const HeroSection = ({ onNavigate }) => (
       <Panel className="grid grid-cols-2 gap-3 p-4">
         <Card className="bg-[var(--taali-border-muted)]/30 p-3">
           <div className="mb-2 flex items-center gap-2">
-            <XCircle size={16} className="text-red-500" />
+            <XCircle size={16} className="text-[var(--taali-danger)]" />
             <span className="font-mono text-xs font-bold text-[var(--taali-muted)]">LEGACY TEST</span>
           </div>
           <pre className="overflow-auto font-mono text-xs text-[var(--taali-muted)]">{`function reverseList(head) {
@@ -172,13 +172,13 @@ const HeroSection = ({ onNavigate }) => (
           <p className="font-mono text-xs text-[var(--taali-muted)]">TESTS FOR:</p>
           <p className="mt-1 font-mono text-sm text-[var(--taali-text)]">Algorithm recall</p>
           <p className="font-mono text-sm text-[var(--taali-text)]">Interview theatrics</p>
-          <p className="mt-2 font-mono text-sm font-bold text-red-600">NOT delivery quality</p>
+          <p className="mt-2 font-mono text-sm font-bold text-[var(--taali-danger)]">NOT delivery quality</p>
         </Card>
 
-        <Card className="!bg-gray-900 p-3 text-white">
+        <Card className="!bg-[var(--taali-text)] p-3 text-[var(--taali-surface)]">
           <p className="font-mono text-xs text-[var(--taali-purple)]">TESTS FOR:</p>
-          <p className="mt-1 font-mono text-sm">Agent collaboration</p>
-          <p className="font-mono text-sm">Debugging in context</p>
+          <p className="mt-1 font-mono text-sm text-[var(--taali-surface)]">Agent collaboration</p>
+          <p className="font-mono text-sm text-[var(--taali-surface)]">Debugging in context</p>
           <p className="mt-2 font-mono text-sm font-bold text-[var(--taali-purple)]">ACTUAL execution</p>
         </Card>
       </Panel>
@@ -278,11 +278,11 @@ const HowTaaliSection = () => {
             <Card className="h-[340px] p-3">
               <ResponsiveContainer width="100%" height="100%">
                 <RadarChart data={demoComparison} outerRadius="72%">
-                  <PolarGrid stroke="rgba(157, 0, 255, 0.22)" />
+                  <PolarGrid stroke="var(--taali-purple-soft)" />
                   <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'var(--taali-font)' }} />
                   <PolarRadiusAxis domain={[0, 100]} tickCount={6} />
-                  <Radar name="AI-Native Product Engineer" dataKey="candidateA" stroke="#9D00FF" fill="#9D00FF" fillOpacity={0.16} />
-                  <Radar name="Code-Strong Backend Engineer" dataKey="candidateB" stroke="#3f3f56" fill="#3f3f56" fillOpacity={0.08} />
+                  <Radar name="AI-Native Product Engineer" dataKey="candidateA" stroke="var(--taali-purple)" fill="var(--taali-purple)" fillOpacity={0.16} />
+                  <Radar name="Code-Strong Backend Engineer" dataKey="candidateB" stroke="var(--taali-muted)" fill="var(--taali-muted)" fillOpacity={0.08} />
                 </RadarChart>
               </ResponsiveContainer>
             </Card>
@@ -358,7 +358,7 @@ const PricingSection = ({ onNavigate }) => (
 );
 
 const Footer = () => (
-  <footer className="border-t-2 border-[var(--taali-border)] bg-[#12031f] text-white">
+  <footer className="border-t-2 border-[var(--taali-border)] bg-[var(--taali-text)] text-[var(--taali-surface)]">
     <div className="mx-auto max-w-7xl px-6 py-14">
       <div className="grid gap-8 md:grid-cols-4">
         <div>

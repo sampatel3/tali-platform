@@ -2,8 +2,7 @@ import React from 'react';
 
 export const AssessmentBrandGlyph = ({ sizeClass = 'w-8 h-8', markSizeClass = 'w-6 h-6' }) => (
   <div
-    className={`${sizeClass} border-2 border-black flex items-center justify-center`}
-    style={{ backgroundColor: '#9D00FF' }}
+    className={`${sizeClass} border-2 border-[var(--taali-border)] flex items-center justify-center bg-[var(--taali-purple)]`}
     aria-hidden="true"
   >
     <svg viewBox="0 0 24 24" className={markSizeClass} fill="none">

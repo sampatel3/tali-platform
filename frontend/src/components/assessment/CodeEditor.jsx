@@ -59,8 +59,7 @@ export default function CodeEditor({
           <button
             onClick={handleRun}
             disabled={disabled}
-            className="border-2 border-black px-4 py-1.5 font-mono text-sm font-bold flex items-center gap-2 text-white hover:bg-black transition-colors"
-            style={{ backgroundColor: '#9D00FF' }}
+            className="border-2 border-[var(--taali-border)] px-4 py-1.5 font-mono text-sm font-bold flex items-center gap-2 text-[var(--taali-surface)] bg-[var(--taali-purple)] hover:opacity-90 transition-colors"
           >
             <Play size={14} /> Run Code
           </button>

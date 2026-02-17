@@ -18,9 +18,9 @@ import {
 } from '../../shared/ui/TaaliPrimitives';
 
 const scoreColor = (score) => {
-  if (score >= 7) return '#16a34a';
-  if (score >= 5) return '#d97706';
-  return '#dc2626';
+  if (score >= 7) return 'var(--taali-success)';
+  if (score >= 5) return 'var(--taali-warning)';
+  return 'var(--taali-danger)';
 };
 
 export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
@@ -30,37 +30,36 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
     <div className="space-y-6">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <Card className="p-4">
-          <div className="font-mono text-xs text-gray-500">Avg Prompt clarity</div>
-          <div className="text-2xl font-bold">{assessment.prompt_quality_score?.toFixed(1) || '--'}<span className="text-sm text-gray-500">/10</span></div>
+          <div className="font-mono text-xs text-[var(--taali-muted)]">Avg Prompt clarity</div>
+          <div className="text-2xl font-bold text-[var(--taali-text)]">{assessment.prompt_quality_score?.toFixed(1) || '--'}<span className="text-sm text-[var(--taali-muted)]">/10</span></div>
         </Card>
         <Card className="p-4">
-          <div className="font-mono text-xs text-gray-500">Time to First Prompt</div>
-          <div className="text-2xl font-bold">{assessment.time_to_first_prompt_seconds ? `${Math.floor(assessment.time_to_first_prompt_seconds / 60)}m ${Math.round(assessment.time_to_first_prompt_seconds % 60)}s` : '--'}</div>
+          <div className="font-mono text-xs text-[var(--taali-muted)]">Time to First Prompt</div>
+          <div className="text-2xl font-bold text-[var(--taali-text)]">{assessment.time_to_first_prompt_seconds ? `${Math.floor(assessment.time_to_first_prompt_seconds / 60)}m ${Math.round(assessment.time_to_first_prompt_seconds % 60)}s` : '--'}</div>
         </Card>
         <Card className="p-4">
-          <div className="font-mono text-xs text-gray-500">Browser Focus</div>
+          <div className="font-mono text-xs text-[var(--taali-muted)]">Browser Focus</div>
           <div
-            className="text-2xl font-bold"
-            style={assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 ? { color: '#dc2626' } : {}}
+            className={`text-2xl font-bold ${assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}
           >
             {assessment.browser_focus_ratio != null ? `${Math.round(assessment.browser_focus_ratio * 100)}%` : '--'}
           </div>
         </Card>
         <Card className="p-4">
-          <div className="font-mono text-xs text-gray-500">Tab Switches</div>
-          <div className="text-2xl font-bold" style={assessment.tab_switch_count > 5 ? { color: '#dc2626' } : {}}>{assessment.tab_switch_count ?? '--'}</div>
+          <div className="font-mono text-xs text-[var(--taali-muted)]">Tab Switches</div>
+          <div className={`text-2xl font-bold ${assessment.tab_switch_count > 5 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}>{assessment.tab_switch_count ?? '--'}</div>
         </Card>
         <Card className="p-4">
-          <div className="font-mono text-xs text-gray-500">Calibration</div>
-          <div className="text-2xl font-bold">{assessment.calibration_score != null ? `${assessment.calibration_score.toFixed(1)}/10` : '--'}</div>
-          <div className="mt-1 font-mono text-xs text-gray-500">vs avg {avgCalibrationScore != null ? `${avgCalibrationScore.toFixed(1)}/10` : '--'}</div>
+          <div className="font-mono text-xs text-[var(--taali-muted)]">Calibration</div>
+          <div className="text-2xl font-bold text-[var(--taali-text)]">{assessment.calibration_score != null ? `${assessment.calibration_score.toFixed(1)}/10` : '--'}</div>
+          <div className="mt-1 font-mono text-xs text-[var(--taali-muted)]">vs avg {avgCalibrationScore != null ? `${avgCalibrationScore.toFixed(1)}/10` : '--'}</div>
         </Card>
       </div>
 
       {assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 ? (
-        <Panel className="border-amber-300 bg-amber-50 p-4">
-          <div className="flex items-center gap-2 font-bold text-amber-700"><AlertTriangle size={18} /> Low Browser Focus ({Math.round(assessment.browser_focus_ratio * 100)}%)</div>
-          <div className="mt-1 font-mono text-xs text-amber-700">Candidate spent less than 80% of assessment time with the browser in focus. {assessment.tab_switch_count > 5 ? `${assessment.tab_switch_count} tab switches recorded.` : ''}</div>
+        <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
+          <div className="flex items-center gap-2 font-bold text-[var(--taali-warning)]"><AlertTriangle size={18} /> Low Browser Focus ({Math.round(assessment.browser_focus_ratio * 100)}%)</div>
+          <div className="mt-1 text-xs text-[var(--taali-muted)]">Candidate spent less than 80% of assessment time with the browser in focus. {assessment.tab_switch_count > 5 ? `${assessment.tab_switch_count} tab switches recorded.` : ''}</div>
         </Panel>
       ) : null}
 
@@ -81,7 +80,7 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
                 <XAxis dataKey="name" tick={{ fontSize: 10, fontFamily: 'monospace' }} />
                 <YAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
                 <Tooltip />
-                <Line type="monotone" dataKey="clarity" stroke="#9D00FF" strokeWidth={2} dot={{ r: 3 }} />
+                <Line type="monotone" dataKey="clarity" stroke="var(--taali-purple)" strokeWidth={2} dot={{ r: 3 }} />
                 <Line type="monotone" dataKey="specificity" stroke="#2d2d44" strokeWidth={1.3} />
                 <Line type="monotone" dataKey="efficiency" stroke="#6b7280" strokeWidth={1.3} />
               </LineChart>
@@ -100,8 +99,8 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
                 <div className="mb-2 flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2">
                     <Badge variant="purple" className="font-mono text-[11px]">#{i + 1}</Badge>
-                    {p.timestamp ? <span className="font-mono text-xs text-gray-400">{new Date(p.timestamp).toLocaleTimeString()}</span> : null}
-                    {perPrompt ? <span className="font-mono text-xs text-gray-500">{perPrompt.word_count} words</span> : null}
+                    {p.timestamp ? <span className="font-mono text-xs text-[var(--taali-muted)]">{new Date(p.timestamp).toLocaleTimeString()}</span> : null}
+                    {perPrompt ? <span className="font-mono text-xs text-[var(--taali-muted)]">{perPrompt.word_count} words</span> : null}
                   </div>
                   {perPrompt ? (
                     <div className="flex items-center gap-1">
@@ -127,7 +126,7 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
           })}
 
           {(candidate.promptsList || []).length === 0 ? (
-            <Card className="py-8 text-center font-mono text-gray-500">No prompt data available yet</Card>
+            <Card className="py-8 text-center text-[var(--taali-muted)]">No prompt data available yet</Card>
           ) : null}
         </div>
       </Panel>
@@ -136,10 +135,10 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
         <Panel className="p-4">
           <div className="mb-3 font-bold">Prompt Statistics</div>
           <div className="grid grid-cols-2 gap-3 font-mono text-sm md:grid-cols-4">
-            <div><span className="text-gray-500">Avg Words:</span> {assessment.prompt_analytics.metric_details?.word_count_avg || '—'}</div>
-            <div><span className="text-gray-500">Questions:</span> {assessment.prompt_analytics.metric_details?.question_presence ? `${(assessment.prompt_analytics.metric_details.question_presence * 100).toFixed(0)}%` : '—'}</div>
-            <div><span className="text-gray-500">Code Context:</span> {assessment.prompt_analytics.metric_details?.code_snippet_rate ? `${(assessment.prompt_analytics.metric_details.code_snippet_rate * 100).toFixed(0)}%` : '—'}</div>
-            <div><span className="text-gray-500">Paste Detected:</span> {assessment.prompt_analytics.metric_details?.paste_ratio ? `${(assessment.prompt_analytics.metric_details.paste_ratio * 100).toFixed(0)}%` : '0%'}</div>
+            <div><span className="text-[var(--taali-muted)]">Avg Words:</span> {assessment.prompt_analytics.metric_details?.word_count_avg || '—'}</div>
+            <div><span className="text-[var(--taali-muted)]">Questions:</span> {assessment.prompt_analytics.metric_details?.question_presence ? `${(assessment.prompt_analytics.metric_details.question_presence * 100).toFixed(0)}%` : '—'}</div>
+            <div><span className="text-[var(--taali-muted)]">Code Context:</span> {assessment.prompt_analytics.metric_details?.code_snippet_rate ? `${(assessment.prompt_analytics.metric_details.code_snippet_rate * 100).toFixed(0)}%` : '—'}</div>
+            <div><span className="text-[var(--taali-muted)]">Paste Detected:</span> {assessment.prompt_analytics.metric_details?.paste_ratio ? `${(assessment.prompt_analytics.metric_details.paste_ratio * 100).toFixed(0)}%` : '0%'}</div>
           </div>
         </Panel>
       ) : null}
@@ -166,17 +165,17 @@ export const CandidateCvFitTab = ({ candidate, onDownloadCandidateDoc }) => {
             </Card>
             <Card className="p-6 text-center">
               <div className="mb-1 font-mono text-xs text-gray-500">Skills Match</div>
-              <div className="text-4xl font-bold" style={{ color: skills != null ? scoreColor(skills) : '#6b7280' }}>{skills != null ? `${skills}/10` : '—'}</div>
+              <div className="text-4xl font-bold" style={{ color: skills != null ? scoreColor(skills) : 'var(--taali-muted)' }}>{skills != null ? `${skills}/10` : '—'}</div>
             </Card>
             <Card className="p-6 text-center">
               <div className="mb-1 font-mono text-xs text-gray-500">Experience</div>
-              <div className="text-4xl font-bold" style={{ color: experience != null ? scoreColor(experience) : '#6b7280' }}>{experience != null ? `${experience}/10` : '—'}</div>
+              <div className="text-4xl font-bold" style={{ color: experience != null ? scoreColor(experience) : 'var(--taali-muted)' }}>{experience != null ? `${experience}/10` : '—'}</div>
             </Card>
           </div>
 
           {cvMatch.matching_skills?.length > 0 ? (
             <Panel className="p-4">
-              <div className="mb-3 font-bold text-green-700">Matching Skills</div>
+              <div className="mb-3 font-bold text-[var(--taali-success)]">Matching Skills</div>
               <div className="flex flex-wrap gap-1.5">
                 {cvMatch.matching_skills.map((skill, i) => (
                   <Badge key={i} variant="success" className="font-mono text-[11px]">{skill}</Badge>
@@ -187,7 +186,7 @@ export const CandidateCvFitTab = ({ candidate, onDownloadCandidateDoc }) => {
 
           {cvMatch.missing_skills?.length > 0 ? (
             <Panel className="p-4">
-              <div className="mb-3 font-bold text-red-700">Missing Skills</div>
+              <div className="mb-3 font-bold text-[var(--taali-danger)]">Missing Skills</div>
               <div className="flex flex-wrap gap-1.5">
                 {cvMatch.missing_skills.map((skill, i) => (
                   <Badge key={i} variant="warning" className="font-mono text-[11px]">{skill}</Badge>
@@ -201,8 +200,8 @@ export const CandidateCvFitTab = ({ candidate, onDownloadCandidateDoc }) => {
               <div className="mb-3 font-bold">Relevant Experience</div>
               <ul className="space-y-1">
                 {cvMatch.experience_highlights.map((exp, i) => (
-                  <li key={i} className="flex items-start gap-2 font-mono text-sm text-gray-700">
-                    <span className="mt-0.5 text-green-600">•</span>{exp}
+                  <li key={i} className="flex items-start gap-2 text-sm text-[var(--taali-text)]">
+                    <span className="mt-0.5 text-[var(--taali-success)]">•</span>{exp}
                   </li>
                 ))}
               </ul>
@@ -210,12 +209,12 @@ export const CandidateCvFitTab = ({ candidate, onDownloadCandidateDoc }) => {
           ) : null}
 
           {cvMatch.concerns?.length > 0 ? (
-            <Panel className="border-amber-300 bg-amber-50 p-4">
-              <div className="mb-3 font-bold text-amber-700">Concerns</div>
+            <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
+              <div className="mb-3 font-bold text-[var(--taali-warning)]">Concerns</div>
               <ul className="space-y-1">
                 {cvMatch.concerns.map((concern, i) => (
-                  <li key={i} className="flex items-start gap-2 font-mono text-sm text-amber-800">
-                    <AlertTriangle size={14} className="mt-0.5 shrink-0 text-amber-700" />{concern}
+                  <li key={i} className="flex items-start gap-2 text-sm text-[var(--taali-text)]">
+                    <AlertTriangle size={14} className="mt-0.5 shrink-0 text-[var(--taali-warning)]" />{concern}
                   </li>
                 ))}
               </ul>
@@ -225,14 +224,14 @@ export const CandidateCvFitTab = ({ candidate, onDownloadCandidateDoc }) => {
           {cvMatch.summary ? (
             <Panel className="p-4">
               <div className="mb-2 font-bold">Summary</div>
-              <p className="font-mono text-sm italic text-gray-700">"{cvMatch.summary}"</p>
+              <p className="text-sm italic text-[var(--taali-text)]">"{cvMatch.summary}"</p>
             </Panel>
           ) : null}
         </>
       ) : (
         <Card className="p-8 text-center">
-          <div className="mb-2 font-mono text-gray-500">No role fit analysis available</div>
-          <div className="font-mono text-xs text-gray-400">
+          <div className="mb-2 text-[var(--taali-muted)]">No role fit analysis available</div>
+          <div className="text-xs text-[var(--taali-muted)]">
             Fit analysis requires both a CV and a job specification to be uploaded for this candidate.
             Upload documents on the Candidates page.
           </div>
@@ -293,8 +292,8 @@ export const CandidateCodeGitTab = ({ candidate }) => {
 
   if (!hasAny) {
     return (
-      <Card className="bg-gray-50 p-6">
-        <div className="font-mono text-sm text-gray-600">No git evidence captured for this assessment. This can happen if the task did not use a repository or evidence capture failed.</div>
+      <Card className="bg-[var(--taali-bg)] p-6">
+        <div className="text-sm text-[var(--taali-muted)]">No git evidence captured for this assessment. This can happen if the task did not use a repository or evidence capture failed.</div>
       </Card>
     );
   }
@@ -302,46 +301,46 @@ export const CandidateCodeGitTab = ({ candidate }) => {
   return (
     <div className="space-y-6">
       {assessment.completed_due_to_timeout ? (
-        <Panel className="border-amber-300 bg-amber-50 p-3 font-mono text-sm">Assessment was auto-submitted when time expired.</Panel>
+        <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-3 text-sm text-[var(--taali-text)]">Assessment was auto-submitted when time expired.</Panel>
       ) : null}
 
       {headSha ? (
         <Panel className="p-4">
-          <div className="mb-1 font-mono text-xs font-bold text-gray-600">Final HEAD (SHA)</div>
+          <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Final HEAD (SHA)</div>
           <pre className="overflow-x-auto bg-[#151122] p-2 font-mono text-xs text-gray-200">{headSha}</pre>
         </Panel>
       ) : null}
 
       {commits ? (
         <Panel className="p-4">
-          <div className="mb-1 font-mono text-xs font-bold text-gray-600">Commits (assessment branch)</div>
+          <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Commits (assessment branch)</div>
           <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[#151122] p-2 font-mono text-xs text-gray-200">{commits}</pre>
         </Panel>
       ) : null}
 
       {diffMain ? (
         <Panel className="p-4">
-          <div className="mb-1 font-mono text-xs font-bold text-gray-600">Diff (main...HEAD)</div>
+          <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Diff (main...HEAD)</div>
           <pre className="max-h-96 overflow-auto whitespace-pre-wrap bg-[#151122] p-2 font-mono text-xs text-green-300">{diffMain}</pre>
         </Panel>
       ) : null}
 
       {diffStaged ? (
         <Panel className="p-4">
-          <div className="mb-1 font-mono text-xs font-bold text-gray-600">Staged diff</div>
+          <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Staged diff</div>
           <pre className="max-h-48 overflow-auto whitespace-pre-wrap bg-[#151122] p-2 font-mono text-xs text-gray-200">{diffStaged}</pre>
         </Panel>
       ) : null}
 
       {statusPorcelain ? (
         <Panel className="p-4">
-          <div className="mb-1 font-mono text-xs font-bold text-gray-600">Status (porcelain)</div>
+          <div className="mb-1 font-mono text-xs font-bold text-[var(--taali-muted)]">Status (porcelain)</div>
           <pre className="overflow-x-auto bg-[#151122] p-2 font-mono text-xs text-gray-200">{statusPorcelain}</pre>
         </Panel>
       ) : null}
 
       {error ? (
-        <Panel className="border-red-300 bg-red-50 p-3 font-mono text-sm text-red-700">{error}</Panel>
+        <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-3 text-sm text-[var(--taali-danger)]">{error}</Panel>
       ) : null}
     </div>
   );
@@ -354,10 +353,10 @@ export const CandidateTimelineTab = ({ candidate }) => (
       {candidate.timeline.map((t, i) => (
         <div key={i} className="relative mb-5 pl-7 last:mb-0">
           <div className="absolute -left-0 top-1 h-4 w-4 border-2 border-[var(--taali-border)] bg-[var(--taali-purple)]" />
-          <div className="mb-1 font-mono text-xs text-gray-500">{t.time}</div>
-          <div className="font-bold text-gray-900">{t.event}</div>
+          <div className="mb-1 font-mono text-xs text-[var(--taali-muted)]">{t.time}</div>
+          <div className="font-bold text-[var(--taali-text)]">{t.event}</div>
           {t.prompt ? (
-            <div className="mt-1 font-mono text-sm italic text-gray-500">"{t.prompt}"</div>
+            <div className="mt-1 text-sm italic text-[var(--taali-muted)]">"{t.prompt}"</div>
           ) : null}
         </div>
       ))}

@@ -14,8 +14,7 @@ from ....models.candidate_application import CandidateApplication
 from ....models.organization import Organization
 from ....models.role import Role
 from ....platform.config import settings
-from ....services.document_service import extract_text, save_file_locally
-from ....services.fit_matching_service import calculate_cv_job_match_sync
+from ....services.document_service import save_file_locally
 from .service import WorkableRateLimitError, WorkableService
 
 logger = logging.getLogger(__name__)
@@ -148,6 +147,95 @@ def _rank_score_for_application(app: CandidateApplication) -> float | None:
     return app.cv_match_score
 
 
+def _extract_candidate_fields(payload: dict) -> dict:
+    """Extract known profile fields from a Workable candidate payload."""
+    fields: dict[str, Any] = {}
+
+    # Headline
+    headline = payload.get("headline") or payload.get("title")
+    if isinstance(headline, str) and headline.strip():
+        fields["headline"] = headline.strip()
+
+    # Image
+    image_url = payload.get("image_url") or payload.get("avatar_url")
+    if isinstance(image_url, str) and image_url.strip():
+        fields["image_url"] = image_url.strip()
+
+    # Location
+    location = payload.get("location") or {}
+    if isinstance(location, dict):
+        city = location.get("city")
+        country = location.get("country")
+        if isinstance(city, str) and city.strip():
+            fields["location_city"] = city.strip()
+        if isinstance(country, str) and country.strip():
+            fields["location_country"] = country.strip()
+    elif isinstance(location, str) and location.strip():
+        fields["location_city"] = location.strip()
+
+    # Phone
+    phone = payload.get("phone")
+    if isinstance(phone, str) and phone.strip():
+        fields["phone"] = phone.strip()
+
+    # Profile URL
+    profile_url = payload.get("profile_url") or payload.get("url")
+    if isinstance(profile_url, str) and profile_url.strip():
+        fields["profile_url"] = profile_url.strip()
+
+    # Social profiles
+    socials = payload.get("social_profiles")
+    if isinstance(socials, list) and socials:
+        fields["social_profiles"] = [
+            {k: v for k, v in s.items() if k in ("type", "url", "name", "username")}
+            for s in socials
+            if isinstance(s, dict)
+        ]
+
+    # Tags
+    tags = payload.get("tags")
+    if isinstance(tags, list) and tags:
+        fields["tags"] = [str(t) for t in tags if t]
+
+    # Skills
+    skills = payload.get("skills")
+    if isinstance(skills, list) and skills:
+        fields["skills"] = [str(s) for s in skills if s]
+
+    # Education
+    education = payload.get("education_entries") or payload.get("education")
+    if isinstance(education, list) and education:
+        fields["education_entries"] = [
+            {k: v for k, v in e.items() if k in ("school", "degree", "field_of_study", "start_date", "end_date")}
+            for e in education
+            if isinstance(e, dict)
+        ]
+
+    # Experience
+    experience = payload.get("experience_entries") or payload.get("experience")
+    if isinstance(experience, list) and experience:
+        fields["experience_entries"] = [
+            {k: v for k, v in e.items() if k in ("company", "title", "start_date", "end_date", "current", "summary", "industry")}
+            for e in experience
+            if isinstance(e, dict)
+        ]
+
+    # Summary
+    summary = payload.get("summary") or payload.get("cover_letter")
+    if isinstance(summary, str) and summary.strip():
+        fields["summary"] = summary.strip()
+
+    # Created at
+    created_at = payload.get("created_at")
+    if isinstance(created_at, str) and created_at.strip():
+        try:
+            fields["workable_created_at"] = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+        except (ValueError, TypeError):
+            pass
+
+    return fields
+
+
 class WorkableSyncService:
     def __init__(self, client: WorkableService):
         self.client = client
@@ -157,15 +245,13 @@ class WorkableSyncService:
         db.refresh(org)
         return org.workable_sync_cancel_requested_at is not None
 
-    def sync_org(self, db: Session, org: Organization, *, full_resync: bool = False, skip_cv: bool = False) -> dict:
+    def sync_org(self, db: Session, org: Organization, *, full_resync: bool = False) -> dict:
         summary = {
             "jobs_seen": 0,
             "jobs_upserted": 0,
             "candidates_seen": 0,
             "candidates_upserted": 0,
             "applications_upserted": 0,
-            "cv_downloaded": 0,
-            "cv_matched": 0,
             "errors": [],
             "full_resync": bool(full_resync),
             "current_step": "listing_jobs",
@@ -239,7 +325,7 @@ class WorkableSyncService:
                         cid = str(candidate_ref.get("id") or "?")[:12]
                         summary["current_step"] = "syncing_candidate"
                         summary["current_candidate_index"] = f"{idx + 1}/{total_candidates}" if total_candidates else str(idx + 1)
-                        summary["last_request"] = f"GET /candidates/{cid}"
+                        summary["last_request"] = f"syncing candidate {cid}"
                         if (idx + 1) % 5 == 1 or summary["candidates_seen"] % PROGRESS_BATCH_SIZE == 0:
                             org.workable_sync_progress = dict(summary)
                             db.commit()
@@ -251,8 +337,6 @@ class WorkableSyncService:
                                 job=job,
                                 candidate_ref=candidate_ref,
                                 now=now,
-                                enrich=True,  # fetch full candidate profile
-                                skip_cv=skip_cv,
                             )
                         except WorkableSyncCancelled:
                             summary["errors"].append("Sync cancelled by user")
@@ -260,8 +344,6 @@ class WorkableSyncService:
                             break
                         summary["candidates_upserted"] += synced.get("candidate_upserted", 0)
                         summary["applications_upserted"] += synced.get("application_upserted", 0)
-                        summary["cv_downloaded"] += synced.get("cv_downloaded", 0)
-                        summary["cv_matched"] += synced.get("cv_matched", 0)
                         if summary["candidates_seen"] % PROGRESS_BATCH_SIZE == 0:
                             org.workable_sync_progress = dict(summary)
                             db.commit()
@@ -417,24 +499,20 @@ class WorkableSyncService:
         job: dict,
         candidate_ref: dict,
         now: datetime,
-        enrich: bool,
-        skip_cv: bool = False,
     ) -> dict:
         if self._is_cancel_requested(db, org):
             raise WorkableSyncCancelled()
         counters = {
             "candidate_upserted": 0,
             "application_upserted": 0,
-            "cv_downloaded": 0,
-            "cv_matched": 0,
         }
         candidate_id = str(candidate_ref.get("id") or "").strip()
         if not candidate_id:
             return counters
 
+        # Use bulk payload directly -- no individual candidate fetch
         candidate_payload = candidate_ref
-        if enrich:
-            candidate_payload = self.client.get_candidate(candidate_id) or candidate_ref
+
         if self._is_cancel_requested(db, org):
             raise WorkableSyncCancelled()
         stage = (
@@ -482,6 +560,13 @@ class WorkableSyncService:
         candidate.position = _candidate_position(candidate_payload, role.name)
         candidate.workable_candidate_id = candidate_id
         candidate.workable_data = candidate_payload
+        candidate.workable_enriched = False
+
+        # Extract rich profile fields from bulk payload
+        extracted = _extract_candidate_fields(candidate_payload)
+        for field, value in extracted.items():
+            setattr(candidate, field, value)
+
         db.flush()
         if created_candidate:
             counters["candidate_upserted"] += 1
@@ -513,6 +598,12 @@ class WorkableSyncService:
         app.workable_stage = str(stage or "")
         app.last_synced_at = now
 
+        # Extract application-level Workable fields
+        app.workable_sourced = candidate_payload.get("sourced", None)
+        profile_url = candidate_payload.get("profile_url") or candidate_payload.get("url")
+        if isinstance(profile_url, str) and profile_url.strip():
+            app.workable_profile_url = profile_url.strip()
+
         # Skip ratings API during sync to stay under rate limit (10 req/10 sec); use candidate payload score only
         ratings_payload = None
         raw_score, normalized_score, score_source = self.client.extract_workable_score(
@@ -524,63 +615,12 @@ class WorkableSyncService:
             app.workable_score_raw = raw_score
             app.workable_score = normalized_score
             app.workable_score_source = score_source
-        if enrich and not skip_cv:
-            downloaded = self.client.download_candidate_resume(candidate_payload)
-            if not downloaded:
-                logger.debug(
-                    "No CV downloaded for candidate_id=%s (workable)",
-                    candidate_id,
-                )
-            if downloaded:
-                filename, content = downloaded
-                ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
-                if ext in {"pdf", "docx", "txt"}:
-                    try:
-                        path = save_file_locally(content=content, directory="cv", prefix=f"cv-{app.id or candidate.id}", ext=ext)
-                        extracted = extract_text(content, ext)
-                        if extracted:
-                            app.cv_file_url = path
-                            app.cv_filename = filename
-                            app.cv_text = extracted
-                            app.cv_uploaded_at = now
-                            candidate.cv_file_url = path
-                            candidate.cv_filename = filename
-                            candidate.cv_text = extracted
-                            candidate.cv_uploaded_at = now
-                            counters["cv_downloaded"] += 1
-                    except Exception:
-                        logger.exception("Failed processing downloaded CV")
 
         if self._is_cancel_requested(db, org):
             raise WorkableSyncCancelled()
-        if not skip_cv:
-            cv_matched = self._compute_cv_match(app=app, role=role, now=now)
-            if cv_matched:
-                counters["cv_matched"] += 1
+
         app.rank_score = _rank_score_for_application(app)
         db.flush()
         if created_app:
             counters["application_upserted"] += 1
         return counters
-
-    def _compute_cv_match(self, *, app: CandidateApplication, role: Role, now: datetime) -> bool:
-        cv_text = (app.cv_text or "").strip()
-        job_spec = (role.job_spec_text or "").strip()
-        if not cv_text or not job_spec or not settings.ANTHROPIC_API_KEY:
-            app.cv_match_score = app.cv_match_score
-            return False
-        try:
-            result = calculate_cv_job_match_sync(
-                cv_text=cv_text,
-                job_spec_text=job_spec,
-                api_key=settings.ANTHROPIC_API_KEY,
-                model=settings.resolved_claude_scoring_model,
-                additional_requirements=(role.additional_requirements or "").strip() or None,
-            )
-            app.cv_match_score = result.get("cv_job_match_score")
-            app.cv_match_details = result.get("match_details", {})
-            app.cv_match_scored_at = now
-            return app.cv_match_score is not None
-        except Exception:
-            logger.exception("Failed computing CV match during Workable sync")
-            return False

@@ -57,6 +57,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [inviteSheetOpen, setInviteSheetOpen] = useState(false);
   const [inviteDraft, setInviteDraft] = useState(null);
   const [cvSidebarApplicationId, setCvSidebarApplicationId] = useState(null);
+  const [batchScoring, setBatchScoring] = useState(null);
 
   const selectedRole = useMemo(
     () => roles.find((role) => String(role.id) === String(selectedRoleId)) || null,
@@ -396,6 +397,54 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
   }, [rolesApi, showToast]);
 
+  const handleBatchScore = useCallback(async () => {
+    if (!rolesApi?.batchScore || !selectedRoleId) return;
+    try {
+      const res = await rolesApi.batchScore(selectedRoleId);
+      const data = res?.data || {};
+      setBatchScoring({ total: data.total_unscored || data.total || 0, scored: 0, status: 'running' });
+
+      // Poll for progress
+      const poll = setInterval(async () => {
+        try {
+          const statusRes = await rolesApi.batchScoreStatus(selectedRoleId);
+          const s = statusRes?.data || {};
+          setBatchScoring({ total: s.total || 0, scored: s.scored || 0, status: s.status || 'running' });
+          if (s.status === 'completed' || s.status === 'failed' || s.status === 'idle') {
+            clearInterval(poll);
+            setBatchScoring(null);
+            loadRoleContext(selectedRoleId);
+            if (s.status === 'completed') {
+              showToast(`Scored ${s.scored || 0} candidates.`, 'success');
+            }
+          }
+        } catch {
+          clearInterval(poll);
+          setBatchScoring(null);
+        }
+      }, 3000);
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to start batch scoring.'), 'error');
+      setBatchScoring(null);
+    }
+  }, [rolesApi, selectedRoleId, loadRoleContext, showToast]);
+
+  const handleEnrichCandidate = useCallback(async (application) => {
+    if (!rolesApi?.enrichApplication) return;
+    try {
+      const res = await rolesApi.enrichApplication(application.id);
+      const updated = res?.data;
+      if (updated && updated.id) {
+        setRoleApplications((prev) =>
+          prev.map((app) => (Number(app.id) === Number(updated.id) ? { ...app, ...updated } : app))
+        );
+      }
+      showToast('Profile enriched from Workable.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to enrich candidate.'), 'error');
+    }
+  }, [rolesApi, showToast]);
+
   return (
     <div>
       <NavComponent currentPage="candidates" onNavigate={onNavigate} />
@@ -572,6 +621,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   role={selectedRole}
                   roleTasks={roleTasks}
                   onEditRole={() => handleOpenRoleSheet('edit')}
+                  batchScoring={batchScoring}
+                  onBatchScore={handleBatchScore}
                 />
                 {loadingTasks ? (
                   <Panel className="px-4 py-3 text-sm text-gray-600 bg-[#faf8ff]">
@@ -606,6 +657,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   onOpenCvSidebar={(app) => setCvSidebarApplicationId(app?.id ?? null)}
                   onCreateAssessment={handleCreateAssessment}
                   onGenerateTaaliCvAi={handleGenerateTaaliCvAi}
+                  onEnrichCandidate={handleEnrichCandidate}
                 />
               </>
             )}

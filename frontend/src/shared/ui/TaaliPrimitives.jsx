@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { X } from 'lucide-react';
+import { X, Loader2 } from 'lucide-react';
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -93,12 +93,49 @@ const BADGE_VARIANT_CLASS = {
   muted: 'taali-badge-muted',
   success: 'taali-badge-success',
   warning: 'taali-badge-warning',
+  danger: 'taali-badge-danger',
+  info: 'taali-badge-info',
 };
 
 export const Badge = ({ variant = 'muted', className = '', children }) => (
   <span className={cx('taali-badge', BADGE_VARIANT_CLASS[variant] || BADGE_VARIANT_CLASS.muted, className)}>
     {children}
   </span>
+);
+
+export const Spinner = ({ size = 24, className = '' }) => (
+  <Loader2 size={size} className={cx('animate-spin text-[var(--taali-purple)]', className)} aria-hidden />
+);
+
+export const TabBar = ({ tabs, activeTab, onChange, className = '' }) => (
+  <div
+    role="tablist"
+    className={cx('flex flex-wrap gap-0 border-b-2 border-[var(--taali-border)]', className)}
+    aria-label="Tabs"
+  >
+    {tabs.map((tab) => {
+      const isActive = activeTab === tab.id;
+      return (
+        <button
+          key={tab.id}
+          role="tab"
+          aria-selected={isActive}
+          aria-controls={tab.panelId}
+          id={tab.id}
+          type="button"
+          onClick={() => onChange(tab.id)}
+          className={cx(
+            'px-4 py-3 text-sm font-semibold transition-colors -mb-[2px] border-b-2',
+            isActive
+              ? 'border-[var(--taali-border)] bg-[var(--taali-surface)] text-[var(--taali-text)]'
+              : 'border-transparent text-[var(--taali-muted)] hover:text-[var(--taali-text)] hover:bg-[var(--taali-bg)]'
+          )}
+        >
+          {tab.label}
+        </button>
+      );
+    })}
+  </div>
 );
 
 export const EmptyState = ({ title, description, action, className = '' }) => (

@@ -1,62 +1,57 @@
 import React from 'react';
-import {
-  Code,
-  Eye,
-  Loader2,
-} from 'lucide-react';
+import { Code, Eye } from 'lucide-react';
+import { Button, Spinner, Badge, Panel } from '../../shared/ui/TaaliPrimitives';
 
-const difficultyColors = {
-  junior: '#22c55e',
-  mid: '#FFAA00',
-  senior: '#9D00FF',
-  staff: '#FF0033',
+const DIFFICULTY_LEVEL_CLASS = {
+  junior: 'bg-[var(--taali-level-junior)] text-white border-[var(--taali-border)]',
+  mid: 'bg-[var(--taali-level-mid)] text-white border-[var(--taali-border)]',
+  senior: 'bg-[var(--taali-level-senior)] text-white border-[var(--taali-border)]',
+  staff: 'bg-[var(--taali-level-staff)] text-white border-[var(--taali-border)]',
 };
 
 const TaskCard = ({ task, onViewTask }) => (
-  <div key={task.id} className="border-2 border-black p-6 hover:shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] transition-shadow">
+  <Panel key={task.id} as="div" className="p-6 hover:shadow-lg transition-shadow">
     <div className="flex items-center justify-between mb-3">
       <span
-        className="px-3 py-1 text-xs font-mono font-bold text-white border-2 border-black"
-        style={{ backgroundColor: difficultyColors[task.difficulty] || '#9D00FF' }}
+        className={[
+          'px-3 py-1 text-xs font-mono font-bold border-2',
+          DIFFICULTY_LEVEL_CLASS[task.difficulty] || 'bg-[var(--taali-purple)] text-white border-[var(--taali-border)]',
+        ].join(' ')}
       >
-        {task.difficulty?.toUpperCase()}
+        {task.difficulty?.toUpperCase() || 'MID'}
       </span>
-      <span className="font-mono text-xs text-gray-500">{task.duration_minutes}min</span>
+      <span className="font-mono text-xs text-[var(--taali-muted)]">{task.duration_minutes}min</span>
     </div>
-    <h3 className="font-bold text-lg mb-2">{task.name}</h3>
-    <p className="font-mono text-sm text-gray-600 mb-4 line-clamp-3">{task.description}</p>
+    <h3 className="font-bold text-lg mb-2 text-[var(--taali-text)]">{task.name}</h3>
+    <p className="text-sm text-[var(--taali-muted)] mb-4 line-clamp-3">{task.description}</p>
     <div className="flex items-center justify-between flex-wrap gap-2">
       <div className="flex flex-wrap gap-1">
-        <span className="font-mono text-xs px-2 py-1 border border-gray-300">{task.task_type?.replace('_', ' ')}</span>
+        <Badge variant="muted" className="font-mono">{task.task_type?.replace('_', ' ')}</Badge>
         {task.role && (
-          <span className="font-mono text-xs px-2 py-1 border border-gray-300 bg-gray-50">
-            {String(task.role).replace(/_/g, ' ')}
-          </span>
+          <Badge variant="muted" className="font-mono">{String(task.role).replace(/_/g, ' ')}</Badge>
         )}
         {typeof task.repo_file_count === 'number' && (
-          <span className="font-mono text-xs px-2 py-1 border border-gray-300 bg-gray-50">{task.repo_file_count} files</span>
+          <Badge variant="muted" className="font-mono">{task.repo_file_count} files</Badge>
         )}
         {typeof task.claude_budget_limit_usd === 'number' && (
-          <span className="font-mono text-xs px-2 py-1 border border-amber-500 bg-amber-50">
-            ${task.claude_budget_limit_usd.toFixed(2)} Claude cap
-          </span>
+          <Badge variant="warning" className="font-mono">${task.claude_budget_limit_usd.toFixed(2)} Claude cap</Badge>
         )}
       </div>
       <div className="flex items-center gap-2">
-        <button
-          type="button"
-          className="border-2 border-black p-2 hover:bg-black hover:text-white transition-colors"
+        <Button
+          variant="secondary"
+          size="sm"
           title="View task"
           onClick={() => onViewTask(task)}
         >
           <Eye size={14} />
-        </button>
+        </Button>
         {task.is_template && (
-          <span className="font-mono text-xs text-gray-400">template</span>
+          <span className="font-mono text-xs text-[var(--taali-muted)]">template</span>
         )}
       </div>
     </div>
-  </div>
+  </Panel>
 );
 
 export const TasksListView = ({
@@ -64,24 +59,24 @@ export const TasksListView = ({
   tasksList,
   onViewTask,
 }) => (
-  <div className="hidden md:block max-w-7xl mx-auto px-6 py-8">
+  <div className="max-w-7xl mx-auto px-6 py-8">
     <div className="flex items-center justify-between mb-8">
       <div>
-        <h1 className="text-3xl font-bold">Tasks</h1>
-        <p className="font-mono text-sm text-gray-600 mt-1">Backend-authored assessment task catalog</p>
+        <h1 className="text-3xl font-bold text-[var(--taali-text)]">Tasks</h1>
+        <p className="text-sm text-[var(--taali-muted)] mt-1">Backend-authored assessment task catalog</p>
       </div>
     </div>
 
     {loading ? (
       <div className="flex items-center justify-center py-16 gap-3">
-        <Loader2 size={24} className="animate-spin" style={{ color: '#9D00FF' }} />
-        <span className="font-mono text-sm text-gray-500">Loading tasks...</span>
+        <Spinner size={24} />
+        <span className="font-mono text-sm text-[var(--taali-muted)]">Loading tasks...</span>
       </div>
     ) : tasksList.length === 0 ? (
-      <div className="border-2 border-black p-16 text-center">
-        <Code size={48} className="mx-auto mb-4 text-gray-300" />
-        <h3 className="text-xl font-bold mb-2">No tasks available</h3>
-        <p className="font-mono text-sm text-gray-500 mb-6">Add task specs in the backend to populate this catalog.</p>
+      <div className="taali-empty-state p-16 text-center border-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
+        <Code size={48} className="mx-auto mb-4 text-[var(--taali-border-muted)]" />
+        <h3 className="text-xl font-bold mb-2 text-[var(--taali-text)]">No tasks available</h3>
+        <p className="text-sm text-[var(--taali-muted)]">Add task specs in the backend to populate this catalog.</p>
       </div>
     ) : (
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">

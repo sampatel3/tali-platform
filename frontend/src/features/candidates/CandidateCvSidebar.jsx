@@ -1,5 +1,5 @@
 import React, { useEffect, useRef } from 'react';
-import { FileText, Loader2, X } from 'lucide-react';
+import { FileText, Linkedin, Github, Twitter, ExternalLink, Loader2, MapPin, X } from 'lucide-react';
 
 import { Badge, Button } from '../../shared/ui/TaaliPrimitives';
 import { statusVariant } from './candidatesUiUtils';
@@ -12,6 +12,12 @@ const FOCUSABLE_SELECTOR = [
   'select:not([disabled])',
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
+
+const SOCIAL_ICONS = {
+  linkedin: Linkedin,
+  github: Github,
+  twitter: Twitter,
+};
 
 export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWorkable, fetchingCvApplicationId }) {
   const panelRef = useRef(null);
@@ -42,6 +48,10 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
   const formatScore = (v) => (typeof v === 'number' ? `${v.toFixed(1)}/10` : '—');
   const data = application ?? null;
 
+  const socials = Array.isArray(data?.candidate_social_profiles) ? data.candidate_social_profiles : [];
+  const skills = Array.isArray(data?.candidate_skills) ? data.candidate_skills : [];
+  const hasProfileSummary = data && (data.candidate_headline || data.candidate_location || socials.length > 0 || skills.length > 0);
+
   return (
     <>
       <div
@@ -59,13 +69,29 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
       >
         {/* Header */}
         <div className="shrink-0 flex items-start justify-between gap-3 px-5 py-4 border-b border-[var(--taali-border-muted)] bg-[#faf8ff]">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-lg font-bold tracking-tight text-[var(--taali-text)] truncate">
-              {data?.candidate_name || data?.candidate_email || 'Candidate'}
-            </h2>
-            {data?.candidate_email ? (
-              <p className="mt-0.5 text-sm text-[var(--taali-muted)] truncate">{data.candidate_email}</p>
-            ) : null}
+          <div className="flex items-start gap-3 min-w-0 flex-1">
+            {data?.candidate_image_url ? (
+              <img
+                src={data.candidate_image_url}
+                alt=""
+                className="w-10 h-10 rounded-full object-cover shrink-0"
+              />
+            ) : (
+              <div className="w-10 h-10 rounded-full bg-[var(--taali-primary)] text-white flex items-center justify-center text-sm font-bold shrink-0">
+                {(data?.candidate_name || '?').split(/\s+/).map((w) => w[0]).join('').toUpperCase().slice(0, 2)}
+              </div>
+            )}
+            <div className="min-w-0 flex-1">
+              <h2 className="text-lg font-bold tracking-tight text-[var(--taali-text)] truncate">
+                {data?.candidate_name || data?.candidate_email || 'Candidate'}
+              </h2>
+              {data?.candidate_headline ? (
+                <p className="text-sm text-gray-600 truncate">{data.candidate_headline}</p>
+              ) : null}
+              {data?.candidate_email ? (
+                <p className="mt-0.5 text-sm text-[var(--taali-muted)] truncate">{data.candidate_email}</p>
+              ) : null}
+            </div>
           </div>
           <Button
             type="button"
@@ -78,6 +104,49 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
             <X size={18} />
           </Button>
         </div>
+
+        {/* Profile summary */}
+        {hasProfileSummary ? (
+          <div className="shrink-0 px-5 py-3 border-b border-[var(--taali-border-muted)] bg-white space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
+              {data.candidate_location ? (
+                <span className="inline-flex items-center gap-0.5">
+                  <MapPin size={11} />
+                  {data.candidate_location}
+                </span>
+              ) : null}
+              {data.candidate_phone ? (
+                <span>{data.candidate_phone}</span>
+              ) : null}
+              {socials.map((s, i) => {
+                const type = (s.type || '').toLowerCase();
+                const Icon = SOCIAL_ICONS[type] || ExternalLink;
+                return (
+                  <a
+                    key={`${type}-${i}`}
+                    href={s.url || '#'}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-gray-400 hover:text-gray-700"
+                    title={s.name || type}
+                  >
+                    <Icon size={13} />
+                  </a>
+                );
+              })}
+            </div>
+            {skills.length > 0 ? (
+              <div className="flex flex-wrap gap-1">
+                {skills.slice(0, 8).map((s) => (
+                  <Badge key={s} variant="muted">{s}</Badge>
+                ))}
+                {skills.length > 8 ? (
+                  <span className="text-xs text-gray-400">+{skills.length - 8}</span>
+                ) : null}
+              </div>
+            ) : null}
+          </div>
+        ) : null}
 
         {/* Meta row */}
         {data ? (
@@ -124,7 +193,7 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
                     {fetchingCvApplicationId === data.id ? (
                       <>
                         <Loader2 size={14} className="animate-spin" />
-                        Fetching from Workable…
+                        Fetching from Workable...
                       </>
                     ) : (
                       'Fetch CV from Workable'

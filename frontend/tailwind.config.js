@@ -8,8 +8,12 @@ export default {
   theme: {
     extend: {
       colors: {
-        'taali-purple': '#9D00FF',
-        'taali-purple-dark': '#7B00CC',
+        'taali-purple': 'var(--taali-purple)',
+        'taali-purple-dark': 'var(--taali-purple-hover)',
+        'taali-success': 'var(--taali-success)',
+        'taali-warning': 'var(--taali-warning)',
+        'taali-danger': 'var(--taali-danger)',
+        'taali-info': 'var(--taali-info)',
       },
       fontFamily: {
         sans: ['var(--taali-font)'],

@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { BriefcaseBusiness, ChevronDown, ChevronUp, FileText } from 'lucide-react';
+import { BriefcaseBusiness, ChevronDown, ChevronUp, FileText, Loader2, Sparkles } from 'lucide-react';
 
 import {
   Badge,
@@ -9,7 +9,7 @@ import {
   Panel,
 } from '../../shared/ui/TaaliPrimitives';
 
-export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
+export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, onBatchScore }) => {
   if (!role) return null;
   const focus = role.interview_focus || null;
   const focusQuestions = Array.isArray(focus?.questions) ? focus.questions.slice(0, 3) : [];
@@ -57,9 +57,32 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole }) => {
           <h2 className="text-2xl font-bold tracking-tight text-[var(--taali-text)]">{role.name}</h2>
           {rolePreview ? <p className="text-sm text-[var(--taali-muted)]">{rolePreview}</p> : null}
         </div>
-        <Button type="button" variant="secondary" size="sm" onClick={onEditRole}>
-          Edit role
-        </Button>
+        <div className="flex items-center gap-2">
+          {onBatchScore ? (
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              onClick={onBatchScore}
+              disabled={Boolean(batchScoring)}
+            >
+              {batchScoring ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  Scoring {batchScoring.scored}/{batchScoring.total}...
+                </>
+              ) : (
+                <>
+                  <Sparkles size={14} />
+                  Score all candidates
+                </>
+              )}
+            </Button>
+          ) : null}
+          <Button type="button" variant="secondary" size="sm" onClick={onEditRole}>
+            Edit role
+          </Button>
+        </div>
       </div>
       <Card className="mt-4 p-3 bg-[#faf8ff]">
         <div className="flex flex-col gap-3">

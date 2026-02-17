@@ -1,6 +1,15 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AlertTriangle, CheckCircle, CreditCard, Loader2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle, CreditCard } from 'lucide-react';
 
+import {
+  Button,
+  Input,
+  Select,
+  Spinner,
+  TabBar,
+  Panel,
+  Sheet,
+} from '../../shared/ui/TaaliPrimitives';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
@@ -510,42 +519,36 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       {NavComponent ? <NavComponent currentPage="settings" onNavigate={onNavigate} /> : null}
       <div className="max-w-7xl mx-auto px-6 py-8">
         <h1 className="text-3xl font-bold mb-2">Settings</h1>
-        <p className="font-mono text-sm text-gray-600 mb-8">Manage integrations and billing</p>
+        <p className="text-sm text-[var(--taali-muted)] mb-8">Manage integrations and billing</p>
 
-        <div className="flex border-2 border-black mb-8">
-          {['workable', 'billing', 'team', 'enterprise', 'preferences'].map((tab) => (
-            <button
-              key={tab}
-              className={`flex-1 px-6 py-3 font-mono text-sm font-bold border-r-2 border-black last:border-r-0 transition-colors ${
-                settingsTab === tab ? 'text-white' : 'bg-white hover:bg-gray-100'
-              }`}
-              style={settingsTab === tab ? { backgroundColor: '#9D00FF' } : {}}
-              onClick={() => setSettingsTab(tab)}
-            >
-              {tab === 'workable' && 'Workable'}
-              {tab === 'billing' && 'Billing'}
-              {tab === 'team' && 'Team'}
-              {tab === 'enterprise' && 'Enterprise'}
-              {tab === 'preferences' && 'Preferences'}
-            </button>
-          ))}
-        </div>
+        <TabBar
+          tabs={[
+            { id: 'workable', label: 'Workable', panelId: 'settings-workable' },
+            { id: 'billing', label: 'Billing', panelId: 'settings-billing' },
+            { id: 'team', label: 'Team', panelId: 'settings-team' },
+            { id: 'enterprise', label: 'Enterprise', panelId: 'settings-enterprise' },
+            { id: 'preferences', label: 'Preferences', panelId: 'settings-preferences' },
+          ]}
+          activeTab={settingsTab}
+          onChange={setSettingsTab}
+          className="mb-8"
+        />
 
         {orgLoading ? (
           <div className="flex items-center justify-center py-16 gap-3">
-            <Loader2 size={24} className="animate-spin" style={{ color: '#9D00FF' }} />
-            <span className="font-mono text-sm text-gray-500">Loading settings...</span>
+            <Spinner size={24} />
+            <span className="text-sm text-[var(--taali-muted)]">Loading settings...</span>
           </div>
         ) : (
           <>
             {settingsTab === 'workable' && (
               <div>
-                <div className={`border-2 border-black p-6 mb-8 flex items-center justify-between gap-4 flex-wrap ${workableConnected ? 'bg-green-50' : 'bg-yellow-50'}`}>
+                <Panel className={`p-6 mb-8 flex items-center justify-between gap-4 flex-wrap ${workableConnected ? 'bg-[var(--taali-success-soft)]' : 'bg-[var(--taali-warning-soft)]'}`}>
                   <div className="flex items-center gap-4">
-                    {workableConnected ? <CheckCircle size={24} className="text-green-600" /> : <AlertTriangle size={24} className="text-yellow-600" />}
+                    {workableConnected ? <CheckCircle size={24} className="text-[var(--taali-success)]" /> : <AlertTriangle size={24} className="text-[var(--taali-warning)]" />}
                     <div>
-                      <div className="font-bold text-lg">Status: {workableConnected ? 'Connected' : 'Not Connected'}</div>
-                      <div className="font-mono text-sm text-gray-600">
+                      <div className="font-bold text-lg text-[var(--taali-text)]">Status: {workableConnected ? 'Connected' : 'Not Connected'}</div>
+                      <div className="text-sm text-[var(--taali-muted)]">
                         {workableConnected ? 'Workable integration is active' : 'Connect your Workable account to sync candidates'}
                       </div>
                     </div>
@@ -554,40 +557,36 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     ConnectWorkableButton ? (
                       <ConnectWorkableButton onClick={openWorkableDrawer} />
                     ) : (
-                      <button
-                        type="button"
-                        className="px-4 py-2 font-mono text-sm font-bold border-2 border-black bg-black text-white hover:bg-gray-800"
-                        onClick={openWorkableDrawer}
-                      >
+                      <Button variant="primary" onClick={openWorkableDrawer}>
                         Connect Workable
-                      </button>
+                      </Button>
                     )
                   ) : null}
-                </div>
+                </Panel>
 
-                <div className="border-2 border-black p-6 space-y-4">
+                <Panel className="p-6 space-y-4">
                   <div>
-                    <div className="font-mono text-xs text-gray-500 mb-1">Organization</div>
-                    <div className="font-bold">{orgName}</div>
+                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Organization</div>
+                    <div className="font-bold text-[var(--taali-text)]">{orgName}</div>
                   </div>
                   <div>
-                    <div className="font-mono text-xs text-gray-500 mb-1">Admin Email</div>
-                    <div className="font-mono">{adminEmail}</div>
+                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Admin Email</div>
+                    <div className="font-mono text-[var(--taali-text)]">{adminEmail}</div>
                   </div>
                   <div>
-                    <div className="font-mono text-xs text-gray-500 mb-1">Connected Since</div>
-                    <div className="font-mono">{workableConnected ? connectedSince : '—'}</div>
+                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Connected Since</div>
+                    <div className="font-mono text-[var(--taali-text)]">{workableConnected ? connectedSince : '—'}</div>
                   </div>
                   <div>
-                    <div className="font-mono text-xs text-gray-500 mb-1">Last Sync</div>
-                    <div className="font-mono">{lastSyncAt} ({lastSyncStatus})</div>
+                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Last Sync</div>
+                    <div className="font-mono text-[var(--taali-text)]">{lastSyncAt} ({lastSyncStatus})</div>
                     {Array.isArray(orgData?.workable_last_sync_summary?.errors) && orgData.workable_last_sync_summary.errors.length > 0 && (
-                      <div className="mt-1 text-sm text-amber-800 font-mono">
+                      <div className="mt-1 text-sm text-[var(--taali-warning)] font-mono">
                         {orgData.workable_last_sync_summary.errors[0]}
                       </div>
                     )}
                   </div>
-                  <div className="rounded-lg border-2 border-gray-300 bg-gray-50 p-3 text-sm text-gray-700">
+                  <div className="border-2 border-[var(--taali-border-muted)] bg-[var(--taali-bg)] p-3 text-sm text-[var(--taali-text)]">
                     <div className="font-semibold mb-1">What happens when you sync</div>
                     <ul className="list-disc list-inside space-y-0.5">
                       <li>Open jobs from Workable are imported as roles; job specs are saved as attachments.</li>
@@ -595,24 +594,24 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       <li>For each candidate we fetch full profile data and try to download their CV from Workable.</li>
                       <li>CV–job match scores are computed when both CV and job spec are present.</li>
                     </ul>
-                    <p className="mt-2 text-xs text-gray-600">
+                    <p className="mt-2 text-xs text-[var(--taali-muted)]">
                       For a completely fresh import, use <strong>Remove all candidates and roles</strong> below, then <strong>Sync</strong>.
                     </p>
                   </div>
                   {workableSyncInProgress && (
-                    <div className="rounded-lg border-2 border-black bg-amber-50 p-4 flex items-center gap-3 mt-3">
-                      <Loader2 size={24} className="animate-spin text-amber-700 flex-shrink-0" />
+                    <div className="border-2 border-[var(--taali-border)] bg-[var(--taali-warning-soft)] p-4 flex items-center gap-3 mt-3">
+                      <Spinner size={24} className="flex-shrink-0" />
                       <div className="min-w-0 flex-1">
-                        <div className="font-semibold text-amber-900">
+                        <div className="font-semibold text-[var(--taali-text)]">
                           {workableSyncLoading ? 'Starting…' : 'Running in background'}
                         </div>
-                        <div className="text-sm text-amber-800">
+                        <div className="text-sm text-[var(--taali-text)]">
                           Sync is running in the background. We’ll notify you when it’s done. You can leave this page.
                         </div>
                         {orgData?.workable_sync_progress && (orgData.workable_sync_progress.current_step || orgData.workable_sync_progress.jobs_seen != null || orgData.workable_sync_progress.candidates_seen != null) ? (
                           <>
                             {(orgData.workable_sync_progress.current_step || orgData.workable_sync_progress.last_request) && (
-                              <div className="mt-2 font-mono text-xs text-amber-800">
+                              <div className="mt-2 font-mono text-xs text-[var(--taali-text)]">
                                 {orgData.workable_sync_progress.current_step && (
                                   <span>Step: {orgData.workable_sync_progress.current_step.replace(/_/g, ' ')}</span>
                                 )}
@@ -623,38 +622,39 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                                   <span> · Candidate {orgData.workable_sync_progress.current_candidate_index}</span>
                                 )}
                                 {orgData.workable_sync_progress.last_request && (
-                                  <span className="block mt-0.5 text-amber-700">Request: {orgData.workable_sync_progress.last_request}</span>
+                                  <span className="block mt-0.5 text-[var(--taali-muted)]">Request: {orgData.workable_sync_progress.last_request}</span>
                                 )}
                               </div>
                             )}
-                            <div className="mt-2 font-mono text-xs text-amber-900">
+                            <div className="mt-2 font-mono text-xs text-[var(--taali-text)]">
                               {orgData.workable_sync_progress.jobs_upserted ?? 0} roles imported · {orgData.workable_sync_progress.candidates_upserted ?? 0} candidates imported · {orgData.workable_sync_progress.cv_downloaded ?? 0} CVs
                             </div>
                           </>
                         ) : (
-                          <div className="mt-2 font-mono text-xs text-amber-700">Starting sync…</div>
+                          <div className="mt-2 font-mono text-xs text-[var(--taali-muted)]">Starting sync…</div>
                         )}
                         <div className="mt-3">
-                          <button
+                          <Button
                             type="button"
+                            variant="secondary"
+                            size="sm"
                             disabled={workableSyncCancelLoading}
-                            className="border-2 border-amber-700 px-3 py-1.5 font-mono text-xs font-semibold text-amber-900 bg-white hover:bg-amber-100 disabled:opacity-60"
                             onClick={handleCancelWorkableSync}
                           >
                             {workableSyncCancelLoading ? 'Stopping…' : 'Stop sync'}
-                          </button>
+                          </Button>
                         </div>
                       </div>
                     </div>
                   )}
-                  <hr className="border-black" />
+                  <hr className="border-[var(--taali-border)]" />
                   <div>
-                    <div className="font-bold mb-3">Sync + Invite Settings</div>
+                    <div className="font-bold mb-3 text-[var(--taali-text)]">Sync + Invite Settings</div>
                     <div className="grid md:grid-cols-2 gap-3">
                       <label className="block">
-                        <span className="font-mono text-xs text-gray-500 mb-1 block">Email mode</span>
-                        <select
-                          className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                        <span className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Email mode</span>
+                        <Select
+                          className="w-full"
                           value={workableForm.emailMode}
                           onChange={(e) => {
                             const nextMode = e.target.value;
@@ -667,84 +667,84 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         >
                           <option value="manual_taali">Manual</option>
                           <option value="workable_preferred_fallback_manual">Automated via Workable</option>
-                        </select>
-                        <span className="font-mono text-xs text-gray-500 mt-1 block">
+                        </Select>
+                        <span className="font-mono text-xs text-[var(--taali-muted)] mt-1 block">
                           Automated mode requires `w_candidates` scope and a Workable stage name.
                         </span>
                       </label>
                       <label className="block">
-                        <span className="font-mono text-xs text-gray-500 mb-1 block">Sync interval (minutes)</span>
-                        <input
+                        <span className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Sync interval (minutes)</span>
+                        <Input
                           type="number"
                           min={5}
                           max={1440}
-                          className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                          className="w-full"
                           value={workableForm.syncIntervalMinutes}
                           onChange={(e) => setWorkableForm((prev) => ({ ...prev, syncIntervalMinutes: e.target.value }))}
                         />
                       </label>
                       {workableForm.emailMode === 'workable_preferred_fallback_manual' ? (
                         <label className="block md:col-span-2">
-                          <span className="font-mono text-xs text-gray-500 mb-1 block">Invite stage name</span>
-                          <input
+                          <span className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Invite stage name</span>
+                          <Input
                             type="text"
-                            className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                            className="w-full"
                             placeholder="Enter exact Workable stage name"
                             value={workableForm.inviteStageName}
                             onChange={(e) => setWorkableForm((prev) => ({ ...prev, inviteStageName: e.target.value }))}
                           />
-                          <span className="font-mono text-xs text-gray-500 mt-1 block">
+                          <span className="font-mono text-xs text-[var(--taali-muted)] mt-1 block">
                             Keep this blank in manual mode. For automated mode, enter the exact stage already configured in Workable.
                           </span>
                         </label>
                       ) : null}
                     </div>
-                    <p className="mt-2 font-mono text-xs text-gray-600">
+                    <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
                       <strong>Sync (candidates only)</strong> is faster; use it first, then run <strong>Sync (full)</strong> to fetch CVs and TAALI scores.
                     </p>
                     <div className="mt-4 flex flex-wrap gap-3">
-                      <button
+                      <Button
                         type="button"
+                        variant="primary"
                         disabled={workableSaving}
-                        className="border-2 border-black px-4 py-2 font-mono text-sm font-bold text-white"
-                        style={{ backgroundColor: '#9D00FF' }}
                         onClick={handleSaveWorkable}
                       >
                         {workableSaving ? 'Saving…' : 'Save Workable Settings'}
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
+                        variant="secondary"
                         disabled={workableSyncLoading || workableSyncInProgress || !workableConnected}
-                        className="border-2 border-gray-600 px-4 py-2 font-mono text-sm font-bold bg-white text-gray-800 hover:bg-gray-100 disabled:opacity-60"
                         onClick={() => handleSyncWorkable({ skipCv: true })}
                       >
                         {workableSyncInProgress ? 'Running…' : 'Sync (candidates only)'}
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         type="button"
+                        variant="secondary"
+                        className="border-2 border-[var(--taali-border)] bg-[var(--taali-text)] text-[var(--taali-surface)] hover:opacity-90"
                         disabled={workableSyncLoading || workableSyncInProgress || !workableConnected}
-                        className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
                         onClick={() => handleSyncWorkable()}
                       >
                         {workableSyncInProgress ? 'Running in background' : 'Sync (full)'}
-                      </button>
+                      </Button>
                     </div>
                   </div>
 
-                  <div className="border-2 border-red-300 bg-red-50 p-6 mt-6 rounded-lg">
-                    <div className="font-bold text-red-900 mb-1">Remove all Workable data</div>
-                    <p className="text-sm text-red-800 mb-3">
+                  <Panel className="border-2 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-6 mt-6">
+                    <div className="font-bold text-[var(--taali-danger)] mb-1">Remove all Workable data</div>
+                    <p className="text-sm text-[var(--taali-text)] mb-3">
                       This will delete all roles, candidates, and applications that were imported from Workable.
                     </p>
-                    <button
+                    <Button
                       type="button"
+                      variant="danger"
                       disabled={clearWorkableLoading}
-                      className="border-2 border-red-600 px-4 py-2 font-mono text-sm font-bold text-red-700 bg-white hover:bg-red-100 disabled:opacity-60"
                       onClick={() => setClearWorkableModalOpen(true)}
                     >
                       {clearWorkableLoading ? 'Removing…' : 'Remove all candidates and roles'}
-                    </button>
-                  </div>
+                    </Button>
+                  </Panel>
 
                   {clearWorkableModalOpen ? (
                     <div
@@ -753,118 +753,119 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       aria-modal="true"
                       aria-labelledby="clear-workable-title"
                     >
-                      <div className="bg-white border-2 border-black rounded-lg shadow-xl max-w-md w-full p-6">
-                        <h2 id="clear-workable-title" className="text-lg font-bold mb-2">Remove all Workable data?</h2>
-                        <p className="text-sm text-gray-700 mb-4">
+                      <Panel className="border-2 border-[var(--taali-border)] shadow-xl max-w-md w-full p-6 bg-[var(--taali-surface)]">
+                        <h2 id="clear-workable-title" className="text-lg font-bold mb-2 text-[var(--taali-text)]">Remove all Workable data?</h2>
+                        <p className="text-sm text-[var(--taali-muted)] mb-4">
                           All roles, candidates, and applications imported from Workable will be deleted from this account.
                         </p>
                         <div className="flex gap-3 justify-end">
-                          <button
+                          <Button
                             type="button"
-                            className="border-2 border-black px-4 py-2 font-mono text-sm font-bold"
+                            variant="secondary"
                             disabled={clearWorkableLoading}
                             onClick={() => setClearWorkableModalOpen(false)}
                           >
                             Cancel
-                          </button>
-                          <button
+                          </Button>
+                          <Button
                             type="button"
-                            className="border-2 border-red-600 px-4 py-2 font-mono text-sm font-bold text-red-700 bg-red-50 hover:bg-red-100 disabled:opacity-60"
+                            variant="danger"
                             disabled={clearWorkableLoading}
                             onClick={handleClearWorkableData}
                           >
                             {clearWorkableLoading ? 'Removing…' : 'Remove all data'}
-                          </button>
+                          </Button>
                         </div>
-                      </div>
+                      </Panel>
                     </div>
                   ) : null}
-                </div>
+                </Panel>
               </div>
             )}
 
             {settingsTab === 'billing' && (
               <div>
-                <div className="border-2 border-black p-6 mb-8">
+                <Panel className="p-6 mb-8">
                   <div className="flex items-start justify-between flex-wrap gap-4">
                     <div>
-                      <div className="font-mono text-xs text-gray-500 mb-1">Current Plan</div>
-                      <div className="text-2xl font-bold">{billingPlan}</div>
-                      <div className="font-mono text-sm text-gray-600 mt-1">Billing provider: Lemon</div>
+                      <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Current Plan</div>
+                      <div className="text-2xl font-bold text-[var(--taali-text)]">{billingPlan}</div>
+                      <div className="font-mono text-sm text-[var(--taali-muted)] mt-1">Billing provider: Lemon</div>
                     </div>
                     <div className="text-right">
-                      <div className="font-mono text-xs text-gray-500 mb-1">Total usage</div>
-                      <div className="text-3xl font-bold" style={{ color: '#9D00FF' }}>{formatAed(monthlyCost)}</div>
-                      <div className="font-mono text-xs text-gray-500">{monthlyAssessments} assessments</div>
+                      <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Total usage</div>
+                      <div className="text-3xl font-bold text-[var(--taali-purple)]">{formatAed(monthlyCost)}</div>
+                      <div className="font-mono text-xs text-[var(--taali-muted)]">{monthlyAssessments} assessments</div>
                     </div>
                     <div className="text-right">
-                      <div className="font-mono text-xs text-gray-500 mb-1">Credits balance</div>
-                      <div className="text-3xl font-bold" style={{ color: '#9D00FF' }}>{creditsBalance}</div>
+                      <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Credits balance</div>
+                      <div className="text-3xl font-bold text-[var(--taali-purple)]">{creditsBalance}</div>
                     </div>
                   </div>
                   <div className="mt-5 grid md:grid-cols-3 gap-3">
                     {Object.entries(packCatalog).map(([packId, pack]) => (
-                      <button
+                      <Button
                         key={packId}
                         type="button"
+                        variant="secondary"
+                        className="flex items-center justify-between gap-2 !px-4 !py-3 border-2 border-[var(--taali-border)] bg-[var(--taali-text)] text-[var(--taali-surface)] hover:opacity-90"
                         onClick={() => handleAddCredits(packId)}
                         disabled={checkoutLoading}
-                        className="flex items-center justify-between gap-2 px-4 py-3 font-mono text-sm font-bold border-2 border-black bg-black text-white hover:bg-gray-800 disabled:opacity-60 disabled:cursor-not-allowed"
                       >
                         <span>{pack.label || packId}</span>
                         <span className="inline-flex items-center gap-1">
-                          {checkoutLoading ? <Loader2 size={14} className="animate-spin" /> : <CreditCard size={14} />}
+                          {checkoutLoading ? <Spinner size={14} /> : <CreditCard size={14} />}
                           +{pack.credits || 0}
                         </span>
-                      </button>
+                      </Button>
                     ))}
                   </div>
-                </div>
+                </Panel>
 
                 <div className="grid md:grid-cols-2 gap-4 mb-8">
-                  <div className="border-2 border-black p-4 bg-white">
-                    <div className="font-mono text-xs text-gray-500 mb-1">Daily spend threshold</div>
-                    <div className="text-2xl font-bold">{formatAed(thresholdConfig.daily_spend_usd ?? 0, { maximumFractionDigits: 2 })}</div>
-                    <div className={`font-mono text-xs mt-2 ${thresholdStatus.daily_spend_exceeded ? 'text-red-700' : 'text-green-700'}`}>
+                  <Panel className="p-4">
+                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Daily spend threshold</div>
+                    <div className="text-2xl font-bold text-[var(--taali-text)]">{formatAed(thresholdConfig.daily_spend_usd ?? 0, { maximumFractionDigits: 2 })}</div>
+                    <div className={`font-mono text-xs mt-2 ${thresholdStatus.daily_spend_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
                       Today: {formatAed(Number(spendSummary.daily_spend_usd || 0), { maximumFractionDigits: 2 })} • {thresholdStatus.daily_spend_exceeded ? 'Exceeded' : 'Within threshold'}
                     </div>
-                  </div>
-                  <div className="border-2 border-black p-4 bg-white">
-                    <div className="font-mono text-xs text-gray-500 mb-1">Cost / completed assessment threshold</div>
-                    <div className="text-2xl font-bold">{formatAed(thresholdConfig.cost_per_completed_assessment_usd ?? 0, { maximumFractionDigits: 2 })}</div>
-                    <div className={`font-mono text-xs mt-2 ${thresholdStatus.cost_per_completed_assessment_exceeded ? 'text-red-700' : 'text-green-700'}`}>
+                  </Panel>
+                  <Panel className="p-4">
+                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Cost / completed assessment threshold</div>
+                    <div className="text-2xl font-bold text-[var(--taali-text)]">{formatAed(thresholdConfig.cost_per_completed_assessment_usd ?? 0, { maximumFractionDigits: 2 })}</div>
+                    <div className={`font-mono text-xs mt-2 ${thresholdStatus.cost_per_completed_assessment_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
                       Current: {formatAed(Number(spendSummary.cost_per_completed_assessment_usd || 0), { maximumFractionDigits: 2 })} • {thresholdStatus.cost_per_completed_assessment_exceeded ? 'Exceeded' : 'Within threshold'}
                     </div>
-                  </div>
+                  </Panel>
                 </div>
 
-                <div className="border-2 border-black">
-                  <div className="border-b-2 border-black px-6 py-4 bg-black text-white">
+                <div className="border-2 border-[var(--taali-border)]">
+                  <div className="border-b-2 border-[var(--taali-border)] px-6 py-4 bg-[var(--taali-text)] text-[var(--taali-surface)]">
                     <h3 className="font-bold">Usage History</h3>
                   </div>
                   <table className="w-full">
                     <thead>
-                      <tr className="border-b-2 border-black bg-gray-50">
-                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Date</th>
-                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Candidate</th>
-                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Task</th>
-                        <th className="text-right px-6 py-3 font-mono text-xs font-bold uppercase">Cost</th>
+                      <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-bg)]">
+                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Date</th>
+                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Candidate</th>
+                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Task</th>
+                        <th className="text-right px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Cost</th>
                       </tr>
                     </thead>
                     <tbody>
                       {usageHistory.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="px-6 py-8 font-mono text-sm text-gray-500 text-center">
+                          <td colSpan={4} className="px-6 py-8 font-mono text-sm text-[var(--taali-muted)] text-center">
                             No usage yet. Completed assessments will appear here.
                           </td>
                         </tr>
                       ) : (
                         usageHistory.map((row, i) => (
-                          <tr key={row.assessment_id ?? i} className="border-b border-gray-200 hover:bg-gray-50">
-                            <td className="px-6 py-3 font-mono text-sm">{row.date}</td>
-                            <td className="px-6 py-3 text-sm">{row.candidate}</td>
-                            <td className="px-6 py-3 font-mono text-sm">{row.task}</td>
-                            <td className="px-6 py-3 font-mono text-sm text-right font-bold">{toAedLabel(row.cost)}</td>
+                          <tr key={row.assessment_id ?? i} className="border-b border-[var(--taali-border-muted)] hover:bg-[var(--taali-bg)]">
+                            <td className="px-6 py-3 font-mono text-sm text-[var(--taali-text)]">{row.date}</td>
+                            <td className="px-6 py-3 text-sm text-[var(--taali-text)]">{row.candidate}</td>
+                            <td className="px-6 py-3 font-mono text-sm text-[var(--taali-text)]">{row.task}</td>
+                            <td className="px-6 py-3 font-mono text-sm text-right font-bold text-[var(--taali-text)]">{toAedLabel(row.cost)}</td>
                           </tr>
                         ))
                       )}
@@ -876,51 +877,48 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
             {settingsTab === 'team' && (
               <div className="space-y-6">
-                <div className="border-2 border-black p-6">
-                  <h3 className="text-xl font-bold mb-4">Invite Team Member</h3>
+                <Panel className="p-6">
+                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Invite Team Member</h3>
                   <form className="grid md:grid-cols-3 gap-3" onSubmit={handleInvite}>
-                    <input
+                    <Input
                       type="text"
-                      className="border-2 border-black px-3 py-2 font-mono text-sm"
                       placeholder="Full name"
                       value={inviteName}
                       onChange={(e) => setInviteName(e.target.value)}
                     />
-                    <input
+                    <Input
                       type="email"
-                      className="border-2 border-black px-3 py-2 font-mono text-sm"
                       placeholder="Email"
                       value={inviteEmail}
                       onChange={(e) => setInviteEmail(e.target.value)}
                     />
-                    <button
+                    <Button
                       type="submit"
+                      variant="primary"
                       disabled={inviteLoading}
-                      className="border-2 border-black px-4 py-2 font-mono font-bold text-white"
-                      style={{ backgroundColor: '#9D00FF' }}
                     >
                       {inviteLoading ? 'Inviting…' : 'Invite'}
-                    </button>
+                    </Button>
                   </form>
-                </div>
-                <div className="border-2 border-black">
-                  <div className="border-b-2 border-black px-6 py-4 bg-black text-white">
+                </Panel>
+                <div className="border-2 border-[var(--taali-border)]">
+                  <div className="border-b-2 border-[var(--taali-border)] px-6 py-4 bg-[var(--taali-text)] text-[var(--taali-surface)]">
                     <h3 className="font-bold">Team Members</h3>
                   </div>
                   <table className="w-full">
                     <thead>
-                      <tr className="border-b-2 border-black bg-gray-50">
-                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Name</th>
-                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Email</th>
+                      <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-bg)]">
+                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Name</th>
+                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Email</th>
                       </tr>
                     </thead>
                     <tbody>
                       {teamMembers.length === 0 ? (
-                        <tr><td colSpan={2} className="px-6 py-8 font-mono text-sm text-gray-500 text-center">No members yet.</td></tr>
+                        <tr><td colSpan={2} className="px-6 py-8 font-mono text-sm text-[var(--taali-muted)] text-center">No members yet.</td></tr>
                       ) : teamMembers.map((m) => (
-                        <tr key={m.id} className="border-b border-gray-200">
-                          <td className="px-6 py-3">{m.full_name || '—'}</td>
-                          <td className="px-6 py-3 font-mono text-sm">{m.email}</td>
+                        <tr key={m.id} className="border-b border-[var(--taali-border-muted)]">
+                          <td className="px-6 py-3 text-[var(--taali-text)]">{m.full_name || '—'}</td>
+                          <td className="px-6 py-3 font-mono text-sm text-[var(--taali-text)]">{m.email}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -931,206 +929,189 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
             {settingsTab === 'enterprise' && (
               <div className="space-y-6">
-                <div className="border-2 border-black p-6">
-                  <h3 className="text-xl font-bold mb-4">Enterprise Access Controls</h3>
+                <Panel className="p-6">
+                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Enterprise Access Controls</h3>
                   <div className="space-y-4">
                     <div>
-                      <label className="font-mono text-xs text-gray-500 mb-1 block">Allowed email domains (comma separated)</label>
-                      <input
+                      <label className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Allowed email domains (comma separated)</label>
+                      <Input
                         type="text"
-                        className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                        className="w-full"
                         placeholder="acme.com, subsidiary.org"
                         value={enterpriseForm.allowedEmailDomains}
                         onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, allowedEmailDomains: e.target.value }))}
                       />
-                      <div className="font-mono text-xs text-gray-500 mt-1">
+                      <div className="font-mono text-xs text-[var(--taali-muted)] mt-1">
                         Leave empty to allow any domain.
                       </div>
                     </div>
                     <label className="flex items-center gap-3 cursor-pointer">
                       <input
                         type="checkbox"
-                        className="w-4 h-4 accent-purple-600"
+                        className="w-4 h-4 accent-[var(--taali-purple)]"
                         checked={enterpriseForm.ssoEnforced}
                         onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, ssoEnforced: e.target.checked }))}
                       />
-                      <span className="font-mono text-sm">Enforce SSO (blocks password login and invites)</span>
+                      <span className="text-sm text-[var(--taali-text)]">Enforce SSO (blocks password login and invites)</span>
                     </label>
                     <label className="flex items-center gap-3 cursor-pointer">
                       <input
                         type="checkbox"
-                        className="w-4 h-4 accent-purple-600"
+                        className="w-4 h-4 accent-[var(--taali-purple)]"
                         checked={enterpriseForm.samlEnabled}
                         onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, samlEnabled: e.target.checked }))}
                       />
-                      <span className="font-mono text-sm">Enable SAML metadata configuration</span>
+                      <span className="text-sm text-[var(--taali-text)]">Enable SAML metadata configuration</span>
                     </label>
                     <div>
-                      <label className="font-mono text-xs text-gray-500 mb-1 block">SAML metadata URL</label>
-                      <input
+                      <label className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">SAML metadata URL</label>
+                      <Input
                         type="url"
-                        className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
+                        className="w-full"
                         placeholder="https://idp.example.com/metadata.xml"
                         value={enterpriseForm.samlMetadataUrl}
                         onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, samlMetadataUrl: e.target.value }))}
                       />
                     </div>
-                    <button
+                    <Button
                       type="button"
+                      variant="primary"
                       disabled={enterpriseSaving}
-                      className="border-2 border-black px-4 py-2 font-mono text-sm font-bold text-white"
-                      style={{ backgroundColor: '#9D00FF' }}
                       onClick={handleSaveEnterprise}
                     >
                       {enterpriseSaving ? 'Saving…' : 'Save enterprise settings'}
-                    </button>
+                    </Button>
                   </div>
-                </div>
+                </Panel>
               </div>
             )}
 
             {settingsTab === 'preferences' && (
-              <div className="border-2 border-black p-6">
-                <h3 className="text-xl font-bold mb-4">Display Preferences</h3>
-                <label className="flex items-center gap-3 font-mono text-sm">
+              <Panel className="p-6">
+                <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Display Preferences</h3>
+                <label className="flex items-center gap-3 text-sm text-[var(--taali-text)] cursor-pointer">
                   <input
                     type="checkbox"
                     checked={darkMode}
                     onChange={(e) => setDarkMode(e.target.checked)}
-                    className="w-4 h-4 accent-purple-600"
+                    className="w-4 h-4 accent-[var(--taali-purple)]"
                   />
                   Enable dark mode
                 </label>
-              </div>
+              </Panel>
             )}
           </>
         )}
       </div>
-      {workableDrawerOpen && settingsTab === 'workable' ? (
-        <div className="fixed inset-0 z-50">
-          <button
-            type="button"
-            className="absolute inset-0 bg-black/50"
-            onClick={closeWorkableDrawer}
-            aria-label="Close Workable connection drawer"
-          />
-          <aside className="absolute right-0 top-0 h-full w-full max-w-xl bg-white border-l-2 border-black shadow-xl overflow-y-auto">
-            <div className="p-6 border-b-2 border-black flex items-center justify-between">
-              <div>
-                <div className="text-xl font-bold">Connect Workable</div>
-                <div className="font-mono text-xs text-gray-600">Choose connection mode and rights before connecting.</div>
-              </div>
-              <button
+      <Sheet
+        open={workableDrawerOpen && settingsTab === 'workable'}
+        onClose={closeWorkableDrawer}
+        title="Connect Workable"
+        description="Choose connection mode and rights before connecting."
+        footer={null}
+      >
+        <div className="space-y-5">
+          <div className="grid grid-cols-2 border-2 border-[var(--taali-border)]">
+            <button
+              type="button"
+              className={`px-4 py-2 font-mono text-sm font-bold border-r-2 border-[var(--taali-border)] ${workableConnectMode === 'oauth' ? 'bg-[var(--taali-text)] text-[var(--taali-surface)]' : 'bg-[var(--taali-surface)] text-[var(--taali-text)] hover:bg-[var(--taali-bg)]'}`}
+              onClick={() => {
+                setWorkableConnectMode('oauth');
+                setWorkableConnectError('');
+              }}
+            >
+              OAuth
+            </button>
+            <button
+              type="button"
+              className={`px-4 py-2 font-mono text-sm font-bold ${workableConnectMode === 'token' ? 'bg-[var(--taali-text)] text-[var(--taali-surface)]' : 'bg-[var(--taali-surface)] text-[var(--taali-text)] hover:bg-[var(--taali-bg)]'}`}
+              onClick={() => {
+                setWorkableConnectMode('token');
+                setWorkableConnectError('');
+              }}
+            >
+              API Token
+            </button>
+          </div>
+
+          <Panel className="p-4 space-y-3">
+            <div className="font-bold text-[var(--taali-text)]">Token Rights / Scopes</div>
+            {WORKABLE_SCOPE_OPTIONS.map((scope) => (
+              <label key={scope.id} className="flex items-start gap-3 cursor-pointer">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 w-4 h-4 accent-[var(--taali-purple)]"
+                  checked={Boolean(workableSelectedScopes[scope.id])}
+                  onChange={() => toggleWorkableScope(scope.id)}
+                />
+                <span>
+                  <span className="font-mono text-sm font-bold text-[var(--taali-text)]">{scope.label}</span>
+                  <span className="font-mono text-xs text-[var(--taali-muted)] block">{scope.description}</span>
+                </span>
+              </label>
+            ))}
+            <div className="font-mono text-xs text-[var(--taali-muted)]">
+              Selected scopes: {workableScopes}
+            </div>
+            <div className="font-mono text-xs text-[var(--taali-muted)]">
+              Mode after connect: {workableWriteScopeEnabled ? 'Write-enabled (Workable invite path possible)' : 'Read-only (manual TAALI invites only)'}
+            </div>
+          </Panel>
+
+          {workableConnectMode === 'oauth' ? (
+            <Panel className="p-4 space-y-3">
+              <div className="font-bold text-[var(--taali-text)]">OAuth Setup</div>
+              <div className="font-mono text-xs text-[var(--taali-muted)]">Callback URL: {workableCallbackUrl}</div>
+              <Button
                 type="button"
-                className="border-2 border-black px-3 py-1 font-mono text-xs font-bold hover:bg-gray-100"
-                onClick={closeWorkableDrawer}
+                variant="secondary"
+                className="border-2 border-[var(--taali-border)] bg-[var(--taali-text)] text-[var(--taali-surface)] hover:opacity-90"
+                disabled={workableOAuthLoading}
+                onClick={handleConnectWorkableOAuth}
               >
-                Close
-              </button>
+                {workableOAuthLoading ? 'Redirecting…' : 'Continue with Workable OAuth'}
+              </Button>
+            </Panel>
+          ) : (
+            <form className="border-2 border-[var(--taali-border)] p-4 space-y-3 taali-panel" onSubmit={handleConnectWorkableToken}>
+              <div className="font-bold text-[var(--taali-text)]">API Token Setup</div>
+              <Input
+                type="text"
+                placeholder="Workable subdomain (e.g. acme)"
+                className="w-full"
+                value={workableTokenForm.subdomain}
+                onChange={(e) => setWorkableTokenForm((prev) => ({ ...prev, subdomain: e.target.value }))}
+              />
+              <Input
+                type="password"
+                placeholder="Workable API access token"
+                className="w-full"
+                value={workableTokenForm.accessToken}
+                onChange={(e) => setWorkableTokenForm((prev) => ({ ...prev, accessToken: e.target.value }))}
+              />
+              <Button
+                type="submit"
+                variant="secondary"
+                className="border-2 border-[var(--taali-border)] bg-[var(--taali-text)] text-[var(--taali-surface)] hover:opacity-90"
+                disabled={workableTokenSaving}
+              >
+                {workableTokenSaving ? 'Connecting…' : 'Connect via API Token'}
+              </Button>
+            </form>
+          )}
+
+          {missingRequiredWorkableScopes.length > 0 ? (
+            <div className="font-mono text-xs text-[var(--taali-danger)]">
+              Missing required scopes: {missingRequiredWorkableScopes.join(', ')}
             </div>
-
-            <div className="p-6 space-y-5">
-              <div className="grid grid-cols-2 border-2 border-black">
-                <button
-                  type="button"
-                  className={`px-4 py-2 font-mono text-sm font-bold border-r-2 border-black ${workableConnectMode === 'oauth' ? 'bg-black text-white' : 'bg-white hover:bg-gray-100'}`}
-                  onClick={() => {
-                    setWorkableConnectMode('oauth');
-                    setWorkableConnectError('');
-                  }}
-                >
-                  OAuth
-                </button>
-                <button
-                  type="button"
-                  className={`px-4 py-2 font-mono text-sm font-bold ${workableConnectMode === 'token' ? 'bg-black text-white' : 'bg-white hover:bg-gray-100'}`}
-                  onClick={() => {
-                    setWorkableConnectMode('token');
-                    setWorkableConnectError('');
-                  }}
-                >
-                  API Token
-                </button>
-              </div>
-
-              <div className="border-2 border-black p-4 space-y-3">
-                <div className="font-bold">Token Rights / Scopes</div>
-                {WORKABLE_SCOPE_OPTIONS.map((scope) => (
-                  <label key={scope.id} className="flex items-start gap-3 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      className="mt-0.5 w-4 h-4 accent-purple-600"
-                      checked={Boolean(workableSelectedScopes[scope.id])}
-                      onChange={() => toggleWorkableScope(scope.id)}
-                    />
-                    <span>
-                      <span className="font-mono text-sm font-bold">{scope.label}</span>
-                      <span className="font-mono text-xs text-gray-600 block">{scope.description}</span>
-                    </span>
-                  </label>
-                ))}
-                <div className="font-mono text-xs text-gray-600">
-                  Selected scopes: {workableScopes}
-                </div>
-                <div className="font-mono text-xs text-gray-600">
-                  Mode after connect: {workableWriteScopeEnabled ? 'Write-enabled (Workable invite path possible)' : 'Read-only (manual TAALI invites only)'}
-                </div>
-              </div>
-
-              {workableConnectMode === 'oauth' ? (
-                <div className="border-2 border-black p-4 space-y-3">
-                  <div className="font-bold">OAuth Setup</div>
-                  <div className="font-mono text-xs text-gray-600">Callback URL: {workableCallbackUrl}</div>
-                  <button
-                    type="button"
-                    disabled={workableOAuthLoading}
-                    onClick={handleConnectWorkableOAuth}
-                    className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
-                  >
-                    {workableOAuthLoading ? 'Redirecting…' : 'Continue with Workable OAuth'}
-                  </button>
-                </div>
-              ) : (
-                <form className="border-2 border-black p-4 space-y-3" onSubmit={handleConnectWorkableToken}>
-                  <div className="font-bold">API Token Setup</div>
-                  <input
-                    type="text"
-                    placeholder="Workable subdomain (e.g. acme)"
-                    className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
-                    value={workableTokenForm.subdomain}
-                    onChange={(e) => setWorkableTokenForm((prev) => ({ ...prev, subdomain: e.target.value }))}
-                  />
-                  <input
-                    type="password"
-                    placeholder="Workable API access token"
-                    className="w-full border-2 border-black px-3 py-2 font-mono text-sm"
-                    value={workableTokenForm.accessToken}
-                    onChange={(e) => setWorkableTokenForm((prev) => ({ ...prev, accessToken: e.target.value }))}
-                  />
-                  <button
-                    type="submit"
-                    disabled={workableTokenSaving}
-                    className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
-                  >
-                    {workableTokenSaving ? 'Connecting…' : 'Connect via API Token'}
-                  </button>
-                </form>
-              )}
-
-              {missingRequiredWorkableScopes.length > 0 ? (
-                <div className="font-mono text-xs text-red-700">
-                  Missing required scopes: {missingRequiredWorkableScopes.join(', ')}
-                </div>
-              ) : null}
-              {workableConnectError ? (
-                <div className="font-mono text-xs text-red-700">
-                  {workableConnectError}
-                </div>
-              ) : null}
+          ) : null}
+          {workableConnectError ? (
+            <div className="font-mono text-xs text-[var(--taali-danger)]">
+              {workableConnectError}
             </div>
-          </aside>
+          ) : null}
         </div>
-      ) : null}
+      </Sheet>
     </div>
   );
 };

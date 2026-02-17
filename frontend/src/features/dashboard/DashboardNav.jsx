@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { LogOut } from 'lucide-react';
+import { LogOut, Menu, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { organizations as organizationsApi } from '../../shared/api';
 import { Logo } from '../../shared/ui/Branding';
@@ -19,11 +19,20 @@ const pickOrganizationName = (user) => String(
   || ''
 ).trim();
 
+const NAV_ITEMS = [
+  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'candidates', label: 'Candidates' },
+  { id: 'tasks', label: 'Tasks' },
+  { id: 'analytics', label: 'Analytics' },
+  { id: 'settings', label: 'Settings' },
+];
+
 export const DashboardNav = ({ currentPage, onNavigate }) => {
   const { user, logout } = useAuth();
   const userName = pickUserName(user);
   const fallbackOrgName = pickOrganizationName(user);
   const [resolvedOrgName, setResolvedOrgName] = useState(fallbackOrgName);
+  const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
     setResolvedOrgName(fallbackOrgName);
@@ -62,19 +71,18 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
     onNavigate('landing');
   };
 
+  const handleNav = (id) => {
+    onNavigate(id);
+    setMobileOpen(false);
+  };
+
   return (
-    <nav className="taali-nav">
+    <nav className="taali-nav border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
       <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
         <div className="flex items-center gap-8">
           <Logo onClick={() => onNavigate('dashboard')} />
           <div className="hidden md:flex items-center gap-1">
-            {[
-              { id: 'dashboard', label: 'Dashboard' },
-              { id: 'candidates', label: 'Candidates' },
-              { id: 'tasks', label: 'Tasks' },
-              { id: 'analytics', label: 'Analytics' },
-              { id: 'settings', label: 'Settings' },
-            ].map((item) => (
+            {NAV_ITEMS.map((item) => (
               <Button
                 key={item.id}
                 variant={currentPage === item.id ? 'primary' : 'ghost'}
@@ -89,19 +97,25 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
         </div>
         <div className="flex items-center gap-4">
           <div className="hidden sm:flex flex-col text-right leading-tight">
-            <span className="font-mono text-sm">{displayName}</span>
-            <span className="font-mono text-xs text-gray-600">{orgName}</span>
+            <span className="font-mono text-sm text-[var(--taali-text)]">{displayName}</span>
+            <span className="font-mono text-xs text-[var(--taali-muted)]">{orgName}</span>
           </div>
-          <div
-            className="w-9 h-9 border-2 border-black flex items-center justify-center text-white font-bold text-sm"
-            style={{ backgroundColor: 'var(--taali-purple)' }}
-          >
+          <div className="w-9 h-9 border-2 border-[var(--taali-border)] flex items-center justify-center text-white font-bold text-sm bg-[var(--taali-purple)]">
             {initials}
           </div>
           <Button
             variant="ghost"
             size="sm"
-            className="!p-2"
+            className="!p-2 md:hidden"
+            onClick={() => setMobileOpen((o) => !o)}
+            aria-label={mobileOpen ? 'Close menu' : 'Open menu'}
+          >
+            {mobileOpen ? <X size={20} /> : <Menu size={20} />}
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="!p-2 hidden md:flex"
             onClick={handleLogout}
             title="Sign out"
           >
@@ -109,6 +123,29 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
           </Button>
         </div>
       </div>
+      {mobileOpen && (
+        <div className="md:hidden border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-6 py-4 flex flex-col gap-2">
+          {NAV_ITEMS.map((item) => (
+            <Button
+              key={item.id}
+              variant={currentPage === item.id ? 'primary' : 'ghost'}
+              size="sm"
+              className="font-mono w-full justify-start"
+              onClick={() => handleNav(item.id)}
+            >
+              {item.label}
+            </Button>
+          ))}
+          <Button
+            variant="ghost"
+            size="sm"
+            className="font-mono w-full justify-start mt-2"
+            onClick={handleLogout}
+          >
+            <LogOut size={16} className="mr-2" /> Sign out
+          </Button>
+        </div>
+      )}
     </nav>
   );
 };

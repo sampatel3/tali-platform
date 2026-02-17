@@ -1,33 +1,31 @@
 import React from 'react';
 import { Check, Timer } from 'lucide-react';
+import { Badge } from './TaaliPrimitives';
 
 export const StatsCard = ({ icon: Icon, label, value, change }) => (
   <div
-    className="border-2 border-black bg-white p-6 hover:shadow-lg transition-shadow cursor-pointer"
+    className="border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] p-6 hover:shadow-lg transition-shadow cursor-pointer"
     onClick={() => {}}
   >
-    <Icon size={32} className="mb-4" />
-    <div className="font-mono text-sm text-gray-600 mb-2">{label}</div>
-    <div className="text-3xl font-bold mb-1">{value}</div>
-    <div className="font-mono text-xs text-gray-500">{change}</div>
+    <Icon size={32} className="mb-4 text-[var(--taali-text)]" />
+    <div className="font-mono text-sm text-[var(--taali-muted)] mb-2">{label}</div>
+    <div className="text-3xl font-bold mb-1 text-[var(--taali-text)]">{value}</div>
+    <div className="font-mono text-xs text-[var(--taali-muted)]">{change}</div>
   </div>
 );
 
 export const StatusBadge = ({ status }) => {
   if (status === 'completed') {
     return (
-      <span
-        className="inline-flex items-center gap-1 px-3 py-1 text-xs font-mono font-bold border-2"
-        style={{ borderColor: '#9D00FF', backgroundColor: '#f3e8ff', color: '#9D00FF' }}
-      >
+      <Badge variant="purple" className="inline-flex gap-1">
         <Check size={12} /> Completed
-      </span>
+      </Badge>
     );
   }
 
   return (
-    <span className="inline-flex items-center gap-1 px-3 py-1 text-xs font-mono font-bold border-2 border-black bg-yellow-300 text-black">
+    <Badge variant="warning" className="inline-flex gap-1">
       <Timer size={12} /> In Progress
-    </span>
+    </Badge>
   );
 };

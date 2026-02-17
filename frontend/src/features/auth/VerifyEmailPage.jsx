@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
-import { AlertTriangle, CheckCircle, Loader2 } from 'lucide-react';
+import { AlertTriangle, CheckCircle } from 'lucide-react';
 
 import { auth } from '../../shared/api';
 import { Logo } from '../../shared/ui/Branding';
+import { Button, Spinner } from '../../shared/ui/TaaliPrimitives';
 
 export const VerifyEmailPage = ({ onNavigate, token }) => {
   const [status, setStatus] = useState('loading');
@@ -35,47 +36,39 @@ export const VerifyEmailPage = ({ onNavigate, token }) => {
   }, [token]);
 
   return (
-    <div className="min-h-screen bg-white flex flex-col">
-      <nav className="border-b-2 border-black bg-white">
+    <div className="min-h-screen bg-[var(--taali-surface)] flex flex-col">
+      <nav className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
         <div className="max-w-7xl mx-auto px-6 py-4">
           <Logo onClick={() => onNavigate('landing')} />
         </div>
       </nav>
       <div className="flex-1 flex items-center justify-center p-6">
-        <div className="border-2 border-black p-8 text-center max-w-md w-full">
+        <div className="border-2 border-[var(--taali-border)] p-8 text-center max-w-md w-full bg-[var(--taali-surface)]">
           {status === 'loading' && (
             <>
-              <Loader2 size={48} className="mx-auto mb-4 animate-spin" style={{ color: '#9D00FF' }} />
+              <Spinner size={48} className="mx-auto mb-4" />
               <h2 className="text-2xl font-bold mb-2">Verifying your email...</h2>
-              <p className="font-mono text-sm text-gray-600">Please wait a moment.</p>
+              <p className="text-sm text-[var(--taali-muted)]">Please wait a moment.</p>
             </>
           )}
           {status === 'success' && (
             <>
-              <CheckCircle size={48} className="mx-auto mb-4" style={{ color: '#9D00FF' }} />
+              <CheckCircle size={48} className="mx-auto mb-4 text-[var(--taali-purple)]" />
               <h2 className="text-2xl font-bold mb-2">Email verified!</h2>
-              <p className="font-mono text-sm text-gray-600 mb-6">{message}</p>
-              <button
-                className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors"
-                style={{ backgroundColor: '#9D00FF' }}
-                onClick={() => onNavigate('login')}
-              >
+              <p className="text-sm text-[var(--taali-muted)] mb-6">{message}</p>
+              <Button variant="primary" className="w-full" onClick={() => onNavigate('login')}>
                 Sign In
-              </button>
+              </Button>
             </>
           )}
           {status === 'error' && (
             <>
-              <AlertTriangle size={48} className="mx-auto mb-4 text-amber-500" />
+              <AlertTriangle size={48} className="mx-auto mb-4 text-[var(--taali-warning)]" />
               <h2 className="text-2xl font-bold mb-2">Verification failed</h2>
-              <p className="font-mono text-sm text-gray-600 mb-6">{message}</p>
-              <button
-                className="w-full border-2 border-black py-3 font-bold text-white hover:bg-black transition-colors"
-                style={{ backgroundColor: '#9D00FF' }}
-                onClick={() => onNavigate('login')}
-              >
+              <p className="text-sm text-[var(--taali-muted)] mb-6">{message}</p>
+              <Button variant="primary" className="w-full" onClick={() => onNavigate('login')}>
                 Go to Sign In
-              </button>
+              </Button>
             </>
           )}
         </div>

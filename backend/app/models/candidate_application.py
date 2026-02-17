@@ -1,4 +1,4 @@
-from sqlalchemy import Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -20,6 +20,8 @@ class CandidateApplication(Base):
     source = Column(String, default="manual", nullable=False)
     workable_candidate_id = Column(String, nullable=True, index=True)
     workable_stage = Column(String, nullable=True)
+    workable_sourced = Column(Boolean, nullable=True)
+    workable_profile_url = Column(String, nullable=True)
     workable_score_raw = Column(Float, nullable=True)
     workable_score = Column(Float, nullable=True)
     workable_score_source = Column(String, nullable=True)

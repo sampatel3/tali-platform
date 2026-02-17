@@ -68,6 +68,16 @@ def role_to_response(role: Role) -> RoleResponse:
     )
 
 
+def _candidate_location(candidate) -> str | None:
+    if not candidate:
+        return None
+    city = (candidate.location_city or "").strip()
+    country = (candidate.location_country or "").strip()
+    if city and country:
+        return f"{city}, {country}"
+    return city or country or None
+
+
 def application_to_response(app: CandidateApplication) -> ApplicationResponse:
     candidate = app.candidate
     return ApplicationResponse(
@@ -92,6 +102,21 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
         workable_score=app.workable_score,
         workable_score_source=app.workable_score_source,
         rank_score=app.rank_score,
+        candidate_headline=(candidate.headline if candidate else None),
+        candidate_image_url=(candidate.image_url if candidate else None),
+        candidate_location=_candidate_location(candidate),
+        candidate_phone=(candidate.phone if candidate else None),
+        candidate_profile_url=(candidate.profile_url if candidate else None),
+        candidate_social_profiles=(candidate.social_profiles if candidate else None),
+        candidate_tags=(candidate.tags if candidate else None),
+        candidate_skills=(candidate.skills if candidate else None),
+        candidate_education=(candidate.education_entries if candidate else None),
+        candidate_experience=(candidate.experience_entries if candidate else None),
+        candidate_summary=(candidate.summary if candidate else None),
+        candidate_workable_created_at=(candidate.workable_created_at if candidate else None),
+        workable_sourced=app.workable_sourced,
+        workable_profile_url=app.workable_profile_url,
+        workable_enriched=(candidate.workable_enriched if candidate else None),
         created_at=app.created_at,
         updated_at=app.updated_at,
     )

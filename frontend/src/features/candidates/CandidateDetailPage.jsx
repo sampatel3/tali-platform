@@ -56,10 +56,10 @@ export const CandidateDetailPage = ({ candidate, onNavigate, onDeleted, onNoteAd
     .filter(Boolean);
 
   const getRecommendation = (score100) => {
-    if (score100 >= 80) return { label: 'STRONG HIRE', color: '#16a34a' };
-    if (score100 >= 65) return { label: 'HIRE', color: '#2563eb' };
-    if (score100 >= 50) return { label: 'CONSIDER', color: '#d97706' };
-    return { label: 'NOT RECOMMENDED', color: '#FF0033' };
+    if (score100 >= 80) return { label: 'STRONG HIRE', color: 'var(--taali-success)' };
+    if (score100 >= 65) return { label: 'HIRE', color: 'var(--taali-info)' };
+    if (score100 >= 50) return { label: 'CONSIDER', color: 'var(--taali-warning)' };
+    return { label: 'NOT RECOMMENDED', color: 'var(--taali-danger)' };
   };
 
   const score100 = candidate?._raw?.final_score || (candidate?.score ? candidate.score * 10 : null);

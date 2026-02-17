@@ -127,7 +127,7 @@ export const AssessmentWorkspace = ({
 
       <div className="h-[40%] bg-black text-white p-4 font-mono text-sm overflow-y-auto">
         <div className="flex items-center gap-2 mb-3">
-          <span className="font-bold" style={{ color: '#9D00FF' }}>
+          <span className="font-bold text-[var(--taali-purple)]">
             Output:
           </span>
           {executing && (

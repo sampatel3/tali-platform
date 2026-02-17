@@ -53,8 +53,7 @@ export const AssessmentTopBar = ({
       <button
         onClick={onSubmit}
         disabled={isTimerPaused}
-        className="border-2 border-black px-6 py-1.5 font-mono text-sm font-bold text-white hover:bg-black transition-colors"
-        style={{ backgroundColor: '#9D00FF' }}
+        className="border-2 border-[var(--taali-border)] px-6 py-1.5 font-mono text-sm font-bold text-white bg-[var(--taali-purple)] hover:opacity-90 transition-colors"
       >
         Submit
       </button>

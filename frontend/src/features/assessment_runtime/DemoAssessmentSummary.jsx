@@ -84,8 +84,8 @@ export const DemoAssessmentSummary = ({
                   <Radar
                     name="Your TAALI profile"
                     dataKey="candidateLevel"
-                    stroke="#9D00FF"
-                    fill="#9D00FF"
+                    stroke="var(--taali-purple)"
+                    fill="var(--taali-purple)"
                     fillOpacity={0.18}
                   />
                   <Radar
