@@ -15,6 +15,11 @@ from ....models.organization import Organization
 from ....models.role import Role
 from ....platform.config import settings
 from ....services.document_service import extract_text, save_file_locally
+from ....services.fit_matching_service import calculate_cv_job_match_sync
+from .service import WorkableRateLimitError, WorkableService
+
+logger = logging.getLogger(__name__)
+
 
 def _format_job_spec_from_api(job_data: dict) -> str:
     """Build a well-formatted job spec string from full Workable job API data."""
@@ -54,10 +59,7 @@ def _format_job_spec_from_api(job_data: dict) -> str:
             lines.append("")
 
     return "\n".join(lines).strip()
-from ....services.fit_matching_service import calculate_cv_job_match_sync
-from .service import WorkableRateLimitError, WorkableService
 
-logger = logging.getLogger(__name__)
 
 TERMINAL_STAGES = {"hired", "rejected", "withdrawn", "disqualified", "declined", "archived"}
 
@@ -159,6 +161,8 @@ class WorkableSyncService:
         try:
             jobs = self.client.list_open_jobs()
             summary["jobs_seen"] = len(jobs)
+            if not jobs:
+                logger.warning("Workable list_open_jobs returned 0 jobs for org_id=%s", org.id)
             rate_limited = False
             for job in jobs:
                 if rate_limited:
@@ -169,6 +173,13 @@ class WorkableSyncService:
                         summary["jobs_upserted"] += 1
 
                     candidates = self._list_job_candidates_for_job(job=job, role=role)
+                    job_title = (job.get("title") or job.get("shortcode") or "job")[:60]
+                    logger.info(
+                        "Workable job shortcode=%s title=%s candidates=%s",
+                        job.get("shortcode"),
+                        job_title,
+                        len(candidates),
+                    )
                     for candidate_ref in candidates:
                         summary["candidates_seen"] += 1
                         synced = self._sync_candidate_for_role(
@@ -237,7 +248,7 @@ class WorkableSyncService:
             candidates = self.client.list_job_candidates(
                 identifier,
                 paginate=True,
-                max_pages=None,  # no limit — fetch all pages
+                max_pages=None,
             )
             if candidates:
                 return candidates
@@ -418,9 +429,8 @@ class WorkableSyncService:
         app.workable_stage = str(stage or "")
         app.last_synced_at = now
 
+        # Skip ratings API during sync to stay under rate limit (10 req/10 sec); use candidate payload score only
         ratings_payload = None
-        if enrich:
-            ratings_payload = self.client.get_candidate_ratings(candidate_id)
         raw_score, normalized_score, score_source = self.client.extract_workable_score(
             candidate_payload=candidate_payload,
             ratings_payload=ratings_payload,
@@ -432,6 +442,11 @@ class WorkableSyncService:
             app.workable_score_source = score_source
         if enrich:
             downloaded = self.client.download_candidate_resume(candidate_payload)
+            if not downloaded:
+                logger.debug(
+                    "No CV downloaded for candidate_id=%s (workable)",
+                    candidate_id,
+                )
             if downloaded:
                 filename, content = downloaded
                 ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()

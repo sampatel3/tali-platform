@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
+import threading
 from datetime import datetime, timezone
 
+import httpx
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ...components.integrations.workable.service import WorkableService
@@ -15,13 +17,15 @@ from ...models.organization import Organization
 from ...models.role import Role
 from ...models.user import User
 from ...platform.config import settings
-from ...platform.database import get_db
+from ...platform.database import SessionLocal, get_db
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workable", tags=["Workable"])
 
-
-class WorkableSyncRequest(BaseModel):
-    full_resync: bool = False
+# In-memory set of org_ids currently running a background sync (single process).
+_workable_sync_in_progress: set[int] = set()
+_lock = threading.Lock()
 
 
 def _get_org_for_user(db: Session, current_user: User) -> Organization:
@@ -36,6 +40,27 @@ def _assert_workable_connected(org: Organization) -> None:
         raise HTTPException(status_code=400, detail="Workable is not connected")
 
 
+def _run_sync_in_background(org_id: int) -> None:
+    db = SessionLocal()
+    try:
+        org = db.query(Organization).filter(Organization.id == org_id).first()
+        if not org or not org.workable_access_token or not org.workable_subdomain:
+            return
+        service = WorkableSyncService(
+            WorkableService(
+                access_token=org.workable_access_token,
+                subdomain=org.workable_subdomain,
+            )
+        )
+        service.sync_org(db, org)
+    except Exception as exc:
+        logger.exception("Workable background sync failed for org_id=%s: %s", org_id, exc)
+    finally:
+        with _lock:
+            _workable_sync_in_progress.discard(org_id)
+        db.close()
+
+
 @router.get("/sync/status")
 def workable_sync_status(
     db: Session = Depends(get_db),
@@ -44,17 +69,19 @@ def workable_sync_status(
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     org = _get_org_for_user(db, current_user)
+    with _lock:
+        sync_in_progress = org.id in _workable_sync_in_progress
     return {
         "workable_connected": bool(org.workable_connected),
         "workable_last_sync_at": org.workable_last_sync_at,
         "workable_last_sync_status": org.workable_last_sync_status,
         "workable_last_sync_summary": org.workable_last_sync_summary or {},
+        "sync_in_progress": sync_in_progress,
     }
 
 
 @router.post("/sync")
 def run_workable_sync(
-    body: WorkableSyncRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -63,22 +90,20 @@ def run_workable_sync(
     org = _get_org_for_user(db, current_user)
     _assert_workable_connected(org)
 
-    service = WorkableSyncService(
-        WorkableService(
-            access_token=org.workable_access_token,
-            subdomain=org.workable_subdomain,
-        )
-    )
-    try:
-        summary = service.sync_org(db, org, full_resync=bool(body.full_resync))
-        return {
-            "status": "ok",
-            "workable_last_sync_at": org.workable_last_sync_at,
-            "workable_last_sync_status": org.workable_last_sync_status,
-            "summary": summary,
-        }
-    except Exception:
-        raise HTTPException(status_code=502, detail="Workable sync failed")
+    with _lock:
+        if org.id in _workable_sync_in_progress:
+            raise HTTPException(
+                status_code=409,
+                detail="A sync is already in progress. Check status below or try again in a few minutes.",
+            )
+        _workable_sync_in_progress.add(org.id)
+
+    thread = threading.Thread(target=_run_sync_in_background, args=(org.id,), daemon=True)
+    thread.start()
+    return {
+        "status": "started",
+        "message": "Sync started in the background. This may take several minutes due to API rate limits. Poll /workable/sync/status or refresh this page to see progress.",
+    }
 
 
 @router.post("/clear")

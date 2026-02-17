@@ -1,3 +1,5 @@
+import time
+
 from app.domains.workable_sync import routes as workable_routes
 from app.models.organization import Organization
 from app.models.user import User
@@ -31,8 +33,20 @@ def test_workable_sync_manual_trigger_success(client, db, monkeypatch):
 
     monkeypatch.setattr(workable_routes.WorkableSyncService, "sync_org", fake_sync)
 
-    resp = client.post("/api/v1/workable/sync", json={"full_resync": False}, headers=headers)
+    resp = client.post("/api/v1/workable/sync", headers=headers)
     assert resp.status_code == 200, resp.text
     payload = resp.json()
-    assert payload["status"] == "ok"
-    assert payload["summary"]["jobs_seen"] == 1
+    assert payload["status"] == "started"
+    assert "message" in payload
+
+    # Wait for background sync to finish (fake_sync is fast)
+    for _ in range(20):
+        time.sleep(0.2)
+        status_resp = client.get("/api/v1/workable/sync/status", headers=headers)
+        status_resp.raise_for_status()
+        data = status_resp.json()
+        if not data.get("sync_in_progress"):
+            assert data.get("workable_last_sync_summary", {}).get("jobs_seen") == 1
+            break
+    else:
+        assert False, "Background sync did not complete within 4s"

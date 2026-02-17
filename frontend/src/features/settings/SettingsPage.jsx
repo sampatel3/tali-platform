@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { AlertTriangle, CheckCircle, CreditCard, Loader2 } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
@@ -41,6 +41,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [workableSaving, setWorkableSaving] = useState(false);
   const [workableSyncLoading, setWorkableSyncLoading] = useState(false);
+  const [workableSyncInProgress, setWorkableSyncInProgress] = useState(false);
+  const workableSyncPollRef = useRef(null);
   const [workableDrawerOpen, setWorkableDrawerOpen] = useState(false);
   const [workableConnectMode, setWorkableConnectMode] = useState('oauth');
   const [workableOAuthLoading, setWorkableOAuthLoading] = useState(false);
@@ -190,29 +192,78 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       );
       setClearWorkableModalOpen(false);
     } catch (err) {
-      showToast(err?.response?.data?.detail || 'Failed to clear Workable data', 'error');
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail ?? err?.message;
+      const message = status === 404
+        ? 'Clear endpoint not available. Deploy the latest backend (with POST /workable/clear) and run migrations.'
+        : (detail || 'Failed to clear Workable data');
+      showToast(message, 'error');
     } finally {
       setClearWorkableLoading(false);
     }
   };
 
-  const handleSyncWorkableNow = async (fullResync = false) => {
-    setWorkableSyncLoading(true);
+  const fetchWorkableSyncStatus = async () => {
     try {
-      const res = await orgsApi.syncWorkable({ full_resync: fullResync });
+      const res = await orgsApi.getWorkableSyncStatus();
+      const data = res.data || {};
+      setWorkableSyncInProgress(Boolean(data.sync_in_progress));
       setOrgData((prev) => ({
         ...(prev || {}),
-        workable_last_sync_at: res.data?.workable_last_sync_at || new Date().toISOString(),
-        workable_last_sync_status: res.data?.workable_last_sync_status || 'success',
-        workable_last_sync_summary: res.data?.summary || {},
+        workable_last_sync_at: data.workable_last_sync_at ?? prev?.workable_last_sync_at,
+        workable_last_sync_status: data.workable_last_sync_status ?? prev?.workable_last_sync_status,
+        workable_last_sync_summary: data.workable_last_sync_summary ?? prev?.workable_last_sync_summary,
       }));
-      const summary = res.data?.summary || {};
-      const msg = fullResync
-        ? `Full sync completed. Jobs: ${summary.jobs_upserted ?? 0}, Candidates: ${summary.candidates_upserted ?? 0}, CVs: ${summary.cv_downloaded ?? 0}.`
-        : 'Workable sync completed.';
-      showToast(msg, 'success');
+      return data;
+    } catch {
+      return {};
+    }
+  };
+
+  useEffect(() => {
+    if (settingsTab !== 'workable') return;
+    fetchWorkableSyncStatus();
+  }, [settingsTab]);
+
+  useEffect(() => {
+    if (!workableSyncInProgress) {
+      if (workableSyncPollRef.current) {
+        clearInterval(workableSyncPollRef.current);
+        workableSyncPollRef.current = null;
+      }
+      return;
+    }
+    const interval = setInterval(async () => {
+      const data = await fetchWorkableSyncStatus();
+      if (!data.sync_in_progress) {
+        const s = data.workable_last_sync_summary || {};
+        showToast(
+          `Sync finished. Jobs: ${s.jobs_upserted ?? 0}, Candidates: ${s.candidates_upserted ?? 0}, CVs: ${s.cv_downloaded ?? 0}.`,
+          (data.workable_last_sync_status || '').toLowerCase() === 'success' ? 'success' : 'info'
+        );
+      }
+    }, 30000);
+    workableSyncPollRef.current = interval;
+    return () => {
+      if (workableSyncPollRef.current) clearInterval(workableSyncPollRef.current);
+    };
+  }, [workableSyncInProgress]);
+
+  const handleSyncWorkable = async () => {
+    setWorkableSyncLoading(true);
+    try {
+      await orgsApi.syncWorkable();
+      setWorkableSyncInProgress(true);
+      showToast('Sync started in the background. This may take a few minutes.', 'info');
     } catch (err) {
-      showToast(err?.response?.data?.detail || 'Workable sync failed', 'error');
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail ?? err?.message;
+      if (status === 409) {
+        setWorkableSyncInProgress(true);
+        showToast('A sync is already in progress. Status will update below.', 'info');
+      } else {
+        showToast(detail || 'Workable sync failed', 'error');
+      }
     } finally {
       setWorkableSyncLoading(false);
     }
@@ -507,9 +558,20 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       <li>CV–job match scores are computed when both CV and job spec are present.</li>
                     </ul>
                     <p className="mt-2 text-xs text-gray-600">
-                      <strong>Full sync</strong> re-fetches everything. Use it to get all candidates and CVs after connecting or if counts look wrong.
+                      For a completely fresh import, use <strong>Remove all candidates and roles</strong> below, then <strong>Sync</strong>.
                     </p>
                   </div>
+                  {workableSyncInProgress && (
+                    <div className="rounded-lg border-2 border-black bg-amber-50 p-3 flex items-center gap-3 mt-3">
+                      <Loader2 size={20} className="animate-spin text-amber-700 flex-shrink-0" />
+                      <div>
+                        <div className="font-semibold text-amber-900">Syncing…</div>
+                        <div className="text-sm text-amber-800">
+                          Sync runs in the background and may take several minutes due to API rate limits. This page updates every 30 seconds.
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <hr className="border-black" />
                   <div>
                     <div className="font-bold mb-3">Sync + Invite Settings</div>
@@ -574,20 +636,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       </button>
                       <button
                         type="button"
-                        disabled={workableSyncLoading || !workableConnected}
+                        disabled={workableSyncLoading || workableSyncInProgress || !workableConnected}
                         className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
-                        onClick={() => handleSyncWorkableNow(false)}
+                        onClick={handleSyncWorkable}
                       >
-                        {workableSyncLoading ? 'Syncing…' : 'Sync Now'}
-                      </button>
-                      <button
-                        type="button"
-                        disabled={workableSyncLoading || !workableConnected}
-                        className="border-2 border-black px-4 py-2 font-mono text-sm font-bold disabled:opacity-60"
-                        title="Re-fetch all jobs, all candidates, and all CVs from Workable"
-                        onClick={() => handleSyncWorkableNow(true)}
-                      >
-                        {workableSyncLoading ? 'Syncing…' : 'Full sync'}
+                        {workableSyncLoading ? 'Starting…' : workableSyncInProgress ? 'Sync in progress' : 'Sync'}
                       </button>
                     </div>
                   </div>
@@ -595,8 +648,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   <div className="border-2 border-red-300 bg-red-50 p-6 mt-6 rounded-lg">
                     <div className="font-bold text-red-900 mb-1">Remove all Workable data</div>
                     <p className="text-sm text-red-800 mb-3">
-                      This will hide all roles, candidates, and applications that were imported from Workable.
-                      Data is not permanently deleted; it is marked as removed and can be re-imported with a full sync.
+                      This will delete all roles, candidates, and applications that were imported from Workable.
                     </p>
                     <button
                       type="button"
@@ -618,8 +670,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       <div className="bg-white border-2 border-black rounded-lg shadow-xl max-w-md w-full p-6">
                         <h2 id="clear-workable-title" className="text-lg font-bold mb-2">Remove all Workable data?</h2>
                         <p className="text-sm text-gray-700 mb-4">
-                          This will remove all roles, candidates, and applications imported from Workable from this account.
-                          Nothing is permanently deleted; records are marked as removed. You can run a full sync later to re-import from Workable.
+                          All roles, candidates, and applications imported from Workable will be deleted from this account.
                         </p>
                         <div className="flex gap-3 justify-end">
                           <button

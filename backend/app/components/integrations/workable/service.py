@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 from typing import Any
 from urllib.parse import parse_qsl, urlparse
 
 import httpx
 
 logger = logging.getLogger(__name__)
+
+# Workable: 10 requests per 10 seconds (https://workable.readme.io/reference/rate-limits)
+WORKABLE_THROTTLE_SEC = 1.0
+WORKABLE_429_RETRY_AFTER_SEC = 11
+WORKABLE_JOBS_LIMIT = 100
 
 _NUMERIC_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
@@ -51,28 +57,47 @@ class WorkableService:
         }
         self._ratings_supported: bool | None = None
 
+    def _throttle(self) -> None:
+        time.sleep(WORKABLE_THROTTLE_SEC)
+
     def _request(self, method: str, path: str, *, json: dict | None = None, params: dict | None = None) -> dict:
         url = f"{self.base_url}{path}"
-        with httpx.Client(timeout=30.0) as client:
-            response = client.request(method, url, json=json, params=params, headers=self.headers)
-        response.raise_for_status()
-        return response.json() if response.content else {}
+        for attempt in range(2):
+            try:
+                with httpx.Client(timeout=30.0) as client:
+                    response = client.request(method, url, json=json, params=params, headers=self.headers)
+                response.raise_for_status()
+                self._throttle()
+                return response.json() if response.content else {}
+            except httpx.HTTPStatusError as exc:
+                if exc.response.status_code == 429 and attempt == 0:
+                    logger.warning("Workable 429, waiting %ss then retry", WORKABLE_429_RETRY_AFTER_SEC)
+                    time.sleep(WORKABLE_429_RETRY_AFTER_SEC)
+                    continue
+                self._throttle()
+                raise
+        self._throttle()
+        return {}
 
     def _request_optional(self, method: str, path: str, *, json: dict | None = None, params: dict | None = None) -> dict:
         try:
             return self._request(method, path, json=json, params=params)
+        except WorkableRateLimitError:
+            raise
         except httpx.HTTPStatusError as exc:
             status_code = exc.response.status_code if exc.response else None
             if status_code == 429:
-                logger.warning("Workable rate limited (429) for %s %s", method, path)
                 raise WorkableRateLimitError("Workable API rate limited (429)")
             logger.exception("Workable request failed: %s %s", method, path)
+            self._throttle()
             return {}
         except Exception:
             logger.exception("Workable request failed: %s %s", method, path)
+            self._throttle()
             return {}
 
     def _download(self, url: str) -> bytes:
+        self._throttle()
         with httpx.Client(timeout=30.0, follow_redirects=True) as client:
             response = client.get(url, headers=self.headers)
             # Workable often returns a presigned URL for resumes; these reject extra auth headers.
@@ -81,24 +106,74 @@ class WorkableService:
         response.raise_for_status()
         return response.content
 
-    def list_open_jobs(self) -> list[dict]:
-        candidates = []
-        for params in ({"state": "published"}, {"state": "open"}, {"status": "open"}, {}):
-            payload = self._request_optional("GET", "/jobs", params=params)
-            jobs = payload.get("jobs")
+    def _parse_jobs_response(self, payload: dict | list) -> list[dict]:
+        """Extract list of job dicts from Workable API response."""
+        if isinstance(payload, list):
+            return [j for j in payload if isinstance(j, dict)]
+        if not isinstance(payload, dict):
+            return []
+        jobs = payload.get("jobs")
+        if isinstance(jobs, list):
+            return [j for j in jobs if isinstance(j, dict)]
+        data = payload.get("data")
+        if isinstance(data, list):
+            return [j for j in data if isinstance(j, dict)]
+        if isinstance(data, dict):
+            jobs = data.get("jobs")
             if isinstance(jobs, list):
-                candidates = jobs
-                if candidates:
-                    break
-            elif isinstance(payload, list):
-                candidates = payload
-                if candidates:
-                    break
-        return [job for job in candidates if isinstance(job, dict)]
+                return [j for j in jobs if isinstance(j, dict)]
+        return []
+
+    def list_open_jobs(self) -> list[dict]:
+        """Fetch open/published jobs. First request uses _request to surface auth errors."""
+        params_list = [
+            {"state": "published", "limit": str(WORKABLE_JOBS_LIMIT)},
+            {"state": "open", "limit": str(WORKABLE_JOBS_LIMIT)},
+            {"limit": str(WORKABLE_JOBS_LIMIT)},
+        ]
+        for i, params in enumerate(params_list):
+            try:
+                payload = self._request("GET", "/jobs", params=params) if i == 0 else self._request_optional("GET", "/jobs", params=params)
+            except WorkableRateLimitError:
+                raise
+            except Exception:
+                if i == 0:
+                    raise
+                continue
+            jobs = self._parse_jobs_response(payload)
+            if jobs:
+                return jobs
+            if i == 0 and isinstance(payload, dict):
+                logger.info("Workable /jobs returned 0 jobs (keys=%s)", list(payload.keys())[:20])
+        return []
 
     def verify_access(self) -> None:
         # A simple authenticated read endpoint to validate token + subdomain.
         self._request("GET", "/jobs", params={"state": "published"})
+
+    def _get_next_page(self, next_url: str) -> dict:
+        """Fetch a single page using the full 'next' URL from Workable (handles absolute URLs)."""
+        url = next_url.strip()
+        if not url:
+            return {}
+        self._throttle()
+        for attempt in range(2):
+            with httpx.Client(timeout=30.0, follow_redirects=True) as client:
+                response = client.get(url, headers=self.headers)
+            if response.status_code == 429 and attempt == 0:
+                logger.warning("Workable 429 on next page, waiting %ss", WORKABLE_429_RETRY_AFTER_SEC)
+                time.sleep(WORKABLE_429_RETRY_AFTER_SEC)
+                continue
+            if response.status_code == 429:
+                raise WorkableRateLimitError("Workable API rate limited (429)")
+            if response.status_code != 200:
+                logger.warning("Workable next page returned %s for %s", response.status_code, url[:80])
+                return {}
+            try:
+                return response.json() if response.content else {}
+            except Exception:
+                return {}
+        return {}
 
     def list_job_candidates(
         self,
@@ -114,11 +189,17 @@ class WorkableService:
         seen_ids: set[str] = set()
         path = f"/jobs/{job_identifier}/candidates"
         params: dict[str, str] | None = {"limit": str(self.DEFAULT_PAGE_LIMIT)}
+        next_page_url: str | None = None
         pages = 0
 
-        while path:
+        while True:
             pages += 1
-            payload = self._request_optional("GET", path, params=params)
+            if next_page_url:
+                payload = self._get_next_page(next_page_url)
+                next_page_url = None
+            else:
+                payload = self._request_optional("GET", path, params=params)
+
             if isinstance(payload, dict):
                 batch = payload.get("candidates")
                 paging = payload.get("paging") if isinstance(payload.get("paging"), dict) else {}
@@ -148,53 +229,16 @@ class WorkableService:
             if not isinstance(next_url, str) or not next_url:
                 break
             parsed = urlparse(next_url)
-            parsed_path = parsed.path or ""
-            if parsed_path.startswith("/spi/v3"):
-                parsed_path = parsed_path[len("/spi/v3"):]
-            path = parsed_path if parsed_path else path
-            params = dict(parse_qsl(parsed.query))
+            if parsed.scheme and parsed.netloc and "workable.com" in parsed.netloc:
+                next_page_url = next_url
+            else:
+                parsed_path = parsed.path or ""
+                if parsed_path.startswith("/spi/v3"):
+                    parsed_path = parsed_path[len("/spi/v3"):]
+                path = parsed_path or path
+                params = dict(parse_qsl(parsed.query))
 
         return candidates
-
-    def get_job_candidates_page(
-        self,
-        job_identifier: str,
-        *,
-        since_id: str | None = None,
-        limit: int | None = None,
-    ) -> tuple[list[dict], str | None, bool]:
-        """Fetch a single page of job candidates.
-
-        Returns: (candidates, next_since_id, ok)
-        """
-        if not job_identifier:
-            return [], None, False
-
-        page_limit = self.DEFAULT_PAGE_LIMIT if limit is None else int(limit)
-        params: dict[str, str] = {"limit": str(page_limit)}
-        if since_id:
-            params["since_id"] = str(since_id)
-
-        payload = self._request_optional("GET", f"/jobs/{job_identifier}/candidates", params=params)
-        if isinstance(payload, dict) and isinstance(payload.get("candidates"), list):
-            batch = [item for item in payload.get("candidates") or [] if isinstance(item, dict)]
-            paging = payload.get("paging") if isinstance(payload.get("paging"), dict) else {}
-            next_url = paging.get("next") if isinstance(paging, dict) else None
-            next_since = None
-            if isinstance(next_url, str) and next_url:
-                try:
-                    parsed = urlparse(next_url)
-                    next_params = dict(parse_qsl(parsed.query))
-                    next_since = (next_params.get("since_id") or "").strip() or None
-                except Exception:
-                    next_since = None
-            return batch, next_since, True
-
-        if isinstance(payload, list):
-            batch = [item for item in payload if isinstance(item, dict)]
-            return batch, None, True
-
-        return [], None, False
 
     def get_job_details(self, job_identifier: str) -> dict:
         if not job_identifier:
@@ -210,6 +254,18 @@ class WorkableService:
         if isinstance(wrapped, dict):
             return wrapped
         return payload
+
+    def get_candidate_files(self, candidate_id: str) -> list[dict]:
+        """Fetch files for a candidate via GET /candidates/:id/files (Workable API)."""
+        if not candidate_id:
+            return []
+        payload = self._request_optional("GET", f"/candidates/{candidate_id}/files")
+        if not isinstance(payload, dict):
+            return []
+        files = payload.get("files") or payload.get("data") or payload.get("attachments")
+        if isinstance(files, list):
+            return [f for f in files if isinstance(f, dict)]
+        return []
 
     def get_candidate_ratings(self, candidate_id: str) -> dict:
         if self._ratings_supported is False:
@@ -315,6 +371,35 @@ class WorkableService:
                 continue
             if content:
                 return str(filename), content
+
+        # Workable API: GET /candidates/:id/files returns files attached to the candidate
+        candidate_id = str(candidate_payload.get("id") or "").strip()
+        if candidate_id:
+            api_files = self.get_candidate_files(candidate_id)
+            for item in api_files:
+                url = (
+                    item.get("download_url")
+                    or item.get("url")
+                    or item.get("file_url")
+                    or item.get("href")
+                    or item.get("source")
+                )
+                if not url:
+                    continue
+                filename = (
+                    item.get("filename")
+                    or item.get("name")
+                    or item.get("title")
+                    or item.get("file_name")
+                    or "resume.pdf"
+                )
+                try:
+                    content = self._download(url)
+                except Exception:
+                    logger.exception("Failed downloading candidate file from /files")
+                    continue
+                if content:
+                    return str(filename), content
         return None
 
     def extract_workable_score(self, *, candidate_payload: dict, ratings_payload: dict | None = None) -> tuple[float | None, float | None, str | None]:
