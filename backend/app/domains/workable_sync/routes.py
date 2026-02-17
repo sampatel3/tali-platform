@@ -4,7 +4,8 @@ import logging
 import threading
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from ...components.integrations.workable.service import WorkableService
@@ -22,6 +23,39 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workable", tags=["Workable"])
 
+
+class _AdminClearSyncBody(BaseModel):
+    email: str
+
+
+@router.post("/admin/clear-sync")
+def admin_clear_workable_sync(
+    body: _AdminClearSyncBody,
+    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
+    db: Session = Depends(get_db),
+):
+    """Clear Workable sync state for a user by email. Requires X-Admin-Secret header (SECRET_KEY)."""
+    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
+        raise HTTPException(status_code=403, detail="Forbidden")
+    email = (body.email or "").strip().lower()
+    if not email:
+        raise HTTPException(status_code=400, detail="email required")
+    user = db.query(User).filter(User.email == email).first()
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User not found: {email}")
+    org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    db.query(Organization).filter(Organization.id == org.id).update(
+        {
+            Organization.workable_sync_started_at: None,
+            Organization.workable_sync_progress: None,
+            Organization.workable_sync_cancel_requested_at: None,
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+    return {"status": "ok", "message": f"Cleared Workable sync state for {email}. They can start a new sync."}
 
 
 def _get_org_for_user(db: Session, current_user: User) -> Organization:
@@ -100,51 +134,25 @@ def cancel_workable_sync(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Request the current sync to stop. The sync will stop after the current job finishes."""
+    """Stop the current sync and clear state immediately so the UI shows not running.
+    Sets cancel flag so the background thread stops at its next checkpoint (Workable API uses 30s timeout).
+    """
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     org = _get_org_for_user(db, current_user)
     if org.workable_sync_started_at is None:
         return {"status": "ok", "message": "No sync in progress."}
     now = datetime.now(timezone.utc)
-    org.workable_sync_cancel_requested_at = now
-    db.commit()
-    return {"status": "ok", "message": "Stop requested. Sync will stop within a few seconds (after the current candidate)."}
-
-
-@router.post("/sync/clear-stuck")
-def clear_stuck_workable_sync(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Clear sync state if it has been running for more than 10 minutes with no completion.
-    Use when the UI shows 'Running in background' but no progress (e.g. worker died or hung).
-    """
-    if settings.MVP_DISABLE_WORKABLE:
-        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
-    org = _get_org_for_user(db, current_user)
-    started_at = org.workable_sync_started_at
-    if started_at is None:
-        return {"status": "ok", "message": "No sync in progress."}
-    now = datetime.now(timezone.utc)
-    if started_at.tzinfo is None:
-        started_at = started_at.replace(tzinfo=timezone.utc)
-    age_seconds = (now - started_at).total_seconds()
-    if age_seconds < 600:  # 10 minutes
-        raise HTTPException(
-            status_code=400,
-            detail="Sync started recently. Wait a few minutes or use Stop sync. Clear stuck is only for syncs that have been running for more than 10 minutes.",
-        )
     db.query(Organization).filter(Organization.id == org.id).update(
         {
+            Organization.workable_sync_cancel_requested_at: now,
             Organization.workable_sync_started_at: None,
             Organization.workable_sync_progress: None,
-            Organization.workable_sync_cancel_requested_at: None,
         },
         synchronize_session=False,
     )
     db.commit()
-    return {"status": "ok", "message": "Stuck sync cleared. You can start a new sync now."}
+    return {"status": "ok", "message": "Sync stopped. You can start a new sync when ready."}
 
 
 @router.post("/sync")
