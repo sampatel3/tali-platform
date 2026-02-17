@@ -95,6 +95,23 @@ def workable_sync_status(
     }
 
 
+@router.post("/sync/cancel")
+def cancel_workable_sync(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Request the current sync to stop. The sync will stop after the current job finishes."""
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
+    org = _get_org_for_user(db, current_user)
+    if org.workable_sync_started_at is None:
+        return {"status": "ok", "message": "No sync in progress."}
+    now = datetime.now(timezone.utc)
+    org.workable_sync_cancel_requested_at = now
+    db.commit()
+    return {"status": "ok", "message": "Sync cancel requested. It will stop after the current job completes."}
+
+
 @router.post("/sync")
 def run_workable_sync(
     db: Session = Depends(get_db),
@@ -122,23 +139,6 @@ def run_workable_sync(
         "status": "started",
         "message": "Sync started in the background. This may take several minutes due to API rate limits. Poll /workable/sync/status or refresh this page to see progress.",
     }
-
-
-@router.post("/sync/cancel")
-def cancel_workable_sync(
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """Request the current sync to stop. The sync will stop after the current job finishes."""
-    if settings.MVP_DISABLE_WORKABLE:
-        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
-    org = _get_org_for_user(db, current_user)
-    if org.workable_sync_started_at is None:
-        return {"status": "ok", "message": "No sync in progress."}
-    now = datetime.now(timezone.utc)
-    org.workable_sync_cancel_requested_at = now
-    db.commit()
-    return {"status": "ok", "message": "Sync cancel requested. It will stop after the current job completes."}
 
 
 @router.post("/clear")

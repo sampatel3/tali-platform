@@ -264,7 +264,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       showToast('Sync cancel requested. It will stop after the current job.', 'info');
       fetchWorkableSyncStatus();
     } catch (err) {
-      showToast(err?.response?.data?.detail ?? 'Failed to cancel sync', 'error');
+      const status = err?.response?.status;
+      const detail = err?.response?.data?.detail ?? err?.message;
+      const message = status === 404
+        ? 'Stop sync is not available yet. Deploy the latest backend (Railway) and run migrations, then try again.'
+        : (detail || 'Failed to cancel sync');
+      showToast(message, 'error');
     } finally {
       setWorkableSyncCancelLoading(false);
     }
