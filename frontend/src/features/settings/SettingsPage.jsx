@@ -43,6 +43,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [workableSyncLoading, setWorkableSyncLoading] = useState(false);
   const [workableSyncInProgress, setWorkableSyncInProgress] = useState(false);
   const [workableSyncCancelLoading, setWorkableSyncCancelLoading] = useState(false);
+  const [workableClearStuckLoading, setWorkableClearStuckLoading] = useState(false);
   const workableSyncPollRef = useRef(null);
   const [workableDrawerOpen, setWorkableDrawerOpen] = useState(false);
   const [workableConnectMode, setWorkableConnectMode] = useState('oauth');
@@ -245,8 +246,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         );
       }
     };
-    const firstDelay = setTimeout(poll, 5000);
-    const interval = setInterval(poll, 30000);
+    const firstDelay = setTimeout(poll, 2000);
+    const interval = setInterval(poll, 5000);
     workableSyncPollRef.current = { firstDelay, interval };
     return () => {
       if (workableSyncPollRef.current) {
@@ -272,6 +273,20 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       showToast(message, 'error');
     } finally {
       setWorkableSyncCancelLoading(false);
+    }
+  };
+
+  const handleClearStuckWorkableSync = async () => {
+    setWorkableClearStuckLoading(true);
+    try {
+      await orgsApi.clearStuckWorkableSync();
+      showToast('Stuck sync cleared. You can start a new sync now.', 'info');
+      await fetchWorkableSyncStatus();
+    } catch (err) {
+      const detail = err?.response?.data?.detail ?? err?.message;
+      showToast(detail || 'Failed to clear stuck sync', 'error');
+    } finally {
+      setWorkableClearStuckLoading(false);
     }
   };
 
@@ -602,8 +617,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                           <div className="mt-2 font-mono text-xs text-amber-900">
                             {orgData.workable_sync_progress.jobs_upserted ?? 0} roles imported · {orgData.workable_sync_progress.candidates_upserted ?? 0} candidates imported · {orgData.workable_sync_progress.cv_downloaded ?? 0} CVs
                           </div>
-                        ) : null}
-                        <div className="mt-3">
+                        ) : (
+                          <div className="mt-2 font-mono text-xs text-amber-700">Connecting to Workable…</div>
+                        )}
+                        <div className="mt-3 flex flex-wrap gap-2">
                           <button
                             type="button"
                             disabled={workableSyncCancelLoading}
@@ -611,6 +628,15 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                             onClick={handleCancelWorkableSync}
                           >
                             {workableSyncCancelLoading ? 'Stopping…' : 'Stop sync'}
+                          </button>
+                          <button
+                            type="button"
+                            disabled={workableClearStuckLoading}
+                            className="border-2 border-amber-600 px-3 py-1.5 font-mono text-xs text-amber-800 bg-amber-100 hover:bg-amber-200 disabled:opacity-60"
+                            onClick={handleClearStuckWorkableSync}
+                            title="Use if sync has been running for a long time with no progress"
+                          >
+                            {workableClearStuckLoading ? 'Clearing…' : 'Clear stuck sync'}
                           </button>
                         </div>
                       </div>

@@ -112,6 +112,41 @@ def cancel_workable_sync(
     return {"status": "ok", "message": "Sync cancel requested. It will stop after the current job completes."}
 
 
+@router.post("/sync/clear-stuck")
+def clear_stuck_workable_sync(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Clear sync state if it has been running for more than 10 minutes with no completion.
+    Use when the UI shows 'Running in background' but no progress (e.g. worker died or hung).
+    """
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
+    org = _get_org_for_user(db, current_user)
+    started_at = org.workable_sync_started_at
+    if started_at is None:
+        return {"status": "ok", "message": "No sync in progress."}
+    now = datetime.now(timezone.utc)
+    if started_at.tzinfo is None:
+        started_at = started_at.replace(tzinfo=timezone.utc)
+    age_seconds = (now - started_at).total_seconds()
+    if age_seconds < 600:  # 10 minutes
+        raise HTTPException(
+            status_code=400,
+            detail="Sync started recently. Wait a few minutes or use Stop sync. Clear stuck is only for syncs that have been running for more than 10 minutes.",
+        )
+    db.query(Organization).filter(Organization.id == org.id).update(
+        {
+            Organization.workable_sync_started_at: None,
+            Organization.workable_sync_progress: None,
+            Organization.workable_sync_cancel_requested_at: None,
+        },
+        synchronize_session=False,
+    )
+    db.commit()
+    return {"status": "ok", "message": "Stuck sync cleared. You can start a new sync now."}
+
+
 @router.post("/sync")
 def run_workable_sync(
     db: Session = Depends(get_db),

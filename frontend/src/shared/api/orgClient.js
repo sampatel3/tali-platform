@@ -14,5 +14,6 @@ export const organizations = {
   syncWorkable: (data = {}) => api.post('/workable/sync', data),
   getWorkableSyncStatus: () => api.get('/workable/sync/status'),
   cancelWorkableSync: () => api.post('/workable/sync/cancel'),
+  clearStuckWorkableSync: () => api.post('/workable/sync/clear-stuck'),
   clearWorkableData: () => api.post('/workable/clear'),
 };
