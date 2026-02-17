@@ -42,6 +42,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [workableSaving, setWorkableSaving] = useState(false);
   const [workableSyncLoading, setWorkableSyncLoading] = useState(false);
   const [workableSyncInProgress, setWorkableSyncInProgress] = useState(false);
+  const [workableSyncCancelLoading, setWorkableSyncCancelLoading] = useState(false);
   const workableSyncPollRef = useRef(null);
   const [workableDrawerOpen, setWorkableDrawerOpen] = useState(false);
   const [workableConnectMode, setWorkableConnectMode] = useState('oauth');
@@ -255,6 +256,19 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       }
     };
   }, [workableSyncInProgress]);
+
+  const handleCancelWorkableSync = async () => {
+    setWorkableSyncCancelLoading(true);
+    try {
+      await orgsApi.cancelWorkableSync();
+      showToast('Sync cancel requested. It will stop after the current job.', 'info');
+      fetchWorkableSyncStatus();
+    } catch (err) {
+      showToast(err?.response?.data?.detail ?? 'Failed to cancel sync', 'error');
+    } finally {
+      setWorkableSyncCancelLoading(false);
+    }
+  };
 
   const handleSyncWorkable = async () => {
     setWorkableSyncLoading(true);
@@ -584,6 +598,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                             {orgData.workable_sync_progress.jobs_upserted ?? 0} roles imported · {orgData.workable_sync_progress.candidates_upserted ?? 0} candidates imported · {orgData.workable_sync_progress.cv_downloaded ?? 0} CVs
                           </div>
                         ) : null}
+                        <div className="mt-3">
+                          <button
+                            type="button"
+                            disabled={workableSyncCancelLoading}
+                            className="border-2 border-amber-700 px-3 py-1.5 font-mono text-xs font-semibold text-amber-900 bg-white hover:bg-amber-100 disabled:opacity-60"
+                            onClick={handleCancelWorkableSync}
+                          >
+                            {workableSyncCancelLoading ? 'Stopping…' : 'Stop sync'}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   )}

@@ -159,6 +159,8 @@ class WorkableSyncService:
         }
         now = _now()
         try:
+            org.workable_sync_cancel_requested_at = None
+            db.commit()
             jobs = self.client.list_open_jobs()
             summary["jobs_seen"] = len(jobs)
             if not jobs:
@@ -167,6 +169,11 @@ class WorkableSyncService:
             db.commit()
             rate_limited = False
             for job in jobs:
+                db.refresh(org)
+                if org.workable_sync_cancel_requested_at is not None:
+                    summary["errors"].append("Sync cancelled by user")
+                    logger.info("Workable sync cancelled by user for org_id=%s", org.id)
+                    break
                 if rate_limited:
                     break
                 try:
@@ -208,9 +215,11 @@ class WorkableSyncService:
                 db.commit()
 
             org.workable_last_sync_at = now
-            org.workable_last_sync_status = "success" if not summary["errors"] else "partial"
-            org.workable_last_sync_summary = summary
+            cancelled = any("cancelled" in (e or "").lower() for e in summary["errors"])
+            org.workable_last_sync_status = "cancelled" if cancelled else ("success" if not summary["errors"] else "partial")
+            org.workable_last_sync_summary = {**summary, "cancelled": cancelled}
             org.workable_sync_progress = None
+            org.workable_sync_cancel_requested_at = None
             db.commit()
             return summary
         except Exception as exc:
@@ -222,6 +231,7 @@ class WorkableSyncService:
                 "errors": [*summary["errors"], str(exc)],
             }
             org.workable_sync_progress = None
+            org.workable_sync_cancel_requested_at = None
             db.commit()
             raise
 
