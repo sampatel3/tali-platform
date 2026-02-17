@@ -15,6 +15,7 @@ from ....models.organization import Organization
 from ....models.role import Role
 from ....platform.config import settings
 from ....services.document_service import save_file_locally
+from ....services.interview_focus_service import generate_interview_focus_sync
 from .service import WorkableRateLimitError, WorkableService
 
 logger = logging.getLogger(__name__)
@@ -80,13 +81,20 @@ def _format_location(value) -> str | None:
 
 
 def _format_job_spec_from_api(job_data: dict) -> str:
-    """Build a well-formatted job spec string from full Workable job API data."""
-    if not job_data:
+    """Build a well-formatted job spec string from Workable job API data.
+    Handles: list response (minimal), job details response ({job: {...}}), or flat dict.
+    """
+    if not job_data or not isinstance(job_data, dict):
         return ""
-    # Unwrap if API returned {"job": {...}} or use as-is
-    merged = job_data.get("job") if isinstance(job_data.get("job"), dict) else dict(job_data)
-    details = merged.get("details") if isinstance(merged.get("details"), dict) else {}
-    merged = {**merged, **details}
+    # Unwrap nested structures: {"job": {...}} or {"job": {"details": {...}}}
+    merged = dict(job_data)
+    job_inner = merged.get("job")
+    if isinstance(job_inner, dict):
+        merged = {**merged, **job_inner}
+    details = merged.get("details")
+    if isinstance(details, dict):
+        merged = {**merged, **details}
+    merged.pop("job", None)
     merged.pop("details", None)
     lines: list[str] = []
 
@@ -94,7 +102,7 @@ def _format_job_spec_from_api(job_data: dict) -> str:
     lines.append(f"# {title}")
     lines.append("")
 
-    # Location needs special handling (may be a dict)
+    # Location: may be dict {city, region, country} or string
     location_str = _format_location(merged.get("location"))
     if location_str:
         lines.append(f"**Location:** {location_str}")
@@ -111,6 +119,7 @@ def _format_job_spec_from_api(job_data: dict) -> str:
             lines.append(f"**{label}:** {value}")
     lines.append("")
 
+    # Description/requirements: Workable may use different keys
     for key in ("description", "full_description", "requirements", "benefits"):
         value = merged.get(key)
         if isinstance(value, str) and value.strip():
@@ -126,6 +135,23 @@ def _format_job_spec_from_api(job_data: dict) -> str:
 TERMINAL_STAGES = {"hired", "rejected", "withdrawn", "disqualified", "declined", "archived"}
 
 
+def _normalize_stage_for_terminal(value: str | None) -> str | None:
+    """Normalize stage string for terminal check; Workable may use various formats."""
+    if not value or not isinstance(value, str):
+        return None
+    v = value.strip().lower()
+    if not v:
+        return None
+    # Handle "Hired", "Rejected", "Withdrawn" etc.
+    if v in TERMINAL_STAGES:
+        return v
+    # Handle "stage_slug" format like "hired" in stage names
+    for t in TERMINAL_STAGES:
+        if t in v or v in t:
+            return t
+    return None
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -136,8 +162,9 @@ def _is_terminal_stage(stage_value: str | None) -> bool:
 
 
 def _is_terminal_candidate(payload: dict) -> bool:
-    stage_kind = str(payload.get("stage_kind") or "").strip().lower()
-    if stage_kind and stage_kind in TERMINAL_STAGES:
+    """Return True only when we are confident the candidate is in a terminal state."""
+    stage_kind = _normalize_stage_for_terminal(str(payload.get("stage_kind") or ""))
+    if stage_kind:
         return True
     stage = (
         payload.get("stage")
@@ -145,7 +172,7 @@ def _is_terminal_candidate(payload: dict) -> bool:
         or payload.get("status")
         or ""
     )
-    if _is_terminal_stage(str(stage)):
+    if _normalize_stage_for_terminal(str(stage)):
         return True
     if payload.get("disqualified") is True:
         return True
@@ -155,7 +182,7 @@ def _is_terminal_candidate(payload: dict) -> bool:
 
 
 def _candidate_email(payload: dict) -> str | None:
-    for key in ("email", "work_email", "candidate_email"):
+    for key in ("email", "work_email", "candidate_email", "email_address"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
@@ -170,7 +197,12 @@ def _candidate_email(payload: dict) -> str | None:
                 return value.strip().lower()
     contact = payload.get("contact")
     if isinstance(contact, dict):
-        value = contact.get("email")
+        value = contact.get("email") or contact.get("email_address")
+        if isinstance(value, str) and value.strip():
+            return value.strip().lower()
+    profile = payload.get("profile")
+    if isinstance(profile, dict):
+        value = profile.get("email") or profile.get("email_address")
         if isinstance(value, str) and value.strip():
             return value.strip().lower()
     return None
@@ -486,7 +518,13 @@ class WorkableSyncService:
     def _upsert_role(self, db: Session, org: Organization, job: dict) -> tuple[Role, bool]:
         job_id = str(job.get("id") or job.get("shortcode") or "").strip()
         title = str(job.get("title") or job.get("name") or f"Workable role {job_id or 'unknown'}").strip()
-        details = self._job_details_for_role(job=job)
+        # Use list job data first; only fetch details if we need full description (saves 1 API call per job)
+        list_has_spec = any(job.get(k) for k in ("description", "full_description", "requirements") if job.get(k))
+        jd = job.get("details") if isinstance(job.get("details"), dict) else {}
+        list_has_spec = list_has_spec or any(jd.get(k) for k in ("description", "full_description", "requirements") if jd.get(k))
+        details = {}
+        if not list_has_spec:
+            details = self._job_details_for_role(job=job)
         description = (
             details.get("description")
             or details.get("full_description")
@@ -544,6 +582,19 @@ class WorkableSyncService:
                 role.job_spec_uploaded_at = _now()
             except Exception:
                 logger.exception("Failed saving Workable job spec file for role_id=%s", role.id)
+        # Auto-generate interview focus pointers when we have job spec and API key
+        if (role.job_spec_text or "").strip() and settings.ANTHROPIC_API_KEY:
+            try:
+                focus = generate_interview_focus_sync(
+                    job_spec_text=(role.job_spec_text or "").strip(),
+                    api_key=settings.ANTHROPIC_API_KEY,
+                    model=settings.resolved_claude_model,
+                )
+                if focus:
+                    role.interview_focus = focus
+                    role.interview_focus_generated_at = _now()
+            except Exception:
+                logger.exception("Failed generating interview focus for role_id=%s", role.id)
         return role, created
 
     def _sync_candidate_for_role(

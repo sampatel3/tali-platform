@@ -48,8 +48,8 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, o
 
   useEffect(() => {
     setFocusExpanded(true);
-    setSpecExpanded(Boolean(roleDescription));
-  }, [role.id, roleDescription]);
+    setSpecExpanded(Boolean(hasSpecContent));
+  }, [role.id, hasSpecContent]);
 
   return (
     <Panel className="p-5">

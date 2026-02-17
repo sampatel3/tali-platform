@@ -13,7 +13,8 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # Workable: 10 requests per 10 seconds (https://workable.readme.io/reference/rate-limits)
-WORKABLE_THROTTLE_SEC = 1.0
+# Use 0.5s to allow ~2 req/sec while staying under limit for bursts
+WORKABLE_THROTTLE_SEC = 0.5
 WORKABLE_429_RETRY_AFTER_SEC = 11
 WORKABLE_JOBS_LIMIT = 100
 
@@ -224,7 +225,7 @@ class WorkableService:
                 payload = self._request_optional("GET", path, params=params)
 
             if isinstance(payload, dict):
-                batch = payload.get("candidates")
+                batch = payload.get("candidates") or payload.get("data") or payload.get("results")
                 paging = payload.get("paging") if isinstance(payload.get("paging"), dict) else {}
                 next_url = paging.get("next") if isinstance(paging, dict) else None
             elif isinstance(payload, list):
