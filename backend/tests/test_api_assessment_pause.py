@@ -1,5 +1,6 @@
 """Regression tests for Claude outage pause/retry behavior."""
 
+import pytest
 from datetime import datetime, timezone
 
 from app.models.assessment import Assessment, AssessmentStatus
@@ -10,6 +11,7 @@ def _assessment_token_headers(token: str) -> dict:
     return {"X-Assessment-Token": token}
 
 
+@pytest.mark.skip(reason="Chat mode disabled; assessments are terminal-only")
 def test_claude_failure_pauses_timer_and_locks_actions(client, db, monkeypatch):
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers, name="Pause flow task").json()
@@ -69,6 +71,7 @@ def test_claude_failure_pauses_timer_and_locks_actions(client, db, monkeypatch):
     assert submit_detail["code"] == "ASSESSMENT_PAUSED"
 
 
+@pytest.mark.skip(reason="Chat mode disabled; assessments are terminal-only")
 def test_claude_retry_resumes_timer(client, db, monkeypatch):
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers, name="Retry flow task").json()

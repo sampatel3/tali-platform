@@ -1,3 +1,4 @@
+import pytest
 from tests.conftest import verify_user
 from app.models.organization import Organization
 from app.models.user import User
@@ -71,6 +72,10 @@ def test_candidate_can_resume_in_progress_assessment(client, monkeypatch):
     class FakeSandbox:
         def __init__(self, sid):
             self.sandbox_id = sid
+            self.files = type("Files", (), {"write": lambda self, *a, **kw: None})()
+
+        def run_code(self, _code):
+            return {"stdout": '{"returncode": 0, "stderr": ""}'}
 
     class FakeE2BService:
         def __init__(self, api_key):
@@ -128,6 +133,10 @@ def test_start_assessment_consumes_credit_once(client, db, monkeypatch):
     class FakeSandbox:
         def __init__(self, sid):
             self.sandbox_id = sid
+            self.files = type("Files", (), {"write": lambda self, *a, **kw: None})()
+
+        def run_code(self, _code):
+            return {"stdout": '{"returncode": 0, "stderr": ""}'}
 
     class FakeE2BService:
         def __init__(self, api_key):
@@ -192,6 +201,7 @@ def test_start_assessment_requires_credit_when_lemon_enabled(client, db, monkeyp
     assert resp.status_code == 402
 
 
+@pytest.mark.skip(reason="Chat mode disabled; assessments are terminal-only")
 def test_timeline_telemetry_records_execute_and_prompt_events(client, monkeypatch):
     headers = _register_and_login(client)
     task = _create_task(client, headers)
@@ -204,6 +214,10 @@ def test_timeline_telemetry_records_execute_and_prompt_events(client, monkeypatc
     class FakeSandbox:
         def __init__(self, sid):
             self.sandbox_id = sid
+            self.files = type("Files", (), {"write": lambda self, *a, **kw: None})()
+
+        def run_code(self, _code):
+            return {"stdout": '{"returncode": 0, "stderr": ""}'}
 
     class FakeE2BService:
         def __init__(self, api_key):
@@ -280,6 +294,7 @@ def test_timeline_telemetry_records_execute_and_prompt_events(client, monkeypatc
     assert prompt_event["time_since_last_prompt_ms"] == 456
 
 
+@pytest.mark.skip(reason="Chat mode disabled; assessments are terminal-only")
 def test_claude_budget_snapshot_and_limit_enforcement(client, monkeypatch):
     headers = _register_and_login(client)
     task = _create_task(client, headers, claude_budget_limit_usd=0.000005)
@@ -292,6 +307,10 @@ def test_claude_budget_snapshot_and_limit_enforcement(client, monkeypatch):
     class FakeSandbox:
         def __init__(self, sid):
             self.sandbox_id = sid
+            self.files = type("Files", (), {"write": lambda self, *a, **kw: None})()
+
+        def run_code(self, _code):
+            return {"stdout": '{"returncode": 0, "stderr": ""}'}
 
     class FakeE2BService:
         def __init__(self, api_key):
@@ -362,6 +381,7 @@ def test_claude_budget_snapshot_and_limit_enforcement(client, monkeypatch):
     assert FakeClaudeService.call_count == 1
 
 
+@pytest.mark.skip(reason="Materialization path removed; repo is now cloned from template")
 def test_start_materializes_repository_files_in_sandbox(client, monkeypatch):
     headers = _register_and_login(client)
     task = _create_task(client, headers)
@@ -386,7 +406,7 @@ def test_start_materializes_repository_files_in_sandbox(client, monkeypatch):
 
         def run_code(self, code):
             self.run_code_calls.append(code)
-            return {"stdout": "", "stderr": "", "error": None}
+            return {"stdout": '{"returncode": 0, "stderr": ""}', "stderr": "", "error": None}
 
     holder = {}
 
@@ -444,7 +464,7 @@ def test_execute_auto_submits_when_time_expires(client, monkeypatch):
             self.files = FakeFiles()
 
         def run_code(self, code):
-            return {"stdout": "{}", "stderr": "", "error": None}
+            return {"stdout": '{"returncode": 0, "stderr": ""}', "stderr": "", "error": None}
 
     class FakeE2BService:
         def __init__(self, api_key):

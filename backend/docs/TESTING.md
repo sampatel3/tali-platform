@@ -32,3 +32,4 @@ cd backend
 
 1. Tests use SQLite (`sqlite:///./test.db`) from `backend/tests/conftest.py`.
 2. Production smoke checks are separately marked and not part of the default local run.
+3. If you see "attempt to write a readonly database" or "disk I/O error", remove stale DB files first: `rm -f backend/test.db backend/test_mig.db` then re-run tests.

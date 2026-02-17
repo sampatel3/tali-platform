@@ -22,4 +22,5 @@ venv/
 .cursor/ralph-config.json
 backend/uploads/
 test.db
+test_mig.db
 backend/.env
