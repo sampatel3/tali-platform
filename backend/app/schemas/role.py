@@ -96,6 +96,11 @@ class ApplicationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class ApplicationDetailResponse(ApplicationResponse):
+    """Application with optional full CV text for viewer."""
+    cv_text: Optional[str] = None
+
+
 class ApplicationCvUploadResponse(BaseModel):
     success: bool = True
     application_id: int

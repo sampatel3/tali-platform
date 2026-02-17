@@ -23,6 +23,7 @@ from ...platform.database import get_db
 from ...schemas.role import (
     ApplicationCreate,
     ApplicationCvUploadResponse,
+    ApplicationDetailResponse,
     ApplicationResponse,
     ApplicationUpdate,
     AssessmentFromApplicationCreate,
@@ -200,6 +201,27 @@ def list_role_applications(
             db.rollback()
             logger.exception("Failed to persist backfilled cv_match_score values")
     return [application_to_response(app) for app in apps]
+
+
+@router.get("/applications/{application_id}", response_model=ApplicationDetailResponse)
+def get_application_detail(
+    application_id: int,
+    include_cv_text: bool = Query(False, description="Include full CV extracted text for viewer"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Get a single application; optionally include full cv_text for CV viewer sidebar."""
+    app = get_application(application_id, current_user.organization_id, db)
+    data = application_to_response(app)
+    payload = data.model_dump()
+    if include_cv_text:
+        cv = (app.cv_text or "").strip()
+        if not cv and app.candidate:
+            cv = (app.candidate.cv_text or "").strip()
+        payload["cv_text"] = cv or None
+    else:
+        payload["cv_text"] = None
+    return ApplicationDetailResponse(**payload)
 
 
 @router.patch("/applications/{application_id}", response_model=ApplicationResponse)

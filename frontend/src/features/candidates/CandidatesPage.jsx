@@ -5,6 +5,7 @@ import { Button, Input, PageContainer, PageHeader, Panel, Select } from '../../s
 
 import { useToast } from '../../context/ToastContext';
 import {
+  CandidateCvSidebar,
   CandidateSheet,
   CandidatesTable,
   EmptyRoleDetail,
@@ -55,6 +56,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [generatingTaaliId, setGeneratingTaaliId] = useState(null);
   const [inviteSheetOpen, setInviteSheetOpen] = useState(false);
   const [inviteDraft, setInviteDraft] = useState(null);
+  const [cvSidebarApplicationId, setCvSidebarApplicationId] = useState(null);
 
   const selectedRole = useMemo(
     () => roles.find((role) => String(role.id) === String(selectedRoleId)) || null,
@@ -595,6 +597,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                     setCandidateSheetOpen(true);
                   }}
                   onViewCandidate={handleViewFromApplication}
+                  onOpenCvSidebar={(app) => setCvSidebarApplicationId(app?.id ?? null)}
                   onCreateAssessment={handleCreateAssessment}
                   onGenerateTaaliCvAi={handleGenerateTaaliCvAi}
                 />
@@ -629,6 +632,13 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         open={inviteSheetOpen}
         onClose={() => setInviteSheetOpen(false)}
         draft={inviteDraft}
+      />
+
+      <CandidateCvSidebar
+        open={cvSidebarApplicationId != null}
+        applicationId={cvSidebarApplicationId}
+        onClose={() => setCvSidebarApplicationId(null)}
+        getApplication={rolesApi?.getApplication}
       />
     </div>
   );
