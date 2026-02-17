@@ -131,6 +131,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       const appParams = {
         sort_by: sortBy,
         sort_order: sortOrder,
+        include_cv_text: true,
       };
       if (sourceFilter !== 'all') appParams.source = sourceFilter;
       if (minWorkableScore !== '') appParams.min_workable_score = Number(minWorkableScore);
@@ -380,15 +381,20 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     if (!rolesApi?.generateTaaliCvAi) return;
     setGeneratingTaaliId(application.id);
     try {
-      await rolesApi.generateTaaliCvAi(application.id);
-      await loadRoleContext(selectedRoleId);
+      const res = await rolesApi.generateTaaliCvAi(application.id);
+      const updated = res?.data;
+      if (updated && updated.id) {
+        setRoleApplications((prev) =>
+          prev.map((app) => (Number(app.id) === Number(updated.id) ? { ...app, ...updated } : app))
+        );
+      }
     } catch (err) {
       const msg = getErrorMessage(err, 'Failed to generate TAALI score.');
       showToast(msg, err?.response?.status === 404 ? 'info' : 'error');
     } finally {
       setGeneratingTaaliId(null);
     }
-  }, [rolesApi, loadRoleContext, selectedRoleId, showToast]);
+  }, [rolesApi, showToast]);
 
   return (
     <div>
@@ -636,9 +642,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
 
       <CandidateCvSidebar
         open={cvSidebarApplicationId != null}
-        applicationId={cvSidebarApplicationId}
+        application={roleApplications.find((a) => Number(a.id) === Number(cvSidebarApplicationId)) ?? null}
         onClose={() => setCvSidebarApplicationId(null)}
-        getApplication={rolesApi?.getApplication}
       />
     </div>
   );

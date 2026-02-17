@@ -75,11 +75,12 @@ class Settings(BaseSettings):
 
     @property
     def resolved_claude_scoring_model(self) -> str:
-        """Model for CV-job match (TAALI score). Defaults to Haiku; use CLAUDE_SCORING_MODEL to override."""
+        """Model for CV-job match (TAALI score). Defaults to Haiku; use CLAUDE_SCORING_MODEL to override.
+        Never falls back to CLAUDE_MODEL so production can use a different/legacy model without breaking scoring."""
         scoring = (self.CLAUDE_SCORING_MODEL or "").strip()
         if scoring:
             return scoring
-        return self.resolved_claude_model
+        return "claude-3-5-haiku-latest"
 
     # GitHub assessment repository integration
     GITHUB_TOKEN: str = ""

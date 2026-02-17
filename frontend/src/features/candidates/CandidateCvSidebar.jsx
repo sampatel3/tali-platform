@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useRef } from 'react';
-import { FileText, Loader2, X } from 'lucide-react';
+import React, { useEffect, useRef } from 'react';
+import { FileText, X } from 'lucide-react';
 
 import { Badge, Button } from '../../shared/ui/TaaliPrimitives';
 import { statusVariant } from './candidatesUiUtils';
@@ -13,37 +13,9 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
-export function CandidateCvSidebar({ open, applicationId, onClose, getApplication }) {
+export function CandidateCvSidebar({ open, application, onClose }) {
   const panelRef = useRef(null);
   const previousFocusRef = useRef(null);
-  const [loading, setLoading] = React.useState(false);
-  const [error, setError] = React.useState('');
-  const [data, setData] = React.useState(null);
-
-  const fetchApplication = useCallback(async () => {
-    if (!applicationId || !getApplication) return;
-    setLoading(true);
-    setError('');
-    setData(null);
-    try {
-      const res = await getApplication(applicationId, { params: { include_cv_text: true } });
-      setData(res?.data ?? null);
-    } catch (err) {
-      const status = err?.response?.status;
-      let msg = err?.response?.data?.detail ?? err?.message ?? 'Failed to load candidate';
-      if (typeof msg !== 'string' && msg != null) msg = String(msg);
-      if (status === 405) {
-        msg = (msg ? `${msg}. ` : '') + 'The API may not support GET for this resource yet—ensure the backend is deployed with the latest code.';
-      }
-      setError(msg || 'Failed to load candidate');
-    } finally {
-      setLoading(false);
-    }
-  }, [applicationId, getApplication]);
-
-  useEffect(() => {
-    if (open && applicationId) fetchApplication();
-  }, [open, applicationId, fetchApplication]);
 
   useEffect(() => {
     if (!open) return;
@@ -68,6 +40,7 @@ export function CandidateCvSidebar({ open, applicationId, onClose, getApplicatio
   if (!open) return null;
 
   const formatScore = (v) => (typeof v === 'number' ? `${v.toFixed(1)}/10` : '—');
+  const data = application ?? null;
 
   return (
     <>
@@ -107,7 +80,7 @@ export function CandidateCvSidebar({ open, applicationId, onClose, getApplicatio
         </div>
 
         {/* Meta row */}
-        {data && !loading && !error ? (
+        {data ? (
           <div className="shrink-0 px-5 py-3 flex flex-wrap items-center gap-2 border-b border-[var(--taali-border-muted)] bg-white">
             {data.candidate_position ? (
               <span className="text-xs text-gray-600">{data.candidate_position}</span>
@@ -122,16 +95,9 @@ export function CandidateCvSidebar({ open, applicationId, onClose, getApplicatio
           </div>
         ) : null}
 
-        {/* Body: loading / error / CV */}
+        {/* Body: CV from already-loaded application */}
         <div className="flex-1 overflow-y-auto px-5 py-4">
-          {loading ? (
-            <div className="flex flex-col items-center justify-center py-12 text-[var(--taali-muted)]">
-              <Loader2 size={24} className="animate-spin" />
-              <span className="mt-2 text-sm">Loading CV…</span>
-            </div>
-          ) : error ? (
-            <div className="py-6 text-sm text-red-600">{error}</div>
-          ) : data?.cv_text ? (
+          {data?.cv_text ? (
             <div className="space-y-3">
               <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-[var(--taali-muted)]">
                 <FileText size={14} />

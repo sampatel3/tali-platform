@@ -151,6 +151,7 @@ def list_role_applications(
     min_workable_score: float | None = Query(default=None),
     min_cv_match_score: float | None = Query(default=None),
     source: str | None = Query(default=None, pattern="^(manual|workable)$"),
+    include_cv_text: bool = Query(False, description="Include full CV text for each application (for viewer)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -200,7 +201,20 @@ def list_role_applications(
         except Exception:
             db.rollback()
             logger.exception("Failed to persist backfilled cv_match_score values")
-    return [application_to_response(app) for app in apps]
+
+    out = []
+    for app in apps:
+        data = application_to_response(app)
+        payload = data.model_dump()
+        if include_cv_text:
+            cv = (app.cv_text or "").strip()
+            if not cv and app.candidate:
+                cv = (app.candidate.cv_text or "").strip()
+            payload["cv_text"] = cv or None
+        else:
+            payload["cv_text"] = None
+        out.append(ApplicationDetailResponse(**payload))
+    return out
 
 
 @router.get("/applications/{application_id}", response_model=ApplicationDetailResponse)
