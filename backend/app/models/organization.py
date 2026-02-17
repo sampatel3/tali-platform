@@ -18,6 +18,7 @@ class Organization(Base):
     workable_last_sync_at = Column(DateTime(timezone=True), nullable=True)
     workable_last_sync_status = Column(String, nullable=True)
     workable_last_sync_summary = Column(JSON, nullable=True)
+    workable_sync_started_at = Column(DateTime(timezone=True), nullable=True)
     stripe_customer_id = Column(String)
     stripe_subscription_id = Column(String)
     billing_provider = Column(String, default="lemon")

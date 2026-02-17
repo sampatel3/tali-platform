@@ -4,7 +4,6 @@ import logging
 import threading
 from datetime import datetime, timezone
 
-import httpx
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -23,9 +22,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/workable", tags=["Workable"])
 
-# In-memory set of org_ids currently running a background sync (single process).
-_workable_sync_in_progress: set[int] = set()
-_lock = threading.Lock()
 
 
 def _get_org_for_user(db: Session, current_user: User) -> Organization:
@@ -56,8 +52,10 @@ def _run_sync_in_background(org_id: int) -> None:
     except Exception as exc:
         logger.exception("Workable background sync failed for org_id=%s: %s", org_id, exc)
     finally:
-        with _lock:
-            _workable_sync_in_progress.discard(org_id)
+        db.query(Organization).filter(Organization.id == org_id).update(
+            {Organization.workable_sync_started_at: None}, synchronize_session=False
+        )
+        db.commit()
         db.close()
 
 
@@ -69,8 +67,19 @@ def workable_sync_status(
     if settings.MVP_DISABLE_WORKABLE:
         raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
     org = _get_org_for_user(db, current_user)
-    with _lock:
-        sync_in_progress = org.id in _workable_sync_in_progress
+    started_at = org.workable_sync_started_at
+    if started_at is not None:
+        now = datetime.now(timezone.utc)
+        if started_at.tzinfo is None:
+            started_at = started_at.replace(tzinfo=timezone.utc)
+        age_seconds = (now - started_at).total_seconds()
+        if age_seconds > 7200:  # 2 hours: treat as stale (crashed worker)
+            db.query(Organization).filter(Organization.id == org.id).update(
+                {Organization.workable_sync_started_at: None}, synchronize_session=False
+            )
+            db.commit()
+            started_at = None
+    sync_in_progress = started_at is not None
     return {
         "workable_connected": bool(org.workable_connected),
         "workable_last_sync_at": org.workable_last_sync_at,
@@ -90,13 +99,15 @@ def run_workable_sync(
     org = _get_org_for_user(db, current_user)
     _assert_workable_connected(org)
 
-    with _lock:
-        if org.id in _workable_sync_in_progress:
-            raise HTTPException(
-                status_code=409,
-                detail="A sync is already in progress. Check status below or try again in a few minutes.",
-            )
-        _workable_sync_in_progress.add(org.id)
+    if org.workable_sync_started_at is not None:
+        raise HTTPException(
+            status_code=409,
+            detail="A sync is already in progress. Check status below or try again in a few minutes.",
+        )
+
+    now = datetime.now(timezone.utc)
+    org.workable_sync_started_at = now
+    db.commit()
 
     thread = threading.Thread(target=_run_sync_in_background, args=(org.id,), daemon=True)
     thread.start()

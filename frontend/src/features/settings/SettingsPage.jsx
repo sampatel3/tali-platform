@@ -233,7 +233,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       }
       return;
     }
-    const interval = setInterval(async () => {
+    const poll = async () => {
       const data = await fetchWorkableSyncStatus();
       if (!data.sync_in_progress) {
         const s = data.workable_last_sync_summary || {};
@@ -242,10 +242,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
           (data.workable_last_sync_status || '').toLowerCase() === 'success' ? 'success' : 'info'
         );
       }
-    }, 30000);
-    workableSyncPollRef.current = interval;
+    };
+    const firstDelay = setTimeout(poll, 5000);
+    const interval = setInterval(poll, 30000);
+    workableSyncPollRef.current = { firstDelay, interval };
     return () => {
-      if (workableSyncPollRef.current) clearInterval(workableSyncPollRef.current);
+      if (workableSyncPollRef.current) {
+        clearTimeout(workableSyncPollRef.current.firstDelay);
+        clearInterval(workableSyncPollRef.current.interval);
+        workableSyncPollRef.current = null;
+      }
     };
   }, [workableSyncInProgress]);
 
@@ -254,14 +260,15 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     try {
       await orgsApi.syncWorkable();
       setWorkableSyncInProgress(true);
-      showToast('Sync started in the background. This may take a few minutes.', 'info');
+      showToast('Sync started. You’ll see status below; this may take several minutes.', 'info');
     } catch (err) {
       const status = err?.response?.status;
-      const detail = err?.response?.data?.detail ?? err?.message;
+      const detail = err?.response?.data?.detail ?? err?.message ?? String(err);
       if (status === 409) {
         setWorkableSyncInProgress(true);
         showToast('A sync is already in progress. Status will update below.', 'info');
       } else {
+        console.error('Workable sync failed:', err?.response?.data ?? err);
         showToast(detail || 'Workable sync failed', 'error');
       }
     } finally {
