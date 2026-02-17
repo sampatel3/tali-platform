@@ -524,9 +524,10 @@ class WorkableSyncService:
             role.job_spec_text = formatted_spec
             role.description = formatted_spec
         else:
-            role.description = description or role.description
-            if isinstance(description, str) and description.strip():
-                role.job_spec_text = description.strip()
+            stripped = _strip_html(description) if isinstance(description, str) and description.strip() else ""
+            role.description = stripped or role.description
+            if stripped:
+                role.job_spec_text = stripped
         db.flush()
         # Save job spec as an attachment (file) for download and consistent display
         if (role.job_spec_text or "").strip():

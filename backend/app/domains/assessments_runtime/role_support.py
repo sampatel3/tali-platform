@@ -57,6 +57,7 @@ def role_to_response(role: Role) -> RoleResponse:
         source=role.source,
         workable_job_id=role.workable_job_id,
         job_spec_filename=role.job_spec_filename,
+        job_spec_text=role.job_spec_text,
         job_spec_uploaded_at=role.job_spec_uploaded_at,
         job_spec_present=role_has_job_spec(role),
         interview_focus=role.interview_focus,

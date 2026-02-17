@@ -627,7 +627,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                               </div>
                             )}
                             <div className="mt-2 font-mono text-xs text-[var(--taali-text)]">
-                              {orgData.workable_sync_progress.jobs_upserted ?? 0} roles imported · {orgData.workable_sync_progress.candidates_upserted ?? 0} candidates imported · {orgData.workable_sync_progress.cv_downloaded ?? 0} CVs
+                              {orgData.workable_sync_progress.jobs_seen ?? 0} roles processed ({orgData.workable_sync_progress.jobs_upserted ?? 0} new) · {orgData.workable_sync_progress.candidates_seen ?? 0} candidates processed ({orgData.workable_sync_progress.candidates_upserted ?? 0} new)
                             </div>
                           </>
                         ) : (

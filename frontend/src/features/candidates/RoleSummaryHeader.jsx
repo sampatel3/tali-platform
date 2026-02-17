@@ -35,10 +35,11 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, o
     return raw.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   };
 
-  const roleDescription = (role.description || '').trim();
-  const roleText = toPlainText(role.description);
+  const specContent = (role.description || role.job_spec_text || '').trim();
+  const roleDescription = specContent;
+  const roleText = toPlainText(role.description || role.job_spec_text);
   const rolePreview = roleText.length > 180 ? `${roleText.slice(0, 180)}…` : roleText;
-  const hasSpecContent = roleDescription.length > 0;
+  const hasSpecContent = specContent.length > 0;
   const jobSpecReady = Boolean(role.job_spec_present || role.job_spec_filename || hasSpecContent);
   const jobSpecLabel = role.job_spec_filename
     || (jobSpecReady

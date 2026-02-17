@@ -167,6 +167,7 @@ def upload_role_job_spec(
     role.job_spec_file_url = result["file_url"]
     role.job_spec_filename = result["filename"]
     role.job_spec_text = result["extracted_text"]
+    role.description = (result.get("extracted_text") or "").strip() or role.description
     role.job_spec_uploaded_at = now
     role.interview_focus = None
     role.interview_focus_generated_at = None

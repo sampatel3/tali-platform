@@ -37,6 +37,7 @@ class RoleResponse(BaseModel):
     source: Optional[str] = "manual"
     workable_job_id: Optional[str] = None
     job_spec_filename: Optional[str] = None
+    job_spec_text: Optional[str] = None
     job_spec_uploaded_at: Optional[datetime] = None
     job_spec_present: bool = False
     interview_focus: Optional[InterviewFocus] = None
