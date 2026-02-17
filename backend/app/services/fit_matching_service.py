@@ -101,7 +101,7 @@ async def calculate_cv_job_match(
             additional_requirements_section=additional_section,
         )
 
-        resolved_model = model or settings.resolved_claude_model
+        resolved_model = model or settings.resolved_claude_scoring_model
 
         logger.info(
             "Running CV-job match analysis (cv_chars=%d, js_chars=%d, model=%s)",

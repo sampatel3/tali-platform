@@ -4,7 +4,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -70,7 +70,7 @@ def _assert_workable_connected(org: Organization) -> None:
         raise HTTPException(status_code=400, detail="Workable is not connected")
 
 
-def _run_sync_in_background(org_id: int) -> None:
+def _run_sync_in_background(org_id: int, skip_cv: bool = False) -> None:
     db = SessionLocal()
     try:
         org = db.query(Organization).filter(Organization.id == org_id).first()
@@ -82,7 +82,7 @@ def _run_sync_in_background(org_id: int) -> None:
                 subdomain=org.workable_subdomain,
             )
         )
-        service.sync_org(db, org)
+        service.sync_org(db, org, skip_cv=skip_cv)
     except Exception as exc:
         logger.exception("Workable background sync failed for org_id=%s: %s", org_id, exc)
     finally:
@@ -155,8 +155,13 @@ def cancel_workable_sync(
     return {"status": "ok", "message": "Sync stopped. You can start a new sync when ready."}
 
 
+class _SyncBody(BaseModel):
+    skip_cv: bool = False
+
+
 @router.post("/sync")
 def run_workable_sync(
+    body: _SyncBody | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -176,7 +181,8 @@ def run_workable_sync(
     org.workable_sync_cancel_requested_at = None
     db.commit()
 
-    thread = threading.Thread(target=_run_sync_in_background, args=(org.id,), daemon=True)
+    skip_cv = (body or _SyncBody()).skip_cv
+    thread = threading.Thread(target=_run_sync_in_background, args=(org.id, skip_cv), daemon=True)
     thread.start()
     return {
         "status": "started",

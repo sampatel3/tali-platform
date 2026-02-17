@@ -275,12 +275,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
-  const handleSyncWorkable = async () => {
+  const handleSyncWorkable = async (options = {}) => {
+    const skipCv = options.skipCv === true;
     setWorkableSyncLoading(true);
     setWorkableSyncInProgress(true); // show "running in background" immediately
     try {
-      await orgsApi.syncWorkable();
-      showToast("Sync is running in the background. We'll notify you when it's done.", 'info');
+      await orgsApi.syncWorkable(skipCv ? { skip_cv: true } : {});
+      showToast(
+        skipCv
+          ? "Syncing candidates only (no CVs). Run full Sync later to fetch CVs and scores."
+          : "Sync is running in the background. We'll notify you when it's done.",
+        'info'
+      );
     } catch (err) {
       const status = err?.response?.status;
       const detail = err?.response?.data?.detail ?? err?.message ?? String(err);
@@ -598,12 +604,30 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         <div className="text-sm text-amber-800">
                           Sync is running in the background. We’ll notify you when it’s done. You can leave this page.
                         </div>
-                        {orgData?.workable_sync_progress && (orgData.workable_sync_progress.jobs_seen != null || orgData.workable_sync_progress.candidates_seen != null) ? (
-                          <div className="mt-2 font-mono text-xs text-amber-900">
-                            {orgData.workable_sync_progress.jobs_upserted ?? 0} roles imported · {orgData.workable_sync_progress.candidates_upserted ?? 0} candidates imported · {orgData.workable_sync_progress.cv_downloaded ?? 0} CVs
-                          </div>
+                        {orgData?.workable_sync_progress && (orgData.workable_sync_progress.current_step || orgData.workable_sync_progress.jobs_seen != null || orgData.workable_sync_progress.candidates_seen != null) ? (
+                          <>
+                            {(orgData.workable_sync_progress.current_step || orgData.workable_sync_progress.last_request) && (
+                              <div className="mt-2 font-mono text-xs text-amber-800">
+                                {orgData.workable_sync_progress.current_step && (
+                                  <span>Step: {orgData.workable_sync_progress.current_step.replace(/_/g, ' ')}</span>
+                                )}
+                                {orgData.workable_sync_progress.current_job_shortcode && (
+                                  <span> · Job {orgData.workable_sync_progress.current_job_shortcode}</span>
+                                )}
+                                {orgData.workable_sync_progress.current_candidate_index && (
+                                  <span> · Candidate {orgData.workable_sync_progress.current_candidate_index}</span>
+                                )}
+                                {orgData.workable_sync_progress.last_request && (
+                                  <span className="block mt-0.5 text-amber-700">Request: {orgData.workable_sync_progress.last_request}</span>
+                                )}
+                              </div>
+                            )}
+                            <div className="mt-2 font-mono text-xs text-amber-900">
+                              {orgData.workable_sync_progress.jobs_upserted ?? 0} roles imported · {orgData.workable_sync_progress.candidates_upserted ?? 0} candidates imported · {orgData.workable_sync_progress.cv_downloaded ?? 0} CVs
+                            </div>
+                          </>
                         ) : (
-                          <div className="mt-2 font-mono text-xs text-amber-700">Connecting to Workable…</div>
+                          <div className="mt-2 font-mono text-xs text-amber-700">Starting sync…</div>
                         )}
                         <div className="mt-3">
                           <button
@@ -670,6 +694,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         </label>
                       ) : null}
                     </div>
+                    <p className="mt-2 font-mono text-xs text-gray-600">
+                      <strong>Sync (candidates only)</strong> is faster; use it first, then run <strong>Sync (full)</strong> to fetch CVs and TAALI scores.
+                    </p>
                     <div className="mt-4 flex flex-wrap gap-3">
                       <button
                         type="button"
@@ -683,10 +710,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       <button
                         type="button"
                         disabled={workableSyncLoading || workableSyncInProgress || !workableConnected}
-                        className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
-                        onClick={handleSyncWorkable}
+                        className="border-2 border-gray-600 px-4 py-2 font-mono text-sm font-bold bg-white text-gray-800 hover:bg-gray-100 disabled:opacity-60"
+                        onClick={() => handleSyncWorkable({ skipCv: true })}
                       >
-                        {workableSyncInProgress ? 'Running in background' : 'Sync'}
+                        {workableSyncInProgress ? 'Running…' : 'Sync (candidates only)'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={workableSyncLoading || workableSyncInProgress || !workableConnected}
+                        className="border-2 border-black px-4 py-2 font-mono text-sm font-bold bg-black text-white disabled:opacity-60"
+                        onClick={() => handleSyncWorkable()}
+                      >
+                        {workableSyncInProgress ? 'Running in background' : 'Sync (full)'}
                       </button>
                     </div>
                   </div>

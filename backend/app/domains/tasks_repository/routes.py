@@ -2,7 +2,8 @@ import logging
 import re
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, Header, HTTPException, status
+from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from typing import Any, Dict, List, Optional
 
@@ -213,6 +214,39 @@ def _sync_template_task_specs_if_needed(db: Session) -> None:
     except Exception:
         db.rollback()
         logger.exception("Task template sync failed during DB update.")
+
+
+class _AdminDeleteTemplateBody(BaseModel):
+    task_key: str
+
+
+@router.post("/admin/delete-template")
+def admin_delete_template_task(
+    body: _AdminDeleteTemplateBody,
+    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
+    db: Session = Depends(get_db),
+):
+    """Delete a template task by task_key. Requires X-Admin-Secret header (SECRET_KEY)."""
+    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
+        raise HTTPException(status_code=403, detail="Forbidden")
+    task_key = (body.task_key or "").strip()
+    if not task_key:
+        raise HTTPException(status_code=400, detail="task_key required")
+    task = (
+        db.query(Task)
+        .filter(
+            Task.task_key == task_key,
+            Task.is_template == True,
+            Task.organization_id == None,
+        )
+        .first()
+    )
+    if not task:
+        raise HTTPException(status_code=404, detail=f"No template task found with task_key={task_key!r}")
+    db.delete(task)
+    db.commit()
+    return {"status": "ok", "message": f"Deleted template task task_key={task_key!r}"}
+
 
 # --- Standard CRUD ---
 

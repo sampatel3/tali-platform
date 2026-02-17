@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     # Explicit model must be configured via environment.
     CLAUDE_MODEL: str = ""
+    # Model for CV-job match (TAALI score). Default Haiku for cost/debugging; override with CLAUDE_SCORING_MODEL if needed.
+    CLAUDE_SCORING_MODEL: str = "claude-3-5-haiku-latest"
     MAX_TOKENS_PER_RESPONSE: int = 1024
     # Terminal-native Claude Code runtime
     ASSESSMENT_TERMINAL_ENABLED: bool = True
@@ -71,6 +73,13 @@ class Settings(BaseSettings):
             raise RuntimeError("CLAUDE_MODEL is required and must be explicitly configured")
         return model
 
+    @property
+    def resolved_claude_scoring_model(self) -> str:
+        """Model for CV-job match (TAALI score). Defaults to Haiku; use CLAUDE_SCORING_MODEL to override."""
+        scoring = (self.CLAUDE_SCORING_MODEL or "").strip()
+        if scoring:
+            return scoring
+        return self.resolved_claude_model
 
     # GitHub assessment repository integration
     GITHUB_TOKEN: str = ""

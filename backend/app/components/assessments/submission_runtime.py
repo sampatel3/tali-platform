@@ -264,7 +264,7 @@ def submit_assessment_impl(
                 cv_text=cv_text,
                 job_spec_text=job_spec_text,
                 api_key=settings_obj.ANTHROPIC_API_KEY,
-                model=settings_obj.resolved_claude_model,
+                model=settings_obj.resolved_claude_scoring_model,
             )
         elif candidate and (not cv_text or not job_spec_text):
             scoring_errors.append(

@@ -157,7 +157,7 @@ class WorkableSyncService:
         db.refresh(org)
         return org.workable_sync_cancel_requested_at is not None
 
-    def sync_org(self, db: Session, org: Organization, *, full_resync: bool = False) -> dict:
+    def sync_org(self, db: Session, org: Organization, *, full_resync: bool = False, skip_cv: bool = False) -> dict:
         summary = {
             "jobs_seen": 0,
             "jobs_upserted": 0,
@@ -168,13 +168,21 @@ class WorkableSyncService:
             "cv_matched": 0,
             "errors": [],
             "full_resync": bool(full_resync),
+            "current_step": "listing_jobs",
+            "last_request": "GET /jobs?state=published",
+            "current_job_shortcode": None,
+            "current_candidate_index": None,
         }
         now = _now()
         try:
             org.workable_sync_cancel_requested_at = None
             db.commit()
+            org.workable_sync_progress = dict(summary)
+            db.commit()
             jobs = self.client.list_open_jobs()
             summary["jobs_seen"] = len(jobs)
+            summary["current_step"] = "listing_candidates" if jobs else None
+            summary["last_request"] = "GET /jobs (done)" if jobs else "GET /jobs (0 jobs)"
             if not jobs:
                 logger.warning("Workable list_open_jobs returned 0 jobs for org_id=%s", org.id)
             org.workable_sync_progress = dict(summary)
@@ -202,6 +210,12 @@ class WorkableSyncService:
                     if created_role:
                         summary["jobs_upserted"] += 1
 
+                    shortcode = (job.get("shortcode") or job.get("id") or "?")[:20]
+                    summary["current_step"] = "listing_candidates"
+                    summary["current_job_shortcode"] = shortcode
+                    summary["last_request"] = f"GET /jobs/{shortcode}/candidates"
+                    org.workable_sync_progress = dict(summary)
+                    db.commit()
                     candidates = self._list_job_candidates_for_job(job=job, role=role)
                     job_title = (job.get("title") or job.get("shortcode") or "job")[:60]
                     logger.info(
@@ -212,12 +226,20 @@ class WorkableSyncService:
                     )
                     org.workable_sync_progress = dict(summary)
                     db.commit()
-                    for candidate_ref in candidates:
+                    total_candidates = len(candidates)
+                    for idx, candidate_ref in enumerate(candidates):
                         db.refresh(org)
                         if org.workable_sync_cancel_requested_at is not None:
                             summary["errors"].append("Sync cancelled by user")
                             break
                         summary["candidates_seen"] += 1
+                        cid = str(candidate_ref.get("id") or "?")[:12]
+                        summary["current_step"] = "syncing_candidate"
+                        summary["current_candidate_index"] = f"{idx + 1}/{total_candidates}" if total_candidates else str(idx + 1)
+                        summary["last_request"] = f"GET /candidates/{cid}"
+                        if (idx + 1) % 5 == 1 or summary["candidates_seen"] % PROGRESS_BATCH_SIZE == 0:
+                            org.workable_sync_progress = dict(summary)
+                            db.commit()
                         try:
                             synced = self._sync_candidate_for_role(
                                 db=db,
@@ -226,7 +248,8 @@ class WorkableSyncService:
                                 job=job,
                                 candidate_ref=candidate_ref,
                                 now=now,
-                                enrich=True,  # always fetch full candidate + CV
+                                enrich=True,  # fetch full candidate profile
+                                skip_cv=skip_cv,
                             )
                         except WorkableSyncCancelled:
                             summary["errors"].append("Sync cancelled by user")
@@ -392,6 +415,7 @@ class WorkableSyncService:
         candidate_ref: dict,
         now: datetime,
         enrich: bool,
+        skip_cv: bool = False,
     ) -> dict:
         if self._is_cancel_requested(db, org):
             raise WorkableSyncCancelled()
@@ -497,7 +521,7 @@ class WorkableSyncService:
             app.workable_score_raw = raw_score
             app.workable_score = normalized_score
             app.workable_score_source = score_source
-        if enrich:
+        if enrich and not skip_cv:
             downloaded = self.client.download_candidate_resume(candidate_payload)
             if not downloaded:
                 logger.debug(
@@ -526,9 +550,10 @@ class WorkableSyncService:
 
         if self._is_cancel_requested(db, org):
             raise WorkableSyncCancelled()
-        cv_matched = self._compute_cv_match(app=app, role=role, now=now)
-        if cv_matched:
-            counters["cv_matched"] += 1
+        if not skip_cv:
+            cv_matched = self._compute_cv_match(app=app, role=role, now=now)
+            if cv_matched:
+                counters["cv_matched"] += 1
         app.rank_score = _rank_score_for_application(app)
         db.flush()
         if created_app:
@@ -546,7 +571,7 @@ class WorkableSyncService:
                 cv_text=cv_text,
                 job_spec_text=job_spec,
                 api_key=settings.ANTHROPIC_API_KEY,
-                model=settings.resolved_claude_model,
+                model=settings.resolved_claude_scoring_model,
                 additional_requirements=(role.additional_requirements or "").strip() or None,
             )
             app.cv_match_score = result.get("cv_job_match_score")
