@@ -13,7 +13,7 @@
   --taali-purple-hover: #7B00CC;
   --taali-purple-soft: #f3e6ff;
   --taali-radius: 0px;
-  --taali-font: 'Inter', 'system-ui', sans-serif;
+  --taali-font: 'JetBrains Mono', 'Roboto Mono', 'Fira Code', 'Consolas', 'Courier New', monospace;
   --taali-font-mono: 'JetBrains Mono', 'Roboto Mono', 'Courier New', monospace;
   --taali-ring: rgba(157, 0, 255, 0.35);
   --taali-spacing: 8px;
