@@ -222,6 +222,10 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, o
             </div>
           ) : null}
         </Card>
+      ) : jobSpecReady ? (
+        <Card className="mt-4 border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+          Interview focus pointers will be generated from the job spec.
+        </Card>
       ) : (
         <Card className="mt-4 border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
           Upload a job spec to generate interview focus pointers for manual screening.

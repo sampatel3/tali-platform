@@ -28,6 +28,57 @@ class WorkableSyncCancelled(Exception):
 
 
 
+def _strip_html(html: str) -> str:
+    """Convert HTML to plain text, preserving basic structure."""
+    if not html or not isinstance(html, str):
+        return html or ""
+    import re
+    text = html
+    # Block elements to newlines
+    text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</div>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</li>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<li[^>]*>", "- ", text, flags=re.IGNORECASE)
+    # Headings to markdown
+    for level in range(1, 7):
+        text = re.sub(rf"<h{level}[^>]*>(.*?)</h{level}>", rf"\n{'#' * level} \1\n", text, flags=re.IGNORECASE | re.DOTALL)
+    # Bold/strong to markdown
+    text = re.sub(r"<strong[^>]*>(.*?)</strong>", r"**\1**", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<b[^>]*>(.*?)</b>", r"**\1**", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"<em[^>]*>(.*?)</em>", r"*\1*", text, flags=re.IGNORECASE | re.DOTALL)
+    # Strip remaining tags
+    text = re.sub(r"<[^>]+>", "", text)
+    # Decode common entities
+    text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", " ").replace("&quot;", '"')
+    # Collapse excessive blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
+
+
+def _format_location(value) -> str | None:
+    """Format a Workable location value (may be dict or string) into readable text."""
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    if isinstance(value, dict):
+        parts = []
+        city = value.get("city")
+        region = value.get("region")
+        country = value.get("country")
+        if isinstance(city, str) and city.strip():
+            parts.append(city.strip())
+        if isinstance(region, str) and region.strip() and region.strip() != (city or "").strip():
+            parts.append(region.strip())
+        if isinstance(country, str) and country.strip():
+            parts.append(country.strip())
+        location_str = ", ".join(parts)
+        workplace = value.get("workplace_type")
+        if isinstance(workplace, str) and workplace.strip():
+            location_str = f"{location_str} ({workplace.strip()})" if location_str else workplace.strip()
+        return location_str or None
+    return None
+
+
 def _format_job_spec_from_api(job_data: dict) -> str:
     """Build a well-formatted job spec string from full Workable job API data."""
     if not job_data:
@@ -43,16 +94,20 @@ def _format_job_spec_from_api(job_data: dict) -> str:
     lines.append(f"# {title}")
     lines.append("")
 
+    # Location needs special handling (may be a dict)
+    location_str = _format_location(merged.get("location"))
+    if location_str:
+        lines.append(f"**Location:** {location_str}")
+
     for key, label in (
         ("department", "Department"),
-        ("location", "Location"),
         ("employment_type", "Employment type"),
         ("application_url", "Apply"),
         ("state", "State"),
         ("full_title", "Full title"),
     ):
         value = merged.get(key)
-        if value is not None and str(value).strip():
+        if value is not None and isinstance(value, str) and value.strip():
             lines.append(f"**{label}:** {value}")
     lines.append("")
 
@@ -62,7 +117,7 @@ def _format_job_spec_from_api(job_data: dict) -> str:
             label = key.replace("_", " ").title()
             lines.append(f"## {label}")
             lines.append("")
-            lines.append(value.strip())
+            lines.append(_strip_html(value.strip()))
             lines.append("")
 
     return "\n".join(lines).strip()
