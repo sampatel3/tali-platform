@@ -163,6 +163,8 @@ class WorkableSyncService:
             summary["jobs_seen"] = len(jobs)
             if not jobs:
                 logger.warning("Workable list_open_jobs returned 0 jobs for org_id=%s", org.id)
+            org.workable_sync_progress = dict(summary)
+            db.commit()
             rate_limited = False
             for job in jobs:
                 if rate_limited:
@@ -202,10 +204,13 @@ class WorkableSyncService:
                 except Exception as exc:
                     logger.exception("Failed syncing job")
                     summary["errors"].append(str(exc))
+                org.workable_sync_progress = dict(summary)
+                db.commit()
 
             org.workable_last_sync_at = now
             org.workable_last_sync_status = "success" if not summary["errors"] else "partial"
             org.workable_last_sync_summary = summary
+            org.workable_sync_progress = None
             db.commit()
             return summary
         except Exception as exc:
@@ -216,6 +221,7 @@ class WorkableSyncService:
                 **summary,
                 "errors": [*summary["errors"], str(exc)],
             }
+            org.workable_sync_progress = None
             db.commit()
             raise
 

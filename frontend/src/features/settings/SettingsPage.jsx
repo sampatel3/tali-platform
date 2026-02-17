@@ -213,6 +213,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         workable_last_sync_at: data.workable_last_sync_at ?? prev?.workable_last_sync_at,
         workable_last_sync_status: data.workable_last_sync_status ?? prev?.workable_last_sync_status,
         workable_last_sync_summary: data.workable_last_sync_summary ?? prev?.workable_last_sync_summary,
+        workable_sync_progress: data.workable_sync_progress ?? prev?.workable_sync_progress,
       }));
       return data;
     } catch {
@@ -571,13 +572,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   {workableSyncInProgress && (
                     <div className="rounded-lg border-2 border-black bg-amber-50 p-4 flex items-center gap-3 mt-3">
                       <Loader2 size={24} className="animate-spin text-amber-700 flex-shrink-0" />
-                      <div>
+                      <div className="min-w-0 flex-1">
                         <div className="font-semibold text-amber-900">
                           {workableSyncLoading ? 'Starting…' : 'Running in background'}
                         </div>
                         <div className="text-sm text-amber-800">
                           Sync is running in the background. We’ll notify you when it’s done. You can leave this page.
                         </div>
+                        {orgData?.workable_sync_progress && (orgData.workable_sync_progress.jobs_seen != null || orgData.workable_sync_progress.candidates_seen != null) ? (
+                          <div className="mt-2 font-mono text-xs text-amber-900">
+                            {orgData.workable_sync_progress.jobs_upserted ?? 0} roles imported · {orgData.workable_sync_progress.candidates_upserted ?? 0} candidates imported · {orgData.workable_sync_progress.cv_downloaded ?? 0} CVs
+                          </div>
+                        ) : null}
                       </div>
                     </div>
                   )}

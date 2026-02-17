@@ -53,7 +53,11 @@ def _run_sync_in_background(org_id: int) -> None:
         logger.exception("Workable background sync failed for org_id=%s: %s", org_id, exc)
     finally:
         db.query(Organization).filter(Organization.id == org_id).update(
-            {Organization.workable_sync_started_at: None}, synchronize_session=False
+            {
+                Organization.workable_sync_started_at: None,
+                Organization.workable_sync_progress: None,
+            },
+            synchronize_session=False,
         )
         db.commit()
         db.close()
@@ -85,6 +89,7 @@ def workable_sync_status(
         "workable_last_sync_at": org.workable_last_sync_at,
         "workable_last_sync_status": org.workable_last_sync_status,
         "workable_last_sync_summary": org.workable_last_sync_summary or {},
+        "workable_sync_progress": org.workable_sync_progress or {},
         "sync_in_progress": sync_in_progress,
     }
 
