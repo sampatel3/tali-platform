@@ -46,6 +46,7 @@ export const CandidatesTable = ({
   onGenerateTaaliCvAi,
 }) => {
   const [composerApplicationId, setComposerApplicationId] = useState(null);
+  const [detailsApplicationId, setDetailsApplicationId] = useState(null);
   const [taskByApplication, setTaskByApplication] = useState({});
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [columnPrefs, setColumnPrefs] = useState(() => {
@@ -69,6 +70,7 @@ export const CandidatesTable = ({
 
   useEffect(() => {
     setComposerApplicationId(null);
+    setDetailsApplicationId(null);
   }, [applications, roleTasks]);
 
   useEffect(() => {
@@ -438,6 +440,15 @@ export const CandidatesTable = ({
                             {app.candidate_name || app.candidate_email}
                           </button>
                           <div className="mt-1 flex flex-wrap items-center gap-2">
+                            <button
+                              type="button"
+                              className="text-xs text-gray-500 underline decoration-gray-300 underline-offset-2 hover:text-gray-800"
+                              onClick={() => {
+                                setDetailsApplicationId((current) => (current === app.id ? null : app.id));
+                              }}
+                            >
+                              {detailsApplicationId === app.id ? 'Hide details' : 'Details'}
+                            </button>
                             {onOpenCvSidebar ? (
                               <button
                                 type="button"
@@ -621,6 +632,89 @@ export const CandidatesTable = ({
                         >
                           Cancel
                         </Button>
+                      </div>
+                    </td>
+                  </tr>
+                ) : null}
+
+                {detailsApplicationId === app.id ? (
+                  <tr className="bg-[#faf8ff]">
+                    <td colSpan={columnCount} className="px-3 py-3">
+                      <p className="mb-3 text-xs text-gray-500">
+                        Status is TAALI&apos;s application status; Workable stage is the pipeline step from Workable. For Workable-imported candidates they may match.
+                      </p>
+                      <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-3">
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Status</p>
+                          <p className="mt-1 text-sm text-gray-800">{app.status || 'applied'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Email</p>
+                          <p className="mt-1 text-sm text-gray-800 break-all">{app.candidate_email || '—'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Position</p>
+                          <p className="mt-1 text-sm text-gray-800 break-words">{app.candidate_position || '—'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Source</p>
+                          <p className="mt-1 text-sm text-gray-800">{app.source || 'manual'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Workable candidate id</p>
+                          <p className="mt-1 text-sm text-gray-800 break-all">{app.workable_candidate_id || '—'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Workable stage</p>
+                          <p className="mt-1 text-sm text-gray-800 break-words">{app.workable_stage || '—'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Workable score</p>
+                          <p className="mt-1 text-sm text-gray-800">
+                            {typeof app.workable_score === 'number' ? formatScore(app.workable_score) : '—'}
+                            {typeof app.workable_score_raw === 'number' ? ` (raw: ${formatWorkableRaw(app.workable_score_raw)})` : ''}
+                          </p>
+                          {app.workable_score_source ? (
+                            <p className="mt-1 text-xs text-gray-500 break-all">{app.workable_score_source}</p>
+                          ) : null}
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Taali score</p>
+                          <p className="mt-1 text-sm text-gray-800">{renderTaaliScore(app)}</p>
+                          {app.cv_match_details?.error ? (
+                            <p className="mt-1 text-xs text-amber-700">{app.cv_match_details.error}</p>
+                          ) : null}
+                          {typeof app.cv_match_score !== 'number' && typeof onGenerateTaaliCvAi === 'function' ? (
+                            <div className="mt-2">
+                              <Button
+                                type="button"
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => onGenerateTaaliCvAi(app)}
+                                disabled={generatingTaaliId === app.id}
+                              >
+                                {generatingTaaliId === app.id ? 'Generating…' : 'Generate TAALI CV AI'}
+                              </Button>
+                              {app.source === 'workable' && !app.cv_filename ? (
+                                <p className="mt-1 text-xs text-gray-500">
+                                  This will import the CV from Workable (if available) and compute the match.
+                                </p>
+                              ) : null}
+                            </div>
+                          ) : null}
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">CV</p>
+                          <p className="mt-1 text-sm text-gray-800">{app.cv_filename || '—'}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Added</p>
+                          <p className="mt-1 text-sm text-gray-800">{formatDateTime(app.created_at)}</p>
+                        </div>
+                        <div>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Updated</p>
+                          <p className="mt-1 text-sm text-gray-800">{formatDateTime(app.updated_at || app.created_at)}</p>
+                        </div>
                       </div>
                     </td>
                   </tr>

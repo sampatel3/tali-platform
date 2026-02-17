@@ -29,7 +29,13 @@ export function CandidateCvSidebar({ open, applicationId, onClose, getApplicatio
       const res = await getApplication(applicationId, { params: { include_cv_text: true } });
       setData(res?.data ?? null);
     } catch (err) {
-      setError(err?.response?.data?.detail || err?.message || 'Failed to load candidate');
+      const status = err?.response?.status;
+      let msg = err?.response?.data?.detail ?? err?.message ?? 'Failed to load candidate';
+      if (typeof msg !== 'string' && msg != null) msg = String(msg);
+      if (status === 405) {
+        msg = (msg ? `${msg}. ` : '') + 'The API may not support GET for this resource yet—ensure the backend is deployed with the latest code.';
+      }
+      setError(msg || 'Failed to load candidate');
     } finally {
       setLoading(false);
     }

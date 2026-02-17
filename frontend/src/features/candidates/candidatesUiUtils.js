@@ -14,4 +14,11 @@ export const statusVariant = (status) => {
   return 'muted';
 };
 
-export const getErrorMessage = (err, fallback) => err?.response?.data?.detail || fallback;
+export const getErrorMessage = (err, fallback) => {
+  const d = err?.response?.data?.detail;
+  if (d != null) {
+    if (typeof d === 'string') return d;
+    if (Array.isArray(d) && d.length) return d[0]?.msg ?? d[0]?.loc?.join?.('. ') ?? String(d[0]);
+  }
+  return fallback;
+};
