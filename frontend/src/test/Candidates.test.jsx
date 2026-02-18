@@ -134,12 +134,17 @@ const renderAppOnCandidatesPage = async () => {
 
   await waitFor(() => {
     expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
-  });
+  }, { timeout: 5000 });
 
-  const candidatesNav = screen.getByText('Candidates', { selector: 'button' });
+  const candidatesNav = screen.getByRole('button', { name: /^Candidates$/ });
   await act(async () => {
     fireEvent.click(candidatesNav);
   });
+
+  // Wait for Candidates page to load (lazy + API)
+  await waitFor(() => {
+    expect(screen.getByText('Candidates', { selector: 'h1' })).toBeInTheDocument();
+  }, { timeout: 5000 });
 
   return result;
 };
@@ -178,10 +183,6 @@ describe('CandidatesPage', () => {
 
   it('renders candidates header controls', async () => {
     await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Candidates', { selector: 'h1' })).toBeInTheDocument();
-    });
 
     expect(screen.getByRole('button', { name: 'New role' })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Add candidate' })).toBeInTheDocument();

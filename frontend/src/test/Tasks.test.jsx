@@ -151,13 +151,18 @@ const renderAppOnTasksPage = async () => {
   // Wait for dashboard to render
   await waitFor(() => {
     expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
-  });
+  }, { timeout: 5000 });
 
   // Navigate to Tasks via nav
-  const tasksNav = screen.getByText('Tasks', { selector: 'button' });
+  const tasksNav = screen.getByRole('button', { name: /^Tasks$/ });
   await act(async () => {
     fireEvent.click(tasksNav);
   });
+
+  // Wait for Tasks page to load (lazy + API)
+  await waitFor(() => {
+    expect(screen.getByText('Tasks', { selector: 'h1' })).toBeInTheDocument();
+  }, { timeout: 5000 });
 
   return result;
 };
@@ -182,7 +187,7 @@ describe('TasksPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Tasks', { selector: 'h1' })).toBeInTheDocument();
       expect(screen.getByText('Backend-authored assessment task catalog')).toBeInTheDocument();
-    });
+    }, { timeout: 5000 });
   });
 
   it('renders task list', async () => {
@@ -192,7 +197,7 @@ describe('TasksPage', () => {
       expect(screen.getByText('Async Pipeline Debugging')).toBeInTheDocument();
       expect(screen.getByText('AI Agent Integration')).toBeInTheDocument();
       expect(screen.getByText('Template Task')).toBeInTheDocument();
-    });
+    }, { timeout: 5000 });
   });
 
   it('renders task descriptions', async () => {
@@ -201,7 +206,7 @@ describe('TasksPage', () => {
     await waitFor(() => {
       expect(screen.getByText(/Fix 3 bugs in an async data pipeline/)).toBeInTheDocument();
       expect(screen.getByText(/Build an AI agent that can answer questions/)).toBeInTheDocument();
-    });
+    }, { timeout: 5000 });
   });
 
   it('renders difficulty badges', async () => {

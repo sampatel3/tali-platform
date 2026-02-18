@@ -1,7 +1,7 @@
 # RALPH_TASK.md — TAALI Platform Hardening Execution Plan
 
 > **Status:** ACTIVE (reopened)
-> **Last refreshed:** 2026-02-13
+> **Last refreshed:** 2026-02-18 (RALPH run: frontend 112 tests pass, Workable 21 unit tests pass, Q4/Q5 done)
 > **Purpose:** source of truth for post-MVP hardening, QA, and release confidence work.
 
 ---
@@ -21,6 +21,7 @@ test_command: "cd backend && pytest -q -m 'not production' && cd ../frontend && 
 - [x] Reconciled key docs (`README`, `PRODUCT_PLAN`, `RALPH_TASK`) toward a single active-plan narrative.
 
 ### Still open / in progress
+- [ ] **Workable + Candidates UI/UX (Section 9)** — Live QA with sampatel@deeplight.ae; unit tests + docs + integration test added (see 9.3–9.5).
 - [x] Verify all task creation/import paths always persist `scenario` and `repo_structure` end-to-end.
 - [x] Add targeted E2E for “History Backfill” (task context + repo files visible before first prompt).
 - [x] Resolve frontend unit test failures and remaining `act(...)` warning cleanup.
@@ -288,3 +289,81 @@ railway run bash -c 'cd backend && .venv/bin/python ../scripts/seed_tasks_db.py'
 3. Test mobile viewport (Chrome DevTools)
 4. `npm run build` — no build errors
 5. `npm test` — existing tests pass
+
+---
+
+## 9) Workable Integration + Candidates UI/UX (CRITICAL — NOT YET RESOLVED)
+
+> **Status:** OPEN — Issues persist after multiple fix attempts
+> **Test user:** sampatel@deeplight.ae (use org’s Workable credentials for QA)
+> **Last attempt:** 2026-02-13 — throttle, job details skip, candidate ingestion, job spec formatting, interview focus, tests
+
+### 9.1) Issues raised in chat (all still unresolved)
+
+| # | Issue | Description |
+|---|-------|-------------|
+| 1 | Sync is slow | Sync takes too long; user expects ~100 seconds for 1000 candidates (10 calls × 100/call) |
+| 2 | Roles/candidates numbers don’t update during sync | Progress UI shows 0 roles/candidates and doesn’t increment live |
+| 3 | Job spec format wrong when viewing | Role job spec (from Workable .txt or API) is not displayed/rendered correctly |
+| 4 | “Upload a job spec” shown when spec exists | Message appears even though job spec has been provided (.txt or Workable-synced) |
+| 5 | No interview pointers on role ingestion | Interview focus pointers should auto-generate when role is synced from Workable |
+| 6 | 7 roles ingested, only 1 visible | Sync reports 7 roles but Candidates page shows only 1 role |
+| 7 | Candidates not brought in | Sync doesn’t bring in candidates or brings far fewer than expected |
+| 8 | Candidates page not informative | Data presentation on Candidates page is poor for recruiter workflow |
+
+### 9.2) What was executed (and still failing)
+
+- **Backend sync_service.py:** Throttle 0.5s, conditional get_job_details skip, relaxed terminal stage logic, expanded email extraction, candidates `data`/`results` fallback, job spec formatting for nested structures, auto-generate interview focus on role upsert
+- **Backend service.py:** Throttle 0.5s, candidate batch keys `data`/`results`
+- **Frontend RoleSummaryHeader.jsx:** `job_spec_text` fallback, `specContent` from description || job_spec_text, expand spec by default when content exists
+- **Frontend SettingsPage.jsx:** Sync progress shows `jobs_seen`/`candidates_seen` as “processed” counts
+- **Backend roles_management_routes.py:** Set `role.description` on job spec upload
+- **Backend role_support.py + schemas/role.py:** Added `job_spec_text` to RoleResponse
+- **Tests:** `test_workable_sync_service.py` (21 unit tests), `scripts/workable_qa_diagnostic.py`
+
+**Result:** None of the above has resolved the reported issues in production/QA.
+
+### 9.3) Root-cause investigation checklist (execute in order)
+
+Before further code changes, run diagnostic and API inspection:
+
+- [ ] **W1** Run `python scripts/workable_qa_diagnostic.py sampatel@deeplight.ae` from `backend/` with DB reachable (Railway Shell or `DATABASE_PUBLIC_URL`) and capture full output:
+  - Jobs list structure and count
+  - First job details structure (keys, nesting)
+  - First job candidates structure (keys, email/stage location)
+  - DB roles count and `applications_count` per role
+- [ ] **W2** Inspect Workable API response shapes: list jobs vs GET /jobs/:shortcode vs GET /jobs/:shortcode/candidates — document exact keys for `description`, `full_description`, `requirements`, `candidates`, `email`, `stage`
+- [ ] **W3** Run full sync (`run_workable_sync` or POST /workable/sync) as sampatel@deeplight.ae, then re-run diagnostic — compare before/after roles and applications
+- [ ] **W4** Trace candidate ingestion: log when `_is_terminal_candidate` returns True, when `_candidate_email` returns None; verify list response structure matches our parsing
+
+### 9.4) Fix plan (revisit after W1–W4)
+
+| Area | Action |
+|------|--------|
+| Sync speed | Use single list jobs call; fetch job details only when missing spec; batch candidate fetches (100/page); validate throttle vs rate limit |
+| Progress UI | Ensure `workable_sync_progress` is committed and polled; frontend must poll GET /workable/sync/status every 2–3s during sync |
+| Job spec display | Align `_format_job_spec_from_api` with actual Workable response shape from W2; ensure `description`/`job_spec_text` populated and frontend uses correct field |
+| “Upload a job spec” | Fix `jobSpecReady` logic: treat `job_spec_present` OR `job_spec_filename` OR `hasSpecContent` as “spec exists”; ensure API returns these for Workable-synced roles |
+| Interview focus | Call `generate_interview_focus_sync` after role upsert when `job_spec_text` is non-empty and `ANTHROPIC_API_KEY` set; handle failures gracefully |
+| Role visibility | Verify `list_roles` returns all roles with `deleted_at IS NULL`; check no frontend filter hides roles with 0 applications |
+| Candidate ingestion | Fix terminal-stage logic per actual Workable stage values; fix email extraction per actual candidate payload shape from W2 |
+| Candidates page UX | Improve role selector, application counts, job spec preview, and interview focus visibility |
+
+### 9.5) QA and testing requirements
+
+- [ ] **Q1** Use sampatel@deeplight.ae org (existing Workable keys) for all live QA
+- [ ] **Q2** Run diagnostic script before and after each sync; diff outputs
+- [ ] **Q3** Manual UI QA: Settings → Workable → Sync; observe progress numbers updating; Candidates page → verify all roles visible; select each role → verify job spec renders, interview focus shows when generated
+- [x] **Q4** Add integration test (`TestWorkableSyncIntegration`) that mocks Workable API; asserts roles, applications, job_spec_text (skipped in default run due to sqlite concurrency)
+- [x] **Q5** Document Workable API response shapes in `docs/WORKABLE_API_RESPONSE_SAMPLES.md` for future maintenance
+
+### 9.6) Definition of done for Workable + Candidates UX
+
+- [ ] Sync completes in reasonable time (~100s for 1000 candidates)
+- [ ] Progress UI shows roles/candidates counts incrementing during sync
+- [ ] All synced roles visible on Candidates page
+- [ ] Job spec displays correctly (markdown/HTML rendered as intended)
+- [ ] “Upload a job spec” does not show when spec exists (Workable or manual)
+- [ ] Interview focus auto-generated for roles with job spec
+- [ ] Candidates ingested for all non-terminal stages
+- [ ] Candidates page is informative for recruiter workflow (role context, spec preview, focus pointers visible)

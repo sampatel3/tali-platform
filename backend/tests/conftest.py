@@ -1,6 +1,7 @@
 import os
-# Override DATABASE_URL before any app imports to avoid PostgreSQL driver requirement
-os.environ["DATABASE_URL"] = "sqlite:///./test.db"
+# Override DATABASE_URL before any app imports. Shared in-memory avoids disk I/O
+# and locking when sync + async engines both access the DB.
+os.environ["DATABASE_URL"] = "sqlite:///file:taalitest?mode=memory&cache=shared"
 # Keep external integrations disabled by default for unit/API tests. Individual
 # tests can opt-in by monkeypatching settings.
 os.environ["MVP_DISABLE_LEMON"] = "true"
@@ -12,6 +13,8 @@ os.environ["CLAUDE_MODEL"] = "claude-3-5-haiku-latest"
 os.environ["TASK_AUTHORING_API_ENABLED"] = "true"
 os.environ["GITHUB_MOCK_MODE"] = "true"
 
+import asyncio
+import time
 import uuid
 import pytest
 from fastapi.testclient import TestClient
@@ -26,15 +29,20 @@ from app.models.task import Task
 from app.models.candidate import Candidate
 from app.models.assessment import Assessment
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///./test.db"
-engine = create_engine(SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False})
+SQLALCHEMY_DATABASE_URL = os.environ["DATABASE_URL"]
+# Use same URL as app so sync + async share the in-memory DB
+engine = create_engine(
+    SQLALCHEMY_DATABASE_URL,
+    connect_args={"check_same_thread": False, "timeout": 30},
+)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
-# Enable foreign key support for SQLite
+# Enable foreign key support and WAL mode for SQLite (reduces locking with async engine)
 @event.listens_for(engine, "connect")
 def set_sqlite_pragma(dbapi_connection, connection_record):
     cursor = dbapi_connection.cursor()
     cursor.execute("PRAGMA foreign_keys=ON")
+    cursor.execute("PRAGMA journal_mode=WAL")
     cursor.close()
 
 def override_get_db():
@@ -44,25 +52,42 @@ def override_get_db():
     finally:
         db.close()
 
+def _dispose_async_engine_before_teardown():
+    """Dispose async engine so drop_all can run without 'database is locked'."""
+    from app.platform.database import async_engine
+    asyncio.run(async_engine.dispose())
+    time.sleep(0.05)  # Let SQLite release locks
+
+
+def _safe_drop_all():
+    """Drop all tables in reverse dependency order; use IF EXISTS for robustness."""
+    from sqlalchemy import text
+    _dispose_async_engine_before_teardown()
+    with engine.connect() as conn:
+        # Drop in reverse dependency order (referencing tables first)
+        for table in reversed(Base.metadata.sorted_tables):
+            conn.execute(text(f"DROP TABLE IF EXISTS {table.name}"))
+        conn.commit()
+
+
 @pytest.fixture(scope="function")
 def db():
     Base.metadata.create_all(bind=engine)
     db = TestingSessionLocal()
     yield db
     db.close()
-    Base.metadata.drop_all(bind=engine)
+    _safe_drop_all()
+
 
 @pytest.fixture(scope="function")
 def client(db):
     app.dependency_overrides[get_db] = override_get_db
-    Base.metadata.create_all(bind=engine)
     # Clear in-memory rate limit state between tests to prevent 429 bleed-through
     _rate_limit_store.clear()
     with TestClient(app) as c:
         yield c
     app.dependency_overrides.clear()
     _rate_limit_store.clear()
-    Base.metadata.drop_all(bind=engine)
 
 
 # ---------------------------------------------------------------------------

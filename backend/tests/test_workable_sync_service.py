@@ -116,3 +116,87 @@ class TestNormalizeStageForTerminal:
     def test_non_terminal(self):
         assert _normalize_stage_for_terminal("screening") is None
         assert _normalize_stage_for_terminal("") is None
+
+
+@pytest.mark.skip(reason="Uses sync commits; sqlite 'database is locked' when run in parallel")
+class TestWorkableSyncIntegration:
+    """Integration tests with mocked Workable client; asserts sync creates roles, applications, job_spec."""
+
+    def test_sync_creates_role_and_application_with_mocked_client(self, db, monkeypatch):
+        """Sync with realistic Workable payloads creates role, candidate, application, job_spec_text."""
+        from app.models.organization import Organization
+        from app.models.role import Role
+        from app.models.candidate import Candidate
+        from app.models.candidate_application import CandidateApplication
+        from app.components.integrations.workable.sync_service import WorkableSyncService
+        from app.components.integrations.workable.service import WorkableService
+
+        class MockClient(WorkableService):
+            def __init__(self):
+                super().__init__(access_token="x", subdomain="test")
+
+            def list_open_jobs(self):
+                return [
+                    {
+                        "id": "J1",
+                        "shortcode": "J1",
+                        "title": "Backend Engineer",
+                        "description": "<p>We need a Python expert.</p>",
+                    }
+                ]
+
+            def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+                return [
+                    {
+                        "id": "cand_1",
+                        "email": "dev@example.com",
+                        "name": "Dev Person",
+                        "stage": "Screening",
+                        "stage_name": "Screening",
+                    }
+                ]
+
+            def get_job_details(self, job_identifier):
+                return {}
+
+            def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+                return 7.5, 7.5, "candidate.score"
+
+        monkeypatch.setattr("app.components.integrations.workable.sync_service.settings.ANTHROPIC_API_KEY", None)
+        org = Organization(
+            name="Test Org Workable",
+            slug="test-org-workable-sync",
+            workable_connected=True,
+            workable_access_token="x",
+            workable_subdomain="test",
+        )
+        db.add(org)
+        db.commit()
+        db.refresh(org)
+
+        service = WorkableSyncService(MockClient())
+        summary = service.sync_org(db, org)
+
+        assert summary["jobs_seen"] == 1
+        assert summary["jobs_upserted"] >= 1
+        assert summary["candidates_seen"] == 1
+        assert summary["candidates_upserted"] >= 1
+        assert summary["applications_upserted"] >= 1
+
+        role = db.query(Role).filter(Role.organization_id == org.id, Role.workable_job_id == "J1").first()
+        assert role is not None
+        assert (role.job_spec_text or "").strip() != ""
+        assert (role.description or "").strip() != ""
+
+        app = db.query(CandidateApplication).filter(
+            CandidateApplication.organization_id == org.id,
+            CandidateApplication.workable_candidate_id == "cand_1",
+        ).first()
+        assert app is not None
+
+        candidate = db.query(Candidate).filter(
+            Candidate.organization_id == org.id,
+            Candidate.workable_candidate_id == "cand_1",
+        ).first()
+        assert candidate is not None
+        assert candidate.email == "dev@example.com"

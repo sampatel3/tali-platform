@@ -7,12 +7,10 @@ from sqlalchemy.orm import sessionmaker, DeclarativeBase
 from .config import settings
 
 # Sync engine (legacy, for non-auth routes until full async migration)
-engine = create_engine(
-    settings.DATABASE_URL,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
-)
+_sync_engine_kw: dict = {}
+if "sqlite" not in settings.DATABASE_URL:
+    _sync_engine_kw = {"pool_pre_ping": True, "pool_size": 10, "max_overflow": 20}
+engine = create_engine(settings.DATABASE_URL, **_sync_engine_kw)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
@@ -40,7 +38,10 @@ def _async_database_url() -> str:
 
 _async_url = _async_database_url()
 _async_engine_kw: dict = {}
-if "sqlite" not in _async_url:
+if "sqlite" in _async_url:
+    # Timeout to avoid "database is locked" when sync+async share same file (e.g. tests)
+    _async_engine_kw = {"connect_args": {"timeout": 30}}
+else:
     _async_engine_kw = {"pool_pre_ping": True, "pool_size": 10, "max_overflow": 20}
 
 async_engine = create_async_engine(_async_url, **_async_engine_kw)
