@@ -102,7 +102,7 @@ const mockTasks = [
     is_template: false,
     starter_code: 'async function process() {}',
     test_code: 'test("works", () => {});',
-    task_key: 'data_eng_c_backfill_schema',
+    task_key: 'data_eng_super_platform_crisis',
     role: 'data_engineer',
     scenario: 'Compliance audit needs full history and schema keeps changing.',
     repo_structure: { files: { 'pipeline/main.py': 'print("ok")' } },
@@ -263,7 +263,7 @@ describe('TasksPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Task JSON Preview')).toBeInTheDocument();
-      expect(screen.getByText(/"task_id": "data_eng_c_backfill_schema"/)).toBeInTheDocument();
+      expect(screen.getByText(/"task_id": "data_eng_super_platform_crisis"/)).toBeInTheDocument();
       expect(screen.getByText(/"repo_structure"/)).toBeInTheDocument();
       expect(screen.getByText(/"expected_approaches"/)).toBeInTheDocument();
     });

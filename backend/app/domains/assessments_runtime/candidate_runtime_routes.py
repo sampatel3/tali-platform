@@ -46,14 +46,16 @@ router.include_router(candidate_terminal_router)
 DEMO_ORG_SLUG = "taali-demo"
 DEMO_ORG_NAME = "TAALI Demo Leads"
 DEMO_TRACK_TASK_KEYS = {
-    # Primary demo track: one canonical data engineering task for product demos.
-    "data_eng_a_pipeline_reliability": "data_eng_a_pipeline_reliability",
-    # Backward-compatible aliases (all route to the canonical task key).
-    "data_eng_b_cdc_fix": "data_eng_a_pipeline_reliability",
-    "data_eng_c_backfill_schema": "data_eng_a_pipeline_reliability",
-    "backend-reliability": "data_eng_a_pipeline_reliability",
-    "frontend-debugging": "data_eng_a_pipeline_reliability",
-    "data-pipeline": "data_eng_a_pipeline_reliability",
+    # Primary demo track: canonical tasks for product demos (from tasks/*.json).
+    "data_eng_super_platform_crisis": "data_eng_super_platform_crisis",
+    "ai_eng_super_production_launch": "ai_eng_super_production_launch",
+    # Backward-compatible aliases (route to current tasks; legacy keys removed from repo).
+    "data_eng_a_pipeline_reliability": "data_eng_super_platform_crisis",
+    "data_eng_b_cdc_fix": "data_eng_super_platform_crisis",
+    "data_eng_c_backfill_schema": "data_eng_super_platform_crisis",
+    "backend-reliability": "data_eng_super_platform_crisis",
+    "frontend-debugging": "data_eng_super_platform_crisis",
+    "data-pipeline": "data_eng_super_platform_crisis",
 }
 DEMO_TRACK_KEYS = set(DEMO_TRACK_TASK_KEYS.keys())
 

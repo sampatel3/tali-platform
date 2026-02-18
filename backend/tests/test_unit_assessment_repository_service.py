@@ -8,7 +8,7 @@ def test_create_assessment_branch_with_collision_suffix(monkeypatch, tmp_path):
     monkeypatch.setenv("GITHUB_MOCK_ROOT", str(tmp_path))
 
     svc = AssessmentRepositoryService(github_org="test-org", github_token="x")
-    task = SimpleNamespace(task_key="data_eng_c_backfill_schema", repo_structure={"files": {"README.md": "hi"}})
+    task = SimpleNamespace(task_key="data_eng_super_platform_crisis", repo_structure={"files": {"README.md": "hi"}})
 
     first = svc.create_assessment_branch(task, 12)
     second = svc.create_assessment_branch(task, 12)

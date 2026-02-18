@@ -274,18 +274,18 @@ def test_create_task_creates_template_repo(client, monkeypatch):
         def create_template_repo(self, task):
             captured["task_key"] = task.task_key
             captured["repo_structure"] = task.repo_structure
-            return "mock://taali-assessments/data_eng_c_backfill_schema"
+            return "mock://taali-assessments/data_eng_super_platform_crisis"
 
     monkeypatch.setattr("app.domains.tasks_repository.routes.AssessmentRepositoryService", StubRepoService)
 
     resp = create_task_via_api(
         client,
         headers,
-        task_id="data_eng_c_backfill_schema",
+        task_id="data_eng_super_platform_crisis",
         repo_structure={"name": "transaction-pipeline", "files": {"README.md": "# Transaction Pipeline"}},
     )
     assert resp.status_code == 201
-    assert captured["task_key"] == "data_eng_c_backfill_schema"
+    assert captured["task_key"] == "data_eng_super_platform_crisis"
     assert captured["repo_structure"]["name"] == "transaction-pipeline"
 
 
@@ -307,9 +307,9 @@ def test_update_task_recreates_template_repo(client, monkeypatch):
     task_id = create_task_via_api(client, headers, task_id="seed_task").json()["id"]
     resp = client.patch(
         f"/api/v1/tasks/{task_id}",
-        json={"task_id": "data_eng_c_backfill_schema"},
+        json={"task_id": "data_eng_super_platform_crisis"},
         headers=headers,
     )
     assert resp.status_code == 200
     assert calls["count"] >= 2
-    assert calls["task_key"] == "data_eng_c_backfill_schema"
+    assert calls["task_key"] == "data_eng_super_platform_crisis"

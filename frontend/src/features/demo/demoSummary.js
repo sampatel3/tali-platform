@@ -24,29 +24,21 @@ const categoryPlaybook = {
 };
 
 const successfulCandidateBenchmarks = {
-  data_eng_a_pipeline_reliability: {
-    problem_framing: 3.9,
-    execution_rigor: 3.8,
-    testing_validation: 3.9,
-    ai_collaboration: 3.8,
-    technical_communication: 3.7,
-    delivery_momentum: 3.7,
-  },
-  data_eng_b_cdc_fix: {
-    problem_framing: 3.7,
-    execution_rigor: 3.8,
-    testing_validation: 3.5,
-    ai_collaboration: 3.6,
-    technical_communication: 3.4,
-    delivery_momentum: 3.8,
-  },
-  data_eng_c_backfill_schema: {
+  data_eng_super_platform_crisis: {
     problem_framing: 3.8,
     execution_rigor: 3.6,
     testing_validation: 3.7,
     ai_collaboration: 3.5,
     technical_communication: 3.6,
     delivery_momentum: 3.5,
+  },
+  ai_eng_super_production_launch: {
+    problem_framing: 3.8,
+    execution_rigor: 3.7,
+    testing_validation: 3.6,
+    ai_collaboration: 3.8,
+    technical_communication: 3.7,
+    delivery_momentum: 3.6,
   },
   default: {
     problem_framing: 3.6,

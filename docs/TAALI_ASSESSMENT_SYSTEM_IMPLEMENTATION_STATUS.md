@@ -29,7 +29,7 @@ This document checks the codebase against the goal and requirements in your spec
 | Criteria never shown to candidate | ✅ | `candidate_rubric_view()` returns only `{category, weight}`; start payload has `rubric_categories`, `evaluation_rubric: None` |
 | expected_insights / expected_fixes / valid_solutions evaluator-only | ✅ | In task JSON / extra_data; not in candidate payload |
 
-**Gap:** `scripts/seed_tasks_db.py` reads `tasks/*.json` directly and does **not** call `load_task_specs()` or `validate_task_spec()`. Rubric weight sum is not validated at seed time. Only one task JSON found in repo: `tasks/data_eng_c_backfill_schema.json` (spec also references ai_eng_a_prompt_cache, ai_eng_b_llm_gateway, etc.—may live elsewhere or be added later).
+**Gap:** `scripts/seed_tasks_db.py` reads `tasks/*.json` directly and does **not** call `load_task_specs()` or `validate_task_spec()`. Rubric weight sum is not validated at seed time. Tasks in repo: `tasks/ai_eng_super_production_launch.json`, `tasks/data_eng_super_platform_crisis.json`.
 
 ---
 

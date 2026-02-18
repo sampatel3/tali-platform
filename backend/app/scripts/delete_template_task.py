@@ -2,12 +2,12 @@
 Delete a template task by task_key (e.g. after removing its JSON from backend/tasks/).
 
 Usage (from backend/ with DATABASE_URL set, or via Railway shell):
-  python -m app.scripts.delete_template_task data_eng_a_pipeline_reliability
+  python -m app.scripts.delete_template_task data_eng_c_backfill_schema
 
 Alternatively call the admin API (no DB access needed):
   curl -X POST https://<api>/api/v1/tasks/admin/delete-template \\
     -H "Content-Type: application/json" -H "X-Admin-Secret: <SECRET_KEY>" \\
-    -d '{"task_key": "data_eng_a_pipeline_reliability"}'
+    -d '{"task_key": "data_eng_c_backfill_schema"}'
 """
 from __future__ import annotations
 

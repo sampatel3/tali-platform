@@ -218,7 +218,7 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
         duration_minutes=15,
         starter_code="print('demo')",
         test_code="def test_placeholder():\n    assert True\n",
-        task_key="data_eng_a_pipeline_reliability",
+        task_key="data_eng_super_platform_crisis",
     )
     db.add(canonical_task)
     db.commit()
@@ -262,7 +262,7 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
         "work_email": "demo-user@company.com",
         "company_name": "Acme Corp",
         "company_size": "51-200",
-        "assessment_track": "data_eng_a_pipeline_reliability",
+        "assessment_track": "data_eng_super_platform_crisis",
         "marketing_consent": True,
     }
     resp = client.post("/api/v1/assessments/demo/start", json=payload)
@@ -288,54 +288,41 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     assessment = db.query(Assessment).filter(Assessment.id == body["assessment_id"]).first()
     assert assessment is not None
     assert assessment.is_demo is True
-    assert assessment.demo_track == "data_eng_a_pipeline_reliability"
+    assert assessment.demo_track == "data_eng_super_platform_crisis"
     assert assessment.task_id == canonical_task.id
     assert assessment.demo_profile["work_email"] == "demo-user@company.com"
     assert assessment.demo_profile["marketing_consent"] is True
-    assert body["task"]["task_key"] == "data_eng_a_pipeline_reliability"
+    assert body["task"]["task_key"] == "data_eng_super_platform_crisis"
 
 
 def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
-    canonical_task = Task(
+    platform_task = Task(
         organization_id=None,
-        name="Orders Pipeline Reliability Sprint",
-        description="Canonical demo task",
+        name="Data Platform Incident Triage and Recovery",
+        description="Data platform demo task",
         task_type="python",
         difficulty="medium",
-        duration_minutes=15,
+        duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="data_eng_a_pipeline_reliability",
+        task_key="data_eng_super_platform_crisis",
     )
-    cdc_task = Task(
+    ai_task = Task(
         organization_id=None,
-        name="Fix the Broken Data Sync",
-        description="CDC sync discrepancies demo task",
+        name="AI Feature Production Readiness Assessment",
+        description="AI engineer demo task",
         task_type="python",
         difficulty="medium",
-        duration_minutes=10,
+        duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="data_eng_b_cdc_fix",
+        task_key="ai_eng_super_production_launch",
     )
-    backfill_task = Task(
-        organization_id=None,
-        name="Historical Backfill and Schema Evolution",
-        description="Backfill + schema evolution demo task",
-        task_type="python",
-        difficulty="medium",
-        duration_minutes=10,
-        starter_code="print('demo')",
-        test_code="",
-        task_key="data_eng_c_backfill_schema",
-    )
-    db.add(canonical_task)
-    db.add(cdc_task)
-    db.add(backfill_task)
+    db.add(platform_task)
+    db.add(ai_task)
     db.commit()
-    db.refresh(canonical_task)
-    db.refresh(cdc_task)
-    db.refresh(backfill_task)
+    db.refresh(platform_task)
+    db.refresh(ai_task)
 
     def fake_start_or_resume(assessment, _db):
         selected_task = _db.query(Task).filter(Task.id == assessment.task_id).first()
@@ -368,6 +355,7 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
 
     monkeypatch.setattr(candidate_runtime_module, "start_or_resume_assessment", fake_start_or_resume)
 
+    # Legacy track "data_eng_c_backfill_schema" aliases to "data_eng_super_platform_crisis"
     payload = {
         "full_name": "Frontend Demo User",
         "position": "Engineering Director",
@@ -385,38 +373,25 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
     assessment = db.query(Assessment).filter(Assessment.id == body["assessment_id"]).first()
     assert assessment is not None
     assert assessment.demo_track == "data_eng_c_backfill_schema"
-    assert assessment.task_id == canonical_task.id
-    assert body["task"]["task_key"] == "data_eng_a_pipeline_reliability"
+    assert assessment.task_id == platform_task.id
+    assert body["task"]["task_key"] == "data_eng_super_platform_crisis"
 
 
 def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
-    canonical_task = Task(
+    platform_task = Task(
         organization_id=None,
-        name="Orders Pipeline Reliability Sprint",
-        description="Canonical demo task",
+        name="Data Platform Incident Triage and Recovery",
+        description="Demo task (legacy alias backend-reliability)",
         task_type="python",
         difficulty="medium",
-        duration_minutes=15,
+        duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="data_eng_a_pipeline_reliability",
+        task_key="data_eng_super_platform_crisis",
     )
-    cdc_task = Task(
-        organization_id=None,
-        name="Fix the Broken Data Sync",
-        description="CDC sync discrepancies demo task",
-        task_type="python",
-        difficulty="medium",
-        duration_minutes=10,
-        starter_code="print('demo')",
-        test_code="",
-        task_key="data_eng_b_cdc_fix",
-    )
-    db.add(canonical_task)
-    db.add(cdc_task)
+    db.add(platform_task)
     db.commit()
-    db.refresh(canonical_task)
-    db.refresh(cdc_task)
+    db.refresh(platform_task)
 
     def fake_start_or_resume(assessment, _db):
         selected_task = _db.query(Task).filter(Task.id == assessment.task_id).first()
@@ -466,8 +441,8 @@ def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
     assessment = db.query(Assessment).filter(Assessment.id == body["assessment_id"]).first()
     assert assessment is not None
     assert assessment.demo_track == "backend-reliability"
-    assert assessment.task_id == canonical_task.id
-    assert body["task"]["task_key"] == "data_eng_a_pipeline_reliability"
+    assert assessment.task_id == platform_task.id
+    assert body["task"]["task_key"] == "data_eng_super_platform_crisis"
 
 
 def test_demo_start_rejects_invalid_track(client):

@@ -254,8 +254,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         showToast(msg, (data.workable_last_sync_status || '').toLowerCase() === 'success' ? 'success' : 'info');
       }
     };
-    const firstDelay = setTimeout(poll, 2000);
-    const interval = setInterval(poll, 5000);
+    const firstDelay = setTimeout(poll, 1500);
+    const interval = setInterval(poll, 2500);
     workableSyncPollRef.current = { firstDelay, interval };
     return () => {
       if (workableSyncPollRef.current) {

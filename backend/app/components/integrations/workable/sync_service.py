@@ -20,39 +20,45 @@ from .service import WorkableRateLimitError, WorkableService
 
 logger = logging.getLogger(__name__)
 
-# Progress is persisted every N candidates to limit DB writes; UI still shows live counts.
-PROGRESS_BATCH_SIZE = 50
-
-
 class WorkableSyncCancelled(Exception):
     """Raised when the user requested sync cancellation; sync should stop immediately."""
 
 
 
 def _strip_html(html: str) -> str:
-    """Convert HTML to plain text, preserving basic structure."""
+    """Convert HTML to plain text, preserving basic structure for readable job specs."""
     if not html or not isinstance(html, str):
         return html or ""
-    import re
     text = html
-    # Block elements to newlines
+    # Block elements to newlines (order matters)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</tr>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<td[^>]*>", " | ", text, flags=re.IGNORECASE)
     text = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</div>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</li>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"<li[^>]*>", "- ", text, flags=re.IGNORECASE)
+    text = re.sub(r"<ol[^>]*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</ol>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<ul[^>]*>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"</ul>", "\n", text, flags=re.IGNORECASE)
     # Headings to markdown
     for level in range(1, 7):
         text = re.sub(rf"<h{level}[^>]*>(.*?)</h{level}>", rf"\n{'#' * level} \1\n", text, flags=re.IGNORECASE | re.DOTALL)
-    # Bold/strong to markdown
+    # Bold/strong/emphasis to markdown
     text = re.sub(r"<strong[^>]*>(.*?)</strong>", r"**\1**", text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r"<b[^>]*>(.*?)</b>", r"**\1**", text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r"<em[^>]*>(.*?)</em>", r"*\1*", text, flags=re.IGNORECASE | re.DOTALL)
-    # Strip remaining tags
-    text = re.sub(r"<[^>]+>", "", text)
+    text = re.sub(r"<i[^>]*>(.*?)</i>", r"*\1*", text, flags=re.IGNORECASE | re.DOTALL)
+    # Strip remaining tags (span, div, etc.)
+    text = re.sub(r"<[^>]+>", " ", text)
     # Decode common entities
-    text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">").replace("&nbsp;", " ").replace("&quot;", '"')
-    # Collapse excessive blank lines
+    text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    text = text.replace("&nbsp;", " ").replace("&quot;", '"').replace("&#39;", "'")
+    # Normalize whitespace: collapse multiple spaces, clean up newlines
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n[ \t]+", "\n", text)
+    text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
     return text.strip()
 
@@ -142,12 +148,11 @@ def _normalize_stage_for_terminal(value: str | None) -> str | None:
     v = value.strip().lower()
     if not v:
         return None
-    # Handle "Hired", "Rejected", "Withdrawn" etc.
     if v in TERMINAL_STAGES:
         return v
-    # Handle "stage_slug" format like "hired" in stage names
+    # Match "Rejected", "Hired - 2024", "Interview: Withdrawn", etc.
     for t in TERMINAL_STAGES:
-        if t in v or v in t:
+        if v == t or v.startswith(t + ":") or v.startswith(t + " ") or v.endswith(":" + t) or v.endswith(" " + t):
             return t
     return None
 
@@ -182,29 +187,34 @@ def _is_terminal_candidate(payload: dict) -> bool:
 
 
 def _candidate_email(payload: dict) -> str | None:
-    for key in ("email", "work_email", "candidate_email", "email_address"):
+    """Extract email from Workable candidate payload. Handles many response shapes."""
+    def _valid_email(v) -> str | None:
+        if isinstance(v, str) and "@" in v and "." in v:
+            return v.strip().lower()
+        return None
+
+    for key in ("email", "work_email", "candidate_email", "email_address", "primary_email"):
         value = payload.get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip().lower()
-    # Workable sometimes provides a list of emails.
-    emails = payload.get("emails")
-    if isinstance(emails, list):
-        for item in emails:
-            if not isinstance(item, dict):
-                continue
-            value = item.get("value") or item.get("email") or item.get("address")
-            if isinstance(value, str) and value.strip():
-                return value.strip().lower()
-    contact = payload.get("contact")
-    if isinstance(contact, dict):
-        value = contact.get("email") or contact.get("email_address")
-        if isinstance(value, str) and value.strip():
-            return value.strip().lower()
-    profile = payload.get("profile")
-    if isinstance(profile, dict):
-        value = profile.get("email") or profile.get("email_address")
-        if isinstance(value, str) and value.strip():
-            return value.strip().lower()
+        if (e := _valid_email(value)):
+            return e
+    # Workable sometimes provides a list of emails
+    for key in ("emails", "email_addresses"):
+        items = payload.get(key)
+        if isinstance(items, list):
+            for item in items:
+                if isinstance(item, dict):
+                    value = item.get("value") or item.get("email") or item.get("address")
+                    if (e := _valid_email(value)):
+                        return e
+                elif isinstance(item, str) and (e := _valid_email(item)):
+                    return e
+    # Nested objects
+    for obj_key in ("contact", "profile", "info", "personal_info"):
+        obj = payload.get(obj_key)
+        if isinstance(obj, dict):
+            for k in ("email", "email_address", "primary_email"):
+                if (e := _valid_email(obj.get(k))):
+                    return e
     return None
 
 
@@ -413,9 +423,9 @@ class WorkableSyncService:
                         summary["current_step"] = "syncing_candidate"
                         summary["current_candidate_index"] = f"{idx + 1}/{total_candidates}" if total_candidates else str(idx + 1)
                         summary["last_request"] = f"syncing candidate {cid}"
-                        if (idx + 1) % 5 == 1 or summary["candidates_seen"] % PROGRESS_BATCH_SIZE == 0:
-                            org.workable_sync_progress = dict(summary)
-                            db.commit()
+                        # Commit progress every candidate so UI shows live updates
+                        org.workable_sync_progress = dict(summary)
+                        db.commit()
                         try:
                             synced = self._sync_candidate_for_role(
                                 db=db,
@@ -431,9 +441,6 @@ class WorkableSyncService:
                             break
                         summary["candidates_upserted"] += synced.get("candidate_upserted", 0)
                         summary["applications_upserted"] += synced.get("application_upserted", 0)
-                        if summary["candidates_seen"] % PROGRESS_BATCH_SIZE == 0:
-                            org.workable_sync_progress = dict(summary)
-                            db.commit()
                     if any("cancelled" in (e or "").lower() for e in summary["errors"]):
                         break
                 except WorkableRateLimitError as exc:
@@ -516,7 +523,8 @@ class WorkableSyncService:
         return {}
 
     def _upsert_role(self, db: Session, org: Organization, job: dict) -> tuple[Role, bool]:
-        job_id = str(job.get("id") or job.get("shortcode") or "").strip()
+        # Prefer shortcode (used by Workable API for /jobs/:shortcode/candidates)
+        job_id = str(job.get("shortcode") or job.get("id") or "").strip()
         title = str(job.get("title") or job.get("name") or f"Workable role {job_id or 'unknown'}").strip()
         # Use list job data first; only fetch details if we need full description (saves 1 API call per job)
         list_has_spec = any(job.get(k) for k in ("description", "full_description", "requirements") if job.get(k))

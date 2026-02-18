@@ -1,7 +1,7 @@
 # RALPH_TASK.md — TAALI Platform Hardening Execution Plan
 
 > **Status:** ACTIVE (reopened)
-> **Last refreshed:** 2026-02-18 (RALPH run: frontend 112 tests pass, Workable 21 unit tests pass, Q4/Q5 done)
+> **Last refreshed:** 2026-02-18 (frontend 112 pass, Workable 21 unit tests pass; Section 9 code complete, live QA pending)
 > **Purpose:** source of truth for post-MVP hardening, QA, and release confidence work.
 
 ---
@@ -19,13 +19,13 @@ test_command: "cd backend && pytest -q -m 'not production' && cd ../frontend && 
 - [x] Restored assessment runtime context payload shape (`task_key`, `role`, `scenario`, `repo_structure`, `evaluation_rubric`, `extra_data`).
 - [x] Isolated production smoke tests from default backend local-safe run.
 - [x] Reconciled key docs (`README`, `PRODUCT_PLAN`, `RALPH_TASK`) toward a single active-plan narrative.
-
-### Still open / in progress
-- [ ] **Workable + Candidates UI/UX (Section 9)** — Live QA with sampatel@deeplight.ae; unit tests + docs + integration test added (see 9.3–9.5).
 - [x] Verify all task creation/import paths always persist `scenario` and `repo_structure` end-to-end.
-- [x] Add targeted E2E for “History Backfill” (task context + repo files visible before first prompt).
+- [x] Add targeted E2E for "History Backfill" (task context + repo files visible before first prompt).
 - [x] Resolve frontend unit test failures and remaining `act(...)` warning cleanup.
 - [x] Complete frontend decomposition so `App.jsx` is primarily routing/composition.
+
+### Still open / in progress
+- [ ] **Workable + Candidates UI/UX (Section 9)** — Code fixes applied (progress commit every candidate, poll 2.5s; candidate email extraction; terminal stage matching; job spec HTML stripping; role shortcode for workable_job_id). Live QA required: run sync as sampatel@deeplight.ae, verify roles/candidates/progress in production.
 
 ---
 
@@ -311,17 +311,17 @@ railway run bash -c 'cd backend && .venv/bin/python ../scripts/seed_tasks_db.py'
 | 7 | Candidates not brought in | Sync doesn’t bring in candidates or brings far fewer than expected |
 | 8 | Candidates page not informative | Data presentation on Candidates page is poor for recruiter workflow |
 
-### 9.2) What was executed (and still failing)
+### 9.2) What was executed (code-complete; live verification pending)
 
-- **Backend sync_service.py:** Throttle 0.5s, conditional get_job_details skip, relaxed terminal stage logic, expanded email extraction, candidates `data`/`results` fallback, job spec formatting for nested structures, auto-generate interview focus on role upsert
+- **Backend sync_service.py:** Throttle 0.5s, conditional get_job_details skip, relaxed terminal stage logic, expanded email extraction (primary_email, emails list, info, personal_info), candidates `data`/`results` fallback, job spec formatting for nested structures (tables, lists, spans), role `workable_job_id` prefers shortcode, **progress committed after every candidate** (was batch)
 - **Backend service.py:** Throttle 0.5s, candidate batch keys `data`/`results`
 - **Frontend RoleSummaryHeader.jsx:** `job_spec_text` fallback, `specContent` from description || job_spec_text, expand spec by default when content exists
-- **Frontend SettingsPage.jsx:** Sync progress shows `jobs_seen`/`candidates_seen` as “processed” counts
+- **Frontend SettingsPage.jsx:** Sync progress shows `jobs_seen`/`candidates_seen`; poll interval 2.5s, initial delay 1.5s
 - **Backend roles_management_routes.py:** Set `role.description` on job spec upload
 - **Backend role_support.py + schemas/role.py:** Added `job_spec_text` to RoleResponse
 - **Tests:** `test_workable_sync_service.py` (21 unit tests), `scripts/workable_qa_diagnostic.py`
 
-**Result:** None of the above has resolved the reported issues in production/QA.
+**Result:** Code changes applied. Live QA with sampatel@deeplight.ae required to verify in production.
 
 ### 9.3) Root-cause investigation checklist (execute in order)
 
