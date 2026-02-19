@@ -138,6 +138,60 @@ def test_workable_clear_soft_deletes(client, db, monkeypatch):
     assert r.deleted_at is not None
 
 
+def test_workable_diagnostic_returns_api_structure(client, db, monkeypatch):
+    """GET /workable/diagnostic returns jobs, job_details, candidates structure from Workable API."""
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    headers, email = auth_headers(client, email="diagnostic@example.com", organization_name="Diagnostic Org")
+    owner = db.query(User).filter(User.email == email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.workable_connected = True
+    org.workable_access_token = "test-token"
+    org.workable_subdomain = "test"
+    db.commit()
+
+    # Mock WorkableService to avoid real API calls
+    original_list = workable_routes.WorkableService.list_open_jobs
+    original_details = workable_routes.WorkableService.get_job_details
+    original_candidates = workable_routes.WorkableService.list_job_candidates
+
+    def mock_list_jobs(self):
+        return [
+            {"shortcode": "J1", "id": "J1", "title": "Test Job", "state": "published"},
+        ]
+
+    def mock_get_details(self, job_id):
+        return {
+            "job": {
+                "shortcode": job_id,
+                "title": "Test Job",
+                "details": {"description": "<p>Job desc</p>", "requirements": "Req 1"},
+            }
+        }
+
+    def mock_list_candidates(self, job_id, *, paginate=False, max_pages=None):
+        return [
+            {"id": "c1", "email": "cand@example.com", "stage": "screening", "name": "Candidate"},
+        ]
+
+    monkeypatch.setattr(workable_routes.WorkableService, "list_open_jobs", mock_list_jobs)
+    monkeypatch.setattr(workable_routes.WorkableService, "get_job_details", mock_get_details)
+    monkeypatch.setattr(workable_routes.WorkableService, "list_job_candidates", mock_list_candidates)
+
+    resp = client.get("/api/v1/workable/diagnostic", headers=headers)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data.get("api_reachable") is True
+    assert data["jobs"]["count"] == 1
+    assert data["jobs"]["first_shortcode"] == "J1"
+    assert data["job_details"]["top_level_keys"] == ["job"]
+    assert data["candidates"]["count"] == 1
+    assert data["candidates"]["first_email"] == "cand@example.com"
+    assert "db_roles_count" in data
+    assert "db_roles" in data
+
+
 def test_run_workable_sync_script_exits_without_email():
     """run_workable_sync script exits 1 when no email provided."""
     import sys

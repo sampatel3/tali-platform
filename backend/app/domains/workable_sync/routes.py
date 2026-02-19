@@ -4,7 +4,7 @@ import logging
 import threading
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body, Depends, Header, HTTPException
+from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -26,6 +26,50 @@ router = APIRouter(prefix="/workable", tags=["Workable"])
 
 class _AdminClearSyncBody(BaseModel):
     email: str
+
+
+@router.get("/admin/diagnostic")
+def admin_workable_diagnostic(
+    email: str = Query(..., description="User email (e.g. sampatel@deeplight.ae)"),
+    x_admin_secret: str | None = Header(None, alias="X-Admin-Secret"),
+    db: Session = Depends(get_db),
+):
+    """Run Workable API diagnostic for a user by email. Requires X-Admin-Secret header (SECRET_KEY)."""
+    if not x_admin_secret or x_admin_secret.strip() != (settings.SECRET_KEY or "").strip():
+        raise HTTPException(status_code=403, detail="Forbidden")
+    email_clean = (email or "").strip().lower()
+    if not email_clean:
+        raise HTTPException(status_code=400, detail="email required")
+    user = db.query(User).filter(User.email == email_clean).first()
+    if not user:
+        raise HTTPException(status_code=404, detail=f"User not found: {email_clean}")
+    org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    diagnostic = _run_workable_diagnostic(org)
+    roles = (
+        db.query(Role)
+        .filter(Role.organization_id == org.id, Role.deleted_at.is_(None))
+        .order_by(Role.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    roles_summary = []
+    for r in roles:
+        app_count = db.query(CandidateApplication).filter(
+            CandidateApplication.role_id == r.id,
+            CandidateApplication.deleted_at.is_(None),
+        ).count()
+        roles_summary.append({
+            "id": r.id,
+            "name": (r.name or "")[:50],
+            "workable_job_id": r.workable_job_id,
+            "applications_count": app_count,
+            "has_job_spec": bool((r.job_spec_text or r.description or "").strip()),
+        })
+    diagnostic["db_roles_count"] = len(roles)
+    diagnostic["db_roles"] = roles_summary
+    return diagnostic
 
 
 @router.post("/admin/clear-sync")
@@ -96,6 +140,92 @@ def _run_sync_in_background(org_id: int) -> None:
         )
         db.commit()
         db.close()
+
+
+def _run_workable_diagnostic(org: Organization) -> dict:
+    """Run Workable API diagnostic for the org. Returns structured output for testing."""
+    if not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
+        return {"error": "Workable not connected"}
+    client = WorkableService(
+        access_token=org.workable_access_token,
+        subdomain=org.workable_subdomain,
+    )
+    result: dict = {
+        "jobs": {"count": 0, "first_job_keys": [], "first_shortcode": None, "first_id": None, "first_title": None},
+        "job_details": {"top_level_keys": [], "job_wrapper_keys": [], "details_keys": []},
+        "candidates": {"count": 0, "first_candidate_keys": [], "first_email": None, "first_stage": None},
+    }
+    try:
+        jobs = client.list_open_jobs()
+        result["jobs"]["count"] = len(jobs)
+        if jobs:
+            j0 = jobs[0]
+            result["jobs"]["first_job_keys"] = list(j0.keys())
+            result["jobs"]["first_shortcode"] = j0.get("shortcode")
+            result["jobs"]["first_id"] = j0.get("id")
+            result["jobs"]["first_title"] = j0.get("title")
+
+            shortcode = j0.get("shortcode") or j0.get("id")
+            if shortcode:
+                details = client.get_job_details(str(shortcode))
+                if isinstance(details, dict):
+                    result["job_details"]["top_level_keys"] = list(details.keys())
+                    job_wrapped = details.get("job")
+                    if isinstance(job_wrapped, dict):
+                        result["job_details"]["job_wrapper_keys"] = list(job_wrapped.keys())[:20]
+                        det = job_wrapped.get("details")
+                        if isinstance(det, dict):
+                            result["job_details"]["details_keys"] = list(det.keys())
+
+                candidates = client.list_job_candidates(str(shortcode), paginate=True, max_pages=2)
+                result["candidates"]["count"] = len(candidates)
+                if candidates:
+                    c0 = candidates[0]
+                    result["candidates"]["first_candidate_keys"] = list(c0.keys())
+                    result["candidates"]["first_email"] = c0.get("email")
+                    result["candidates"]["first_stage"] = c0.get("stage") or c0.get("stage_name")
+        result["api_reachable"] = True
+    except Exception as exc:
+        result["api_reachable"] = False
+        result["error"] = str(exc)
+        logger.exception("Workable diagnostic failed")
+    return result
+
+
+@router.get("/diagnostic")
+def workable_diagnostic(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Run Workable API diagnostic for current user's org. For testing integration."""
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
+    org = _get_org_for_user(db, current_user)
+    diagnostic = _run_workable_diagnostic(org)
+
+    roles = (
+        db.query(Role)
+        .filter(Role.organization_id == org.id, Role.deleted_at.is_(None))
+        .order_by(Role.created_at.desc())
+        .limit(20)
+        .all()
+    )
+    roles_summary = []
+    for r in roles:
+        app_count = db.query(CandidateApplication).filter(
+            CandidateApplication.role_id == r.id,
+            CandidateApplication.deleted_at.is_(None),
+        ).count()
+        roles_summary.append({
+            "id": r.id,
+            "name": (r.name or "")[:50],
+            "workable_job_id": r.workable_job_id,
+            "applications_count": app_count,
+            "has_job_spec": bool((r.job_spec_text or r.description or "").strip()),
+        })
+    diagnostic["db_roles_count"] = len(roles)
+    diagnostic["db_roles"] = roles_summary
+    return diagnostic
 
 
 @router.get("/sync/status")

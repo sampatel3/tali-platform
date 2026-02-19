@@ -322,11 +322,28 @@ railway run bash -c 'cd backend && .venv/bin/python ../scripts/seed_tasks_db.py'
 - **RoleSummaryHeader.jsx:** Fetch all CVs button
 - **CandidatesPage.jsx, rolesClient.js:** handleFetchCvs, fetchCvs, fetchCvsStatus
 
-### 9.3) Root-cause investigation checklist (execute in order)
+### 9.3) Workable API testing
+
+**Unit tests (run locally):**
+```bash
+cd backend && .venv/bin/python -m pytest tests/test_workable_sync_service.py tests/test_api_workable_sync.py -v
+```
+
+**Live API diagnostic (after merge to main or deploy of feature branch):**
+```bash
+# Option A: Admin endpoint (no password needed)
+SECRET_KEY="<from Railway variables>" EMAIL=sampatel@deeplight.ae ./scripts/test_workable_api.sh
+
+# Option B: With user token (login in app, copy token from devtools)
+AUTH_TOKEN="<Bearer token>" ./scripts/test_workable_api.sh
+```
+Endpoints: `GET /api/v1/workable/diagnostic` (auth), `GET /api/v1/workable/admin/diagnostic?email=...` (X-Admin-Secret).
+
+### 9.4) Root-cause investigation checklist (execute in order)
 
 Before further code changes, run diagnostic and API inspection:
 
-- [ ] **W1** Run `python scripts/workable_qa_diagnostic.py sampatel@deeplight.ae` from `backend/` with DB reachable (Railway Shell or `DATABASE_PUBLIC_URL`) and capture full output:
+- [ ] **W1** Run diagnostic (see 9.3) or `python scripts/workable_qa_diagnostic.py sampatel@deeplight.ae` from backend/ with DB reachable:
   - Jobs list structure and count
   - First job details structure (keys, nesting)
   - First job candidates structure (keys, email/stage location)
@@ -335,7 +352,7 @@ Before further code changes, run diagnostic and API inspection:
 - [ ] **W3** Run full sync (`run_workable_sync` or POST /workable/sync) as sampatel@deeplight.ae, then re-run diagnostic — compare before/after roles and applications
 - [ ] **W4** Trace candidate ingestion: log when `_is_terminal_candidate` returns True, when `_candidate_email` returns None; verify list response structure matches our parsing
 
-### 9.4) Fix plan (revisit after W1–W4)
+### 9.5) Fix plan (revisit after W1–W4)
 
 | Area | Action |
 |------|--------|
@@ -348,7 +365,7 @@ Before further code changes, run diagnostic and API inspection:
 | Candidate ingestion | Fix terminal-stage logic per actual Workable stage values; fix email extraction per actual candidate payload shape from W2 |
 | Candidates page UX | Improve role selector, application counts, job spec preview, and interview focus visibility |
 
-### 9.5) QA and testing requirements
+### 9.6) QA and testing requirements
 
 - [ ] **Q1** Use sampatel@deeplight.ae org (existing Workable keys) for all live QA
 - [ ] **Q2** Run diagnostic script before and after each sync; diff outputs
@@ -356,7 +373,7 @@ Before further code changes, run diagnostic and API inspection:
 - [x] **Q4** Add integration test (`TestWorkableSyncIntegration`) that mocks Workable API; asserts roles, applications, job_spec_text (skipped in default run due to sqlite concurrency)
 - [x] **Q5** Document Workable API response shapes in `docs/WORKABLE_API_RESPONSE_SAMPLES.md` for future maintenance
 
-### 9.6) Definition of done for Workable + Candidates UX
+### 9.7) Definition of done for Workable + Candidates UX
 
 - [ ] Sync completes in reasonable time (~100s for 1000 candidates)
 - [ ] Progress UI shows roles/candidates counts incrementing during sync
