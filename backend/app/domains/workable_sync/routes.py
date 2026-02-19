@@ -230,6 +230,7 @@ def workable_diagnostic(
 
 @router.get("/sync/status")
 def workable_sync_status(
+    include_diagnostic: bool = Query(False, description="Include Workable API diagnostic for testing"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -249,7 +250,7 @@ def workable_sync_status(
             db.commit()
             started_at = None
     sync_in_progress = started_at is not None
-    return {
+    out = {
         "workable_connected": bool(org.workable_connected),
         "workable_last_sync_at": org.workable_last_sync_at,
         "workable_last_sync_status": org.workable_last_sync_status,
@@ -257,6 +258,10 @@ def workable_sync_status(
         "workable_sync_progress": org.workable_sync_progress or {},
         "sync_in_progress": sync_in_progress,
     }
+    if include_diagnostic:
+        diag = _run_workable_diagnostic(org)
+        out["diagnostic"] = diag
+    return out
 
 
 @router.post("/sync/cancel")

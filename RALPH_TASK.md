@@ -329,15 +329,18 @@ railway run bash -c 'cd backend && .venv/bin/python ../scripts/seed_tasks_db.py'
 cd backend && .venv/bin/python -m pytest tests/test_workable_sync_service.py tests/test_api_workable_sync.py -v
 ```
 
-**Live API diagnostic (after merge to main or deploy of feature branch):**
+**Live API diagnostic:**
 ```bash
-# Option A: Admin endpoint (no password needed)
+# Option A: Admin endpoint (if deployed; no password needed)
 SECRET_KEY="<from Railway variables>" EMAIL=sampatel@deeplight.ae ./scripts/test_workable_api.sh
 
-# Option B: With user token (login in app, copy token from devtools)
+# Option B: User auth (works with current deploy; uses sync/status?include_diagnostic=true)
+EMAIL=sampatel@deeplight.ae PASSWORD="<your password>" ./scripts/test_workable_api.sh
+
+# Option C: With Bearer token (login in app, copy token from devtools)
 AUTH_TOKEN="<Bearer token>" ./scripts/test_workable_api.sh
 ```
-Endpoints: `GET /api/v1/workable/diagnostic` (auth), `GET /api/v1/workable/admin/diagnostic?email=...` (X-Admin-Secret).
+Endpoints: `GET /api/v1/workable/admin/diagnostic?email=...` (X-Admin-Secret), `GET /api/v1/workable/diagnostic` (auth), or `GET /api/v1/workable/sync/status?include_diagnostic=true` (auth, always available).
 
 ### 9.4) Root-cause investigation checklist (execute in order)
 

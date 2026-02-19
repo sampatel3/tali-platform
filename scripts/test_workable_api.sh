@@ -19,14 +19,16 @@ API_BASE="${BACKEND_URL}/api/v1"
 TEST_EMAIL="${EMAIL:-sampatel@deeplight.ae}"
 
 if [ -n "$SECRET_KEY" ]; then
-  echo "Using admin diagnostic endpoint for $TEST_EMAIL..."
-  echo "========================================"
-  curl -s -X GET "${API_BASE}/workable/admin/diagnostic?email=${TEST_EMAIL}" \
-    -H "X-Admin-Secret: ${SECRET_KEY}" | python3 -m json.tool
-  echo ""
-  echo "========================================"
-  echo "Done."
-  exit 0
+  echo "Trying admin diagnostic for $TEST_EMAIL..."
+  HTTP=$(curl -s -o /tmp/workable_admin.json -w "%{http_code}" -X GET "${API_BASE}/workable/admin/diagnostic?email=${TEST_EMAIL}" \
+    -H "X-Admin-Secret: ${SECRET_KEY}")
+  if [ "$HTTP" = "200" ]; then
+    python3 -m json.tool < /tmp/workable_admin.json
+    echo "Done (admin)."
+    exit 0
+  fi
+  echo "Admin diagnostic returned $HTTP (endpoint may not be deployed). Use EMAIL + PASSWORD instead."
+  rm -f /tmp/workable_admin.json
 fi
 
 if [ -z "$AUTH_TOKEN" ]; then
@@ -47,9 +49,9 @@ if [ -z "$AUTH_TOKEN" ]; then
 fi
 
 echo ""
-echo "Calling GET /workable/diagnostic..."
+echo "Calling GET /workable/sync/status?include_diagnostic=true (works even if diagnostic route not deployed)..."
 echo "========================================"
-curl -s -X GET "${API_BASE}/workable/diagnostic" \
+curl -s -X GET "${API_BASE}/workable/sync/status?include_diagnostic=true" \
   -H "Authorization: Bearer ${AUTH_TOKEN}" | python3 -m json.tool
 echo ""
 echo "========================================"

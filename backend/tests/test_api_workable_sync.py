@@ -192,6 +192,43 @@ def test_workable_diagnostic_returns_api_structure(client, db, monkeypatch):
     assert "db_roles" in data
 
 
+def test_workable_sync_status_include_diagnostic(client, db, monkeypatch):
+    """GET /workable/sync/status?include_diagnostic=true returns diagnostic when requested."""
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    headers, email = auth_headers(client, email="status-diag@example.com", organization_name="Status Diag Org")
+    owner = db.query(User).filter(User.email == email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.workable_connected = True
+    org.workable_access_token = "test-token"
+    org.workable_subdomain = "test"
+    db.commit()
+
+    def mock_list_jobs(self):
+        return [{"shortcode": "J1", "id": "J1", "title": "Test Job", "state": "published"}]
+
+    def mock_get_details(self, job_id):
+        return {"job": {"shortcode": job_id, "title": "Test Job", "details": {}}}
+
+    def mock_list_candidates(self, job_id, *, paginate=False, max_pages=None):
+        return [{"id": "c1", "email": "cand@example.com", "stage": "screening"}]
+
+    monkeypatch.setattr(workable_routes.WorkableService, "list_open_jobs", mock_list_jobs)
+    monkeypatch.setattr(workable_routes.WorkableService, "get_job_details", mock_get_details)
+    monkeypatch.setattr(workable_routes.WorkableService, "list_job_candidates", mock_list_candidates)
+
+    resp = client.get("/api/v1/workable/sync/status?include_diagnostic=true", headers=headers)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "sync_in_progress" in data
+    assert "diagnostic" in data
+    diag = data["diagnostic"]
+    assert diag.get("api_reachable") is True
+    assert diag["jobs"]["count"] == 1
+    assert diag["candidates"]["count"] == 1
+
+
 def test_run_workable_sync_script_exits_without_email():
     """run_workable_sync script exits 1 when no email provided."""
     import sys
