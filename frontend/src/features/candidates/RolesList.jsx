@@ -10,14 +10,24 @@ import {
   cx,
 } from '../../shared/ui/TaaliPrimitives';
 
-export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole, onCreateRole }) => (
-  <Panel className="p-4">
-    <div className="mb-4 flex items-center justify-between">
-      <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-gray-600">Roles</h2>
-      <Button type="button" variant="ghost" size="sm" onClick={onCreateRole}>
-        <Plus size={14} />
-        New
-      </Button>
+export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole, onCreateRole, onRefresh }) => (
+  <Panel className="p-4 flex flex-col max-h-[calc(100vh-200px)]">
+    <div className="mb-4 flex items-center justify-between shrink-0">
+      <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-gray-600">
+        Roles
+        {roles.length > 0 ? ` (${roles.length})` : ''}
+      </h2>
+      <div className="flex items-center gap-1">
+        {onRefresh ? (
+          <Button type="button" variant="ghost" size="sm" onClick={onRefresh} title="Refresh roles">
+            ↻
+          </Button>
+        ) : null}
+        <Button type="button" variant="ghost" size="sm" onClick={onCreateRole}>
+          <Plus size={14} />
+          New
+        </Button>
+      </div>
     </div>
 
     {loading ? (
@@ -49,7 +59,7 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
     ) : null}
 
     {!loading && !error && roles.length > 0 ? (
-      <ul className="space-y-2">
+      <ul className="space-y-2 overflow-y-auto min-h-0 flex-1 -mr-1 pr-1">
         {roles.map((role) => {
           const selected = String(role.id) === String(selectedRoleId);
           const specReady = Boolean(role.job_spec_present || role.job_spec_filename);

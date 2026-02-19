@@ -6,6 +6,7 @@ export const roles = {
   create: (data) => api.post('/roles', data),
   update: (id, data) => api.patch(`/roles/${id}`, data),
   remove: (id) => api.delete(`/roles/${id}`),
+  regenerateInterviewFocus: (roleId) => api.post(`/roles/${roleId}/regenerate-interview-focus`),
   uploadJobSpec: (roleId, file) => {
     const form = new FormData();
     form.append('file', file);

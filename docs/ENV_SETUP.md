@@ -49,22 +49,20 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 **Where to get it:** Sign up at [console.anthropic.com](https://console.anthropic.com) → API Keys → Create Key.
 
 
-### Claude Model Tiering (Phase P6)
+### Claude Model Configuration
 
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
-| `DEPLOYMENT_ENV` | No | `development` | Deployment environment (`development`, `staging`, `production`). |
-| `CLAUDE_MODEL` | No | `None` | Explicit model override for all environments. |
-| `CLAUDE_MODEL_NON_PROD` | No | `claude-3-5-haiku-latest` | Default model used for test/staging/dev (cheapest tier). |
-| `CLAUDE_MODEL_PRODUCTION` | No | `claude-3-5-sonnet-20241022` | Default production model when `DEPLOYMENT_ENV=production`. |
+| `CLAUDE_MODEL` | No | `claude-3-5-haiku-latest` | Model for assessment terminal, chat, and general use. |
+| `CLAUDE_SCORING_MODEL` | No | `claude-3-5-haiku-latest` | Model for TAALI CV score, interview focus, and scoring. |
 | `MAX_TOKENS_PER_RESPONSE` | No | `1024` | Maximum tokens returned per Claude response. |
 
-Model resolution precedence: `CLAUDE_MODEL` (if set) → environment default (`CLAUDE_MODEL_PRODUCTION` for production, otherwise `CLAUDE_MODEL_NON_PROD`).
-
-For low-cost local testing, set:
+Both models default to `claude-3-5-haiku-latest` for consistency and cost efficiency. Override via environment if needed:
 
 ```bash
+# Optional overrides (defaults are recommended)
 CLAUDE_MODEL=claude-3-5-haiku-latest
+CLAUDE_SCORING_MODEL=claude-3-5-haiku-latest
 ```
 
 ### Cost Observability Controls (Phase P6)

@@ -136,6 +136,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         include_cv_text: true,
       };
       if (sourceFilter !== 'all') appParams.source = sourceFilter;
+      if (statusFilter !== 'all') appParams.status = statusFilter;
       if (minWorkableScore !== '') appParams.min_workable_score = Number(minWorkableScore);
       if (minCvMatchScore !== '') appParams.min_cv_match_score = Number(minCvMatchScore);
       const [tasksRes, applicationsRes] = await Promise.all([
@@ -151,7 +152,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     } finally {
       setLoadingRoleContext(false);
     }
-  }, [rolesApi, sortBy, sortOrder, sourceFilter, minWorkableScore, minCvMatchScore]);
+  }, [rolesApi, sortBy, sortOrder, sourceFilter, statusFilter, minWorkableScore, minCvMatchScore]);
 
   const loadTasks = useCallback(async () => {
     if (!tasksApi?.list) {
@@ -174,6 +175,14 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     loadRoles();
     loadTasks();
   }, [loadRoles, loadTasks]);
+
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') loadRoles();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [loadRoles]);
 
   useEffect(() => {
     loadRoleContext(selectedRoleId);
@@ -460,6 +469,22 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
   }, [rolesApi, selectedRoleId, loadRoleContext, showToast]);
 
+  const handleRegenerateInterviewFocus = useCallback(async () => {
+    if (!rolesApi?.regenerateInterviewFocus || !selectedRoleId) return;
+    try {
+      const res = await rolesApi.regenerateInterviewFocus(selectedRoleId);
+      const data = res?.data || {};
+      if (data.interview_focus_generated) {
+        showToast('Interview focus pointers generated.', 'success');
+        await loadRoles(selectedRoleId);
+      } else if (data.interview_focus_error) {
+        showToast(data.interview_focus_error, 'error');
+      }
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to generate interview focus.'), 'error');
+    }
+  }, [rolesApi, selectedRoleId, loadRoles, showToast]);
+
   const handleEnrichCandidate = useCallback(async (application) => {
     if (!rolesApi?.enrichApplication) return;
     try {
@@ -641,6 +666,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
             error={rolesError}
             onSelectRole={setSelectedRoleId}
             onCreateRole={() => handleOpenRoleSheet('create')}
+            onRefresh={() => loadRoles()}
           />
 
           <div className="space-y-4">
@@ -656,6 +682,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   onBatchScore={handleBatchScore}
                   onFetchCvs={rolesApi?.fetchCvs ? handleFetchCvs : null}
                   fetchCvsProgress={fetchCvsProgress}
+                  onRegenerateInterviewFocus={rolesApi?.regenerateInterviewFocus ? handleRegenerateInterviewFocus : null}
                 />
                 {loadingTasks ? (
                   <Panel className="px-4 py-3 text-sm text-gray-600 bg-[#faf8ff]">

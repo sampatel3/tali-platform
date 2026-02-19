@@ -1,4 +1,14 @@
 import os
+import warnings
+
+# Suppress starlette's PendingDeprecationWarning (multipart vs python_multipart) — from dependency
+warnings.filterwarnings(
+    "ignore",
+    message="Please use `import python_multipart` instead",
+    category=PendingDeprecationWarning,
+    module="starlette.formparsers",
+)
+
 # Override DATABASE_URL before any app imports. Shared in-memory avoids disk I/O
 # and locking when sync + async engines both access the DB.
 os.environ["DATABASE_URL"] = "sqlite:///file:taalitest?mode=memory&cache=shared"

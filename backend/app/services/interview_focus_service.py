@@ -89,7 +89,7 @@ def generate_interview_focus_sync(
         from anthropic import Anthropic
 
         client = Anthropic(api_key=api_key)
-        resolved_model = model or settings.resolved_claude_model
+        resolved_model = model or settings.resolved_claude_scoring_model
         prompt = INTERVIEW_FOCUS_PROMPT.format(job_spec_text=job_spec_text[:5000])
 
         logger.info(

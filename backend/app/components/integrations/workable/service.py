@@ -221,7 +221,28 @@ class WorkableService:
                 payload = self._get_next_page(next_page_url)
                 next_page_url = None
             else:
-                payload = self._request_optional("GET", path, params=params)
+                try:
+                    payload = self._request("GET", path, params=params)
+                except httpx.HTTPStatusError as exc:
+                    status = exc.response.status_code if exc.response else None
+                    err_body = ""
+                    if exc.response and exc.response.content:
+                        try:
+                            err_body = exc.response.text[:200] if exc.response.text else ""
+                        except Exception:
+                            pass
+                    logger.warning(
+                        "Workable GET %s returned %s (body=%s). Check token has candidates scope (r_candidates).",
+                        path,
+                        status,
+                        err_body or "(none)",
+                    )
+                    return []
+                except Exception as exc:
+                    logger.exception("Workable GET %s failed: %s", path, exc)
+                    return []
+                if not payload and not isinstance(payload, dict):
+                    payload = {}
 
             if isinstance(payload, dict):
                 batch = (
@@ -230,6 +251,22 @@ class WorkableService:
                     or payload.get("results")
                     or payload.get("applicants")
                 )
+                if isinstance(batch, dict):
+                    batch = (
+                        batch.get("candidates")
+                        or batch.get("data")
+                        or batch.get("results")
+                        or batch.get("applicants")
+                        or []
+                    )
+                if not isinstance(batch, list):
+                    batch = []
+                if pages == 1 and len(candidates) == 0 and len(batch) == 0 and payload:
+                    logger.info(
+                        "Workable GET %s returned 0 candidates. Response keys=%s",
+                        path,
+                        list(payload.keys())[:15],
+                    )
                 paging = payload.get("paging") if isinstance(payload.get("paging"), dict) else {}
                 next_url = paging.get("next") if isinstance(paging, dict) else None
             elif isinstance(payload, list):

@@ -9,7 +9,7 @@ import {
   Panel,
 } from '../../shared/ui/TaaliPrimitives';
 
-export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, onBatchScore, onFetchCvs, fetchCvsProgress }) => {
+export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, onBatchScore, onFetchCvs, fetchCvsProgress, onRegenerateInterviewFocus }) => {
   if (!role) return null;
   const focus = role.interview_focus || null;
   const focusQuestions = Array.isArray(focus?.questions) ? focus.questions.slice(0, 3) : [];
@@ -17,9 +17,11 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, o
   const hasInterviewFocus = focusQuestions.length > 0;
   const [focusExpanded, setFocusExpanded] = useState(true);
   const [specExpanded, setSpecExpanded] = useState(false);
+  const [regeneratingFocus, setRegeneratingFocus] = useState(false);
   const focusPanelId = `interview-focus-panel-${role.id || 'active'}`;
   const specPanelId = `role-spec-panel-${role.id || 'active'}`;
 
+  /** Strip HTML to plain text (for preview). */
   const toPlainText = (value) => {
     if (!value) return '';
     const raw = String(value);
@@ -35,9 +37,42 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, o
     return raw.replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
   };
 
-  const specContent = (role.description || role.job_spec_text || '').trim();
+  /** Strip HTML from string, preserve basic structure (for full job spec display). */
+  const stripHtml = (html) => {
+    if (!html || typeof html !== 'string') return html || '';
+    return html
+      .replace(/<br\s*\/?>/gi, '\n')
+      .replace(/<\/p>/gi, '\n\n')
+      .replace(/<\/div>/gi, '\n')
+      .replace(/<li[^>]*>/gi, '\n- ')
+      .replace(/<\/li>/gi, '')
+      .replace(/<[^>]+>/g, ' ')
+      .replace(/&nbsp;/g, ' ')
+      .replace(/&amp;/g, '&')
+      .replace(/&lt;/g, '<')
+      .replace(/&gt;/g, '>')
+      .replace(/&quot;/g, '"')
+      .replace(/\s{2,}/g, '\n')
+      .trim();
+  };
+
+  /** Remove embedded Python dict/list reprs like {'key': 'val'} from job spec text. */
+  const stripEmbeddedReprs = (text) => {
+    if (!text || typeof text !== 'string') return text || '';
+    let r = text;
+    let prev;
+    do {
+      prev = r;
+      r = r.replace(/\{[^{}]*(?:\{[^{}]*\}[^{}]*)*\}/g, '').replace(/\[[^[\]]*(?:\[[^[\]]*\][^[\]]*)*\]/g, '');
+    } while (r !== prev);
+    return r.replace(/\s{2,}/g, '\n').trim();
+  };
+
+  const rawSpec = (role.description || role.job_spec_text || '').trim();
+  const noHtml = rawSpec.includes('<') ? stripHtml(rawSpec) : rawSpec;
+  const specContent = stripEmbeddedReprs(noHtml) || noHtml || rawSpec;
   const roleDescription = specContent;
-  const roleText = toPlainText(role.description || role.job_spec_text);
+  const roleText = toPlainText(specContent);
   const rolePreview = roleText.length > 180 ? `${roleText.slice(0, 180)}…` : roleText;
   const hasSpecContent = specContent.length > 0;
   const jobSpecReady = Boolean(role.job_spec_present || role.job_spec_filename || hasSpecContent);
@@ -246,7 +281,34 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, o
         </Card>
       ) : jobSpecReady ? (
         <Card className="mt-4 border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
-          Interview focus pointers will be generated from the job spec.
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <span>Interview focus pointers will be generated from the job spec.</span>
+            {onRegenerateInterviewFocus ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={async () => {
+                  setRegeneratingFocus(true);
+                  try {
+                    await onRegenerateInterviewFocus();
+                  } finally {
+                    setRegeneratingFocus(false);
+                  }
+                }}
+                disabled={regeneratingFocus}
+              >
+                {regeneratingFocus ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    Generating...
+                  </>
+                ) : (
+                  'Generate interview focus'
+                )}
+              </Button>
+            ) : null}
+          </div>
         </Card>
       ) : (
         <Card className="mt-4 border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">

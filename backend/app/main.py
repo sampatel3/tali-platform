@@ -1,4 +1,5 @@
 import logging as _logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 # Friendly messages for API error codes (returned to frontend)
@@ -31,11 +32,7 @@ if _is_production and settings.SECRET_KEY in _INSECURE_DEFAULTS:
 # ---------------------------------------------------------------------------
 # Claude/assessment runtime policy enforcement
 # ---------------------------------------------------------------------------
-if not (settings.CLAUDE_MODEL or "").strip():
-    raise RuntimeError(
-        "CRITICAL: CLAUDE_MODEL is not configured. "
-        "Set CLAUDE_MODEL explicitly (for example, claude-3-5-haiku-latest)."
-    )
+# CLAUDE_MODEL defaults to claude-3-5-haiku-latest in config; no startup check needed.
 if not settings.ASSESSMENT_TERMINAL_ENABLED:
     raise RuntimeError(
         "CRITICAL: ASSESSMENT_TERMINAL_ENABLED must be true. "
@@ -52,12 +49,22 @@ if (settings.ASSESSMENT_TERMINAL_DEFAULT_MODE or "").strip().lower() != "claude_
 _docs_url = None if _is_production else "/api/docs"
 _openapi_url = None if _is_production else "/api/openapi.json"
 
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):
+    # Startup
+    logger.info("%s API started | env=%s", BRAND_NAME, "production" if settings.SENTRY_DSN else "development")
+    yield
+    # Shutdown (none needed currently)
+
+
 app = FastAPI(
     title=f"{BRAND_NAME} API",
     description=BRAND_APP_DESCRIPTION,
     version="1.0.0",
     docs_url=_docs_url,
     openapi_url=_openapi_url,
+    lifespan=_lifespan,
 )
 
 _val_logger = _logging.getLogger("taali.validation")
@@ -232,11 +239,6 @@ app.include_router(candidates_router, prefix="/api/v1")
 app.include_router(roles_router, prefix="/api/v1")
 app.include_router(scoring_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
-
-
-@app.on_event("startup")
-def startup():
-    logger.info("%s API started | env=%s", BRAND_NAME, "production" if settings.SENTRY_DSN else "development")
 
 
 @app.get("/health")

@@ -153,6 +153,7 @@ def list_role_applications(
     min_workable_score: float | None = Query(default=None),
     min_cv_match_score: float | None = Query(default=None),
     source: str | None = Query(default=None, pattern="^(manual|workable)$"),
+    status: str | None = Query(default=None, description="Filter by application status (e.g. applied, shortlisted)"),
     include_cv_text: bool = Query(False, description="Include full CV text for each application (for viewer)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -169,6 +170,8 @@ def list_role_applications(
     )
     if source:
         query = query.filter(CandidateApplication.source == source)
+    if status and status.strip().lower() != "all":
+        query = query.filter(CandidateApplication.status.ilike(status.strip()))
     if min_rank_score is not None:
         query = query.filter(CandidateApplication.rank_score >= min_rank_score)
     if min_workable_score is not None:
@@ -293,10 +296,14 @@ def upload_application_cv(
         app.candidate.cv_uploaded_at = now
     try:
         _compute_cv_match_for_application(app, reset_if_unavailable=True)
-    except Exception:
-        logger.exception("Failed to compute cv_match_score for application_id=%s", app.id)
+    except Exception as e:
+        err_msg = str(e)
+        logger.exception("Failed to compute cv_match_score for application_id=%s: %s", app.id, err_msg)
         app.cv_match_score = None
-        app.cv_match_details = {"error": "Failed to compute CV match score"}
+        hint = "Verify CLAUDE_SCORING_MODEL is valid (use claude-3-5-haiku-latest)."
+        if "404" in err_msg or "not found" in err_msg.lower():
+            hint = "Model may be deprecated. Set CLAUDE_SCORING_MODEL=claude-3-5-haiku-latest in production."
+        app.cv_match_details = {"error": err_msg[:300], "hint": hint}
         app.cv_match_scored_at = None
     _refresh_rank_score(app)
     try:
@@ -350,10 +357,14 @@ def generate_taali_cv_ai(
 
     try:
         _compute_cv_match_for_application(app, reset_if_unavailable=True)
-    except Exception:
-        logger.exception("Failed to compute cv_match_score for application_id=%s", app.id)
+    except Exception as e:
+        err_msg = str(e)
+        logger.exception("Failed to compute cv_match_score for application_id=%s: %s", app.id, err_msg)
         app.cv_match_score = None
-        app.cv_match_details = {"error": "Failed to compute CV match score"}
+        hint = "Verify CLAUDE_SCORING_MODEL is valid (use claude-3-5-haiku-latest)."
+        if "404" in err_msg or "not found" in err_msg.lower():
+            hint = "Model may be deprecated. Set CLAUDE_SCORING_MODEL=claude-3-5-haiku-latest in production."
+        app.cv_match_details = {"error": err_msg[:300], "hint": hint}
         app.cv_match_scored_at = None
     _refresh_rank_score(app)
 

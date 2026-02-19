@@ -33,7 +33,7 @@ def _generate_interview_focus(role: Role) -> tuple[dict | None, str | None]:
     interview_focus = generate_interview_focus_sync(
         job_spec_text=job_spec_text,
         api_key=settings.ANTHROPIC_API_KEY,
-        model=settings.resolved_claude_model,
+        model=settings.resolved_claude_scoring_model,
     )
     if not interview_focus:
         return None, "Interview focus unavailable: failed to generate pointers"
@@ -197,6 +197,48 @@ def upload_role_job_spec(
         "filename": result["filename"],
         "text_preview": result["text_preview"],
         "uploaded_at": now,
+        "interview_focus_generated": bool(role.interview_focus),
+        "interview_focus_generated_at": role.interview_focus_generated_at,
+        "interview_focus": role.interview_focus,
+        "interview_focus_error": interview_focus_error,
+    }
+
+
+@router.post("/roles/{role_id}/regenerate-interview-focus")
+def regenerate_interview_focus(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Regenerate interview focus pointers from the role's job spec. Use after fixing CLAUDE_SCORING_MODEL."""
+    role = get_role(role_id, current_user.organization_id, db)
+    now = datetime.now(timezone.utc)
+    role.interview_focus = None
+    role.interview_focus_generated_at = None
+
+    interview_focus: dict | None = None
+    interview_focus_error: str | None = None
+    try:
+        interview_focus, interview_focus_error = _generate_interview_focus(role)
+    except Exception:
+        logger.exception("Failed to regenerate interview focus for role_id=%s", role.id)
+        interview_focus = None
+        interview_focus_error = "Interview focus unavailable: failed to generate pointers"
+
+    if interview_focus:
+        role.interview_focus = interview_focus
+        role.interview_focus_generated_at = now
+
+    try:
+        db.commit()
+        db.refresh(role)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to regenerate interview focus")
+
+    return {
+        "success": True,
+        "role_id": role.id,
         "interview_focus_generated": bool(role.interview_focus),
         "interview_focus_generated_at": role.interview_focus_generated_at,
         "interview_focus": role.interview_focus,

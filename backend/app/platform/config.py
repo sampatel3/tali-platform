@@ -35,9 +35,9 @@ class Settings(BaseSettings):
 
     # Claude / Anthropic
     ANTHROPIC_API_KEY: str = ""
-    # Explicit model must be configured via environment.
-    CLAUDE_MODEL: str = ""
-    # Model for CV-job match (TAALI score). Default Haiku for cost/debugging; override with CLAUDE_SCORING_MODEL if needed.
+    # Model for assessment terminal, chat, and general use. Default Haiku for cost/debugging.
+    CLAUDE_MODEL: str = "claude-3-5-haiku-latest"
+    # Model for CV-job match (TAALI score), interview focus, scoring. Default Haiku; override with CLAUDE_SCORING_MODEL if needed.
     CLAUDE_SCORING_MODEL: str = "claude-3-5-haiku-latest"
     MAX_TOKENS_PER_RESPONSE: int = 1024
     # Terminal-native Claude Code runtime
@@ -67,11 +67,9 @@ class Settings(BaseSettings):
 
     @property
     def resolved_claude_model(self) -> str:
-        """Resolve the required Claude model from explicit environment config."""
+        """Claude model for assessment terminal, chat, and general use. Defaults to claude-3-5-haiku-latest."""
         model = (self.CLAUDE_MODEL or "").strip()
-        if not model:
-            raise RuntimeError("CLAUDE_MODEL is required and must be explicitly configured")
-        return model
+        return model or "claude-3-5-haiku-latest"
 
     @property
     def resolved_claude_scoring_model(self) -> str:

@@ -23,6 +23,16 @@ class TestStripHtml:
         out = _strip_html("<li>Item</li>")
         assert "Item" in out
 
+    def test_strips_html_and_embedded_dict(self):
+        html = "<p>Location: {'country': 'UAE', 'city': 'Dubai'}</p>"
+        out = _strip_html(html)
+        assert "Dubai" in out
+        assert "'country'" not in out
+
+    def test_fixes_literal_backslash_n(self):
+        out = _strip_html("Line1\\nLine2")
+        assert "\n" in out
+
 
 class TestFormatJobSpecFromApi:
     def test_empty_input(self):
@@ -63,6 +73,28 @@ class TestFormatJobSpecFromApi:
         out = _format_job_spec_from_api(job)
         assert "# Data Engineer" in out
         assert "Full text here" in out
+
+    def test_location_dict_formatted_not_raw(self):
+        job = {
+            "title": "GenAI Engineer",
+            "location": {"country": "United Arab Emirates", "region": "Dubai", "city": "Dubai", "workplace_type": "hybrid"},
+            "department": "DeepLight",
+        }
+        out = _format_job_spec_from_api(job)
+        assert "Dubai" in out
+        assert "United Arab Emirates" in out
+        assert "hybrid" in out
+        assert "{'" not in out and "'country'" not in out
+
+    def test_location_as_python_repr_string(self):
+        job = {
+            "title": "Test",
+            "location": "{'country': 'UAE', 'city': 'Dubai', 'workplace_type': 'remote'}",
+        }
+        out = _format_job_spec_from_api(job)
+        assert "Dubai" in out
+        assert "UAE" in out
+        assert "'country'" not in out
 
 
 class TestIsTerminalCandidate:

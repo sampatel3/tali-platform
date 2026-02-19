@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import json
 import logging
 import re
 from datetime import datetime, timezone
@@ -58,6 +60,10 @@ def _strip_html(html: str) -> str:
     # Decode common entities
     text = text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
     text = text.replace("&nbsp;", " ").replace("&quot;", '"').replace("&#39;", "'")
+    # Fix literal backslash-n shown as text
+    text = text.replace("\\n", "\n").replace("\\t", " ")
+    # Remove embedded Python dict/list reprs (e.g. location object serialized into text)
+    text = _remove_embedded_dict_reprs(text)
     # Normalize whitespace: collapse multiple spaces, clean up newlines
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r"\n[ \t]+", "\n", text)
@@ -66,15 +72,94 @@ def _strip_html(html: str) -> str:
     return text.strip()
 
 
+def _remove_embedded_dict_reprs(text: str) -> str:
+    """Remove Python dict/list reprs embedded in text (e.g. {'country': 'UAE'}, {'key': 'val'})."""
+    if not text or not isinstance(text, str):
+        return text
+    result = []
+    i = 0
+    while i < len(text):
+        if text[i] == "{":
+            depth = 0
+            start = i
+            found = False
+            for j in range(i, len(text)):
+                if text[j] == "{":
+                    depth += 1
+                elif text[j] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        chunk = text[start : j + 1]
+                        # Location-like dict: try to format as readable text
+                        if "'country'" in chunk or '"country"' in chunk or "'city'" in chunk or '"city"' in chunk:
+                            parsed = _parse_location_like(chunk)
+                            if parsed:
+                                loc = _format_location(parsed)
+                                if loc:
+                                    result.append(loc)
+                        # Any dict repr (key: val) - remove entirely to avoid raw Python repr in job specs
+                        i = j + 1
+                        found = True
+                        break
+            if not found:
+                result.append(text[i])
+                i += 1
+        elif text[i] == "[":
+            # Remove list reprs like ['a','b'] or [1,2,3]
+            depth = 0
+            start = i
+            found = False
+            for j in range(i, len(text)):
+                if text[j] == "[":
+                    depth += 1
+                elif text[j] == "]":
+                    depth -= 1
+                    if depth == 0:
+                        i = j + 1
+                        found = True
+                        break
+            if not found:
+                result.append(text[i])
+                i += 1
+        else:
+            result.append(text[i])
+            i += 1
+    return "".join(result)
+
+
+def _parse_location_like(value: str) -> dict | None:
+    """Try to parse a string that looks like a dict (JSON or Python repr) for location."""
+    s = (value or "").strip()
+    if not s or not s.startswith("{"):
+        return None
+    try:
+        return json.loads(s)
+    except json.JSONDecodeError:
+        pass
+    try:
+        parsed = ast.literal_eval(s)
+        return parsed if isinstance(parsed, dict) else None
+    except (ValueError, SyntaxError):
+        pass
+    return None
+
+
 def _format_location(value) -> str | None:
-    """Format a Workable location value (may be dict or string) into readable text."""
+    """Format a Workable location value (may be dict, JSON string, or Python repr) into readable text.
+    Never returns raw dict repr - always returns human-readable string or None."""
+    if value is None:
+        return None
     if isinstance(value, str) and value.strip():
-        return value.strip()
+        parsed = _parse_location_like(value)
+        if parsed:
+            value = parsed
+        else:
+            return value.strip()
     if isinstance(value, dict):
         parts = []
-        city = value.get("city")
-        region = value.get("region")
-        country = value.get("country")
+        city = value.get("city") or value.get("city_name")
+        region = value.get("region") or value.get("subregion") or value.get("state_code") or value.get("state")
+        country = value.get("country") or value.get("country_name")
         if isinstance(city, str) and city.strip():
             parts.append(city.strip())
         if isinstance(region, str) and region.strip() and region.strip() != (city or "").strip():
@@ -86,35 +171,67 @@ def _format_location(value) -> str | None:
         if isinstance(workplace, str) and workplace.strip():
             location_str = f"{location_str} ({workplace.strip()})" if location_str else workplace.strip()
         return location_str or None
+    # Reject lists, objects - never return repr
     return None
 
 
 def _format_job_spec_from_api(job_data: dict) -> str:
     """Build a well-formatted job spec string from Workable job API data.
     Handles: list response (minimal), job details response ({job: {...}}), or flat dict.
+    Never outputs raw dict/list repr or HTML - always sanitized.
     """
     if not job_data or not isinstance(job_data, dict):
         return ""
-    # Unwrap nested structures: {"job": {...}} or {"job": {"details": {...}}}
+    # Unwrap nested structures: {"job": {...}}, {"job": {"details": {...}}}, or details from get_job_details
     merged = dict(job_data)
-    job_inner = merged.get("job")
-    if isinstance(job_inner, dict):
-        merged = {**merged, **job_inner}
-    details = merged.get("details")
-    if isinstance(details, dict):
-        merged = {**merged, **details}
-    merged.pop("job", None)
-    merged.pop("details", None)
+    for _ in range(3):  # Flatten nested job/details
+        job_inner = merged.get("job")
+        if isinstance(job_inner, dict):
+            merged = {**merged, **job_inner}
+        details = merged.get("details")  # Re-get after merge so we capture nested details
+        if isinstance(details, dict):
+            merged = {**merged, **details}
+        merged.pop("job", None)
+        merged.pop("details", None)
+        if not isinstance(merged.get("job"), dict) and not isinstance(merged.get("details"), dict):
+            break
+
+    def _extract_html_or_text(val: Any) -> str | None:
+        """Get displayable string from value - handles {"html": "...", "text": "..."} or plain string."""
+        if val is None:
+            return None
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+        if isinstance(val, dict):
+            for k in ("text", "html", "content"):
+                v = val.get(k)
+                if isinstance(v, str) and v.strip():
+                    return v.strip()
+        return None
+
     lines: list[str] = []
 
     title = merged.get("title") or merged.get("name") or merged.get("headline") or "Job"
     lines.append(f"# {title}")
     lines.append("")
 
-    # Location: may be dict {city, region, country} or string
-    location_str = _format_location(merged.get("location"))
+    # Location: always use _format_location - never output dict repr
+    loc_val = merged.get("location")
+    if isinstance(loc_val, list) and loc_val:
+        loc_val = loc_val[0] if isinstance(loc_val[0], dict) else None
+    location_str = _format_location(loc_val)
     if location_str:
         lines.append(f"**Location:** {location_str}")
+
+    def _scalar_str(val: Any) -> str | None:
+        """Convert value to display string; reject dicts/lists to avoid raw repr."""
+        if val is None:
+            return None
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+        if isinstance(val, (int, float, bool)):
+            return str(val)
+        return None
 
     for key, label in (
         ("department", "Department"),
@@ -123,22 +240,26 @@ def _format_job_spec_from_api(job_data: dict) -> str:
         ("state", "State"),
         ("full_title", "Full title"),
     ):
-        value = merged.get(key)
-        if value is not None and isinstance(value, str) and value.strip():
+        value = _scalar_str(merged.get(key))
+        if value:
             lines.append(f"**{label}:** {value}")
     lines.append("")
 
-    # Description/requirements: Workable may use different keys
+    # Description/requirements: extract from dict or string, always _strip_html
     for key in ("description", "full_description", "requirements", "benefits"):
-        value = merged.get(key)
-        if isinstance(value, str) and value.strip():
+        raw = merged.get(key)
+        value = _extract_html_or_text(raw)
+        if value:
             label = key.replace("_", " ").title()
             lines.append(f"## {label}")
             lines.append("")
-            lines.append(_strip_html(value.strip()))
+            lines.append(_strip_html(value))
             lines.append("")
 
-    return "\n".join(lines).strip()
+    result = "\n".join(lines).strip()
+    # Final pass: strip any remaining embedded reprs (defense in depth)
+    result = _remove_embedded_dict_reprs(result)
+    return result.strip()
 
 
 TERMINAL_STAGES = {"hired", "rejected", "withdrawn", "disqualified", "declined", "archived"}
@@ -535,22 +656,21 @@ class WorkableSyncService:
         # Prefer shortcode (used by Workable API for /jobs/:shortcode/candidates)
         job_id = str(job.get("shortcode") or job.get("id") or "").strip()
         title = str(job.get("title") or job.get("name") or f"Workable role {job_id or 'unknown'}").strip()
-        # Use list job data first; only fetch details if we need full description (saves 1 API call per job)
-        list_has_spec = any(job.get(k) for k in ("description", "full_description", "requirements") if job.get(k))
-        jd = job.get("details") if isinstance(job.get("details"), dict) else {}
-        list_has_spec = list_has_spec or any(jd.get(k) for k in ("description", "full_description", "requirements") if jd.get(k))
-        details = {}
-        if not list_has_spec:
-            details = self._job_details_for_role(job=job)
-        description = (
-            details.get("description")
-            or details.get("full_description")
-            or details.get("requirements")
-            or job.get("description")
-            or job.get("full_description")
-            or job.get("requirements")
-            or ""
-        )
+        # Always fetch job details to get consistent structure (location, description, etc.).
+        details = self._job_details_for_role(job=job, role=None)
+        def _get_desc(d: dict) -> str:
+            for key in ("description", "full_description", "requirements"):
+                v = d.get(key) if isinstance(d, dict) else None
+                if isinstance(v, str) and v.strip():
+                    return v
+            for sub in (d.get("job"), d.get("details")):
+                if isinstance(sub, dict):
+                    for key in ("description", "full_description", "requirements"):
+                        v = sub.get(key)
+                        if isinstance(v, str) and v.strip():
+                            return v
+            return ""
+        description = _get_desc(details) or _get_desc(job) or ""
         role = None
         if job_id:
             role = (
@@ -605,7 +725,7 @@ class WorkableSyncService:
                 focus = generate_interview_focus_sync(
                     job_spec_text=(role.job_spec_text or "").strip(),
                     api_key=settings.ANTHROPIC_API_KEY,
-                    model=settings.resolved_claude_model,
+                    model=settings.resolved_claude_scoring_model,
                 )
                 if focus:
                     role.interview_focus = focus

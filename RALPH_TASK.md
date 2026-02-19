@@ -313,8 +313,8 @@ railway run bash -c 'cd backend && .venv/bin/python ../scripts/seed_tasks_db.py'
 
 ### 9.2) Hardening fixes (2026-02-19)
 
-- **service.py:** Throttle 0.3s, jobs aggregate all states, candidates `applicants` fallback
-- **sync_service.py:** Email extraction (contact_info, details), batch commits every 5, job spec th/td, logging
+- **service.py:** Throttle 0.3s, jobs aggregate all states, candidates `applicants` fallback; surface 403/404 on candidates API, handle nested `data.candidates`, log when 0 candidates
+- **sync_service.py:** Email extraction (contact_info, details), batch commits every 5, job spec th/td, logging; format location (dict/JSON/repr→readable), strip embedded dict reprs, fix `\n` escapes, HTML→markdown
 - **applications_routes.py:** POST /roles/{id}/fetch-cvs, fit_matching error handling
 - **fit_matching_service.py:** Error logging with type and hint
 - **SettingsPage.jsx:** Completion message uses processed counts, no cv_downloaded
@@ -342,7 +342,15 @@ AUTH_TOKEN="<Bearer token>" ./scripts/test_workable_api.sh
 ```
 Endpoints: `GET /api/v1/workable/admin/diagnostic?email=...` (X-Admin-Secret), `GET /api/v1/workable/diagnostic` (auth), or `GET /api/v1/workable/sync/status?include_diagnostic=true` (auth, always available).
 
-### 9.4) Root-cause investigation checklist (execute in order)
+### 9.4) "0 candidates" troubleshooting
+
+If sync shows **21 roles processed, 0 candidates** for 3+ minutes:
+
+1. **Token scope** — Workable API token must include `r_candidates` (not just `r_jobs`). Check Integrations → Access Token in Workable; re-create token with `r_jobs` + `r_candidates`.
+2. **Logs** — Railway logs will now show `Workable GET /jobs/XXX/candidates returned 403` (or 404) when the API rejects. Check status and error body.
+3. **Diagnostic** — Run `EMAIL=... PASSWORD=... ./scripts/test_workable_api.sh` to see `candidates.count` and `first_candidate_keys`; if 0, API is returning empty or failing.
+
+### 9.5) Root-cause investigation checklist (execute in order)
 
 Before further code changes, run diagnostic and API inspection:
 
@@ -355,20 +363,20 @@ Before further code changes, run diagnostic and API inspection:
 - [ ] **W3** Run full sync (`run_workable_sync` or POST /workable/sync) as sampatel@deeplight.ae, then re-run diagnostic — compare before/after roles and applications
 - [ ] **W4** Trace candidate ingestion: log when `_is_terminal_candidate` returns True, when `_candidate_email` returns None; verify list response structure matches our parsing
 
-### 9.5) Fix plan (revisit after W1–W4)
+### 9.6) Fix plan (revisit after W1–W4)
 
 | Area | Action |
 |------|--------|
 | Sync speed | Use single list jobs call; fetch job details only when missing spec; batch candidate fetches (100/page); validate throttle vs rate limit |
 | Progress UI | Ensure `workable_sync_progress` is committed and polled; frontend must poll GET /workable/sync/status every 2–3s during sync |
-| Job spec display | Align `_format_job_spec_from_api` with actual Workable response shape from W2; ensure `description`/`job_spec_text` populated and frontend uses correct field |
+| Job spec display | **Fixed:** `_format_job_spec_from_api` always fetches job details; flattens nested job/details; formats location (country_name, subregion); strips HTML; never outputs raw dict repr. Frontend strips HTML and dict reprs. Run `python -m app.scripts.reformat_job_specs` to fix existing roles. |
 | “Upload a job spec” | Fix `jobSpecReady` logic: treat `job_spec_present` OR `job_spec_filename` OR `hasSpecContent` as “spec exists”; ensure API returns these for Workable-synced roles |
 | Interview focus | Call `generate_interview_focus_sync` after role upsert when `job_spec_text` is non-empty and `ANTHROPIC_API_KEY` set; handle failures gracefully |
-| Role visibility | Verify `list_roles` returns all roles with `deleted_at IS NULL`; check no frontend filter hides roles with 0 applications |
+| Role visibility | `list_roles` returns all roles (no limit). Sync status includes `db_roles_count` and `db_applications_count` for debugging. If DB has 21 roles but UI shows 1, check org_id match (user's org vs sync org). |
 | Candidate ingestion | Fix terminal-stage logic per actual Workable stage values; fix email extraction per actual candidate payload shape from W2 |
 | Candidates page UX | Improve role selector, application counts, job spec preview, and interview focus visibility |
 
-### 9.6) QA and testing requirements
+### 9.7) QA and testing requirements
 
 - [ ] **Q1** Use sampatel@deeplight.ae org (existing Workable keys) for all live QA
 - [ ] **Q2** Run diagnostic script before and after each sync; diff outputs
@@ -376,7 +384,7 @@ Before further code changes, run diagnostic and API inspection:
 - [x] **Q4** Add integration test (`TestWorkableSyncIntegration`) that mocks Workable API; asserts roles, applications, job_spec_text (skipped in default run due to sqlite concurrency)
 - [x] **Q5** Document Workable API response shapes in `docs/WORKABLE_API_RESPONSE_SAMPLES.md` for future maintenance
 
-### 9.7) Definition of done for Workable + Candidates UX
+### 9.8) Definition of done for Workable + Candidates UX
 
 - [ ] Sync completes in reasonable time (~100s for 1000 candidates)
 - [ ] Progress UI shows roles/candidates counts incrementing during sync

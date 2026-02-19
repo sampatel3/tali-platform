@@ -250,6 +250,19 @@ def workable_sync_status(
             db.commit()
             started_at = None
     sync_in_progress = started_at is not None
+    db_roles_count = (
+        db.query(Role)
+        .filter(Role.organization_id == org.id, Role.deleted_at.is_(None))
+        .count()
+    )
+    db_applications_count = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.organization_id == org.id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .count()
+    )
     out = {
         "workable_connected": bool(org.workable_connected),
         "workable_last_sync_at": org.workable_last_sync_at,
@@ -257,6 +270,8 @@ def workable_sync_status(
         "workable_last_sync_summary": org.workable_last_sync_summary or {},
         "workable_sync_progress": org.workable_sync_progress or {},
         "sync_in_progress": sync_in_progress,
+        "db_roles_count": db_roles_count,
+        "db_applications_count": db_applications_count,
     }
     if include_diagnostic:
         diag = _run_workable_diagnostic(org)
