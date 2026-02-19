@@ -33,7 +33,10 @@ def _strip_html(html: str) -> str:
     # Block elements to newlines (order matters)
     text = re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</tr>", "\n", text, flags=re.IGNORECASE)
+    text = re.sub(r"<th[^>]*>", " **", text, flags=re.IGNORECASE)
+    text = re.sub(r"</th>", "** | ", text, flags=re.IGNORECASE)
     text = re.sub(r"<td[^>]*>", " | ", text, flags=re.IGNORECASE)
+    text = re.sub(r"</td>", " ", text, flags=re.IGNORECASE)
     text = re.sub(r"</p>", "\n\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</div>", "\n", text, flags=re.IGNORECASE)
     text = re.sub(r"</li>", "\n", text, flags=re.IGNORECASE)
@@ -208,11 +211,11 @@ def _candidate_email(payload: dict) -> str | None:
                         return e
                 elif isinstance(item, str) and (e := _valid_email(item)):
                     return e
-    # Nested objects
-    for obj_key in ("contact", "profile", "info", "personal_info"):
+    # Nested objects (contact_info common in Workable API)
+    for obj_key in ("contact", "profile", "info", "personal_info", "contact_info", "details"):
         obj = payload.get(obj_key)
         if isinstance(obj, dict):
-            for k in ("email", "email_address", "primary_email"):
+            for k in ("email", "email_address", "primary_email", "work_email"):
                 if (e := _valid_email(obj.get(k))):
                     return e
     return None
@@ -403,6 +406,11 @@ class WorkableSyncService:
                     org.workable_sync_progress = dict(summary)
                     db.commit()
                     candidates = self._list_job_candidates_for_job(job=job, role=role)
+                    if not candidates:
+                        logger.info(
+                            "list_job_candidates returned 0 for job shortcode=%s",
+                            job.get("shortcode"),
+                        )
                     job_title = (job.get("title") or job.get("shortcode") or "job")[:60]
                     logger.info(
                         "Workable job shortcode=%s title=%s candidates=%s",
@@ -423,9 +431,10 @@ class WorkableSyncService:
                         summary["current_step"] = "syncing_candidate"
                         summary["current_candidate_index"] = f"{idx + 1}/{total_candidates}" if total_candidates else str(idx + 1)
                         summary["last_request"] = f"syncing candidate {cid}"
-                        # Commit progress every candidate so UI shows live updates
                         org.workable_sync_progress = dict(summary)
-                        db.commit()
+                        # Commit every 5 candidates to reduce DB load while keeping UI responsive
+                        if (idx + 1) % 5 == 0 or idx == 0:
+                            db.commit()
                         try:
                             synced = self._sync_candidate_for_role(
                                 db=db,
@@ -637,10 +646,20 @@ class WorkableSyncService:
             or ""
         )
         if _is_terminal_candidate(candidate_payload) or _is_terminal_candidate(candidate_ref):
+            logger.debug(
+                "Skipping candidate id=%s (terminal stage: %s)",
+                candidate_id,
+                candidate_payload.get("stage") or candidate_payload.get("stage_name") or candidate_ref.get("stage"),
+            )
             return counters
 
         email = _candidate_email(candidate_payload) or _candidate_email(candidate_ref)
         if not email:
+            logger.debug(
+                "Skipping candidate id=%s (no email); payload keys=%s",
+                candidate_id,
+                list(candidate_payload.keys())[:20] if candidate_payload else [],
+            )
             return counters
 
         candidate = (

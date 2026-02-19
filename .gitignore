@@ -23,4 +23,5 @@ venv/
 backend/uploads/
 test.db
 test_mig.db
+file:taalitest*
 backend/.env

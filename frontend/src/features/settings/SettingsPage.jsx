@@ -250,7 +250,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         const s = data.workable_last_sync_summary || {};
         const msg = Array.isArray(s.errors) && s.errors.length > 0
           ? `${s.errors[0]}`
-          : `Sync finished. Jobs: ${s.jobs_upserted ?? 0}, Candidates: ${s.candidates_upserted ?? 0}, CVs: ${s.cv_downloaded ?? 0}.`;
+          : `Sync finished. Roles: ${s.jobs_seen ?? 0} processed (${s.jobs_upserted ?? 0} new), Candidates: ${s.candidates_seen ?? 0} processed (${s.candidates_upserted ?? 0} new).`;
         showToast(msg, (data.workable_last_sync_status || '').toLowerCase() === 'success' ? 'success' : 'info');
       }
     };

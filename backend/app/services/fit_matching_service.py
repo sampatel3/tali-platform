@@ -165,12 +165,20 @@ async def calculate_cv_job_match(
         }
 
     except Exception as e:
-        logger.error("CV-job match analysis failed: %s", e)
+        err_msg = str(e)
+        logger.error(
+            "CV-job match analysis failed: %s (type=%s). Check ANTHROPIC_API_KEY and CLAUDE_SCORING_MODEL.",
+            err_msg,
+            type(e).__name__,
+        )
         return {
             "cv_job_match_score": None,
             "skills_match": None,
             "experience_relevance": None,
-            "match_details": {"error": str(e)},
+            "match_details": {
+                "error": err_msg[:500],
+                "hint": "Verify ANTHROPIC_API_KEY is set and CLAUDE_SCORING_MODEL is valid (e.g. claude-3-5-haiku-latest).",
+            },
         }
 
 

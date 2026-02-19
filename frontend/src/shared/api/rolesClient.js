@@ -31,5 +31,7 @@ export const roles = {
   enrichApplication: (applicationId) => api.post(`/applications/${applicationId}/enrich`),
   batchScore: (roleId) => api.post(`/roles/${roleId}/batch-score`),
   batchScoreStatus: (roleId) => api.get(`/roles/${roleId}/batch-score/status`),
+  fetchCvs: (roleId) => api.post(`/roles/${roleId}/fetch-cvs`),
+  fetchCvsStatus: (roleId) => api.get(`/roles/${roleId}/fetch-cvs/status`),
   createAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments`, data),
 };

@@ -58,6 +58,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [inviteDraft, setInviteDraft] = useState(null);
   const [cvSidebarApplicationId, setCvSidebarApplicationId] = useState(null);
   const [batchScoring, setBatchScoring] = useState(null);
+  const [fetchCvsProgress, setFetchCvsProgress] = useState(null);
 
   const selectedRole = useMemo(
     () => roles.find((role) => String(role.id) === String(selectedRoleId)) || null,
@@ -397,6 +398,36 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
   }, [rolesApi, showToast]);
 
+  const handleFetchCvs = useCallback(async () => {
+    if (!rolesApi?.fetchCvs || !selectedRoleId) return;
+    try {
+      await rolesApi.fetchCvs(selectedRoleId);
+      setFetchCvsProgress({ total: 0, fetched: 0, status: 'running' });
+
+      const poll = setInterval(async () => {
+        try {
+          const statusRes = await rolesApi.fetchCvsStatus(selectedRoleId);
+          const s = statusRes?.data || {};
+          setFetchCvsProgress({ total: s.total || 0, fetched: s.fetched || 0, status: s.status || 'running' });
+          if (s.status === 'completed' || s.status === 'failed' || s.status === 'idle') {
+            clearInterval(poll);
+            setFetchCvsProgress(null);
+            loadRoleContext(selectedRoleId);
+            if (s.status === 'completed') {
+              showToast(`Fetched ${s.fetched || 0} CVs from Workable.`, 'success');
+            }
+          }
+        } catch {
+          clearInterval(poll);
+          setFetchCvsProgress(null);
+        }
+      }, 3000);
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to start CV fetch.'), 'error');
+      setFetchCvsProgress(null);
+    }
+  }, [rolesApi, selectedRoleId, loadRoleContext, showToast]);
+
   const handleBatchScore = useCallback(async () => {
     if (!rolesApi?.batchScore || !selectedRoleId) return;
     try {
@@ -623,6 +654,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   onEditRole={() => handleOpenRoleSheet('edit')}
                   batchScoring={batchScoring}
                   onBatchScore={handleBatchScore}
+                  onFetchCvs={rolesApi?.fetchCvs ? handleFetchCvs : null}
+                  fetchCvsProgress={fetchCvsProgress}
                 />
                 {loadingTasks ? (
                   <Panel className="px-4 py-3 text-sm text-gray-600 bg-[#faf8ff]">

@@ -502,6 +502,7 @@ def _try_fetch_cv_from_workable(
 
 # In-memory progress store keyed by role_id
 _batch_score_progress: dict[int, dict] = {}
+_batch_fetch_cvs_progress: dict[int, dict] = {}
 
 
 def _run_batch_score(role_id: int, org_id: int) -> None:
@@ -647,6 +648,131 @@ def batch_score_status(
         "status": progress.get("status", "idle"),
         "total": progress.get("total", 0),
         "scored": progress.get("scored", 0),
+        "errors": progress.get("errors", 0),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Batch CV fetch (from Workable, no scoring)
+# ---------------------------------------------------------------------------
+
+
+def _run_batch_fetch_cvs(role_id: int, org_id: int) -> None:
+    """Background worker: fetch CVs from Workable for applications missing cv_text."""
+    db = SessionLocal()
+    try:
+        org = db.query(Organization).filter(Organization.id == org_id).first()
+        if not org:
+            return
+        role = db.query(Role).filter(Role.id == role_id, Role.organization_id == org_id).first()
+        if not role:
+            return
+
+        apps = (
+            db.query(CandidateApplication)
+            .options(joinedload(CandidateApplication.candidate))
+            .filter(
+                CandidateApplication.role_id == role_id,
+                CandidateApplication.organization_id == org_id,
+                CandidateApplication.deleted_at.is_(None),
+                CandidateApplication.source == "workable",
+            )
+            .all()
+        )
+
+        apps_to_fetch = [a for a in apps if not (a.cv_text or "").strip()]
+        total = len(apps_to_fetch)
+        progress = _batch_fetch_cvs_progress.get(role_id, {})
+        progress.update({"total": total, "fetched": 0, "errors": 0, "status": "running"})
+        _batch_fetch_cvs_progress[role_id] = progress
+
+        for idx, app in enumerate(apps_to_fetch):
+            try:
+                if not (app.cv_text or "").strip():
+                    if app.candidate and (app.candidate.cv_text or "").strip():
+                        app.cv_file_url = app.candidate.cv_file_url
+                        app.cv_filename = app.candidate.cv_filename
+                        app.cv_text = app.candidate.cv_text
+                        app.cv_uploaded_at = app.candidate.cv_uploaded_at
+                    elif app.source == "workable":
+                        _try_fetch_cv_from_workable(app, app.candidate, db, org)
+                progress["fetched"] = idx + 1
+                _batch_fetch_cvs_progress[role_id] = progress
+                if (idx + 1) % 3 == 0:
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+            except Exception:
+                logger.exception("Batch fetch CV failed for application_id=%s", app.id)
+                progress["errors"] = progress.get("errors", 0) + 1
+                progress["fetched"] = idx + 1
+                _batch_fetch_cvs_progress[role_id] = progress
+
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        progress["status"] = "completed"
+        _batch_fetch_cvs_progress[role_id] = progress
+    except Exception:
+        logger.exception("Batch fetch CVs failed for role_id=%s", role_id)
+        progress = _batch_fetch_cvs_progress.get(role_id, {})
+        progress["status"] = "failed"
+        _batch_fetch_cvs_progress[role_id] = progress
+    finally:
+        db.close()
+
+
+@router.post("/roles/{role_id}/fetch-cvs")
+def batch_fetch_cvs_role(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Fetch CVs from Workable for all applications in this role that don't have CV text yet."""
+    role = get_role(role_id, current_user.organization_id, db)
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if not org or not org.workable_connected:
+        raise HTTPException(status_code=400, detail="Workable is not connected")
+
+    existing = _batch_fetch_cvs_progress.get(role_id, {})
+    if existing.get("status") == "running":
+        return {"status": "already_running", "total": existing.get("total", 0), "fetched": existing.get("fetched", 0)}
+
+    to_fetch = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.role_id == role_id,
+            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.source == "workable",
+        )
+        .all()
+    )
+    to_fetch_count = sum(1 for a in to_fetch if not (a.cv_text or "").strip())
+    thread = threading.Thread(
+        target=_run_batch_fetch_cvs,
+        args=(role_id, current_user.organization_id),
+        daemon=True,
+    )
+    thread.start()
+    return {"status": "started", "total": to_fetch_count}
+
+
+@router.get("/roles/{role_id}/fetch-cvs/status")
+def batch_fetch_cvs_status(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Poll batch CV fetch progress for a role."""
+    get_role(role_id, current_user.organization_id, db)
+    progress = _batch_fetch_cvs_progress.get(role_id, {})
+    return {
+        "status": progress.get("status", "idle"),
+        "total": progress.get("total", 0),
+        "fetched": progress.get("fetched", 0),
         "errors": progress.get("errors", 0),
     }
 

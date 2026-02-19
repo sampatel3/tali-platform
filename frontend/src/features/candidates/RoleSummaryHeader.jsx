@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { BriefcaseBusiness, ChevronDown, ChevronUp, FileText, Loader2, Sparkles } from 'lucide-react';
+import { BriefcaseBusiness, ChevronDown, ChevronUp, FileText, Loader2, Sparkles, Download } from 'lucide-react';
 
 import {
   Badge,
@@ -9,7 +9,7 @@ import {
   Panel,
 } from '../../shared/ui/TaaliPrimitives';
 
-export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, onBatchScore }) => {
+export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, onBatchScore, onFetchCvs, fetchCvsProgress }) => {
   if (!role) return null;
   const focus = role.interview_focus || null;
   const focusQuestions = Array.isArray(focus?.questions) ? focus.questions.slice(0, 3) : [];
@@ -59,6 +59,27 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, o
           {rolePreview ? <p className="text-sm text-[var(--taali-muted)]">{rolePreview}</p> : null}
         </div>
         <div className="flex items-center gap-2">
+          {onFetchCvs ? (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={onFetchCvs}
+              disabled={Boolean(fetchCvsProgress)}
+            >
+              {fetchCvsProgress ? (
+                <>
+                  <Loader2 size={14} className="animate-spin" />
+                  Fetching CVs {fetchCvsProgress.fetched}/{fetchCvsProgress.total}...
+                </>
+              ) : (
+                <>
+                  <Download size={14} />
+                  Fetch all CVs
+                </>
+              )}
+            </Button>
+          ) : null}
           {onBatchScore ? (
             <Button
               type="button"

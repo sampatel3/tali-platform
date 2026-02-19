@@ -13,8 +13,8 @@ import httpx
 logger = logging.getLogger(__name__)
 
 # Workable: 10 requests per 10 seconds (https://workable.readme.io/reference/rate-limits)
-# Use 0.5s to allow ~2 req/sec while staying under limit for bursts
-WORKABLE_THROTTLE_SEC = 0.5
+# Use 0.3s to allow ~3 req/sec while staying under limit for bursts
+WORKABLE_THROTTLE_SEC = 0.3
 WORKABLE_429_RETRY_AFTER_SEC = 11
 WORKABLE_JOBS_LIMIT = 100
 
@@ -128,7 +128,7 @@ class WorkableService:
         return []
 
     def list_open_jobs(self) -> list[dict]:
-        """Fetch all open/published jobs, with pagination and multiple state fallbacks."""
+        """Fetch all open/published jobs, with full pagination across all states."""
         seen_shortcodes: set[str] = set()
         all_jobs: list[dict] = []
         params_list = [
@@ -148,7 +148,7 @@ class WorkableService:
                 continue
             while True:
                 jobs = self._parse_jobs_response(payload)
-                if not jobs and isinstance(payload, dict) and not all_jobs:
+                if not jobs and isinstance(payload, dict) and not all_jobs and i == 0:
                     logger.info(
                         "Workable /jobs state=%s returned 0 jobs (response keys=%s)",
                         params.get("state", "none"),
@@ -167,8 +167,7 @@ class WorkableService:
                     break
                 self._throttle()
                 payload = self._get_next_page(next_url)
-            if all_jobs:
-                return all_jobs
+            # Do not return early: aggregate jobs from all states
         return all_jobs
 
     def verify_access(self) -> None:
@@ -225,7 +224,12 @@ class WorkableService:
                 payload = self._request_optional("GET", path, params=params)
 
             if isinstance(payload, dict):
-                batch = payload.get("candidates") or payload.get("data") or payload.get("results")
+                batch = (
+                    payload.get("candidates")
+                    or payload.get("data")
+                    or payload.get("results")
+                    or payload.get("applicants")
+                )
                 paging = payload.get("paging") if isinstance(payload.get("paging"), dict) else {}
                 next_url = paging.get("next") if isinstance(paging, dict) else None
             elif isinstance(payload, list):

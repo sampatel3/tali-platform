@@ -19,6 +19,49 @@ const SOCIAL_ICONS = {
   twitter: Twitter,
 };
 
+const CV_SECTION_HEADERS = /^(Professional\s+)?Experience|Work\s+(?:History|Experience)|Education|Skills|Summary|Objective|Qualifications|Certifications|Projects|Achievements|Languages$/i;
+
+function formatCvWithSections(text) {
+  if (!text || typeof text !== 'string') return null;
+  const trimmed = text.trim();
+  if (!trimmed) return null;
+  const lines = trimmed.split(/\n/);
+  const elements = [];
+  let currentBlock = [];
+  const flushBlock = (isHeader = false) => {
+    const block = currentBlock.join('\n').trim();
+    if (block) {
+      if (isHeader) {
+        elements.push(
+          <h4 key={elements.length} className="text-sm font-semibold text-[var(--taali-text)] mt-4 mb-2 first:mt-0 border-b border-[var(--taali-border-muted)] pb-1">
+            {block}
+          </h4>
+        );
+      } else {
+        elements.push(
+          <div key={elements.length} className="whitespace-pre-wrap text-sm leading-relaxed text-gray-800">
+            {block}
+          </div>
+        );
+      }
+    }
+    currentBlock = [];
+  };
+  for (const line of lines) {
+    const trimmedLine = line.trim();
+    if (CV_SECTION_HEADERS.test(trimmedLine)) {
+      flushBlock(false);
+      currentBlock.push(line);
+      flushBlock(true);
+    } else {
+      currentBlock.push(line);
+    }
+  }
+  flushBlock(false);
+  if (elements.length === 0) return <span className="whitespace-pre-wrap block">{trimmed}</span>;
+  return <div className="space-y-2">{elements}</div>;
+}
+
 export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWorkable, fetchingCvApplicationId }) {
   const panelRef = useRef(null);
   const previousFocusRef = useRef(null);
@@ -172,8 +215,8 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
                 <FileText size={14} />
                 CV
               </div>
-              <div className="rounded-lg border border-[var(--taali-border-muted)] bg-white p-4 text-sm leading-relaxed text-gray-800 whitespace-pre-wrap font-[inherit]">
-                {data.cv_text}
+              <div className="rounded-lg border border-[var(--taali-border-muted)] bg-white p-4 font-[inherit]">
+                {formatCvWithSections(data.cv_text)}
               </div>
             </div>
           ) : data ? (

@@ -294,9 +294,9 @@ railway run bash -c 'cd backend && .venv/bin/python ../scripts/seed_tasks_db.py'
 
 ## 9) Workable Integration + Candidates UI/UX (CRITICAL — NOT YET RESOLVED)
 
-> **Status:** OPEN — Issues persist after multiple fix attempts
+> **Status:** Hardening in progress — branch `feat/workable-integration-hardening`
 > **Test user:** sampatel@deeplight.ae (use org’s Workable credentials for QA)
-> **Last attempt:** 2026-02-13 — throttle, job details skip, candidate ingestion, job spec formatting, interview focus, tests
+> **Last implementation:** 2026-02-19 — comprehensive hardening (see 9.2)
 
 ### 9.1) Issues raised in chat (all still unresolved)
 
@@ -311,17 +311,16 @@ railway run bash -c 'cd backend && .venv/bin/python ../scripts/seed_tasks_db.py'
 | 7 | Candidates not brought in | Sync doesn’t bring in candidates or brings far fewer than expected |
 | 8 | Candidates page not informative | Data presentation on Candidates page is poor for recruiter workflow |
 
-### 9.2) What was executed (code-complete; live verification pending)
+### 9.2) Hardening fixes (2026-02-19)
 
-- **Backend sync_service.py:** Throttle 0.5s, conditional get_job_details skip, relaxed terminal stage logic, expanded email extraction (primary_email, emails list, info, personal_info), candidates `data`/`results` fallback, job spec formatting for nested structures (tables, lists, spans), role `workable_job_id` prefers shortcode, **progress committed after every candidate** (was batch)
-- **Backend service.py:** Throttle 0.5s, candidate batch keys `data`/`results`
-- **Frontend RoleSummaryHeader.jsx:** `job_spec_text` fallback, `specContent` from description || job_spec_text, expand spec by default when content exists
-- **Frontend SettingsPage.jsx:** Sync progress shows `jobs_seen`/`candidates_seen`; poll interval 2.5s, initial delay 1.5s
-- **Backend roles_management_routes.py:** Set `role.description` on job spec upload
-- **Backend role_support.py + schemas/role.py:** Added `job_spec_text` to RoleResponse
-- **Tests:** `test_workable_sync_service.py` (21 unit tests), `scripts/workable_qa_diagnostic.py`
-
-**Result:** Code changes applied. Live QA with sampatel@deeplight.ae required to verify in production.
+- **service.py:** Throttle 0.3s, jobs aggregate all states, candidates `applicants` fallback
+- **sync_service.py:** Email extraction (contact_info, details), batch commits every 5, job spec th/td, logging
+- **applications_routes.py:** POST /roles/{id}/fetch-cvs, fit_matching error handling
+- **fit_matching_service.py:** Error logging with type and hint
+- **SettingsPage.jsx:** Completion message uses processed counts, no cv_downloaded
+- **CandidateCvSidebar.jsx:** CV section formatting (Experience, Education, Skills)
+- **RoleSummaryHeader.jsx:** Fetch all CVs button
+- **CandidatesPage.jsx, rolesClient.js:** handleFetchCvs, fetchCvs, fetchCvsStatus
 
 ### 9.3) Root-cause investigation checklist (execute in order)
 
