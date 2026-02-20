@@ -144,19 +144,19 @@ export const AssessmentTerminal = ({
 
   return (
     <div className="h-full flex flex-col bg-black text-white">
-      <div className="border-b-2 border-black bg-[#0f0f0f] px-3 py-2 flex items-center justify-between gap-3">
+      <div className="border-b border-white/10 bg-[#0f141d] px-3 py-2 flex items-center justify-between gap-3">
         <div className="flex items-center gap-2">
           <span className="font-mono text-xs font-bold uppercase tracking-wide">
             Claude Code CLI
           </span>
-          <span className={`font-mono text-[11px] px-2 py-0.5 border ${connected ? 'border-green-700 text-green-400' : 'border-amber-700 text-amber-300'}`}>
+          <span className={`font-mono text-[11px] px-2 py-0.5 border ${connected ? 'border-emerald-500/50 text-emerald-300 bg-emerald-500/10' : 'border-amber-500/50 text-amber-300 bg-amber-500/10'}`}>
             {connectionBadge}
           </span>
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className="border border-red-700 px-2 py-1 font-mono text-[11px] text-red-200 hover:bg-red-900/40 disabled:opacity-50"
+            className="border border-red-500/60 px-2 py-1 font-mono text-[11px] text-red-200 hover:bg-red-900/30 disabled:opacity-50"
             onClick={onStop}
             disabled={stopping}
           >
@@ -183,6 +183,11 @@ export const AssessmentTerminal = ({
           const text = event.clipboardData?.getData('text');
           if (!text) return;
           event.preventDefault();
+          const term = terminalRef.current;
+          if (term && typeof term.paste === 'function') {
+            term.paste(text);
+            return;
+          }
           onInput?.(text);
         }}
       />

@@ -6,6 +6,7 @@ import AssessmentPage from '../../features/assessment_runtime/AssessmentPage';
 const mockSubmit = vi.fn();
 const mockTerminalStatus = vi.fn();
 const mockTerminalStop = vi.fn();
+const mockClaude = vi.fn();
 
 vi.mock('../../shared/api', () => ({
   assessments: {
@@ -13,6 +14,7 @@ vi.mock('../../shared/api', () => ({
     execute: vi.fn(),
     terminalStatus: (...args) => mockTerminalStatus(...args),
     terminalStop: (...args) => mockTerminalStop(...args),
+    claude: (...args) => mockClaude(...args),
     terminalWsUrl: (id, token) => `ws://localhost/api/v1/assessments/${id}/terminal/ws?token=${token}`,
     submit: (...args) => mockSubmit(...args),
   },
@@ -38,6 +40,7 @@ describe('AssessmentPage tracking metadata', () => {
     mockTerminalStatus.mockResolvedValue({ data: { state: 'running' } });
     mockTerminalStop.mockResolvedValue({ data: { success: true } });
     mockSubmit.mockResolvedValue({ data: { success: true } });
+    mockClaude.mockResolvedValue({ data: { success: true, content: 'ok' } });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
   });
 
@@ -152,7 +155,7 @@ describe('AssessmentPage tracking metadata', () => {
     render(<AssessmentPage token="tok4" startData={startData} />);
 
     expect(await screen.findByRole('button', { name: /Instructions/i })).toBeInTheDocument();
-    expect(screen.getByText(/Use Claude CLI in the terminal for guidance/i)).toBeInTheDocument();
+    expect(screen.getByText(/Use the Ask Claude box for Cursor-style help with repo context/i)).toBeInTheDocument();
     expect(screen.getByText(/Workspace clone command/i)).toBeInTheDocument();
     expect(screen.queryByText('exploration')).not.toBeInTheDocument();
     expect(screen.queryByText(/should never render/i)).not.toBeInTheDocument();
@@ -197,7 +200,7 @@ describe('AssessmentPage tracking metadata', () => {
     expect(screen.getByText(/Read the task context and inspect repository files before editing/i)).toBeInTheDocument();
   });
 
-  it('renders terminal pane in Claude CLI mode and initializes websocket', async () => {
+  it('renders terminal toggle in Claude CLI mode and initializes websocket', async () => {
     const sentMessages = [];
     class MockWebSocket {
       static OPEN = 1;
@@ -238,6 +241,11 @@ describe('AssessmentPage tracking metadata', () => {
 
     render(<AssessmentPage token="tok-terminal" startData={startData} />);
 
+    expect(await screen.findByRole('button', { name: /Show Terminal/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('assessment-terminal')).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Show Terminal/i }));
+    });
     expect(await screen.findByTestId('assessment-terminal')).toBeInTheDocument();
     expect(screen.queryByText('send-claude')).not.toBeInTheDocument();
 
@@ -287,6 +295,11 @@ describe('AssessmentPage tracking metadata', () => {
 
     render(<AssessmentPage token="tok-terminal-demo" startData={startData} demoMode />);
 
+    expect(await screen.findByRole('button', { name: /Show Terminal/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('assessment-terminal')).not.toBeInTheDocument();
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Show Terminal/i }));
+    });
     expect(await screen.findByTestId('assessment-terminal')).toBeInTheDocument();
     expect(screen.queryByText('send-claude')).not.toBeInTheDocument();
 
@@ -318,6 +331,55 @@ describe('AssessmentPage tracking metadata', () => {
     render(<AssessmentPage token="tok9" startData={startData} />);
 
     expect(await screen.findByText(/Claude budget exhausted for this task/i)).toBeInTheDocument();
+  });
+
+  it('updates Claude credit display after prompt response', async () => {
+    const startData = {
+      assessment_id: 23,
+      token: 'tok-claude-budget',
+      time_remaining: 1200,
+      claude_budget: {
+        enabled: true,
+        limit_usd: 1,
+        used_usd: 0,
+        remaining_usd: 1,
+        tokens_used: 0,
+        is_exhausted: false,
+      },
+      task: {
+        name: 'Budget update task',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+      },
+    };
+
+    mockClaude.mockResolvedValueOnce({
+      data: {
+        success: true,
+        content: 'Use stronger filtering.',
+        claude_budget: {
+          enabled: true,
+          limit_usd: 1,
+          used_usd: 0.25,
+          remaining_usd: 0.75,
+          tokens_used: 1000,
+          is_exhausted: false,
+        },
+      },
+    });
+
+    render(<AssessmentPage token="tok-claude-budget" startData={startData} />);
+
+    expect(await screen.findByText(/Claude Credit: \$1.00 left of \$1.00/i)).toBeInTheDocument();
+
+    const promptInput = screen.getByPlaceholderText(/Ask Claude \(Cursor-style\)/i);
+    fireEvent.change(promptInput, { target: { value: 'Help me debug' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Ask Claude/i }));
+    });
+
+    await waitFor(() => expect(mockClaude).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/Claude Credit: \$0.75 left of \$1.00/i)).toBeInTheDocument();
   });
 
 });

@@ -164,6 +164,32 @@ describe('Demo flow', () => {
     });
   });
 
+  it('shows all demo tasks and starts with selected track', async () => {
+    renderApp();
+    fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
+    await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 });
+
+    expect(screen.getByRole('button', { name: /Data Platform Incident Triage and Recovery/i })).toBeInTheDocument();
+    const aiTrackButton = screen.getByRole('button', { name: /AI Feature Production Readiness Assessment/i });
+    expect(aiTrackButton).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'Jane Doe' } });
+    fireEvent.change(screen.getByLabelText('Position'), { target: { value: 'Engineering Manager' } });
+    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'jane@email.com' } });
+    fireEvent.change(screen.getByLabelText('Work email'), { target: { value: 'jane@company.com' } });
+    fireEvent.change(screen.getByLabelText('Company'), { target: { value: 'Acme' } });
+    fireEvent.change(screen.getByLabelText('Company size'), { target: { value: '51-200' } });
+
+    fireEvent.click(aiTrackButton);
+    fireEvent.click(screen.getByRole('button', { name: 'Start demo assessment' }));
+
+    await waitFor(() => {
+      expect(assessments.startDemo).toHaveBeenCalledWith(
+        expect.objectContaining({ assessment_track: 'ai_eng_super_production_launch' })
+      );
+    });
+  });
+
   it('shows demo summary after submit', async () => {
     renderApp();
     fireEvent.click(screen.getByRole('button', { name: 'Demo' }));

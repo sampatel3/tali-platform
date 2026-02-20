@@ -8,7 +8,9 @@ from app.components.integrations.workable.sync_service import (
     _is_terminal_candidate,
     _candidate_email,
     _normalize_stage_for_terminal,
+    WorkableSyncService,
 )
+from app.components.integrations.workable.service import WorkableService
 
 
 class TestStripHtml:
@@ -32,6 +34,11 @@ class TestStripHtml:
     def test_fixes_literal_backslash_n(self):
         out = _strip_html("Line1\\nLine2")
         assert "\n" in out
+
+    def test_strips_nul_characters(self):
+        out = _strip_html("<p>Hello\x00World</p>")
+        assert "\x00" not in out
+        assert "HelloWorld" in out
 
 
 class TestFormatJobSpecFromApi:
@@ -148,6 +155,133 @@ class TestNormalizeStageForTerminal:
     def test_non_terminal(self):
         assert _normalize_stage_for_terminal("screening") is None
         assert _normalize_stage_for_terminal("") is None
+
+
+class TestJobIdentifierPriority:
+    def test_shortcode_precedes_numeric_and_id(self):
+        service = WorkableSyncService(WorkableService(access_token="x", subdomain="test"))
+        job = {
+            "id": "50c5fd",
+            "shortcode": "120884740D",
+            "application_url": "https://jobs.workable.com/jobs/90000123/apply",
+        }
+        identifiers = service._job_identifiers(job)
+        assert identifiers[0] == "120884740D"
+        assert "90000123" in identifiers
+        assert identifiers[-1] == "50c5fd"
+
+
+def test_sync_includes_candidates_without_email_and_counts_upserts_on_updates(db):
+    """Workable list payloads may omit email; sync should still persist by candidate ID."""
+    from app.models.organization import Organization
+    from app.models.candidate import Candidate
+    from app.models.candidate_application import CandidateApplication
+
+    class MockClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def list_open_jobs(self):
+            return [{"id": "J1", "shortcode": "J1", "title": "Backend Engineer"}]
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            return [{"id": "cand_no_email_1", "name": "No Email Candidate", "stage": "Screening"}]
+
+        def get_job_details(self, job_identifier):
+            return {}
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    org = Organization(
+        name="No Email Org",
+        slug="no-email-org-workable-sync",
+        workable_connected=True,
+        workable_access_token="x",
+        workable_subdomain="test",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    service = WorkableSyncService(MockClient())
+    first = service.sync_org(db, org)
+    assert first["candidates_seen"] == 1
+    assert first["candidates_upserted"] == 1
+    assert first["applications_upserted"] == 1
+
+    candidate = db.query(Candidate).filter(
+        Candidate.organization_id == org.id,
+        Candidate.workable_candidate_id == "cand_no_email_1",
+    ).first()
+    assert candidate is not None
+    assert (candidate.email or "") == ""
+
+    app = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org.id,
+        CandidateApplication.candidate_id == candidate.id,
+    ).first()
+    assert app is not None
+
+    # Second run updates existing rows; upsert counters should still reflect applied upserts.
+    second = service.sync_org(db, org)
+    assert second["candidates_seen"] == 1
+    assert second["candidates_upserted"] == 1
+    assert second["applications_upserted"] == 1
+
+
+def test_sync_respects_selected_job_shortcodes(db):
+    from app.models.organization import Organization
+    from app.models.role import Role
+    from app.models.candidate_application import CandidateApplication
+
+    class MockClient(WorkableService):
+        def __init__(self):
+            super().__init__(access_token="x", subdomain="test")
+
+        def list_open_jobs(self):
+            return [
+                {"id": "J1", "shortcode": "J1", "title": "Role One"},
+                {"id": "J2", "shortcode": "J2", "title": "Role Two"},
+            ]
+
+        def list_job_candidates(self, job_identifier, *, paginate=False, max_pages=None):
+            if str(job_identifier) == "J2":
+                return [{"id": "cand_j2", "email": "j2@example.com", "name": "J2 Candidate", "stage": "Screening"}]
+            return [{"id": "cand_j1", "email": "j1@example.com", "name": "J1 Candidate", "stage": "Screening"}]
+
+        def get_job_details(self, job_identifier):
+            return {}
+
+        def extract_workable_score(self, *, candidate_payload, ratings_payload=None):
+            return None, None, None
+
+    org = Organization(
+        name="Scoped Role Org",
+        slug="scoped-role-org-workable-sync",
+        workable_connected=True,
+        workable_access_token="x",
+        workable_subdomain="test",
+    )
+    db.add(org)
+    db.commit()
+    db.refresh(org)
+
+    service = WorkableSyncService(MockClient())
+    summary = service.sync_org(db, org, selected_job_shortcodes=["J2"])
+    assert summary["jobs_seen"] == 2
+    assert summary["jobs_total"] == 1
+    assert summary["jobs_processed"] == 1
+    assert summary["selected_jobs_count"] == 1
+    assert summary["selected_jobs_applied"] == 1
+
+    roles = db.query(Role).filter(Role.organization_id == org.id).all()
+    assert len(roles) == 1
+    assert roles[0].workable_job_id == "J2"
+
+    apps = db.query(CandidateApplication).filter(CandidateApplication.organization_id == org.id).all()
+    assert len(apps) == 1
+    assert apps[0].workable_candidate_id == "cand_j2"
 
 
 @pytest.mark.skip(reason="Uses sync commits; sqlite 'database is locked' when run in parallel")

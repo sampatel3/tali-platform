@@ -37,8 +37,8 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     # Model for assessment terminal, chat, and general use. Default Haiku for cost/debugging.
     CLAUDE_MODEL: str = "claude-3-5-haiku-latest"
-    # Model for CV-job match (TAALI score), interview focus, scoring. Default Haiku; override with CLAUDE_SCORING_MODEL if needed.
-    CLAUDE_SCORING_MODEL: str = "claude-3-5-haiku-latest"
+    # Legacy compatibility only: when set, must match CLAUDE_MODEL.
+    CLAUDE_SCORING_MODEL: str = ""
     MAX_TOKENS_PER_RESPONSE: int = 1024
     # Terminal-native Claude Code runtime
     ASSESSMENT_TERMINAL_ENABLED: bool = True
@@ -73,12 +73,25 @@ class Settings(BaseSettings):
 
     @property
     def resolved_claude_scoring_model(self) -> str:
-        """Model for CV-job match (TAALI score). Defaults to Haiku; use CLAUDE_SCORING_MODEL to override.
-        Never falls back to CLAUDE_MODEL so production can use a different/legacy model without breaking scoring."""
+        """Scoring model resolver. Uses the same effective model as CLAUDE_MODEL."""
         scoring = (self.CLAUDE_SCORING_MODEL or "").strip()
-        if scoring:
-            return scoring
-        return "claude-3-5-haiku-latest"
+        resolved = self.resolved_claude_model
+        if scoring and scoring != resolved:
+            raise ValueError(
+                "CLAUDE_SCORING_MODEL is deprecated and must match CLAUDE_MODEL when set."
+            )
+        return resolved
+
+    @property
+    def active_claude_model(self) -> str:
+        return self.resolved_claude_model
+
+    def model_post_init(self, __context) -> None:
+        scoring = (self.CLAUDE_SCORING_MODEL or "").strip()
+        if scoring and scoring != self.resolved_claude_model:
+            raise ValueError(
+                "CLAUDE_SCORING_MODEL is deprecated and must match CLAUDE_MODEL when set."
+            )
 
     # GitHub assessment repository integration
     GITHUB_TOKEN: str = ""

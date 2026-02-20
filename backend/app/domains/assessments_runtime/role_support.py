@@ -47,7 +47,19 @@ def get_application(application_id: int, org_id: int, db: Session) -> CandidateA
     return app
 
 
-def role_to_response(role: Role) -> RoleResponse:
+def role_to_response(
+    role: Role,
+    *,
+    tasks_count: int | None = None,
+    applications_count: int | None = None,
+) -> RoleResponse:
+    if tasks_count is None:
+        tasks_count = len(role.tasks or [])
+    if applications_count is None:
+        applications_count = len(
+            [a for a in (role.applications or []) if getattr(a, "deleted_at", None) is None]
+        )
+
     return RoleResponse(
         id=role.id,
         organization_id=role.organization_id,
@@ -62,8 +74,8 @@ def role_to_response(role: Role) -> RoleResponse:
         job_spec_present=role_has_job_spec(role),
         interview_focus=role.interview_focus,
         interview_focus_generated_at=role.interview_focus_generated_at,
-        tasks_count=len(role.tasks or []),
-        applications_count=len([a for a in (role.applications or []) if getattr(a, "deleted_at", None) is None]),
+        tasks_count=tasks_count,
+        applications_count=applications_count,
         created_at=role.created_at,
         updated_at=role.updated_at,
     )

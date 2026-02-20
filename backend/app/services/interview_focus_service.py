@@ -7,6 +7,10 @@ import logging
 import re
 from typing import Any, Dict, Optional
 
+from ..components.integrations.claude.model_fallback import (
+    candidate_models_for,
+    is_model_not_found_error,
+)
 from ..platform.config import settings
 
 logger = logging.getLogger("taali.interview_focus")
@@ -89,7 +93,8 @@ def generate_interview_focus_sync(
         from anthropic import Anthropic
 
         client = Anthropic(api_key=api_key)
-        resolved_model = model or settings.resolved_claude_scoring_model
+        resolved_model = (model or settings.resolved_claude_scoring_model).strip()
+        model_candidates = candidate_models_for(resolved_model)
         prompt = INTERVIEW_FOCUS_PROMPT.format(job_spec_text=job_spec_text[:5000])
 
         logger.info(
@@ -98,13 +103,41 @@ def generate_interview_focus_sync(
             resolved_model,
         )
 
-        response = client.messages.create(
-            model=resolved_model,
-            max_tokens=1400,
-            system="You are an expert recruiter. Respond ONLY with valid JSON.",
-            messages=[{"role": "user", "content": prompt}],
-        )
-        usage_ledger = _build_usage_ledger(response=response, model=resolved_model)
+        response = None
+        model_used = resolved_model
+        last_model_error: Exception | None = None
+        for candidate_model in model_candidates:
+            try:
+                response = client.messages.create(
+                    model=candidate_model,
+                    max_tokens=1400,
+                    system="You are an expert recruiter. Respond ONLY with valid JSON.",
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                model_used = candidate_model
+                if candidate_model != resolved_model:
+                    logger.warning(
+                        "Fell back to Claude model=%s after primary model=%s was unavailable",
+                        candidate_model,
+                        resolved_model,
+                    )
+                break
+            except Exception as exc:
+                if is_model_not_found_error(exc):
+                    last_model_error = exc
+                    logger.warning(
+                        "Claude model unavailable for interview focus (model=%s): %s",
+                        candidate_model,
+                        exc,
+                    )
+                    continue
+                raise
+        if response is None:
+            if last_model_error is not None:
+                raise last_model_error
+            raise RuntimeError("Claude call failed before receiving a response")
+
+        usage_ledger = _build_usage_ledger(response=response, model=model_used)
 
         parsed = _parse_json(response.content[0].text)
         if not isinstance(parsed, dict):

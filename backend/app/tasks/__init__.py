@@ -6,6 +6,7 @@ from .assessment_tasks import (
     cleanup_expired_assessments,
     sync_workable_orgs,
 )
+from .workable_tasks import run_workable_sync_run_task
 
 __all__ = [
     "celery_app",
@@ -14,4 +15,5 @@ __all__ = [
     "post_results_to_workable",
     "cleanup_expired_assessments",
     "sync_workable_orgs",
+    "run_workable_sync_run_task",
 ]

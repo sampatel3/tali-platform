@@ -184,14 +184,17 @@ def _sync_template_task_specs_if_needed(db: Session) -> None:
         for task in db.query(Task).filter(Task.is_template == True, Task.organization_id == None).all()  # noqa: E712,E711
         if task.task_key
     }
+    spec_task_keys: set[str] = set()
     created = 0
     updated = 0
+    deactivated = 0
 
     try:
         for spec in specs:
             task_key = spec.get("task_id")
             if not task_key:
                 continue
+            spec_task_keys.add(task_key)
 
             payload = _build_template_task_payload(spec)
             existing = existing_templates.get(task_key)
@@ -208,9 +211,22 @@ def _sync_template_task_specs_if_needed(db: Session) -> None:
             if has_changes:
                 updated += 1
 
-        if created or updated:
+        # Soft-delete stale templates removed from tasks/*.json
+        for task_key, task in existing_templates.items():
+            if task_key in spec_task_keys:
+                continue
+            if task.is_active:
+                task.is_active = False
+                deactivated += 1
+
+        if created or updated or deactivated:
             db.commit()
-            logger.info("Task template sync complete: created=%d updated=%d", created, updated)
+            logger.info(
+                "Task template sync complete: created=%d updated=%d deactivated=%d",
+                created,
+                updated,
+                deactivated,
+            )
     except Exception:
         db.rollback()
         logger.exception("Task template sync failed during DB update.")
@@ -280,9 +296,12 @@ def list_tasks(
     current_user: User = Depends(get_current_user),
 ):
     _sync_template_task_specs_if_needed(db)
-    tasks = db.query(Task).filter(
-        (Task.organization_id == current_user.organization_id) | (Task.is_template == True)
-    ).all()
+    tasks = (
+        db.query(Task)
+        .filter(Task.is_active == True)  # noqa: E712
+        .filter((Task.organization_id == current_user.organization_id) | (Task.is_template == True))
+        .all()
+    )
     return [_serialize_task_response(task) for task in tasks]
 
 

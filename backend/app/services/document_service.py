@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict
@@ -14,6 +15,34 @@ logger = logging.getLogger("taali.documents")
 
 ALLOWED_EXTENSIONS = {"pdf", "docx", "txt"}
 MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
+_UNSAFE_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+
+
+def sanitize_text_for_storage(value: str | None) -> str:
+    """Strip NUL and non-printable control characters unsafe for DB text fields."""
+    if value is None:
+        return ""
+    text = str(value)
+    if not text:
+        return ""
+    return _UNSAFE_CONTROL_CHARS_RE.sub("", text)
+
+
+def sanitize_json_for_storage(value: Any) -> Any:
+    """Recursively sanitize strings inside JSON-like payloads."""
+    if isinstance(value, str):
+        return sanitize_text_for_storage(value)
+    if isinstance(value, list):
+        return [sanitize_json_for_storage(item) for item in value]
+    if isinstance(value, tuple):
+        return [sanitize_json_for_storage(item) for item in value]
+    if isinstance(value, dict):
+        out: dict[Any, Any] = {}
+        for key, item in value.items():
+            safe_key = sanitize_text_for_storage(key) if isinstance(key, str) else key
+            out[safe_key] = sanitize_json_for_storage(item)
+        return out
+    return value
 
 
 # ---------------------------------------------------------------------------
@@ -63,11 +92,11 @@ def extract_text(content: bytes, extension: str) -> str:
     """Route to the appropriate extractor based on file extension."""
     ext = extension.lower().lstrip(".")
     if ext == "pdf":
-        return extract_text_from_pdf(content)
+        return sanitize_text_for_storage(extract_text_from_pdf(content))
     elif ext == "docx":
-        return extract_text_from_docx(content)
+        return sanitize_text_for_storage(extract_text_from_docx(content))
     elif ext == "txt":
-        return extract_text_from_txt(content)
+        return sanitize_text_for_storage(extract_text_from_txt(content))
     return ""
 
 
@@ -164,7 +193,7 @@ def process_document_upload(
     except Exception as exc:
         logger.warning("S3 upload skipped (falling back to local): %s", exc)
 
-    extracted_text = extract_text(content, ext)
+    extracted_text = sanitize_text_for_storage(extract_text(content, ext))
     text_preview = extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
 
     logger.info(

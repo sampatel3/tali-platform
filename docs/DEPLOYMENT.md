@@ -24,6 +24,28 @@ Optional:
 
 ## Backend Deployment (Railway)
 
+### Railway CLI contract (default path)
+
+Always deploy backend services through repository wrapper scripts from repo root:
+
+```bash
+./scripts/railway/check_status.sh
+./scripts/railway/deploy_backend.sh
+./scripts/railway/fetch_logs.sh resourceful-adaptation
+```
+
+Worker (if present):
+
+```bash
+RAILWAY_WORKER_SERVICE=<worker-service-name> ./scripts/railway/deploy_worker.sh
+```
+
+Why this matters:
+- Deploys are forced from `backend/` so Railway does not attempt a repo-root build.
+- Service/environment are validated before deploy.
+- This avoids `Railpack could not determine how to build app` failures caused by wrong root directory detection.
+- Manual Workable sync runs are queued to Celery when enabled, so keep the worker service deployed for durable background execution.
+
 ### 1. Create a new Railway project
 
 ```bash
@@ -77,8 +99,8 @@ See [ENV_SETUP.md](./ENV_SETUP.md) for the full variable reference.
 ### 4. Deploy
 
 ```bash
-# From repo root (backend is the service directory)
-cd backend && railway up
+# Default (from repo root)
+./scripts/railway/deploy_backend.sh
 ```
 
 Railway will detect the `railway.json` configuration and:
@@ -108,6 +130,12 @@ When `MVP_DISABLE_CELERY=False`, async tasks (assessment invitation emails, Work
 4. Add the **same environment variables** as the web service (or use Railway [shared variables](https://docs.railway.app/develop/variables#shared-variables)): at minimum `DATABASE_URL`, `REDIS_URL`, `SECRET_KEY`, `RESEND_API_KEY`, `ANTHROPIC_API_KEY`, and any keys used by your tasks.
 
 The worker uses the same Redis as the web app as the broker; no extra Redis service is needed.
+
+Deploy worker after the service is created:
+
+```bash
+RAILWAY_WORKER_SERVICE=<worker-service-name> ./scripts/railway/deploy_worker.sh
+```
 
 ---
 
@@ -200,6 +228,30 @@ Recommended policy:
 - Daily automated backups
 - 14-day retention
 - Manual pre-release snapshot for every production rollout
+
+---
+
+## Production Smoke (Test Account)
+
+Use the production test account (`sampatel@deeplight.ae`) via env vars; never commit secrets:
+
+```bash
+export TAALI_TEST_EMAIL=sampatel@deeplight.ae
+export TAALI_TEST_PASSWORD='<secure-secret>'
+export TAALI_API_BASE_URL='https://resourceful-adaptation-production.up.railway.app/api/v1'
+```
+
+Run Workable metadata sync smoke:
+
+```bash
+./scripts/qa/prod_account_workable_smoke.sh
+```
+
+Run model policy smoke (Haiku check):
+
+```bash
+EXPECTED_CLAUDE_MODEL=claude-3-5-haiku-latest ./scripts/qa/prod_model_smoke.sh
+```
 
 ---
 

@@ -26,6 +26,10 @@ export const assessments = {
     api.post(`/assessments/${id}/terminal/stop`, {}, {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
+  claude: (id, payload, assessmentToken) =>
+    api.post(`/assessments/${id}/claude`, payload, {
+      headers: { 'X-Assessment-Token': assessmentToken },
+    }),
   terminalWsUrl: (id, assessmentToken) => buildTerminalWsUrl(id, assessmentToken),
   submit: (id, finalCode, assessmentToken, metadata = {}) =>
     api.post(`/assessments/${id}/submit`, { final_code: finalCode, ...metadata }, {

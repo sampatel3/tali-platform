@@ -111,6 +111,59 @@ def _build_claude_cli_command(*, repo_root: str) -> str:
     return " ".join(shlex.quote(str(part)) for part in parts if str(part).strip())
 
 
+def _build_terminal_bootstrap_script(*, repo_root: str, cli_cmd: str) -> str:
+    home = shlex.quote(repo_root)
+    return (
+        f"export HOME={home}\n"
+        f"cd {home}\n"
+        "taali_claude() {\n"
+        "  if [ \"$#\" -eq 0 ]; then\n"
+        f"    command {cli_cmd}\n"
+        "    return $?\n"
+        "  fi\n"
+        "  case \"$1\" in\n"
+        "    -*)\n"
+        f"      command {cli_cmd} \"$@\"\n"
+        "      return $?\n"
+        "      ;;\n"
+        "  esac\n"
+        "  if [ \"$#\" -gt 1 ]; then\n"
+        f"    command {cli_cmd} -p \"$*\"\n"
+        "  else\n"
+        f"    command {cli_cmd} -p \"$1\"\n"
+        "  fi\n"
+        "}\n"
+        "taali_ask() {\n"
+        "  if [ \"$#\" -gt 0 ]; then\n"
+        "    taali_claude \"$*\"\n"
+        "    return $?\n"
+        "  fi\n"
+        "  echo 'Paste your prompt. End with a new line containing only /send.'\n"
+        "  local _taali_line\n"
+        "  local _taali_prompt=''\n"
+        "  while IFS= read -r _taali_line; do\n"
+        "    if [ \"$_taali_line\" = \"/send\" ]; then\n"
+        "      break\n"
+        "    fi\n"
+        "    if [ -n \"$_taali_prompt\" ]; then\n"
+        "      _taali_prompt=\"${_taali_prompt}\"$'\\n'\"$_taali_line\"\n"
+        "    else\n"
+        "      _taali_prompt=\"$_taali_line\"\n"
+        "    fi\n"
+        "  done\n"
+        "  if [ -z \"$(printf \"%s\" \"$_taali_prompt\" | tr -d \"[:space:]\")\" ]; then\n"
+        "    echo 'No prompt provided. Usage: claude \"question\" or ask then paste text and /send.' >&2\n"
+        "    return 2\n"
+        "  fi\n"
+        "  taali_claude \"$_taali_prompt\"\n"
+        "}\n"
+        "alias claude='taali_claude'\n"
+        "alias ask='taali_ask'\n"
+        "echo 'Claude Code CLI ready.'\n"
+        "echo 'Quick tips: use Ask Claude (Cursor-style) in UI | claude \"question\" | ask (paste multi-line, end with /send)'\n"
+    )
+
+
 def append_cli_transcript(assessment: Assessment, event_type: str, payload: dict) -> None:
     transcript = list(getattr(assessment, "cli_transcript", None) or [])
     transcript.append(
@@ -134,6 +187,19 @@ def _has_legacy_auto_exec_bootstrap(assessment: Assessment) -> bool:
             continue
         data = str(entry.get("data") or "")
         if "exec claude --permission-mode" in data:
+            return True
+    return False
+
+
+def _has_legacy_prompt_wrapper(assessment: Assessment) -> bool:
+    transcript = list(getattr(assessment, "cli_transcript", None) or [])
+    for entry in reversed(transcript[-500:]):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("event_type") or "") != "terminal_output":
+            continue
+        data = str(entry.get("data") or "")
+        if 'Claude Code CLI ready. Type: claude "<your prompt>"' in data:
             return True
     return False
 
@@ -250,7 +316,7 @@ def ensure_terminal_session(
         db.commit()
     pid = int(assessment.cli_session_pid or 0)
     if pid > 0:
-        if _has_legacy_auto_exec_bootstrap(assessment):
+        if _has_legacy_auto_exec_bootstrap(assessment) or _has_legacy_prompt_wrapper(assessment):
             try:
                 e2b_service.kill_process(sandbox, pid)
             except Exception:
@@ -351,18 +417,14 @@ def ensure_terminal_session(
 
     if cli_available:
         cli_cmd = _build_claude_cli_command(repo_root=repo_root)
+        bootstrap_script = _build_terminal_bootstrap_script(repo_root=repo_root, cli_cmd=cli_cmd)
         # Keep candidates at an interactive shell prompt and provide a guarded Claude wrapper.
         # Auto-exec into Claude can leave sessions looking frozen if the CLI is waiting silently.
-        e2b_service.send_pty_input(
-            sandbox,
-            pid,
-            (
-                f"export HOME={shlex.quote(repo_root)}\n"
-                f"cd {shlex.quote(repo_root)}\n"
-                f"taali_claude() {{ command {cli_cmd} \"$@\"; }}\n"
-                "alias claude='taali_claude'\n"
-                "echo 'Claude Code CLI ready. Type: claude \"<your prompt>\"'\n"
-            ),
+        e2b_service.send_pty_input(sandbox, pid, bootstrap_script)
+        append_cli_transcript(
+            assessment,
+            "terminal_bootstrap",
+            {"pid": pid, "version": 2},
         )
 
     db.commit()

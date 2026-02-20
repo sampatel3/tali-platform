@@ -11,8 +11,11 @@ export const organizations = {
   connectWorkable: (code) => api.post('/organizations/workable/connect', { code }),
   connectWorkableToken: ({ access_token, subdomain, read_only = true }) =>
     api.post('/organizations/workable/connect-token', { access_token, subdomain, read_only }),
-  syncWorkable: (data = {}) => api.post('/workable/sync', data),
-  getWorkableSyncStatus: () => api.get('/workable/sync/status'),
-  cancelWorkableSync: () => api.post('/workable/sync/cancel'),
+  getWorkableSyncJobs: () => api.get('/workable/sync/jobs'),
+  syncWorkable: (data = {}) => api.post('/workable/sync', { mode: 'metadata', ...data }),
+  getWorkableSyncStatus: (runId = null) => api.get('/workable/sync/status', {
+    params: runId != null ? { run_id: runId } : undefined,
+  }),
+  cancelWorkableSync: (runId = null) => api.post('/workable/sync/cancel', runId != null ? { run_id: runId } : {}),
   clearWorkableData: () => api.post('/workable/clear'),
 };

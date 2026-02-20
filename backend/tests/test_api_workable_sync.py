@@ -3,6 +3,7 @@ import time
 import pytest
 
 from app.domains.workable_sync import routes as workable_routes
+from app.components.integrations.workable import sync_runner as workable_sync_runner
 from app.models.organization import Organization
 from app.models.role import Role
 from app.models.user import User
@@ -27,19 +28,35 @@ def test_workable_sync_manual_trigger_success(client, db, monkeypatch):
     db.commit()
 
     monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", True)
 
-    def fake_sync(self, db_session, org_obj, full_resync=False):
+    def fake_sync(
+        self,
+        db_session,
+        org_obj,
+        full_resync=False,
+        run_id=None,
+        mode="metadata",
+        selected_job_shortcodes=None,
+    ):
         org_obj.workable_last_sync_status = "success"
-        org_obj.workable_last_sync_summary = {"jobs_seen": 1}
+        org_obj.workable_last_sync_summary = {
+            "jobs_seen": 1,
+            "run_id": run_id,
+            "mode": mode,
+            "selected_job_shortcodes": selected_job_shortcodes or [],
+        }
         db_session.commit()
         return {"jobs_seen": 1}
 
-    monkeypatch.setattr(workable_routes.WorkableSyncService, "sync_org", fake_sync)
+    monkeypatch.setattr(workable_sync_runner.WorkableSyncService, "sync_org", fake_sync)
 
     resp = client.post("/api/v1/workable/sync", headers=headers)
     assert resp.status_code == 200, resp.text
     payload = resp.json()
     assert payload["status"] == "started"
+    assert isinstance(payload.get("run_id"), int)
+    assert payload.get("mode") == "metadata"
     assert "message" in payload
 
     # Wait for background sync to finish (fake_sync is fast; thread may use separate session)
@@ -71,17 +88,31 @@ def test_workable_sync_status_shows_in_progress_after_start(client, db, monkeypa
     db.commit()
 
     monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", True)
 
     # Slow fake sync so we can poll while in progress
     import time
-    def slow_fake_sync(self, db_session, org_obj, full_resync=False):
+    def slow_fake_sync(
+        self,
+        db_session,
+        org_obj,
+        full_resync=False,
+        run_id=None,
+        mode="metadata",
+        selected_job_shortcodes=None,
+    ):
         time.sleep(1.0)
         org_obj.workable_last_sync_status = "success"
-        org_obj.workable_last_sync_summary = {"jobs_seen": 2}
+        org_obj.workable_last_sync_summary = {
+            "jobs_seen": 2,
+            "run_id": run_id,
+            "mode": mode,
+            "selected_job_shortcodes": selected_job_shortcodes or [],
+        }
         db_session.commit()
         return {"jobs_seen": 2}
 
-    monkeypatch.setattr(workable_routes.WorkableSyncService, "sync_org", slow_fake_sync)
+    monkeypatch.setattr(workable_sync_runner.WorkableSyncService, "sync_org", slow_fake_sync)
 
     resp = client.post("/api/v1/workable/sync", headers=headers)
     assert resp.status_code == 200
@@ -109,6 +140,7 @@ def test_workable_sync_status_shows_in_progress_after_start(client, db, monkeypa
 def test_workable_clear_soft_deletes(client, db, monkeypatch):
     """POST /workable/clear soft-deletes workable roles/apps/candidates and returns counts."""
     monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", True)
     headers, email = auth_headers(client, email="clear@example.com", organization_name="Clear Org")
     owner = db.query(User).filter(User.email == email).first()
     assert owner is not None
@@ -227,6 +259,148 @@ def test_workable_sync_status_include_diagnostic(client, db, monkeypatch):
     assert diag.get("api_reachable") is True
     assert diag["jobs"]["count"] == 1
     assert diag["candidates"]["count"] == 1
+
+
+def test_workable_sync_jobs_lists_selectable_roles(client, db, monkeypatch):
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    headers, email = auth_headers(client, email="sync-jobs@example.com", organization_name="Sync Jobs Org")
+    owner = db.query(User).filter(User.email == email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "example"
+    db.commit()
+
+    def mock_list_jobs(self):
+        return [
+            {"shortcode": "A1", "id": "100", "title": "Role A", "state": "published"},
+            {"shortcode": "B2", "id": "200", "title": "Role B", "state": "open"},
+        ]
+
+    monkeypatch.setattr(workable_routes.WorkableService, "list_open_jobs", mock_list_jobs)
+
+    resp = client.get("/api/v1/workable/sync/jobs", headers=headers)
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload.get("total") == 2
+    jobs = payload.get("jobs") or []
+    identifiers = {row.get("identifier") for row in jobs}
+    assert identifiers == {"A1", "B2"}
+
+
+def test_workable_sync_cancel_accepts_optional_run_id(client, db, monkeypatch):
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    headers, email = auth_headers(client, email="cancel-run@example.com", organization_name="Cancel Run Org")
+    owner = db.query(User).filter(User.email == email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "example"
+    db.commit()
+
+    def slow_fake_sync(
+        self,
+        db_session,
+        org_obj,
+        full_resync=False,
+        run_id=None,
+        mode="metadata",
+        selected_job_shortcodes=None,
+    ):
+        time.sleep(1.5)
+        org_obj.workable_last_sync_status = "cancelled"
+        org_obj.workable_last_sync_summary = {"run_id": run_id, "mode": mode}
+        db_session.commit()
+        return {"run_id": run_id}
+
+    monkeypatch.setattr(workable_sync_runner.WorkableSyncService, "sync_org", slow_fake_sync)
+
+    start = client.post("/api/v1/workable/sync", headers=headers)
+    assert start.status_code == 200, start.text
+    run_id = start.json().get("run_id")
+    assert isinstance(run_id, int)
+
+    cancel = client.post("/api/v1/workable/sync/cancel", headers=headers, json={"run_id": run_id})
+    assert cancel.status_code == 200, cancel.text
+    payload = cancel.json()
+    assert payload["status"] == "ok"
+    assert payload["run_id"] == run_id
+
+
+def test_workable_sync_queues_to_celery_when_enabled(client, db, monkeypatch):
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", False)
+
+    headers, email = auth_headers(client, email="celery-queue@example.com", organization_name="Celery Queue Org")
+    owner = db.query(User).filter(User.email == email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "example"
+    db.commit()
+
+    from app.tasks import workable_tasks
+
+    queued: dict[str, object] = {}
+
+    class _DummyTask:
+        def delay(self, **kwargs):
+            queued.update(kwargs)
+            return None
+
+    monkeypatch.setattr(workable_tasks, "run_workable_sync_run_task", _DummyTask())
+
+    resp = client.post("/api/v1/workable/sync", headers=headers, json={"mode": "metadata"})
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["status"] == "started"
+    assert payload["execution_backend"] == "celery"
+    assert queued.get("org_id") == org.id
+    assert queued.get("run_id") == payload.get("run_id")
+    assert queued.get("mode") == "metadata"
+
+
+def test_workable_sync_passes_selected_role_shortcodes(client, db, monkeypatch):
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", False)
+
+    headers, email = auth_headers(client, email="scoped-sync@example.com", organization_name="Scoped Sync Org")
+    owner = db.query(User).filter(User.email == email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "example"
+    db.commit()
+
+    from app.tasks import workable_tasks
+
+    queued: dict[str, object] = {}
+
+    class _DummyTask:
+        def delay(self, **kwargs):
+            queued.update(kwargs)
+            return None
+
+    monkeypatch.setattr(workable_tasks, "run_workable_sync_run_task", _DummyTask())
+
+    resp = client.post(
+        "/api/v1/workable/sync",
+        headers=headers,
+        json={"mode": "metadata", "job_shortcodes": ["A1", "B2", "A1"]},
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["status"] == "started"
+    assert payload["selected_jobs_count"] == 2
+    assert queued.get("selected_job_shortcodes") == ["A1", "B2"]
 
 
 def test_run_workable_sync_script_exits_without_email():

@@ -4,6 +4,7 @@ import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from ...deps import get_current_user
@@ -69,7 +70,7 @@ def list_roles(
 ):
     roles = (
         db.query(Role)
-        .options(joinedload(Role.tasks), joinedload(Role.applications))
+        .options(joinedload(Role.tasks))
         .filter(
             Role.organization_id == current_user.organization_id,
             Role.deleted_at.is_(None),
@@ -77,7 +78,30 @@ def list_roles(
         .order_by(Role.created_at.desc())
         .all()
     )
-    return [role_to_response(role) for role in roles]
+    if not roles:
+        return []
+
+    role_ids = [role.id for role in roles]
+    app_counts_rows = (
+        db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
+        .filter(
+            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.role_id.in_(role_ids),
+        )
+        .group_by(CandidateApplication.role_id)
+        .all()
+    )
+    app_counts = {int(role_id): int(total) for role_id, total in app_counts_rows}
+
+    return [
+        role_to_response(
+            role,
+            tasks_count=len(role.tasks or []),
+            applications_count=app_counts.get(role.id, 0),
+        )
+        for role in roles
+    ]
 
 
 @router.get("/roles/{role_id}", response_model=RoleResponse)
@@ -88,13 +112,24 @@ def get_role_endpoint(
 ):
     role = (
         db.query(Role)
-        .options(joinedload(Role.tasks), joinedload(Role.applications))
+        .options(joinedload(Role.tasks))
         .filter(Role.id == role_id, Role.organization_id == current_user.organization_id)
         .first()
     )
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
-    return role_to_response(role)
+
+    app_count = (
+        db.query(func.count(CandidateApplication.id))
+        .filter(
+            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.role_id == role.id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .scalar()
+        or 0
+    )
+    return role_to_response(role, tasks_count=len(role.tasks or []), applications_count=int(app_count))
 
 
 @router.patch("/roles/{role_id}", response_model=RoleResponse)
@@ -210,7 +245,7 @@ def regenerate_interview_focus(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Regenerate interview focus pointers from the role's job spec. Use after fixing CLAUDE_SCORING_MODEL."""
+    """Regenerate interview focus pointers from the role's job spec. Use after fixing CLAUDE_MODEL."""
     role = get_role(role_id, current_user.organization_id, db)
     now = datetime.now(timezone.utc)
     role.interview_focus = None

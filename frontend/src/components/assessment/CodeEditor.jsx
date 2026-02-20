@@ -11,6 +11,7 @@ export default function CodeEditor({
   language = 'python',
   filename = 'pipeline.py',
   disabled = false,
+  lightMode = false,
 }) {
   const isControlled = controlledValue !== undefined;
   const [internalCode, setInternalCode] = useState(initialCode);
@@ -49,37 +50,35 @@ export default function CodeEditor({
 
   return (
     <div className="h-full flex flex-col">
-      {/* Header bar */}
-      <div className="border-b-2 border-black bg-white px-4 py-2 flex items-center justify-between">
+      <div className={`${lightMode ? 'border-b border-gray-200 bg-white' : 'border-b border-white/10 bg-[#0f141d]'} px-3 py-2 flex items-center justify-between`}>
         <div className="flex items-center gap-2">
-          <span className="font-mono text-sm font-bold">{filename}</span>
-          <span className="font-mono text-xs text-gray-400">{language}</span>
+          <span className={`font-mono text-sm truncate max-w-[36ch] ${lightMode ? 'text-gray-900' : 'text-gray-100'}`}>{filename}</span>
+          <span className={`font-mono text-[11px] uppercase tracking-wide ${lightMode ? 'text-gray-500' : 'text-gray-500'}`}>{language}</span>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={handleRun}
             disabled={disabled}
-            className="border-2 border-[var(--taali-border)] px-4 py-1.5 font-mono text-sm font-bold flex items-center gap-2 text-[var(--taali-surface)] bg-[var(--taali-purple)] hover:opacity-90 transition-colors"
+            className="border border-[var(--taali-purple)] px-3 py-1.5 font-mono text-xs font-bold flex items-center gap-1.5 text-white bg-[var(--taali-purple)] hover:bg-[#aa4dff] transition-colors disabled:opacity-50"
           >
-            <Play size={14} /> Run Code
+            <Play size={12} /> Run
           </button>
           <button
             onClick={handleSave}
             disabled={disabled}
-            className="border-2 border-black px-4 py-1.5 font-mono text-sm font-bold flex items-center gap-2 bg-white hover:bg-black hover:text-white transition-colors"
+            className={`border px-3 py-1.5 font-mono text-xs font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50 ${lightMode ? 'border-gray-300 bg-gray-100 text-gray-700 hover:bg-gray-200' : 'border-white/20 bg-[#131a25] text-gray-200 hover:bg-[#1a2432]'}`}
           >
-            <Save size={14} /> Save
+            <Save size={12} /> Save
           </button>
         </div>
       </div>
 
-      {/* Monaco Editor */}
       <div className="flex-1 overflow-hidden">
         <Editor
           height="100%"
           language={language}
           value={code}
-          theme="vs-dark"
+          theme={lightMode ? 'vs-light' : 'vs-dark'}
           onChange={handleChange}
           onMount={handleEditorDidMount}
           options={{

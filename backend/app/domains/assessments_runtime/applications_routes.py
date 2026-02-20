@@ -31,7 +31,14 @@ from ...schemas.role import (
     AssessmentFromApplicationCreate,
 )
 from ...components.integrations.workable.service import WorkableRateLimitError, WorkableService
-from ...services.document_service import MAX_FILE_SIZE, extract_text, process_document_upload, save_file_locally
+from ...services.document_service import (
+    MAX_FILE_SIZE,
+    extract_text,
+    process_document_upload,
+    sanitize_json_for_storage,
+    sanitize_text_for_storage,
+    save_file_locally,
+)
 from ...services.fit_matching_service import calculate_cv_job_match_sync
 from ...services.assessment_repository_service import (
     AssessmentRepositoryError,
@@ -287,12 +294,12 @@ def upload_application_cv(
     now = datetime.now(timezone.utc)
     app.cv_file_url = result["file_url"]
     app.cv_filename = result["filename"]
-    app.cv_text = result["extracted_text"]
+    app.cv_text = sanitize_text_for_storage(result["extracted_text"])
     app.cv_uploaded_at = now
     if app.candidate:
         app.candidate.cv_file_url = result["file_url"]
         app.candidate.cv_filename = result["filename"]
-        app.candidate.cv_text = result["extracted_text"]
+        app.candidate.cv_text = sanitize_text_for_storage(result["extracted_text"])
         app.candidate.cv_uploaded_at = now
     try:
         _compute_cv_match_for_application(app, reset_if_unavailable=True)
@@ -300,9 +307,12 @@ def upload_application_cv(
         err_msg = str(e)
         logger.exception("Failed to compute cv_match_score for application_id=%s: %s", app.id, err_msg)
         app.cv_match_score = None
-        hint = "Verify CLAUDE_SCORING_MODEL is valid (use claude-3-5-haiku-latest)."
+        hint = "Verify CLAUDE_MODEL is valid (use Claude Haiku)."
         if "404" in err_msg or "not found" in err_msg.lower():
-            hint = "Model may be deprecated. Set CLAUDE_SCORING_MODEL=claude-3-5-haiku-latest in production."
+            hint = (
+                "Configured model was not found. Keep CLAUDE_MODEL on Haiku; "
+                "backend now retries supported Haiku fallbacks automatically."
+            )
         app.cv_match_details = {"error": err_msg[:300], "hint": hint}
         app.cv_match_scored_at = None
     _refresh_rank_score(app)
@@ -361,9 +371,12 @@ def generate_taali_cv_ai(
         err_msg = str(e)
         logger.exception("Failed to compute cv_match_score for application_id=%s: %s", app.id, err_msg)
         app.cv_match_score = None
-        hint = "Verify CLAUDE_SCORING_MODEL is valid (use claude-3-5-haiku-latest)."
+        hint = "Verify CLAUDE_MODEL is valid (use Claude Haiku)."
         if "404" in err_msg or "not found" in err_msg.lower():
-            hint = "Model may be deprecated. Set CLAUDE_SCORING_MODEL=claude-3-5-haiku-latest in production."
+            hint = (
+                "Configured model was not found. Keep CLAUDE_MODEL on Haiku; "
+                "backend now retries supported Haiku fallbacks automatically."
+            )
         app.cv_match_details = {"error": err_msg[:300], "hint": hint}
         app.cv_match_scored_at = None
     _refresh_rank_score(app)
@@ -417,7 +430,7 @@ def enrich_application_candidate(
     if not full_payload:
         raise HTTPException(status_code=502, detail="Failed to fetch Workable candidate profile")
 
-    candidate.workable_data = full_payload
+    candidate.workable_data = sanitize_json_for_storage(full_payload)
     extracted = _extract_candidate_fields(full_payload)
     for field, value in extracted.items():
         setattr(candidate, field, value)
@@ -483,7 +496,7 @@ def _try_fetch_cv_from_workable(
     except Exception:
         pass
 
-    extracted = extract_text(content, ext)
+    extracted = sanitize_text_for_storage(extract_text(content, ext))
     if not extracted:
         return False
 

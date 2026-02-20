@@ -1,7 +1,9 @@
 """API tests for task CRUD endpoints (/api/v1/tasks/)."""
 
+from pathlib import Path
 import uuid
 
+from app.models.task import Task
 from tests.conftest import auth_headers, create_task_via_api
 
 
@@ -110,6 +112,68 @@ def test_list_tasks_with_tasks(client):
 def test_list_tasks_no_auth_401(client):
     resp = client.get("/api/v1/tasks/")
     assert resp.status_code == 401
+
+
+def test_list_tasks_deactivates_removed_template_specs(client, db, monkeypatch):
+    headers, _ = auth_headers(client)
+
+    stale_template = Task(
+        organization_id=None,
+        name="Orders Pipeline Reliability Sprint",
+        description="Legacy demo template",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=15,
+        starter_code="print('legacy')",
+        test_code="",
+        is_template=True,
+        is_active=True,
+        task_key="data_eng_b_cdc_fix",
+    )
+    current_template = Task(
+        organization_id=None,
+        name="Data Platform Incident Triage and Recovery",
+        description="Current demo template",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=30,
+        starter_code="print('current')",
+        test_code="",
+        is_template=True,
+        is_active=True,
+        task_key="data_eng_super_platform_crisis",
+    )
+    db.add(stale_template)
+    db.add(current_template)
+    db.commit()
+
+    monkeypatch.setattr("app.domains.tasks_repository.routes._TEMPLATE_SYNC_ATTEMPTED", False)
+    monkeypatch.setattr("app.domains.tasks_repository.routes.settings.DATABASE_URL", "postgresql://unit-test")
+    monkeypatch.setattr("app.domains.tasks_repository.routes._resolve_tasks_dir", lambda: Path("."))
+    monkeypatch.setattr(
+        "app.domains.tasks_repository.routes.load_task_specs",
+        lambda _: [
+            {
+                "task_id": "data_eng_super_platform_crisis",
+                "name": "Data Platform Incident Triage and Recovery",
+                "role": "data_engineer",
+                "duration_minutes": 30,
+                "scenario": "Current task",
+                "repo_structure": {"name": "repo", "files": {"README.md": "ok"}},
+                "evaluation_rubric": {"quality": {"weight": 1.0}},
+            }
+        ],
+    )
+
+    resp = client.get("/api/v1/tasks/", headers=headers)
+    assert resp.status_code == 200
+    data = resp.json()
+    returned_keys = {task.get("task_key") for task in data}
+    assert "data_eng_super_platform_crisis" in returned_keys
+    assert "data_eng_b_cdc_fix" not in returned_keys
+
+    db.refresh(stale_template)
+    assert stale_template.is_active is False
 
 
 # ---------------------------------------------------------------------------
