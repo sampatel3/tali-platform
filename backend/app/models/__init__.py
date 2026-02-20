@@ -7,6 +7,7 @@ from .role import Role, role_tasks
 from .task import Task
 from .session import AssessmentSession
 from .billing_credit_ledger import BillingCreditLedger
+from .workable_sync_run import WorkableSyncRun
 
 __all__ = [
     "User",
@@ -20,4 +21,5 @@ __all__ = [
     "Task",
     "AssessmentSession",
     "BillingCreditLedger",
+    "WorkableSyncRun",
 ]

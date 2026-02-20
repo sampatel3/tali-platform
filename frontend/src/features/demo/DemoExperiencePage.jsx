@@ -208,7 +208,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
           <Panel className="p-5">
             <h2 className="text-2xl font-bold">Demo assessment task</h2>
             <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
-              This demo task is aligned to the task currently live on the platform.
+              These demo tasks mirror the current live assessment catalog.
             </p>
             <div className="mt-4 grid gap-3">
               {DEMO_ASSESSMENTS.map((assessment) => {

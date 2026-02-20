@@ -178,6 +178,91 @@ All endpoints (except Health, assessment start, and webhooks) require a Bearer t
 
 ---
 
+## Workable Sync
+
+| Method | Path | Auth | Description |
+|--------|------|------|-------------|
+| `GET` | `/api/v1/workable/sync/jobs` | Yes | List selectable Workable roles/jobs for scoped sync. |
+| `POST` | `/api/v1/workable/sync` | Yes | Start a background Workable sync run and return `run_id`. |
+| `GET` | `/api/v1/workable/sync/status` | Yes | Get run-aware sync status (`run_id`, phase, counters, errors, db snapshot). |
+| `POST` | `/api/v1/workable/sync/cancel` | Yes | Request cancellation for a run (`run_id` optional). |
+
+### GET /api/v1/workable/sync/jobs
+
+**Response:**
+
+```json
+{
+  "total": 2,
+  "jobs": [
+    {
+      "shortcode": "ABC123",
+      "id": "123456",
+      "identifier": "ABC123",
+      "title": "Backend Engineer",
+      "state": "published"
+    }
+  ]
+}
+```
+
+### POST /api/v1/workable/sync
+
+**Request body:**
+
+```json
+{
+  "mode": "metadata",
+  "job_shortcodes": ["ABC123", "XYZ999"]
+}
+```
+
+`mode` supports:
+- `metadata` (default): roles + candidate/application metadata only.
+- `full` (reserved): accepted for forward compatibility, currently executes metadata flow.
+
+`job_shortcodes` is optional:
+- Omit it to sync all Workable jobs.
+- Provide a shortlist to sync only selected roles.
+
+**Response:**
+
+```json
+{
+  "status": "started",
+  "run_id": 123,
+  "mode": "metadata",
+  "selected_jobs_count": 2,
+  "execution_backend": "celery",
+  "message": "Sync started in the background. Poll /workable/sync/status to see progress."
+}
+```
+
+### GET /api/v1/workable/sync/status
+
+**Query params:**
+- `run_id` (optional): if omitted, latest org run is returned.
+
+**Response fields include:**
+- `run_id`, `phase`, `jobs_total`, `jobs_processed`
+- `candidates_seen`, `candidates_upserted`, `applications_upserted`
+- `errors`, `started_at`, `finished_at`, `cancel_requested_at`
+- `db_snapshot` (`roles_active`, `applications_active`, `candidates_active`)
+
+### POST /api/v1/workable/sync/cancel
+
+**Request body:**
+
+```json
+{
+  "run_id": 123
+}
+```
+
+If `run_id` is omitted, the latest running org sync is targeted.
+
+---
+
 ## Tasks
 
 | Method | Path | Auth | Description |

@@ -199,9 +199,6 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
             ) : null}
             <Badge variant={statusVariant(data.status)}>{data.status || 'applied'}</Badge>
             <span className="text-xs text-gray-500">
-              Workable: {formatScore(data.workable_score)}
-            </span>
-            <span className="text-xs text-gray-500">
               Taali: {formatScore(data.cv_match_score)}
             </span>
           </div>
@@ -248,7 +245,7 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
                 </div>
               ) : (
                 <p className="text-xs text-gray-600">
-                  Upload a CV for this application, or run a full Workable sync (not candidates-only) to import CVs.
+                  Upload a CV for this application, or run metadata sync in Settings and use candidate-level CV fetch when needed.
                 </p>
               )}
             </div>

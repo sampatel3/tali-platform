@@ -14,9 +14,6 @@ import { formatDateTime, statusVariant } from './candidatesUiUtils';
 const COLUMN_STORAGE_KEY = 'taali_candidates_table_columns_v2';
 
 const DEFAULT_COLUMN_PREFS = {
-  workable_ai: true,
-  workable_raw: false,
-  workable_score_source: false,
   workable_stage: true,
   workable_candidate_id: false,
   added: true,
@@ -70,7 +67,7 @@ export const CandidatesTable = ({
   error,
   searchQuery = '',
   statusFilter = 'all',
-  sortBy = 'workable_score',
+  sortBy = 'cv_match_score',
   sortOrder = 'desc',
   roleTasks,
   canCreateAssessment,
@@ -104,7 +101,6 @@ export const CandidatesTable = ({
   });
 
   const sortableColumns = {
-    workable_score: 'Workable AI',
     cv_match_score: 'Taali AI',
     created_at: 'Added',
   };
@@ -174,9 +170,6 @@ export const CandidatesTable = ({
       'candidate',
       'send',
       'taali_ai',
-      'workable_ai',
-      'workable_raw',
-      'workable_score_source',
       'workable_stage',
       'workable_candidate_id',
       'status',
@@ -202,17 +195,24 @@ export const CandidatesTable = ({
       : '—'
   );
 
-  const formatWorkableRaw = (value) => {
-    if (typeof value !== 'number') return '—';
-    if (Number.isInteger(value)) return String(value);
-    return value.toFixed(2);
-  };
-
   const renderTaaliScore = (app) => {
     if (typeof app.cv_match_score === 'number') return formatScore(app.cv_match_score);
     if (!app.cv_filename) return '—';
     if (app.cv_match_details?.error) return 'Unavailable';
     return 'Pending';
+  };
+
+  const renderTaaliError = (app) => {
+    const raw = app?.cv_match_details?.error;
+    if (!raw || typeof raw !== 'string') return null;
+    const normalized = raw.trim();
+    if (!normalized) return null;
+    const lower = normalized.toLowerCase();
+    if (lower.includes('not_found_error') && lower.includes('model')) {
+      return 'Claude model not found on provider; retrying with supported Haiku fallback.';
+    }
+    if (normalized.length > 180) return `${normalized.slice(0, 180)}...`;
+    return normalized;
   };
 
   const handleEnrich = async (app) => {
@@ -287,9 +287,6 @@ export const CandidatesTable = ({
   }
 
   const allColumnCheckboxes = [
-    { key: 'workable_ai', label: 'Workable AI score' },
-    { key: 'workable_raw', label: 'Workable raw score' },
-    { key: 'workable_score_source', label: 'Workable score source' },
     { key: 'workable_stage', label: 'Workable stage' },
     { key: 'workable_candidate_id', label: 'Workable candidate id' },
     { key: 'headline', label: 'Headline' },
@@ -357,9 +354,6 @@ export const CandidatesTable = ({
                 candidate: 'w-[280px]',
                 taali_ai: 'w-[110px]',
                 send: 'w-[170px]',
-                workable_ai: 'w-[110px]',
-                workable_raw: 'w-[120px]',
-                workable_score_source: 'w-[220px]',
                 workable_stage: 'w-[150px]',
                 workable_candidate_id: 'w-[200px]',
                 status: 'w-[140px]',
@@ -397,25 +391,6 @@ export const CandidatesTable = ({
                 );
               }
 
-              if (column === 'workable_ai') {
-                return (
-                  <th
-                    key={column}
-                    className={`${thBase} ${widthClass} px-3 py-2`}
-                    aria-sort={sortBy === 'workable_score' ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'}
-                  >
-                    <button
-                      type="button"
-                      className="inline-flex items-center gap-1 uppercase tracking-[0.08em] text-gray-600 transition-colors hover:text-gray-900"
-                      onClick={() => handleSortToggle('workable_score')}
-                    >
-                      Workable AI
-                      <span className="text-[0.65rem] text-gray-500">{renderSortIndicator('workable_score')}</span>
-                    </button>
-                  </th>
-                );
-              }
-
               if (column === 'added') {
                 return (
                   <th
@@ -437,8 +412,6 @@ export const CandidatesTable = ({
 
               const label = {
                 send: 'Send assessment',
-                workable_raw: 'Workable raw',
-                workable_score_source: 'Workable score src',
                 workable_stage: 'Workable stage',
                 workable_candidate_id: 'Workable id',
                 status: 'Status',
@@ -566,30 +539,6 @@ export const CandidatesTable = ({
                           ) : (
                             <span className="text-sm text-gray-500">—</span>
                           )}
-                        </td>
-                      );
-                    }
-
-                    if (column === 'workable_ai') {
-                      return (
-                        <td key={column} className="px-3 py-2 text-sm text-gray-700 text-right tabular-nums whitespace-nowrap">
-                          {formatScore(app.workable_score)}
-                        </td>
-                      );
-                    }
-
-                    if (column === 'workable_raw') {
-                      return (
-                        <td key={column} className="px-3 py-2 text-sm text-gray-700 text-right tabular-nums whitespace-nowrap">
-                          {formatWorkableRaw(app.workable_score_raw)}
-                        </td>
-                      );
-                    }
-
-                    if (column === 'workable_score_source') {
-                      return (
-                        <td key={column} className="px-3 py-2 text-sm text-gray-700 break-words">
-                          {app.workable_score_source || '—'}
                         </td>
                       );
                     }
@@ -851,22 +800,12 @@ export const CandidatesTable = ({
                       ) : null}
 
                       {/* Scores */}
-                      <div className="mt-4 grid gap-3 md:grid-cols-3">
-                        <div>
-                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Workable score</p>
-                          <p className="mt-1 text-sm text-gray-800">
-                            {typeof app.workable_score === 'number' ? formatScore(app.workable_score) : '—'}
-                            {typeof app.workable_score_raw === 'number' ? ` (raw: ${formatWorkableRaw(app.workable_score_raw)})` : ''}
-                          </p>
-                          {app.workable_score_source ? (
-                            <p className="mt-1 text-xs text-gray-500 break-all">{app.workable_score_source}</p>
-                          ) : null}
-                        </div>
+                      <div className="mt-4 grid gap-3 md:grid-cols-2">
                         <div>
                           <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Taali score</p>
                           <p className="mt-1 text-sm text-gray-800">{renderTaaliScore(app)}</p>
-                          {app.cv_match_details?.error ? (
-                            <p className="mt-1 text-xs text-amber-700">{app.cv_match_details.error}</p>
+                          {renderTaaliError(app) ? (
+                            <p className="mt-1 text-xs text-amber-700">{renderTaaliError(app)}</p>
                           ) : null}
                           {typeof app.cv_match_score !== 'number' && typeof onGenerateTaaliCvAi === 'function' ? (
                             <div className="mt-2">
@@ -877,7 +816,7 @@ export const CandidatesTable = ({
                                 onClick={() => onGenerateTaaliCvAi(app)}
                                 disabled={generatingTaaliId === app.id}
                               >
-                                {generatingTaaliId === app.id ? 'Generating...' : 'Generate TAALI CV AI'}
+                                {generatingTaaliId === app.id ? 'Scoring...' : 'Generate TAALI Score'}
                               </Button>
                             </div>
                           ) : null}
@@ -893,17 +832,6 @@ export const CandidatesTable = ({
                         {onOpenCvSidebar ? (
                           <Button type="button" variant="secondary" size="sm" onClick={() => onOpenCvSidebar(app)}>
                             View CV
-                          </Button>
-                        ) : null}
-                        {typeof onGenerateTaaliCvAi === 'function' && typeof app.cv_match_score !== 'number' ? (
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            onClick={() => onGenerateTaaliCvAi(app)}
-                            disabled={generatingTaaliId === app.id}
-                          >
-                            {generatingTaaliId === app.id ? 'Scoring...' : 'Generate Score'}
                           </Button>
                         ) : null}
                         {app.workable_profile_url ? (

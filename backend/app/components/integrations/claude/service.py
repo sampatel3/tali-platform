@@ -9,6 +9,7 @@ import json
 import logging
 
 from anthropic import Anthropic
+from .model_fallback import candidate_models_for, is_model_not_found_error
 from ....platform.config import settings
 
 logger = logging.getLogger(__name__)
@@ -33,6 +34,37 @@ class ClaudeService:
         self.max_tokens_per_response = settings.MAX_TOKENS_PER_RESPONSE
         logger.info("ClaudeService initialised with model=%s", self.model)
 
+    def _create_with_model_fallback(self, *, max_tokens: int, system: str, messages: list):
+        last_model_error: Exception | None = None
+        for candidate_model in candidate_models_for(self.model):
+            try:
+                response = self.client.messages.create(
+                    model=candidate_model,
+                    max_tokens=max_tokens,
+                    system=system,
+                    messages=messages,
+                )
+                if candidate_model != self.model:
+                    logger.warning(
+                        "Fell back to Claude model=%s after primary model=%s was unavailable",
+                        candidate_model,
+                        self.model,
+                    )
+                return response, candidate_model
+            except Exception as exc:
+                if is_model_not_found_error(exc):
+                    last_model_error = exc
+                    logger.warning(
+                        "Claude model unavailable (model=%s): %s",
+                        candidate_model,
+                        exc,
+                    )
+                    continue
+                raise
+        if last_model_error is not None:
+            raise last_model_error
+        raise RuntimeError("Claude call failed before receiving a response")
+
     def chat(self, messages: list, system: str = None) -> dict:
         """
         Send a conversation to Claude and return the response.
@@ -52,8 +84,7 @@ class ClaudeService:
                 self.model,
             )
 
-            response = self.client.messages.create(
-                model=self.model,
+            response, model_used = self._create_with_model_fallback(
                 max_tokens=self.max_tokens_per_response,
                 system=system_prompt,
                 messages=messages,
@@ -63,7 +94,9 @@ class ClaudeService:
             tokens_used = response.usage.input_tokens + response.usage.output_tokens
 
             logger.info(
-                "Claude chat response received (tokens_used=%d)", tokens_used
+                "Claude chat response received (tokens_used=%d, model=%s)",
+                tokens_used,
+                model_used,
             )
 
             return {
@@ -113,8 +146,7 @@ class ClaudeService:
                 f"Code:\n```\n{code}\n```"
             )
 
-            response = self.client.messages.create(
-                model=self.model,
+            response, model_used = self._create_with_model_fallback(
                 max_tokens=2048,
                 system="You are an expert code reviewer. Respond only with valid JSON.",
                 messages=[{"role": "user", "content": analysis_prompt}],
@@ -128,7 +160,7 @@ class ClaudeService:
             except json.JSONDecodeError:
                 logger.warning("Claude returned non-JSON analysis, returning raw text")
 
-            logger.info("Code quality analysis completed successfully")
+            logger.info("Code quality analysis completed successfully (model=%s)", model_used)
 
             return {
                 "success": True,
@@ -241,8 +273,7 @@ class ClaudeService:
                 len(task_description),
             )
 
-            response = self.client.messages.create(
-                model=self.model,
+            response, model_used = self._create_with_model_fallback(
                 max_tokens=4096,
                 system="You are an expert technical interviewer. Respond ONLY with valid JSON, no markdown.",
                 messages=[{"role": "user", "content": analysis_prompt}],
@@ -281,9 +312,10 @@ class ClaudeService:
                     validated_scores[key] = 0.0
 
             logger.info(
-                "Prompt session analysis completed (scores=%d, fraud_flags=%d)",
+                "Prompt session analysis completed (scores=%d, fraud_flags=%d, model=%s)",
                 len(validated_scores),
                 len(fraud),
+                model_used,
             )
 
             return {

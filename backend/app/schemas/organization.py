@@ -34,6 +34,7 @@ class OrgResponse(BaseModel):
     workable_last_sync_at: Optional[datetime] = None
     workable_last_sync_status: Optional[str] = None
     workable_last_sync_summary: Optional[dict] = None
+    active_claude_model: str
     plan: str
     assessments_used: int
     assessments_limit: Optional[int] = None

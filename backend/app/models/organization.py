@@ -44,3 +44,9 @@ class Organization(Base):
     roles = relationship("Role", cascade="all, delete-orphan")
     applications = relationship("CandidateApplication", cascade="all, delete-orphan")
     credit_ledger_entries = relationship("BillingCreditLedger", back_populates="organization", cascade="all, delete-orphan")
+    workable_sync_runs = relationship("WorkableSyncRun", back_populates="organization", cascade="all, delete-orphan")
+
+    @property
+    def active_claude_model(self) -> str:
+        from ..platform.config import settings
+        return settings.resolved_claude_model

@@ -1,11 +1,17 @@
 const demoTasks = [
   {
-    // Keep legacy track id for backwards compatibility with older backend deploys.
-    id: 'data_eng_b_cdc_fix',
-    title: 'Orders Pipeline Reliability Sprint',
-    description: 'Deliver one production-safe patch for dedupe, hard deletes, schema drift, and idempotent backfills (target ~10 min, hard cap 15 min).',
-    durationLabel: '15 min',
-    difficulty: 'Advanced',
+    id: 'data_eng_super_platform_crisis',
+    title: 'Data Platform Incident Triage and Recovery',
+    description: 'Triage urgent data platform failures, prioritize fixes, and stabilize finance, compliance, and pipeline reliability.',
+    durationLabel: '30 min',
+    difficulty: 'Medium',
+  },
+  {
+    id: 'ai_eng_super_production_launch',
+    title: 'AI Feature Production Readiness Assessment',
+    description: 'Evaluate an AI feature prototype and make production-safe improvements across safety, reliability, and cost.',
+    durationLabel: '30 min',
+    difficulty: 'Medium',
   },
 ];
 

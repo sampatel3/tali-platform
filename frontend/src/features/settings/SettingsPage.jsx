@@ -14,6 +14,11 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
 import { formatAed } from '../../lib/currency';
+import {
+  readDarkModePreference,
+  setDarkModePreference,
+  subscribeThemePreference,
+} from '../../lib/themePreference';
 
 const WORKABLE_SCOPE_OPTIONS = [
   { id: 'r_jobs', label: 'r_jobs', description: 'Read jobs and roles from Workable.' },
@@ -51,7 +56,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [workableSaving, setWorkableSaving] = useState(false);
   const [workableSyncLoading, setWorkableSyncLoading] = useState(false);
   const [workableSyncInProgress, setWorkableSyncInProgress] = useState(false);
+  const [workableActiveRunId, setWorkableActiveRunId] = useState(null);
   const [workableSyncCancelLoading, setWorkableSyncCancelLoading] = useState(false);
+  const [workableJobsLoading, setWorkableJobsLoading] = useState(false);
+  const [workableJobsError, setWorkableJobsError] = useState('');
+  const [workableJobs, setWorkableJobs] = useState([]);
+  const [workableJobSearch, setWorkableJobSearch] = useState('');
+  const [workableSelectedJobShortcodes, setWorkableSelectedJobShortcodes] = useState([]);
   const workableSyncPollRef = useRef(null);
   const [workableDrawerOpen, setWorkableDrawerOpen] = useState(false);
   const [workableConnectMode, setWorkableConnectMode] = useState('oauth');
@@ -71,7 +82,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
   const [inviteLoading, setInviteLoading] = useState(false);
-  const [darkMode, setDarkMode] = useState(() => localStorage.getItem('taali_dark_mode') === '1');
+  const [darkMode, setDarkMode] = useState(() => readDarkModePreference());
   const [enterpriseSaving, setEnterpriseSaving] = useState(false);
   const [enterpriseForm, setEnterpriseForm] = useState({
     allowedEmailDomains: '',
@@ -144,9 +155,14 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   }, [settingsTab]);
 
   useEffect(() => {
-    localStorage.setItem('taali_dark_mode', darkMode ? '1' : '0');
-    document.documentElement.classList.toggle('dark', darkMode);
+    setDarkModePreference(darkMode);
   }, [darkMode]);
+
+  useEffect(() => {
+    return subscribeThemePreference((next) => {
+      setDarkMode(Boolean(next));
+    });
+  }, []);
 
   useEffect(() => {
     if (!orgData) return;
@@ -213,13 +229,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
-  const fetchWorkableSyncStatus = async () => {
+  const fetchWorkableSyncStatus = async (runIdOverride = null) => {
     try {
-      const res = await orgsApi.getWorkableSyncStatus();
+      const runId = runIdOverride != null ? runIdOverride : workableActiveRunId;
+      const res = await orgsApi.getWorkableSyncStatus(runId);
       const data = res.data || {};
+      setWorkableActiveRunId(data.run_id ?? null);
       setWorkableSyncInProgress(Boolean(data.sync_in_progress));
       setOrgData((prev) => ({
         ...(prev || {}),
+        active_claude_model: data.active_claude_model ?? prev?.active_claude_model,
         workable_last_sync_at: data.workable_last_sync_at ?? prev?.workable_last_sync_at,
         workable_last_sync_status: data.workable_last_sync_status ?? prev?.workable_last_sync_status,
         workable_last_sync_summary: data.workable_last_sync_summary ?? prev?.workable_last_sync_summary,
@@ -231,27 +250,57 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
+  const loadWorkableSyncJobs = async () => {
+    if (!orgData?.workable_connected) {
+      setWorkableJobs([]);
+      setWorkableSelectedJobShortcodes([]);
+      setWorkableJobsError('');
+      return;
+    }
+    setWorkableJobsLoading(true);
+    setWorkableJobsError('');
+    try {
+      const res = await orgsApi.getWorkableSyncJobs();
+      const jobs = Array.isArray(res?.data?.jobs) ? res.data.jobs : [];
+      setWorkableJobs(jobs);
+      const available = jobs
+        .map((job) => String(job?.shortcode || job?.id || '').trim())
+        .filter(Boolean);
+      setWorkableSelectedJobShortcodes((prev) => {
+        const kept = prev.filter((id) => available.includes(id));
+        return kept.length > 0 ? kept : available;
+      });
+    } catch (err) {
+      setWorkableJobsError(err?.response?.data?.detail || 'Failed to load Workable roles.');
+    } finally {
+      setWorkableJobsLoading(false);
+    }
+  };
+
   useEffect(() => {
     if (settingsTab !== 'workable') return;
     fetchWorkableSyncStatus();
-  }, [settingsTab]);
+    loadWorkableSyncJobs();
+  }, [settingsTab, orgData?.workable_connected]);
 
   useEffect(() => {
     if (!workableSyncInProgress) {
       if (workableSyncPollRef.current) {
-        clearInterval(workableSyncPollRef.current);
+        clearTimeout(workableSyncPollRef.current.firstDelay);
+        clearInterval(workableSyncPollRef.current.interval);
         workableSyncPollRef.current = null;
       }
       return;
     }
     const poll = async () => {
-      const data = await fetchWorkableSyncStatus();
+      const data = await fetchWorkableSyncStatus(workableActiveRunId);
       if (!data.sync_in_progress) {
         const s = data.workable_last_sync_summary || {};
         const msg = Array.isArray(s.errors) && s.errors.length > 0
           ? `${s.errors[0]}`
-          : `Sync finished. Roles: ${s.jobs_seen ?? 0} processed (${s.jobs_upserted ?? 0} new), Candidates: ${s.candidates_seen ?? 0} processed (${s.candidates_upserted ?? 0} new).`;
+          : `Metadata sync finished. Roles: ${s.jobs_processed ?? s.jobs_seen ?? 0}/${s.jobs_total ?? s.jobs_seen ?? 0}, Candidates: ${s.candidates_seen ?? 0} seen (${s.candidates_upserted ?? 0} upserted).`;
         showToast(msg, (data.workable_last_sync_status || '').toLowerCase() === 'success' ? 'success' : 'info');
+        setWorkableActiveRunId(null);
       }
     };
     const firstDelay = setTimeout(poll, 1500);
@@ -264,14 +313,14 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         workableSyncPollRef.current = null;
       }
     };
-  }, [workableSyncInProgress]);
+  }, [workableSyncInProgress, workableActiveRunId]);
 
   const handleCancelWorkableSync = async () => {
     setWorkableSyncCancelLoading(true);
     try {
-      await orgsApi.cancelWorkableSync();
-      showToast('Sync stopped. You can start a new sync when ready.', 'info');
-      fetchWorkableSyncStatus();
+      await orgsApi.cancelWorkableSync(workableActiveRunId);
+      showToast('Cancel requested. Sync will stop shortly.', 'info');
+      fetchWorkableSyncStatus(workableActiveRunId);
     } catch (err) {
       const status = err?.response?.status;
       const detail = err?.response?.data?.detail ?? err?.message;
@@ -284,23 +333,36 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
-  const handleSyncWorkable = async (options = {}) => {
-    const skipCv = options.skipCv === true;
+  const handleSyncWorkable = async () => {
     setWorkableSyncLoading(true);
-    setWorkableSyncInProgress(true); // show "running in background" immediately
     try {
-      await orgsApi.syncWorkable(skipCv ? { skip_cv: true } : {});
+      const availableIdentifiers = (workableJobs || [])
+        .map((job) => String(job?.shortcode || job?.id || '').trim())
+        .filter(Boolean);
+      const selectedIdentifiers = workableSelectedJobShortcodes.filter((id) => availableIdentifiers.includes(id));
+      if (availableIdentifiers.length > 0 && selectedIdentifiers.length === 0) {
+        showToast('Select at least one Workable role to sync.', 'info');
+        return;
+      }
+      const res = await orgsApi.syncWorkable({
+        mode: 'metadata',
+        job_shortcodes: selectedIdentifiers,
+      });
+      const runId = res?.data?.run_id ?? null;
+      setWorkableActiveRunId(runId);
+      setWorkableSyncInProgress(true);
+      const selectedCount = selectedIdentifiers.length;
       showToast(
-        skipCv
-          ? "Syncing candidates only (no CVs). Run full Sync later to fetch CVs and scores."
-          : "Sync is running in the background. We'll notify you when it's done.",
+        `Metadata sync is running for ${selectedCount} role${selectedCount === 1 ? '' : 's'} in the background.`,
         'info'
       );
+      fetchWorkableSyncStatus(runId);
     } catch (err) {
       const status = err?.response?.status;
       const detail = err?.response?.data?.detail ?? err?.message ?? String(err);
       if (status === 409) {
         showToast("A sync is already running in the background. We'll notify you when it's done.", 'info');
+        fetchWorkableSyncStatus();
       } else {
         setWorkableSyncInProgress(false);
         console.error('Workable sync failed:', err?.response?.data ?? err);
@@ -309,6 +371,15 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     } finally {
       setWorkableSyncLoading(false);
     }
+  };
+
+  const toggleWorkableSyncRole = (identifier) => {
+    if (!identifier) return;
+    setWorkableSelectedJobShortcodes((prev) => (
+      prev.includes(identifier)
+        ? prev.filter((id) => id !== identifier)
+        : [...prev, identifier]
+    ));
   };
 
   const handleSaveWorkable = async () => {
@@ -490,6 +561,17 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const workableCallbackUrl = `${window.location.origin}/settings/workable/callback`;
   const workableScopes = selectedWorkableScopes.join(' ') || 'none';
   const workableWriteScopeEnabled = selectedWorkableScopes.includes('w_candidates');
+  const workableSyncJobs = Array.isArray(workableJobs) ? workableJobs : [];
+  const normalizedWorkableJobSearch = (workableJobSearch || '').trim().toLowerCase();
+  const filteredWorkableSyncJobs = workableSyncJobs.filter((job) => {
+    if (!normalizedWorkableJobSearch) return true;
+    const identifier = String(job?.shortcode || job?.id || '').toLowerCase();
+    const title = String(job?.title || '').toLowerCase();
+    return identifier.includes(normalizedWorkableJobSearch) || title.includes(normalizedWorkableJobSearch);
+  });
+  const selectedRoleCountForSync = workableSelectedJobShortcodes.length;
+  const totalRoleCountForSync = workableSyncJobs.length;
+  const selectedRoleSetForSync = new Set(workableSelectedJobShortcodes);
   const creditsBalance = Number(billingCredits?.credits_balance ?? orgData?.credits_balance ?? 0);
   const packCatalog = billingCredits?.packs || {
     starter_5: { label: 'Starter (5 credits)', credits: 5 },
@@ -578,6 +660,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <div className="font-mono text-[var(--taali-text)]">{workableConnected ? connectedSince : '—'}</div>
                   </div>
                   <div>
+                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Active Claude model</div>
+                    <div className="font-mono text-[var(--taali-text)]">{orgData?.active_claude_model || '—'}</div>
+                  </div>
+                  <div>
                     <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Last Sync</div>
                     <div className="font-mono text-[var(--taali-text)]">{lastSyncAt} ({lastSyncStatus})</div>
                     {Array.isArray(orgData?.workable_last_sync_summary?.errors) && orgData.workable_last_sync_summary.errors.length > 0 && (
@@ -591,11 +677,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <ul className="list-disc list-inside space-y-0.5">
                       <li>Open jobs from Workable are imported as roles; job specs are saved as attachments.</li>
                       <li>All candidates for each job are fetched (no 50-candidate limit).</li>
-                      <li>For each candidate we fetch full profile data and try to download their CV from Workable.</li>
-                      <li>CV–job match scores are computed when both CV and job spec are present.</li>
+                      <li>Only metadata is synced in this baseline run (roles, candidate/application records, stages).</li>
+                      <li>CV fetch and TAALI scoring are run separately from the Candidates page when needed.</li>
                     </ul>
                     <p className="mt-2 text-xs text-[var(--taali-muted)]">
-                      For a completely fresh import, use <strong>Remove all candidates and roles</strong> below, then <strong>Sync</strong>.
+                      For a completely fresh import, use <strong>Remove all candidates and roles</strong> below, then run <strong>Metadata sync</strong>.
                     </p>
                   </div>
                   {workableSyncInProgress && (
@@ -608,7 +694,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         <div className="text-sm text-[var(--taali-text)]">
                           Sync is running in the background. We’ll notify you when it’s done. You can leave this page.
                         </div>
-                        {orgData?.workable_sync_progress && (orgData.workable_sync_progress.current_step || orgData.workable_sync_progress.jobs_seen != null || orgData.workable_sync_progress.candidates_seen != null) ? (
+                        {orgData?.workable_sync_progress && (orgData.workable_sync_progress.current_step || orgData.workable_sync_progress.jobs_total != null || orgData.workable_sync_progress.candidates_seen != null) ? (
                           <>
                             {(orgData.workable_sync_progress.current_step || orgData.workable_sync_progress.last_request) && (
                               <div className="mt-2 font-mono text-xs text-[var(--taali-text)]">
@@ -627,7 +713,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                               </div>
                             )}
                             <div className="mt-2 font-mono text-xs text-[var(--taali-text)]">
-                              {orgData.workable_sync_progress.jobs_seen ?? 0} roles processed ({orgData.workable_sync_progress.jobs_upserted ?? 0} new) · {orgData.workable_sync_progress.candidates_seen ?? 0} candidates processed ({orgData.workable_sync_progress.candidates_upserted ?? 0} new)
+                              {orgData.workable_sync_progress.jobs_processed ?? 0}/{orgData.workable_sync_progress.jobs_total ?? 0} roles processed ({orgData.workable_sync_progress.jobs_upserted ?? 0} new) · {orgData.workable_sync_progress.candidates_seen ?? 0} candidates seen ({orgData.workable_sync_progress.candidates_upserted ?? 0} upserted)
                             </div>
                           </>
                         ) : (
@@ -700,8 +786,86 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       ) : null}
                     </div>
                     <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
-                      <strong>Sync (candidates only)</strong> is faster; use it first, then run <strong>Sync (full)</strong> to fetch CVs and TAALI scores.
+                      Metadata sync is the default baseline. Use candidate-level enrichment, CV fetch, and TAALI scoring actions from the Candidates page when needed.
                     </p>
+                    <div className="mt-3 border border-[var(--taali-border)] bg-[var(--taali-bg)] p-3 space-y-2">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-[var(--taali-text)]">Roles to import</p>
+                          <p className="text-xs text-[var(--taali-muted)]">
+                            {selectedRoleCountForSync}/{totalRoleCountForSync} selected
+                          </p>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={loadWorkableSyncJobs}
+                            disabled={workableJobsLoading || !workableConnected}
+                          >
+                            {workableJobsLoading ? 'Refreshing…' : 'Refresh roles'}
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setWorkableSelectedJobShortcodes(workableSyncJobs.map((job) => String(job?.shortcode || job?.id || '').trim()).filter(Boolean))}
+                            disabled={workableJobsLoading || totalRoleCountForSync === 0}
+                          >
+                            Select all
+                          </Button>
+                          <Button
+                            type="button"
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => setWorkableSelectedJobShortcodes([])}
+                            disabled={workableJobsLoading || selectedRoleCountForSync === 0}
+                          >
+                            Clear
+                          </Button>
+                        </div>
+                      </div>
+                      <Input
+                        type="text"
+                        value={workableJobSearch}
+                        onChange={(e) => setWorkableJobSearch(e.target.value)}
+                        placeholder="Search role name or shortcode"
+                        disabled={workableJobsLoading || totalRoleCountForSync === 0}
+                      />
+                      {workableJobsError ? (
+                        <p className="text-xs text-[var(--taali-danger)]">{workableJobsError}</p>
+                      ) : null}
+                      <div className="max-h-56 overflow-y-auto border border-[var(--taali-border)] bg-[var(--taali-surface)] p-2">
+                        {workableJobsLoading ? (
+                          <p className="text-xs text-[var(--taali-muted)]">Loading Workable roles…</p>
+                        ) : filteredWorkableSyncJobs.length === 0 ? (
+                          <p className="text-xs text-[var(--taali-muted)]">
+                            {totalRoleCountForSync === 0 ? 'No Workable roles available.' : 'No roles match your search.'}
+                          </p>
+                        ) : (
+                          <div className="space-y-1">
+                            {filteredWorkableSyncJobs.map((job) => {
+                              const identifier = String(job?.shortcode || job?.id || '').trim();
+                              if (!identifier) return null;
+                              return (
+                                <label key={identifier} className="flex items-start gap-2 text-sm text-[var(--taali-text)]">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedRoleSetForSync.has(identifier)}
+                                    onChange={() => toggleWorkableSyncRole(identifier)}
+                                  />
+                                  <span>
+                                    <span className="font-medium">{job?.title || identifier}</span>
+                                    <span className="ml-1 text-xs text-[var(--taali-muted)]">({identifier})</span>
+                                  </span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
                     <div className="mt-4 flex flex-wrap gap-3">
                       <Button
                         type="button"
@@ -714,19 +878,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       <Button
                         type="button"
                         variant="secondary"
-                        disabled={workableSyncLoading || workableSyncInProgress || !workableConnected}
-                        onClick={() => handleSyncWorkable({ skipCv: true })}
-                      >
-                        {workableSyncInProgress ? 'Running…' : 'Sync (candidates only)'}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="secondary"
                         className="border-2 border-[var(--taali-border)] bg-[var(--taali-text)] text-[var(--taali-surface)] hover:opacity-90"
-                        disabled={workableSyncLoading || workableSyncInProgress || !workableConnected}
-                        onClick={() => handleSyncWorkable()}
+                        disabled={workableSyncLoading || workableSyncInProgress || !workableConnected || (totalRoleCountForSync > 0 && selectedRoleCountForSync === 0)}
+                        onClick={handleSyncWorkable}
                       >
-                        {workableSyncInProgress ? 'Running in background' : 'Sync (full)'}
+                        {workableSyncInProgress ? 'Running in background' : 'Run metadata sync'}
                       </Button>
                     </div>
                   </div>
@@ -996,7 +1152,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     onChange={(e) => setDarkMode(e.target.checked)}
                     className="w-4 h-4 accent-[var(--taali-purple)]"
                   />
-                  Enable dark mode
+                  Enable dark mode (default)
                 </label>
               </Panel>
             )}

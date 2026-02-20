@@ -54,14 +54,16 @@ Use the output as the value for `SECRET_KEY`. Never reuse the dev default in pro
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `CLAUDE_MODEL` | No | `claude-3-5-haiku-latest` | Model for assessment terminal, chat, and general use. |
-| `CLAUDE_SCORING_MODEL` | No | `claude-3-5-haiku-latest` | Model for TAALI CV score, interview focus, and scoring. |
+| `CLAUDE_SCORING_MODEL` | No | `""` | Legacy compatibility variable. If set, it must match `CLAUDE_MODEL`. |
 | `MAX_TOKENS_PER_RESPONSE` | No | `1024` | Maximum tokens returned per Claude response. |
 
-Both models default to `claude-3-5-haiku-latest` for consistency and cost efficiency. Override via environment if needed:
+Use `CLAUDE_MODEL` as the single active model selector:
 
 ```bash
-# Optional overrides (defaults are recommended)
+# Recommended
 CLAUDE_MODEL=claude-3-5-haiku-latest
+
+# Optional legacy compatibility (must match CLAUDE_MODEL if set)
 CLAUDE_SCORING_MODEL=claude-3-5-haiku-latest
 ```
 

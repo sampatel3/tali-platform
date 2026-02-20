@@ -15,6 +15,7 @@ import { useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import { assessments as assessmentsApi } from './shared/api';
 import { pathForPage } from './app/routing';
+import { GlobalThemeToggle } from './shared/ui/GlobalThemeToggle';
 
 import { LandingPage } from './features/marketing/LandingPage';
 import {
@@ -367,6 +368,7 @@ function App() {
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <ToastProvider>
         <AppContent />
+        <GlobalThemeToggle />
       </ToastProvider>
     </BrowserRouter>
   );

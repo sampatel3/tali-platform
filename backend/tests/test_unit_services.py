@@ -20,6 +20,8 @@ from app.services.document_service import (
     extract_text_from_docx,
     extract_text_from_txt,
     extract_text,
+    sanitize_json_for_storage,
+    sanitize_text_for_storage,
     validate_upload,
     save_file_locally,
 )
@@ -50,6 +52,18 @@ class TestExtractTextFromTxt:
         content = b"\x80\x81\x82"
         result = extract_text_from_txt(content)
         assert isinstance(result, str)
+
+
+class TestSanitizeForStorage:
+
+    def test_sanitize_text_removes_nul_and_unsafe_controls(self):
+        raw = "hello\x00world\x07!\nline"
+        assert sanitize_text_for_storage(raw) == "helloworld!\nline"
+
+    def test_sanitize_json_recursively_strips_controls(self):
+        payload = {"a": "x\x00y", "nested": [{"k\x00": "v\x07"}]}
+        cleaned = sanitize_json_for_storage(payload)
+        assert cleaned == {"a": "xy", "nested": [{"k": "v"}]}
 
 
 class TestExtractTextFromPdf:

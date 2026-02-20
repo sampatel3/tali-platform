@@ -101,14 +101,16 @@ def test_start_payload_exposes_terminal_mode_contract(client, monkeypatch):
     assert payload["terminal_capabilities"]["enabled"] is True
 
 
-def test_claude_endpoint_returns_terminal_hint_in_cli_mode(client, monkeypatch):
+def test_claude_endpoint_returns_cursor_style_wrapper_response(client, monkeypatch):
     headers = _register_and_login(client)
     task = _create_task(client, headers)
     assessment = _create_assessment(client, headers, task["id"])
 
     import app.domains.assessments_runtime.routes as assessments_api
+    import app.domains.assessments_runtime.candidate_claude_routes as candidate_claude_routes
     import app.domains.integrations_notifications.adapters as integrations_adapters
     import app.components.assessments.service as assessments_svc
+    import app.components.assessments.claude_budget as claude_budget
     import app.components.assessments.terminal_runtime as terminal_runtime
 
     class FakeSandbox:
@@ -135,6 +137,21 @@ def test_claude_endpoint_returns_terminal_hint_in_cli_mode(client, monkeypatch):
         def close_sandbox(self, _sandbox):
             return None
 
+    class FakeClaudeService:
+        def __init__(self, _api_key):
+            pass
+
+        def chat(self, messages, system=None):
+            assert messages[-1]["role"] == "user"
+            assert system is not None
+            return {
+                "success": True,
+                "content": "Cursor-style wrapper response",
+                "tokens_used": 12,
+                "input_tokens": 7,
+                "output_tokens": 5,
+            }
+
     monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_api.settings, "ASSESSMENT_TERMINAL_ENABLED", True)
     monkeypatch.setattr(assessments_api.settings, "ASSESSMENT_TERMINAL_DEFAULT_MODE", "claude_cli_terminal")
@@ -143,9 +160,15 @@ def test_claude_endpoint_returns_terminal_hint_in_cli_mode(client, monkeypatch):
     monkeypatch.setattr(assessments_svc.settings, "ASSESSMENT_TERMINAL_DEFAULT_MODE", "claude_cli_terminal")
     monkeypatch.setattr(terminal_runtime.settings, "ASSESSMENT_TERMINAL_ENABLED", True)
     monkeypatch.setattr(terminal_runtime.settings, "ASSESSMENT_TERMINAL_DEFAULT_MODE", "claude_cli_terminal")
+    monkeypatch.setattr(terminal_runtime.settings, "ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK", True)
+    monkeypatch.setattr(terminal_runtime.settings, "ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setattr(claude_budget.settings, "ASSESSMENT_CLAUDE_BUDGET_DEFAULT_USD", 1.0)
+    monkeypatch.setattr(claude_budget.settings, "CLAUDE_INPUT_COST_PER_MILLION_USD", 1.0)
+    monkeypatch.setattr(claude_budget.settings, "CLAUDE_OUTPUT_COST_PER_MILLION_USD", 1.0)
     monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
     monkeypatch.setattr(assessments_svc, "_clone_assessment_branch_into_workspace", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(candidate_claude_routes, "ClaudeService", FakeClaudeService)
 
     start = client.post(f"/api/v1/assessments/token/{assessment['token']}/start")
     assert start.status_code == 200
@@ -156,11 +179,13 @@ def test_claude_endpoint_returns_terminal_hint_in_cli_mode(client, monkeypatch):
         json={"message": "help", "conversation_history": []},
         headers={"x-assessment-token": assessment["token"]},
     )
-    assert claude.status_code == 501
+    assert claude.status_code == 200
     payload = claude.json()
-    detail = payload["detail"]
-    assert detail["requires_terminal"] is True
-    assert "terminal-only" in detail["message"]
+    assert payload["success"] is True
+    assert "Cursor-style wrapper response" in payload["content"]
+    assert payload["claude_budget"]["enabled"] is True
+    assert payload["claude_budget"]["used_usd"] > 0
+    assert payload["claude_budget"]["remaining_usd"] < payload["claude_budget"]["limit_usd"]
 
 
 def test_terminal_ws_rejects_invalid_token(client, monkeypatch):

@@ -15,9 +15,12 @@ from ....models.candidate import Candidate
 from ....models.candidate_application import CandidateApplication
 from ....models.organization import Organization
 from ....models.role import Role
-from ....platform.config import settings
-from ....services.document_service import save_file_locally
-from ....services.interview_focus_service import generate_interview_focus_sync
+from ....models.workable_sync_run import WorkableSyncRun
+from ....services.document_service import (
+    sanitize_json_for_storage,
+    sanitize_text_for_storage,
+    save_file_locally,
+)
 from .service import WorkableRateLimitError, WorkableService
 
 logger = logging.getLogger(__name__)
@@ -69,7 +72,7 @@ def _strip_html(html: str) -> str:
     text = re.sub(r"\n[ \t]+", "\n", text)
     text = re.sub(r"[ \t]+\n", "\n", text)
     text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    return sanitize_text_for_storage(text.strip())
 
 
 def _remove_embedded_dict_reprs(text: str) -> str:
@@ -197,7 +200,6 @@ def _format_job_spec_from_api(job_data: dict) -> str:
             break
 
     def _extract_html_or_text(val: Any) -> str | None:
-        """Get displayable string from value - handles {"html": "...", "text": "..."} or plain string."""
         if val is None:
             return None
         if isinstance(val, str) and val.strip():
@@ -259,7 +261,7 @@ def _format_job_spec_from_api(job_data: dict) -> str:
     result = "\n".join(lines).strip()
     # Final pass: strip any remaining embedded reprs (defense in depth)
     result = _remove_embedded_dict_reprs(result)
-    return result.strip()
+    return sanitize_text_for_storage(result.strip())
 
 
 TERMINAL_STAGES = {"hired", "rejected", "withdrawn", "disqualified", "declined", "archived"}
@@ -345,21 +347,21 @@ def _candidate_email(payload: dict) -> str | None:
 def _candidate_name(payload: dict, fallback: str | None = None) -> str | None:
     name = payload.get("name")
     if isinstance(name, str) and name.strip():
-        return name.strip()
+        return sanitize_text_for_storage(name.strip())
     first = (payload.get("firstname") or "").strip()
     last = (payload.get("lastname") or "").strip()
     full = f"{first} {last}".strip()
     if full:
-        return full
-    return fallback
+        return sanitize_text_for_storage(full)
+    return sanitize_text_for_storage(fallback) if fallback else None
 
 
 def _candidate_position(payload: dict, job_title: str | None = None) -> str | None:
     for key in ("headline", "title", "position"):
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
-            return value.strip()
-    return job_title
+            return sanitize_text_for_storage(value.strip())
+    return sanitize_text_for_storage(job_title) if job_title else None
 
 
 def _rank_score_for_application(app: CandidateApplication) -> float | None:
@@ -375,12 +377,12 @@ def _extract_candidate_fields(payload: dict) -> dict:
     # Headline
     headline = payload.get("headline") or payload.get("title")
     if isinstance(headline, str) and headline.strip():
-        fields["headline"] = headline.strip()
+        fields["headline"] = sanitize_text_for_storage(headline.strip())
 
     # Image
     image_url = payload.get("image_url") or payload.get("avatar_url")
     if isinstance(image_url, str) and image_url.strip():
-        fields["image_url"] = image_url.strip()
+        fields["image_url"] = sanitize_text_for_storage(image_url.strip())
 
     # Location
     location = payload.get("location") or {}
@@ -388,63 +390,63 @@ def _extract_candidate_fields(payload: dict) -> dict:
         city = location.get("city")
         country = location.get("country")
         if isinstance(city, str) and city.strip():
-            fields["location_city"] = city.strip()
+            fields["location_city"] = sanitize_text_for_storage(city.strip())
         if isinstance(country, str) and country.strip():
-            fields["location_country"] = country.strip()
+            fields["location_country"] = sanitize_text_for_storage(country.strip())
     elif isinstance(location, str) and location.strip():
-        fields["location_city"] = location.strip()
+        fields["location_city"] = sanitize_text_for_storage(location.strip())
 
     # Phone
     phone = payload.get("phone")
     if isinstance(phone, str) and phone.strip():
-        fields["phone"] = phone.strip()
+        fields["phone"] = sanitize_text_for_storage(phone.strip())
 
     # Profile URL
     profile_url = payload.get("profile_url") or payload.get("url")
     if isinstance(profile_url, str) and profile_url.strip():
-        fields["profile_url"] = profile_url.strip()
+        fields["profile_url"] = sanitize_text_for_storage(profile_url.strip())
 
     # Social profiles
     socials = payload.get("social_profiles")
     if isinstance(socials, list) and socials:
-        fields["social_profiles"] = [
+        fields["social_profiles"] = sanitize_json_for_storage([
             {k: v for k, v in s.items() if k in ("type", "url", "name", "username")}
             for s in socials
             if isinstance(s, dict)
-        ]
+        ])
 
     # Tags
     tags = payload.get("tags")
     if isinstance(tags, list) and tags:
-        fields["tags"] = [str(t) for t in tags if t]
+        fields["tags"] = [sanitize_text_for_storage(str(t)) for t in tags if t]
 
     # Skills
     skills = payload.get("skills")
     if isinstance(skills, list) and skills:
-        fields["skills"] = [str(s) for s in skills if s]
+        fields["skills"] = [sanitize_text_for_storage(str(s)) for s in skills if s]
 
     # Education
     education = payload.get("education_entries") or payload.get("education")
     if isinstance(education, list) and education:
-        fields["education_entries"] = [
+        fields["education_entries"] = sanitize_json_for_storage([
             {k: v for k, v in e.items() if k in ("school", "degree", "field_of_study", "start_date", "end_date")}
             for e in education
             if isinstance(e, dict)
-        ]
+        ])
 
     # Experience
     experience = payload.get("experience_entries") or payload.get("experience")
     if isinstance(experience, list) and experience:
-        fields["experience_entries"] = [
+        fields["experience_entries"] = sanitize_json_for_storage([
             {k: v for k, v in e.items() if k in ("company", "title", "start_date", "end_date", "current", "summary", "industry")}
             for e in experience
             if isinstance(e, dict)
-        ]
+        ])
 
     # Summary
     summary = payload.get("summary") or payload.get("cover_letter")
     if isinstance(summary, str) and summary.strip():
-        fields["summary"] = summary.strip()
+        fields["summary"] = sanitize_text_for_storage(summary.strip())
 
     # Created at
     created_at = payload.get("created_at")
@@ -462,100 +464,243 @@ class WorkableSyncService:
         self.client = client
         self._job_details_cache: dict[str, dict] = {}
 
-    def _is_cancel_requested(self, db: Session, org: Organization) -> bool:
+    def _get_sync_run(self, db: Session, run_id: int | None) -> WorkableSyncRun | None:
+        if not run_id:
+            return None
+        return db.query(WorkableSyncRun).filter(WorkableSyncRun.id == run_id).first()
+
+    def _build_db_snapshot(self, db: Session, org: Organization) -> dict:
+        return {
+            "roles_active": (
+                db.query(Role)
+                .filter(Role.organization_id == org.id, Role.deleted_at.is_(None))
+                .count()
+            ),
+            "applications_active": (
+                db.query(CandidateApplication)
+                .filter(
+                    CandidateApplication.organization_id == org.id,
+                    CandidateApplication.deleted_at.is_(None),
+                )
+                .count()
+            ),
+            "candidates_active": (
+                db.query(Candidate)
+                .filter(Candidate.organization_id == org.id, Candidate.deleted_at.is_(None))
+                .count()
+            ),
+        }
+
+    def _persist_progress(
+        self,
+        db: Session,
+        org: Organization,
+        run: WorkableSyncRun | None,
+        summary: dict,
+        *,
+        final_status: str | None = None,
+    ) -> None:
+        errors = []
+        for err in summary.get("errors") or []:
+            text = sanitize_text_for_storage(str(err))
+            if text:
+                errors.append(text)
+        summary["errors"] = errors
+        selected_job_shortcodes = []
+        for value in summary.get("selected_job_shortcodes") or []:
+            text = sanitize_text_for_storage(str(value or "").strip())
+            if text:
+                selected_job_shortcodes.append(text)
+        summary["selected_job_shortcodes"] = selected_job_shortcodes
+        summary["selected_jobs_count"] = int(summary.get("selected_jobs_count") or len(selected_job_shortcodes))
+        summary["selected_jobs_applied"] = int(summary.get("selected_jobs_applied") or 0)
+        summary["db_snapshot"] = sanitize_json_for_storage(summary.get("db_snapshot") or {})
+
+        if run:
+            run.phase = sanitize_text_for_storage(summary.get("phase") or "") or None
+            run.jobs_total = int(summary.get("jobs_total") or 0)
+            run.jobs_processed = int(summary.get("jobs_processed") or 0)
+            run.candidates_seen = int(summary.get("candidates_seen") or 0)
+            run.candidates_upserted = int(summary.get("candidates_upserted") or 0)
+            run.applications_upserted = int(summary.get("applications_upserted") or 0)
+            run.errors = errors
+            run.db_snapshot = summary["db_snapshot"]
+            if final_status:
+                run.status = final_status
+                run.finished_at = _now()
+
+        if final_status:
+            org.workable_sync_progress = None
+            org.workable_sync_started_at = None
+            org.workable_sync_cancel_requested_at = None
+        else:
+            org.workable_sync_progress = sanitize_json_for_storage(
+                {
+                    "run_id": summary.get("run_id"),
+                    "mode": summary.get("mode"),
+                    "phase": summary.get("phase"),
+                    "jobs_total": summary.get("jobs_total"),
+                    "jobs_processed": summary.get("jobs_processed"),
+                    "jobs_upserted": summary.get("jobs_upserted"),
+                    "candidates_seen": summary.get("candidates_seen"),
+                    "candidates_upserted": summary.get("candidates_upserted"),
+                    "applications_upserted": summary.get("applications_upserted"),
+                    "errors": errors,
+                    "current_step": summary.get("current_step"),
+                    "current_job_shortcode": summary.get("current_job_shortcode"),
+                    "current_candidate_index": summary.get("current_candidate_index"),
+                    "last_request": summary.get("last_request"),
+                    "selected_job_shortcodes": summary.get("selected_job_shortcodes"),
+                    "selected_jobs_count": summary.get("selected_jobs_count"),
+                    "selected_jobs_applied": summary.get("selected_jobs_applied"),
+                    "db_snapshot": summary.get("db_snapshot"),
+                }
+            )
+        db.commit()
+
+    def _is_cancel_requested(self, db: Session, org: Organization, run: WorkableSyncRun | None = None) -> bool:
+        if run is not None:
+            db.refresh(run)
+            if run.cancel_requested_at is not None:
+                return True
         db.refresh(org)
         return org.workable_sync_cancel_requested_at is not None
 
-    def sync_org(self, db: Session, org: Organization, *, full_resync: bool = False) -> dict:
+    def sync_org(
+        self,
+        db: Session,
+        org: Organization,
+        *,
+        full_resync: bool = False,
+        run_id: int | None = None,
+        mode: str = "metadata",
+        selected_job_shortcodes: list[str] | None = None,
+    ) -> dict:
+        run = self._get_sync_run(db, run_id)
+        requested_mode = (mode or "metadata").strip().lower()
+        if requested_mode not in {"metadata", "full"}:
+            requested_mode = "metadata"
+        effective_mode = "metadata"  # Full mode is reserved in this cycle.
+        selected_identifiers: set[str] = set()
+        for value in selected_job_shortcodes or []:
+            normalized = sanitize_text_for_storage(str(value or "").strip())
+            if normalized:
+                selected_identifiers.add(normalized)
+
         summary = {
+            "run_id": run.id if run else None,
+            "requested_mode": requested_mode,
+            "mode": effective_mode,
+            "full_mode_reserved": requested_mode == "full",
+            "full_resync": bool(full_resync),
+            "phase": "listing_jobs",
+            "jobs_total": 0,
+            "jobs_processed": 0,
             "jobs_seen": 0,
             "jobs_upserted": 0,
             "candidates_seen": 0,
             "candidates_upserted": 0,
             "applications_upserted": 0,
             "errors": [],
-            "full_resync": bool(full_resync),
             "current_step": "listing_jobs",
             "last_request": "GET /jobs?state=published",
             "current_job_shortcode": None,
             "current_candidate_index": None,
+            "selected_job_shortcodes": sorted(selected_identifiers),
+            "selected_jobs_count": len(selected_identifiers),
+            "selected_jobs_applied": 0,
+            "db_snapshot": {},
         }
         now = _now()
+        final_status = "success"
+
         try:
             org.workable_sync_cancel_requested_at = None
-            db.commit()
-            org.workable_sync_progress = dict(summary)
-            db.commit()
-            jobs = self.client.list_open_jobs()
-            summary["jobs_seen"] = len(jobs)
+            org.workable_sync_started_at = now
+            if run:
+                run.mode = requested_mode
+                run.status = "running"
+                run.phase = "listing_jobs"
+                run.cancel_requested_at = None
+                if run.started_at is None:
+                    run.started_at = now
+            summary["db_snapshot"] = self._build_db_snapshot(db, org)
+            self._persist_progress(db, org, run, summary)
+
+            all_jobs = self.client.list_open_jobs()
+            summary["jobs_seen"] = len(all_jobs)
+            jobs = all_jobs
+            if selected_identifiers:
+                filtered_jobs: list[dict] = []
+                matched_identifiers: set[str] = set()
+                for job in all_jobs:
+                    if not isinstance(job, dict):
+                        continue
+                    job_identifiers: set[str] = set()
+                    for raw in (job.get("shortcode"), job.get("id")):
+                        value = sanitize_text_for_storage(str(raw or "").strip())
+                        if value:
+                            job_identifiers.add(value)
+                    if job_identifiers.intersection(selected_identifiers):
+                        filtered_jobs.append(job)
+                        matched_identifiers.update(job_identifiers.intersection(selected_identifiers))
+                jobs = filtered_jobs
+                missing = sorted(selected_identifiers - matched_identifiers)
+                if missing:
+                    summary["errors"].append(
+                        f"{len(missing)} selected roles were not found in Workable jobs."
+                    )
+                    final_status = "partial"
+            summary["selected_jobs_applied"] = len(jobs)
+            summary["jobs_total"] = len(jobs)
+            summary["phase"] = "syncing_candidates" if jobs else "completed"
             summary["current_step"] = "listing_candidates" if jobs else None
-            summary["last_request"] = "GET /jobs (done)" if jobs else "GET /jobs (0 jobs)"
+            summary["last_request"] = "GET /jobs (filtered)" if jobs and selected_identifiers else ("GET /jobs (done)" if jobs else "GET /jobs (0 jobs)")
             if not jobs:
-                logger.warning("Workable list_open_jobs returned 0 jobs for org_id=%s", org.id)
-                summary["errors"].append(
-                    "Workable returned 0 jobs. Ensure you have jobs in Published or Open state in Workable, and that your token has the 'Jobs' (r_jobs) scope."
-                )
-            org.workable_sync_progress = dict(summary)
-            db.commit()
-            if self._is_cancel_requested(db, org):
-                summary["errors"].append("Sync cancelled by user")
-                org.workable_last_sync_at = now
-                org.workable_last_sync_status = "cancelled"
-                org.workable_last_sync_summary = {**summary, "cancelled": True}
-                org.workable_sync_progress = None
-                org.workable_sync_cancel_requested_at = None
-                db.commit()
-                return summary
-            rate_limited = False
-            for job in jobs:
-                db.refresh(org)
-                if org.workable_sync_cancel_requested_at is not None:
-                    summary["errors"].append("Sync cancelled by user")
-                    logger.info("Workable sync cancelled by user for org_id=%s", org.id)
-                    break
-                if rate_limited:
-                    break
+                if selected_identifiers:
+                    logger.warning("Workable sync selection matched 0 jobs for org_id=%s", org.id)
+                    summary["errors"].append("No Workable jobs matched your selected roles.")
+                else:
+                    logger.warning("Workable list_open_jobs returned 0 jobs for org_id=%s", org.id)
+                    summary["errors"].append(
+                        "Workable returned 0 jobs. Ensure your token includes r_jobs and the account has published/open jobs."
+                    )
+                final_status = "partial"
+            summary["db_snapshot"] = self._build_db_snapshot(db, org)
+            self._persist_progress(db, org, run, summary)
+
+            for job_idx, job in enumerate(jobs):
+                if self._is_cancel_requested(db, org, run):
+                    raise WorkableSyncCancelled()
                 try:
                     role, created_role = self._upsert_role(db, org, job)
                     if created_role:
                         summary["jobs_upserted"] += 1
 
-                    shortcode = (job.get("shortcode") or job.get("id") or "?")[:20]
+                    shortcode = sanitize_text_for_storage(str(job.get("shortcode") or job.get("id") or "?"))[:20]
+                    summary["phase"] = "syncing_candidates"
                     summary["current_step"] = "listing_candidates"
                     summary["current_job_shortcode"] = shortcode
+                    summary["current_candidate_index"] = None
                     summary["last_request"] = f"GET /jobs/{shortcode}/candidates"
-                    org.workable_sync_progress = dict(summary)
-                    db.commit()
+                    self._persist_progress(db, org, run, summary)
+
                     candidates = self._list_job_candidates_for_job(job=job, role=role)
-                    if not candidates:
-                        logger.info(
-                            "list_job_candidates returned 0 for job shortcode=%s",
-                            job.get("shortcode"),
-                        )
-                    job_title = (job.get("title") or job.get("shortcode") or "job")[:60]
-                    logger.info(
-                        "Workable job shortcode=%s title=%s candidates=%s",
-                        job.get("shortcode"),
-                        job_title,
-                        len(candidates),
-                    )
-                    org.workable_sync_progress = dict(summary)
-                    db.commit()
                     total_candidates = len(candidates)
+                    if not candidates:
+                        logger.info("list_job_candidates returned 0 for job shortcode=%s", job.get("shortcode"))
+
                     for idx, candidate_ref in enumerate(candidates):
-                        db.refresh(org)
-                        if org.workable_sync_cancel_requested_at is not None:
-                            summary["errors"].append("Sync cancelled by user")
-                            break
+                        if self._is_cancel_requested(db, org, run):
+                            raise WorkableSyncCancelled()
+
                         summary["candidates_seen"] += 1
-                        cid = str(candidate_ref.get("id") or "?")[:12]
+                        cid = sanitize_text_for_storage(str(candidate_ref.get("id") or "?"))[:12]
                         summary["current_step"] = "syncing_candidate"
-                        summary["current_candidate_index"] = f"{idx + 1}/{total_candidates}" if total_candidates else str(idx + 1)
+                        summary["current_candidate_index"] = (
+                            f"{idx + 1}/{total_candidates}" if total_candidates else str(idx + 1)
+                        )
                         summary["last_request"] = f"syncing candidate {cid}"
-                        org.workable_sync_progress = dict(summary)
-                        # Commit every 5 candidates to reduce DB load while keeping UI responsive
-                        if (idx + 1) % 5 == 0 or idx == 0:
-                            db.commit()
                         try:
                             synced = self._sync_candidate_for_role(
                                 db=db,
@@ -564,44 +709,75 @@ class WorkableSyncService:
                                 job=job,
                                 candidate_ref=candidate_ref,
                                 now=now,
+                                run=run,
                             )
+                            summary["candidates_upserted"] += synced.get("candidate_upserted", 0)
+                            summary["applications_upserted"] += synced.get("application_upserted", 0)
                         except WorkableSyncCancelled:
-                            summary["errors"].append("Sync cancelled by user")
-                            logger.info("Workable sync cancelled by user for org_id=%s", org.id)
-                            break
-                        summary["candidates_upserted"] += synced.get("candidate_upserted", 0)
-                        summary["applications_upserted"] += synced.get("application_upserted", 0)
-                    if any("cancelled" in (e or "").lower() for e in summary["errors"]):
-                        break
+                            raise
+                        except Exception as exc:
+                            logger.exception("Failed syncing candidate for job_shortcode=%s", shortcode)
+                            summary["errors"].append(str(exc))
+                            final_status = "partial"
+
+                        if (idx + 1) % 5 == 0 or idx == 0:
+                            summary["db_snapshot"] = self._build_db_snapshot(db, org)
+                            self._persist_progress(db, org, run, summary)
+
+                    summary["jobs_processed"] = job_idx + 1
+                    summary["db_snapshot"] = self._build_db_snapshot(db, org)
+                    self._persist_progress(db, org, run, summary)
                 except WorkableRateLimitError as exc:
                     logger.warning("Workable sync rate-limited; stopping early for org_id=%s", org.id)
                     summary["errors"].append(str(exc))
-                    rate_limited = True
+                    final_status = "partial"
+                    break
+                except WorkableSyncCancelled:
+                    raise
                 except Exception as exc:
-                    logger.exception("Failed syncing job")
+                    logger.exception("Failed syncing job for org_id=%s", org.id)
                     summary["errors"].append(str(exc))
-                org.workable_sync_progress = dict(summary)
-                db.commit()
+                    final_status = "partial"
 
+            if self._is_cancel_requested(db, org, run):
+                raise WorkableSyncCancelled()
+
+            summary["phase"] = "completed"
+            summary["current_step"] = None
+            summary["current_job_shortcode"] = None
+            summary["current_candidate_index"] = None
+            summary["db_snapshot"] = self._build_db_snapshot(db, org)
             org.workable_last_sync_at = now
-            cancelled = any("cancelled" in (e or "").lower() for e in summary["errors"])
-            org.workable_last_sync_status = "cancelled" if cancelled else ("success" if not summary["errors"] else "partial")
-            org.workable_last_sync_summary = {**summary, "cancelled": cancelled}
-            org.workable_sync_progress = None
-            org.workable_sync_cancel_requested_at = None
-            db.commit()
+            org.workable_last_sync_status = "success" if final_status == "success" else "partial"
+            org.workable_last_sync_summary = sanitize_json_for_storage(dict(summary))
+            self._persist_progress(
+                db,
+                org,
+                run,
+                summary,
+                final_status=org.workable_last_sync_status,
+            )
+            return summary
+        except WorkableSyncCancelled:
+            summary["errors"].append("Sync cancelled by user")
+            summary["phase"] = "cancelled"
+            summary["current_step"] = None
+            summary["db_snapshot"] = self._build_db_snapshot(db, org)
+            org.workable_last_sync_at = _now()
+            org.workable_last_sync_status = "cancelled"
+            org.workable_last_sync_summary = sanitize_json_for_storage(dict(summary))
+            self._persist_progress(db, org, run, summary, final_status="cancelled")
             return summary
         except Exception as exc:
             logger.exception("Workable org sync failed")
-            org.workable_last_sync_at = now
+            summary["errors"].append(str(exc))
+            summary["phase"] = "failed"
+            summary["current_step"] = None
+            summary["db_snapshot"] = self._build_db_snapshot(db, org)
+            org.workable_last_sync_at = _now()
             org.workable_last_sync_status = "failed"
-            org.workable_last_sync_summary = {
-                **summary,
-                "errors": [*summary["errors"], str(exc)],
-            }
-            org.workable_sync_progress = None
-            org.workable_sync_cancel_requested_at = None
-            db.commit()
+            org.workable_last_sync_summary = sanitize_json_for_storage(dict(summary))
+            self._persist_progress(db, org, run, summary, final_status="failed")
             raise
 
     def _job_identifiers(self, job: dict, role: Role | None = None) -> list[str]:
@@ -654,22 +830,26 @@ class WorkableSyncService:
 
     def _upsert_role(self, db: Session, org: Organization, job: dict) -> tuple[Role, bool]:
         # Prefer shortcode (used by Workable API for /jobs/:shortcode/candidates)
-        job_id = str(job.get("shortcode") or job.get("id") or "").strip()
-        title = str(job.get("title") or job.get("name") or f"Workable role {job_id or 'unknown'}").strip()
+        job_id = sanitize_text_for_storage(str(job.get("shortcode") or job.get("id") or "").strip())
+        title = sanitize_text_for_storage(
+            str(job.get("title") or job.get("name") or f"Workable role {job_id or 'unknown'}").strip()
+        )
         # Always fetch job details to get consistent structure (location, description, etc.).
         details = self._job_details_for_role(job=job, role=None)
+
         def _get_desc(d: dict) -> str:
             for key in ("description", "full_description", "requirements"):
                 v = d.get(key) if isinstance(d, dict) else None
                 if isinstance(v, str) and v.strip():
-                    return v
+                    return sanitize_text_for_storage(v)
             for sub in (d.get("job"), d.get("details")):
                 if isinstance(sub, dict):
                     for key in ("description", "full_description", "requirements"):
                         v = sub.get(key)
                         if isinstance(v, str) and v.strip():
-                            return v
+                            return sanitize_text_for_storage(v)
             return ""
+
         description = _get_desc(details) or _get_desc(job) or ""
         role = None
         if job_id:
@@ -691,18 +871,20 @@ class WorkableSyncService:
         role.deleted_at = None  # restore if was soft-deleted
         role.source = "workable"
         role.workable_job_id = job_id or role.workable_job_id
-        role.workable_job_data = {**job, "details": details} if details else job
+        role.workable_job_data = sanitize_json_for_storage({**job, "details": details} if details else job)
         role.name = title
         # Build one formatted spec from full API data for display and attachment
         formatted_spec = _format_job_spec_from_api(role.workable_job_data or {})
         if formatted_spec:
-            role.job_spec_text = formatted_spec
-            role.description = formatted_spec
+            safe_spec = sanitize_text_for_storage(formatted_spec)
+            role.job_spec_text = safe_spec
+            role.description = safe_spec
         else:
             stripped = _strip_html(description) if isinstance(description, str) and description.strip() else ""
-            role.description = stripped or role.description
+            safe_desc = sanitize_text_for_storage(stripped)
+            role.description = safe_desc or role.description
             if stripped:
-                role.job_spec_text = stripped
+                role.job_spec_text = safe_desc
         db.flush()
         # Save job spec as an attachment (file) for download and consistent display
         if (role.job_spec_text or "").strip():
@@ -715,23 +897,10 @@ class WorkableSyncService:
                     ext="txt",
                 )
                 role.job_spec_file_url = path
-                role.job_spec_filename = f"job-spec-{role.name or role.id}.txt".replace("/", "-")
+                role.job_spec_filename = sanitize_text_for_storage(f"job-spec-{role.name or role.id}.txt").replace("/", "-")
                 role.job_spec_uploaded_at = _now()
             except Exception:
                 logger.exception("Failed saving Workable job spec file for role_id=%s", role.id)
-        # Auto-generate interview focus pointers when we have job spec and API key
-        if (role.job_spec_text or "").strip() and settings.ANTHROPIC_API_KEY:
-            try:
-                focus = generate_interview_focus_sync(
-                    job_spec_text=(role.job_spec_text or "").strip(),
-                    api_key=settings.ANTHROPIC_API_KEY,
-                    model=settings.resolved_claude_scoring_model,
-                )
-                if focus:
-                    role.interview_focus = focus
-                    role.interview_focus_generated_at = _now()
-            except Exception:
-                logger.exception("Failed generating interview focus for role_id=%s", role.id)
         return role, created
 
     def _sync_candidate_for_role(
@@ -743,8 +912,9 @@ class WorkableSyncService:
         job: dict,
         candidate_ref: dict,
         now: datetime,
+        run: WorkableSyncRun | None = None,
     ) -> dict:
-        if self._is_cancel_requested(db, org):
+        if self._is_cancel_requested(db, org, run):
             raise WorkableSyncCancelled()
         counters = {
             "candidate_upserted": 0,
@@ -757,7 +927,7 @@ class WorkableSyncService:
         # Use bulk payload directly -- no individual candidate fetch
         candidate_payload = candidate_ref
 
-        if self._is_cancel_requested(db, org):
+        if self._is_cancel_requested(db, org, run):
             raise WorkableSyncCancelled()
         stage = (
             candidate_payload.get("stage")
@@ -776,11 +946,9 @@ class WorkableSyncService:
         email = _candidate_email(candidate_payload) or _candidate_email(candidate_ref)
         if not email:
             logger.debug(
-                "Skipping candidate id=%s (no email); payload keys=%s",
+                "Candidate id=%s has no email in list payload; syncing by Workable ID only.",
                 candidate_id,
-                list(candidate_payload.keys())[:20] if candidate_payload else [],
             )
-            return counters
 
         candidate = (
             db.query(Candidate)
@@ -790,7 +958,7 @@ class WorkableSyncService:
             )
             .first()
         )
-        if not candidate:
+        if not candidate and email:
             candidate = (
                 db.query(Candidate)
                 .filter(
@@ -799,21 +967,21 @@ class WorkableSyncService:
                 )
                 .first()
             )
-        created_candidate = False
         if not candidate:
             candidate = Candidate(
                 organization_id=org.id,
-                email=email,
+                email=sanitize_text_for_storage(email) if email else None,
             )
             db.add(candidate)
-            created_candidate = True
 
         candidate.deleted_at = None  # restore if was soft-deleted
-        candidate.email = email
-        candidate.full_name = _candidate_name(candidate_payload, fallback=candidate.full_name or email)
+        if email:
+            candidate.email = sanitize_text_for_storage(email)
+        fallback_name = candidate.full_name or email or f"Workable candidate {candidate_id}"
+        candidate.full_name = _candidate_name(candidate_payload, fallback=fallback_name)
         candidate.position = _candidate_position(candidate_payload, role.name)
-        candidate.workable_candidate_id = candidate_id
-        candidate.workable_data = candidate_payload
+        candidate.workable_candidate_id = sanitize_text_for_storage(candidate_id)
+        candidate.workable_data = sanitize_json_for_storage(candidate_payload)
         candidate.workable_enriched = False
 
         # Extract rich profile fields from bulk payload
@@ -822,8 +990,7 @@ class WorkableSyncService:
             setattr(candidate, field, value)
 
         db.flush()
-        if created_candidate:
-            counters["candidate_upserted"] += 1
+        counters["candidate_upserted"] += 1
 
         app = (
             db.query(CandidateApplication)
@@ -834,7 +1001,6 @@ class WorkableSyncService:
             )
             .first()
         )
-        created_app = False
         if not app:
             app = CandidateApplication(
                 organization_id=org.id,
@@ -843,20 +1009,19 @@ class WorkableSyncService:
                 status="applied",
             )
             db.add(app)
-            created_app = True
 
         app.deleted_at = None  # restore if was soft-deleted
         app.source = "workable"
-        app.status = str(stage or app.status or "applied")
-        app.workable_candidate_id = candidate_id
-        app.workable_stage = str(stage or "")
+        app.status = sanitize_text_for_storage(str(stage or app.status or "applied"))
+        app.workable_candidate_id = sanitize_text_for_storage(candidate_id)
+        app.workable_stage = sanitize_text_for_storage(str(stage or ""))
         app.last_synced_at = now
 
         # Extract application-level Workable fields
         app.workable_sourced = candidate_payload.get("sourced", None)
         profile_url = candidate_payload.get("profile_url") or candidate_payload.get("url")
         if isinstance(profile_url, str) and profile_url.strip():
-            app.workable_profile_url = profile_url.strip()
+            app.workable_profile_url = sanitize_text_for_storage(profile_url.strip())
 
         # Skip ratings API during sync to stay under rate limit (10 req/10 sec); use candidate payload score only
         ratings_payload = None
@@ -870,11 +1035,10 @@ class WorkableSyncService:
             app.workable_score = normalized_score
             app.workable_score_source = score_source
 
-        if self._is_cancel_requested(db, org):
+        if self._is_cancel_requested(db, org, run):
             raise WorkableSyncCancelled()
 
         app.rank_score = _rank_score_for_application(app)
         db.flush()
-        if created_app:
-            counters["application_upserted"] += 1
+        counters["application_upserted"] += 1
         return counters

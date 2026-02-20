@@ -4,13 +4,11 @@ import App from './App.jsx'
 import { AuthProvider } from './context/AuthContext.jsx'
 import './index.css'
 import { getDocumentTitle } from './config/brand'
+import { applyDarkModeClass, readDarkModePreference } from './lib/themePreference'
 
 document.title = getDocumentTitle();
 
-const darkModeEnabled = typeof window !== 'undefined' && localStorage.getItem('taali_dark_mode') === '1';
-if (darkModeEnabled) {
-  document.documentElement.classList.add('dark');
-}
+applyDarkModeClass(readDarkModePreference());
 
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>

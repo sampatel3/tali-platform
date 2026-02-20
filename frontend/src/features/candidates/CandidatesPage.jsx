@@ -31,11 +31,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [roleApplications, setRoleApplications] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState('workable_score');
+  const [sortBy, setSortBy] = useState('cv_match_score');
   const [sortOrder, setSortOrder] = useState('desc');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [minWorkableScore, setMinWorkableScore] = useState('');
   const [minCvMatchScore, setMinCvMatchScore] = useState('');
 
   const [loadingRoles, setLoadingRoles] = useState(true);
@@ -76,11 +75,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const activeFilterCount = useMemo(() => (
     [
       searchQuery.trim() !== '',
-      sortBy !== 'workable_score',
+      sortBy !== 'cv_match_score',
       sortOrder !== 'desc',
       sourceFilter !== 'all',
       statusFilter !== 'all',
-      minWorkableScore !== '',
       minCvMatchScore !== '',
     ].filter(Boolean).length
   ), [
@@ -89,7 +87,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     sortOrder,
     sourceFilter,
     statusFilter,
-    minWorkableScore,
     minCvMatchScore,
   ]);
 
@@ -137,7 +134,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       };
       if (sourceFilter !== 'all') appParams.source = sourceFilter;
       if (statusFilter !== 'all') appParams.status = statusFilter;
-      if (minWorkableScore !== '') appParams.min_workable_score = Number(minWorkableScore);
       if (minCvMatchScore !== '') appParams.min_cv_match_score = Number(minCvMatchScore);
       const [tasksRes, applicationsRes] = await Promise.all([
         rolesApi?.listTasks ? rolesApi.listTasks(roleId) : Promise.resolve({ data: [] }),
@@ -152,7 +148,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     } finally {
       setLoadingRoleContext(false);
     }
-  }, [rolesApi, sortBy, sortOrder, sourceFilter, statusFilter, minWorkableScore, minCvMatchScore]);
+  }, [rolesApi, sortBy, sortOrder, sourceFilter, statusFilter, minCvMatchScore]);
 
   const loadTasks = useCallback(async () => {
     if (!tasksApi?.list) {
@@ -198,11 +194,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
 
   const resetFilters = useCallback(() => {
     setSearchQuery('');
-    setSortBy('workable_score');
+    setSortBy('cv_match_score');
     setSortOrder('desc');
     setSourceFilter('all');
     setStatusFilter('all');
-    setMinWorkableScore('');
     setMinCvMatchScore('');
   }, []);
 
@@ -577,13 +572,12 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 </Button>
               </div>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-6">
+            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
                   Sort by
                 </span>
                 <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-                  <option value="workable_score">Workable AI</option>
                   <option value="cv_match_score">Taali AI (CV match)</option>
                   <option value="created_at">Added</option>
                 </Select>
@@ -623,21 +617,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                     </option>
                   ))}
                 </Select>
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
-                  Min workable
-                </span>
-                <Input
-                  type="number"
-                  min="0"
-                  max="10"
-                  step="0.1"
-                  aria-label="Minimum workable score"
-                  placeholder="0.0"
-                  value={minWorkableScore}
-                  onChange={(event) => setMinWorkableScore(event.target.value)}
-                />
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">

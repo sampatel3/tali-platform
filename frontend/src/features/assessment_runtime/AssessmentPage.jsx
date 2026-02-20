@@ -50,6 +50,14 @@ export default function AssessmentPage({
   const [terminalEvents, setTerminalEvents] = useState([]);
   const [terminalConnected, setTerminalConnected] = useState(false);
   const [terminalStopping, setTerminalStopping] = useState(false);
+  const [terminalPanelOpen, setTerminalPanelOpen] = useState(false);
+  const [assessmentLightMode, setAssessmentLightMode] = useState(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('taali_assessment_theme') === 'light';
+  });
+  const [claudePrompt, setClaudePrompt] = useState('');
+  const [claudePromptSending, setClaudePromptSending] = useState(false);
+  const [claudeConversation, setClaudeConversation] = useState([]);
   const [collapsedSections, setCollapsedSections] = useState({
     contextWindow: false,
     taskContext: false,
@@ -73,6 +81,10 @@ export default function AssessmentPage({
     setTerminalEvents([]);
     setTerminalConnected(false);
     setTerminalStopping(false);
+    setTerminalPanelOpen(false);
+    setClaudePrompt('');
+    setClaudePromptSending(false);
+    setClaudeConversation([]);
 
     if (startData) {
       const normalized = normalizeStartData(startData);
@@ -213,6 +225,17 @@ export default function AssessmentPage({
   const terminalCapabilities = assessment?.terminal_capabilities || {};
   const showTerminal = aiMode === 'claude_cli_terminal';
 
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    localStorage.setItem('taali_assessment_theme', assessmentLightMode ? 'light' : 'dark');
+  }, [assessmentLightMode]);
+
+  useEffect(() => {
+    if (!showTerminal) {
+      setTerminalPanelOpen(false);
+    }
+  }, [showTerminal]);
+
   const toggleSection = useCallback((sectionKey) => {
     setCollapsedSections((prev) => ({
       ...prev,
@@ -292,6 +315,14 @@ export default function AssessmentPage({
       setTerminalStopping(false);
     }
   }, [assessment, assessmentId, assessmentTokenForApi, terminalStopping, appendTerminalEvent, sendTerminalPayload]);
+
+  const handleToggleTerminalPanel = useCallback(() => {
+    setTerminalPanelOpen((prev) => !prev);
+  }, []);
+
+  const handleToggleAssessmentTheme = useCallback(() => {
+    setAssessmentLightMode((prev) => !prev);
+  }, []);
 
   useEffect(() => {
     // Demo sessions use the same terminal transport; do not skip websocket init in demo mode.
@@ -462,6 +493,69 @@ export default function AssessmentPage({
     setOutput("Code saved.");
   }, [demoMode]);
 
+  const handleClaudePromptSubmit = useCallback(async () => {
+    const message = String(claudePrompt || '').trim();
+    if (!message || claudePromptSending) return;
+    if (isTimerPaused) {
+      setOutput("Assessment is paused. Retry Claude before sending prompts.");
+      return;
+    }
+    const id = assessment?.id || assessmentId;
+    if (!id || !assessmentTokenForApi) return;
+
+    setClaudePromptSending(true);
+    setClaudePrompt('');
+    setClaudeConversation((prev) => {
+      const next = [...prev, { role: 'user', content: message }];
+      return next.slice(-30);
+    });
+    if (demoMode) {
+      setDemoPromptMessages((prev) => [...prev, message].slice(-100));
+    }
+    try {
+      const res = await assessments.claude(
+        id,
+        {
+          message,
+          conversation_history: claudeConversation,
+          code_context: codeRef.current,
+          paste_detected: false,
+          browser_focused: typeof document !== 'undefined' ? document.visibilityState === 'visible' : true,
+        },
+        assessmentTokenForApi,
+      );
+      const payload = res?.data || {};
+      const reply = String(payload.content || payload.response || '').trim() || 'No response from Claude.';
+      if (payload?.claude_budget && typeof payload.claude_budget === 'object') {
+        setClaudeBudget(payload.claude_budget);
+      }
+
+      setClaudeConversation((prev) => {
+        const next = [...prev, { role: 'assistant', content: reply }];
+        return next.slice(-30);
+      });
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      const errorMessage = typeof detail === 'string'
+        ? detail
+        : detail?.message || err?.message || 'Claude prompt failed.';
+      setClaudeConversation((prev) => {
+        const next = [...prev, { role: 'assistant', content: `[Error] ${errorMessage}` }];
+        return next.slice(-30);
+      });
+    } finally {
+      setClaudePromptSending(false);
+    }
+  }, [
+    claudePrompt,
+    claudePromptSending,
+    isTimerPaused,
+    assessment,
+    assessmentId,
+    assessmentTokenForApi,
+    claudeConversation,
+  ]);
+
   const handleSubmit = useCallback(
     async (autoSubmit = false) => {
       if (submitted) return;
@@ -563,7 +657,7 @@ export default function AssessmentPage({
   }
 
   return (
-    <div className="h-screen flex flex-col bg-white">
+    <div className={`h-screen flex flex-col ${assessmentLightMode ? 'bg-[#f3f4f6] text-gray-900' : 'bg-[#0b0f16] text-gray-100'}`}>
       <AssessmentRuntimeAlerts
         showTabWarning={showTabWarning}
         proctoringEnabled={proctoringEnabled}
@@ -575,6 +669,7 @@ export default function AssessmentPage({
         isClaudeBudgetExhausted={isClaudeBudgetExhausted}
         claudeBudget={claudeBudget}
         formatUsd={formatUsd}
+        lightMode={assessmentLightMode}
       />
 
       <AssessmentTopBar
@@ -588,6 +683,8 @@ export default function AssessmentPage({
         timeLeft={timeLeft}
         formatTime={formatTime}
         isTimerPaused={isTimerPaused}
+        lightMode={assessmentLightMode}
+        onToggleTheme={handleToggleAssessmentTheme}
         onSubmit={() => handleSubmit(false)}
       />
 
@@ -597,6 +694,7 @@ export default function AssessmentPage({
         taskContext={taskContext}
         aiMode={aiMode}
         cloneCommand={assessment?.clone_command}
+        lightMode={assessmentLightMode}
       />
 
       <AssessmentWorkspace
@@ -617,6 +715,8 @@ export default function AssessmentPage({
         editorFilename={selectedRepoPath || assessment?.filename || 'main'}
         isTimerPaused={isTimerPaused}
         showTerminal={showTerminal}
+        terminalPanelOpen={terminalPanelOpen}
+        onToggleTerminal={handleToggleTerminalPanel}
         terminalConnected={terminalConnected}
         terminalEvents={terminalEvents}
         onTerminalInput={handleTerminalInput}
@@ -625,6 +725,13 @@ export default function AssessmentPage({
         terminalStopping={terminalStopping}
         output={output}
         executing={executing}
+        claudeConversation={claudeConversation}
+        claudePrompt={claudePrompt}
+        onClaudePromptChange={setClaudePrompt}
+        onClaudePromptSubmit={handleClaudePromptSubmit}
+        claudePromptSending={claudePromptSending}
+        claudePromptDisabled={isTimerPaused || submitted}
+        lightMode={assessmentLightMode}
       />
     </div>
   );
