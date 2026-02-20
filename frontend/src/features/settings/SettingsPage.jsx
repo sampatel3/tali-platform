@@ -878,7 +878,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       <Button
                         type="button"
                         variant="secondary"
-                        className="border-2 border-[var(--taali-border)] bg-[var(--taali-text)] text-[var(--taali-surface)] hover:opacity-90"
+                        className="border-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
                         disabled={workableSyncLoading || workableSyncInProgress || !workableConnected || (totalRoleCountForSync > 0 && selectedRoleCountForSync === 0)}
                         onClick={handleSyncWorkable}
                       >
@@ -964,7 +964,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         key={packId}
                         type="button"
                         variant="secondary"
-                        className="flex items-center justify-between gap-2 !px-4 !py-3 border-2 border-[var(--taali-border)] bg-[var(--taali-text)] text-[var(--taali-surface)] hover:opacity-90"
+                        className="flex items-center justify-between gap-2 !px-4 !py-3 border-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
                         onClick={() => handleAddCredits(packId)}
                         disabled={checkoutLoading}
                       >
@@ -996,7 +996,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 </div>
 
                 <div className="border-2 border-[var(--taali-border)]">
-                  <div className="border-b-2 border-[var(--taali-border)] px-6 py-4 bg-[var(--taali-text)] text-[var(--taali-surface)]">
+                  <div className="border-b-2 border-[var(--taali-border)] px-6 py-4 bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)]">
                     <h3 className="font-bold">Usage History</h3>
                   </div>
                   <table className="w-full">
@@ -1058,7 +1058,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </form>
                 </Panel>
                 <div className="border-2 border-[var(--taali-border)]">
-                  <div className="border-b-2 border-[var(--taali-border)] px-6 py-4 bg-[var(--taali-text)] text-[var(--taali-surface)]">
+                  <div className="border-b-2 border-[var(--taali-border)] px-6 py-4 bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)]">
                     <h3 className="font-bold">Team Members</h3>
                   </div>
                   <table className="w-full">
@@ -1170,7 +1170,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
           <div className="grid grid-cols-2 border-2 border-[var(--taali-border)]">
             <button
               type="button"
-              className={`px-4 py-2 font-mono text-sm font-bold border-r-2 border-[var(--taali-border)] ${workableConnectMode === 'oauth' ? 'bg-[var(--taali-text)] text-[var(--taali-surface)]' : 'bg-[var(--taali-surface)] text-[var(--taali-text)] hover:bg-[var(--taali-bg)]'}`}
+              className={`px-4 py-2 font-mono text-sm font-bold border-r-2 border-[var(--taali-border)] ${workableConnectMode === 'oauth' ? 'bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)]' : 'bg-[var(--taali-surface)] text-[var(--taali-text)] hover:bg-[var(--taali-bg)]'}`}
               onClick={() => {
                 setWorkableConnectMode('oauth');
                 setWorkableConnectError('');
@@ -1180,7 +1180,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
             </button>
             <button
               type="button"
-              className={`px-4 py-2 font-mono text-sm font-bold ${workableConnectMode === 'token' ? 'bg-[var(--taali-text)] text-[var(--taali-surface)]' : 'bg-[var(--taali-surface)] text-[var(--taali-text)] hover:bg-[var(--taali-bg)]'}`}
+              className={`px-4 py-2 font-mono text-sm font-bold ${workableConnectMode === 'token' ? 'bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)]' : 'bg-[var(--taali-surface)] text-[var(--taali-text)] hover:bg-[var(--taali-bg)]'}`}
               onClick={() => {
                 setWorkableConnectMode('token');
                 setWorkableConnectError('');
@@ -1221,7 +1221,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               <Button
                 type="button"
                 variant="secondary"
-                className="border-2 border-[var(--taali-border)] bg-[var(--taali-text)] text-[var(--taali-surface)] hover:opacity-90"
+                className="border-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
                 disabled={workableOAuthLoading}
                 onClick={handleConnectWorkableOAuth}
               >
@@ -1248,7 +1248,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               <Button
                 type="submit"
                 variant="secondary"
-                className="border-2 border-[var(--taali-border)] bg-[var(--taali-text)] text-[var(--taali-surface)] hover:opacity-90"
+                className="border-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
                 disabled={workableTokenSaving}
               >
                 {workableTokenSaving ? 'Connecting…' : 'Connect via API Token'}

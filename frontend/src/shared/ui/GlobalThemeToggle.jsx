@@ -7,7 +7,7 @@ import {
   subscribeThemePreference,
 } from '../../lib/themePreference';
 
-export const GlobalThemeToggle = () => {
+export const GlobalThemeToggle = ({ className = '', compact = false }) => {
   const [darkMode, setDarkMode] = useState(() => readDarkModePreference());
 
   useEffect(() => {
@@ -16,19 +16,24 @@ export const GlobalThemeToggle = () => {
     });
   }, []);
 
+  const targetModeLabel = darkMode ? 'light' : 'dark';
+
   return (
     <button
       type="button"
-      aria-label={`Switch to ${darkMode ? 'light' : 'dark'} theme`}
+      title={`Switch to ${targetModeLabel} mode`}
+      aria-label={`Switch to ${targetModeLabel} theme`}
       onClick={() => setDarkModePreference(!darkMode)}
-      className={`fixed bottom-4 left-4 z-[60] inline-flex items-center gap-2 border px-3 py-2 font-mono text-xs font-bold shadow-lg transition-colors ${
+      className={`inline-flex items-center gap-2 border px-3 py-2 font-mono text-xs font-bold transition-colors ${
         darkMode
           ? 'border-white/20 bg-[#111827] text-gray-100 hover:border-[var(--taali-purple)]'
           : 'border-gray-300 bg-white text-gray-800 hover:border-[var(--taali-purple)]'
-      }`}
+      } ${className}`}
     >
       {darkMode ? <Sun size={14} /> : <Moon size={14} />}
-      {darkMode ? 'Light Mode' : 'Dark Mode'}
+      <span className={compact ? 'hidden sm:inline' : ''}>
+        {darkMode ? 'Light Mode' : 'Dark Mode'}
+      </span>
     </button>
   );
 };

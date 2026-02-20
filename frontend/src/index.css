@@ -8,6 +8,8 @@
   --taali-border: #232338;
   --taali-border-muted: #d5d5e8;
   --taali-text: #111827;
+  --taali-inverse-bg: #0b1220;
+  --taali-inverse-text: #f8fafc;
   --taali-muted: #5b6472;
   --taali-purple: #9D00FF;
   --taali-purple-hover: #7B00CC;
@@ -290,6 +292,8 @@ code {
   --taali-border: #475569;
   --taali-border-muted: #334155;
   --taali-text: #f8fafc;
+  --taali-inverse-bg: #020617;
+  --taali-inverse-text: #f8fafc;
   --taali-muted: #cbd5e1;
   --taali-purple: #a855f7;
   --taali-purple-hover: #9333ea;
