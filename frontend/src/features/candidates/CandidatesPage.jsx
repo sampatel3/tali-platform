@@ -528,7 +528,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         >
           <div className="grid gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Active role
               </span>
               <Select
@@ -544,7 +544,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
               </Select>
             </label>
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Search candidates
               </span>
               <SearchInput
@@ -554,12 +554,12 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
               />
             </label>
           </div>
-          <div className="mt-3 border border-[var(--taali-border-muted)] bg-[#faf8ff] p-3">
+          <div className="mt-3 border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-3">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">
+              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Sorting and filters
               </p>
-              <div className="flex items-center gap-2 text-xs text-gray-500">
+              <div className="flex items-center gap-2 text-xs text-[var(--taali-muted)]">
                 <span>{activeFilterCount > 0 ? `${activeFilterCount} active` : 'Default view'}</span>
                 <Button
                   type="button"
@@ -574,7 +574,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
             </div>
             <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
               <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Sort by
                 </span>
                 <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
@@ -583,7 +583,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 </Select>
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Order
                 </span>
                 <Select aria-label="Sort order" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
@@ -592,7 +592,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 </Select>
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Source
                 </span>
                 <Select aria-label="Source filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
@@ -602,7 +602,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 </Select>
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Status
                 </span>
                 <Select aria-label="Status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
@@ -619,7 +619,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 </Select>
               </label>
               <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Min taali
                 </span>
                 <Input
@@ -664,7 +664,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   onRegenerateInterviewFocus={rolesApi?.regenerateInterviewFocus ? handleRegenerateInterviewFocus : null}
                 />
                 {loadingTasks ? (
-                  <Panel className="px-4 py-3 text-sm text-gray-600 bg-[#faf8ff]">
+                  <Panel className="px-4 py-3 text-sm text-[var(--taali-muted)]">
                     Loading tasks catalog...
                   </Panel>
                 ) : null}
