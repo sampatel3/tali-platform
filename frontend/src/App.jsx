@@ -210,17 +210,6 @@ function AppContent() {
       <Loader2 size={28} className="animate-spin" style={{ color: '#9D00FF' }} />
     </div>
   );
-  const hasTopBarThemeToggle = (
-    location.pathname === '/'
-    || location.pathname === '/demo'
-    || location.pathname === '/dashboard'
-    || location.pathname === '/candidates'
-    || location.pathname === '/candidate-detail'
-    || location.pathname === '/tasks'
-    || location.pathname === '/analytics'
-    || location.pathname === '/settings'
-    || location.pathname === '/assessment/live'
-  );
 
   const CandidateWelcomeRoute = () => {
     const { token } = useParams();
@@ -372,9 +361,7 @@ function AppContent() {
 
       <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      {!hasTopBarThemeToggle ? (
-        <GlobalThemeToggle compact className="fixed top-4 right-4 z-[80] shadow-lg" />
-      ) : null}
+      <GlobalThemeToggle className="fixed top-4 right-4 z-[90] shadow-lg" />
     </>
   );
 }

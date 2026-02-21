@@ -19,7 +19,6 @@ import {
   Panel,
 } from '../../shared/ui/TaaliPrimitives';
 import { ScoringCardGrid } from '../../shared/ui/ScoringCardGrid';
-import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
 
 const LandingNav = ({ onNavigate }) => {
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -33,22 +32,18 @@ const LandingNav = ({ onNavigate }) => {
     <nav className="taali-nav sticky top-0 z-40">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-4">
         <Logo onClick={() => onNavigate('landing')} />
-        <div className="flex items-center gap-2 md:hidden">
-          <GlobalThemeToggle compact className="!px-2 !py-2" />
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="!px-2 !py-2"
-            onClick={() => setMobileOpen((open) => !open)}
-            aria-label="Toggle navigation"
-          >
-            {mobileOpen ? <X size={18} /> : <Menu size={18} />}
-          </Button>
-        </div>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="md:hidden !px-2 !py-2"
+          onClick={() => setMobileOpen((open) => !open)}
+          aria-label="Toggle navigation"
+        >
+          {mobileOpen ? <X size={18} /> : <Menu size={18} />}
+        </Button>
 
         <div className="hidden items-center gap-2 md:flex">
-          <GlobalThemeToggle compact className="!px-3 !py-2" />
           <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => scrollTo('pricing')}>
             Pricing
           </Button>

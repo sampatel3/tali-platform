@@ -12,7 +12,6 @@ import {
   Panel,
   Select,
 } from '../../shared/ui/TaaliPrimitives';
-import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
 
 const initialForm = {
   fullName: '',
@@ -109,7 +108,6 @@ export const DemoExperiencePage = ({ onNavigate }) => {
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-4">
           <Logo onClick={() => onNavigate('landing')} />
           <div className="flex items-center gap-2">
-            <GlobalThemeToggle compact className="!px-2.5 !py-2" />
             <Button type="button" variant="secondary" size="sm" className="font-mono" onClick={() => onNavigate('landing')}>
               Back to landing
             </Button>
