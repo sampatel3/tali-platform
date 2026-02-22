@@ -262,7 +262,14 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
             "cv_job_match_score": 84,
             "skills_match": 80,
             "experience_relevance": 88,
-            "match_details": {"summary": "Strong API and SQL alignment.", "score_scale": "0-100"},
+            "match_details": {
+                "summary": "Strong API and SQL alignment.",
+                "score_scale": "0-100",
+                "score_rationale_bullets": [
+                    "Composite fit 84/100 from strong API skills and relevant backend delivery.",
+                    "Recruiter requirements coverage: 2/3 met, 1 partial, 0 missing.",
+                ],
+            },
         },
     )
 
@@ -276,6 +283,7 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
     assert len(apps) == 1
     assert apps[0]["cv_match_score"] == 84.0
     assert apps[0]["cv_match_details"]["summary"] == "Strong API and SQL alignment."
+    assert len(apps[0]["cv_match_details"]["score_rationale_bullets"]) == 2
     assert apps[0]["cv_match_scored_at"] is not None
 
 

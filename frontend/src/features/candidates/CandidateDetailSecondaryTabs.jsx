@@ -198,6 +198,27 @@ export const CandidateCvFitTab = ({
   const requirementsMatch = toCvScore100(cvMatch.requirements_match_score_100, cvMatch);
   const requirementsCoverage = cvMatch.requirements_coverage || {};
   const requirementsAssessment = Array.isArray(cvMatch.requirements_assessment) ? cvMatch.requirements_assessment : [];
+  const rationaleBullets = Array.isArray(cvMatch.score_rationale_bullets)
+    ? cvMatch.score_rationale_bullets
+      .map((item) => String(item || '').trim())
+      .filter(Boolean)
+      .slice(0, 6)
+    : [];
+  const fallbackWhyBullets = [
+    requirementsCoverage.total
+      ? `Recruiter requirements coverage: ${requirementsCoverage.met ?? 0}/${requirementsCoverage.total} met, ${requirementsCoverage.partially_met ?? 0} partial, ${requirementsCoverage.missing ?? 0} missing.`
+      : null,
+    cvMatch.matching_skills?.length
+      ? `Strong CV-to-role evidence: ${cvMatch.matching_skills.slice(0, 4).join(', ')}.`
+      : null,
+    cvMatch.missing_skills?.length
+      ? `Gaps vs role requirements: ${cvMatch.missing_skills.slice(0, 4).join(', ')}.`
+      : null,
+    cvMatch.concerns?.length
+      ? `Risk signals from CV evidence: ${cvMatch.concerns.slice(0, 2).join('; ')}.`
+      : null,
+  ].filter(Boolean);
+  const whyBullets = rationaleBullets.length > 0 ? rationaleBullets : fallbackWhyBullets;
   const hasCv = Boolean(assessment.candidate_cv_filename || assessment.cv_filename);
 
   return (
@@ -218,6 +239,20 @@ export const CandidateCvFitTab = ({
               <div className="text-4xl font-bold" style={{ color: experience != null ? cvScoreColor(experience, cvMatch) : 'var(--taali-muted)' }}>{experience != null ? formatCvScore100(experience, cvMatch) : '—'}</div>
             </Card>
           </div>
+
+          {whyBullets.length > 0 ? (
+            <Panel className="p-4">
+              <div className="mb-2 font-bold">Why this score</div>
+              <ul className="space-y-1.5">
+                {whyBullets.map((item, index) => (
+                  <li key={`why-score-${index}`} className="flex items-start gap-2 text-sm text-[var(--taali-text)]">
+                    <span className="mt-0.5 text-[var(--taali-success)]">•</span>
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            </Panel>
+          ) : null}
 
           {(requirementsMatch != null || requirementsAssessment.length > 0) ? (
             <Panel className="p-4">

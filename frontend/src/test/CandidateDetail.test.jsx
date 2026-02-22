@@ -187,6 +187,10 @@ const mockCandidate = {
           missing_skills: ['Kubernetes', 'Terraform'],
           experience_highlights: ['5 years of backend development', 'Led team of 4 engineers'],
           concerns: ['No cloud infrastructure experience'],
+          score_rationale_bullets: [
+            'Composite fit 74.2/100 from skills 78.8/100, experience 71.5/100, recruiter requirements 69.0/100.',
+            'Recruiter requirements coverage: 2/3 met, 1 partial, 0 missing.',
+          ],
           summary: 'Strong technical skills with gaps in DevOps tooling.',
         },
       },
@@ -336,6 +340,18 @@ describe('CandidateDetailPage', () => {
       expect(screen.getByText('Missing Skills')).toBeInTheDocument();
       expect(screen.getByText('Kubernetes')).toBeInTheDocument();
       expect(screen.getByText('Terraform')).toBeInTheDocument();
+    });
+  });
+
+  it('shows score rationale bullets in CV & Fit tab', async () => {
+    await renderCandidateDetail();
+
+    fireEvent.click(screen.getByText('CV & Fit'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Why this score')).toBeInTheDocument();
+      expect(screen.getByText(/Composite fit 74.2\/100/)).toBeInTheDocument();
+      expect(screen.getByText(/Recruiter requirements coverage: 2\/3 met/)).toBeInTheDocument();
     });
   });
 

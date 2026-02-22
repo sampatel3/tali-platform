@@ -23,6 +23,7 @@ logger = logging.getLogger("taali.fit_matching")
 _TOKENS_PER_MILLION = 1_000_000.0
 
 _MAX_REQUIREMENTS = 16
+_MAX_RATIONALE_BULLETS = 6
 
 CV_MATCH_PROMPT = """Analyze candidate CV fit for this role.
 
@@ -60,7 +61,7 @@ Scoring policy:
 1) The score must be tailored to the actual role requirements and recruiter-added criteria.
 2) If a must-have requirement is missing or unsupported by evidence, reduce scores materially.
 3) Be evidence-based; do not infer experience not present in the CV text.
-4) Use the full 0-100 scale: 50 = neutral baseline, 70+ = good match, 85+ = strong match.
+4) Use the full 0-100 scale with granular precision (do not round to 10-point bands): 50 = neutral baseline, 70+ = good match, 85+ = strong match.
 5) Include a requirements_assessment entry for each recruiter-added criterion when provided.
 """
 
@@ -134,6 +135,20 @@ def _score_to_100(value: Any) -> float | None:
     if numeric <= 10:
         numeric = numeric * 10.0
     return round(max(0.0, min(100.0, numeric)), 1)
+
+
+def _clamp_score_100(value: float) -> float:
+    return round(max(0.0, min(100.0, float(value))), 1)
+
+
+def _weighted_average(scores: list[tuple[float, float]]) -> float | None:
+    if not scores:
+        return None
+    denominator = sum(weight for _, weight in scores if weight > 0)
+    if denominator <= 0:
+        return None
+    numerator = sum(score * weight for score, weight in scores if weight > 0)
+    return _clamp_score_100(numerator / denominator)
 
 
 def _priority_value(priority: str) -> float:
@@ -267,7 +282,60 @@ def _derive_requirements_score_100(requirements_assessment: list[dict[str, str]]
         float(coverage.get("must_have_missing", 0) or 0) * 14.0
         + float(coverage.get("constraint_missing", 0) or 0) * 16.0
     )
-    return round(max(0.0, min(100.0, float(base) - penalty)), 1)
+    return _clamp_score_100(float(base) - penalty)
+
+
+def _derive_skills_score_100(
+    *,
+    matching_skills: list[str],
+    missing_skills: list[str],
+    concerns: list[str],
+) -> float | None:
+    if not matching_skills and not missing_skills and not concerns:
+        return None
+
+    matched = min(len(matching_skills), 10)
+    missing = min(len(missing_skills), 10)
+    concern_count = min(len(concerns), 8)
+
+    raw = (
+        52.0
+        + (matched * 6.8)
+        - (missing * 6.2)
+        - (concern_count * 2.5)
+        + (2.0 if matched > 0 and missing == 0 else 0.0)
+    )
+    return _clamp_score_100(raw)
+
+
+def _derive_experience_score_100(*, experience_highlights: list[str], concerns: list[str]) -> float | None:
+    if not experience_highlights and not concerns:
+        return None
+
+    highlights = min(len(experience_highlights), 8)
+    concern_count = min(len(concerns), 8)
+    raw = 50.0 + (highlights * 7.5) - (concern_count * 2.8) + (2.5 if highlights >= 3 else 0.0)
+    return _clamp_score_100(raw)
+
+
+def _refine_component_score_100(
+    *,
+    model_score_100: float | None,
+    evidence_score_100: float | None,
+    fallback_score_100: float | None = None,
+) -> float | None:
+    parts: list[tuple[float, float]] = []
+    if model_score_100 is not None:
+        parts.append((model_score_100, 0.72))
+    if evidence_score_100 is not None:
+        parts.append((evidence_score_100, 0.28))
+
+    refined = _weighted_average(parts)
+    if refined is not None:
+        return refined
+    if fallback_score_100 is not None:
+        return _clamp_score_100(fallback_score_100)
+    return None
 
 
 def _blend_final_score_100(
@@ -277,6 +345,10 @@ def _blend_final_score_100(
     experience_score_100: float | None,
     requirements_score_100: float | None,
     requirements_assessment: list[dict[str, str]],
+    matching_skills: list[str],
+    missing_skills: list[str],
+    experience_highlights: list[str],
+    concerns: list[str],
 ) -> float | None:
     weighted_parts: list[tuple[float, float]] = []
     if skills_score_100 is not None:
@@ -286,11 +358,7 @@ def _blend_final_score_100(
     if requirements_score_100 is not None:
         weighted_parts.append((requirements_score_100, 0.35))
 
-    derived = None
-    if weighted_parts:
-        numerator = sum(score * weight for score, weight in weighted_parts)
-        denominator = sum(weight for _, weight in weighted_parts)
-        derived = round(numerator / denominator, 1) if denominator > 0 else None
+    derived = _weighted_average(weighted_parts)
 
     if derived is None and model_overall_score_100 is None:
         return None
@@ -300,16 +368,33 @@ def _blend_final_score_100(
         final_score = float(derived)
     else:
         # Bias toward structured recruiter-requirement scoring while preserving model holistic judgment.
-        final_score = round((float(derived) * 0.65) + (float(model_overall_score_100) * 0.35), 1)
+        final_score = (float(derived) * 0.70) + (float(model_overall_score_100) * 0.30)
 
     coverage = _requirements_coverage(requirements_assessment)
+    met = float(coverage.get("met") or 0.0)
+    partially_met = float(coverage.get("partially_met") or 0.0)
+    unknown = float(coverage.get("unknown") or 0.0)
+    coverage_score = coverage.get("coverage_score_100")
+    signal_adjustment = (
+        min(4.0, len(matching_skills) * 0.65)
+        - min(4.5, len(missing_skills) * 0.75)
+        + min(3.0, len(experience_highlights) * 0.55)
+        - min(3.5, len(concerns) * 0.65)
+        + min(2.4, met * 0.35)
+        + min(1.2, partially_met * 0.15)
+        - min(2.4, unknown * 0.25)
+    )
+    if coverage_score is not None:
+        signal_adjustment += (float(coverage_score) - 50.0) * 0.04
+    final_score = final_score + signal_adjustment
+
     must_have_missing = int(coverage.get("must_have_missing") or 0)
     constraint_missing = int(coverage.get("constraint_missing") or 0)
     if must_have_missing > 0 and final_score > 69.0:
         final_score = 69.0
     if constraint_missing > 0 and final_score > 59.0:
         final_score = 59.0
-    return round(max(0.0, min(100.0, final_score)), 1)
+    return _clamp_score_100(final_score)
 
 
 def _normalize_recommendation(raw: Any, final_score_100: float | None, requirements_assessment: list[dict[str, str]]) -> str:
@@ -333,6 +418,123 @@ def _normalize_recommendation(raw: Any, final_score_100: float | None, requireme
     if final_score_100 >= 55:
         return "lean_no"
     return "no"
+
+
+def _score_text(value: float | None) -> str:
+    if value is None:
+        return "n/a"
+    rounded = round(float(value), 1)
+    return f"{int(rounded)}" if rounded.is_integer() else f"{rounded:.1f}"
+
+
+def _clean_bullet(text: str, *, max_chars: int = 260) -> str:
+    cleaned = _safe_string(text, max_chars=max_chars)
+    return cleaned.rstrip(".") + "." if cleaned else ""
+
+
+def _build_score_rationale_bullets(
+    *,
+    final_score_100: float | None,
+    skills_score_100: float | None,
+    experience_score_100: float | None,
+    requirements_score_100: float | None,
+    requirements_assessment: list[dict[str, str]],
+    matching_skills: list[str],
+    missing_skills: list[str],
+    experience_highlights: list[str],
+    concerns: list[str],
+    recruiter_requirements_used: bool,
+) -> list[str]:
+    bullets: list[str] = []
+    coverage = _requirements_coverage(requirements_assessment)
+    total = int(coverage.get("total") or 0)
+    met = int(coverage.get("met") or 0)
+    partially_met = int(coverage.get("partially_met") or 0)
+    missing = int(coverage.get("missing") or 0)
+    unknown = int(coverage.get("unknown") or 0)
+
+    component_parts: list[str] = []
+    if skills_score_100 is not None:
+        component_parts.append(f"skills {_score_text(skills_score_100)}/100")
+    if experience_score_100 is not None:
+        component_parts.append(f"experience {_score_text(experience_score_100)}/100")
+    if requirements_score_100 is not None:
+        component_parts.append(f"recruiter requirements {_score_text(requirements_score_100)}/100")
+    if component_parts and final_score_100 is not None:
+        bullets.append(
+            _clean_bullet(
+                f"Composite fit {_score_text(final_score_100)}/100 from {', '.join(component_parts)}",
+                max_chars=280,
+            )
+        )
+
+    if matching_skills:
+        bullets.append(
+            _clean_bullet(
+                f"Strong CV-to-role skill evidence: {', '.join(matching_skills[:4])}",
+                max_chars=220,
+            )
+        )
+
+    if experience_highlights:
+        bullets.append(
+            _clean_bullet(
+                f"Relevant experience evidence: {'; '.join(experience_highlights[:2])}",
+                max_chars=240,
+            )
+        )
+
+    if recruiter_requirements_used and total > 0:
+        bullets.append(
+            _clean_bullet(
+                f"Recruiter requirements coverage: {met}/{total} met, {partially_met} partial, {missing} missing, {unknown} unknown",
+                max_chars=220,
+            )
+        )
+
+    missing_critical = [
+        item.get("requirement", "")
+        for item in requirements_assessment
+        if item.get("status") == "missing" and item.get("priority") in {"must_have", "constraint"}
+    ]
+    if missing_critical:
+        bullets.append(
+            _clean_bullet(
+                f"Critical recruiter requirements missing/unsupported: {', '.join(missing_critical[:2])}",
+                max_chars=240,
+            )
+        )
+
+    if missing_skills:
+        bullets.append(
+            _clean_bullet(
+                f"Skills gaps versus role needs: {', '.join(missing_skills[:4])}",
+                max_chars=220,
+            )
+        )
+
+    if concerns:
+        bullets.append(
+            _clean_bullet(
+                f"Risk signals from CV evidence: {'; '.join(concerns[:2])}",
+                max_chars=240,
+            )
+        )
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for bullet in bullets:
+        text = _safe_string(bullet, max_chars=300)
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(text)
+        if len(deduped) >= _MAX_RATIONALE_BULLETS:
+            break
+    return deduped
 
 
 async def calculate_cv_job_match(
@@ -474,28 +676,55 @@ async def calculate_cv_job_match(
                 for requirement in recruiter_requirements[:_MAX_REQUIREMENTS]
             ]
 
+        matching_skills = _safe_string_list(result.get("matching_skills"), max_items=20, max_chars=120)
+        missing_skills = _safe_string_list(result.get("missing_skills"), max_items=20, max_chars=120)
+        experience_highlights = _safe_string_list(result.get("experience_highlights"), max_items=12, max_chars=180)
+        concerns = _safe_string_list(result.get("concerns"), max_items=12, max_chars=220)
+
         model_overall_score_100 = _score_to_100(
             result.get("overall_match_score")
             or result.get("overall_match_score_100")
             or result.get("overall_score")
         )
-        skills_score_100 = _score_to_100(
+        model_skills_score_100 = _score_to_100(
             result.get("skills_match_score")
             or result.get("skills_alignment_score")
             or result.get("skills_score")
         )
-        experience_score_100 = _score_to_100(
+        model_experience_score_100 = _score_to_100(
             result.get("experience_relevance_score")
             or result.get("experience_alignment_score")
             or result.get("experience_score")
         )
-        requirements_score_100 = _score_to_100(
+        model_requirements_score_100 = _score_to_100(
             result.get("requirements_match_score")
             or result.get("requirement_match_score")
             or result.get("criteria_match_score")
         )
+        requirements_score_100 = model_requirements_score_100
         if requirements_score_100 is None:
             requirements_score_100 = _derive_requirements_score_100(requirements_assessment)
+
+        skills_evidence_score_100 = _derive_skills_score_100(
+            matching_skills=matching_skills,
+            missing_skills=missing_skills,
+            concerns=concerns,
+        )
+        experience_evidence_score_100 = _derive_experience_score_100(
+            experience_highlights=experience_highlights,
+            concerns=concerns,
+        )
+
+        skills_score_100 = _refine_component_score_100(
+            model_score_100=model_skills_score_100,
+            evidence_score_100=skills_evidence_score_100,
+            fallback_score_100=model_overall_score_100,
+        )
+        experience_score_100 = _refine_component_score_100(
+            model_score_100=model_experience_score_100,
+            evidence_score_100=experience_evidence_score_100,
+            fallback_score_100=model_overall_score_100,
+        )
 
         final_score_100 = _blend_final_score_100(
             model_overall_score_100=model_overall_score_100,
@@ -503,6 +732,10 @@ async def calculate_cv_job_match(
             experience_score_100=experience_score_100,
             requirements_score_100=requirements_score_100,
             requirements_assessment=requirements_assessment,
+            matching_skills=matching_skills,
+            missing_skills=missing_skills,
+            experience_highlights=experience_highlights,
+            concerns=concerns,
         )
         recommendation = _normalize_recommendation(
             result.get("recommendation"),
@@ -510,6 +743,18 @@ async def calculate_cv_job_match(
             requirements_assessment=requirements_assessment,
         )
         coverage = _requirements_coverage(requirements_assessment)
+        rationale_bullets = _build_score_rationale_bullets(
+            final_score_100=final_score_100,
+            skills_score_100=skills_score_100,
+            experience_score_100=experience_score_100,
+            requirements_score_100=requirements_score_100,
+            requirements_assessment=requirements_assessment,
+            matching_skills=matching_skills,
+            missing_skills=missing_skills,
+            experience_highlights=experience_highlights,
+            concerns=concerns,
+            recruiter_requirements_used=bool(recruiter_requirements),
+        )
 
         logger.info(
             (
@@ -538,17 +783,24 @@ async def calculate_cv_job_match(
             "match_details": {
                 "score_scale": "0-100",
                 "model_overall_score_100": model_overall_score_100,
+                "model_skills_score_100": model_skills_score_100,
+                "model_experience_relevance_score_100": model_experience_score_100,
+                "model_requirements_match_score_100": model_requirements_score_100,
                 "skills_match_score_100": skills_score_100,
                 "experience_relevance_score_100": experience_score_100,
                 "requirements_match_score_100": requirements_score_100,
-                "matching_skills": _safe_string_list(result.get("matching_skills"), max_items=20, max_chars=120),
-                "missing_skills": _safe_string_list(result.get("missing_skills"), max_items=20, max_chars=120),
-                "experience_highlights": _safe_string_list(result.get("experience_highlights"), max_items=12, max_chars=180),
-                "concerns": _safe_string_list(result.get("concerns"), max_items=12, max_chars=220),
+                "skills_evidence_score_100": skills_evidence_score_100,
+                "experience_evidence_score_100": experience_evidence_score_100,
+                "matching_skills": matching_skills,
+                "missing_skills": missing_skills,
+                "experience_highlights": experience_highlights,
+                "concerns": concerns,
                 "requirements_assessment": requirements_assessment,
                 "requirements_coverage": coverage,
                 "custom_requirements_used": bool(recruiter_requirements),
                 "recommendation": recommendation,
+                "score_rationale_bullets": rationale_bullets,
+                "scoring_version": "cv_fit_v2_granular_100",
                 "summary": _safe_string(result.get("summary"), max_chars=600),
                 "_claude_usage": usage_ledger,
             },

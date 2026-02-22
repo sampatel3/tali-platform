@@ -73,5 +73,9 @@ def test_fit_matching_retries_when_primary_haiku_alias_is_unavailable(monkeypatc
 
     assert calls[0] == PRIMARY_HAIKU_MODEL
     assert calls[1] == SNAPSHOT_HAIKU_MODEL
-    assert result["cv_job_match_score"] == 79.0
+    assert result["cv_job_match_score"] == 73.6
+    assert result["cv_job_match_score"] % 10 != 0
+    assert result["match_details"]["skills_match_score_100"] == 68.7
+    assert result["match_details"]["experience_relevance_score_100"] == 72.2
+    assert len(result["match_details"]["score_rationale_bullets"]) >= 2
     assert result["match_details"]["_claude_usage"]["model"] == SNAPSHOT_HAIKU_MODEL
