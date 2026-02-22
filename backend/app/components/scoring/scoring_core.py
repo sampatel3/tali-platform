@@ -740,9 +740,24 @@ def _score_cv_match(cv_match: Dict[str, Any] | None) -> Dict[str, Any]:
             },
         }
 
-    overall = _clamp10(cv_match.get("cv_job_match_score") or 0)
-    skills = _clamp10(cv_match.get("skills_match") or 0)
-    experience = _clamp10(cv_match.get("experience_relevance") or 0)
+    def _to_10_scale(value: Any) -> float | None:
+        if value is None:
+            return None
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            return None
+        if numeric > 10:
+            numeric = numeric / 10.0
+        return _clamp10(numeric)
+
+    overall = _to_10_scale(cv_match.get("cv_job_match_score")) or 0.0
+    skills = _to_10_scale(cv_match.get("skills_match"))
+    experience = _to_10_scale(cv_match.get("experience_relevance"))
+    if skills is None:
+        skills = _to_10_scale(cv_match.get("skills_match_10")) or overall
+    if experience is None:
+        experience = _to_10_scale(cv_match.get("experience_relevance_10")) or overall
 
     details = cv_match.get("match_details", {})
 

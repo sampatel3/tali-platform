@@ -714,7 +714,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   Sort by
                 </span>
                 <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-                  <option value="cv_match_score">Taali AI (CV match)</option>
+                  <option value="cv_match_score">Taali AI (CV match /100)</option>
                   <option value="created_at">Added</option>
                 </Select>
               </label>
@@ -761,10 +761,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 <Input
                   type="number"
                   min="0"
-                  max="10"
-                  step="0.1"
+                  max="100"
+                  step="1"
                   aria-label="Minimum CV match score"
-                  placeholder="0.0"
+                  placeholder="0"
                   value={minCvMatchScore}
                   onChange={(event) => setMinCvMatchScore(event.target.value)}
                 />

@@ -259,10 +259,10 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
         applications_routes,
         "calculate_cv_job_match_sync",
         lambda **_: {
-            "cv_job_match_score": 8.4,
-            "skills_match": 8.0,
-            "experience_relevance": 8.8,
-            "match_details": {"summary": "Strong API and SQL alignment."},
+            "cv_job_match_score": 84,
+            "skills_match": 80,
+            "experience_relevance": 88,
+            "match_details": {"summary": "Strong API and SQL alignment.", "score_scale": "0-100"},
         },
     )
 
@@ -274,7 +274,7 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
     assert list_resp.status_code == 200, list_resp.text
     apps = list_resp.json()
     assert len(apps) == 1
-    assert apps[0]["cv_match_score"] == 8.4
+    assert apps[0]["cv_match_score"] == 84.0
     assert apps[0]["cv_match_details"]["summary"] == "Strong API and SQL alignment."
     assert apps[0]["cv_match_scored_at"] is not None
 

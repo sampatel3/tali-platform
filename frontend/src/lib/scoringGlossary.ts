@@ -52,9 +52,9 @@ export const SCORING_METRIC_GLOSSARY: ScoringGlossary = {
   debugging_score: { label: 'Debugging Strategy', description: 'Signals hypothesis-driven debugging and root-cause exploration.' },
   design_score: { label: 'Design Thinking', description: 'Evidence of architecture-level tradeoff and design consideration.' },
 
-  cv_job_match_score: { label: 'Overall Match', description: 'Overall CV/job fit estimate across skills and experience.' },
-  skills_match: { label: 'Skills Alignment', description: 'Alignment between required technical skills and candidate profile.' },
-  experience_relevance: { label: 'Experience', description: 'Relevance of prior project experience to the target role.' },
+  cv_job_match_score: { label: 'Overall Match', description: 'Overall CV/job fit estimate (reported to recruiters on a 0-100 scale, normalized internally for rubric weighting).' },
+  skills_match: { label: 'Skills Alignment', description: 'Alignment between required technical skills and candidate profile (normalized internally for rubric weighting).' },
+  experience_relevance: { label: 'Experience', description: 'Relevance of prior project experience to the target role (normalized internally for rubric weighting).' },
 };
 
 const DEFAULT_CATEGORY_DESCRIPTION = 'Reflects one core dimension of AI-collaboration performance in this assessment.';

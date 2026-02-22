@@ -3,6 +3,9 @@ from typing import Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
+ROLE_DESCRIPTION_MAX_LENGTH = 20000
+ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH = 12000
+
 
 class InterviewFocusQuestion(BaseModel):
     question: str
@@ -18,14 +21,14 @@ class InterviewFocus(BaseModel):
 
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    description: Optional[str] = Field(default=None, max_length=4000)
-    additional_requirements: Optional[str] = Field(default=None, max_length=4000)
+    description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
+    additional_requirements: Optional[str] = Field(default=None, max_length=ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH)
 
 
 class RoleUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
-    description: Optional[str] = Field(default=None, max_length=4000)
-    additional_requirements: Optional[str] = Field(default=None, max_length=4000)
+    description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
+    additional_requirements: Optional[str] = Field(default=None, max_length=ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH)
 
 
 class RoleResponse(BaseModel):

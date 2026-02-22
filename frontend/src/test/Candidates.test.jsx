@@ -352,7 +352,7 @@ describe('CandidatesPage', () => {
           candidate_position: 'Backend Engineer',
           status: 'applied',
           cv_filename: 'match.pdf',
-          cv_match_score: 8.2,
+          cv_match_score: 82,
           created_at: '2026-01-10T10:00:00Z',
           updated_at: '2026-01-10T10:00:00Z',
         },
@@ -363,7 +363,7 @@ describe('CandidatesPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Match Candidate')).toBeInTheDocument();
-      expect(screen.getByText('8.2/10')).toBeInTheDocument();
+      expect(screen.getByText('82/100')).toBeInTheDocument();
     });
   });
 

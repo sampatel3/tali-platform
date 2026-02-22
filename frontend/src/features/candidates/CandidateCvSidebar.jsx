@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import { FileText, Linkedin, Github, Twitter, ExternalLink, Loader2, MapPin, X } from 'lucide-react';
 
 import { Badge, Button } from '../../shared/ui/TaaliPrimitives';
-import { statusVariant } from './candidatesUiUtils';
+import { formatCvScore100, statusVariant } from './candidatesUiUtils';
 
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -88,7 +88,6 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
 
   if (!open) return null;
 
-  const formatScore = (v) => (typeof v === 'number' ? `${v.toFixed(1)}/10` : '—');
   const data = application ?? null;
 
   const socials = Array.isArray(data?.candidate_social_profiles) ? data.candidate_social_profiles : [];
@@ -199,7 +198,7 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
             ) : null}
             <Badge variant={statusVariant(data.status)}>{data.status || 'applied'}</Badge>
             <span className="text-xs text-gray-500">
-              Taali: {formatScore(data.cv_match_score)}
+              Taali: {formatCvScore100(data.cv_match_score, data.cv_match_details)}
             </span>
           </div>
         ) : null}

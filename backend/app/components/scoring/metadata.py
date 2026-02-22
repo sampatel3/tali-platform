@@ -42,7 +42,7 @@ SCORING_CATEGORIES: Dict[str, Dict[str, Any]] = {
     },
     "cv_match": {
         "label": "CV-Job Fit",
-        "description": "Estimates alignment between candidate background and role requirements.",
+        "description": "Estimates alignment between candidate background and role requirements (normalized from recruiter-fit 0-100 scoring).",
         "metrics": ["cv_job_match_score", "skills_match", "experience_relevance"],
     },
 }
@@ -72,9 +72,9 @@ SCORING_METRICS: Dict[str, Dict[str, str]] = {
     "tone_score": {"label": "Professional Tone", "description": "Professionalism and absence of abusive language."},
     "debugging_score": {"label": "Debugging Strategy", "description": "Evidence of hypothesis-driven debugging and validation."},
     "design_score": {"label": "Design Thinking", "description": "Evidence of architecture and tradeoff reasoning."},
-    "cv_job_match_score": {"label": "Overall Match", "description": "Overall CV/job fit estimate."},
-    "skills_match": {"label": "Skills Alignment", "description": "Alignment between required skills and candidate profile."},
-    "experience_relevance": {"label": "Experience Relevance", "description": "Relevance of prior experience to this role."},
+    "cv_job_match_score": {"label": "Overall Match", "description": "Overall CV/job fit estimate (internally normalized to /10 for assessment weighting)."},
+    "skills_match": {"label": "Skills Alignment", "description": "Alignment between required skills and candidate profile (normalized to /10 for rubric weighting)."},
+    "experience_relevance": {"label": "Experience Relevance", "description": "Relevance of prior experience to this role (normalized to /10 for rubric weighting)."},
 }
 
 SCORING_POLICIES: Dict[str, Any] = {

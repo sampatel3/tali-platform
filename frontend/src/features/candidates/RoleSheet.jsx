@@ -12,6 +12,9 @@ import {
   cx,
 } from '../../shared/ui/TaaliPrimitives';
 
+const ROLE_DESCRIPTION_MAX_LENGTH = 20000;
+const ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH = 12000;
+
 export const RoleSheet = ({
   open,
   mode,
@@ -46,6 +49,8 @@ export const RoleSheet = ({
   const canSave = hasValidName && !saving;
   const steps = ['Role details', 'Job spec', 'Tasks'];
   const isEdit = mode === 'edit';
+  const descriptionChars = description.length;
+  const additionalRequirementsChars = additionalRequirements.length;
 
   const toggleTask = (taskId) => {
     setSelectedTaskIds((prev) => (
@@ -151,7 +156,11 @@ export const RoleSheet = ({
               onChange={(event) => setDescription(event.target.value)}
               placeholder="Optional summary for recruiters."
               className="min-h-[110px]"
+              maxLength={ROLE_DESCRIPTION_MAX_LENGTH}
             />
+            <span className="mt-1 block text-xs text-gray-500">
+              {descriptionChars.toLocaleString()}/{ROLE_DESCRIPTION_MAX_LENGTH.toLocaleString()} characters
+            </span>
           </label>
           <label className="block">
             <span className="mb-1 block text-sm font-semibold text-gray-800">Additional requirements (for CV scoring)</span>
@@ -160,9 +169,13 @@ export const RoleSheet = ({
               onChange={(event) => setAdditionalRequirements(event.target.value)}
               placeholder="e.g. Large enterprise experience; production experience; holds XYZ passport; 30 days notice or less. Used by AI when scoring CVs against this role."
               className="min-h-[100px]"
+              maxLength={ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH}
             />
             <span className="mt-1 block text-xs text-gray-500">
               These are used alongside the job spec when we score how well a candidate&apos;s CV matches. Leave blank to score only on the job spec.
+            </span>
+            <span className="mt-1 block text-xs text-gray-500">
+              {additionalRequirementsChars.toLocaleString()}/{ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH.toLocaleString()} characters
             </span>
           </label>
         </div>

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, Optional
 
 from ..components.integrations.claude.model_fallback import (
@@ -21,7 +22,9 @@ logger = logging.getLogger("taali.fit_matching")
 
 _TOKENS_PER_MILLION = 1_000_000.0
 
-CV_MATCH_PROMPT = """Analyze the match between this candidate's CV and the job specification.
+_MAX_REQUIREMENTS = 16
+
+CV_MATCH_PROMPT = """Analyze candidate CV fit for this role.
 
 CV:
 {cv_text}
@@ -32,9 +35,20 @@ Job Specification:
 
 Provide a JSON response with EXACTLY this structure (no markdown, no explanation, ONLY valid JSON):
 {{
-    "overall_match_score": <0-10>,
-    "skills_match_score": <0-10>,
-    "experience_relevance_score": <0-10>,
+    "overall_match_score": <0-100>,
+    "skills_match_score": <0-100>,
+    "experience_relevance_score": <0-100>,
+    "requirements_match_score": <0-100>,
+    "recommendation": "strong_yes|yes|lean_no|no",
+    "requirements_assessment": [
+        {{
+            "requirement": "string",
+            "priority": "must_have|strong_preference|nice_to_have|constraint",
+            "status": "met|partially_met|missing|unknown",
+            "evidence": "short evidence from CV or lack of evidence",
+            "impact": "why this matters for recruiter decision"
+        }}
+    ],
     "matching_skills": ["skill1", "skill2"],
     "missing_skills": ["skill1", "skill2"],
     "experience_highlights": ["relevant experience 1", "relevant experience 2"],
@@ -42,22 +56,283 @@ Provide a JSON response with EXACTLY this structure (no markdown, no explanation
     "summary": "2-3 sentence summary of fit"
 }}
 
-Scoring: Focus the overall_match_score on how well the CV meets the role requirements.
-(1) Job spec: match to the job specification above (skills, experience, role fit).
-(2) Additional criteria: if "Additional scoring criteria" is provided, treat those as must-consider requirements (e.g. large enterprise experience, notice period, passport, production experience). Only give high scores (7+) when the CV supports both the job spec and the additional criteria where they apply; otherwise reflect gaps in concerns and lower the overall score.
-Be objective and base scores only on evidence in the documents. Score 5 as average/neutral, 7+ as good match, 9+ as exceptional.
+Scoring policy:
+1) The score must be tailored to the actual role requirements and recruiter-added criteria.
+2) If a must-have requirement is missing or unsupported by evidence, reduce scores materially.
+3) Be evidence-based; do not infer experience not present in the CV text.
+4) Use the full 0-100 scale: 50 = neutral baseline, 70+ = good match, 85+ = strong match.
+5) Include a requirements_assessment entry for each recruiter-added criterion when provided.
 """
+
+
+def _extract_recruiter_requirements(additional_requirements: Optional[str]) -> list[str]:
+    text = str(additional_requirements or "").strip()
+    if not text:
+        return []
+
+    parts = re.split(r"[\n;]+", text)
+    items: list[str] = []
+    seen: set[str] = set()
+    for raw in parts:
+        cleaned = re.sub(r"^\s*(?:[-*•]|\d+[\).\-\s])\s*", "", str(raw or "")).strip()
+        if not cleaned:
+            continue
+        compact = re.sub(r"\s+", " ", cleaned)
+        lowered = compact.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        items.append(compact[:220])
+        if len(items) >= _MAX_REQUIREMENTS:
+            break
+
+    if not items and text:
+        return [re.sub(r"\s+", " ", text)[:220]]
+    return items
 
 
 def _format_additional_requirements_section(additional_requirements: Optional[str]) -> str:
-    if not additional_requirements or not additional_requirements.strip():
+    items = _extract_recruiter_requirements(additional_requirements)
+    if not items:
         return ""
-    text = additional_requirements.strip()[:1500]
+
+    item_lines = "\n".join(f"- {item}" for item in items)
     return f"""
 
-Additional scoring criteria (evaluate the CV against these; lower the overall score if the CV does not support them):
-{text}
+Recruiter-added scoring criteria (treat these as explicit decision requirements):
+{item_lines}
 """
+
+
+def _safe_string(value: Any, *, max_chars: int = 300) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text)[:max_chars]
+
+
+def _safe_string_list(value: Any, *, max_items: int = 20, max_chars: int = 160) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    out: list[str] = []
+    for raw in value[:max_items]:
+        text = _safe_string(raw, max_chars=max_chars)
+        if text:
+            out.append(text)
+    return out
+
+
+def _score_to_100(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric < 0:
+        return None
+    if numeric <= 10:
+        numeric = numeric * 10.0
+    return round(max(0.0, min(100.0, numeric)), 1)
+
+
+def _priority_value(priority: str) -> float:
+    if priority == "must_have":
+        return 2.2
+    if priority == "constraint":
+        return 2.4
+    if priority == "strong_preference":
+        return 1.5
+    return 1.0
+
+
+def _status_value(status: str) -> float:
+    if status == "met":
+        return 1.0
+    if status == "partially_met":
+        return 0.55
+    if status == "unknown":
+        return 0.35
+    return 0.0
+
+
+def _normalize_requirement_priority(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"must", "must-have", "must_have", "required", "hard"}:
+        return "must_have"
+    if raw in {"constraint", "hard_constraint", "blocking"}:
+        return "constraint"
+    if raw in {"strong_preference", "strong-preference", "preferred", "preference", "important"}:
+        return "strong_preference"
+    return "nice_to_have"
+
+
+def _normalize_requirement_status(value: Any) -> str:
+    raw = str(value or "").strip().lower()
+    if raw in {"met", "yes", "satisfied", "present"}:
+        return "met"
+    if raw in {"partial", "partially_met", "partially-met", "partially"}:
+        return "partially_met"
+    if raw in {"missing", "not_met", "not-met", "no", "failed"}:
+        return "missing"
+    return "unknown"
+
+
+def _normalize_requirements_assessment(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+
+    normalized: list[dict[str, str]] = []
+    for raw in value[:_MAX_REQUIREMENTS]:
+        if not isinstance(raw, dict):
+            continue
+        requirement = _safe_string(
+            raw.get("requirement") or raw.get("criterion") or raw.get("name"),
+            max_chars=220,
+        )
+        if not requirement:
+            continue
+        priority = _normalize_requirement_priority(raw.get("priority"))
+        status = _normalize_requirement_status(raw.get("status"))
+        evidence = _safe_string(raw.get("evidence"), max_chars=260)
+        impact = _safe_string(raw.get("impact"), max_chars=220)
+        normalized.append(
+            {
+                "requirement": requirement,
+                "priority": priority,
+                "status": status,
+                "evidence": evidence,
+                "impact": impact,
+            }
+        )
+    return normalized
+
+
+def _requirements_coverage(requirements_assessment: list[dict[str, str]]) -> dict[str, Any]:
+    total = len(requirements_assessment)
+    if total == 0:
+        return {
+            "total": 0,
+            "met": 0,
+            "partially_met": 0,
+            "missing": 0,
+            "unknown": 0,
+            "must_have_missing": 0,
+            "constraint_missing": 0,
+            "coverage_score_100": None,
+        }
+
+    met = sum(1 for item in requirements_assessment if item.get("status") == "met")
+    partially_met = sum(1 for item in requirements_assessment if item.get("status") == "partially_met")
+    missing = sum(1 for item in requirements_assessment if item.get("status") == "missing")
+    unknown = sum(1 for item in requirements_assessment if item.get("status") == "unknown")
+    must_have_missing = sum(
+        1
+        for item in requirements_assessment
+        if item.get("priority") == "must_have" and item.get("status") == "missing"
+    )
+    constraint_missing = sum(
+        1
+        for item in requirements_assessment
+        if item.get("priority") == "constraint" and item.get("status") == "missing"
+    )
+
+    weighted_total = 0.0
+    weighted_met = 0.0
+    for item in requirements_assessment:
+        w = _priority_value(item.get("priority") or "nice_to_have")
+        weighted_total += w
+        weighted_met += _status_value(item.get("status") or "unknown") * w
+    coverage_score = round((weighted_met / weighted_total) * 100.0, 1) if weighted_total > 0 else None
+
+    return {
+        "total": total,
+        "met": met,
+        "partially_met": partially_met,
+        "missing": missing,
+        "unknown": unknown,
+        "must_have_missing": must_have_missing,
+        "constraint_missing": constraint_missing,
+        "coverage_score_100": coverage_score,
+    }
+
+
+def _derive_requirements_score_100(requirements_assessment: list[dict[str, str]]) -> float | None:
+    coverage = _requirements_coverage(requirements_assessment)
+    base = coverage.get("coverage_score_100")
+    if base is None:
+        return None
+
+    penalty = (
+        float(coverage.get("must_have_missing", 0) or 0) * 14.0
+        + float(coverage.get("constraint_missing", 0) or 0) * 16.0
+    )
+    return round(max(0.0, min(100.0, float(base) - penalty)), 1)
+
+
+def _blend_final_score_100(
+    *,
+    model_overall_score_100: float | None,
+    skills_score_100: float | None,
+    experience_score_100: float | None,
+    requirements_score_100: float | None,
+    requirements_assessment: list[dict[str, str]],
+) -> float | None:
+    weighted_parts: list[tuple[float, float]] = []
+    if skills_score_100 is not None:
+        weighted_parts.append((skills_score_100, 0.35))
+    if experience_score_100 is not None:
+        weighted_parts.append((experience_score_100, 0.30))
+    if requirements_score_100 is not None:
+        weighted_parts.append((requirements_score_100, 0.35))
+
+    derived = None
+    if weighted_parts:
+        numerator = sum(score * weight for score, weight in weighted_parts)
+        denominator = sum(weight for _, weight in weighted_parts)
+        derived = round(numerator / denominator, 1) if denominator > 0 else None
+
+    if derived is None and model_overall_score_100 is None:
+        return None
+    if derived is None:
+        final_score = float(model_overall_score_100)
+    elif model_overall_score_100 is None:
+        final_score = float(derived)
+    else:
+        # Bias toward structured recruiter-requirement scoring while preserving model holistic judgment.
+        final_score = round((float(derived) * 0.65) + (float(model_overall_score_100) * 0.35), 1)
+
+    coverage = _requirements_coverage(requirements_assessment)
+    must_have_missing = int(coverage.get("must_have_missing") or 0)
+    constraint_missing = int(coverage.get("constraint_missing") or 0)
+    if must_have_missing > 0 and final_score > 69.0:
+        final_score = 69.0
+    if constraint_missing > 0 and final_score > 59.0:
+        final_score = 59.0
+    return round(max(0.0, min(100.0, final_score)), 1)
+
+
+def _normalize_recommendation(raw: Any, final_score_100: float | None, requirements_assessment: list[dict[str, str]]) -> str:
+    mapped = str(raw or "").strip().lower().replace("-", "_")
+    if mapped in {"strong_yes", "yes", "lean_no", "no"}:
+        return mapped
+
+    coverage = _requirements_coverage(requirements_assessment)
+    must_have_missing = int(coverage.get("must_have_missing") or 0)
+    constraint_missing = int(coverage.get("constraint_missing") or 0)
+    if constraint_missing > 0:
+        return "no"
+    if must_have_missing > 0:
+        return "lean_no"
+    if final_score_100 is None:
+        return "lean_no"
+    if final_score_100 >= 85:
+        return "strong_yes"
+    if final_score_100 >= 70:
+        return "yes"
+    if final_score_100 >= 55:
+        return "lean_no"
+    return "no"
 
 
 async def calculate_cv_job_match(
@@ -78,8 +353,7 @@ async def calculate_cv_job_match(
             "30 days notice", "XYZ passport") used when scoring; not part of the job spec.
 
     Returns:
-        Dict with overall_match_score, skills_match_score,
-        experience_relevance_score, and detailed match info.
+        Dict with 0-100 tailored recruiter fit score and detailed requirement-level evidence.
     """
     if not cv_text or not job_spec_text:
         return {
@@ -98,6 +372,7 @@ async def calculate_cv_job_match(
         cv_truncated = cv_text[:4000]
         js_truncated = job_spec_text[:2000]
         additional_section = _format_additional_requirements_section(additional_requirements)
+        recruiter_requirements = _extract_recruiter_requirements(additional_requirements)
 
         prompt = CV_MATCH_PROMPT.format(
             cv_text=cv_truncated,
@@ -156,7 +431,6 @@ async def calculate_cv_job_match(
         try:
             result = json.loads(raw_text)
         except json.JSONDecodeError:
-            import re
             json_match = re.search(r"\{[\s\S]*\}", raw_text)
             if json_match:
                 result = json.loads(json_match.group())
@@ -172,27 +446,110 @@ async def calculate_cv_job_match(
                     },
                 }
 
-        overall = _clamp_score(result.get("overall_match_score"))
-        skills = _clamp_score(result.get("skills_match_score"))
-        experience = _clamp_score(result.get("experience_relevance_score"))
+        if not isinstance(result, dict):
+            return {
+                "cv_job_match_score": None,
+                "skills_match": None,
+                "experience_relevance": None,
+                "match_details": {
+                    "error": "Claude response was not a JSON object",
+                    "_claude_usage": usage_ledger,
+                },
+            }
+
+        requirements_assessment = _normalize_requirements_assessment(
+            result.get("requirements_assessment")
+            or result.get("requirement_assessment")
+            or result.get("criteria_assessment")
+        )
+        if not requirements_assessment and recruiter_requirements:
+            requirements_assessment = [
+                {
+                    "requirement": requirement,
+                    "priority": "must_have",
+                    "status": "unknown",
+                    "evidence": "",
+                    "impact": "No explicit requirement-level verdict returned by model.",
+                }
+                for requirement in recruiter_requirements[:_MAX_REQUIREMENTS]
+            ]
+
+        model_overall_score_100 = _score_to_100(
+            result.get("overall_match_score")
+            or result.get("overall_match_score_100")
+            or result.get("overall_score")
+        )
+        skills_score_100 = _score_to_100(
+            result.get("skills_match_score")
+            or result.get("skills_alignment_score")
+            or result.get("skills_score")
+        )
+        experience_score_100 = _score_to_100(
+            result.get("experience_relevance_score")
+            or result.get("experience_alignment_score")
+            or result.get("experience_score")
+        )
+        requirements_score_100 = _score_to_100(
+            result.get("requirements_match_score")
+            or result.get("requirement_match_score")
+            or result.get("criteria_match_score")
+        )
+        if requirements_score_100 is None:
+            requirements_score_100 = _derive_requirements_score_100(requirements_assessment)
+
+        final_score_100 = _blend_final_score_100(
+            model_overall_score_100=model_overall_score_100,
+            skills_score_100=skills_score_100,
+            experience_score_100=experience_score_100,
+            requirements_score_100=requirements_score_100,
+            requirements_assessment=requirements_assessment,
+        )
+        recommendation = _normalize_recommendation(
+            result.get("recommendation"),
+            final_score_100=final_score_100,
+            requirements_assessment=requirements_assessment,
+        )
+        coverage = _requirements_coverage(requirements_assessment)
 
         logger.info(
-            "CV-job match complete: overall=%.1f skills=%.1f experience=%.1f",
-            overall or 0,
-            skills or 0,
-            experience or 0,
+            (
+                "CV-job match complete: final=%.1f model=%.1f "
+                "skills=%.1f experience=%.1f requirements=%.1f must_missing=%d"
+            ),
+            final_score_100 or 0.0,
+            model_overall_score_100 or 0.0,
+            skills_score_100 or 0.0,
+            experience_score_100 or 0.0,
+            requirements_score_100 or 0.0,
+            int(coverage.get("must_have_missing") or 0),
         )
 
+        final_score_10 = round((final_score_100 or 0.0) / 10.0, 1) if final_score_100 is not None else None
+        skills_score_10 = round((skills_score_100 or 0.0) / 10.0, 1) if skills_score_100 is not None else None
+        experience_score_10 = round((experience_score_100 or 0.0) / 10.0, 1) if experience_score_100 is not None else None
+
         return {
-            "cv_job_match_score": overall,
-            "skills_match": skills,
-            "experience_relevance": experience,
+            "cv_job_match_score": final_score_100,
+            "cv_job_match_score_10": final_score_10,
+            "skills_match": skills_score_100,
+            "skills_match_10": skills_score_10,
+            "experience_relevance": experience_score_100,
+            "experience_relevance_10": experience_score_10,
             "match_details": {
-                "matching_skills": result.get("matching_skills", []),
-                "missing_skills": result.get("missing_skills", []),
-                "experience_highlights": result.get("experience_highlights", []),
-                "concerns": result.get("concerns", []),
-                "summary": result.get("summary", ""),
+                "score_scale": "0-100",
+                "model_overall_score_100": model_overall_score_100,
+                "skills_match_score_100": skills_score_100,
+                "experience_relevance_score_100": experience_score_100,
+                "requirements_match_score_100": requirements_score_100,
+                "matching_skills": _safe_string_list(result.get("matching_skills"), max_items=20, max_chars=120),
+                "missing_skills": _safe_string_list(result.get("missing_skills"), max_items=20, max_chars=120),
+                "experience_highlights": _safe_string_list(result.get("experience_highlights"), max_items=12, max_chars=180),
+                "concerns": _safe_string_list(result.get("concerns"), max_items=12, max_chars=220),
+                "requirements_assessment": requirements_assessment,
+                "requirements_coverage": coverage,
+                "custom_requirements_used": bool(recruiter_requirements),
+                "recommendation": recommendation,
+                "summary": _safe_string(result.get("summary"), max_chars=600),
                 "_claude_usage": usage_ledger,
             },
         }
@@ -256,17 +613,6 @@ def calculate_cv_job_match_sync(
                 additional_requirements=additional_requirements,
             )
         )
-
-
-def _clamp_score(val: Any) -> float | None:
-    """Clamp a score value to 0-10 range, or return None."""
-    if val is None:
-        return None
-    try:
-        v = float(val)
-        return max(0.0, min(10.0, round(v, 1)))
-    except (TypeError, ValueError):
-        return None
 
 
 def _build_usage_ledger(*, response: Any, model: str) -> Dict[str, Any]:

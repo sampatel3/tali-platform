@@ -23,12 +23,7 @@ import {
   Card,
   Panel,
 } from '../../shared/ui/TaaliPrimitives';
-
-const scoreColor = (score) => {
-  if (score >= 7) return 'var(--taali-success)';
-  if (score >= 5) return 'var(--taali-warning)';
-  return 'var(--taali-danger)';
-};
+import { cvScoreColor, formatCvScore100, toCvScore100 } from './candidatesUiUtils';
 
 const normalizeAssessmentStatus = (status) => {
   const normalized = String(status || '').toLowerCase();
@@ -197,9 +192,12 @@ export const CandidateCvFitTab = ({
   const assessment = candidate._raw || {};
   const cvMatch = assessment.cv_job_match_details || assessment.prompt_analytics?.cv_job_match?.details || {};
   const matchScores = assessment.prompt_analytics?.cv_job_match || {};
-  const overall = matchScores.overall || assessment.cv_job_match_score;
-  const skills = matchScores.skills;
-  const experience = matchScores.experience;
+  const overall = toCvScore100(matchScores.overall ?? assessment.cv_job_match_score, cvMatch);
+  const skills = toCvScore100(matchScores.skills, cvMatch);
+  const experience = toCvScore100(matchScores.experience, cvMatch);
+  const requirementsMatch = toCvScore100(cvMatch.requirements_match_score_100, cvMatch);
+  const requirementsCoverage = cvMatch.requirements_coverage || {};
+  const requirementsAssessment = Array.isArray(cvMatch.requirements_assessment) ? cvMatch.requirements_assessment : [];
   const hasCv = Boolean(assessment.candidate_cv_filename || assessment.cv_filename);
 
   return (
@@ -209,17 +207,59 @@ export const CandidateCvFitTab = ({
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
             <Card className="p-6 text-center">
               <div className="mb-1 font-mono text-xs text-gray-500">Overall Match</div>
-              <div className="text-4xl font-bold" style={{ color: scoreColor(overall) }}>{overall}/10</div>
+              <div className="text-4xl font-bold" style={{ color: cvScoreColor(overall, cvMatch) }}>{formatCvScore100(overall, cvMatch)}</div>
             </Card>
             <Card className="p-6 text-center">
               <div className="mb-1 font-mono text-xs text-gray-500">Skills Match</div>
-              <div className="text-4xl font-bold" style={{ color: skills != null ? scoreColor(skills) : 'var(--taali-muted)' }}>{skills != null ? `${skills}/10` : '—'}</div>
+              <div className="text-4xl font-bold" style={{ color: skills != null ? cvScoreColor(skills, cvMatch) : 'var(--taali-muted)' }}>{skills != null ? formatCvScore100(skills, cvMatch) : '—'}</div>
             </Card>
             <Card className="p-6 text-center">
               <div className="mb-1 font-mono text-xs text-gray-500">Experience</div>
-              <div className="text-4xl font-bold" style={{ color: experience != null ? scoreColor(experience) : 'var(--taali-muted)' }}>{experience != null ? `${experience}/10` : '—'}</div>
+              <div className="text-4xl font-bold" style={{ color: experience != null ? cvScoreColor(experience, cvMatch) : 'var(--taali-muted)' }}>{experience != null ? formatCvScore100(experience, cvMatch) : '—'}</div>
             </Card>
           </div>
+
+          {(requirementsMatch != null || requirementsAssessment.length > 0) ? (
+            <Panel className="p-4">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+                <div className="font-bold">Recruiter Requirements Fit</div>
+                {requirementsMatch != null ? (
+                  <Badge variant="purple" className="font-mono text-[11px]">{formatCvScore100(requirementsMatch, cvMatch)}</Badge>
+                ) : null}
+              </div>
+              {requirementsCoverage.total ? (
+                <div className="mb-3 grid grid-cols-2 gap-2 font-mono text-xs text-[var(--taali-muted)] md:grid-cols-4">
+                  <div>Total: {requirementsCoverage.total}</div>
+                  <div>Met: {requirementsCoverage.met ?? 0}</div>
+                  <div>Partial: {requirementsCoverage.partially_met ?? 0}</div>
+                  <div>Missing: {requirementsCoverage.missing ?? 0}</div>
+                </div>
+              ) : null}
+              {requirementsAssessment.length > 0 ? (
+                <div className="space-y-2">
+                  {requirementsAssessment.map((item, index) => {
+                    const priority = String(item?.priority || 'nice_to_have');
+                    const status = String(item?.status || 'unknown');
+                    const priorityBadge = priority === 'must_have' || priority === 'constraint' ? 'warning' : 'muted';
+                    const statusBadge = status === 'met' ? 'success' : (status === 'partially_met' ? 'warning' : (status === 'missing' ? 'warning' : 'muted'));
+                    return (
+                      <Card key={`${item?.requirement || 'requirement'}-${index}`} className="p-3">
+                        <div className="mb-2 flex flex-wrap items-center gap-2">
+                          <Badge variant={priorityBadge} className="font-mono text-[11px]">{priority.replace(/_/g, ' ')}</Badge>
+                          <Badge variant={statusBadge} className="font-mono text-[11px]">{status.replace(/_/g, ' ')}</Badge>
+                        </div>
+                        <div className="text-sm font-semibold text-[var(--taali-text)]">{item?.requirement || 'Unnamed requirement'}</div>
+                        {item?.evidence ? <div className="mt-1 text-xs text-[var(--taali-muted)]">Evidence: {item.evidence}</div> : null}
+                        {item?.impact ? <div className="mt-1 text-xs text-[var(--taali-muted)]">Impact: {item.impact}</div> : null}
+                      </Card>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="font-mono text-xs text-[var(--taali-muted)]">No requirement-level breakdown was returned for this score.</div>
+              )}
+            </Panel>
+          ) : null}
 
           {cvMatch.matching_skills?.length > 0 ? (
             <Panel className="p-4">

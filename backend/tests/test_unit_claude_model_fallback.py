@@ -44,9 +44,9 @@ def test_fit_matching_retries_when_primary_haiku_alias_is_unavailable(monkeypatc
                     "Error code: 404 - {'type':'error','error':{'type':'not_found_error','message':'model: claude-3-5-haiku-latest'}}"
                 )
             payload = {
-                "overall_match_score": 8.2,
-                "skills_match_score": 7.6,
-                "experience_relevance_score": 7.9,
+                "overall_match_score": 82,
+                "skills_match_score": 76,
+                "experience_relevance_score": 79,
                 "matching_skills": ["python"],
                 "missing_skills": ["spark"],
                 "experience_highlights": ["backend delivery"],
@@ -73,5 +73,5 @@ def test_fit_matching_retries_when_primary_haiku_alias_is_unavailable(monkeypatc
 
     assert calls[0] == PRIMARY_HAIKU_MODEL
     assert calls[1] == SNAPSHOT_HAIKU_MODEL
-    assert result["cv_job_match_score"] == 8.2
+    assert result["cv_job_match_score"] == 79.0
     assert result["match_details"]["_claude_usage"]["model"] == SNAPSHOT_HAIKU_MODEL

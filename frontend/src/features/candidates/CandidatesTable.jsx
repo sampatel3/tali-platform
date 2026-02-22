@@ -10,7 +10,7 @@ import {
   TableShell,
 } from '../../shared/ui/TaaliPrimitives';
 import { TableRowSkeleton } from '../../shared/ui/Skeletons';
-import { formatDateTime, statusVariant } from './candidatesUiUtils';
+import { formatCvScore100, formatDateTime, statusVariant } from './candidatesUiUtils';
 
 const COLUMN_STORAGE_KEY = 'taali_candidates_table_columns_v2';
 
@@ -108,7 +108,7 @@ export const CandidatesTable = ({
   });
 
   const sortableColumns = {
-    cv_match_score: 'Taali AI',
+    cv_match_score: 'Taali AI (/100)',
     created_at: 'Added',
   };
 
@@ -206,7 +206,7 @@ export const CandidatesTable = ({
     candidate: 'Candidate',
     send: 'Send assessment',
     cv: 'CV',
-    taali_ai: 'Taali AI',
+    taali_ai: 'Taali AI (/100)',
     workable_stage: 'Workable stage',
     workable_candidate_id: 'Workable id',
     status: 'Status',
@@ -223,14 +223,8 @@ export const CandidatesTable = ({
     setColumnPrefs((prev) => ({ ...prev, [key]: !prev[key] }));
   };
 
-  const formatScore = (value) => (
-    typeof value === 'number'
-      ? `${value.toFixed(1)}/10`
-      : '—'
-  );
-
   const renderTaaliScore = (app) => {
-    if (typeof app.cv_match_score === 'number') return formatScore(app.cv_match_score);
+    if (typeof app.cv_match_score === 'number') return formatCvScore100(app.cv_match_score, app.cv_match_details);
     if (!app.cv_filename) return '—';
     if (app.cv_match_details?.error) return 'Unavailable';
     return 'Pending';
@@ -437,7 +431,7 @@ export const CandidatesTable = ({
                       className="inline-flex items-center gap-1 uppercase tracking-[0.08em] text-gray-600 transition-colors hover:text-gray-900"
                       onClick={() => handleSortToggle('cv_match_score')}
                     >
-                      Taali AI
+                      Taali AI (/100)
                       <span className="text-[0.65rem] text-gray-500">{renderSortIndicator('cv_match_score')}</span>
                     </button>
                   </th>
@@ -869,7 +863,7 @@ export const CandidatesTable = ({
                       {/* Scores */}
                       <div className="mt-4 grid gap-3 md:grid-cols-2">
                         <div>
-                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Taali score</p>
+                          <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Taali score (/100)</p>
                           <p className="mt-1 text-sm text-gray-800">{renderTaaliScore(app)}</p>
                           {renderTaaliError(app) ? (
                             <p className="mt-1 text-xs text-amber-700">{renderTaaliError(app)}</p>

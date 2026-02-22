@@ -55,6 +55,34 @@ router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
 
 
+def _normalize_cv_match_score_100(score: float | int | None, details: dict | None = None) -> float | None:
+    if score is None:
+        return None
+    try:
+        numeric = float(score)
+    except (TypeError, ValueError):
+        return None
+    if numeric < 0:
+        return None
+    scale = str((details or {}).get("score_scale") or "").strip().lower()
+    if "100" in scale:
+        normalized = numeric
+    elif numeric <= 10:
+        normalized = numeric * 10.0
+    else:
+        normalized = numeric
+    return round(max(0.0, min(100.0, normalized)), 1)
+
+
+def _normalize_cv_match_details(details: dict | None, *, final_score_100: float | None) -> dict | None:
+    payload = dict(details or {})
+    if final_score_100 is None:
+        return payload or None
+    payload.setdefault("score_scale", "0-100")
+    payload.setdefault("final_score_100", final_score_100)
+    return payload
+
+
 def _refresh_rank_score(app: CandidateApplication) -> None:
     app.rank_score = app.workable_score if app.workable_score is not None else app.cv_match_score
 
@@ -86,8 +114,16 @@ def _compute_cv_match_for_application(app: CandidateApplication, *, reset_if_una
         model=settings.resolved_claude_scoring_model,
         additional_requirements=(role.additional_requirements or "").strip() or None,
     )
-    app.cv_match_score = result.get("cv_job_match_score")
-    app.cv_match_details = result.get("match_details", {})
+    raw_details = result.get("match_details", {}) if isinstance(result, dict) else {}
+    normalized_score = _normalize_cv_match_score_100(
+        result.get("cv_job_match_score") if isinstance(result, dict) else None,
+        raw_details if isinstance(raw_details, dict) else None,
+    )
+    app.cv_match_score = normalized_score
+    app.cv_match_details = _normalize_cv_match_details(
+        raw_details if isinstance(raw_details, dict) else None,
+        final_score_100=normalized_score,
+    )
     app.cv_match_scored_at = datetime.now(timezone.utc)
     _refresh_rank_score(app)
     return True
@@ -184,7 +220,10 @@ def list_role_applications(
     if min_workable_score is not None:
         query = query.filter(CandidateApplication.workable_score >= min_workable_score)
     if min_cv_match_score is not None:
-        query = query.filter(CandidateApplication.cv_match_score >= min_cv_match_score)
+        threshold = float(min_cv_match_score)
+        if 0 <= threshold <= 10:
+            threshold *= 10.0
+        query = query.filter(CandidateApplication.cv_match_score >= threshold)
 
     sort_map = {
         "created_at": CandidateApplication.created_at,
@@ -583,8 +622,16 @@ def _run_batch_score(role_id: int, org_id: int) -> None:
                     model=settings.resolved_claude_scoring_model,
                     additional_requirements=(role.additional_requirements or "").strip() or None,
                 )
-                app.cv_match_score = result.get("cv_job_match_score")
-                app.cv_match_details = result.get("match_details", {})
+                raw_details = result.get("match_details", {}) if isinstance(result, dict) else {}
+                normalized_score = _normalize_cv_match_score_100(
+                    result.get("cv_job_match_score") if isinstance(result, dict) else None,
+                    raw_details if isinstance(raw_details, dict) else None,
+                )
+                app.cv_match_score = normalized_score
+                app.cv_match_details = _normalize_cv_match_details(
+                    raw_details if isinstance(raw_details, dict) else None,
+                    final_score_100=normalized_score,
+                )
                 app.cv_match_scored_at = datetime.now(timezone.utc)
                 app.rank_score = app.workable_score if app.workable_score is not None else app.cv_match_score
                 db.flush()
