@@ -243,6 +243,119 @@ export const CandidatesTable = ({
     return normalized;
   };
 
+  const buildScoreWhySections = (app) => {
+    const details = (app?.cv_match_details && typeof app.cv_match_details === 'object')
+      ? app.cv_match_details
+      : {};
+    const normalizeList = (value, maxItems = 4) => (
+      Array.isArray(value)
+        ? value
+          .map((item) => String(item || '').trim())
+          .filter(Boolean)
+          .slice(0, maxItems)
+        : []
+    );
+    const toReason = (text) => {
+      const cleaned = String(text || '').trim();
+      if (!cleaned) return null;
+      return cleaned.endsWith('.') ? cleaned : `${cleaned}.`;
+    };
+
+    const cvReasons = [];
+    const requirementsReasons = [];
+
+    const matchingSkills = normalizeList(details.matching_skills, 4);
+    const experienceHighlights = normalizeList(details.experience_highlights, 2);
+    const missingSkills = normalizeList(details.missing_skills, 4);
+    const concerns = normalizeList(details.concerns, 2);
+
+    if (matchingSkills.length > 0) {
+      cvReasons.push(toReason(`Strong skill alignment: ${matchingSkills.join(', ')}`));
+    }
+    if (experienceHighlights.length > 0) {
+      cvReasons.push(toReason(`Relevant experience evidence: ${experienceHighlights.join('; ')}`));
+    }
+    if (missingSkills.length > 0) {
+      cvReasons.push(toReason(`Gaps vs role spec: ${missingSkills.join(', ')}`));
+    }
+    if (concerns.length > 0) {
+      cvReasons.push(toReason(`Risk signals from CV: ${concerns.join('; ')}`));
+    }
+
+    const requirementsCoverage = (details.requirements_coverage && typeof details.requirements_coverage === 'object')
+      ? details.requirements_coverage
+      : {};
+    const requirementsAssessment = Array.isArray(details.requirements_assessment)
+      ? details.requirements_assessment
+      : [];
+
+    if (typeof details.requirements_match_score_100 === 'number') {
+      requirementsReasons.push(
+        toReason(`Additional requirements fit score: ${formatCvScore100(details.requirements_match_score_100, details)}`)
+      );
+    }
+
+    const totalReq = Number(requirementsCoverage.total || 0);
+    if (totalReq > 0) {
+      requirementsReasons.push(
+        toReason(
+          `Coverage: ${requirementsCoverage.met ?? 0}/${totalReq} met, ${requirementsCoverage.partially_met ?? 0} partial, ${requirementsCoverage.missing ?? 0} missing`
+        )
+      );
+    }
+
+    const metReqs = requirementsAssessment
+      .filter((item) => ['met', 'partially_met'].includes(String(item?.status || '').toLowerCase()))
+      .map((item) => String(item?.requirement || '').trim())
+      .filter(Boolean)
+      .slice(0, 2);
+    if (metReqs.length > 0) {
+      requirementsReasons.push(toReason(`Matched recruiter requirements: ${metReqs.join('; ')}`));
+    }
+
+    const missingCriticalReqs = requirementsAssessment
+      .filter((item) => (
+        String(item?.status || '').toLowerCase() === 'missing'
+        && ['must_have', 'constraint'].includes(String(item?.priority || '').toLowerCase())
+      ))
+      .map((item) => String(item?.requirement || '').trim())
+      .filter(Boolean)
+      .slice(0, 2);
+    if (missingCriticalReqs.length > 0) {
+      requirementsReasons.push(toReason(`Critical requirement gaps: ${missingCriticalReqs.join('; ')}`));
+    }
+
+    const modelRationale = normalizeList(details.score_rationale_bullets, 6);
+    modelRationale.forEach((bullet) => {
+      const lower = bullet.toLowerCase();
+      if (lower.includes('requirement')) {
+        requirementsReasons.push(toReason(bullet));
+      } else {
+        cvReasons.push(toReason(bullet));
+      }
+    });
+
+    const dedupe = (items, maxItems = 3) => {
+      const seen = new Set();
+      const out = [];
+      for (const item of items) {
+        const text = String(item || '').trim();
+        if (!text) continue;
+        const key = text.toLowerCase();
+        if (seen.has(key)) continue;
+        seen.add(key);
+        out.push(text);
+        if (out.length >= maxItems) break;
+      }
+      return out;
+    };
+
+    return {
+      cvFit: dedupe(cvReasons, 3),
+      additionalRequirementsFit: dedupe(requirementsReasons, 3),
+    };
+  };
+
   const handleEnrich = async (app) => {
     if (!onEnrichCandidate) return;
     setEnrichingId(app.id);
@@ -742,6 +855,10 @@ export const CandidatesTable = ({
                 {detailsApplicationId === app.id ? (
                   <tr className="bg-[#faf8ff]">
                     <td colSpan={columnCount} className="px-3 py-4">
+                      {(() => {
+                        const scoreWhy = buildScoreWhySections(app);
+                        return (
+                          <>
                       {/* Profile header */}
                       <div className="flex items-start gap-4 mb-4">
                         <CandidateAvatar
@@ -868,6 +985,37 @@ export const CandidatesTable = ({
                           {renderTaaliError(app) ? (
                             <p className="mt-1 text-xs text-amber-700">{renderTaaliError(app)}</p>
                           ) : null}
+                          {(scoreWhy.cvFit.length > 0 || scoreWhy.additionalRequirementsFit.length > 0) ? (
+                            <div className="mt-3 space-y-2">
+                              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">Why this score</p>
+                              {scoreWhy.cvFit.length > 0 ? (
+                                <div>
+                                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">CV fit</p>
+                                  <ul className="mt-1 space-y-1">
+                                    {scoreWhy.cvFit.map((reason, index) => (
+                                      <li key={`cv-fit-reason-${index}`} className="flex items-start gap-1.5 text-xs text-gray-700">
+                                        <span className="text-[var(--taali-success)]">•</span>
+                                        <span>{reason}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : null}
+                              {scoreWhy.additionalRequirementsFit.length > 0 ? (
+                                <div>
+                                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">Additional requirements fit</p>
+                                  <ul className="mt-1 space-y-1">
+                                    {scoreWhy.additionalRequirementsFit.map((reason, index) => (
+                                      <li key={`req-fit-reason-${index}`} className="flex items-start gap-1.5 text-xs text-gray-700">
+                                        <span className="text-[var(--taali-success)]">•</span>
+                                        <span>{reason}</span>
+                                      </li>
+                                    ))}
+                                  </ul>
+                                </div>
+                              ) : null}
+                            </div>
+                          ) : null}
                           {typeof app.cv_match_score !== 'number' && typeof onGenerateTaaliCvAi === 'function' ? (
                             <div className="mt-2">
                               <Button
@@ -965,6 +1113,9 @@ export const CandidatesTable = ({
                           <p className="mt-1 text-gray-800">{formatDateTime(app.updated_at || app.created_at)}</p>
                         </div>
                       </div>
+                          </>
+                        );
+                      })()}
                     </td>
                   </tr>
                 ) : null}

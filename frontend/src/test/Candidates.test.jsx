@@ -367,6 +367,64 @@ describe('CandidatesPage', () => {
     });
   });
 
+  it('shows score rationale in candidate details panel with CV fit and additional requirements fit', async () => {
+    rolesApi.listApplications.mockResolvedValue({
+      data: [
+        {
+          id: 12,
+          candidate_id: 102,
+          candidate_email: 'rationale@example.com',
+          candidate_name: 'Rationale Candidate',
+          candidate_position: 'AI Full Stack Engineer',
+          status: 'applied',
+          cv_filename: 'rationale.pdf',
+          cv_match_score: 84.2,
+          cv_match_details: {
+            score_scale: '0-100',
+            matching_skills: ['Python', 'React', 'FastAPI'],
+            experience_highlights: ['Built and shipped production AI features for enterprise teams'],
+            requirements_match_score_100: 78.4,
+            requirements_coverage: {
+              total: 2,
+              met: 1,
+              partially_met: 1,
+              missing: 0,
+            },
+            requirements_assessment: [
+              {
+                requirement: 'Enterprise production experience',
+                priority: 'must_have',
+                status: 'met',
+              },
+              {
+                requirement: 'Compensation alignment to role band',
+                priority: 'constraint',
+                status: 'partially_met',
+              },
+            ],
+          },
+          created_at: '2026-01-10T10:00:00Z',
+          updated_at: '2026-01-10T10:00:00Z',
+        },
+      ],
+    });
+
+    await renderAppOnCandidatesPage();
+
+    const candidateCell = await screen.findByText('Rationale Candidate');
+    const candidateRow = candidateCell.closest('tr');
+    expect(candidateRow).not.toBeNull();
+    fireEvent.click(within(candidateRow).getByRole('button', { name: 'Details' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Why this score')).toBeInTheDocument();
+      expect(screen.getByText('CV fit')).toBeInTheDocument();
+      expect(screen.getByText('Additional requirements fit')).toBeInTheDocument();
+      expect(screen.getByText(/Strong skill alignment:/)).toBeInTheDocument();
+      expect(screen.getByText(/Additional requirements fit score:/)).toBeInTheDocument();
+    });
+  });
+
   it('creates a role from the role sheet', async () => {
     rolesApi.create.mockResolvedValue({
       data: { id: 321, name: 'Platform Engineer', description: null },
