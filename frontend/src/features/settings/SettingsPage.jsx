@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { AlertTriangle, CheckCircle, CreditCard } from 'lucide-react';
+import { useLocation, useNavigate } from 'react-router-dom';
 
 import {
   Button,
@@ -10,10 +11,11 @@ import {
   Panel,
   Sheet,
 } from '../../shared/ui/TaaliPrimitives';
+import { CardSkeleton } from '../../shared/ui/Skeletons';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
-import { formatAed } from '../../lib/currency';
+import { aedToUsd, formatAed } from '../../lib/currency';
 import {
   readDarkModePreference,
   setDarkModePreference,
@@ -31,11 +33,14 @@ const WORKABLE_REQUIRED_SCOPES = ['r_jobs', 'r_candidates'];
 const normalizeWorkableError = (input) => {
   const raw = (input || '').toString();
   const lower = raw.toLowerCase();
+  if (lower.includes('deploy') || lower.includes('migration') || lower.includes('endpoint not available') || lower.includes('railway')) {
+    return 'This feature is temporarily unavailable. Please try again later or contact support.';
+  }
   if (lower.includes('not configured')) {
-    return 'Workable OAuth is not configured. Add WORKABLE_CLIENT_ID and WORKABLE_CLIENT_SECRET in backend environment variables first.';
+    return 'Workable integration is not yet set up for this account. Please contact support to enable it.';
   }
   if (lower.includes('disabled for mvp')) {
-    return 'Workable integration is currently disabled by environment flag.';
+    return 'Workable integration is not available on your current plan. Contact support to upgrade.';
   }
   if (lower.includes('oauth failed')) {
     return 'Workable OAuth failed. Verify callback URL and scopes in your Workable app, then try again.';
@@ -45,8 +50,13 @@ const normalizeWorkableError = (input) => {
 
 export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableButton }) => {
   const { user } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
   const { showToast } = useToast();
-  const [settingsTab, setSettingsTab] = useState('workable');
+  const settingsPathSegment = location.pathname.replace(/^\/settings\/?/, '').split('/')[0];
+  const routeSettingsTab = ['workable', 'billing', 'team', 'enterprise', 'preferences'].includes(settingsPathSegment)
+    ? settingsPathSegment
+    : 'billing';
   const [orgData, setOrgData] = useState(null);
   const [orgLoading, setOrgLoading] = useState(true);
   const [billingUsage, setBillingUsage] = useState(null);
@@ -83,12 +93,29 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [inviteName, setInviteName] = useState('');
   const [inviteLoading, setInviteLoading] = useState(false);
   const [darkMode, setDarkMode] = useState(() => readDarkModePreference());
+  const [defaultAssessmentMinutes, setDefaultAssessmentMinutes] = useState(() => {
+    if (typeof window === 'undefined') return 30;
+    const raw = Number(window.localStorage.getItem('taali_pref_default_duration_minutes') || 30);
+    return Number.isFinite(raw) && raw >= 15 && raw <= 180 ? raw : 30;
+  });
+  const [customClaudeApiKey, setCustomClaudeApiKey] = useState(() => {
+    if (typeof window === 'undefined') return '';
+    return window.localStorage.getItem('taali_pref_custom_claude_api_key') || '';
+  });
+  const [emailTemplatePreview, setEmailTemplatePreview] = useState(() => {
+    if (typeof window === 'undefined') return 'Hi {{candidate_name}}, your TAALI assessment is ready: {{assessment_link}}';
+    return (
+      window.localStorage.getItem('taali_pref_email_template_preview')
+      || 'Hi {{candidate_name}}, your TAALI assessment is ready: {{assessment_link}}'
+    );
+  });
   const [enterpriseSaving, setEnterpriseSaving] = useState(false);
   const [enterpriseForm, setEnterpriseForm] = useState({
     allowedEmailDomains: '',
     ssoEnforced: false,
     samlEnabled: false,
     samlMetadataUrl: '',
+    candidateFeedbackEnabled: true,
   });
   const [workableForm, setWorkableForm] = useState({
     emailMode: 'manual_taali',
@@ -117,7 +144,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   }, []);
 
   useEffect(() => {
-    if (settingsTab !== 'billing') return;
+    if (routeSettingsTab !== 'billing') return;
     let cancelled = false;
     const fetchUsage = async () => {
       try {
@@ -135,10 +162,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     return () => {
       cancelled = true;
     };
-  }, [settingsTab]);
+  }, [routeSettingsTab]);
 
   useEffect(() => {
-    if (settingsTab !== 'team') return;
+    if (routeSettingsTab !== 'team') return;
     let cancelled = false;
     const fetchTeam = async () => {
       try {
@@ -152,11 +179,26 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     return () => {
       cancelled = true;
     };
-  }, [settingsTab]);
+  }, [routeSettingsTab]);
 
   useEffect(() => {
     setDarkModePreference(darkMode);
   }, [darkMode]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('taali_pref_default_duration_minutes', String(defaultAssessmentMinutes));
+  }, [defaultAssessmentMinutes]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('taali_pref_custom_claude_api_key', customClaudeApiKey);
+  }, [customClaudeApiKey]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem('taali_pref_email_template_preview', emailTemplatePreview);
+  }, [emailTemplatePreview]);
 
   useEffect(() => {
     return subscribeThemePreference((next) => {
@@ -173,6 +215,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       ssoEnforced: Boolean(orgData.sso_enforced),
       samlEnabled: Boolean(orgData.saml_enabled),
       samlMetadataUrl: orgData.saml_metadata_url || '',
+      candidateFeedbackEnabled: orgData.candidate_feedback_enabled !== false,
     });
     setWorkableForm({
       emailMode: cfg.email_mode || 'manual_taali',
@@ -221,8 +264,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       const status = err?.response?.status;
       const detail = err?.response?.data?.detail ?? err?.message;
       const message = status === 404
-        ? 'Clear endpoint not available. Deploy the latest backend (with POST /workable/clear) and run migrations.'
-        : (detail || 'Failed to clear Workable data');
+        ? 'Data removal is temporarily unavailable. Contact support if you need to reset your Workable data.'
+        : normalizeWorkableError(detail || 'Failed to clear Workable data');
       showToast(message, 'error');
     } finally {
       setClearWorkableLoading(false);
@@ -239,6 +282,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       setOrgData((prev) => ({
         ...(prev || {}),
         active_claude_model: data.active_claude_model ?? prev?.active_claude_model,
+        active_claude_scoring_model: data.active_claude_scoring_model ?? prev?.active_claude_scoring_model,
         workable_last_sync_at: data.workable_last_sync_at ?? prev?.workable_last_sync_at,
         workable_last_sync_status: data.workable_last_sync_status ?? prev?.workable_last_sync_status,
         workable_last_sync_summary: data.workable_last_sync_summary ?? prev?.workable_last_sync_summary,
@@ -278,10 +322,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   useEffect(() => {
-    if (settingsTab !== 'workable') return;
+    if (routeSettingsTab !== 'workable') return;
     fetchWorkableSyncStatus();
     loadWorkableSyncJobs();
-  }, [settingsTab, orgData?.workable_connected]);
+  }, [routeSettingsTab, orgData?.workable_connected]);
 
   useEffect(() => {
     if (!workableSyncInProgress) {
@@ -325,8 +369,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       const status = err?.response?.status;
       const detail = err?.response?.data?.detail ?? err?.message;
       const message = status === 404
-        ? 'Stop sync is not available yet. Deploy the latest backend (Railway) and run migrations, then try again.'
-        : (detail || 'Failed to cancel sync');
+        ? 'Sync cancellation is temporarily unavailable. The sync will complete on its own — check back shortly.'
+        : normalizeWorkableError(detail || 'Failed to cancel sync');
       showToast(message, 'error');
     } finally {
       setWorkableSyncCancelLoading(false);
@@ -537,6 +581,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         sso_enforced: enterpriseForm.ssoEnforced,
         saml_enabled: enterpriseForm.samlEnabled,
         saml_metadata_url: enterpriseForm.samlMetadataUrl || null,
+        candidate_feedback_enabled: enterpriseForm.candidateFeedbackEnabled,
       });
       setOrgData(res.data);
       showToast('Enterprise access controls updated.', 'success');
@@ -559,6 +604,22 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const lastSyncStatus = orgData?.workable_last_sync_status || 'not_started';
   const billingPlan = orgData?.plan || 'Pay-Per-Use';
   const workableCallbackUrl = `${window.location.origin}/settings/workable/callback`;
+  const isEnterprisePlan = String(orgData?.plan || '').toLowerCase().includes('enterprise');
+  const showWorkableTab = Boolean(workableConnected);
+  const settingsTabs = [
+    ...(showWorkableTab ? [{ id: 'workable', label: 'Workable', panelId: 'settings-workable' }] : []),
+    { id: 'billing', label: 'Billing', panelId: 'settings-billing' },
+    { id: 'team', label: 'Team', panelId: 'settings-team' },
+    ...(isEnterprisePlan ? [{ id: 'enterprise', label: 'Enterprise', panelId: 'settings-enterprise' }] : []),
+    { id: 'preferences', label: 'Preferences', panelId: 'settings-preferences' },
+  ];
+  const activeSettingsTab = settingsTabs.some((tab) => tab.id === routeSettingsTab)
+    ? routeSettingsTab
+    : settingsTabs[0].id;
+  const setSettingsTab = (tab) => {
+    if (!tab) return;
+    navigate(`/settings/${tab}`);
+  };
   const workableScopes = selectedWorkableScopes.join(' ') || 'none';
   const workableWriteScopeEnabled = selectedWorkableScopes.includes('w_candidates');
   const workableSyncJobs = Array.isArray(workableJobs) ? workableJobs : [];
@@ -584,16 +645,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const thresholdConfig = billingCosts?.thresholds || {};
   const thresholdStatus = billingCosts?.threshold_status || {};
   const spendSummary = billingCosts?.summary || {};
-  const toAedLabel = (rawValue, fallbackAmount = null) => {
-    if (typeof rawValue === 'string') {
-      const trimmed = rawValue.trim();
-      if (trimmed.toUpperCase().startsWith('AED')) return trimmed;
-      const numeric = Number(trimmed.replace(/[^\d.-]/g, ''));
-      if (!Number.isNaN(numeric)) return formatAed(numeric);
-    }
-    if (typeof rawValue === 'number') return formatAed(rawValue);
-    if (fallbackAmount != null) return formatAed(fallbackAmount);
-    return formatAed(0);
+  const toAedWithUsdLabel = (rawValue, fallbackAmount = null, options = {}) => {
+    const numeric = typeof rawValue === 'number'
+      ? rawValue
+      : typeof rawValue === 'string'
+        ? Number(rawValue.replace(/[^\d.-]/g, ''))
+        : fallbackAmount;
+    const safe = Number.isFinite(Number(numeric)) ? Number(numeric) : 0;
+    const usd = Number(aedToUsd(safe)).toLocaleString('en-US', {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: options.maximumFractionDigits ?? 0,
+    });
+    return `${formatAed(safe, options)} (~$${usd} USD)`;
   };
 
   return (
@@ -604,26 +667,23 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         <p className="text-sm text-[var(--taali-muted)] mb-8">Manage integrations and billing</p>
 
         <TabBar
-          tabs={[
-            { id: 'workable', label: 'Workable', panelId: 'settings-workable' },
-            { id: 'billing', label: 'Billing', panelId: 'settings-billing' },
-            { id: 'team', label: 'Team', panelId: 'settings-team' },
-            { id: 'enterprise', label: 'Enterprise', panelId: 'settings-enterprise' },
-            { id: 'preferences', label: 'Preferences', panelId: 'settings-preferences' },
-          ]}
-          activeTab={settingsTab}
+          tabs={settingsTabs}
+          activeTab={activeSettingsTab}
           onChange={setSettingsTab}
           className="mb-8"
         />
 
         {orgLoading ? (
-          <div className="flex items-center justify-center py-16 gap-3">
-            <Spinner size={24} />
-            <span className="text-sm text-[var(--taali-muted)]">Loading settings...</span>
+          <div className="space-y-6">
+            <CardSkeleton lines={3} />
+            <div className="grid gap-4 md:grid-cols-2">
+              <CardSkeleton lines={4} />
+              <CardSkeleton lines={4} />
+            </div>
           </div>
         ) : (
           <>
-            {settingsTab === 'workable' && (
+            {activeSettingsTab === 'workable' && (
               <div>
                 <Panel className={`p-6 mb-8 flex items-center justify-between gap-4 flex-wrap ${workableConnected ? 'bg-[var(--taali-success-soft)]' : 'bg-[var(--taali-warning-soft)]'}`}>
                   <div className="flex items-center gap-4">
@@ -661,7 +721,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </div>
                   <div>
                     <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Active Claude model</div>
-                    <div className="font-mono text-[var(--taali-text)]">{orgData?.active_claude_model || '—'}</div>
+                    <div className="font-mono text-[var(--taali-text)]">
+                      {`Assessment model: ${orgData?.active_claude_model || '—'} · Scoring model: ${orgData?.active_claude_scoring_model || orgData?.active_claude_model || '—'}`}
+                    </div>
                   </div>
                   <div>
                     <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Last Sync</div>
@@ -939,18 +1001,17 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               </div>
             )}
 
-            {settingsTab === 'billing' && (
+            {activeSettingsTab === 'billing' && (
               <div>
                 <Panel className="p-6 mb-8">
                   <div className="flex items-start justify-between flex-wrap gap-4">
                     <div>
                       <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Current Plan</div>
                       <div className="text-2xl font-bold text-[var(--taali-text)]">{billingPlan}</div>
-                      <div className="font-mono text-sm text-[var(--taali-muted)] mt-1">Billing provider: Lemon</div>
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Total usage</div>
-                      <div className="text-3xl font-bold text-[var(--taali-purple)]">{formatAed(monthlyCost)}</div>
+                      <div className="text-3xl font-bold text-[var(--taali-purple)]">{toAedWithUsdLabel(monthlyCost)}</div>
                       <div className="font-mono text-xs text-[var(--taali-muted)]">{monthlyAssessments} assessments</div>
                     </div>
                     <div className="text-right">
@@ -981,16 +1042,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <div className="grid md:grid-cols-2 gap-4 mb-8">
                   <Panel className="p-4">
                     <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Daily spend threshold</div>
-                    <div className="text-2xl font-bold text-[var(--taali-text)]">{formatAed(thresholdConfig.daily_spend_usd ?? 0, { maximumFractionDigits: 2 })}</div>
+                    <div className="text-2xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.daily_spend_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
                     <div className={`font-mono text-xs mt-2 ${thresholdStatus.daily_spend_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
-                      Today: {formatAed(Number(spendSummary.daily_spend_usd || 0), { maximumFractionDigits: 2 })} • {thresholdStatus.daily_spend_exceeded ? 'Exceeded' : 'Within threshold'}
+                      Today: {toAedWithUsdLabel(Number(spendSummary.daily_spend_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.daily_spend_exceeded ? 'Exceeded' : 'Within threshold'}
                     </div>
                   </Panel>
                   <Panel className="p-4">
                     <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Cost / completed assessment threshold</div>
-                    <div className="text-2xl font-bold text-[var(--taali-text)]">{formatAed(thresholdConfig.cost_per_completed_assessment_usd ?? 0, { maximumFractionDigits: 2 })}</div>
+                    <div className="text-2xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.cost_per_completed_assessment_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
                     <div className={`font-mono text-xs mt-2 ${thresholdStatus.cost_per_completed_assessment_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
-                      Current: {formatAed(Number(spendSummary.cost_per_completed_assessment_usd || 0), { maximumFractionDigits: 2 })} • {thresholdStatus.cost_per_completed_assessment_exceeded ? 'Exceeded' : 'Within threshold'}
+                      Current: {toAedWithUsdLabel(Number(spendSummary.cost_per_completed_assessment_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.cost_per_completed_assessment_exceeded ? 'Exceeded' : 'Within threshold'}
                     </div>
                   </Panel>
                 </div>
@@ -1021,7 +1082,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                             <td className="px-6 py-3 font-mono text-sm text-[var(--taali-text)]">{row.date}</td>
                             <td className="px-6 py-3 text-sm text-[var(--taali-text)]">{row.candidate}</td>
                             <td className="px-6 py-3 font-mono text-sm text-[var(--taali-text)]">{row.task}</td>
-                            <td className="px-6 py-3 font-mono text-sm text-right font-bold text-[var(--taali-text)]">{toAedLabel(row.cost)}</td>
+                            <td className="px-6 py-3 font-mono text-sm text-right font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(row.cost)}</td>
                           </tr>
                         ))
                       )}
@@ -1031,7 +1092,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               </div>
             )}
 
-            {settingsTab === 'team' && (
+            {activeSettingsTab === 'team' && (
               <div className="space-y-6">
                 <Panel className="p-6">
                   <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Invite Team Member</h3>
@@ -1083,7 +1144,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               </div>
             )}
 
-            {settingsTab === 'enterprise' && (
+            {activeSettingsTab === 'enterprise' && (
               <div className="space-y-6">
                 <Panel className="p-6">
                   <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Enterprise Access Controls</h3>
@@ -1119,6 +1180,15 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       />
                       <span className="text-sm text-[var(--taali-text)]">Enable SAML metadata configuration</span>
                     </label>
+                    <label className="flex items-center gap-3 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 accent-[var(--taali-purple)]"
+                        checked={enterpriseForm.candidateFeedbackEnabled}
+                        onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, candidateFeedbackEnabled: e.target.checked }))}
+                      />
+                      <span className="text-sm text-[var(--taali-text)]">Enable candidate feedback reports</span>
+                    </label>
                     <div>
                       <label className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">SAML metadata URL</label>
                       <Input
@@ -1142,25 +1212,79 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               </div>
             )}
 
-            {settingsTab === 'preferences' && (
-              <Panel className="p-6">
-                <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Display Preferences</h3>
-                <label className="flex items-center gap-3 text-sm text-[var(--taali-text)] cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={darkMode}
-                    onChange={(e) => setDarkMode(e.target.checked)}
-                    className="w-4 h-4 accent-[var(--taali-purple)]"
-                  />
-                  Enable dark mode (default)
-                </label>
-              </Panel>
+            {activeSettingsTab === 'preferences' && (
+              <div className="space-y-6">
+                <Panel className="p-6">
+                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Display Preferences</h3>
+                  <label className="flex items-center gap-3 text-sm text-[var(--taali-text)] cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={darkMode}
+                      onChange={(e) => setDarkMode(e.target.checked)}
+                      className="w-4 h-4 accent-[var(--taali-purple)]"
+                    />
+                    Dark mode
+                  </label>
+                  <p className="mt-2 text-xs text-[var(--taali-muted)]">Follows your system setting by default until you change it here.</p>
+                </Panel>
+
+                <Panel className="p-6">
+                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Assessment Defaults</h3>
+                  <label className="block">
+                    <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Default assessment duration (minutes)</span>
+                    <Input
+                      type="number"
+                      min={15}
+                      max={180}
+                      value={defaultAssessmentMinutes}
+                      onChange={(event) => {
+                        const raw = Number(event.target.value || 30);
+                        const clamped = Math.max(15, Math.min(180, raw));
+                        setDefaultAssessmentMinutes(Number.isFinite(clamped) ? clamped : 30);
+                      }}
+                    />
+                  </label>
+                  <p className="mt-2 text-xs text-[var(--taali-muted)]">
+                    Stored locally in this browser. New assessments can use this as your default duration.
+                  </p>
+                </Panel>
+
+                <Panel className="p-6">
+                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Custom Claude API Key (Optional)</h3>
+                  <label className="block">
+                    <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">API key override</span>
+                    <Input
+                      type="password"
+                      placeholder="sk-ant-..."
+                      value={customClaudeApiKey}
+                      onChange={(event) => setCustomClaudeApiKey(event.target.value)}
+                    />
+                  </label>
+                  <p className="mt-2 text-xs text-[var(--taali-muted)]">
+                    Stored locally for now. Server-side key management can be enabled for enterprise workspaces.
+                  </p>
+                </Panel>
+
+                <Panel className="p-6">
+                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Invite Email Template Preview</h3>
+                  <label className="block">
+                    <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Template body</span>
+                    <Input
+                      value={emailTemplatePreview}
+                      onChange={(event) => setEmailTemplatePreview(event.target.value)}
+                    />
+                  </label>
+                  <p className="mt-2 text-xs text-[var(--taali-muted)]">
+                    Supports placeholders like {'{{candidate_name}}'} and {'{{assessment_link}}'}.
+                  </p>
+                </Panel>
+              </div>
             )}
           </>
         )}
       </div>
       <Sheet
-        open={workableDrawerOpen && settingsTab === 'workable'}
+        open={workableDrawerOpen && activeSettingsTab === 'workable'}
         onClose={closeWorkableDrawer}
         title="Connect Workable"
         description="Choose connection mode and rights before connecting."

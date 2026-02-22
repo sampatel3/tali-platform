@@ -35,6 +35,7 @@ class OrgResponse(BaseModel):
     workable_last_sync_status: Optional[str] = None
     workable_last_sync_summary: Optional[dict] = None
     active_claude_model: str
+    active_claude_scoring_model: str
     plan: str
     assessments_used: int
     assessments_limit: Optional[int] = None
@@ -44,6 +45,7 @@ class OrgResponse(BaseModel):
     sso_enforced: bool = False
     saml_enabled: bool = False
     saml_metadata_url: Optional[str] = None
+    candidate_feedback_enabled: bool = True
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -56,6 +58,7 @@ class OrgUpdate(BaseModel):
     sso_enforced: Optional[bool] = None
     saml_enabled: Optional[bool] = None
     saml_metadata_url: Optional[str] = None
+    candidate_feedback_enabled: Optional[bool] = None
 
 
 class WorkableConnect(BaseModel):

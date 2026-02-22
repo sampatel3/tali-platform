@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     CLAUDE_MODEL: str = "claude-3-5-haiku-latest"
     # Legacy compatibility only: when set, must match CLAUDE_MODEL.
     CLAUDE_SCORING_MODEL: str = ""
+    # Batch-scoring override (cost optimized). If empty, falls back to CLAUDE_MODEL.
+    CLAUDE_SCORING_BATCH_MODEL: str = "claude-3-5-haiku-latest"
     MAX_TOKENS_PER_RESPONSE: int = 1024
     # Terminal-native Claude Code runtime
     ASSESSMENT_TERMINAL_ENABLED: bool = True
@@ -73,18 +75,23 @@ class Settings(BaseSettings):
 
     @property
     def resolved_claude_scoring_model(self) -> str:
-        """Scoring model resolver. Uses the same effective model as CLAUDE_MODEL."""
+        """Scoring model resolver. Prefers CLAUDE_SCORING_BATCH_MODEL when set."""
         scoring = (self.CLAUDE_SCORING_MODEL or "").strip()
         resolved = self.resolved_claude_model
         if scoring and scoring != resolved:
             raise ValueError(
                 "CLAUDE_SCORING_MODEL is deprecated and must match CLAUDE_MODEL when set."
             )
-        return resolved
+        batch_scoring_model = (self.CLAUDE_SCORING_BATCH_MODEL or "").strip()
+        return batch_scoring_model or resolved
 
     @property
     def active_claude_model(self) -> str:
         return self.resolved_claude_model
+
+    @property
+    def active_claude_scoring_model(self) -> str:
+        return self.resolved_claude_scoring_model
 
     def model_post_init(self, __context) -> None:
         scoring = (self.CLAUDE_SCORING_MODEL or "").strip()

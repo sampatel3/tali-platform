@@ -57,11 +57,14 @@ export const SCORING_METRIC_GLOSSARY: ScoringGlossary = {
   experience_relevance: { label: 'Experience', description: 'Relevance of prior project experience to the target role.' },
 };
 
+const DEFAULT_CATEGORY_DESCRIPTION = 'Reflects one core dimension of AI-collaboration performance in this assessment.';
+const DEFAULT_METRIC_DESCRIPTION = 'Contributes to the overall TAALI collaboration score for this assessment.';
+
 export const getMetricMeta = (metricKey: string): ScoringMeta => {
   const fallback = metricKey ? metricKey.replace(/_/g, ' ') : 'Unknown metric';
   return SCORING_METRIC_GLOSSARY[metricKey] || {
     label: fallback,
-    description: 'No glossary description yet for this metric.',
+    description: DEFAULT_METRIC_DESCRIPTION,
   };
 };
 
@@ -81,7 +84,7 @@ export const buildGlossaryFromMetadata = (
     if (!canonicalId) return;
     categories[canonicalId] = {
       label: SCORING_CATEGORY_GLOSSARY[canonicalId]?.label || key.replace(/_/g, ' '),
-      description: value?.description || SCORING_CATEGORY_GLOSSARY[canonicalId]?.description || 'No category description yet.',
+      description: value?.description || SCORING_CATEGORY_GLOSSARY[canonicalId]?.description || DEFAULT_CATEGORY_DESCRIPTION,
     };
   });
 
@@ -89,7 +92,7 @@ export const buildGlossaryFromMetadata = (
   Object.entries(metadata.metrics).forEach(([key, value]) => {
     metrics[key] = {
       label: value?.label || key.replace(/_/g, ' '),
-      description: value?.description || SCORING_METRIC_GLOSSARY[key]?.description || 'No metric description yet.',
+      description: value?.description || SCORING_METRIC_GLOSSARY[key]?.description || DEFAULT_METRIC_DESCRIPTION,
     };
   });
 

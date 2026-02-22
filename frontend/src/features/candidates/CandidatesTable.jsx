@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ExternalLink, GraduationCap, Briefcase, Github, Linkedin, Twitter, Loader2, MapPin, UserPlus } from 'lucide-react';
+import { ExternalLink, GraduationCap, Briefcase, Github, Linkedin, Twitter, MapPin, UserPlus } from 'lucide-react';
 
 import {
   Badge,
@@ -9,6 +9,7 @@ import {
   Select,
   TableShell,
 } from '../../shared/ui/TaaliPrimitives';
+import { TableRowSkeleton } from '../../shared/ui/Skeletons';
 import { formatDateTime, statusVariant } from './candidatesUiUtils';
 
 const COLUMN_STORAGE_KEY = 'taali_candidates_table_columns_v2';
@@ -16,6 +17,7 @@ const COLUMN_STORAGE_KEY = 'taali_candidates_table_columns_v2';
 const DEFAULT_COLUMN_PREFS = {
   workable_stage: true,
   workable_candidate_id: false,
+  cv: true,
   added: true,
   email: false,
   position: false,
@@ -24,6 +26,8 @@ const DEFAULT_COLUMN_PREFS = {
   location: false,
   skills: false,
 };
+
+const PAGE_SIZE = 20;
 
 const SOCIAL_ICONS = {
   linkedin: Linkedin,
@@ -79,6 +83,8 @@ export const CandidatesTable = ({
   onViewCandidate,
   onOpenCvSidebar,
   onCreateAssessment,
+  onUploadCv,
+  uploadingCvId,
   onGenerateTaaliCvAi,
   onEnrichCandidate,
 }) => {
@@ -87,6 +93,7 @@ export const CandidatesTable = ({
   const [taskByApplication, setTaskByApplication] = useState({});
   const [columnsOpen, setColumnsOpen] = useState(false);
   const [enrichingId, setEnrichingId] = useState(null);
+  const [page, setPage] = useState(0);
   const [columnPrefs, setColumnPrefs] = useState(() => {
     try {
       if (typeof window === 'undefined') return DEFAULT_COLUMN_PREFS;
@@ -109,6 +116,10 @@ export const CandidatesTable = ({
     setComposerApplicationId(null);
     setDetailsApplicationId(null);
   }, [applications, roleTasks]);
+
+  useEffect(() => {
+    setPage(0);
+  }, [applications, searchQuery, statusFilter, sortBy, sortOrder]);
 
   useEffect(() => {
     try {
@@ -156,6 +167,11 @@ export const CandidatesTable = ({
   };
 
   const hasClientFilters = Boolean(searchQuery.trim()) || statusFilter !== 'all';
+  const totalFiltered = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(totalFiltered / PAGE_SIZE));
+  const safePage = Math.min(page, totalPages - 1);
+  const startIndex = safePage * PAGE_SIZE;
+  const pagedFiltered = filtered.slice(startIndex, startIndex + PAGE_SIZE);
 
   const showColumn = (key) => {
     if (key === 'candidate') return true;
@@ -168,6 +184,7 @@ export const CandidatesTable = ({
   const visibleColumnOrder = useMemo(() => (
     [
       'candidate',
+      'cv',
       'send',
       'taali_ai',
       'workable_stage',
@@ -184,6 +201,23 @@ export const CandidatesTable = ({
   ), [columnPrefs]);
 
   const columnCount = visibleColumnOrder.length;
+
+  const columnLabel = (column) => ({
+    candidate: 'Candidate',
+    send: 'Send assessment',
+    cv: 'CV',
+    taali_ai: 'Taali AI',
+    workable_stage: 'Workable stage',
+    workable_candidate_id: 'Workable id',
+    status: 'Status',
+    headline: 'Headline',
+    location: 'Location',
+    skills: 'Skills',
+    added: 'Added',
+    email: 'Email',
+    position: 'Position',
+    source: 'Source',
+  }[column] || column);
 
   const togglePref = (key) => {
     setColumnPrefs((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -252,12 +286,29 @@ export const CandidatesTable = ({
 
   if (loading) {
     return (
-      <Panel className="px-4 py-10 text-center text-sm text-gray-500">
-        <div className="inline-flex items-center gap-2">
-          <Loader2 size={15} className="animate-spin" />
-          Loading candidates...
+      <div className="space-y-2">
+        <div className="px-1">
+          <div className="h-3 w-28 animate-pulse rounded bg-[var(--taali-border)]" />
         </div>
-      </Panel>
+        <TableShell className="max-h-[68vh]">
+          <table className="w-full table-fixed min-w-[900px]">
+            <thead>
+              <tr className="text-left text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">
+                {visibleColumnOrder.map((column) => (
+                  <th key={column} className="sticky top-0 z-20 bg-[#f4f1fb] px-3 py-2">
+                    {columnLabel(column)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: 8 }).map((_, index) => (
+                <TableRowSkeleton key={`candidates-skeleton-${index}`} cols={columnCount} />
+              ))}
+            </tbody>
+          </table>
+        </TableShell>
+      </div>
     );
   }
 
@@ -287,6 +338,7 @@ export const CandidatesTable = ({
   }
 
   const allColumnCheckboxes = [
+    { key: 'cv', label: 'CV status' },
     { key: 'workable_stage', label: 'Workable stage' },
     { key: 'workable_candidate_id', label: 'Workable candidate id' },
     { key: 'headline', label: 'Headline' },
@@ -352,6 +404,7 @@ export const CandidatesTable = ({
                 : 'sticky top-0 z-20 bg-[#f4f1fb]';
               const widthClass = {
                 candidate: 'w-[280px]',
+                cv: 'w-[120px]',
                 taali_ai: 'w-[110px]',
                 send: 'w-[170px]',
                 workable_stage: 'w-[150px]',
@@ -412,6 +465,7 @@ export const CandidatesTable = ({
 
               const label = {
                 send: 'Send assessment',
+                cv: 'CV',
                 workable_stage: 'Workable stage',
                 workable_candidate_id: 'Workable id',
                 status: 'Status',
@@ -430,19 +484,20 @@ export const CandidatesTable = ({
           </tr>
           </thead>
           <tbody>
-          {filtered.map((app) => {
+          {pagedFiltered.map((app) => {
             const selectedTask = taskByApplication[app.id] || (roleTasks.length === 1 ? String(roleTasks[0].id) : '');
-            const canOpenComposer = Boolean(canCreateAssessment && app.cv_filename && roleTasks.length > 0);
+            const canOpenComposer = Boolean(canCreateAssessment && roleTasks.length > 0);
+            const cvUploadInputId = `cv-upload-${app.id}`;
 
             return (
               <React.Fragment key={app.id}>
-                <tr className="group align-top">
+                <tr className="group align-top border-b border-[var(--taali-border)] hover:bg-[var(--taali-surface-hover,rgba(0,0,0,0.04))] transition-colors">
                   {visibleColumnOrder.map((column) => {
                     if (column === 'candidate') {
                       return (
                         <td
                           key={column}
-                          className="sticky left-0 z-10 bg-[var(--taali-surface)] px-3 py-2 text-sm group-hover:bg-[#faf8ff]"
+                          className="sticky left-0 z-10 bg-[var(--taali-surface)] px-3 py-2 text-sm group-hover:bg-[var(--taali-surface-hover,rgba(0,0,0,0.04))]"
                         >
                           <div className="flex items-start gap-2.5">
                             <CandidateAvatar
@@ -505,6 +560,18 @@ export const CandidatesTable = ({
                       );
                     }
 
+                    if (column === 'cv') {
+                      return (
+                        <td key={column} className="px-3 py-2 text-sm text-gray-700 whitespace-nowrap">
+                          {app.cv_filename ? (
+                            <span title={app.cv_filename}>📄 Uploaded</span>
+                          ) : (
+                            <span className="text-gray-500">— Missing</span>
+                          )}
+                        </td>
+                      );
+                    }
+
                     if (column === 'send') {
                       return (
                         <td key={column} className="px-3 py-2">
@@ -530,9 +597,9 @@ export const CandidatesTable = ({
                                 Send assessment
                               </Button>
                               {!app.cv_filename ? (
-                                <span className="text-[0.7rem] font-semibold text-amber-700">CV required</span>
+                                <span className="text-[0.7rem] font-semibold text-amber-700">No CV (role fit N/A)</span>
                               ) : null}
-                              {app.cv_filename && roleTasks.length === 0 ? (
+                              {roleTasks.length === 0 ? (
                                 <span className="text-[0.7rem] font-semibold text-amber-700">Link a task first</span>
                               ) : null}
                             </div>
@@ -834,6 +901,34 @@ export const CandidatesTable = ({
                             View CV
                           </Button>
                         ) : null}
+                        {!app.cv_filename && onUploadCv ? (
+                          <>
+                            <input
+                              id={cvUploadInputId}
+                              type="file"
+                              accept=".pdf,.docx,.doc"
+                              className="sr-only"
+                              onChange={(event) => {
+                                const file = event.target.files?.[0];
+                                if (!file) return;
+                                onUploadCv(app, file);
+                                event.target.value = '';
+                              }}
+                            />
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="sm"
+                              disabled={uploadingCvId === app.id}
+                              onClick={() => {
+                                if (typeof document === 'undefined') return;
+                                document.getElementById(cvUploadInputId)?.click();
+                              }}
+                            >
+                              {uploadingCvId === app.id ? 'Uploading...' : 'Upload CV'}
+                            </Button>
+                          </>
+                        ) : null}
                         {app.workable_profile_url ? (
                           <a
                             href={app.workable_profile_url}
@@ -885,6 +980,32 @@ export const CandidatesTable = ({
           </tbody>
         </table>
       </TableShell>
+      {totalFiltered > PAGE_SIZE ? (
+        <div className="flex items-center justify-between border-t border-[var(--taali-border)] pt-4 font-mono text-xs text-[var(--taali-muted)]">
+          <span>
+            Showing {startIndex + 1}-{Math.min(startIndex + PAGE_SIZE, totalFiltered)} of {totalFiltered}
+          </span>
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={safePage === 0}
+              onClick={() => setPage((prev) => Math.max(0, prev - 1))}
+            >
+              Previous
+            </Button>
+            <span>Page {safePage + 1} of {totalPages}</span>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={safePage >= totalPages - 1}
+              onClick={() => setPage((prev) => Math.min(totalPages - 1, prev + 1))}
+            >
+              Next
+            </Button>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 };

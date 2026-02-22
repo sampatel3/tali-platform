@@ -42,7 +42,7 @@ export const CandidateSheet = ({
   const validEmail = email.trim().length > 0;
   const validName = name.trim().length > 0;
   const hasCv = Boolean(cvFile);
-  const canSave = Boolean(role) && hasRoleSpec && validEmail && validName && hasCv && !saving;
+  const canSave = Boolean(role) && hasRoleSpec && validEmail && validName && !saving;
 
   const onDropFile = (event) => {
     event.preventDefault();
@@ -56,7 +56,7 @@ export const CandidateSheet = ({
       open={open}
       onClose={onClose}
       title="Add candidate"
-      description="Create a role application and upload the candidate CV."
+      description="Create a role application. CV upload is optional and can be added later."
       footer={(
         <div className="flex items-center justify-between gap-2">
           <Button type="button" variant="secondary" onClick={onClose}>Cancel</Button>
@@ -65,7 +65,7 @@ export const CandidateSheet = ({
             variant="primary"
             disabled={!canSave}
             onClick={() => {
-              setTouched({ email: true, name: true, cv: true });
+              setTouched({ email: true, name: true, cv: touched.cv });
               if (!canSave) return;
               onSubmit({
                 email: email.trim(),
@@ -138,7 +138,8 @@ export const CandidateSheet = ({
         </label>
 
         <div>
-          <span className="mb-1 block text-sm font-semibold text-gray-800">CV upload *</span>
+          <span className="mb-1 block text-sm font-semibold text-gray-800">CV upload (optional)</span>
+          <span className="mb-1 block text-xs text-gray-500">Upload now or add later from the candidate row.</span>
           <label
             onDragEnter={(event) => {
               event.preventDefault();
@@ -175,8 +176,8 @@ export const CandidateSheet = ({
               className="sr-only"
             />
           </label>
-          {touched.cv && !hasCv ? (
-            <span className="mt-1 block text-xs text-red-700">CV is required.</span>
+          {!hasCv ? (
+            <span className="mt-1 block text-xs text-amber-700">No CV yet. Role fit scoring will show N/A until uploaded.</span>
           ) : null}
         </div>
       </div>

@@ -9,6 +9,7 @@ import {
   Panel,
   cx,
 } from '../../shared/ui/TaaliPrimitives';
+import { CardSkeleton } from '../../shared/ui/Skeletons';
 
 export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole, onCreateRole, onRefresh }) => (
   <Panel className="p-4 flex flex-col max-h-[calc(100vh-200px)]">
@@ -31,12 +32,11 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
     </div>
 
     {loading ? (
-      <Card className="px-3 py-4">
-        <div className="flex items-center gap-2 text-sm text-gray-600">
-          <Loader2 size={14} className="animate-spin" />
-          Loading roles...
-        </div>
-      </Card>
+      <div className="space-y-2">
+        <CardSkeleton lines={2} />
+        <CardSkeleton lines={2} />
+        <CardSkeleton lines={2} />
+      </div>
     ) : null}
 
     {!loading && error ? (

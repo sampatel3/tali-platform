@@ -14,6 +14,7 @@
   --taali-purple: #9D00FF;
   --taali-purple-hover: #7B00CC;
   --taali-purple-soft: #f3e6ff;
+  --taali-surface-hover: rgba(157, 0, 255, 0.04);
   --taali-radius: 0px;
   --taali-font: 'JetBrains Mono', 'Roboto Mono', 'Fira Code', 'Consolas', 'Courier New', monospace;
   --taali-font-mono: 'JetBrains Mono', 'Roboto Mono', 'Courier New', monospace;
@@ -274,7 +275,7 @@ code {
 }
 
 .taali-table-shell tbody tr:hover {
-  background: #faf8ff;
+  background: var(--taali-surface-hover);
 }
 
 .taali-nav {
@@ -298,6 +299,7 @@ code {
   --taali-purple: #a855f7;
   --taali-purple-hover: #9333ea;
   --taali-purple-soft: #2e1065;
+  --taali-surface-hover: rgba(255, 255, 255, 0.04);
 
   /* Semantic colors – dark mode */
   --taali-success: #22c55e;

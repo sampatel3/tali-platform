@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Plus, UserPlus } from 'lucide-react';
 import * as apiClient from '../../shared/api';
 import { Button, Input, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
@@ -51,6 +51,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [roleSheetError, setRoleSheetError] = useState('');
   const [candidateSheetError, setCandidateSheetError] = useState('');
   const [creatingAssessmentId, setCreatingAssessmentId] = useState(null);
+  const [uploadingCvId, setUploadingCvId] = useState(null);
   const [viewingApplicationId, setViewingApplicationId] = useState(null);
   const [generatingTaaliId, setGeneratingTaaliId] = useState(null);
   const [inviteSheetOpen, setInviteSheetOpen] = useState(false);
@@ -58,6 +59,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [cvSidebarApplicationId, setCvSidebarApplicationId] = useState(null);
   const [batchScoring, setBatchScoring] = useState(null);
   const [fetchCvsProgress, setFetchCvsProgress] = useState(null);
+  const [interviewFocusGeneratingRoleId, setInterviewFocusGeneratingRoleId] = useState(null);
+  const interviewFocusAutoAttemptedRef = useRef(new Set());
 
   const selectedRole = useMemo(
     () => roles.find((role) => String(role.id) === String(selectedRoleId)) || null,
@@ -231,12 +234,45 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     setRoleSheetOpen(true);
   };
 
+  const generateInterviewFocusForRole = useCallback(async (roleId, { silent = false } = {}) => {
+    if (!rolesApi?.regenerateInterviewFocus || !roleId) return false;
+    setInterviewFocusGeneratingRoleId(String(roleId));
+    try {
+      const res = await rolesApi.regenerateInterviewFocus(roleId);
+      const data = res?.data || {};
+      if (data.interview_focus_generated) {
+        await Promise.all([
+          loadRoles(roleId),
+          loadRoleContext(roleId),
+        ]);
+        if (!silent) {
+          showToast('Interview focus pointers generated.', 'success');
+        }
+        return true;
+      }
+      if (data.interview_focus_error && !silent) {
+        showToast(data.interview_focus_error, 'error');
+      }
+      return false;
+    } catch (err) {
+      if (!silent) {
+        showToast(getErrorMessage(err, 'Failed to generate interview focus.'), 'error');
+      }
+      return false;
+    } finally {
+      setInterviewFocusGeneratingRoleId((current) => (
+        String(current) === String(roleId) ? null : current
+      ));
+    }
+  }, [loadRoleContext, loadRoles, rolesApi, showToast]);
+
   const handleRoleSubmit = async ({ name, description, additionalRequirements, jobSpecFile, taskIds }) => {
     if (!rolesApi) return;
     setSavingRole(true);
     setRoleSheetError('');
     try {
       let activeRoleId = selectedRoleId;
+      let shouldAutoGenerateInterviewFocus = false;
       if (roleSheetMode === 'create') {
         const createRes = await rolesApi.create({
           name,
@@ -255,6 +291,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
 
       if (jobSpecFile && rolesApi.uploadJobSpec) {
         await rolesApi.uploadJobSpec(activeRoleId, jobSpecFile);
+        shouldAutoGenerateInterviewFocus = true;
       }
 
       const nextTaskIds = new Set((taskIds || []).map((id) => Number(id)));
@@ -279,6 +316,11 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       await loadRoles(activeRoleId);
       await loadRoleContext(activeRoleId);
       setRoleSheetOpen(false);
+
+      if (shouldAutoGenerateInterviewFocus) {
+        interviewFocusAutoAttemptedRef.current.add(String(activeRoleId));
+        void generateInterviewFocusForRole(activeRoleId, { silent: true });
+      }
     } catch (err) {
       setRoleSheetError(getErrorMessage(err, 'Failed to save role.'));
     } finally {
@@ -287,7 +329,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   };
 
   const handleCandidateSubmit = async ({ email, name, position, cvFile }) => {
-    if (!rolesApi?.createApplication || !rolesApi?.uploadApplicationCv || !selectedRoleId) return;
+    if (!rolesApi?.createApplication || !selectedRoleId) return;
     setAddingCandidate(true);
     setCandidateSheetError('');
     try {
@@ -296,7 +338,9 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         candidate_name: name,
         candidate_position: trimOrUndefined(position),
       });
-      await rolesApi.uploadApplicationCv(res.data.id, cvFile);
+      if (cvFile && rolesApi?.uploadApplicationCv) {
+        await rolesApi.uploadApplicationCv(res.data.id, cvFile);
+      }
 
       await Promise.all([
         loadRoleContext(selectedRoleId),
@@ -309,6 +353,20 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       setAddingCandidate(false);
     }
   };
+
+  const handleUploadApplicationCv = useCallback(async (application, file) => {
+    if (!rolesApi?.uploadApplicationCv || !application?.id || !file) return;
+    setUploadingCvId(application.id);
+    try {
+      await rolesApi.uploadApplicationCv(application.id, file);
+      await loadRoleContext(selectedRoleId);
+      showToast('CV uploaded.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to upload CV.'), 'error');
+    } finally {
+      setUploadingCvId(null);
+    }
+  }, [loadRoleContext, rolesApi, selectedRoleId, showToast]);
 
   const handleViewFromApplication = async (application) => {
     setViewingApplicationId(application.id);
@@ -341,6 +399,9 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
     setCreatingAssessmentId(application.id);
     try {
+      if (!application?.cv_filename) {
+        showToast('No CV uploaded — Role fit scoring will show N/A.', 'info');
+      }
       const res = await rolesApi.createAssessment(application.id, { task_id: taskNumber });
       await loadRoleContext(selectedRoleId);
       const created = res?.data || {};
@@ -370,6 +431,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         subject,
         body,
         link,
+        noCv: !application?.cv_filename,
         inviteChannel: created.invite_channel || null,
         inviteSentAt: created.invite_sent_at || null,
       });
@@ -465,20 +527,30 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   }, [rolesApi, selectedRoleId, loadRoleContext, showToast]);
 
   const handleRegenerateInterviewFocus = useCallback(async () => {
-    if (!rolesApi?.regenerateInterviewFocus || !selectedRoleId) return;
-    try {
-      const res = await rolesApi.regenerateInterviewFocus(selectedRoleId);
-      const data = res?.data || {};
-      if (data.interview_focus_generated) {
-        showToast('Interview focus pointers generated.', 'success');
-        await loadRoles(selectedRoleId);
-      } else if (data.interview_focus_error) {
-        showToast(data.interview_focus_error, 'error');
-      }
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to generate interview focus.'), 'error');
-    }
-  }, [rolesApi, selectedRoleId, loadRoles, showToast]);
+    if (!selectedRoleId) return;
+    interviewFocusAutoAttemptedRef.current.delete(String(selectedRoleId));
+    await generateInterviewFocusForRole(selectedRoleId);
+  }, [generateInterviewFocusForRole, selectedRoleId]);
+
+  useEffect(() => {
+    if (!selectedRole || !rolesApi?.regenerateInterviewFocus) return;
+    const roleId = String(selectedRole.id || '');
+    if (!roleId) return;
+
+    const focus = selectedRole.interview_focus || null;
+    const hasInterviewFocus = Array.isArray(focus?.questions) && focus.questions.length > 0;
+    const hasSpecText = Boolean(
+      String(selectedRole.description || selectedRole.job_spec_text || '').trim()
+    );
+    const jobSpecReady = Boolean(selectedRole.job_spec_present || selectedRole.job_spec_filename || hasSpecText);
+
+    if (!jobSpecReady || hasInterviewFocus) return;
+    if (String(interviewFocusGeneratingRoleId) === roleId) return;
+    if (interviewFocusAutoAttemptedRef.current.has(roleId)) return;
+
+    interviewFocusAutoAttemptedRef.current.add(roleId);
+    void generateInterviewFocusForRole(roleId, { silent: true });
+  }, [generateInterviewFocusForRole, interviewFocusGeneratingRoleId, rolesApi, selectedRole]);
 
   const handleEnrichCandidate = useCallback(async (application) => {
     if (!rolesApi?.enrichApplication) return;
@@ -661,11 +733,15 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   onBatchScore={handleBatchScore}
                   onFetchCvs={rolesApi?.fetchCvs ? handleFetchCvs : null}
                   fetchCvsProgress={fetchCvsProgress}
+                  interviewFocusGenerating={String(interviewFocusGeneratingRoleId) === String(selectedRoleId)}
                   onRegenerateInterviewFocus={rolesApi?.regenerateInterviewFocus ? handleRegenerateInterviewFocus : null}
                 />
                 {loadingTasks ? (
-                  <Panel className="px-4 py-3 text-sm text-[var(--taali-muted)]">
-                    Loading tasks catalog...
+                  <Panel className="px-4 py-3">
+                    <div className="space-y-2 animate-pulse">
+                      <div className="h-3 w-32 rounded bg-[var(--taali-border)]" />
+                      <div className="h-3 w-48 rounded bg-[var(--taali-border)]" />
+                    </div>
                   </Panel>
                 ) : null}
                 {roleContextError ? (
@@ -695,6 +771,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   onViewCandidate={handleViewFromApplication}
                   onOpenCvSidebar={(app) => setCvSidebarApplicationId(app?.id ?? null)}
                   onCreateAssessment={handleCreateAssessment}
+                  onUploadCv={handleUploadApplicationCv}
+                  uploadingCvId={uploadingCvId}
                   onGenerateTaaliCvAi={handleGenerateTaaliCvAi}
                   onEnrichCandidate={handleEnrichCandidate}
                 />

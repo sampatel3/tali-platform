@@ -15,4 +15,6 @@ export const auth = {
   resendVerification: (email) => api.post('/auth/request-verify-token', { email }),
   forgotPassword: (email) => api.post('/auth/forgot-password', { email }),
   resetPassword: (token, new_password) => api.post('/auth/reset-password', { token, password: new_password }),
+  ssoCheck: (email) => api.post('/auth/sso-check', { email }),
+  ssoRedirect: (email) => api.get('/auth/sso-redirect', { params: { email } }),
 };

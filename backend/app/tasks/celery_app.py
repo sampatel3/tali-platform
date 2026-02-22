@@ -21,6 +21,10 @@ celery_app.conf.update(
             "task": "app.tasks.assessment_tasks.sync_workable_orgs",
             "schedule": 1800.0,
         },
+        "assessment-expiry-reminders-daily": {
+            "task": "app.tasks.assessment_tasks.send_assessment_expiry_reminders",
+            "schedule": 86400.0,
+        },
     },
 )
 

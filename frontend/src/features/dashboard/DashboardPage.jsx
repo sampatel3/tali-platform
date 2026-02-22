@@ -2,14 +2,44 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { Clipboard, DollarSign, CheckCircle, Eye, Timer, Star, Users } from 'lucide-react';
 import { RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar, ResponsiveContainer, Legend } from 'recharts';
 import { useAuth } from '../../context/AuthContext';
+import { useToast } from '../../context/ToastContext';
+import { getDocumentTitle } from '../../config/brand';
 import * as apiClient from '../../shared/api';
 import { COMPARISON_CATEGORY_CONFIG, getCategoryScoresFromAssessment } from '../../lib/comparisonCategories';
-import { ASSESSMENT_PRICE_AED, formatAed } from '../../lib/currency';
+import { ASSESSMENT_PRICE_AED, aedToUsd, formatAed } from '../../lib/currency';
 import { Button, Select, Spinner, TableShell } from '../../shared/ui/TaaliPrimitives';
+import { StatCardSkeleton, TableRowSkeleton } from '../../shared/ui/Skeletons';
 
 const PAGE_SIZE = 10;
 const MAX_COMPARE = 5;
 const COMPARE_COLORS = ['var(--taali-purple)', 'var(--taali-text)', 'var(--taali-success)', 'var(--taali-warning)', 'var(--taali-info)'];
+const ONBOARDING_DISMISSED_KEY = 'taali_onboarding_dismissed';
+
+const normalizeAssessmentStatus = (status) => {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'submitted' || normalized === 'graded') return 'completed';
+  if (['completed', 'completed_due_to_timeout', 'in_progress', 'expired', 'pending'].includes(normalized)) {
+    return normalized;
+  }
+  if (normalized.includes('progress')) return 'in_progress';
+  if (normalized.includes('timeout')) return 'completed_due_to_timeout';
+  if (normalized.includes('expire')) return 'expired';
+  if (normalized.includes('complete')) return 'completed';
+  return 'pending';
+};
+
+const isCompletedStatus = (status) => {
+  const normalized = normalizeAssessmentStatus(status);
+  return normalized === 'completed' || normalized === 'completed_due_to_timeout';
+};
+
+const daysUntil = (value) => {
+  if (!value) return null;
+  const target = new Date(value);
+  if (Number.isNaN(target.getTime())) return null;
+  const now = new Date();
+  return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+};
 
 export const DashboardPage = ({
   onNavigate,
@@ -21,11 +51,14 @@ export const DashboardPage = ({
   const assessmentsApi = apiClient.assessments;
   const tasksApi = apiClient.tasks;
   const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
+  const candidatesApi = 'candidates' in apiClient ? apiClient.candidates : null;
+  const { showToast } = useToast();
   const { user } = useAuth();
   const [assessmentsList, setAssessmentsList] = useState([]);
   const [totalAssessmentsCount, setTotalAssessmentsCount] = useState(0);
   const [loading, setLoading] = useState(true);
   const [loadingViewId, setLoadingViewId] = useState(null);
+  const [loadingResendId, setLoadingResendId] = useState(null);
   const [statusFilter, setStatusFilter] = useState('');
   const [taskFilter, setTaskFilter] = useState('');
   const [tasksForFilter, setTasksForFilter] = useState([]);
@@ -35,15 +68,52 @@ export const DashboardPage = ({
   const [compareIds, setCompareIds] = useState([]);
   const [compareAssessments, setCompareAssessments] = useState([]);
   const [compareLoadingId, setCompareLoadingId] = useState(null);
+  const [bulkDeleting, setBulkDeleting] = useState(false);
+  const [reloadTick, setReloadTick] = useState(0);
+  const [rolesCount, setRolesCount] = useState(0);
+  const [candidatesCount, setCandidatesCount] = useState(0);
+  const [onboardingDismissed, setOnboardingDismissed] = useState(
+    () => (typeof window !== 'undefined' && window.localStorage.getItem(ONBOARDING_DISMISSED_KEY) === 'true')
+  );
+
+  useEffect(() => {
+    const previousTitle = document.title;
+    document.title = getDocumentTitle('Assessments');
+    return () => {
+      document.title = previousTitle;
+    };
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
     tasksApi.list().then((res) => { if (!cancelled) setTasksForFilter(res.data || []); }).catch(() => {});
     if (rolesApi?.list) {
-      rolesApi.list().then((res) => { if (!cancelled) setRolesForFilter(res.data || []); }).catch(() => {});
+      rolesApi.list().then((res) => {
+        if (cancelled) return;
+        const roles = Array.isArray(res.data) ? res.data : [];
+        setRolesForFilter(roles);
+        setRolesCount(roles.length);
+      }).catch(() => {});
+    }
+    if (candidatesApi?.list) {
+      const candidatesReq = candidatesApi.list({ limit: 1, offset: 0 });
+      if (candidatesReq && typeof candidatesReq.then === 'function') {
+        candidatesReq.then((res) => {
+          if (cancelled) return;
+          const payload = res.data || {};
+          const total = typeof payload.total === 'number'
+            ? payload.total
+            : Array.isArray(payload.items)
+              ? payload.items.length
+              : Array.isArray(payload)
+                ? payload.length
+                : 0;
+          setCandidatesCount(total);
+        }).catch(() => {});
+      }
     }
     return () => { cancelled = true; };
-  }, [rolesApi, tasksApi]);
+  }, [candidatesApi, rolesApi, tasksApi]);
 
   useEffect(() => {
     let cancelled = false;
@@ -66,7 +136,7 @@ export const DashboardPage = ({
       })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [page, statusFilter, taskFilter, roleFilter]);
+  }, [page, statusFilter, taskFilter, roleFilter, reloadTick]);
 
   const getAssessmentLink = (token) =>
     `${typeof window !== 'undefined' ? window.location.origin : ''}/assess/${token || ''}`;
@@ -79,7 +149,7 @@ export const DashboardPage = ({
         email: a.candidate_email || a.candidate?.email || '',
         task: a.task?.name || a.task_name || 'Assessment',
         role: a.role_name || a.task?.role || 'Unassigned role',
-        status: a.status === 'submitted' || a.status === 'graded' ? 'completed' : (a.status || 'in-progress'),
+        status: normalizeAssessmentStatus(a.status),
         score: a.score ?? a.overall_score ?? null,
         time: a.duration_taken ? `${Math.round(a.duration_taken / 60)}m` : '—',
         position: a.candidate?.position || a.task?.name || '',
@@ -90,6 +160,7 @@ export const DashboardPage = ({
         timeline: a.timeline || [],
         results: a.results || [],
         token: a.token,
+        expiresAt: a.expires_at || null,
         assessmentLink: a.token ? getAssessmentLink(a.token) : '',
         _raw: a,
       }))
@@ -99,16 +170,18 @@ export const DashboardPage = ({
 
   // Compute live stats from current page (total count from API)
   const totalAssessments = totalAssessmentsCount;
-  const completedCount = displayCandidates.filter((c) => c.status === 'completed' || c.status === 'submitted' || c.status === 'graded').length;
+  const completedCount = displayCandidates.filter((c) => isCompletedStatus(c.status)).length;
+  const inProgressCount = displayCandidates.filter((c) => c.status === 'in_progress').length;
   const totalPages = Math.max(1, Math.ceil(totalAssessmentsCount / PAGE_SIZE));
   const startRow = page * PAGE_SIZE + 1;
   const endRow = Math.min((page + 1) * PAGE_SIZE, totalAssessmentsCount);
   const completionRate = totalAssessments > 0 ? ((completedCount / totalAssessments) * 100).toFixed(1) : '0';
   const scores = displayCandidates.filter((c) => c.score !== null).map((c) => c.score);
   const avgScore = scores.length > 0 ? (scores.reduce((a, b) => a + b, 0) / scores.length).toFixed(1) : '—';
-  const monthCost = formatAed(completedCount * ASSESSMENT_PRICE_AED);
+  const monthCostAed = completedCount * ASSESSMENT_PRICE_AED;
+  const monthCost = formatAed(monthCostAed);
   const notifications = displayCandidates
-    .filter((c) => c.status === 'completed')
+    .filter((c) => isCompletedStatus(c.status))
     .slice(0, 5)
     .map((c) => ({
       id: `n-${c.id}`,
@@ -188,6 +261,86 @@ export const DashboardPage = ({
     URL.revokeObjectURL(url);
   };
 
+  const exportSelectedCsv = () => {
+    const selected = displayCandidates.filter((candidate) => compareIds.includes(candidate.id));
+    const rows = [['Candidate', 'Email', 'Task', 'Role', 'Status', 'Score', 'Task Completion', 'Prompt Clarity', 'Context Provision', 'Independence & Efficiency', 'Response Utilization', 'Debugging & Design', 'Written Communication', 'Role Fit']]
+      .concat(selected.map((candidate) => {
+        const categories = getCategoryScoresFromAssessment(candidate);
+        return [
+          candidate.name,
+          candidate.email,
+          candidate.task,
+          candidate.role || '',
+          candidate.status,
+          candidate.score ?? '',
+          categories.task_completion ?? '',
+          categories.prompt_clarity ?? '',
+          categories.context_provision ?? '',
+          categories.independence_efficiency ?? '',
+          categories.response_utilization ?? '',
+          categories.debugging_design ?? '',
+          categories.written_communication ?? '',
+          categories.role_fit ?? '',
+        ];
+      }));
+    const csv = rows.map((row) => row.map((value) => `"${String(value).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = 'selected-assessments.csv';
+    anchor.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleBulkDelete = async () => {
+    if (compareIds.length === 0 || bulkDeleting) return;
+    if (!window.confirm(`Delete ${compareIds.length} selected assessment(s)? This cannot be undone.`)) return;
+    setBulkDeleting(true);
+    let deletedCount = 0;
+    for (const id of compareIds) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        await assessmentsApi.remove(id);
+        deletedCount += 1;
+      } catch {
+        // Continue deleting remaining rows.
+      }
+    }
+    setBulkDeleting(false);
+    setCompareIds([]);
+    setCompareAssessments([]);
+    setReloadTick((tick) => tick + 1);
+    if (deletedCount > 0) {
+      showToast(`Deleted ${deletedCount} assessment(s).`, 'success');
+    } else {
+      showToast('No assessments were deleted.', 'error');
+    }
+  };
+
+  const handleResend = async (assessmentId) => {
+    setLoadingResendId(assessmentId);
+    try {
+      await assessmentsApi.resend(assessmentId);
+      showToast('Assessment invite resent.', 'success');
+    } catch (err) {
+      showToast(err?.response?.data?.detail || 'Failed to resend invite.', 'error');
+    } finally {
+      setLoadingResendId(null);
+    }
+  };
+
+  const dismissOnboarding = () => {
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(ONBOARDING_DISMISSED_KEY, 'true');
+    }
+    setOnboardingDismissed(true);
+  };
+
+  const hasRoles = rolesCount > 0;
+  const hasCandidates = candidatesCount > 0;
+  const hasSentAssessment = totalAssessmentsCount > 0;
+
   return (
     <div>
       <NavComponent currentPage="dashboard" onNavigate={onNavigate} />
@@ -213,7 +366,7 @@ export const DashboardPage = ({
           </div>
         )}
         {compareAssessments.length >= 2 && (
-          <div className="border-2 border-[var(--taali-border)] p-6 mb-6 bg-[var(--taali-purple-soft)]">
+          <div id="dashboard-compare-overlay" className="border-2 border-[var(--taali-border)] p-6 mb-6 bg-[var(--taali-purple-soft)]">
             <div className="flex items-center gap-2 mb-4">
               <Users size={20} />
               <h3 className="font-bold text-lg">Candidate comparison</h3>
@@ -275,12 +428,67 @@ export const DashboardPage = ({
         )}
 
         {/* Stats Cards */}
-        <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-          <StatsCardComponent icon={Clipboard} label="Active Assessments" value={String(totalAssessments)} change={`${completedCount} completed`} />
-          <StatsCardComponent icon={CheckCircle} label="Completion Rate" value={`${completionRate}%`} change="Industry avg: 65%" />
-          <StatsCardComponent icon={Star} label="Avg Score" value={avgScore !== '—' ? `${avgScore}/10` : '—'} change="Candidates this month" />
-          <StatsCardComponent icon={DollarSign} label="This Month Cost" value={monthCost} change={`${completedCount} assessments`} />
-        </div>
+        {loading ? (
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+            <StatCardSkeleton />
+          </div>
+        ) : (
+          <div className="grid md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <StatsCardComponent
+              icon={Clipboard}
+              label="Active Assessments"
+              value={String(inProgressCount)}
+              change={`${completedCount} completed`}
+              onClick={() => {
+                setStatusFilter('in_progress');
+                setPage(0);
+              }}
+            />
+            <StatsCardComponent
+              icon={CheckCircle}
+              label="Completion Rate"
+              value={`${completionRate}%`}
+              change={`${completedCount} completed`}
+              onClick={() => onNavigate('analytics')}
+            />
+            <StatsCardComponent
+              icon={Star}
+              label="Avg Score"
+              value={avgScore !== '—' ? `${avgScore}/10` : '—'}
+              change="Candidates this month"
+              onClick={() => onNavigate('analytics')}
+            />
+            <StatsCardComponent
+              icon={DollarSign}
+              label="This Month Cost"
+              value={monthCost}
+              subValue={`≈ $${aedToUsd(monthCostAed)} USD`}
+              change={`${completedCount} assessments`}
+              onClick={() => onNavigate('settings-billing')}
+            />
+          </div>
+        )}
+
+        {totalAssessmentsCount === 0 && !onboardingDismissed ? (
+          <div className="mb-8 border-2 border-[var(--taali-purple)] bg-[var(--taali-surface)] p-6">
+            <div className="mb-4 flex items-start justify-between gap-4">
+              <h2 className="text-lg font-bold text-[var(--taali-text)]">Get started with TAALI</h2>
+              <Button variant="ghost" size="sm" onClick={dismissOnboarding}>Dismiss</Button>
+            </div>
+            <ol className="space-y-2 font-mono text-sm text-[var(--taali-text)]">
+              <li>{hasRoles ? '✓' : '○'} Create a role</li>
+              <li>{hasCandidates ? '✓' : '○'} Add a candidate with their CV</li>
+              <li>{hasSentAssessment ? '✓' : '○'} Send them an assessment link</li>
+              <li>○ Review results here once they finish</li>
+            </ol>
+            <div className="mt-4">
+              <Button variant="secondary" size="sm" onClick={() => onNavigate('candidates')}>Go to Candidates</Button>
+            </div>
+          </div>
+        ) : null}
 
         {/* Filters: split by job role (task); recruiters hire for many roles */}
         <div className="flex flex-wrap items-center gap-4 mb-4">
@@ -311,9 +519,11 @@ export const DashboardPage = ({
             onChange={(e) => { setStatusFilter(e.target.value); setPage(0); }}
           >
             <option value="">All statuses</option>
-            <option value="pending">Pending</option>
+            <option value="pending">Invited</option>
             <option value="in_progress">In progress</option>
             <option value="completed">Completed</option>
+            <option value="completed_due_to_timeout">Timed out</option>
+            <option value="expired">Expired</option>
           </Select>
         </div>
         <p className="font-mono text-xs text-[var(--taali-muted)] mb-2">Candidates are grouped by job role. A candidate can appear in multiple roles if they have assessments for different tasks.</p>
@@ -329,10 +539,25 @@ export const DashboardPage = ({
             )}
           </div>
           {loading ? (
-            <div className="flex items-center justify-center py-16 gap-3">
-              <Spinner size={24} />
-              <span className="font-mono text-sm text-[var(--taali-muted)]">Loading assessments...</span>
-            </div>
+            <table className="w-full">
+              <thead>
+                <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-purple-soft)]">
+                  <th className="text-left px-2 py-3 font-mono text-xs font-bold uppercase">Compare</th>
+                  <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Candidate</th>
+                  <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Task</th>
+                  <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Status</th>
+                  <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Score</th>
+                  <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Time</th>
+                  <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Assessment link</th>
+                  <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase">Actions</th>
+                </tr>
+              </thead>
+              <tbody>
+                {Array.from({ length: 8 }).map((_, index) => (
+                  <TableRowSkeleton key={`dashboard-skeleton-${index}`} cols={8} />
+                ))}
+              </tbody>
+            </table>
           ) : (
             <table className="w-full">
               <thead>
@@ -366,9 +591,11 @@ export const DashboardPage = ({
                       );
                     }
                     const c = row;
-                    const canCompare = (c.status === 'completed' || c.status === 'submitted' || c.status === 'graded') && (compareIds.length < MAX_COMPARE || compareIds.includes(c.id));
+                    const normalizedStatus = normalizeAssessmentStatus(c.status);
+                    const canCompare = isCompletedStatus(normalizedStatus) && (compareIds.length < MAX_COMPARE || compareIds.includes(c.id));
+                    const expiryDays = daysUntil(c.expiresAt);
                     return (
-                      <tr key={c.id} className="border-b border-[var(--taali-border-muted)] hover:bg-[var(--taali-bg)] transition-colors">
+                      <tr key={c.id} className="border-b border-[var(--taali-border-muted)] hover:bg-[var(--taali-surface-hover,rgba(0,0,0,0.04))] transition-colors">
                         <td className="px-2 py-4">
                           {canCompare ? (
                             <input
@@ -388,7 +615,14 @@ export const DashboardPage = ({
                           <div className="font-mono text-xs text-[var(--taali-muted)]">Role: {c.role}</div>
                         </td>
                         <td className="px-6 py-4 font-mono text-sm">{c.task}</td>
-                        <td className="px-6 py-4"><StatusBadgeComponent status={c.status} /></td>
+                        <td className="px-6 py-4">
+                          <div className="flex flex-col gap-1">
+                            <StatusBadgeComponent status={normalizedStatus} />
+                            {normalizedStatus === 'pending' && expiryDays != null && expiryDays > 0 && expiryDays <= 3 ? (
+                              <span className="font-mono text-xs text-[var(--taali-warning)]">Expires in {expiryDays}d</span>
+                            ) : null}
+                          </div>
+                        </td>
                         <td className="px-6 py-4 font-bold">{c.score !== null ? `${c.score}/10` : '—'}</td>
                         <td className="px-6 py-4 font-mono text-sm">{c.time}</td>
                         <td className="px-6 py-4">
@@ -410,7 +644,7 @@ export const DashboardPage = ({
                           )}
                         </td>
                         <td className="px-6 py-4">
-                          {c.status === 'completed' || c.status === 'submitted' || c.status === 'graded' ? (
+                          {isCompletedStatus(normalizedStatus) ? (
                             <Button
                               variant="secondary"
                               size="sm"
@@ -440,16 +674,60 @@ export const DashboardPage = ({
                             >
                               {loadingViewId === c.id ? <Spinner size={14} /> : <Eye size={14} />} View
                             </Button>
-                          ) : (
+                          ) : null}
+                          {normalizedStatus === 'pending' ? (
+                            <div className="flex items-center gap-2">
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="font-mono"
+                                onClick={() => {
+                                  const link = c.assessmentLink || getAssessmentLink(c.token);
+                                  if (!link) return;
+                                  navigator.clipboard?.writeText(link).then(() => {
+                                    showToast('Link copied.', 'success');
+                                  }).catch(() => {
+                                    showToast('Failed to copy link.', 'error');
+                                  });
+                                }}
+                                disabled={!c.token}
+                              >
+                                <Clipboard size={14} /> Copy Link
+                              </Button>
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                className="font-mono"
+                                disabled={loadingResendId === c.id}
+                                onClick={() => handleResend(c.id)}
+                              >
+                                {loadingResendId === c.id ? <Spinner size={14} /> : null}
+                                {loadingResendId === c.id ? 'Resending...' : 'Resend'}
+                              </Button>
+                            </div>
+                          ) : null}
+                          {normalizedStatus === 'expired' ? (
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              className="font-mono"
+                              disabled={loadingResendId === c.id}
+                              onClick={() => handleResend(c.id)}
+                            >
+                              {loadingResendId === c.id ? <Spinner size={14} /> : null}
+                              {loadingResendId === c.id ? 'Resending...' : 'Resend'}
+                            </Button>
+                          ) : null}
+                          {normalizedStatus === 'in_progress' ? (
                             <Button
                               variant="ghost"
                               size="sm"
                               className="opacity-50 cursor-not-allowed"
                               disabled
                             >
-                              <Timer size={14} /> Pending
+                              <Timer size={14} /> In Progress
                             </Button>
-                          )}
+                          ) : null}
                         </td>
                       </tr>
                     );
@@ -481,6 +759,36 @@ export const DashboardPage = ({
           )}
         </TableShell>
       </div>
+      {compareIds.length > 0 ? (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-[var(--taali-surface)] border-2 border-[var(--taali-border)] shadow-xl px-6 py-3 flex items-center gap-3 font-mono text-sm">
+          <span>{compareIds.length} selected</span>
+          <Button size="sm" onClick={exportSelectedCsv}>Export CSV</Button>
+          <Button size="sm" variant="danger" onClick={handleBulkDelete} disabled={bulkDeleting}>
+            {bulkDeleting ? 'Deleting...' : 'Delete'}
+          </Button>
+          {compareIds.length >= 2 && compareIds.length <= MAX_COMPARE ? (
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                document.getElementById('dashboard-compare-overlay')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+            >
+              Compare
+            </Button>
+          ) : null}
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setCompareIds([]);
+              setCompareAssessments([]);
+            }}
+          >
+            Clear
+          </Button>
+        </div>
+      ) : null}
     </div>
   );
 };

@@ -7,18 +7,65 @@ from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 
 from ...deps import get_current_user
-from ...models.assessment import Assessment
+from ...models.assessment import Assessment, AssessmentStatus
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
+from ...platform.request_context import get_request_id
 from ...services.ai_assisted_evaluator import generate_ai_suggestions
+from ...services.candidate_feedback_engine import (
+    build_candidate_feedback_payload,
+    build_interview_debrief_payload,
+)
 from ...services.evaluation_result_service import (
     build_evaluation_result,
     normalize_stored_evaluation_result,
 )
 from ...components.assessments.repository import utcnow
+from ...components.notifications.service import send_candidate_feedback_ready_sync
 
 router = APIRouter()
+
+
+def _is_completed(assessment: Assessment) -> bool:
+    raw = getattr(assessment.status, "value", assessment.status)
+    return str(raw or "").lower() in {
+        AssessmentStatus.COMPLETED.value,
+        AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT.value,
+    }
+
+
+def _candidate_feedback_link(token: str) -> str:
+    return f"{settings.FRONTEND_URL}/assessment/{token}/feedback"
+
+
+def _dispatch_candidate_feedback_email(
+    *,
+    candidate_email: str,
+    candidate_name: str,
+    org_name: str,
+    role_title: str,
+    feedback_link: str,
+) -> None:
+    if settings.MVP_DISABLE_CELERY:
+        send_candidate_feedback_ready_sync(
+            candidate_email=candidate_email,
+            candidate_name=candidate_name,
+            org_name=org_name,
+            role_title=role_title,
+            feedback_link=feedback_link,
+        )
+        return
+    from ...tasks.assessment_tasks import send_candidate_feedback_ready_email
+
+    send_candidate_feedback_ready_email.delay(
+        candidate_email=candidate_email,
+        candidate_name=candidate_name,
+        org_name=org_name,
+        role_title=role_title,
+        feedback_link=feedback_link,
+        request_id=get_request_id(),
+    )
 
 
 @router.get("/{assessment_id}/report.pdf")
@@ -209,11 +256,17 @@ def add_assessment_note(
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
     existing_timeline = assessment.timeline or []
+    timestamp = utcnow().isoformat()
     existing_timeline.append(
         {
+            "event_type": "note",
+            "type": "note",
+            "timestamp": timestamp,
             "time": utcnow().isoformat(),
             "event": "Recruiter note",
+            "text": note,
             "prompt": note,
+            "author": (current_user.full_name or current_user.email or "Recruiter"),
         }
     )
     assessment.timeline = existing_timeline
@@ -223,6 +276,162 @@ def add_assessment_note(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to save note")
     return {"success": True, "timeline": assessment.timeline}
+
+
+@router.post("/{assessment_id}/finalize-candidate-feedback")
+def finalize_candidate_feedback(
+    assessment_id: int,
+    body: Dict[str, Any] | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    payload = body or {}
+    force_regenerate = bool(payload.get("force_regenerate", False))
+    send_email = bool(payload.get("send_email", True))
+    resend_email = bool(payload.get("resend_email", False))
+    include_feedback = bool(payload.get("include_feedback", True))
+
+    assessment = (
+        db.query(Assessment)
+        .options(
+            joinedload(Assessment.candidate),
+            joinedload(Assessment.task),
+            joinedload(Assessment.role),
+            joinedload(Assessment.organization),
+        )
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    if not _is_completed(assessment):
+        raise HTTPException(status_code=400, detail="Assessment must be completed before feedback finalization")
+
+    org = assessment.organization
+    org_feedback_enabled = bool(getattr(org, "candidate_feedback_enabled", True))
+    assessment_feedback_enabled = bool(getattr(assessment, "candidate_feedback_enabled", True))
+    if not org_feedback_enabled or not assessment_feedback_enabled:
+        raise HTTPException(status_code=403, detail="Candidate feedback is disabled for this organization")
+
+    should_generate = (
+        force_regenerate
+        or not bool(getattr(assessment, "candidate_feedback_ready", False))
+        or not isinstance(getattr(assessment, "candidate_feedback_json", None), dict)
+    )
+    if should_generate:
+        generated_payload = build_candidate_feedback_payload(
+            db,
+            assessment,
+            organization_name=(org.name if org and org.name else "Company"),
+        )
+        assessment.candidate_feedback_json = generated_payload
+        assessment.candidate_feedback_generated_at = utcnow()
+        assessment.candidate_feedback_ready = True
+    else:
+        generated_payload = assessment.candidate_feedback_json or {}
+
+    feedback_link = _candidate_feedback_link(assessment.token)
+    email_dispatched = False
+    if send_email and assessment.candidate and assessment.candidate.email:
+        should_send_email = (
+            resend_email
+            or force_regenerate
+            or assessment.candidate_feedback_sent_at is None
+        )
+        if should_send_email:
+            role_title = (
+                (assessment.role.name if assessment.role else None)
+                or (assessment.task.name if assessment.task else None)
+                or "technical assessment"
+            )
+            _dispatch_candidate_feedback_email(
+                candidate_email=assessment.candidate.email,
+                candidate_name=(assessment.candidate.full_name or assessment.candidate.email),
+                org_name=(org.name if org and org.name else "your company"),
+                role_title=role_title,
+                feedback_link=feedback_link,
+            )
+            assessment.candidate_feedback_sent_at = utcnow()
+            email_dispatched = True
+
+    try:
+        db.commit()
+        db.refresh(assessment)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to finalize candidate feedback")
+
+    return {
+        "success": True,
+        "feedback_ready": bool(assessment.candidate_feedback_ready),
+        "feedback_generated_at": assessment.candidate_feedback_generated_at,
+        "feedback_sent_at": assessment.candidate_feedback_sent_at,
+        "feedback_url": feedback_link,
+        "email_dispatched": email_dispatched,
+        "feedback": generated_payload if include_feedback else None,
+    }
+
+
+@router.post("/{assessment_id}/interview-debrief")
+def generate_interview_debrief(
+    assessment_id: int,
+    body: Dict[str, Any] | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    payload = body or {}
+    force_regenerate = bool(payload.get("force_regenerate", False))
+
+    assessment = (
+        db.query(Assessment)
+        .options(
+            joinedload(Assessment.candidate),
+            joinedload(Assessment.task),
+            joinedload(Assessment.role),
+        )
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.organization_id == current_user.organization_id,
+        )
+        .first()
+    )
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    if not _is_completed(assessment):
+        raise HTTPException(status_code=400, detail="Assessment must be completed before generating interview debrief")
+
+    cached = (
+        isinstance(getattr(assessment, "interview_debrief_json", None), dict)
+        and not force_regenerate
+    )
+    if cached:
+        return {
+            "success": True,
+            "cached": True,
+            "generated_at": assessment.interview_debrief_generated_at,
+            "interview_debrief": assessment.interview_debrief_json,
+        }
+
+    debrief = build_interview_debrief_payload(assessment)
+    assessment.interview_debrief_json = debrief
+    assessment.interview_debrief_generated_at = utcnow()
+
+    try:
+        db.commit()
+        db.refresh(assessment)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to generate interview debrief")
+
+    return {
+        "success": True,
+        "cached": False,
+        "generated_at": assessment.interview_debrief_generated_at,
+        "interview_debrief": debrief,
+    }
 
 
 @router.post("/{assessment_id}/ai-eval-suggestions")

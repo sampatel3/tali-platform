@@ -19,6 +19,11 @@ VAGUE_PATTERNS = [
     r"^(help|fix|broken|not working|doesn't work|error|issue)\.?$",
     r"^(what's wrong|why isn't this working)\??$",
     r"^(please help|can you help|help me)\.?$",
+    r"^(make|do|fix|build|write|implement|create|complete|finish)\s+(it|this|that|the|everything|all|the whole|the complete)\b",
+    r"^(just|simply|please)\s+(make|do|fix|build|write|implement|finish)\b",
+    r"^(write|create|implement|build)\s+(the\s+)?(whole|entire|complete|full)\b",
+    r"^(make it work|get it working|make this work|make this pass|get the tests passing)\b",
+    r"^(rewrite|redo|redo everything|start over)\b",
 ]
 
 INJECTION_PATTERNS = [
@@ -27,6 +32,11 @@ INJECTION_PATTERNS = [
     r"you are now",
     r"new instructions:",
     r"forget everything",
+    r"(act|pretend|behave|think)\s+(as if|like|as though)\s+(you|you're|you are)",
+    r"(no|without any|ignore all)\s+(restrictions|limits|constraints|rules)",
+    r"(complete|write|implement|finish|solve)\s+(the|this|everything|all|entire|complete|whole)\s+(for me|for us|solution|code)",
+    r"(give me|show me|write me)\s+(the|a)\s+(complete|full|entire|finished|working)"
+    r"(?:\s+(complete|full|entire|finished|working))?\s+(solution|implementation|code|answer)",
 ]
 
 # Copy-paste detection patterns (used in prompt_analytics)

@@ -78,6 +78,11 @@ export const AssessmentInviteSheet = ({
         </Card>
       ) : (
         <div className="space-y-4">
+          {draft.noCv ? (
+            <Card className="border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              No CV uploaded. Role fit scoring (CV ↔ Job) will show N/A until a CV is added.
+            </Card>
+          ) : null}
           <Card className="bg-[#faf8ff] px-3 py-2 text-sm text-gray-700">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -160,4 +165,3 @@ export const AssessmentInviteSheet = ({
     </Sheet>
   );
 };
-

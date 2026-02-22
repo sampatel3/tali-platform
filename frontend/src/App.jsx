@@ -16,6 +16,7 @@ import { ToastProvider } from './context/ToastContext';
 import { assessments as assessmentsApi } from './shared/api';
 import { pathForPage } from './app/routing';
 import { GlobalThemeToggle } from './shared/ui/GlobalThemeToggle';
+import { ErrorBoundary } from './shared/ui/ErrorBoundary';
 
 import { LandingPage } from './features/marketing/LandingPage';
 import {
@@ -35,6 +36,9 @@ import {
 import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
 
 const AssessmentPage = lazy(() => import('./features/assessment_runtime/AssessmentPage'));
+const CandidateFeedbackPage = lazy(() =>
+  import('./features/assessment_runtime/CandidateFeedbackPage').then((m) => ({ default: m.CandidateFeedbackPage }))
+);
 const DemoExperiencePage = lazy(() =>
   import('./features/demo/DemoExperiencePage').then((m) => ({ default: m.DemoExperiencePage }))
 );
@@ -61,6 +65,7 @@ function AppContent() {
   const [searchParams] = useSearchParams();
 
   const [selectedCandidate, setSelectedCandidate] = useState(null);
+  const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'dashboard', label: 'Back to Assessments' });
   const [loadingCandidateDetail, setLoadingCandidateDetail] = useState(false);
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
 
@@ -127,7 +132,10 @@ function AppContent() {
     if (
       !authLoading &&
       !isAuthenticated &&
-      ['/dashboard', '/candidates', '/analytics', '/settings', '/tasks', '/candidate-detail'].includes(location.pathname)
+      (
+        ['/dashboard', '/candidates', '/analytics', '/tasks', '/candidate-detail'].includes(location.pathname)
+        || location.pathname.startsWith('/settings')
+      )
     ) {
       navigate('/', { replace: true });
     }
@@ -162,8 +170,13 @@ function AppContent() {
     setStartedAssessmentData(startData);
   };
 
-  const navigateToCandidate = (candidate) => {
+  const navigateToCandidate = (candidate, sourcePage = 'dashboard') => {
     setSelectedCandidate(candidate);
+    if (sourcePage === 'candidates') {
+      setCandidateDetailBackTo({ page: 'candidates', label: 'Back to Candidates' });
+    } else {
+      setCandidateDetailBackTo({ page: 'dashboard', label: 'Back to Assessments' });
+    }
     navigateToPage('candidate-detail', {
       candidateDetailAssessmentId: candidate?.id || candidate?._raw?.id || null,
     });
@@ -246,6 +259,15 @@ function AppContent() {
     );
   };
 
+  const CandidateFeedbackRoute = () => {
+    const { token } = useParams();
+    return (
+      <Suspense fallback={lazyFallback}>
+        <CandidateFeedbackPage token={token || ''} />
+      </Suspense>
+    );
+  };
+
   return (
     <>
       <Routes>
@@ -270,7 +292,7 @@ function AppContent() {
           <Suspense fallback={lazyFallback}>
             <DashboardPage
               onNavigate={navigateToPage}
-              onViewCandidate={navigateToCandidate}
+              onViewCandidate={(candidate) => navigateToCandidate(candidate, 'dashboard')}
               NavComponent={DashboardNav}
               StatsCardComponent={StatsCard}
               StatusBadgeComponent={StatusBadge}
@@ -285,7 +307,7 @@ function AppContent() {
           <Suspense fallback={lazyFallback}>
             <CandidatesPage
               onNavigate={navigateToPage}
-              onViewCandidate={navigateToCandidate}
+              onViewCandidate={(candidate) => navigateToCandidate(candidate, 'candidates')}
               NavComponent={DashboardNav}
             />
           </Suspense>
@@ -305,6 +327,7 @@ function AppContent() {
                 candidate={selectedCandidate}
                 assessmentId={candidateDetailAssessmentId}
                 onNavigate={navigateToPage}
+                backTo={candidateDetailBackTo}
                 onDeleted={() => setSelectedCandidate(null)}
                 onNoteAdded={(timeline) =>
                   setSelectedCandidate((prev) => (prev ? { ...prev, timeline } : prev))
@@ -331,7 +354,7 @@ function AppContent() {
       />
 
       <Route
-        path="/settings"
+        path="/settings/*"
         element={(
           <Suspense fallback={lazyFallback}>
             <SettingsPage
@@ -356,6 +379,7 @@ function AppContent() {
       />
 
       <Route path="/assess/:token" element={<CandidateWelcomeRoute />} />
+      <Route path="/assessment/:token/feedback" element={<CandidateFeedbackRoute />} />
       <Route path="/assessment/:assessmentId" element={<CandidateWelcomeWithIdRoute />} />
       <Route path="/assessment/live" element={<AssessmentLiveRoute />} />
 
@@ -370,7 +394,9 @@ function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <ToastProvider>
-        <AppContent />
+        <ErrorBoundary>
+          <AppContent />
+        </ErrorBoundary>
       </ToastProvider>
     </BrowserRouter>
   );

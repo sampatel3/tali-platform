@@ -53,6 +53,46 @@ def send_results_email(self, user_email: str, candidate_name: str, score: float,
         raise self.retry(exc=exc)
 
 
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+def send_candidate_feedback_ready_email(
+    self,
+    candidate_email: str,
+    candidate_name: str,
+    org_name: str,
+    role_title: str,
+    feedback_link: str,
+    request_id: str | None = None,
+):
+    """Notify candidate that their feedback report is ready."""
+    from ..domains.integrations_notifications.adapters import build_email_adapter
+
+    try:
+        email_svc = build_email_adapter()
+        result = email_svc.send_candidate_feedback_ready(
+            candidate_email=candidate_email,
+            candidate_name=candidate_name,
+            org_name=org_name,
+            role_title=role_title,
+            feedback_link=feedback_link,
+        )
+        if not result["success"]:
+            raise Exception(result.get("error", "Email send failed"))
+        logger.info(
+            "Candidate feedback email sent to %s",
+            candidate_email,
+            extra={"request_id": request_id or self.request.id},
+        )
+        return result
+    except Exception as exc:
+        logger.error(
+            "Failed to send candidate feedback email to %s: %s",
+            candidate_email,
+            exc,
+            extra={"request_id": request_id or self.request.id},
+        )
+        raise self.retry(exc=exc)
+
+
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=120)
 def post_results_to_workable(self, access_token: str, subdomain: str, candidate_id: str, assessment_data: dict, request_id: str | None = None):
     """Post assessment results to Workable candidate profile."""
@@ -108,6 +148,78 @@ def cleanup_expired_assessments():
     except Exception as e:
         logger.error(f"Cleanup task failed: {e}")
         db.rollback()
+    finally:
+        db.close()
+
+
+@celery_app.task
+def send_assessment_expiry_reminders():
+    """Daily reminder: notify candidates whose pending assessments expire soon."""
+    from datetime import datetime, timedelta, timezone
+    from sqlalchemy.orm import Session, joinedload
+
+    from ..domains.integrations_notifications.adapters import build_email_adapter
+    from ..models.assessment import Assessment, AssessmentStatus
+    from ..platform.database import SessionLocal
+
+    if not (settings.RESEND_API_KEY or "").strip():
+        return {"status": "skipped", "reason": "resend_not_configured"}
+
+    now = datetime.now(timezone.utc)
+    window_start = now - timedelta(days=6)
+    window_end = now - timedelta(days=5)
+
+    db: Session = SessionLocal()
+    sent = 0
+    failed = 0
+    skipped = 0
+    try:
+        pending = (
+            db.query(Assessment)
+            .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+            .filter(
+                Assessment.status == AssessmentStatus.PENDING,
+                Assessment.created_at > window_start,
+                Assessment.created_at <= window_end,
+                Assessment.expires_at != None,  # noqa: E711
+                Assessment.expires_at > now,
+            )
+            .all()
+        )
+        email_svc = build_email_adapter()
+        for assessment in pending:
+            candidate_email = (
+                (assessment.candidate.email if assessment.candidate else None)
+                or None
+            )
+            if not candidate_email:
+                skipped += 1
+                continue
+            candidate_name = (
+                (assessment.candidate.full_name if assessment.candidate else None)
+                or candidate_email
+            )
+            task_name = (assessment.task.name if assessment.task else None) or "Technical assessment"
+            expiry_text = assessment.expires_at.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+            assessment_link = f"{settings.FRONTEND_URL}/assessment/{assessment.id}?token={assessment.token}"
+            result = email_svc.send_assessment_expiry_reminder(
+                candidate_email=candidate_email,
+                candidate_name=candidate_name,
+                task_name=task_name,
+                assessment_link=assessment_link,
+                expiry_text=expiry_text,
+            )
+            if result.get("success"):
+                sent += 1
+            else:
+                failed += 1
+        logger.info(
+            "Assessment expiry reminders complete: sent=%d failed=%d skipped=%d",
+            sent,
+            failed,
+            skipped,
+        )
+        return {"status": "ok", "sent": sent, "failed": failed, "skipped": skipped}
     finally:
         db.close()
 

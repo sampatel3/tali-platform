@@ -28,6 +28,16 @@ export const pathForPage = (page, options = {}) => {
       return '/analytics';
     case 'settings':
       return '/settings';
+    case 'settings-workable':
+      return '/settings/workable';
+    case 'settings-billing':
+      return '/settings/billing';
+    case 'settings-team':
+      return '/settings/team';
+    case 'settings-enterprise':
+      return '/settings/enterprise';
+    case 'settings-preferences':
+      return '/settings/preferences';
     case 'candidate-welcome':
       if (options.assessmentIdFromLink && options.assessmentToken) {
         return `/assessment/${options.assessmentIdFromLink}?token=${encodeURIComponent(options.assessmentToken)}`;
@@ -36,6 +46,10 @@ export const pathForPage = (page, options = {}) => {
         return `/assess/${encodeURIComponent(options.assessmentToken)}`;
       }
       return '/';
+    case 'candidate-feedback':
+      return options.assessmentToken
+        ? `/assessment/${encodeURIComponent(options.assessmentToken)}/feedback`
+        : '/';
     case 'assessment':
       return `/assessment/live${options.assessmentToken ? `?token=${encodeURIComponent(options.assessmentToken)}` : ''}`;
     case 'workable-callback':

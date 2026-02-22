@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from ...components.notifications.service import send_results_notification_sync
 from ...components.scoring.analytics import compute_all_heuristics
-from ...components.scoring.service import calculate_mvp_score
+from ...components.scoring.service import calculate_mvp_score, generate_heuristic_summary
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
@@ -21,6 +21,7 @@ from ...models.role import Role
 from ...models.task import Task
 from ...models.user import User
 from ...platform.request_context import get_request_id
+from ...services.candidate_feedback_engine import build_candidate_feedback_payload
 from ...services.fit_matching_service import calculate_cv_job_match_sync
 from .repository import (
     append_assessment_timeline_event,
@@ -42,6 +43,142 @@ def _terminal_usage_totals(assessment: Assessment) -> tuple[int, int]:
         input_tokens += max(0, int(entry.get("input_tokens") or 0))
         output_tokens += max(0, int(entry.get("output_tokens") or 0))
     return input_tokens, output_tokens
+
+
+def _task_extra_data(task: Task) -> Dict[str, Any]:
+    extra = getattr(task, "extra_data", None)
+    return extra if isinstance(extra, dict) else {}
+
+
+def _extract_process_output(result: Any) -> tuple[str, str, int | None]:
+    if isinstance(result, dict):
+        stdout = str(result.get("stdout") or result.get("out") or "")
+        stderr = str(result.get("stderr") or result.get("err") or "")
+        exit_code = result.get("exit_code")
+        try:
+            exit_code = int(exit_code) if exit_code is not None else None
+        except (TypeError, ValueError):
+            exit_code = None
+        return stdout, stderr, exit_code
+
+    stdout = str(getattr(result, "stdout", "") or getattr(result, "out", "") or "")
+    stderr = str(getattr(result, "stderr", "") or getattr(result, "err", "") or "")
+    exit_code = getattr(result, "exit_code", None)
+    try:
+        exit_code = int(exit_code) if exit_code is not None else None
+    except (TypeError, ValueError):
+        exit_code = None
+    return stdout, stderr, exit_code
+
+
+def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[str, int]:
+    if not parse_pattern:
+        return {"passed": 0, "failed": 0, "total": 0}
+
+    passed = 0
+    failed = 0
+    total = 0
+
+    try:
+        match = re.search(parse_pattern, output or "", re.IGNORECASE | re.MULTILINE)
+    except re.error:
+        match = None
+    if match:
+        groups = match.groupdict() if hasattr(match, "groupdict") else {}
+        if groups:
+            try:
+                passed = int(groups.get("passed") or 0)
+            except (TypeError, ValueError):
+                passed = 0
+            try:
+                failed = int(groups.get("failed") or 0)
+            except (TypeError, ValueError):
+                failed = 0
+            try:
+                total = int(groups.get("total") or 0)
+            except (TypeError, ValueError):
+                total = 0
+        elif match.groups():
+            try:
+                passed = int(match.group(1))
+            except (TypeError, ValueError):
+                passed = 0
+
+    if failed == 0:
+        fail_match = re.search(r"(?i)(\d+)\s+failed", output or "")
+        if fail_match:
+            try:
+                failed = int(fail_match.group(1))
+            except (TypeError, ValueError):
+                failed = 0
+    if total == 0:
+        total = passed + failed
+        if total == 0 and passed > 0:
+            total = passed
+
+    return {"passed": max(0, passed), "failed": max(0, failed), "total": max(0, total)}
+
+
+def _run_task_test_runner(
+    e2b: Any,
+    sandbox: Any,
+    task: Task,
+    repo_root: str,
+) -> Dict[str, Any] | None:
+    config = (_task_extra_data(task).get("test_runner") or {})
+    if not isinstance(config, dict):
+        return None
+    command = str(config.get("command") or "").strip()
+    if not command:
+        return None
+
+    working_dir = str(config.get("working_dir") or repo_root).strip() or repo_root
+    try:
+        timeout_seconds = float(config.get("timeout_seconds") or 60)
+    except (TypeError, ValueError):
+        timeout_seconds = 60.0
+    timeout_seconds = max(5.0, min(timeout_seconds, 600.0))
+    parse_pattern = str(config.get("parse_pattern") or "").strip()
+
+    try:
+        process = e2b.run_command(
+            sandbox,
+            command,
+            cwd=working_dir,
+            timeout=timeout_seconds,
+        )
+        stdout, stderr, exit_code = _extract_process_output(process)
+        combined = "\n".join(part for part in [stdout, stderr] if part)
+        parsed = _parse_test_runner_results(combined, parse_pattern)
+        passed = parsed["passed"]
+        failed = parsed["failed"]
+        total = parsed["total"]
+        success = (failed == 0) and (exit_code in (None, 0))
+        return {
+            "success": success,
+            "source": "task_test_runner",
+            "command": command,
+            "working_dir": working_dir,
+            "stdout": stdout,
+            "stderr": stderr,
+            "exit_code": exit_code,
+            "passed": passed,
+            "failed": failed,
+            "total": total,
+        }
+    except Exception as exc:
+        return {
+            "success": False,
+            "source": "task_test_runner",
+            "command": command,
+            "working_dir": working_dir,
+            "stdout": "",
+            "stderr": "",
+            "error": str(exc),
+            "passed": 0,
+            "failed": 0,
+            "total": 0,
+        }
 
 
 def submit_assessment_impl(
@@ -74,6 +211,7 @@ def submit_assessment_impl(
             assessment.ai_prompts = prompts
 
     # --- 1. Run tests ---
+    repo_root = workspace_repo_root_fn(task)
     e2b = e2b_service_cls(settings_obj.E2B_API_KEY)
     if assessment.e2b_session_id:
         sandbox = e2b.connect_sandbox(assessment.e2b_session_id)
@@ -81,20 +219,21 @@ def submit_assessment_impl(
         sandbox = e2b.create_sandbox()
 
     sandbox.files.write("/tmp/solution.py", final_code)
-    test_results = (
-        e2b.run_tests(sandbox, task.test_code)
-        if task.test_code
-        else {"passed": 0, "failed": 0, "total": 0}
-    )
+    test_results = _run_task_test_runner(e2b, sandbox, task, repo_root)
+    if not isinstance(test_results, dict) or (
+        int(test_results.get("passed", 0) or 0) == 0
+        and int(test_results.get("total", 0) or 0) == 0
+        and task.test_code
+    ):
+        test_results = e2b.run_tests(sandbox, task.test_code)
     if not isinstance(test_results, dict):
-        test_results = {"passed": 0, "failed": 0, "total": 0, "error": "Invalid test results payload"}
+        test_results = {"passed": 0, "failed": 0, "total": 0}
 
     passed = test_results.get("passed", 0)
     total = test_results.get("total", 0)
 
     # --- 2. Capture git evidence and persist branch state (store before push so diff not lost on failure) ---
     try:
-        repo_root = workspace_repo_root_fn(task)
         evidence = collect_git_evidence_fn(sandbox, repo_root)
         assessment.git_evidence = evidence
         assessment.final_repo_state = evidence.get("head_sha")
@@ -282,6 +421,10 @@ def submit_assessment_impl(
         duration_seconds = max(0, int((utcnow() - ensure_utc(assessment.started_at)).total_seconds()))
 
     interactions = _build_interactions(prompts)
+    task_scoring_hints = None
+    task_extra_data = _task_extra_data(task)
+    if isinstance(task_extra_data.get("scoring_hints"), dict):
+        task_scoring_hints = task_extra_data.get("scoring_hints")
 
     composite = calculate_mvp_score(
         interactions=interactions,
@@ -292,6 +435,7 @@ def submit_assessment_impl(
         v2_enabled=settings_obj.SCORING_V2_ENABLED,
         weights=task.score_weights if task.score_weights else None,
         cv_match_result=cv_match_result,
+        task_scoring_hints=task_scoring_hints,
     )
     final_score_100 = composite["final_score"]
     final_score = round(final_score_100 / 10.0, 1)
@@ -373,6 +517,12 @@ def submit_assessment_impl(
     assessment.cv_job_match_score = cv_match_result.get("cv_job_match_score")
     assessment.cv_job_match_details = cv_match_result.get("match_details", {})
 
+    heuristic_summary = generate_heuristic_summary(
+        category_scores=category_scores,
+        soft_signals=composite.get("soft_signals", {}),
+        fraud_flags=composite.get("fraud", {}).get("flags", []),
+    )
+
     # Store the full breakdown: component scores (0-100) + 8 category scores (0-10) +
     # detailed per-metric scores + explanations + fit match
     assessment.score_breakdown = {
@@ -385,6 +535,9 @@ def submit_assessment_impl(
             "skills": cv_match_result.get("skills_match"),
             "experience": cv_match_result.get("experience_relevance"),
         },
+        "heuristic_summary": heuristic_summary,
+        "uncapped_final_score": composite.get("uncapped_final_score"),
+        "applied_caps": composite.get("applied_caps", []),
         "errors": scoring_errors if scoring_errors else [],
     }
     assessment.score_weights_used = composite.get("weights_used", {})
@@ -448,6 +601,9 @@ def submit_assessment_impl(
         "soft_signals": composite.get("soft_signals", {}),
         "fraud": composite.get("fraud", {}),
         "final_score": final_score_100,
+        "uncapped_final_score": composite.get("uncapped_final_score"),
+        "applied_caps": composite.get("applied_caps", []),
+        "heuristic_summary": heuristic_summary,
         "flags": composite.get("fraud", {}).get("flags", []),
         "calibration_prompt": calibration_prompt,
         "calibration_score": calibration_score,
@@ -477,6 +633,20 @@ def submit_assessment_impl(
     )
     assessment.time_efficiency_score = round(component_scores.get("time_efficiency", 0.0) / 10.0, 2)
 
+    org = db.query(Organization).filter(Organization.id == assessment.organization_id).first()
+    org_feedback_enabled = bool(getattr(org, "candidate_feedback_enabled", True)) if org else True
+    assessment_feedback_enabled = bool(getattr(assessment, "candidate_feedback_enabled", True))
+    if org_feedback_enabled and assessment_feedback_enabled:
+        try:
+            assessment.candidate_feedback_json = build_candidate_feedback_payload(
+                assessment=assessment,
+                db=db,
+            )
+            assessment.candidate_feedback_generated_at = utcnow()
+            assessment.candidate_feedback_ready = True
+        except Exception:
+            assessment.candidate_feedback_ready = False
+
     try:
         db.commit()
         db.refresh(assessment)
@@ -501,7 +671,6 @@ def submit_assessment_impl(
             assessment_id=assessment.id,
         )
 
-    org = db.query(Organization).filter(Organization.id == assessment.organization_id).first()
     if (
         not settings_obj.MVP_DISABLE_WORKABLE
         and not settings_obj.MVP_DISABLE_CELERY
@@ -554,15 +723,64 @@ def submit_assessment_impl(
 
 def _build_interactions(prompts: list) -> List[Dict[str, Any]]:
     """Convert raw ai_prompts records into scoring-engine interaction dicts."""
+    def _parse_ts(value: Any) -> datetime | None:
+        if not value:
+            return None
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except Exception:
+            return None
+        if parsed.tzinfo is None:
+            return parsed.replace(tzinfo=timezone.utc)
+        return parsed
+
+    base_ts = None
+    for raw in prompts:
+        candidate_ts = _parse_ts((raw or {}).get("timestamp"))
+        if candidate_ts is not None:
+            base_ts = candidate_ts
+            break
+
     interactions = []
     for i, p in enumerate(prompts):
         msg = p.get("message", "") or ""
-        code_before = p.get("code_before", "") or ""
-        code_after = p.get("code_after", "") or ""
+        code_before = p.get("code_before")
+        if not isinstance(code_before, str):
+            code_before = p.get("code_context")
+        code_before = code_before or ""
+
+        code_after = p.get("code_after")
+        if not isinstance(code_after, str):
+            next_prompt = prompts[i + 1] if i + 1 < len(prompts) else {}
+            code_after = (
+                next_prompt.get("code_before")
+                or next_prompt.get("code_context")
+                or code_before
+            )
+        code_after = code_after or ""
         before_lines = code_before.splitlines()
         after_lines = code_after.splitlines()
         code_diff_lines_added = max(0, len(after_lines) - len(before_lines))
         code_diff_lines_removed = max(0, len(before_lines) - len(after_lines))
+
+        ts = _parse_ts(p.get("timestamp"))
+        time_since_assessment_start_ms = p.get("time_since_assessment_start_ms")
+        if time_since_assessment_start_ms is None and ts and base_ts:
+            time_since_assessment_start_ms = max(0, int((ts - base_ts).total_seconds() * 1000))
+        if time_since_assessment_start_ms is None and i == 0:
+            time_since_assessment_start_ms = p.get("time_since_last_prompt_ms")
+
+        references_previous = p.get("references_previous")
+        if references_previous is None:
+            references_previous = bool(
+                re.search(r"(?i)\b(as mentioned|previous|earlier|before|last response|you suggested)\b", msg)
+            )
+        retry_after_failure = p.get("retry_after_failure")
+        if retry_after_failure is None:
+            retry_after_failure = bool(
+                re.search(r"(?i)\b(retry|try again|failed|still failing|another attempt)\b", msg)
+            )
+
         interactions.append(
             {
                 "id": str(p.get("id") or i + 1),
@@ -579,21 +797,25 @@ def _build_interactions(prompts: list) -> List[Dict[str, Any]]:
                 "code_diff_lines_removed": code_diff_lines_removed,
                 "word_count": p.get("word_count") or len(msg.split()),
                 "question_count": p.get("question_count") or msg.count("?"),
-                "code_snippet_included": p.get("code_snippet_included", "```" in msg),
+                "code_snippet_included": p.get(
+                    "code_snippet_included",
+                    ("```" in msg) or bool(re.search(r"(?m)^(?: {4}|\t)\S", msg)),
+                ),
                 "error_message_included": p.get(
                     "error_message_included",
-                    bool(re.search(r"(?i)(error|traceback|exception)", msg)),
+                    bool(re.search(r"(?i)(error|traceback|exception|failed|assert|stack trace)", msg)),
                 ),
                 "line_number_referenced": p.get(
                     "line_number_referenced",
-                    bool(re.search(r"(?i)line\\s+\\d+", msg)),
+                    bool(re.search(r"(?i)line\\s+\\d+|:\\d+(?::\\d+)?\\b", msg)),
                 ),
                 "file_reference": p.get(
                     "file_reference",
-                    bool(re.search(r"(?i)\\.(py|js|jsx|ts|tsx|json|yml|yaml|md)\\b", msg)),
+                    bool(re.search(r"(?i)(src/|app/|tests?/|\\.(py|js|jsx|ts|tsx|json|yml|yaml|md)\\b)", msg)),
                 ),
-                "time_since_assessment_start_ms": p.get("time_since_assessment_start_ms")
-                or (p.get("time_since_last_prompt_ms") if i == 0 else None),
+                "references_previous": bool(references_previous),
+                "retry_after_failure": bool(retry_after_failure),
+                "time_since_assessment_start_ms": time_since_assessment_start_ms,
                 "time_since_last_prompt_ms": p.get("time_since_last_prompt_ms"),
                 "paste_detected": p.get("paste_detected", False),
                 "paste_length": p.get("paste_length", 0) or 0,

@@ -10,6 +10,7 @@ import {
 } from 'recharts';
 
 import { BRAND } from '../../config/brand';
+import { aedToUsd } from '../../lib/currency';
 import { dimensionOrder, getDimensionById } from '../../scoring/scoringDimensions';
 import { BrandGlyph, Logo } from '../../shared/ui/Branding';
 import {
@@ -54,7 +55,7 @@ const LandingNav = ({ onNavigate }) => {
             Sign In
           </Button>
           <Button type="button" variant="primary" size="sm" className="font-mono" onClick={() => onNavigate('login')}>
-            Start Free Trial
+            Get Started
           </Button>
         </div>
       </div>
@@ -99,7 +100,7 @@ const LandingNav = ({ onNavigate }) => {
                 onNavigate('login');
               }}
             >
-              Start Free Trial
+              Get Started
             </Button>
           </div>
         </div>
@@ -129,7 +130,7 @@ const HeroSection = ({ onNavigate }) => (
             <ArrowRight size={16} />
           </Button>
           <Button type="button" variant="secondary" size="lg" onClick={() => onNavigate('login')}>
-            Start Free Trial
+            Get Started
           </Button>
         </div>
       </div>
@@ -138,7 +139,7 @@ const HeroSection = ({ onNavigate }) => (
         <Card className="bg-[var(--taali-border-muted)]/30 p-3">
           <div className="mb-2 flex items-center gap-2">
             <XCircle size={16} className="text-[var(--taali-danger)]" />
-            <span className="font-mono text-xs font-bold text-[var(--taali-muted)]">LEGACY TEST</span>
+            <span className="font-mono text-xs font-bold text-[var(--taali-muted)]">TRADITIONAL TEST</span>
           </div>
           <pre className="overflow-auto font-mono text-xs text-[var(--taali-muted)]">{`function reverseList(head) {
   let prev = null;
@@ -321,6 +322,8 @@ const PricingSection = ({ onNavigate }) => (
           <span className="taali-badge taali-badge-purple absolute -top-3 left-5">Most Flexible</span>
           <h3 className="mt-3 text-2xl font-bold">Pay-As-You-Go</h3>
           <p className="mt-1 text-4xl font-bold">AED 59 per assessment</p>
+          <p className="text-xs text-[var(--taali-muted)]">AED 59 / assessment · ≈ ${aedToUsd(59)} USD*</p>
+          <p className="text-xs text-[var(--taali-muted)]">*Approximate. Invoiced in AED.</p>
           <p className="mt-2 font-mono text-sm text-[var(--taali-muted)]">
             Run real, AI-native assessments with automated scoring and a downloadable report.
           </p>
@@ -359,43 +362,22 @@ const PricingSection = ({ onNavigate }) => (
 
 const Footer = () => (
   <footer className="border-t-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)]">
-    <div className="mx-auto max-w-7xl px-6 py-14">
-      <div className="grid gap-8 md:grid-cols-4">
-        <div>
-          <div className="mb-3 flex items-center gap-2">
-            <BrandGlyph borderClass="border-white" />
-            <span className="text-xl font-bold tracking-tight">{BRAND.name}</span>
-          </div>
-          <p className="font-mono text-sm text-white/70">{BRAND.productTagline}</p>
+    <div className="mx-auto max-w-7xl px-6 py-10">
+      <div className="flex flex-wrap items-center justify-between gap-6">
+        <div className="flex items-center gap-2">
+          <BrandGlyph borderClass="border-white" />
+          <span className="text-xl font-bold tracking-tight">{BRAND.name}</span>
         </div>
-
-        {[
-          {
-            title: 'Product',
-            items: ['Features', 'Pricing', 'Integrations', 'Changelog'],
-          },
-          {
-            title: 'Resources',
-            items: ['Documentation', 'API Reference', 'Blog', 'Support'],
-          },
-          {
-            title: 'Company',
-            items: ['About', 'Careers', 'Privacy', 'Terms'],
-          },
-        ].map((column) => (
-          <div key={column.title}>
-            <h4 className="font-bold">{column.title}</h4>
-            <ul className="mt-3 space-y-1 font-mono text-sm text-white/70">
-              {column.items.map((item) => (
-                <li key={item}>{item}</li>
-              ))}
-            </ul>
-          </div>
-        ))}
+        <p className="font-mono text-sm text-white/70">{BRAND.productTagline}</p>
       </div>
-
-      <div className="mt-10 border-t border-white/20 pt-6 font-mono text-xs text-white/55">
-        <div>&copy; 2026 {BRAND.name}. All rights reserved.</div>
+      <div className="mt-8 border-t border-white/20 pt-6 font-mono text-xs text-white/55 flex flex-wrap gap-4 justify-between">
+        <span>&copy; 2026 {BRAND.name}. All rights reserved.</span>
+        <span>
+          Questions?{' '}
+          <a href={`mailto:hello@${BRAND.domain}`} className="underline hover:text-white/80">
+            hello@{BRAND.domain}
+          </a>
+        </span>
       </div>
     </div>
   </footer>

@@ -11,6 +11,7 @@ export const AssessmentRuntimeAlerts = ({
   isClaudeBudgetExhausted,
   claudeBudget,
   formatUsd,
+  timeMilestoneNotice = null,
   lightMode = false,
 }) => (
   <>
@@ -33,6 +34,30 @@ export const AssessmentRuntimeAlerts = ({
         </span>
       </div>
     )}
+
+    {timeMilestoneNotice?.message ? (
+      <div
+        className={`border-b px-4 py-2 ${
+          timeMilestoneNotice.tone === 'danger'
+            ? (lightMode ? 'border-red-300 bg-red-50' : 'border-red-500/40 bg-red-500/10')
+            : timeMilestoneNotice.tone === 'warning'
+              ? (lightMode ? 'border-amber-300 bg-amber-50' : 'border-amber-500/40 bg-amber-500/10')
+              : (lightMode ? 'border-blue-300 bg-blue-50' : 'border-blue-500/40 bg-blue-500/10')
+        }`}
+      >
+        <div
+          className={`font-mono text-xs font-bold ${
+            timeMilestoneNotice.tone === 'danger'
+              ? (lightMode ? 'text-red-700' : 'text-red-200')
+              : timeMilestoneNotice.tone === 'warning'
+                ? (lightMode ? 'text-amber-700' : 'text-amber-200')
+                : (lightMode ? 'text-blue-700' : 'text-blue-200')
+          }`}
+        >
+          {timeMilestoneNotice.message}
+        </div>
+      </div>
+    ) : null}
 
     {isTimerPaused && (
       <div className={`border-b px-4 py-2 flex items-center justify-between gap-3 ${lightMode ? 'border-red-300 bg-red-50' : 'border-red-500/40 bg-red-500/10'}`}>

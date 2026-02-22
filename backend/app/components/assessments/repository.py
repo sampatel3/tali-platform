@@ -242,6 +242,13 @@ def build_breakdown(assessment: Assessment) -> Dict[str, Any]:
     # CV-Job match details
     if isinstance(sb, dict) and "cv_job_match" in sb:
         breakdown["cvJobMatch"] = sb["cv_job_match"]
+    if isinstance(sb, dict):
+        if "heuristic_summary" in sb:
+            breakdown["heuristicSummary"] = sb.get("heuristic_summary")
+        if "uncapped_final_score" in sb:
+            breakdown["uncappedFinalScore"] = sb.get("uncapped_final_score")
+        if "applied_caps" in sb:
+            breakdown["appliedCaps"] = sb.get("applied_caps") or []
 
     # Recommendation badge
     score_100 = assessment.final_score or (assessment.score * 10 if assessment.score else None)
@@ -401,6 +408,11 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "evaluation_rubric": evaluation_rubric,
         "manual_evaluation": evaluation_result,
         "evaluation_result": evaluation_result,
+        "candidate_feedback_ready": bool(getattr(assessment, "candidate_feedback_ready", False)),
+        "candidate_feedback_generated_at": getattr(assessment, "candidate_feedback_generated_at", None),
+        "candidate_feedback_sent_at": getattr(assessment, "candidate_feedback_sent_at", None),
+        "candidate_feedback_enabled": bool(getattr(assessment, "candidate_feedback_enabled", True)),
+        "interview_debrief_generated_at": getattr(assessment, "interview_debrief_generated_at", None),
         "is_demo": bool(getattr(assessment, "is_demo", False)),
         "demo_track": getattr(assessment, "demo_track", None),
         "demo_profile": getattr(assessment, "demo_profile", None),

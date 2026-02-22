@@ -1,14 +1,15 @@
 """API tests for assessment endpoints (/api/v1/assessments/)."""
 
-import uuid
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from app.domains.assessments_runtime import candidate_runtime_routes as candidate_runtime_module
-from app.models.assessment import Assessment
+from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate import Candidate
 from app.models.organization import Organization
 from app.models.task import Task
 from tests.conftest import (
+    TestingSessionLocal,
     auth_headers,
     create_assessment_via_api,
     create_task_via_api,
@@ -20,6 +21,11 @@ from tests.conftest import (
 # ---------------------------------------------------------------------------
 # POST /api/v1/assessments/ — Create
 # ---------------------------------------------------------------------------
+
+
+def _fetch_one(model, *filters):
+    with TestingSessionLocal() as verify_db:
+        return verify_db.query(model).filter(*filters).first()
 
 
 def test_create_assessment_success(client):
@@ -273,10 +279,10 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     assert body["token"]
     assert body["sandbox_id"] == "sandbox-demo"
 
-    demo_org = db.query(Organization).filter(Organization.slug == "taali-demo").first()
+    demo_org = _fetch_one(Organization, Organization.slug == "taali-demo")
     assert demo_org is not None
 
-    candidate = db.query(Candidate).filter(Candidate.email == "demo-user@example.com").first()
+    candidate = _fetch_one(Candidate, Candidate.email == "demo-user@example.com")
     assert candidate is not None
     assert candidate.organization_id == demo_org.id
     assert candidate.work_email == "demo-user@company.com"
@@ -285,7 +291,7 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     assert candidate.lead_source == "landing_demo"
     assert candidate.marketing_consent is True
 
-    assessment = db.query(Assessment).filter(Assessment.id == body["assessment_id"]).first()
+    assessment = _fetch_one(Assessment, Assessment.id == body["assessment_id"])
     assert assessment is not None
     assert assessment.is_demo is True
     assert assessment.demo_track == "data_eng_super_platform_crisis"
@@ -370,7 +376,7 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
     assert resp.status_code == 200, resp.text
 
     body = resp.json()
-    assessment = db.query(Assessment).filter(Assessment.id == body["assessment_id"]).first()
+    assessment = _fetch_one(Assessment, Assessment.id == body["assessment_id"])
     assert assessment is not None
     assert assessment.demo_track == "data_eng_c_backfill_schema"
     assert assessment.task_id == platform_task.id
@@ -438,7 +444,7 @@ def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
     assert resp.status_code == 200, resp.text
 
     body = resp.json()
-    assessment = db.query(Assessment).filter(Assessment.id == body["assessment_id"]).first()
+    assessment = _fetch_one(Assessment, Assessment.id == body["assessment_id"])
     assert assessment is not None
     assert assessment.demo_track == "backend-reliability"
     assert assessment.task_id == platform_task.id
@@ -569,3 +575,144 @@ def test_manual_evaluation_rejects_scored_category_without_evidence(client):
     )
     assert resp.status_code == 400
     assert "Evidence is required" in resp.json()["detail"]
+
+
+def test_finalize_candidate_feedback_and_fetch_public_report(client):
+    env = setup_full_environment(client)
+    assessment_id = env["assessment"]["id"]
+    assessment_token = env["assessment"]["token"]
+
+    with TestingSessionLocal() as db:
+        assessment = db.query(Assessment).filter(Assessment.id == assessment_id).first()
+        assert assessment is not None
+        assessment.status = AssessmentStatus.COMPLETED
+        assessment.score = 7.4
+        assessment.started_at = datetime.now(timezone.utc)
+        assessment.completed_at = datetime.now(timezone.utc)
+        assessment.score_breakdown = {
+            "category_scores": {
+                "task_completion": 7.8,
+                "prompt_clarity": 8.1,
+                "context_provision": 4.2,
+                "independence_efficiency": 7.6,
+                "response_utilization": 7.0,
+                "debugging_design": 7.3,
+                "written_communication": 5.1,
+                "role_fit": 6.8,
+            },
+        }
+        assessment.ai_prompts = [
+            {
+                "message": "Write a function for X. Context: service Y and caller Z. Return JSON and do not modify interface.",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+        db.commit()
+
+    finalize_resp = client.post(
+        f"/api/v1/assessments/{assessment_id}/finalize-candidate-feedback",
+        json={},
+        headers=env["headers"],
+    )
+    assert finalize_resp.status_code == 200, finalize_resp.text
+    finalize_payload = finalize_resp.json()
+    assert finalize_payload["feedback_ready"] is True
+    assert isinstance(finalize_payload.get("feedback"), dict)
+
+    public_resp = client.get(f"/api/v1/assessments/{assessment_token}/feedback")
+    assert public_resp.status_code == 200, public_resp.text
+    public_payload = public_resp.json()
+    assert public_payload["feedback_ready"] is True
+    assert isinstance(public_payload["feedback"].get("dimensions"), list)
+    assert public_payload["feedback"].get("overall_score") is not None
+
+    pdf_resp = client.get(f"/api/v1/assessments/{assessment_token}/feedback.pdf")
+    assert pdf_resp.status_code == 200
+    assert pdf_resp.headers["content-type"].startswith("application/pdf")
+    assert pdf_resp.content.startswith(b"%PDF")
+
+
+def test_public_feedback_rejected_before_finalize(client):
+    env = setup_full_environment(client)
+    assessment_id = env["assessment"]["id"]
+    assessment_token = env["assessment"]["token"]
+
+    with TestingSessionLocal() as db:
+        assessment = db.query(Assessment).filter(Assessment.id == assessment_id).first()
+        assert assessment is not None
+        assessment.status = AssessmentStatus.COMPLETED
+        assessment.score = 6.9
+        db.commit()
+
+    public_resp = client.get(f"/api/v1/assessments/{assessment_token}/feedback")
+    assert public_resp.status_code == 403
+    assert "not ready" in public_resp.json()["detail"].lower()
+
+
+def test_interview_debrief_generation_is_cached(client):
+    env = setup_full_environment(client)
+    assessment_id = env["assessment"]["id"]
+
+    with TestingSessionLocal() as db:
+        assessment = db.query(Assessment).filter(Assessment.id == assessment_id).first()
+        assert assessment is not None
+        assessment.status = AssessmentStatus.COMPLETED
+        assessment.score = 7.1
+        assessment.score_breakdown = {
+            "category_scores": {
+                "prompt_clarity": 8.0,
+                "context_provision": 4.4,
+                "independence_efficiency": 7.2,
+                "written_communication": 5.0,
+            },
+        }
+        db.commit()
+
+    first = client.post(
+        f"/api/v1/assessments/{assessment_id}/interview-debrief",
+        json={},
+        headers=env["headers"],
+    )
+    assert first.status_code == 200, first.text
+    first_payload = first.json()
+    assert first_payload["cached"] is False
+    questions = first_payload["interview_debrief"].get("probing_questions", [])
+    assert len(questions) >= 3
+
+    second = client.post(
+        f"/api/v1/assessments/{assessment_id}/interview-debrief",
+        json={},
+        headers=env["headers"],
+    )
+    assert second.status_code == 200, second.text
+    second_payload = second.json()
+    assert second_payload["cached"] is True
+    assert second_payload["interview_debrief"] == first_payload["interview_debrief"]
+
+
+def test_finalize_candidate_feedback_blocked_when_org_toggle_disabled(client):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers).json()
+    assessment = create_assessment_via_api(client, headers, task["id"]).json()
+
+    patch_org = client.patch(
+        "/api/v1/organizations/me",
+        json={"candidate_feedback_enabled": False},
+        headers=headers,
+    )
+    assert patch_org.status_code == 200, patch_org.text
+
+    with TestingSessionLocal() as db:
+        row = db.query(Assessment).filter(Assessment.id == assessment["id"]).first()
+        assert row is not None
+        row.status = AssessmentStatus.COMPLETED
+        row.score = 7.0
+        db.commit()
+
+    finalize_resp = client.post(
+        f"/api/v1/assessments/{assessment['id']}/finalize-candidate-feedback",
+        json={},
+        headers=headers,
+    )
+    assert finalize_resp.status_code == 403
+    assert "disabled" in finalize_resp.json()["detail"].lower()

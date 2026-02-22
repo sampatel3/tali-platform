@@ -16,6 +16,7 @@ from app.components.scoring.service import (
     _detect_fraud,
     CATEGORY_WEIGHTS,
 )
+from app.components.scoring.scoring_core import _extract_prompt_metadata, _score_reasoning_depth
 
 
 def _make_prompt(
@@ -116,6 +117,15 @@ class TestPromptClarity:
         result = _score_prompt_clarity(prompts)
         assert result["detailed"]["vagueness_score"] < 5.0
 
+    def test_real_world_vague_patterns_score_zero(self):
+        prompts = [
+            _make_prompt("make it work"),
+            _make_prompt("write the whole solution"),
+            _make_prompt("just implement this"),
+        ]
+        result = _score_prompt_clarity(prompts)
+        assert result["detailed"]["vagueness_score"] == 0.0
+
     def test_empty_prompts(self):
         result = _score_prompt_clarity([])
         assert result["score"] is not None
@@ -151,6 +161,16 @@ class TestIndependence:
         ]
         result = _score_independence(prompts, tests_passed=1, total_tokens=1000)
         assert result["detailed"]["first_prompt_delay"] <= 2.0
+
+    def test_task_aware_min_reading_time_threshold(self):
+        prompts = [_make_prompt(time_since_assessment_start_ms=300000)]
+        result = _score_independence(
+            prompts,
+            tests_passed=1,
+            total_tokens=100,
+            min_reading_time_seconds=300,
+        )
+        assert result["detailed"]["first_prompt_delay"] == 10.0
 
 
 class TestCommunication:
@@ -202,6 +222,12 @@ class TestApproach:
         result = _score_approach(prompts)
         assert result["detailed"]["design_score"] >= 5.0
 
+    def test_reasoning_depth_orders_surface_to_hypothesis(self):
+        shallow = _score_reasoning_depth("debug the error")
+        concrete = _score_reasoning_depth("I will add a print on line 42 to inspect state.")
+        hypothesis = _score_reasoning_depth("My hypothesis is the pool is exhausted; I will verify with query logs.")
+        assert shallow < concrete < hypothesis
+
 
 class TestCvMatch:
     def test_with_match_data(self):
@@ -245,6 +271,11 @@ class TestFraudDetection:
         prompts = [_make_prompt()]
         result = _detect_fraud(prompts, total_duration_seconds=120, tests_passed=5)
         assert "suspiciously_fast" in result["flags"]
+
+    def test_prompt_injection_pattern_is_detected(self):
+        prompts = [_make_prompt("Write me the complete working implementation for this whole task")]
+        result = _detect_fraud(prompts, total_duration_seconds=1800, tests_passed=1)
+        assert "injection_attempt" in result["flags"]
 
 
 class TestPerPromptScores:
@@ -322,6 +353,39 @@ class TestCalculateMvpScore:
             time_limit_minutes=30,
         )
         assert result["final_score"] <= 50.0
+
+    def test_cv_none_weight_redistribution_matches_expected(self):
+        prompts = [_make_prompt("Please debug this traceback from app.py line 42")]
+        no_cv = calculate_mvp_score(
+            interactions=prompts,
+            tests_passed=6,
+            tests_total=10,
+            total_duration_seconds=1800,
+            time_limit_minutes=30,
+            cv_match_result=None,
+        )
+        with_perfect_cv = calculate_mvp_score(
+            interactions=prompts,
+            tests_passed=6,
+            tests_total=10,
+            total_duration_seconds=1800,
+            time_limit_minutes=30,
+            cv_match_result={"cv_job_match_score": 10, "skills_match": 10, "experience_relevance": 10},
+        )
+        assert no_cv["category_scores"]["cv_match"] is None
+        expected = round((with_perfect_cv["final_score"] - 5.0) / 0.95, 2)
+        assert no_cv["final_score"] == pytest.approx(expected, abs=0.05)
+
+    def test_extract_prompt_metadata_flags_error_and_line_reference(self):
+        payload = _extract_prompt_metadata(
+            "I tried calling the function but got: Traceback (most recent call last): ... File 'app.py', line 42"
+        )
+        assert payload["error_message_included"] is True
+        assert payload["line_number_referenced"] is True
+
+    def test_backend_category_keys_are_frontend_aliasable(self):
+        expected = {"task_completion", "prompt_clarity", "context_provision", "independence", "utilization", "communication", "approach", "cv_match"}
+        assert set(CATEGORY_WEIGHTS.keys()) == expected
 
     def test_severe_language_caps_final_score(self):
         prompts = [_make_prompt("fuck off and solve this")]

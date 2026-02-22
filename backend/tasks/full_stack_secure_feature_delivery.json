@@ -1,0 +1,96 @@
+{
+  "task_id": "full_stack_secure_feature_delivery",
+  "name": "Full-Stack Engineer - Secure Feature Delivery",
+  "role": "full_stack_engineer",
+  "duration_minutes": 30,
+  "scoring_hints": {
+    "min_reading_time_seconds": 240
+  },
+  "test_runner": {
+    "command": "pytest -q --tb=no",
+    "working_dir": "/workspace/customer-portal",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed",
+    "timeout_seconds": 90
+  },
+  "scenario": "You own a React + API customer portal. Product needs a new 'share project link' feature by end of day, but security flagged that current implementation leaks internal IDs and skips permission checks. In 30 minutes, ship the safest usable version and document tradeoffs.",
+  "repo_structure": {
+    "name": "customer-portal",
+    "files": {
+      "README.md": "# Customer Portal\\n\\nReact frontend + FastAPI backend. New share-link feature must be secure by default.",
+      "frontend/src/ShareLinkPanel.jsx": "import React, { useState } from 'react';\\n\\nexport default function ShareLinkPanel({ projectId }) {\\n  const [url, setUrl] = useState('');\\n  const generate = async () => {\\n    const res = await fetch('/api/share-link', {\\n      method: 'POST',\\n      headers: { 'Content-Type': 'application/json' },\\n      body: JSON.stringify({ project_id: projectId })\\n    });\\n    const data = await res.json();\\n    setUrl(data.url || '');\\n  };\\n\\n  return (\\n    <div>\\n      <button onClick={generate}>Generate link</button>\\n      {url ? <code>{url}</code> : null}\\n    </div>\\n  );\\n}",
+      "backend/app/routes.py": "from fastapi import APIRouter\\nfrom app.security import make_share_token\\n\\nrouter = APIRouter(prefix='/api')\\n\\n@router.post('/share-link')\\ndef create_share_link(payload: dict):\\n    project_id = payload.get('project_id')\\n    token = make_share_token(project_id)\\n    # BUG: exposes raw project id + no auth check\\n    return {'url': f'https://portal.example.com/share/{project_id}?token={token}'}",
+      "backend/app/security.py": "import base64\\n\\ndef make_share_token(project_id):\\n    # BUG: reversible token\\n    return base64.b64encode(str(project_id).encode()).decode()",
+      "tests/test_share_link.py": "from app.security import make_share_token\\n\\ndef test_share_token_not_plain_project_id():\\n    token = make_share_token('project-123')\\n    assert 'project-123' not in token\\n\\ndef test_share_link_payload_requires_project_id(client):\\n    res = client.post('/api/share-link', json={})\\n    assert res.status_code in (400, 422)"
+    }
+  },
+  "evaluation_rubric": {
+    "feature_scoping": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Delivers core feature while explicitly protecting access boundaries.",
+        "good": "Delivers feature with some security improvements.",
+        "poor": "Ships feature but leaves obvious security gaps."
+      }
+    },
+    "security_judgment": {
+      "weight": 0.25,
+      "criteria": {
+        "excellent": "Adds permission checks, non-reversible token strategy, and safe defaults.",
+        "good": "Addresses one major security issue but not all.",
+        "poor": "Ignores security context or introduces insecure workaround."
+      }
+    },
+    "integration_quality": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Frontend and backend changes stay consistent and resilient to API errors.",
+        "good": "Feature works but edge cases are thin.",
+        "poor": "Frontend/backend mismatch or broken flow."
+      }
+    },
+    "testing_discipline": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Updates tests to validate security and behavior path.",
+        "good": "Adds at least one useful regression test.",
+        "poor": "No meaningful validation added."
+      }
+    },
+    "communication": {
+      "weight": 0.15,
+      "criteria": {
+        "excellent": "Clear summary of shipped scope, deferred work, and security rationale.",
+        "good": "Reasonable implementation summary.",
+        "poor": "No clear tradeoff communication."
+      }
+    }
+  },
+  "expected_candidate_journey": {
+    "first_8_minutes": [
+      "Read frontend and backend share-link flow before coding.",
+      "Identify permission and token weaknesses.",
+      "Define minimal secure MVP behavior."
+    ],
+    "minutes_8_to_22": [
+      "Implement backend protections and stable token handling.",
+      "Update frontend for better error handling/UX.",
+      "Add or refine tests."
+    ],
+    "final_8_minutes": [
+      "Run tests and summarize security posture.",
+      "List follow-up hardening work."
+    ]
+  },
+  "interviewer_signals": {
+    "strong_positive": [
+      "Prioritizes security constraints while still delivering usable feature.",
+      "Keeps frontend/backend contract aligned.",
+      "Explains what was intentionally deferred."
+    ],
+    "red_flags": [
+      "Builds UI only and ignores backend security.",
+      "Uses reversible token as final fix.",
+      "Skips validation before claiming completion."
+    ]
+  }
+}

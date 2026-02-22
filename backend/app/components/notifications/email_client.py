@@ -10,7 +10,14 @@ import logging
 import resend
 
 from ...platform.brand import BRAND_NAME, brand_email_from
-from .templates import assessment_invite_html, results_notification_html, password_reset_html, email_verification_html
+from .templates import (
+    assessment_expiry_reminder_html,
+    assessment_invite_html,
+    candidate_feedback_ready_html,
+    email_verification_html,
+    password_reset_html,
+    results_notification_html,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -132,4 +139,60 @@ class EmailService:
             return {"success": True, "email_id": email_id}
         except Exception as e:
             logger.error("Failed to send password reset to %s: %s", to_email, str(e))
+            return {"success": False, "email_id": ""}
+
+    def send_assessment_expiry_reminder(
+        self,
+        candidate_email: str,
+        candidate_name: str,
+        task_name: str,
+        assessment_link: str,
+        expiry_text: str,
+    ) -> dict:
+        try:
+            logger.info("Sending assessment expiry reminder to %s", candidate_email)
+            html_body = assessment_expiry_reminder_html(
+                candidate_name=candidate_name,
+                task_name=task_name,
+                assessment_link=assessment_link,
+                expiry_text=expiry_text,
+            )
+            email = resend.Emails.send({
+                "from": self.from_email,
+                "to": [candidate_email],
+                "subject": f"Your {BRAND_NAME} assessment expires soon",
+                "html": html_body,
+            })
+            email_id = email.get("id", "") if isinstance(email, dict) else str(email)
+            return {"success": True, "email_id": email_id}
+        except Exception as exc:
+            logger.error("Failed to send expiry reminder to %s: %s", candidate_email, str(exc))
+            return {"success": False, "email_id": ""}
+
+    def send_candidate_feedback_ready(
+        self,
+        candidate_email: str,
+        candidate_name: str,
+        org_name: str,
+        role_title: str,
+        feedback_link: str,
+    ) -> dict:
+        try:
+            logger.info("Sending candidate feedback email to %s", candidate_email)
+            html_body = candidate_feedback_ready_html(
+                candidate_name=candidate_name,
+                org_name=org_name,
+                role_title=role_title,
+                feedback_link=feedback_link,
+            )
+            email = resend.Emails.send({
+                "from": self.from_email,
+                "to": [candidate_email],
+                "subject": f"Your AI collaboration results from {org_name} are ready",
+                "html": html_body,
+            })
+            email_id = email.get("id", "") if isinstance(email, dict) else str(email)
+            return {"success": True, "email_id": email_id}
+        except Exception as exc:
+            logger.error("Failed to send candidate feedback email to %s: %s", candidate_email, str(exc))
             return {"success": False, "email_id": ""}

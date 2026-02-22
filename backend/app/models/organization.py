@@ -36,6 +36,7 @@ class Organization(Base):
     sso_enforced = Column(Boolean, default=False)
     saml_enabled = Column(Boolean, default=False)
     saml_metadata_url = Column(String, nullable=True)
+    candidate_feedback_enabled = Column(Boolean, default=True, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
@@ -50,3 +51,8 @@ class Organization(Base):
     def active_claude_model(self) -> str:
         from ..platform.config import settings
         return settings.resolved_claude_model
+
+    @property
+    def active_claude_scoring_model(self) -> str:
+        from ..platform.config import settings
+        return settings.resolved_claude_scoring_model

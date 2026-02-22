@@ -13,6 +13,7 @@ export const assessments = {
   get: (id) => api.get(`/assessments/${id}`),
   create: (data) => api.post('/assessments/', data),
   startDemo: (data) => api.post('/assessments/demo/start', data),
+  preview: (token) => api.get(`/assessments/token/${token}/preview`),
   start: (token) => api.post(`/assessments/token/${token}/start`),
   execute: (id, code, assessmentToken) =>
     api.post(`/assessments/${id}/execute`, { code }, {
@@ -39,6 +40,11 @@ export const assessments = {
   resend: (id) => api.post(`/assessments/${id}/resend`),
   postToWorkable: (id) => api.post(`/assessments/${id}/post-to-workable`),
   downloadReport: (id) => api.get(`/assessments/${id}/report.pdf`, { responseType: 'blob' }),
+  finalizeCandidateFeedback: (id, data = {}) => api.post(`/assessments/${id}/finalize-candidate-feedback`, data),
+  getCandidateFeedback: (token) => api.get(`/assessments/${encodeURIComponent(token)}/feedback`),
+  downloadCandidateFeedbackPdf: (token) =>
+    api.get(`/assessments/${encodeURIComponent(token)}/feedback.pdf`, { responseType: 'blob' }),
+  generateInterviewDebrief: (id, data = {}) => api.post(`/assessments/${id}/interview-debrief`, data),
   aiEvalSuggestions: (id) => api.post(`/assessments/${id}/ai-eval-suggestions`),
   updateManualEvaluation: (id, data) => api.patch(`/assessments/${id}/manual-evaluation`, data),
   addNote: (id, note) => api.post(`/assessments/${id}/notes`, { note }),

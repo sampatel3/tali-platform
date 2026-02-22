@@ -1,0 +1,93 @@
+{
+  "task_id": "engineering_manager_pr_review_judgment",
+  "name": "Engineering Manager - PR Review and Risk Judgment",
+  "role": "engineering_manager",
+  "duration_minutes": 20,
+  "scoring_hints": {
+    "min_reading_time_seconds": 180
+  },
+  "test_runner": {
+    "command": "pytest -q --tb=no",
+    "working_dir": "/workspace/pr-review-pack",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed",
+    "timeout_seconds": 60
+  },
+  "scenario": "You are an engineering manager reviewing a high-priority PR before release. The PR appears to 'work' but team members disagree on risk. Your task is to use AI assistance to evaluate the diff, identify release blockers, and produce a concise decision memo with follow-up actions. No production coding is required.",
+  "repo_structure": {
+    "name": "pr-review-pack",
+    "files": {
+      "README.md": "# PR Review Pack\\n\\nGoal: produce `REVIEW_NOTES.md` with release decision, top risks, and follow-up actions.",
+      "PR_DIFF.md": "## Changed files\\n- `billing/invoice.py`: retries removed around payment gateway call\\n- `api/orders.py`: request auth fallback now allows missing org scope\\n- `frontend/CheckoutButton.tsx`: optimistic success message shown before API confirmation\\n\\n## Team comments\\n- Author: \"Needed this merged quickly for campaign launch.\"\\n- QA: \"Saw flaky failures in staging checkout flow.\"\\n- Security: \"Not sure auth fallback is safe.\"",
+      "RUNBOOK.md": "# Release policy\\n1. Block release for auth bypass risk.\\n2. Block release for payment integrity risk.\\n3. Non-blocking UX issues can ship with mitigation if metrics are monitored.",
+      "tests/test_review_pack.py": "from pathlib import Path\\n\\ndef test_materials_present():\\n    for name in ['README.md', 'PR_DIFF.md', 'RUNBOOK.md']:\\n        assert Path(name).exists()"
+    }
+  },
+  "evaluation_rubric": {
+    "risk_identification": {
+      "weight": 0.25,
+      "criteria": {
+        "excellent": "Flags auth scope regression and payment retry removal as release blockers with clear impact.",
+        "good": "Finds at least one blocker with partial impact framing.",
+        "poor": "Misses critical blockers or focuses only on minor style issues."
+      }
+    },
+    "decision_quality": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Produces clear ship/no-ship recommendation grounded in policy and evidence.",
+        "good": "Recommendation exists but rationale is incomplete.",
+        "poor": "No concrete decision or policy alignment."
+      }
+    },
+    "stakeholder_alignment": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Considers product urgency, QA signal, and security concerns with balanced tradeoffs.",
+        "good": "Mentions major stakeholders but lacks synthesis.",
+        "poor": "Ignores cross-functional concerns."
+      }
+    },
+    "ai_collaboration_quality": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Uses AI to compare alternatives, challenge assumptions, and tighten reasoning.",
+        "good": "Uses AI for summarization with limited critical validation.",
+        "poor": "Blindly copies AI output without verification."
+      }
+    },
+    "communication_clarity": {
+      "weight": 0.15,
+      "criteria": {
+        "excellent": "Concise memo with blockers, mitigations, and explicit owners/next steps.",
+        "good": "Readable summary but vague actions.",
+        "poor": "Unclear, unstructured communication."
+      }
+    }
+  },
+  "expected_candidate_journey": {
+    "first_6_minutes": [
+      "Read PR diff and release runbook before prompting.",
+      "List candidate blockers and uncertainty points."
+    ],
+    "minutes_6_to_14": [
+      "Use AI to stress-test assumptions and classify blocker vs mitigation.",
+      "Draft release decision memo with explicit rationale."
+    ],
+    "final_6_minutes": [
+      "Refine memo for exec readability and owner/action clarity.",
+      "Confirm decision aligns with runbook policy."
+    ]
+  },
+  "interviewer_signals": {
+    "strong_positive": [
+      "Anchors decision to explicit release policy.",
+      "Surfaces concrete blockers and mitigation owners.",
+      "Uses AI critically instead of copying output."
+    ],
+    "red_flags": [
+      "Ship decision without addressing auth bypass concern.",
+      "No clear recommendation (only summary).",
+      "Does not connect findings to business risk."
+    ]
+  }
+}

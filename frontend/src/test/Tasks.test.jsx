@@ -186,7 +186,7 @@ describe('TasksPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Tasks', { selector: 'h1' })).toBeInTheDocument();
-      expect(screen.getByText('Backend-authored assessment task catalog')).toBeInTheDocument();
+      expect(screen.getByText('Assessment task catalog')).toBeInTheDocument();
     }, { timeout: 5000 });
   });
 
@@ -236,7 +236,7 @@ describe('TasksPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('No tasks available')).toBeInTheDocument();
-      expect(screen.getByText('Add task specs in the backend to populate this catalog.')).toBeInTheDocument();
+      expect(screen.getByText('Create your first task to start evaluating candidates.')).toBeInTheDocument();
     });
   });
 
@@ -246,12 +246,12 @@ describe('TasksPage', () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Loading tasks...')).toBeInTheDocument();
+      expect(document.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
     });
   });
 
 
-  it('view task shows JSON preview aligned with task context schema', async () => {
+  it('view task opens task overview modal with task details', async () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
@@ -262,23 +262,23 @@ describe('TasksPage', () => {
     fireEvent.click(viewButtons[0]);
 
     await waitFor(() => {
-      expect(screen.getByText('Task JSON Preview')).toBeInTheDocument();
-      expect(screen.getByText(/"task_id": "data_eng_super_platform_crisis"/)).toBeInTheDocument();
-      expect(screen.getByText(/"repo_structure"/)).toBeInTheDocument();
-      expect(screen.getByText(/"expected_approaches"/)).toBeInTheDocument();
+      expect(screen.getByText('Task Overview')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('Async Pipeline Debugging')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('data_engineer')).toBeInTheDocument();
+      expect(screen.getByDisplayValue(/Compliance audit needs full history/)).toBeInTheDocument();
     });
   });
 
-  it('task authoring actions are hidden in read-only mode', async () => {
+  it('task authoring actions are visible when authoring is enabled', async () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
       expect(screen.getByText('Async Pipeline Debugging')).toBeInTheDocument();
     });
 
-    expect(screen.queryByText('New Task')).not.toBeInTheDocument();
-    expect(screen.queryByTitle('Delete task')).not.toBeInTheDocument();
-    expect(screen.queryByTitle('Edit task')).not.toBeInTheDocument();
+    expect(screen.getByText('Create Task')).toBeInTheDocument();
+    expect(screen.queryAllByTitle('Edit task').length).toBeGreaterThan(0);
+    expect(screen.queryAllByTitle('Delete task').length).toBeGreaterThan(0);
   });
 
   it('shows task type badges', async () => {

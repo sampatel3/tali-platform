@@ -165,7 +165,7 @@ def test_reject_application_without_job_spec(client):
     assert "job spec" in resp.json()["detail"].lower()
 
 
-def test_reject_assessment_creation_without_application_cv(client):
+def test_allow_assessment_creation_without_application_cv(client):
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers, name="CV gate task").json()
     role = client.post("/api/v1/roles", json={"name": "CV gate role"}, headers=headers).json()
@@ -183,8 +183,10 @@ def test_reject_assessment_creation_without_application_cv(client):
         json={"task_id": task["id"]},
         headers=headers,
     )
-    assert resp.status_code == 400
-    assert "cv" in resp.json()["detail"].lower()
+    assert resp.status_code == 201, resp.text
+    body = resp.json()
+    assert body["application_id"] == app["id"]
+    assert body["task_id"] == task["id"]
 
 
 def test_reject_delete_role_with_existing_application(client):

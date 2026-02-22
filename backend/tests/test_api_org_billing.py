@@ -49,6 +49,21 @@ def test_update_org_name(client):
     assert data["name"] == "Renamed Org"
 
 
+def test_update_org_candidate_feedback_toggle(client):
+    headers, _ = auth_headers(client)
+    resp = client.patch(
+        "/api/v1/organizations/me",
+        json={"candidate_feedback_enabled": False},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["candidate_feedback_enabled"] is False
+
+    refetch = client.get("/api/v1/organizations/me", headers=headers)
+    assert refetch.status_code == 200
+    assert refetch.json()["candidate_feedback_enabled"] is False
+
+
 def test_update_org_no_auth_401(client):
     resp = client.patch(
         "/api/v1/organizations/me",

@@ -200,6 +200,7 @@ from .api.v1.roles import router as roles_router
 from .api.v1.scoring import router as scoring_router
 from .api.v1.users import router as users_router
 from .api.v1.workable import router as workable_router
+from .api.v1.auth import router as auth_router
 
 # FastAPI-Users auth routers
 app.include_router(
@@ -231,6 +232,7 @@ app.include_router(
 app.include_router(assessments_router, prefix="/api/v1")
 app.include_router(organizations_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
+app.include_router(auth_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
 app.include_router(tasks_router, prefix="/api/v1")
 app.include_router(analytics_router, prefix="/api/v1")

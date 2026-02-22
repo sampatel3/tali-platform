@@ -333,7 +333,7 @@ describe('AuthPages', () => {
       fireEvent.click(createButton);
 
       await waitFor(() => {
-        expect(screen.getByText('Password must be at least 8 characters')).toBeInTheDocument();
+        expect(screen.getByText('Password must be at least 8 characters long.')).toBeInTheDocument();
       });
     });
 
@@ -550,7 +550,7 @@ describe('AuthPages', () => {
       fireEvent.click(resetButton);
 
       await waitFor(() => {
-        expect(screen.getByText('Password must be at least 8 characters')).toBeInTheDocument();
+        expect(screen.getByText('Password must be at least 8 characters long.')).toBeInTheDocument();
       });
     });
   });

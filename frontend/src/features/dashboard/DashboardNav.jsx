@@ -20,7 +20,7 @@ const pickOrganizationName = (user) => String(
 ).trim();
 
 const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Dashboard' },
+  { id: 'dashboard', label: 'Assessments' },
   { id: 'candidates', label: 'Candidates' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'analytics', label: 'Analytics' },

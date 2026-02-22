@@ -97,6 +97,13 @@ class Assessment(Base):
     cv_job_match_score = Column(Float, nullable=True)
     cv_job_match_details = Column(JSON, nullable=True)
     manual_evaluation = Column(JSON, nullable=True)  # { category_scores: { key: { score, evidence } }, overall_score?, strengths?, improvements? }
+    candidate_feedback_json = Column(JSON, nullable=True)
+    candidate_feedback_generated_at = Column(DateTime(timezone=True), nullable=True)
+    candidate_feedback_sent_at = Column(DateTime(timezone=True), nullable=True)
+    candidate_feedback_ready = Column(Boolean, default=False, nullable=False)
+    candidate_feedback_enabled = Column(Boolean, default=True, nullable=False)
+    interview_debrief_json = Column(JSON, nullable=True)
+    interview_debrief_generated_at = Column(DateTime(timezone=True), nullable=True)
     is_demo = Column(Boolean, default=False, nullable=False)
     demo_track = Column(String, nullable=True)
     demo_profile = Column(JSON, nullable=True)

@@ -347,7 +347,7 @@ describe('CandidateDetailPage', () => {
     await waitFor(() => {
       expect(screen.getByText('Assessment started')).toBeInTheDocument();
       expect(screen.getByText('First prompt sent')).toBeInTheDocument();
-      expect(screen.getByText('Assessment submitted')).toBeInTheDocument();
+      expect(screen.getByText('Submitted')).toBeInTheDocument();
     });
   });
 
@@ -411,10 +411,10 @@ describe('CandidateDetailPage', () => {
     confirmMock.mockRestore();
   });
 
-  it('Back to Dashboard button calls onNavigate', async () => {
+  it('Back to Assessments button calls onNavigate', async () => {
     await renderCandidateDetail();
 
-    const backButton = screen.getByText('Back to Dashboard');
+    const backButton = screen.getByText('Back to Assessments');
     fireEvent.click(backButton);
 
     expect(mockOnNavigate).toHaveBeenCalledWith('dashboard');
@@ -454,10 +454,11 @@ describe('CandidateDetailPage', () => {
     expect(screen.getByText('Post to Workable')).toBeInTheDocument();
   });
 
-  it('shows hint to compare candidates from Dashboard', async () => {
+  it('shows inline comparison hint and action', async () => {
     await renderCandidateDetail();
 
-    expect(screen.getByText(/Compare this candidate with others from the Dashboard/)).toBeInTheDocument();
+    expect(screen.getByText(/Compare this candidate with others in the same role/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Compare with...' })).toBeInTheDocument();
   });
 
   it('saves structured manual evaluation from Evaluate tab', async () => {

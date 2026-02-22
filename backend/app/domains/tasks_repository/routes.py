@@ -305,6 +305,29 @@ def list_tasks(
     return [_serialize_task_response(task) for task in tasks]
 
 
+@router.get("/{task_id}/rubric")
+def get_task_rubric(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return task-specific evaluator rubric criteria for recruiter scoring UI."""
+    task = db.query(Task).filter(
+        Task.id == task_id,
+        (Task.organization_id == current_user.organization_id) | (Task.is_template == True),
+    ).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    rubric = task.evaluation_rubric if isinstance(task.evaluation_rubric, dict) else {}
+    return {
+        "task_id": task.id,
+        "task_key": task.task_key,
+        "task_name": task.name,
+        "evaluation_rubric": rubric,
+    }
+
+
 @router.get("/{task_id}", response_model=TaskResponse)
 def get_task(
     task_id: int,

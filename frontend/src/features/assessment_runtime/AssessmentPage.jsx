@@ -39,6 +39,8 @@ export default function AssessmentPage({
   const [isTimerPaused, setIsTimerPaused] = useState(false);
   const [pauseReason, setPauseReason] = useState(null);
   const [pauseMessage, setPauseMessage] = useState("");
+  const [timeMilestoneNotice, setTimeMilestoneNotice] = useState(null);
+  const [submittedAtIso, setSubmittedAtIso] = useState(null);
   const [claudeBudget, setClaudeBudget] = useState(null);
   const [selectedRepoFile, setSelectedRepoFile] = useState(null);
   const [repoFileEdits, setRepoFileEdits] = useState({});
@@ -71,6 +73,21 @@ export default function AssessmentPage({
   const terminalReconnectTimerRef = useRef(null);
   const terminalEventSeqRef = useRef(0);
   const terminalManualCloseRef = useRef(false);
+  const assessmentStartedAtRef = useRef(null);
+  const lastPromptSentAtRef = useRef(null);
+  const milestoneFlagsRef = useRef({ halfway: false, warning80: false, warning90: false });
+  const milestoneTimerRef = useRef(null);
+
+  const showTimeMilestoneNotice = useCallback((message, tone) => {
+    setTimeMilestoneNotice({ message, tone });
+    if (milestoneTimerRef.current) {
+      clearTimeout(milestoneTimerRef.current);
+    }
+    milestoneTimerRef.current = setTimeout(() => {
+      setTimeMilestoneNotice(null);
+      milestoneTimerRef.current = null;
+    }, 7000);
+  }, []);
 
   useEffect(() => {
     setSubmitted(false);
@@ -85,6 +102,10 @@ export default function AssessmentPage({
     setClaudePrompt('');
     setClaudePromptSending(false);
     setClaudeConversation([]);
+    lastPromptSentAtRef.current = null;
+    milestoneFlagsRef.current = { halfway: false, warning80: false, warning90: false };
+    setTimeMilestoneNotice(null);
+    setSubmittedAtIso(null);
 
     if (startData) {
       const normalized = normalizeStartData(startData);
@@ -105,6 +126,7 @@ export default function AssessmentPage({
       setIsTimerPaused(Boolean(normalized.is_timer_paused));
       setPauseReason(normalized.pause_reason || null);
       setClaudeBudget(normalized.claude_budget || null);
+      assessmentStartedAtRef.current = Date.now() - Math.max(0, (((normalized.duration_minutes || 30) * 60) - (normalized.time_remaining || 0)) * 1000);
       setLoading(false);
       return;
     }
@@ -126,6 +148,7 @@ export default function AssessmentPage({
       setIsTimerPaused(false);
       setPauseReason(null);
       setClaudeBudget(taskData.claude_budget || null);
+      assessmentStartedAtRef.current = Date.now();
       setLoading(false);
       return;
     }
@@ -156,6 +179,7 @@ export default function AssessmentPage({
         setIsTimerPaused(Boolean(normalized.is_timer_paused));
         setPauseReason(normalized.pause_reason || null);
         setClaudeBudget(normalized.claude_budget || null);
+        assessmentStartedAtRef.current = Date.now() - Math.max(0, (((normalized.duration_minutes || 30) * 60) - (normalized.time_remaining || 0)) * 1000);
       } catch (err) {
         setOutput(`Error starting assessment: ${err.message}`);
       } finally {
@@ -164,6 +188,14 @@ export default function AssessmentPage({
     };
     startAssessment();
   }, [token, taskData, startData]);
+
+  useEffect(() => {
+    return () => {
+      if (milestoneTimerRef.current) {
+        clearTimeout(milestoneTimerRef.current);
+      }
+    };
+  }, []);
 
   useEffect(() => {
     if (loading || submitted || timeLeft <= 0 || isTimerPaused) return;
@@ -181,6 +213,24 @@ export default function AssessmentPage({
 
     return () => clearInterval(timerRef.current);
   }, [loading, submitted, isTimerPaused]);
+
+  useEffect(() => {
+    if (loading || submitted || isTimerPaused) return;
+    const totalSeconds = Math.max(1, Number((assessment?.duration_minutes || 30) * 60));
+    const elapsedRatio = Math.max(0, Math.min(1, (totalSeconds - timeLeft) / totalSeconds));
+    if (elapsedRatio >= 0.5 && !milestoneFlagsRef.current.halfway) {
+      milestoneFlagsRef.current.halfway = true;
+      showTimeMilestoneNotice('Halfway through — prioritize highest-impact tasks now.', 'info');
+    }
+    if (elapsedRatio >= 0.8 && !milestoneFlagsRef.current.warning80) {
+      milestoneFlagsRef.current.warning80 = true;
+      showTimeMilestoneNotice('20% time remaining — move to verification and final checks.', 'warning');
+    }
+    if (elapsedRatio >= 0.9 && !milestoneFlagsRef.current.warning90) {
+      milestoneFlagsRef.current.warning90 = true;
+      showTimeMilestoneNotice('10% time remaining — finalize and prepare to submit.', 'danger');
+    }
+  }, [assessment?.duration_minutes, isTimerPaused, loading, showTimeMilestoneNotice, submitted, timeLeft]);
 
   useEffect(() => {
     if (!proctoringEnabled) return undefined;
@@ -505,6 +555,14 @@ export default function AssessmentPage({
 
     setClaudePromptSending(true);
     setClaudePrompt('');
+    const nowMs = Date.now();
+    const timeSinceAssessmentStartMs = assessmentStartedAtRef.current != null
+      ? Math.max(0, nowMs - assessmentStartedAtRef.current)
+      : null;
+    const timeSinceLastPromptMs = lastPromptSentAtRef.current != null
+      ? Math.max(0, nowMs - lastPromptSentAtRef.current)
+      : null;
+    lastPromptSentAtRef.current = nowMs;
     setClaudeConversation((prev) => {
       const next = [...prev, { role: 'user', content: message }];
       return next.slice(-30);
@@ -521,6 +579,8 @@ export default function AssessmentPage({
           code_context: codeRef.current,
           paste_detected: false,
           browser_focused: typeof document !== 'undefined' ? document.visibilityState === 'visible' : true,
+          time_since_assessment_start_ms: timeSinceAssessmentStartMs,
+          time_since_last_prompt_ms: timeSinceLastPromptMs,
         },
         assessmentTokenForApi,
       );
@@ -572,6 +632,7 @@ export default function AssessmentPage({
       }
 
       setSubmitted(true);
+      setSubmittedAtIso(new Date().toISOString());
       clearInterval(timerRef.current);
 
       try {
@@ -614,6 +675,7 @@ export default function AssessmentPage({
         }
         setOutput(`Submit error: ${detail?.message || detail || err.message}`);
         setSubmitted(false);
+        setSubmittedAtIso(null);
       }
     },
     [
@@ -634,7 +696,10 @@ export default function AssessmentPage({
     ],
   );
 
+  const totalDurationSeconds = Math.max(1, Number((assessment?.duration_minutes || 30) * 60));
+  const remainingRatio = Math.max(0, Math.min(1, timeLeft / totalDurationSeconds));
   const isTimeLow = timeLeft > 0 && timeLeft < 300; // under 5 minutes
+  const timeUrgencyLevel = remainingRatio <= 0.1 ? 'danger' : (remainingRatio <= 0.2 ? 'warning' : 'normal');
   const isClaudeBudgetExhausted = Boolean(claudeBudget?.enabled && claudeBudget?.is_exhausted);
 
   if (loading) {
@@ -653,7 +718,7 @@ export default function AssessmentPage({
         />
       );
     }
-    return <AssessmentStatusScreen mode="submitted" />;
+    return <AssessmentStatusScreen mode="submitted" submittedAt={submittedAtIso} />;
   }
 
   return (
@@ -669,6 +734,7 @@ export default function AssessmentPage({
         isClaudeBudgetExhausted={isClaudeBudgetExhausted}
         claudeBudget={claudeBudget}
         formatUsd={formatUsd}
+        timeMilestoneNotice={timeMilestoneNotice}
         lightMode={assessmentLightMode}
       />
 
@@ -680,6 +746,7 @@ export default function AssessmentPage({
         terminalCapabilities={terminalCapabilities}
         formatUsd={formatUsd}
         isTimeLow={isTimeLow}
+        timeUrgencyLevel={timeUrgencyLevel}
         timeLeft={timeLeft}
         formatTime={formatTime}
         isTimerPaused={isTimerPaused}

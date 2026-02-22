@@ -809,8 +809,7 @@ def create_assessment_for_application(
     current_user: User = Depends(get_current_user),
 ):
     app = get_application(application_id, current_user.organization_id, db)
-    if not app.cv_file_url:
-        raise HTTPException(status_code=400, detail="Upload candidate CV before creating an assessment")
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     role = (
         db.query(Role)
         .options(joinedload(Role.tasks))
@@ -840,6 +839,7 @@ def create_assessment_for_application(
         expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
         workable_candidate_id=app.workable_candidate_id,
         workable_job_id=role.workable_job_id,
+        candidate_feedback_enabled=bool(getattr(org, "candidate_feedback_enabled", True)),
     )
     db.add(assessment)
     try:
@@ -867,7 +867,6 @@ def create_assessment_for_application(
         .first()
     )
 
-    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     candidate_email = app.candidate.email if app.candidate else None
     if not candidate_email:
         raise HTTPException(status_code=400, detail="Application has no candidate email")

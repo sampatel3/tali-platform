@@ -3,6 +3,15 @@
   "name": "Data Platform Incident Triage and Recovery",
   "role": "data_engineer",
   "duration_minutes": 30,
+  "scoring_hints": {
+    "min_reading_time_seconds": 300
+  },
+  "test_runner": {
+    "command": "pytest -q --tb=no",
+    "working_dir": "/workspace/fintech-data-platform",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed",
+    "timeout_seconds": 90
+  },
   "scenario": "You just joined as a senior data engineer at a Series B fintech (200 employees, $50M ARR). Day 3, and you've been pulled into an urgent situation.\n\n**The email from your VP of Engineering:**\n\n> Subject: Need your eyes on this ASAP\n>\n> We have three fires burning:\n>\n> 1. **Finance is blocked** — Month-end close is tomorrow. The revenue reconciliation job has been failing for 3 days. CFO is escalating to the CEO.\n>\n> 2. **Compliance audit in 2 weeks** — Auditors need complete transaction lineage from our payment processor to our warehouse. We currently can't prove data completeness.\n>\n> 3. **The platform is groaning** — Data volumes grew 10x this quarter. Jobs that took 5 minutes now take 2 hours. The team has been firefighting instead of fixing root causes.\n>\n> I need you to: (1) assess the situation, (2) propose a plan, and (3) start fixing what you can. The repo has our current pipeline code and some diagnostic artifacts.\n>\n> The previous senior DE left a month ago. Documentation is sparse. The team is junior (2 people, <1 year experience each). You're the most experienced person who's touched this system.\n>\n> Don't try to fix everything. Tell me what to fix first, what can wait, and what we need to stop doing.\n\n**Your mission:**\nExplore the codebase. Understand what's broken and why. Propose a prioritized plan. Implement the highest-impact fixes you can in the time available. Document your reasoning.\n\n**What you'll be evaluated on:**\n- How you explore and understand the system before acting\n- How you prioritize competing demands\n- The quality of your technical judgment and tradeoffs\n- How you validate your changes actually work\n- How clearly you communicate your reasoning and plan",
 
   "repo_structure": {

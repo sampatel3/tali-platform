@@ -137,23 +137,39 @@ class EnterpriseAccessMiddleware(BaseHTTPMiddleware):
         from ..platform.database import SessionLocal
         from ..models.user import User
         from ..models.organization import Organization
+        from ..domains.identity_access.access_policy import email_domain, normalize_allowed_domains
 
         db = SessionLocal()
         try:
             user = db.query(User).filter(User.email == email).first()
-            if not user or not user.organization_id:
-                return await call_next(request)
-            org = db.query(Organization).filter(Organization.id == user.organization_id).first()
-            decision = evaluate_login_access(
-                email=email,
-                sso_enforced=bool(getattr(org, "sso_enforced", False)) if org else False,
-                organization_id=user.organization_id,
-            )
-            if not decision.allowed:
-                return JSONResponse(
-                    status_code=403,
-                    content={"detail": decision.reason or "Access denied by organization policy."},
+            if user and user.organization_id:
+                org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+                decision = evaluate_login_access(
+                    email=email,
+                    sso_enforced=bool(getattr(org, "sso_enforced", False)) if org else False,
+                    organization_id=user.organization_id,
                 )
+                if not decision.allowed:
+                    return JSONResponse(
+                        status_code=403,
+                        content={"detail": decision.reason or "Access denied by organization policy."},
+                    )
+            else:
+                domain = email_domain(email)
+                if domain:
+                    sso_orgs = db.query(Organization).filter(Organization.sso_enforced == True).all()  # noqa: E712
+                    for org in sso_orgs:
+                        allowed_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
+                        if allowed_domains and domain in allowed_domains:
+                            decision = evaluate_login_access(
+                                email=email,
+                                sso_enforced=True,
+                                organization_id=org.id,
+                            )
+                            return JSONResponse(
+                                status_code=403,
+                                content={"detail": decision.reason or "Access denied by organization policy."},
+                            )
         finally:
             db.close()
 

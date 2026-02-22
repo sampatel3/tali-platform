@@ -35,6 +35,52 @@ export const STANDARD_MANUAL_TEMPLATE = {
   },
 };
 
+export const API_RELIABILITY_TEMPLATE = {
+  name: 'API Reliability Regression Hunt',
+  description: 'Stabilize a REST API that intermittently fails under concurrency by fixing retry logic, request validation, and error handling paths.',
+  task_type: 'debugging',
+  difficulty: 'senior',
+  duration_minutes: 60,
+  claude_budget_limit_usd: 7,
+  starter_code: `from fastapi import FastAPI, HTTPException\n\napp = FastAPI()\n_store = {}\n\n@app.post('/items/{item_id}')\ndef create_item(item_id: str, payload: dict):\n    # TODO: ensure idempotency + validation + clear errors\n    _store[item_id] = payload\n    return {'ok': True}\n`,
+  test_code: `from fastapi.testclient import TestClient\nfrom src.task import app\n\nclient = TestClient(app)\n\n\ndef test_create_item():\n    res = client.post('/items/a1', json={'name': 'A'})\n    assert res.status_code == 200\n\n\ndef test_invalid_payload():\n    res = client.post('/items/a2', json={})\n    assert res.status_code in (400, 422)\n`,
+  role: 'backend_engineer',
+  scenario: 'Production API error rates spiked after a rollout. The team needs a safe fix before peak traffic.',
+  task_key: '',
+  repo_structure: null,
+  evaluation_rubric: null,
+  extra_data: {
+    suitable_roles: ['backend engineer', 'site reliability engineer'],
+    skills_tested: ['api debugging', 'validation', 'error handling'],
+  },
+};
+
+export const AI_AGENT_TEMPLATE = {
+  name: 'Customer Support AI Agent Guardrails',
+  description: 'Implement guardrails for an LLM support agent so responses are grounded in provided docs and do not hallucinate unsupported actions.',
+  task_type: 'ai_engineering',
+  difficulty: 'mid',
+  duration_minutes: 45,
+  claude_budget_limit_usd: 6,
+  starter_code: `DOCS = {'refund': 'Refunds are allowed within 14 days with receipt.'}\n\n\ndef answer(question: str) -> str:\n    # TODO: enforce grounding + refusal policy\n    return 'Sure, done.'\n`,
+  test_code: `from src.task import answer\n\n\ndef test_grounded_answer():\n    result = answer('What is the refund policy?')\n    assert '14 days' in result\n\n\ndef test_refuses_unknown_policy():\n    result = answer('Can you waive all late fees forever?')\n    assert 'cannot' in result.lower() or 'not available' in result.lower()\n`,
+  role: 'ai_engineer',
+  scenario: 'Your team is shipping an AI support agent and legal requires strict policy adherence before launch.',
+  task_key: '',
+  repo_structure: null,
+  evaluation_rubric: null,
+  extra_data: {
+    suitable_roles: ['ai engineer', 'ml engineer', 'full-stack engineer'],
+    skills_tested: ['prompt design', 'guardrails', 'safety'],
+  },
+};
+
+export const TASK_TEMPLATES = [
+  { id: 'manual', label: 'Pipeline Stabilization', task: STANDARD_MANUAL_TEMPLATE },
+  { id: 'api-reliability', label: 'API Reliability', task: API_RELIABILITY_TEMPLATE },
+  { id: 'ai-agent', label: 'AI Agent Guardrails', task: AI_AGENT_TEMPLATE },
+];
+
 const DEFAULT_TESTS_BY_TYPE = {
   debugging: ['Root-cause analysis', 'Bug isolation', 'Regression-safe fixes'],
   ai_engineering: ['AI prompt quality', 'Grounded tool usage', 'Output validation'],

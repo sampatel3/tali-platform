@@ -99,6 +99,8 @@ def get_my_org(
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
+    if getattr(org, "candidate_feedback_enabled", None) is None:
+        org.candidate_feedback_enabled = True
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
     org.workable_config = _resolved_workable_config(org)
     return org
@@ -125,6 +127,8 @@ def update_my_org(
     if data.saml_metadata_url is not None:
         metadata_url = (data.saml_metadata_url or "").strip()
         org.saml_metadata_url = metadata_url or None
+    if data.candidate_feedback_enabled is not None:
+        org.candidate_feedback_enabled = bool(data.candidate_feedback_enabled)
     if org.saml_enabled and not org.saml_metadata_url:
         raise HTTPException(status_code=400, detail="saml_metadata_url is required when saml_enabled is true")
     try:
@@ -133,6 +137,8 @@ def update_my_org(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update organization")
+    if getattr(org, "candidate_feedback_enabled", None) is None:
+        org.candidate_feedback_enabled = True
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
     org.workable_config = _resolved_workable_config(org)
     return org

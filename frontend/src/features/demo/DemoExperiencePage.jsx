@@ -20,7 +20,7 @@ const initialForm = {
   workEmail: '',
   company: '',
   companySize: '',
-  marketingConsent: true,
+  marketingConsent: false,
 };
 
 const requiredFieldLabels = {
@@ -199,7 +199,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                   className="mt-1 h-4 w-4"
                 />
                 <span className="font-mono text-xs text-[var(--taali-muted)]">
-                  I agree to receive TAALI follow-up emails about assessment outcomes and product updates.
+                  Send me my demo results by email and occasional product updates (optional).
                 </span>
               </label>
             </div>

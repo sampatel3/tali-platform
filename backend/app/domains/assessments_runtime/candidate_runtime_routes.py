@@ -5,10 +5,12 @@ import time
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, UploadFile
-from sqlalchemy.orm import Session
+from fastapi.responses import Response
+from sqlalchemy.orm import Session, joinedload
 
 from ...components.assessments.repository import (
     append_assessment_timeline_event,
+    ensure_utc,
     get_active_assessment,
     utcnow,
     validate_assessment_token,
@@ -28,6 +30,11 @@ from ...models.candidate import Candidate
 from ...models.task import Task
 from ...platform.config import settings
 from ...platform.database import get_db
+from ...services.candidate_feedback_engine import (
+    build_feedback_text_report,
+    build_plain_text_pdf,
+)
+from ...services.task_spec_loader import candidate_rubric_view
 from ...schemas.assessment import (
     AssessmentStart,
     CodeExecutionRequest,
@@ -114,6 +121,50 @@ def _resolve_demo_task(db: Session, org_id: int, track: str) -> Task | None:
     return None
 
 
+def _get_feedback_assessment_or_404(token: str, db: Session) -> Assessment:
+    assessment = (
+        db.query(Assessment)
+        .options(
+            joinedload(Assessment.candidate),
+            joinedload(Assessment.task),
+            joinedload(Assessment.role),
+            joinedload(Assessment.organization),
+        )
+        .filter(Assessment.token == token)
+        .first()
+    )
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Invalid assessment token")
+    return assessment
+
+
+def _feedback_payload_response(assessment: Assessment) -> dict:
+    org_enabled = bool(getattr(assessment.organization, "candidate_feedback_enabled", True))
+    assessment_enabled = bool(getattr(assessment, "candidate_feedback_enabled", True))
+    if not org_enabled or not assessment_enabled:
+        raise HTTPException(status_code=404, detail="Feedback is unavailable for this assessment")
+    feedback = getattr(assessment, "candidate_feedback_json", None)
+    if not bool(getattr(assessment, "candidate_feedback_ready", False)) or not isinstance(feedback, dict):
+        raise HTTPException(status_code=403, detail="Your feedback report is not ready yet")
+    candidate_name = (
+        (assessment.candidate.full_name if assessment.candidate else None)
+        or (assessment.candidate.email if assessment.candidate else None)
+        or "Candidate"
+    )
+    return {
+        "assessment_id": assessment.id,
+        "token": assessment.token,
+        "feedback_ready": True,
+        "feedback_generated_at": getattr(assessment, "candidate_feedback_generated_at", None),
+        "feedback_sent_at": getattr(assessment, "candidate_feedback_sent_at", None),
+        "organization_name": assessment.organization.name if assessment.organization else None,
+        "task_name": assessment.task.name if assessment.task else None,
+        "role_name": assessment.role.name if assessment.role else None,
+        "candidate_name": candidate_name,
+        "feedback": feedback,
+    }
+
+
 @router.post("/token/{token}/start", response_model=AssessmentStart)
 def start_assessment(token: str, db: Session = Depends(get_db)):
     """Candidate starts or resumes an assessment via token."""
@@ -121,6 +172,38 @@ def start_assessment(token: str, db: Session = Depends(get_db)):
     if not assessment:
         raise HTTPException(status_code=404, detail="Invalid assessment token")
     return start_or_resume_assessment(assessment, db)
+
+
+@router.get("/token/{token}/preview")
+def preview_assessment(token: str, db: Session = Depends(get_db)):
+    """Return candidate-facing task context without starting the assessment timer."""
+    assessment = db.query(Assessment).filter(Assessment.token == token).first()
+    if not assessment:
+        raise HTTPException(status_code=404, detail="Invalid assessment token")
+    if assessment.expires_at and ensure_utc(assessment.expires_at) < utcnow():
+        raise HTTPException(status_code=400, detail="Assessment link has expired")
+
+    task = db.query(Task).filter(Task.id == assessment.task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    extra_data = task.extra_data if isinstance(task.extra_data, dict) else {}
+    return {
+        "assessment_id": assessment.id,
+        "token": assessment.token,
+        "status": str(getattr(assessment.status, "value", assessment.status) or ""),
+        "expires_at": assessment.expires_at,
+        "duration_minutes": assessment.duration_minutes,
+        "task": {
+            "name": task.name,
+            "role": task.role,
+            "description": task.description,
+            "scenario": task.scenario,
+            "duration_minutes": assessment.duration_minutes,
+            "rubric_categories": candidate_rubric_view(task.evaluation_rubric),
+            "expected_candidate_journey": extra_data.get("expected_candidate_journey"),
+        },
+    }
 
 
 @router.post("/demo/start", response_model=AssessmentStart)
@@ -179,6 +262,7 @@ def start_demo_assessment(
         expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
         is_demo=True,
         demo_track=track,
+        candidate_feedback_enabled=bool(getattr(org, "candidate_feedback_enabled", True)),
         demo_profile={
             "full_name": data.full_name,
             "position": data.position,
@@ -199,6 +283,31 @@ def start_demo_assessment(
 
     db.refresh(assessment)
     return start_or_resume_assessment(assessment, db)
+
+
+@router.get("/{token}/feedback")
+def get_candidate_feedback(
+    token: str,
+    db: Session = Depends(get_db),
+):
+    assessment = _get_feedback_assessment_or_404(token, db)
+    return _feedback_payload_response(assessment)
+
+
+@router.get("/{token}/feedback.pdf")
+def download_candidate_feedback_pdf(
+    token: str,
+    db: Session = Depends(get_db),
+):
+    assessment = _get_feedback_assessment_or_404(token, db)
+    payload = _feedback_payload_response(assessment)
+    report_text = build_feedback_text_report(payload.get("feedback") or {})
+    pdf = build_plain_text_pdf(report_text)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="candidate-feedback-{assessment.id}.pdf"'},
+    )
 
 
 @router.post("/{assessment_id}/upload-cv")
@@ -272,6 +381,8 @@ def execute_code(
             "code_length": len(data.code or ""),
             "latency_ms": exec_latency_ms,
             "has_stderr": bool(result.get("stderr")),
+            "tests_passed": result.get("tests_passed"),
+            "tests_total": result.get("tests_total"),
         },
     )
     try:

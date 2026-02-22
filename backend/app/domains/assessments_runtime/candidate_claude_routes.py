@@ -147,6 +147,7 @@ def chat_with_claude(
     output_tokens = max(0, int(result.get("output_tokens") or 0))
 
     prompts = list(getattr(assessment, "ai_prompts", None) or [])
+    is_first_prompt = len(prompts) == 0
     prompts.append(
         {
             "message": message,
@@ -154,6 +155,7 @@ def chat_with_claude(
             "code_context": str(data.code_context or "")[:_MAX_CONTEXT_CHARS],
             "paste_detected": bool(data.paste_detected),
             "browser_focused": bool(data.browser_focused),
+            "time_since_assessment_start_ms": data.time_since_assessment_start_ms,
             "time_since_last_prompt_ms": data.time_since_last_prompt_ms,
             "response_latency_ms": latency_ms,
             "input_tokens": input_tokens,
@@ -173,9 +175,18 @@ def chat_with_claude(
             "output_tokens": output_tokens,
             "paste_detected": bool(data.paste_detected),
             "browser_focused": bool(data.browser_focused),
+            "time_since_assessment_start_ms": data.time_since_assessment_start_ms,
             "time_since_last_prompt_ms": data.time_since_last_prompt_ms,
         },
     )
+    if is_first_prompt:
+        append_assessment_timeline_event(
+            assessment,
+            "first_prompt",
+            {
+                "preview": message[:120],
+            },
+        )
     claude_budget = build_claude_budget_snapshot(
         budget_limit_usd=effective_budget_limit,
         prompts=prompts,

@@ -19,6 +19,8 @@ from .scoring_core import (
     _compute_per_prompt_scores,
     _count_words,
     _detect_fraud,
+    _extract_prompt_metadata,
+    _is_vague_prompt,
     _is_solution_dump,
     _question_presence_rate,
     _score_approach,
@@ -26,6 +28,7 @@ from .scoring_core import (
     _score_context_provision,
     _score_cv_match,
     _score_independence,
+    _score_prompt_evolution,
     _score_prompt_clarity,
     _score_task_completion,
     _score_utilization,
@@ -41,6 +44,7 @@ def calculate_mvp_score(
     v2_enabled: bool = False,
     weights: Dict[str, float] | None = None,
     cv_match_result: Dict[str, Any] | None = None,
+    task_scoring_hints: Dict[str, Any] | None = None,
 ) -> Dict[str, Any]:
     """Calculate comprehensive MVP score with 30+ metrics in 8 categories.
 
@@ -59,13 +63,28 @@ def calculate_mvp_score(
             "SCORING_V2_ENABLED is set, but no production scoring v2 integration is configured."
         )
 
-    prompts = interactions or []
+    prompts = []
+    for raw_prompt in interactions or []:
+        prompt = dict(raw_prompt or {})
+        inferred = _extract_prompt_metadata(prompt.get("message", ""))
+        for key, value in inferred.items():
+            prompt.setdefault(key, value)
+        prompts.append(prompt)
     total_prompts = len(prompts)
     duration_minutes = total_duration_seconds / 60.0 if total_duration_seconds else 0.0
 
     total_tokens = sum(
         (p.get("input_tokens") or 0) + (p.get("output_tokens") or 0) for p in prompts
     )
+
+    min_reading_time_seconds = None
+    if isinstance(task_scoring_hints, dict):
+        raw_min_reading = task_scoring_hints.get("min_reading_time_seconds")
+        try:
+            if raw_min_reading is not None:
+                min_reading_time_seconds = max(0, int(raw_min_reading))
+        except (TypeError, ValueError):
+            min_reading_time_seconds = None
 
     # --- Score all 8 categories ---
     cat_results: Dict[str, Dict] = {}
@@ -77,7 +96,12 @@ def calculate_mvp_score(
     )
     cat_results["prompt_clarity"] = _score_prompt_clarity(prompts)
     cat_results["context_provision"] = _score_context_provision(prompts)
-    cat_results["independence"] = _score_independence(prompts, tests_passed, total_tokens)
+    cat_results["independence"] = _score_independence(
+        prompts,
+        tests_passed,
+        total_tokens,
+        min_reading_time_seconds=min_reading_time_seconds,
+    )
     cat_results["utilization"] = _score_utilization(prompts)
     cat_results["communication"] = _score_communication(prompts)
     cat_results["approach"] = _score_approach(prompts)
@@ -107,10 +131,15 @@ def calculate_mvp_score(
         if score is not None:
             weighted_sum += score * w * 10.0  # Convert 0-10 to 0-100 contribution
             total_weight += w
+    # Excluding None-scored categories (for example cv_match when no CV/job spec is
+    # available) redistributes remaining weights across the denominator.
     final_score = round(_clamp(weighted_sum / total_weight if total_weight > 0 else 0.0), 2)
+    uncapped_final_score = final_score
+    applied_caps: list[str] = []
     communication_flags = (cat_results.get("communication", {}) or {}).get("flags", {}) or {}
     severe_unprofessional_language = bool(communication_flags.get("severe_unprofessional_language"))
     if severe_unprofessional_language:
+        applied_caps.append("severe_unprofessional_language")
         final_score = round(min(final_score, SEVERE_LANGUAGE_FINAL_SCORE_CAP), 2)
 
     # --- Fraud detection ---
@@ -121,6 +150,7 @@ def calculate_mvp_score(
             fraud_flags.append("severe_unprofessional_language")
         fraud["flags"] = fraud_flags
     if fraud["flags"]:
+        applied_caps.append("fraud")
         final_score = round(min(final_score, FRAUD_SCORE_CAP), 2)
 
     # --- Per-prompt scores ---
@@ -147,6 +177,8 @@ def calculate_mvp_score(
     avg_gap = (sum(gaps) / len(gaps)) if gaps else 0
     word_counts = [_count_words(p.get("message", "")) for p in prompts]
 
+    prompt_evolution = _score_prompt_evolution(prompts)
+
     soft_signals = {
         "prompt_count_total": total_prompts,
         "session_duration_minutes": round(duration_minutes, 2),
@@ -169,6 +201,7 @@ def calculate_mvp_score(
         else None,
         "total_prompts": total_prompts,
         "total_tokens_used": total_tokens,
+        "prompt_evolution": prompt_evolution,
     }
 
     # --- Backward-compatible metric_details ---
@@ -198,13 +231,13 @@ def calculate_mvp_score(
         "vague_prompt_count": sum(
             1
             for p in prompts
-            if any(re.search(pat, (p.get("message", "") or "").strip().lower()) for pat in VAGUE_PATTERNS)
+            if _is_vague_prompt(p.get("message", ""))
         ),
         "specific_prompt_count": total_prompts
         - sum(
             1
             for p in prompts
-            if any(re.search(pat, (p.get("message", "") or "").strip().lower()) for pat in VAGUE_PATTERNS)
+            if _is_vague_prompt(p.get("message", ""))
         ),
         "early_prompt_penalty": 25.0 if first_sec < 60 else 0.0,
         "code_changes_before_prompts": sum(
@@ -265,4 +298,61 @@ def calculate_mvp_score(
         "metric_details": metric_details,
         "fraud": fraud,
         "soft_signals": soft_signals,
+        "uncapped_final_score": uncapped_final_score,
+        "applied_caps": applied_caps,
     }
+
+
+def generate_heuristic_summary(
+    category_scores: Dict[str, Any],
+    soft_signals: Dict[str, Any] | None = None,
+    fraud_flags: List[str] | None = None,
+) -> str:
+    """Rule-based recruiter summary grounded in measured scoring signals."""
+    scores = category_scores or {}
+    fraud_flags = fraud_flags or []
+    soft_signals = soft_signals or {}
+
+    task_completion = scores.get("task_completion")
+    independence = scores.get("independence")
+    prompt_clarity = scores.get("prompt_clarity")
+    context_provision = scores.get("context_provision")
+
+    lines: List[str] = []
+    if isinstance(task_completion, (int, float)) and isinstance(independence, (int, float)):
+        if task_completion >= 8 and independence >= 7:
+            lines.append("Strong delivery signal: the candidate completed the task with independent, efficient pacing.")
+        elif task_completion < 5:
+            lines.append("Delivery risk: task completion is below baseline and likely needs interview follow-up.")
+    if isinstance(prompt_clarity, (int, float)) and prompt_clarity >= 7:
+        lines.append("Prompts were clear and structured, which usually correlates with faster AI iteration quality.")
+    if isinstance(context_provision, (int, float)) and context_provision < 5:
+        lines.append("Context sharing was limited; probe debugging context and file/error grounding in the next interview.")
+
+    weak_dimensions = [
+        key
+        for key, value in scores.items()
+        if isinstance(value, (int, float)) and value < 4
+    ]
+    if weak_dimensions:
+        pretty = ", ".join(d.replace("_", " ") for d in weak_dimensions[:2])
+        lines.append(f"Significant gap detected in {pretty}; targeted follow-up questions are recommended.")
+
+    prompt_evolution = soft_signals.get("prompt_evolution") if isinstance(soft_signals, dict) else None
+    trend = prompt_evolution.get("trend") if isinstance(prompt_evolution, dict) else None
+    if trend == "improving":
+        lines.append("Prompt quality trended upward during the session, indicating adaptive collaboration behavior.")
+    elif trend == "declining":
+        lines.append("Prompt quality declined over time, which may indicate pressure-response risk under time constraints.")
+
+    if fraud_flags:
+        lines.append(
+            "Note: potential integrity flags were detected ("
+            + ", ".join(sorted(set(str(flag) for flag in fraud_flags)))
+            + "). Human review is recommended."
+        )
+
+    if not lines:
+        lines.append("Performance is mixed across dimensions; use the weakest categories to drive interview probing.")
+
+    return " ".join(lines[:3]).strip()

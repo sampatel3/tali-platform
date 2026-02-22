@@ -3,6 +3,15 @@
   "name": "AI Feature Production Readiness Assessment",
   "role": "ai_engineer",
   "duration_minutes": 30,
+  "scoring_hints": {
+    "min_reading_time_seconds": 300
+  },
+  "test_runner": {
+    "command": "pytest -q --tb=no",
+    "working_dir": "/workspace/customer-intelligence-ai",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed",
+    "timeout_seconds": 90
+  },
   "scenario": "You're a senior AI engineer at a B2B SaaS company (500 employees, enterprise customers). The company is betting big on AI - the CEO announced \"AI-powered features in every product\" at the last all-hands.\n\n**The Slack message from your engineering director:**\n\n> @you - Need you to take over the Customer Intelligence feature. Launch was supposed to be 2 weeks ago but we're stuck.\n>\n> **What it does:** AI analyzes customer support tickets and generates insights for account managers - churn risk, upsell opportunities, sentiment trends.\n>\n> **The problem:** The prototype \"works\" in demos but nobody trusts it for production:\n> - Sales is nervous about wrong insights reaching customers\n> - Legal flagged potential liability if we give bad advice\n> - Infra is worried about costs (prototype burned $2K in one day of testing)\n> - QA doesn't know how to test it (\"how do you test AI?\")\n>\n> The previous engineer built a working prototype but left for another company. Code is in the repo. Some tests exist but most are commented out or skipped.\n>\n> I need you to:\n> 1. Assess what's actually there and what's risky\n> 2. Make it production-ready (or tell me what's blocking that)\n> 3. Propose a launch plan that Legal/Sales/Infra can sign off on\n>\n> We have enterprise customers. Mistakes here are career-limiting. But shipping nothing is also not an option - the CEO committed to this publicly.\n>\n> Take 30 minutes to assess and start fixing. Then tell me: can we launch this, and if so, how?\n\n**Your mission:**\nUnderstand the system. Identify the risks. Make it safer. Propose a credible path to production. Show your judgment, not just your coding.\n\n**What you'll be evaluated on:**\n- How you assess risk (not just technical risk - business risk)\n- How you balance shipping vs. safety\n- The quality of your production-readiness improvements\n- How you communicate to non-technical stakeholders\n- Whether your plan would actually work",
 
   "repo_structure": {

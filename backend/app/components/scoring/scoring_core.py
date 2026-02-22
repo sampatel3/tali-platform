@@ -115,6 +115,162 @@ def _pattern_rate(prompts: List[Dict], patterns: list) -> float:
     return count / len(prompts)
 
 
+def _is_vague_prompt(message: str) -> bool:
+    text = (message or "").strip().lower()
+    return any(re.search(pat, text, re.IGNORECASE) for pat in VAGUE_PATTERNS)
+
+
+def _prompt_has_context(prompt: Dict[str, Any]) -> bool:
+    return bool(
+        prompt.get("code_snippet_included")
+        or prompt.get("error_message_included")
+        or prompt.get("line_number_referenced")
+        or prompt.get("file_reference")
+    )
+
+
+def _extract_prompt_metadata(prompt_text: str) -> Dict[str, Any]:
+    """Infer prompt metadata when upstream capture fields are missing."""
+    text = str(prompt_text or "")
+    lowered = text.lower()
+    has_code_fence = "```" in text
+    has_indented_code = bool(re.search(r"(?m)^(?: {4}|\t)\S", text))
+    code_snippet_included = has_code_fence or has_indented_code
+
+    error_message_included = bool(
+        re.search(
+            r"(?i)(traceback|error:|exception|failed|assert|stack trace|syntaxerror|typeerror|valueerror)",
+            text,
+        )
+    )
+    line_number_referenced = bool(
+        re.search(r"(?i)\bline\s+\d+\b|:\d+(?::\d+)?\b", text)
+    )
+    file_reference = bool(
+        re.search(
+            r"(?i)\b(?:src/|app/|tests?/|backend/|frontend/|[\w\-.]+\.(?:py|js|jsx|ts|tsx|json|yml|yaml|md))\b",
+            text,
+        )
+    )
+    references_previous = any(re.search(pat, text, re.IGNORECASE) for pat in ATTEMPT_PATTERNS)
+    retry_after_failure = bool(
+        re.search(
+            r"(?i)\b(retry|tried again|try again|another attempt|failed previously|after it failed)\b",
+            lowered,
+        )
+    )
+
+    return {
+        "word_count": _count_words(text),
+        "question_count": text.count("?"),
+        "code_snippet_included": code_snippet_included,
+        "error_message_included": error_message_included,
+        "line_number_referenced": line_number_referenced,
+        "file_reference": file_reference,
+        "references_previous": references_previous,
+        "retry_after_failure": retry_after_failure,
+    }
+
+
+def _score_reasoning_depth(prompt: str) -> float:
+    """Score debugging/design reasoning depth on a 0-3 scale."""
+    text = str(prompt or "")
+    lowered = text.lower()
+    has_signal = any(re.search(pat, lowered, re.IGNORECASE) for pat in DEBUGGING_PATTERNS + DESIGN_PATTERNS)
+    if not has_signal:
+        return 0.0
+
+    has_partial_specificity = bool(
+        re.search(
+            r"(?i)\b(function|module|class|endpoint|api|query|database|cache|service|"
+            r"tradeoff|trade-off|edge case|vs|versus|null reference|timeout|variable|state)\b",
+            text,
+        )
+    )
+    has_concrete_grounding = bool(
+        re.search(
+            r"(?i)\b(line\s+\d+|file\s+[\w\-.]+|src/|tests?/|[\w\-.]+\.(?:py|js|ts|tsx|jsx|json|yml|yaml))\b|:\d+(?::\d+)?\b",
+            text,
+        )
+    )
+    has_hypothesis = bool(
+        re.search(r"(?i)\b(hypothesis|i think|i suspect|likely|probably|might be|root cause)\b", text)
+    )
+    has_test_plan = bool(
+        re.search(
+            r"(?i)\b(let me|i will)\s+(check|test|verify|inspect|reproduce|confirm)\b|"
+            r"\b(add|insert|use)\s+(logging|logs|print|instrumentation)\b",
+            text,
+        )
+    )
+
+    if has_hypothesis and has_test_plan:
+        return 3.0
+    if has_concrete_grounding:
+        return 2.0
+    if has_hypothesis or has_partial_specificity:
+        return 1.0
+    return 0.0
+
+
+def _score_prompt_evolution(prompts: list) -> Dict[str, Any]:
+    """Track whether prompt quality improves over the session."""
+    if not prompts:
+        return {
+            "early_specificity": 0.0,
+            "mid_specificity": 0.0,
+            "late_specificity": 0.0,
+            "early_context": 0.0,
+            "mid_context": 0.0,
+            "late_context": 0.0,
+            "early_word_count": 0.0,
+            "mid_word_count": 0.0,
+            "late_word_count": 0.0,
+            "trend": "stable",
+        }
+
+    total = len(prompts)
+    first_cut = max(1, total // 3)
+    second_cut = max(first_cut + 1, (2 * total) // 3) if total > 1 else first_cut
+    early = prompts[:first_cut]
+    mid = prompts[first_cut:second_cut] or prompts[first_cut:first_cut + 1]
+    late = prompts[second_cut:] or prompts[-1:]
+
+    def _segment_rates(segment: list[Dict[str, Any]]) -> tuple[float, float, float]:
+        if not segment:
+            return (0.0, 0.0, 0.0)
+        specificity = sum(1 for prompt in segment if not _is_vague_prompt(prompt.get("message", ""))) / len(segment)
+        context = sum(1 for prompt in segment if _prompt_has_context(prompt)) / len(segment)
+        avg_words = sum(_count_words(prompt.get("message", "")) for prompt in segment) / len(segment)
+        return (specificity, context, avg_words)
+
+    early_spec, early_ctx, early_words = _segment_rates(early)
+    mid_spec, mid_ctx, mid_words = _segment_rates(mid)
+    late_spec, late_ctx, late_words = _segment_rates(late)
+
+    spec_delta = late_spec - early_spec
+    context_delta = late_ctx - early_ctx
+    if spec_delta <= -0.15 or context_delta <= -0.15:
+        trend = "declining"
+    elif spec_delta >= 0.15 or context_delta >= 0.20:
+        trend = "improving"
+    else:
+        trend = "stable"
+
+    return {
+        "early_specificity": round(early_spec, 3),
+        "mid_specificity": round(mid_spec, 3),
+        "late_specificity": round(late_spec, 3),
+        "early_context": round(early_ctx, 3),
+        "mid_context": round(mid_ctx, 3),
+        "late_context": round(late_ctx, 3),
+        "early_word_count": round(early_words, 1),
+        "mid_word_count": round(mid_words, 1),
+        "late_word_count": round(late_words, 1),
+        "trend": trend,
+    }
+
+
 # ---------------------------------------------------------------------------
 # CATEGORY 1: Task Completion (3 metrics)
 # ---------------------------------------------------------------------------
@@ -199,7 +355,7 @@ def _score_prompt_clarity(prompts: list) -> Dict[str, Any]:
     # prompt_specificity — non-vague prompts
     vague_count = sum(
         1 for p in prompts
-        if any(re.search(pat, (p.get("message", "") or "").strip().lower()) for pat in VAGUE_PATTERNS)
+        if _is_vague_prompt(p.get("message", ""))
     )
     spec_rate = (total - vague_count) / total
     prompt_specificity = _clamp10(spec_rate * 10.0)
@@ -274,14 +430,20 @@ def _score_independence(
     prompts: list,
     tests_passed: int,
     total_tokens: int,
+    min_reading_time_seconds: int | None = None,
 ) -> Dict[str, Any]:
     total = len(prompts) or 1
 
-    # first_prompt_delay (>2min good, <30s bad)
+    # first_prompt_delay (task-aware thresholds; defaults tuned for complex repos)
     first_sec = ((prompts[0].get("time_since_assessment_start_ms") or 0) / 1000.0) if prompts else 0
-    if first_sec >= 240:
+    top_threshold = max(60, int(min_reading_time_seconds or 300))
+    strong_threshold = max(60, int(round(top_threshold * 0.6)))
+    if strong_threshold >= top_threshold:
+        strong_threshold = max(60, top_threshold - 30)
+
+    if first_sec >= top_threshold:
         delay_score = 10.0
-    elif first_sec >= 120:
+    elif first_sec >= strong_threshold:
         delay_score = 8.0
     elif first_sec >= 60:
         delay_score = 5.0
@@ -349,7 +511,10 @@ def _score_independence(
             "pre_prompt_effort": pre_prompt_effort,
         },
         "explanations": {
-            "first_prompt_delay": f"Candidate waited {first_sec:.0f}s before first prompt." + (" Good self-reliance." if first_sec >= 120 else " Prompted quickly."),
+            "first_prompt_delay": (
+                f"Candidate waited {first_sec:.0f}s before first prompt "
+                f"(task baseline: {top_threshold}s for top score)."
+            ) + (" Good self-reliance." if first_sec >= strong_threshold else " Prompted quickly."),
             "prompt_spacing": f"Average {avg_gap:.0f}s between prompts." + (" Thoughtful pacing." if avg_gap >= 60 else " Rapid prompting."),
             "prompt_efficiency": f"{ppt:.1f} prompts per test passed." + (" Efficient." if ppt <= 2 else ""),
             "token_efficiency": f"{tpt:.0f} tokens per test passed.",
@@ -514,10 +679,24 @@ def _score_communication(prompts: list) -> Dict[str, Any]:
 
 def _score_approach(prompts: list) -> Dict[str, Any]:
     debug_rate = _pattern_rate(prompts, DEBUGGING_PATTERNS)
-    debugging_score = _clamp10(debug_rate * 10.0)
-
     design_rate = _pattern_rate(prompts, DESIGN_PATTERNS)
-    design_score = _clamp10(design_rate * 10.0)
+
+    debug_depth_values = []
+    design_depth_values = []
+    for prompt in prompts:
+        msg = prompt.get("message", "") or ""
+        depth = _score_reasoning_depth(msg)
+        if any(re.search(pat, msg, re.IGNORECASE) for pat in DEBUGGING_PATTERNS):
+            debug_depth_values.append(depth)
+        if any(re.search(pat, msg, re.IGNORECASE) for pat in DESIGN_PATTERNS):
+            design_depth_values.append(depth)
+
+    debug_depth = (sum(debug_depth_values) / len(debug_depth_values)) if debug_depth_values else 0.0
+    design_depth = (sum(design_depth_values) / len(design_depth_values)) if design_depth_values else 0.0
+
+    # Presence matters, but reasoning depth contributes most of the score.
+    debugging_score = _clamp10((debug_rate * 4.0) + ((debug_depth / 3.0) * 6.0))
+    design_score = _clamp10((design_rate * 4.0) + ((design_depth / 3.0) * 6.0))
 
     cat_score = _clamp10((debugging_score + design_score) / 2.0)
 
@@ -528,8 +707,14 @@ def _score_approach(prompts: list) -> Dict[str, Any]:
             "design_score": design_score,
         },
         "explanations": {
-            "debugging_score": f"{debug_rate*100:.0f}% of prompts showed debugging strategy (print/log, error analysis, hypotheses).",
-            "design_score": f"{design_rate*100:.0f}% of prompts referenced design/architecture considerations.",
+            "debugging_score": (
+                f"{debug_rate*100:.0f}% of prompts showed debugging strategy; "
+                f"reasoning depth {debug_depth:.1f}/3."
+            ),
+            "design_score": (
+                f"{design_rate*100:.0f}% of prompts referenced design/architecture; "
+                f"reasoning depth {design_depth:.1f}/3."
+            ),
         },
     }
 
@@ -587,13 +772,8 @@ def _compute_per_prompt_scores(prompts: list) -> List[Dict[str, Any]]:
         wc = _count_words(msg)
         has_question = (p.get("question_count") or msg.count("?")) > 0
         is_sweet_spot = 20 <= wc <= 150
-        is_vague = any(re.search(pat, msg.strip().lower()) for pat in VAGUE_PATTERNS)
-        has_context = bool(
-            p.get("code_snippet_included")
-            or p.get("error_message_included")
-            or p.get("line_number_referenced")
-            or p.get("file_reference")
-        )
+        is_vague = _is_vague_prompt(msg)
+        has_context = _prompt_has_context(p)
         has_code_delta = abs((p.get("code_diff_lines_added") or 0) + (p.get("code_diff_lines_removed") or 0)) > 0
 
         pp_clarity = _clamp(
@@ -713,4 +893,3 @@ def _build_legacy_component_scores(
         "decomposition_score": round(app["design_score"] * 10, 2),
         "code_quality_score": round(comm["grammar_score"] * 10, 2),
     }
-

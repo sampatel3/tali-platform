@@ -48,6 +48,7 @@ def create_assessment(
     resolved_role_id = data.role_id
     candidate_email = None
     candidate_name = None
+    org_feedback_enabled = True
 
     try:
         task = db.query(Task).filter(
@@ -56,6 +57,13 @@ def create_assessment(
         ).first()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
+        org_record = (
+            db.query(Organization)
+            .filter(Organization.id == current_user.organization_id)
+            .first()
+        )
+        if org_record is not None:
+            org_feedback_enabled = bool(getattr(org_record, "candidate_feedback_enabled", True))
 
         if data.application_id:
             application = (
@@ -136,6 +144,7 @@ def create_assessment(
                 application.workable_candidate_id if application else getattr(candidate, "workable_candidate_id", None)
             ),
             workable_job_id=(resolved_role.workable_job_id if resolved_role else None),
+            candidate_feedback_enabled=org_feedback_enabled,
         )
         db.add(assessment)
         db.flush()

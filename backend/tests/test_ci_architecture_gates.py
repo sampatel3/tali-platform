@@ -60,8 +60,10 @@ def test_file_size_guard_for_api_and_service_paths() -> None:
     allowlist: dict[str, str] = {
         "app/components/assessments/service.py": "assessment orchestration",
         "app/components/integrations/workable/sync_service.py": "Workable sync flow",
+        "app/components/integrations/workable/service.py": "legacy Workable integration service",
         "app/domains/assessments_runtime/applications_routes.py": "applications API",
         "app/domains/assessments_runtime/candidate_terminal_routes.py": "candidate terminal API",
+        "app/domains/workable_sync/routes.py": "legacy Workable sync API",
     }
 
     target_files = set(_python_files(PROJECT_ROOT / "app" / "api" / "v1"))

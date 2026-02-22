@@ -4,7 +4,8 @@ const THEME_EVENT_NAME = 'taali-theme-changed';
 export const readDarkModePreference = () => {
   if (typeof window === 'undefined') return true;
   const stored = window.localStorage.getItem(THEME_STORAGE_KEY);
-  return stored == null ? true : stored === '1';
+  if (stored != null) return stored === '1';
+  return window.matchMedia?.('(prefers-color-scheme: dark)')?.matches ?? false;
 };
 
 export const applyDarkModeClass = (darkMode) => {
@@ -38,4 +39,3 @@ export const subscribeThemePreference = (listener) => {
     window.removeEventListener(THEME_EVENT_NAME, onThemeEvent);
   };
 };
-

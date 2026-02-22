@@ -48,6 +48,10 @@ export const LoginPage = ({ onNavigate }) => {
   const [needsVerification, setNeedsVerification] = useState(false);
   const [resending, setResending] = useState(false);
   const [resent, setResent] = useState(false);
+  const [showSsoInput, setShowSsoInput] = useState(false);
+  const [ssoEmail, setSsoEmail] = useState('');
+  const [ssoChecking, setSsoChecking] = useState(false);
+  const [ssoMessage, setSsoMessage] = useState('');
 
   const handleLogin = async () => {
     setError('');
@@ -65,6 +69,29 @@ export const LoginPage = ({ onNavigate }) => {
       setError(getLoginErrorMessage(err));
     } finally {
       setLoading(false);
+    }
+  };
+
+  const handleSsoCheck = async () => {
+    const targetEmail = (ssoEmail || email || '').trim().toLowerCase();
+    if (!targetEmail) {
+      setSsoMessage('Enter your work email to continue with SSO.');
+      return;
+    }
+    setSsoChecking(true);
+    setSsoMessage('');
+    try {
+      const res = await auth.ssoCheck(targetEmail);
+      const payload = res?.data || {};
+      if (payload?.sso_enabled && payload?.redirect_url) {
+        window.location.href = payload.redirect_url;
+        return;
+      }
+      setSsoMessage(payload?.message || 'No SSO configured for this domain. Use email/password instead.');
+    } catch (err) {
+      setSsoMessage(err?.response?.data?.detail || 'Unable to check SSO right now. Please try again.');
+    } finally {
+      setSsoChecking(false);
     }
   };
 
@@ -144,6 +171,42 @@ export const LoginPage = ({ onNavigate }) => {
                 {loading ? <><Spinner size={18} /> Signing in...</> : 'Sign In'}
               </Button>
             </div>
+            <div className="my-5 flex items-center gap-3">
+              <div className="h-px flex-1 bg-[var(--taali-border)]" />
+              <span className="font-mono text-xs text-[var(--taali-muted)]">or</span>
+              <div className="h-px flex-1 bg-[var(--taali-border)]" />
+            </div>
+            <Button
+              variant="secondary"
+              className="w-full"
+              onClick={() => {
+                setShowSsoInput((prev) => !prev);
+                setSsoMessage('');
+              }}
+            >
+              Sign in with SSO
+            </Button>
+            {showSsoInput ? (
+              <div className="mt-3 space-y-2">
+                <Input
+                  type="email"
+                  placeholder="you@company.com"
+                  value={ssoEmail}
+                  onChange={(event) => setSsoEmail(event.target.value)}
+                />
+                <Button
+                  variant="secondary"
+                  className="w-full"
+                  onClick={handleSsoCheck}
+                  disabled={ssoChecking}
+                >
+                  {ssoChecking ? <><Spinner size={14} /> Checking SSO...</> : 'Continue to SSO'}
+                </Button>
+                {ssoMessage ? (
+                  <p className="text-xs text-[var(--taali-muted)]">{ssoMessage}</p>
+                ) : null}
+              </div>
+            ) : null}
             <div className="mt-6 text-center space-y-2">
               <button
                 type="button"

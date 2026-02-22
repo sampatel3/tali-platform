@@ -1,0 +1,95 @@
+{
+  "task_id": "backend_eng_api_reliability_incident",
+  "name": "Backend Engineer - API Reliability Incident",
+  "role": "backend_engineer",
+  "duration_minutes": 30,
+  "scoring_hints": {
+    "min_reading_time_seconds": 240
+  },
+  "test_runner": {
+    "command": "pytest -q --tb=no",
+    "working_dir": "/workspace/payments-api",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed",
+    "timeout_seconds": 90
+  },
+  "scenario": "You are the on-call backend engineer for a FastAPI payments service. Error rate spiked after yesterday's deploy and key checkout endpoints are timing out. Product needs a safe patch today. You have 30 minutes to investigate, implement the highest-impact reliability fix, and document remaining risks.",
+  "repo_structure": {
+    "name": "payments-api",
+    "files": {
+      "README.md": "# Payments API\\n\\nFastAPI service for checkout and webhook reconciliation.\\n\\nCurrent incident: intermittent 500s on `/v1/checkout` and duplicate webhook writes.",
+      "app/main.py": "from fastapi import FastAPI\\nfrom app.routes import router\\n\\napp = FastAPI()\\napp.include_router(router)",
+      "app/routes.py": "from fastapi import APIRouter, HTTPException\\nfrom app.store import charge_store\\n\\nrouter = APIRouter(prefix='/v1')\\n\\n@router.post('/checkout')\\ndef checkout(payload: dict):\\n    charge_id = payload.get('charge_id')\\n    amount = payload.get('amount')\\n    if not charge_id or amount is None:\\n        raise HTTPException(status_code=400, detail='missing fields')\\n    charge_store.create_charge(charge_id, amount)\\n    return {'ok': True}\\n\\n@router.post('/webhook')\\ndef webhook(event: dict):\\n    # BUG: idempotency missing\\n    charge_store.append_event(event)\\n    return {'received': True}",
+      "app/store.py": "class ChargeStore:\\n    def __init__(self):\\n        self.charges = {}\\n        self.events = []\\n\\n    def create_charge(self, charge_id, amount):\\n        # BUG: duplicate writes silently overwrite\\n        self.charges[charge_id] = {'amount': amount}\\n\\n    def append_event(self, event):\\n        self.events.append(event)\\n\\ncharge_store = ChargeStore()",
+      "tests/test_api.py": "from fastapi.testclient import TestClient\\nfrom app.main import app\\n\\nclient = TestClient(app)\\n\\ndef test_checkout_success():\\n    res = client.post('/v1/checkout', json={'charge_id': 'c-1', 'amount': 199})\\n    assert res.status_code == 200\\n\\ndef test_checkout_rejects_missing_fields():\\n    res = client.post('/v1/checkout', json={'charge_id': 'c-2'})\\n    assert res.status_code == 400\\n\\ndef test_webhook_idempotency_guard():\\n    payload = {'event_id': 'evt-1', 'charge_id': 'c-1'}\\n    first = client.post('/v1/webhook', json=payload)\\n    second = client.post('/v1/webhook', json=payload)\\n    assert first.status_code == 200\\n    assert second.status_code == 200\\n    # Should still be one logical event after duplicate delivery"
+    }
+  },
+  "evaluation_rubric": {
+    "incident_assessment": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Quickly identifies idempotency and duplicate-write failure mode with clear blast radius.",
+        "good": "Finds major reliability issue with partial risk framing.",
+        "poor": "Focuses on cosmetic changes without identifying root incident risk."
+      }
+    },
+    "reliability_design": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Implements deterministic idempotency + safe write behavior and explains rollback/monitoring.",
+        "good": "Adds defensive checks but misses one edge case.",
+        "poor": "Patch is brittle or introduces new race conditions."
+      }
+    },
+    "implementation_quality": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Clean, focused patch with tests updated and no regressions.",
+        "good": "Working patch with minor gaps.",
+        "poor": "Incomplete or untested implementation."
+      }
+    },
+    "operational_judgment": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Prioritizes user impact, includes mitigation plan and follow-up work.",
+        "good": "Reasonable prioritization with limited mitigation detail.",
+        "poor": "No operational framing or unsafe deployment recommendation."
+      }
+    },
+    "stakeholder_communication": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Clearly communicates what changed, why, and what remains risky in plain language.",
+        "good": "Communicates technical change but limited stakeholder clarity.",
+        "poor": "No clear summary for non-engineering stakeholders."
+      }
+    }
+  },
+  "expected_candidate_journey": {
+    "first_10_minutes": [
+      "Read README and route/store files before editing.",
+      "Identify duplicate webhook/idempotency risk and checkout write behavior.",
+      "Define minimal safe patch for incident containment."
+    ],
+    "minutes_10_to_22": [
+      "Implement idempotency guard and safer charge creation behavior.",
+      "Update/add tests to prove duplicate delivery handling."
+    ],
+    "final_8_minutes": [
+      "Run tests and summarize what is fixed versus deferred.",
+      "Provide next-step operational checks (monitoring/rollback)."
+    ]
+  },
+  "interviewer_signals": {
+    "strong_positive": [
+      "Reads code paths before coding.",
+      "Explains blast radius and safe deployment path.",
+      "Validates with targeted tests."
+    ],
+    "red_flags": [
+      "Skips incident analysis and jumps into broad refactor.",
+      "No idempotency handling despite duplicate webhook context.",
+      "No verification steps after code changes."
+    ]
+  }
+}

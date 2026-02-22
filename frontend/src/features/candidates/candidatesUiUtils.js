@@ -8,6 +8,10 @@ export const trimOrUndefined = (value) => {
 
 export const statusVariant = (status) => {
   const normalized = String(status || '').toLowerCase();
+  if (normalized === 'pending') return 'muted';
+  if (normalized === 'in_progress' || normalized === 'completed_due_to_timeout') return 'warning';
+  if (normalized === 'completed') return 'purple';
+  if (normalized === 'expired') return 'danger';
   if (normalized.includes('interview') || normalized.includes('review')) return 'purple';
   if (normalized.includes('reject') || normalized.includes('decline')) return 'warning';
   if (normalized.includes('offer') || normalized.includes('hired')) return 'success';

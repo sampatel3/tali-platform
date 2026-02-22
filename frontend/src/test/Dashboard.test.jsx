@@ -210,7 +210,8 @@ describe('DashboardPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('Loading assessments...')).toBeInTheDocument();
+      expect(screen.getByText('Recent Assessments')).toBeInTheDocument();
+      expect(screen.queryByText('Loading assessments...')).not.toBeInTheDocument();
     });
   });
 
@@ -271,8 +272,8 @@ describe('DashboardPage', () => {
     renderApp();
 
     await waitFor(() => {
-      // Total assessments = 3
-      expect(screen.getByText('3')).toBeInTheDocument();
+      expect(screen.getByText('1')).toBeInTheDocument();
+      expect(screen.getAllByText('2 completed').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -378,7 +379,7 @@ describe('DashboardPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('Assessments')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Assessments' })).toBeInTheDocument();
     });
 
     expect(screen.queryByText('New Assessment')).not.toBeInTheDocument();
@@ -409,7 +410,8 @@ describe('DashboardPage', () => {
     await waitFor(() => {
       const completedBadges = screen.getAllByText('Completed');
       expect(completedBadges.length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('In Progress')).toBeInTheDocument();
+      const inProgressLabels = screen.getAllByText('In Progress');
+      expect(inProgressLabels.length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -433,12 +435,12 @@ describe('DashboardPage', () => {
     });
   });
 
-  it('renders Pending button for in-progress assessments', async () => {
+  it('renders In Progress button for in-progress assessments', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('Pending')).toBeInTheDocument();
+      expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(1);
     });
   });
 

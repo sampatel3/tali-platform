@@ -1,5 +1,12 @@
 import React from 'react';
-import { AlertTriangle } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle2,
+  MessageSquare,
+  PlayCircle,
+  StickyNote,
+  TerminalSquare,
+} from 'lucide-react';
 import {
   ResponsiveContainer,
   LineChart,
@@ -23,8 +30,34 @@ const scoreColor = (score) => {
   return 'var(--taali-danger)';
 };
 
+const normalizeAssessmentStatus = (status) => {
+  const normalized = String(status || '').toLowerCase();
+  if (normalized === 'submitted' || normalized === 'graded') return 'completed';
+  if (normalized.includes('timeout')) return 'completed_due_to_timeout';
+  if (normalized.includes('progress')) return 'in_progress';
+  if (normalized.includes('expire')) return 'expired';
+  if (normalized.includes('abandon')) return 'abandoned';
+  if (normalized.includes('complete')) return 'completed';
+  return normalized || 'pending';
+};
+
+const promptEmptyMessageForStatus = (status) => {
+  if (status === 'in_progress') {
+    return 'Assessment in progress — prompt activity will populate here as the candidate works.';
+  }
+  if (status === 'completed' || status === 'completed_due_to_timeout') {
+    return 'Prompt analytics are still processing. Refresh in a moment to load prompt activity.';
+  }
+  if (status === 'expired' || status === 'abandoned') {
+    return 'This assessment was not completed, so no prompt activity is available.';
+  }
+  return 'No prompt activity is available for this assessment yet.';
+};
+
 export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
   const assessment = candidate._raw || {};
+  const assessmentStatus = normalizeAssessmentStatus(assessment.status || candidate.status);
+  const promptEmptyMessage = promptEmptyMessageForStatus(assessmentStatus);
 
   return (
     <div className="space-y-6">
@@ -91,6 +124,9 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
 
       <Panel className="p-4">
         <div className="mb-4 font-bold">Prompt Log ({(candidate.promptsList || []).length} prompts)</div>
+        <div className="mb-3 font-mono text-xs text-[var(--taali-muted)]">
+          Clarity = clear, structured asks · Specificity = concrete context and references · Efficiency = prompt-to-action quality (all /10)
+        </div>
         <div className="space-y-3">
           {(candidate.promptsList || []).map((p, i) => {
             const perPrompt = assessment.prompt_analytics?.per_prompt_scores?.[i];
@@ -104,9 +140,15 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
                   </div>
                   {perPrompt ? (
                     <div className="flex items-center gap-1">
-                      <Badge variant="purple" className="font-mono text-[11px]">C:{perPrompt.clarity}</Badge>
-                      <Badge variant="muted" className="font-mono text-[11px]">S:{perPrompt.specificity}</Badge>
-                      <Badge variant="muted" className="font-mono text-[11px]">E:{perPrompt.efficiency}</Badge>
+                      <Badge variant="purple" className="font-mono text-[11px]" title="Clarity: how understandable and structured the prompt is.">
+                        Clarity: {perPrompt.clarity}
+                      </Badge>
+                      <Badge variant="muted" className="font-mono text-[11px]" title="Specificity: how concrete the prompt context is (files, errors, code).">
+                        Specificity: {perPrompt.specificity}
+                      </Badge>
+                      <Badge variant="muted" className="font-mono text-[11px]" title="Efficiency: whether the prompt led to actionable iteration.">
+                        Efficiency: {perPrompt.efficiency}
+                      </Badge>
                     </div>
                   ) : null}
                 </div>
@@ -126,7 +168,7 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
           })}
 
           {(candidate.promptsList || []).length === 0 ? (
-            <Card className="py-8 text-center text-[var(--taali-muted)]">No prompt data available yet</Card>
+            <Card className="py-8 text-center text-[var(--taali-muted)]">{promptEmptyMessage}</Card>
           ) : null}
         </div>
       </Panel>
@@ -153,6 +195,7 @@ export const CandidateCvFitTab = ({ candidate, onDownloadCandidateDoc }) => {
   const overall = matchScores.overall || assessment.cv_job_match_score;
   const skills = matchScores.skills;
   const experience = matchScores.experience;
+  const hasCv = Boolean(assessment.candidate_cv_filename || assessment.cv_filename);
 
   return (
     <div className="space-y-6">
@@ -230,10 +273,11 @@ export const CandidateCvFitTab = ({ candidate, onDownloadCandidateDoc }) => {
         </>
       ) : (
         <Card className="p-8 text-center">
-          <div className="mb-2 text-[var(--taali-muted)]">No role fit analysis available</div>
+          <div className="mb-2 text-[var(--taali-muted)]">{hasCv ? 'No role fit analysis available' : 'Role fit: N/A — No CV'}</div>
           <div className="text-xs text-[var(--taali-muted)]">
-            Fit analysis requires both a CV and a job specification to be uploaded for this candidate.
-            Upload documents on the Candidates page.
+            {hasCv
+              ? 'Fit analysis requires both a CV and a job specification to be uploaded for this candidate. Upload documents on the Candidates page.'
+              : 'Upload a CV from the Candidates page to enable CV ↔ Job role fit scoring.'}
           </div>
         </Card>
       )}
@@ -346,20 +390,210 @@ export const CandidateCodeGitTab = ({ candidate }) => {
   );
 };
 
-export const CandidateTimelineTab = ({ candidate }) => (
-  <Panel className="p-4">
-    <div className="relative pl-7">
-      <div className="absolute bottom-0 left-2 top-0 w-0.5 bg-[var(--taali-purple)]" />
-      {candidate.timeline.map((t, i) => (
-        <div key={i} className="relative mb-5 pl-7 last:mb-0">
-          <div className="absolute -left-0 top-1 h-4 w-4 border-2 border-[var(--taali-border)] bg-[var(--taali-purple)]" />
-          <div className="mb-1 font-mono text-xs text-[var(--taali-muted)]">{t.time}</div>
-          <div className="font-bold text-[var(--taali-text)]">{t.event}</div>
-          {t.prompt ? (
-            <div className="mt-1 text-sm italic text-[var(--taali-muted)]">"{t.prompt}"</div>
-          ) : null}
+const prettifyEventName = (value) => String(value || '')
+  .replace(/_/g, ' ')
+  .replace(/\b\w/g, (chunk) => chunk.toUpperCase())
+  .trim();
+
+const timelineIconForType = (type) => {
+  if (type === 'started') return PlayCircle;
+  if (type === 'first_prompt' || type === 'ai_prompt') return MessageSquare;
+  if (type === 'code_run' || type === 'code_change') return TerminalSquare;
+  if (type === 'test_run') return CheckCircle2;
+  if (type === 'submitted') return CheckCircle2;
+  if (type === 'note') return StickyNote;
+  return PlayCircle;
+};
+
+const normalizeTimelineEvents = (timeline) => {
+  const items = Array.isArray(timeline) ? timeline : [];
+  let sawPrompt = false;
+  const normalized = items.map((raw, index) => {
+    const eventTypeRaw = String(raw?.event_type || raw?.type || raw?.event || '').toLowerCase();
+    const timestamp = raw?.timestamp || raw?.ts || raw?.time || null;
+    const promptPreview = String(raw?.preview || raw?.prompt || raw?.message || raw?.text || '').slice(0, 100);
+    const testsPassed = raw?.tests_passed;
+    const testsTotal = raw?.tests_total;
+    const linesAdded = Number(raw?.lines_added ?? raw?.code_diff_lines_added ?? 0);
+    const linesRemoved = Number(raw?.lines_removed ?? raw?.code_diff_lines_removed ?? 0);
+    const changedFile = raw?.file_path || raw?.file || null;
+
+    let type = 'event';
+    let label = raw?.event || prettifyEventName(eventTypeRaw) || 'Event';
+    if (eventTypeRaw.includes('start')) {
+      type = 'started';
+      label = 'Assessment started';
+    } else if (eventTypeRaw === 'ai_prompt') {
+      if (!sawPrompt) {
+        type = 'first_prompt';
+        label = 'First prompt';
+      } else {
+        type = 'ai_prompt';
+        label = 'AI prompt';
+      }
+      sawPrompt = true;
+    } else if (eventTypeRaw.includes('code_execute')) {
+      type = 'code_run';
+      label = 'Code run';
+    } else if (eventTypeRaw.includes('submit') || eventTypeRaw.includes('timeout')) {
+      type = 'submitted';
+      label = eventTypeRaw.includes('timeout') ? 'Submitted (timeout)' : 'Submitted';
+    } else if (eventTypeRaw.includes('terminal_usage')) {
+      type = 'usage';
+      label = 'AI usage';
+    } else if (eventTypeRaw.includes('terminal_input')) {
+      type = 'ai_prompt';
+      label = 'Terminal input';
+    } else if (eventTypeRaw.includes('terminal_output')) {
+      type = 'event';
+      label = 'Terminal output';
+    } else if (eventTypeRaw.includes('terminal_exit')) {
+      type = 'event';
+      label = 'Terminal exited';
+    } else if (eventTypeRaw.includes('error')) {
+      type = 'event';
+      label = 'Error event';
+    } else if (eventTypeRaw.includes('code') || linesAdded !== 0 || linesRemoved !== 0) {
+      type = 'code_change';
+      label = 'Code change';
+    } else if (eventTypeRaw.includes('test')) {
+      type = 'test_run';
+      label = 'Test run';
+    } else if (eventTypeRaw.includes('note') || String(raw?.event || '').toLowerCase().includes('note')) {
+      type = 'note';
+      label = 'Recruiter note';
+    }
+
+    const detailBits = [];
+    if (promptPreview && (type === 'first_prompt' || type === 'ai_prompt' || type === 'note')) {
+      detailBits.push(promptPreview);
+    }
+    if (type === 'code_run' && Number.isFinite(Number(testsPassed)) && Number.isFinite(Number(testsTotal))) {
+      detailBits.push(`Tests: ${testsPassed}/${testsTotal}`);
+    }
+    if ((type === 'code_change' || type === 'event') && (linesAdded !== 0 || linesRemoved !== 0)) {
+      detailBits.push(`Code delta: +${linesAdded} / -${Math.abs(linesRemoved)}`);
+    }
+    if (changedFile) {
+      detailBits.push(`File: ${changedFile}`);
+    }
+    if (Number.isFinite(Number(raw?.latency_ms))) {
+      detailBits.push(`Latency: ${raw.latency_ms}ms`);
+    }
+    if (raw?.author) {
+      detailBits.push(`Author: ${raw.author}`);
+    }
+
+    return {
+      id: `${index}-${eventTypeRaw || label}`,
+      label,
+      type,
+      timestamp,
+      details: detailBits,
+      raw,
+    };
+  });
+
+  const withQuietPeriods = [];
+  normalized.forEach((event, index) => {
+    const prev = normalized[index - 1];
+    if (prev?.timestamp && event?.timestamp) {
+      const prevTs = new Date(prev.timestamp).getTime();
+      const nextTs = new Date(event.timestamp).getTime();
+      if (Number.isFinite(prevTs) && Number.isFinite(nextTs)) {
+        const gapSeconds = Math.round((nextTs - prevTs) / 1000);
+        if (gapSeconds > 120) {
+          const minutes = Math.round(gapSeconds / 60);
+          withQuietPeriods.push({
+            id: `${event.id}-quiet`,
+            label: `${minutes} min quiet period`,
+            type: 'quiet',
+            timestamp: event.timestamp,
+            details: [],
+            raw: {},
+          });
+        }
+      }
+    }
+    withQuietPeriods.push(event);
+  });
+
+  return withQuietPeriods;
+};
+
+export const CandidateTimelineTab = ({ candidate }) => {
+  const events = normalizeTimelineEvents(candidate?.timeline || []);
+  const assessment = candidate?._raw || {};
+  const totalPrompts = Number(assessment.total_prompts ?? (candidate?.promptsList || []).length ?? 0);
+  const totalTokens = Number((assessment.total_input_tokens || 0) + (assessment.total_output_tokens || 0));
+  const avgPromptWords = (() => {
+    const prompts = Array.isArray(candidate?.promptsList) ? candidate.promptsList : [];
+    if (!prompts.length) return null;
+    const total = prompts.reduce((sum, prompt) => {
+      const text = String(prompt?.message || prompt?.text || '');
+      return sum + text.trim().split(/\s+/).filter(Boolean).length;
+    }, 0);
+    return Math.round(total / prompts.length);
+  })();
+
+  if (events.length === 0) {
+    return (
+      <Panel className="p-6 text-sm text-[var(--taali-muted)]">
+        Assessment activity will appear here once the candidate starts.
+      </Panel>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      <Panel className="p-4">
+        <div className="mb-2 font-bold text-[var(--taali-text)]">AI Usage Summary</div>
+        <div className="grid grid-cols-2 gap-3 font-mono text-xs text-[var(--taali-text)] md:grid-cols-3">
+          <div>Claude prompts: <span className="font-bold">{totalPrompts || 0}</span></div>
+          <div>Total tokens: <span className="font-bold">{totalTokens.toLocaleString()}</span></div>
+          <div>Avg prompt size: <span className="font-bold">{avgPromptWords != null ? `${avgPromptWords} words` : '—'}</span></div>
         </div>
-      ))}
+      </Panel>
+
+      <Panel className="p-4">
+        <div className="mb-3 font-bold text-[var(--taali-text)]">Assessment Timeline</div>
+        <div className="relative pl-8">
+          <div className="absolute bottom-0 left-3 top-0 w-0.5 bg-[var(--taali-purple)]/40" />
+          {events.map((event) => {
+            const Icon = timelineIconForType(event.type);
+            const when = event.timestamp ? new Date(event.timestamp).toLocaleString() : '—';
+            if (event.type === 'quiet') {
+              return (
+                <div key={event.id} className="relative mb-4 pl-8 last:mb-0">
+                  <div className="absolute left-0 top-1.5 h-6 w-6 border border-[var(--taali-border)] bg-[var(--taali-warning-soft)] text-[var(--taali-warning)] flex items-center justify-center">
+                    <AlertTriangle size={12} />
+                  </div>
+                  <div className="font-mono text-xs text-[var(--taali-muted)]">{event.label}</div>
+                </div>
+              );
+            }
+            return (
+              <div key={event.id} className="relative mb-5 pl-8 last:mb-0">
+                <div className="absolute left-0 top-1.5 h-6 w-6 border border-[var(--taali-border)] bg-[var(--taali-surface)] text-[var(--taali-purple)] flex items-center justify-center">
+                  <Icon size={14} />
+                </div>
+                <div className="mb-1 font-mono text-xs text-[var(--taali-muted)]">{when}</div>
+                <div className="font-bold text-[var(--taali-text)]">{event.label}</div>
+                {event.details.length > 0 ? (
+                  <details className="mt-1">
+                    <summary className="cursor-pointer font-mono text-xs text-[var(--taali-purple)]">Details</summary>
+                    <div className="mt-1 space-y-1 text-sm text-[var(--taali-muted)]">
+                      {event.details.map((detail) => (
+                        <div key={`${event.id}-${detail}`}>{detail}</div>
+                      ))}
+                    </div>
+                  </details>
+                ) : null}
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
     </div>
-  </Panel>
-);
+  );
+};

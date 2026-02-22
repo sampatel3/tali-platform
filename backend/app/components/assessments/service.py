@@ -409,13 +409,21 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         _logging.getLogger("taali.assessments").exception("Could not start code environment")
         raise HTTPException(status_code=503, detail="Could not start code environment. Please try again later.")
 
+    started_now = False
     try:
         assessment.status = AssessmentStatus.IN_PROGRESS
         if was_pending or not assessment.started_at:
             assessment.started_at = utcnow()
+            started_now = True
         # Assessments are terminal-only.
         assessment.ai_mode = required_ai_mode
         assessment.e2b_session_id = sandbox_id
+        if started_now:
+            append_assessment_timeline_event(
+                assessment,
+                "assessment_started",
+                {"type": "started"},
+            )
         db.commit()
     except Exception:
         db.rollback()
@@ -424,7 +432,6 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         except Exception:
             pass
         raise HTTPException(status_code=500, detail="Failed to start assessment session")
-
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")

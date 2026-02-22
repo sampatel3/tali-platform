@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { BriefcaseBusiness, ChevronDown, ChevronUp, FileText, Loader2, Sparkles, Download } from 'lucide-react';
+import { BriefcaseBusiness, ChevronDown, ChevronUp, FileText, Loader2, Sparkles, Download, Lock } from 'lucide-react';
 
 import {
   Badge,
@@ -9,7 +9,17 @@ import {
   Panel,
 } from '../../shared/ui/TaaliPrimitives';
 
-export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, onBatchScore, onFetchCvs, fetchCvsProgress, onRegenerateInterviewFocus }) => {
+export const RoleSummaryHeader = ({
+  role,
+  roleTasks,
+  onEditRole,
+  batchScoring,
+  onBatchScore,
+  onFetchCvs,
+  fetchCvsProgress,
+  onRegenerateInterviewFocus,
+  interviewFocusGenerating = false,
+}) => {
   if (!role) return null;
   const focus = role.interview_focus || null;
   const focusQuestions = Array.isArray(focus?.questions) ? focus.questions.slice(0, 3) : [];
@@ -17,7 +27,6 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, o
   const hasInterviewFocus = focusQuestions.length > 0;
   const [focusExpanded, setFocusExpanded] = useState(true);
   const [specExpanded, setSpecExpanded] = useState(false);
-  const [regeneratingFocus, setRegeneratingFocus] = useState(false);
   const focusPanelId = `interview-focus-panel-${role.id || 'active'}`;
   const specPanelId = `role-spec-panel-${role.id || 'active'}`;
 
@@ -279,40 +288,40 @@ export const RoleSummaryHeader = ({ role, roleTasks, onEditRole, batchScoring, o
             </div>
           ) : null}
         </Card>
+      ) : jobSpecReady && interviewFocusGenerating ? (
+        <Card className="mt-4 border-[var(--taali-border)] bg-[var(--taali-surface)] p-3 text-sm text-[var(--taali-muted)]">
+          <div className="inline-flex items-center gap-2">
+            <Loader2 size={15} className="animate-spin" />
+            Generating interview focus...
+          </div>
+        </Card>
       ) : jobSpecReady ? (
         <Card className="mt-4 border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
           <div className="flex flex-wrap items-center justify-between gap-3">
-            <span>Interview focus pointers will be generated from the job spec.</span>
+            <span>Interview focus pointers are generated automatically after job spec upload.</span>
             {onRegenerateInterviewFocus ? (
               <Button
                 type="button"
                 variant="secondary"
                 size="sm"
-                onClick={async () => {
-                  setRegeneratingFocus(true);
-                  try {
-                    await onRegenerateInterviewFocus();
-                  } finally {
-                    setRegeneratingFocus(false);
-                  }
-                }}
-                disabled={regeneratingFocus}
+                onClick={onRegenerateInterviewFocus}
               >
-                {regeneratingFocus ? (
-                  <>
-                    <Loader2 size={14} className="animate-spin" />
-                    Generating...
-                  </>
-                ) : (
-                  'Generate interview focus'
-                )}
+                Retry generation
               </Button>
             ) : null}
           </div>
         </Card>
       ) : (
-        <Card className="mt-4 border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
-          Upload a job spec to generate interview focus pointers for manual screening.
+        <Card className="mt-4 border-[var(--taali-border)] bg-[var(--taali-surface)] p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="inline-flex items-center gap-2 text-sm text-[var(--taali-muted)]">
+              <Lock size={14} />
+              Upload a job spec to unlock AI interview focus pointers.
+            </div>
+            <Button type="button" variant="secondary" size="sm" onClick={onEditRole}>
+              Upload job spec
+            </Button>
+          </div>
         </Card>
       )}
     </Panel>

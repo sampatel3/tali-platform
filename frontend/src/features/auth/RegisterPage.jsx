@@ -25,7 +25,7 @@ export const RegisterPage = ({ onNavigate }) => {
       return;
     }
     if (form.password.length < 8) {
-      setError('Password must be at least 8 characters');
+      setError('Password must be at least 8 characters long.');
       return;
     }
     setLoading(true);
@@ -39,7 +39,7 @@ export const RegisterPage = ({ onNavigate }) => {
 
       const errorMessages = {
         REGISTER_USER_ALREADY_EXISTS: 'An account with this email already exists. Sign in instead or use a different email.',
-        INVALID_PASSWORD: 'Password should be at least 8 characters',
+        INVALID_PASSWORD: 'Password must be at least 8 characters long.',
       };
       if (typeof detail === 'string' && errorMessages[detail]) {
         msg = errorMessages[detail];
@@ -50,7 +50,7 @@ export const RegisterPage = ({ onNavigate }) => {
           const m = e.msg ?? e.message;
           if (typeof m === 'string') return m;
           if (e.type === 'string_too_short' && e.ctx?.min_length === 8 && e.loc?.includes?.('password')) {
-            return 'Password must be at least 8 characters';
+            return 'Password must be at least 8 characters long.';
           }
           return m ? String(m) : JSON.stringify(e);
         });

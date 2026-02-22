@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Brain,
   Check,
@@ -7,6 +7,7 @@ import {
   Shield,
   Terminal,
 } from 'lucide-react';
+import ReactMarkdown from 'react-markdown';
 
 import { assessments as assessmentsApi } from '../../shared/api';
 import { Logo } from '../../shared/ui/Branding';
@@ -14,6 +15,33 @@ import { Logo } from '../../shared/ui/Branding';
 export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarted }) => {
   const [loadingStart, setLoadingStart] = useState(false);
   const [startError, setStartError] = useState('');
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewData, setPreviewData] = useState(null);
+  const [previewError, setPreviewError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadPreview = async () => {
+      if (!token) return;
+      setPreviewLoading(true);
+      setPreviewError('');
+      try {
+        const res = await assessmentsApi.preview(token);
+        if (cancelled) return;
+        setPreviewData(res.data || null);
+      } catch (err) {
+        if (cancelled) return;
+        setPreviewData(null);
+        setPreviewError(err?.response?.data?.detail || 'Task preview is not available yet.');
+      } finally {
+        if (!cancelled) setPreviewLoading(false);
+      }
+    };
+    loadPreview();
+    return () => {
+      cancelled = true;
+    };
+  }, [token]);
 
   const handleStart = async () => {
     if (!token) {
@@ -35,6 +63,13 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
     }
   };
 
+  const taskPreview = previewData?.task || {};
+  const scenarioMarkdown = String(taskPreview?.scenario || '').trim();
+  const expectedJourney = taskPreview?.expected_candidate_journey && typeof taskPreview.expected_candidate_journey === 'object'
+    ? taskPreview.expected_candidate_journey
+    : null;
+  const durationMinutes = Number(taskPreview?.duration_minutes ?? previewData?.duration_minutes ?? 30);
+
   return (
     <div className="min-h-screen bg-white">
       <nav className="border-b-2 border-black bg-white">
@@ -55,7 +90,26 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
           <p className="text-[var(--taali-muted)]">You&apos;ve been invited to complete a coding challenge</p>
         </div>
 
-          <div className="border-2 border-[var(--taali-border)] p-8 mb-8">
+        <div className="border-2 border-[var(--taali-border)] p-5 mb-6 bg-[var(--taali-bg)]">
+          <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-[var(--taali-muted)]">
+            <span>Role: {taskPreview?.role || 'Engineering'}</span>
+            <span>•</span>
+            <span>Duration: {durationMinutes} minutes</span>
+            {taskPreview?.name ? (
+              <>
+                <span>•</span>
+                <span>Task: {taskPreview.name}</span>
+              </>
+            ) : null}
+          </div>
+          {previewLoading ? (
+            <p className="mt-2 text-xs text-[var(--taali-muted)]">Loading task context…</p>
+          ) : previewError ? (
+            <p className="mt-2 text-xs text-[var(--taali-warning)]">{previewError}</p>
+          ) : null}
+        </div>
+
+        <div className="border-2 border-[var(--taali-border)] p-8 mb-8">
           <p className="text-lg mb-4">Welcome,</p>
           <p className="text-sm text-[var(--taali-text)] mb-4 leading-relaxed">
             You&apos;ve been invited to complete a technical assessment. This is a real coding environment where you can write, run, and test code with AI assistance.
@@ -73,6 +127,47 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
           </p>
           <p className="text-sm text-[var(--taali-muted)] mt-4">Ready when you are.</p>
         </div>
+
+        <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-[var(--taali-purple-soft)]">
+          <h2 className="text-xl font-bold mb-3">How you&apos;ll be evaluated</h2>
+          <ul className="space-y-2 font-mono text-sm text-[var(--taali-text)]">
+            <li>• Ask clear, structured questions to Claude.</li>
+            <li>• Provide concrete context (code, files, errors) when you&apos;re stuck.</li>
+            <li>• Work independently before escalating to AI.</li>
+            <li>• Apply AI responses effectively and iterate with evidence.</li>
+            <li>• Communicate reasoning, tradeoffs, and next-step judgment.</li>
+          </ul>
+          <p className="mt-3 text-xs text-[var(--taali-muted)]">
+            TAALI evaluates your collaboration process with AI, not just the final output.
+          </p>
+        </div>
+
+        {scenarioMarkdown ? (
+          <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-white">
+            <h2 className="text-xl font-bold mb-3">Task scenario</h2>
+            <div className="prose prose-sm max-w-none text-[var(--taali-text)] prose-headings:font-bold prose-code:font-mono">
+              <ReactMarkdown>{scenarioMarkdown}</ReactMarkdown>
+            </div>
+          </div>
+        ) : null}
+
+        {expectedJourney ? (
+          <div className="border-2 border-[var(--taali-border)] p-6 mb-8">
+            <h2 className="text-xl font-bold mb-3">Expected working flow</h2>
+            <div className="space-y-3">
+              {Object.entries(expectedJourney).map(([phase, bullets]) => (
+                <div key={phase}>
+                  <div className="font-mono text-xs font-bold uppercase text-[var(--taali-muted)] mb-1">{phase.replace(/_/g, ' ')}</div>
+                  <ul className="space-y-1">
+                    {(Array.isArray(bullets) ? bullets : []).map((item) => (
+                      <li key={`${phase}-${item}`} className="font-mono text-xs text-[var(--taali-text)]">• {item}</li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div className="grid md:grid-cols-3 gap-4 mb-8">
           <div className="border-2 border-[var(--taali-border)] p-6">

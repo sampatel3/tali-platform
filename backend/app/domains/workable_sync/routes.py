@@ -446,6 +446,7 @@ def workable_sync_status(
     out = {
         "workable_connected": bool(org.workable_connected),
         "active_claude_model": settings.active_claude_model,
+        "active_claude_scoring_model": settings.active_claude_scoring_model,
         "workable_last_sync_at": org.workable_last_sync_at,
         "workable_last_sync_status": org.workable_last_sync_status,
         "workable_last_sync_summary": org.workable_last_sync_summary or {},

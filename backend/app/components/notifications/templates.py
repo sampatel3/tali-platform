@@ -134,6 +134,101 @@ def results_notification_html(
 </html>"""
 
 
+def candidate_feedback_ready_html(
+    candidate_name: str,
+    org_name: str,
+    role_title: str,
+    feedback_link: str,
+) -> str:
+    return f"""\
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+</head>
+<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 20px;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+          <tr>
+            <td style="background-color:#6366f1;padding:32px 40px;text-align:center;">
+              <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:-0.5px;">{BRAND_NAME}</h1>
+              <p style="margin:4px 0 0;color:#c7d2fe;font-size:14px;">{BRAND_PRODUCT_NAME}</p>
+            </td>
+          </tr>
+          <tr>
+            <td style="padding:40px;">
+              <h2 style="margin:0 0 16px;color:#1f2937;font-size:22px;">Your AI collaboration results are ready</h2>
+              <p style="margin:0 0 12px;color:#4b5563;font-size:16px;line-height:1.6;">
+                Hi {candidate_name},
+              </p>
+              <p style="margin:0 0 20px;color:#4b5563;font-size:16px;line-height:1.6;">
+                Your {BRAND_NAME} feedback report for <strong>{role_title}</strong> at <strong>{org_name}</strong>
+                is now available.
+              </p>
+              <table cellpadding="0" cellspacing="0" style="margin:0 auto 22px;">
+                <tr>
+                  <td style="background-color:#6366f1;border-radius:6px;text-align:center;">
+                    <a href="{feedback_link}"
+                       style="display:inline-block;padding:14px 30px;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;">
+                      View Feedback Report
+                    </a>
+                  </td>
+                </tr>
+              </table>
+              <p style="margin:0 0 8px;color:#9ca3af;font-size:13px;">Or copy this link into your browser:</p>
+              <p style="margin:0;color:#6366f1;font-size:13px;word-break:break-all;">{feedback_link}</p>
+            </td>
+          </tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+</body>
+</html>"""
+
+
+def assessment_expiry_reminder_html(
+    candidate_name: str,
+    task_name: str,
+    assessment_link: str,
+    expiry_text: str,
+) -> str:
+    return f"""\
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
+<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
+  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 20px;">
+    <tr><td align="center">
+      <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
+        <tr><td style="background-color:#d97706;padding:28px;text-align:center;">
+          <h1 style="margin:0;color:#ffffff;font-size:26px;">{BRAND_NAME}</h1>
+          <p style="margin:6px 0 0;color:#ffedd5;font-size:13px;">Assessment reminder</p>
+        </td></tr>
+        <tr><td style="padding:36px;">
+          <h2 style="margin:0 0 14px;color:#1f2937;font-size:22px;">Your assessment expires soon</h2>
+          <p style="margin:0 0 10px;color:#4b5563;font-size:16px;line-height:1.6;">Hi {candidate_name},</p>
+          <p style="margin:0 0 10px;color:#4b5563;font-size:16px;line-height:1.6;">
+            This is a reminder that your <strong>{task_name}</strong> assessment link expires on <strong>{expiry_text}</strong>.
+          </p>
+          <p style="margin:0 0 22px;color:#4b5563;font-size:16px;line-height:1.6;">
+            Please complete your assessment before it expires.
+          </p>
+          <table cellpadding="0" cellspacing="0" style="margin:0 auto 20px;"><tr><td style="background-color:#6366f1;border-radius:6px;text-align:center;">
+            <a href="{assessment_link}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;">Continue Assessment</a>
+          </td></tr></table>
+          <p style="margin:0;color:#9ca3af;font-size:13px;word-break:break-all;">{assessment_link}</p>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>"""
+
+
 def email_verification_html(full_name: str, verification_link: str) -> str:
     return f"""\
 <!DOCTYPE html>

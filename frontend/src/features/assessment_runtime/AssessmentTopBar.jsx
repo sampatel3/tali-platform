@@ -11,6 +11,7 @@ export const AssessmentTopBar = ({
   terminalCapabilities,
   formatUsd,
   isTimeLow,
+  timeUrgencyLevel = 'normal',
   timeLeft,
   formatTime,
   isTimerPaused,
@@ -54,9 +55,12 @@ export const AssessmentTopBar = ({
           </div>
         )}
         <div
-          className={`flex items-center gap-2 border px-3 py-1.5 font-mono text-xs font-bold ${isTimeLow
-            ? (lightMode ? 'border-red-300 bg-red-50 text-red-700' : 'border-red-500/60 bg-red-500/20 text-red-200')
-            : (lightMode ? 'border-gray-300 bg-gray-50 text-gray-700' : 'border-white/15 bg-[#111827] text-gray-200')
+          className={`flex items-center gap-2 border px-3 py-1.5 font-mono text-xs font-bold ${
+            timeUrgencyLevel === 'danger' || isTimeLow
+              ? (lightMode ? 'border-red-300 bg-red-50 text-red-700' : 'border-red-500/60 bg-red-500/20 text-red-200')
+              : timeUrgencyLevel === 'warning'
+                ? (lightMode ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-amber-500/60 bg-amber-500/20 text-amber-200')
+                : (lightMode ? 'border-gray-300 bg-gray-50 text-gray-700' : 'border-white/15 bg-[#111827] text-gray-200')
           }`}
         >
           <Clock size={14} />
