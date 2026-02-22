@@ -561,22 +561,59 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const handleBatchScore = useCallback(async () => {
     if (!rolesApi?.batchScore || !selectedRoleId) return;
     try {
-      const res = await rolesApi.batchScore(selectedRoleId);
-      const data = res?.data || {};
-      setBatchScoring({ total: data.total_unscored || data.total || 0, scored: 0, status: 'running' });
+      let res = await rolesApi.batchScore(selectedRoleId);
+      let data = res?.data || {};
+      let includeScoredRun = Boolean(data.include_scored);
+
+      const hasPreviouslyScoredCandidates = roleApplications.some(
+        (app) => Number.isFinite(Number(app?.cv_match_score)),
+      );
+      const totalFromStart = Number(data.total_target ?? data.total_unscored ?? data.total ?? 0);
+      const noTargets = data.status === 'nothing_to_score' || totalFromStart === 0;
+
+      // If there are no unscored candidates but the role already has scored candidates,
+      // automatically switch to a full re-score run.
+      if (noTargets && hasPreviouslyScoredCandidates) {
+        res = await rolesApi.batchScore(selectedRoleId, { include_scored: true });
+        data = res?.data || {};
+        includeScoredRun = true;
+        if (data.status === 'started' || data.status === 'already_running') {
+          showToast('No unscored candidates found. Re-scoring all candidates for this role.', 'info');
+        }
+      }
+
+      const totalToProcess = Number(data.total_target ?? data.total_unscored ?? data.total ?? 0);
+      if (data.status === 'nothing_to_score' || totalToProcess === 0) {
+        showToast('No scorable candidates found. Upload CVs first, then retry.', 'info');
+        setBatchScoring(null);
+        return;
+      }
+
+      setBatchScoring({
+        total: totalToProcess,
+        scored: Number(data.scored || 0),
+        status: 'running',
+        include_scored: includeScoredRun,
+      });
 
       // Poll for progress
       const poll = setInterval(async () => {
         try {
           const statusRes = await rolesApi.batchScoreStatus(selectedRoleId);
           const s = statusRes?.data || {};
-          setBatchScoring({ total: s.total || 0, scored: s.scored || 0, status: s.status || 'running' });
+          setBatchScoring({
+            total: Number(s.total || 0),
+            scored: Number(s.scored || 0),
+            status: s.status || 'running',
+            include_scored: Boolean(s.include_scored || includeScoredRun),
+          });
           if (s.status === 'completed' || s.status === 'failed' || s.status === 'idle') {
             clearInterval(poll);
             setBatchScoring(null);
             loadRoleContext(selectedRoleId);
             if (s.status === 'completed') {
-              showToast(`Scored ${s.scored || 0} candidates.`, 'success');
+              const actionLabel = (s.include_scored || includeScoredRun) ? 'Re-scored' : 'Scored';
+              showToast(`${actionLabel} ${s.scored || 0} candidates.`, 'success');
             }
           }
         } catch {
@@ -588,7 +625,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       showToast(getErrorMessage(err, 'Failed to start batch scoring.'), 'error');
       setBatchScoring(null);
     }
-  }, [rolesApi, selectedRoleId, loadRoleContext, showToast]);
+  }, [rolesApi, roleApplications, selectedRoleId, loadRoleContext, showToast]);
 
   const handleRegenerateInterviewFocus = useCallback(async () => {
     if (!selectedRoleId) return;

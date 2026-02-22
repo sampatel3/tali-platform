@@ -140,7 +140,7 @@ export const RoleSummaryHeader = ({
               ) : (
                 <>
                   <Sparkles size={14} />
-                  Score all candidates
+                  Score/Re-score all
                 </>
               )}
             </Button>

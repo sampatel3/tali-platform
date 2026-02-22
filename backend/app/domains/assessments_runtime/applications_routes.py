@@ -568,8 +568,12 @@ _batch_score_progress: dict[int, dict] = {}
 _batch_fetch_cvs_progress: dict[int, dict] = {}
 
 
-def _run_batch_score(role_id: int, org_id: int) -> None:
-    """Background worker: score all unscored applications for a role."""
+def _run_batch_score(role_id: int, org_id: int, *, include_scored: bool = False) -> None:
+    """Background worker: score applications for a role.
+
+    By default, only unscored applications are processed. When include_scored=True,
+    already-scored applications are re-scored as well.
+    """
     db = SessionLocal()
     try:
         org = db.query(Organization).filter(Organization.id == org_id).first()
@@ -579,21 +583,30 @@ def _run_batch_score(role_id: int, org_id: int) -> None:
         if not role:
             return
 
-        apps = (
+        apps_query = (
             db.query(CandidateApplication)
             .options(joinedload(CandidateApplication.candidate), joinedload(CandidateApplication.role))
             .filter(
                 CandidateApplication.role_id == role_id,
                 CandidateApplication.organization_id == org_id,
                 CandidateApplication.deleted_at.is_(None),
-                CandidateApplication.cv_match_score.is_(None),
             )
-            .all()
         )
+        if not include_scored:
+            apps_query = apps_query.filter(CandidateApplication.cv_match_score.is_(None))
+        apps = apps_query.all()
 
         total = len(apps)
         progress = _batch_score_progress.get(role_id, {})
-        progress.update({"total": total, "scored": 0, "errors": 0, "status": "running"})
+        progress.update(
+            {
+                "total": total,
+                "scored": 0,
+                "errors": 0,
+                "status": "running",
+                "include_scored": bool(include_scored),
+            }
+        )
         _batch_score_progress[role_id] = progress
 
         job_spec_text = ((role.job_spec_text if role else None) or "").strip()
@@ -667,10 +680,18 @@ def _run_batch_score(role_id: int, org_id: int) -> None:
 @router.post("/roles/{role_id}/batch-score")
 def batch_score_role(
     role_id: int,
+    include_scored: bool = Query(
+        default=False,
+        description="When true, re-score candidates even if they already have a CV match score.",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Start background batch scoring for all unscored applications in a role."""
+    """Start background batch scoring for a role.
+
+    Default behavior scores only unscored applications. include_scored=true enables
+    a full re-score pass for the role.
+    """
     role = get_role(role_id, current_user.organization_id, db)
     if not role_has_job_spec(role):
         raise HTTPException(status_code=400, detail="Upload job spec before batch scoring")
@@ -681,29 +702,53 @@ def batch_score_role(
             "status": "already_running",
             "total": existing.get("total", 0),
             "scored": existing.get("scored", 0),
+            "include_scored": bool(existing.get("include_scored")),
         }
 
-    unscored_count = (
+    target_query = (
         db.query(CandidateApplication)
         .filter(
             CandidateApplication.role_id == role_id,
             CandidateApplication.organization_id == current_user.organization_id,
             CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.cv_match_score.is_(None),
         )
-        .count()
     )
+    if not include_scored:
+        target_query = target_query.filter(CandidateApplication.cv_match_score.is_(None))
+    target_count = target_query.count()
 
-    _batch_score_progress[role_id] = {"total": unscored_count, "scored": 0, "errors": 0, "status": "running"}
+    if target_count == 0:
+        return {
+            "status": "nothing_to_score",
+            "total": 0,
+            "total_target": 0,
+            "total_unscored": 0,
+            "include_scored": bool(include_scored),
+        }
+
+    _batch_score_progress[role_id] = {
+        "total": target_count,
+        "scored": 0,
+        "errors": 0,
+        "status": "running",
+        "include_scored": bool(include_scored),
+    }
 
     thread = threading.Thread(
         target=_run_batch_score,
         args=(role_id, current_user.organization_id),
+        kwargs={"include_scored": include_scored},
         daemon=True,
     )
     thread.start()
 
-    return {"status": "started", "total_unscored": unscored_count}
+    return {
+        "status": "started",
+        "total": target_count,
+        "total_target": target_count,
+        "total_unscored": target_count if not include_scored else 0,
+        "include_scored": bool(include_scored),
+    }
 
 
 @router.get("/roles/{role_id}/batch-score/status")
@@ -720,6 +765,7 @@ def batch_score_status(
         "total": progress.get("total", 0),
         "scored": progress.get("scored", 0),
         "errors": progress.get("errors", 0),
+        "include_scored": bool(progress.get("include_scored")),
     }
 
 

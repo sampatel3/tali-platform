@@ -30,7 +30,11 @@ export const roles = {
   },
   generateTaaliCvAi: (applicationId) => api.post(`/applications/${applicationId}/generate-taali-cv-ai`),
   enrichApplication: (applicationId) => api.post(`/applications/${applicationId}/enrich`),
-  batchScore: (roleId) => api.post(`/roles/${roleId}/batch-score`),
+  batchScore: (roleId, options = {}) => api.post(
+    `/roles/${roleId}/batch-score`,
+    null,
+    { params: { include_scored: options.include_scored === true ? true : undefined } },
+  ),
   batchScoreStatus: (roleId) => api.get(`/roles/${roleId}/batch-score/status`),
   fetchCvs: (roleId) => api.post(`/roles/${roleId}/fetch-cvs`),
   fetchCvsStatus: (roleId) => api.get(`/roles/${roleId}/fetch-cvs/status`),
