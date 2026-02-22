@@ -260,6 +260,12 @@ export const CandidatesTable = ({
       if (!cleaned) return null;
       return cleaned.endsWith('.') ? cleaned : `${cleaned}.`;
     };
+    const compactText = (value, maxChars = 180) => {
+      const cleaned = String(value || '').replace(/\s+/g, ' ').trim();
+      if (!cleaned) return '';
+      if (cleaned.length <= maxChars) return cleaned;
+      return `${cleaned.slice(0, maxChars - 1).trimEnd()}…`;
+    };
 
     const cvReasons = [];
     const requirementsReasons = [];
@@ -295,22 +301,63 @@ export const CandidatesTable = ({
       );
     }
 
+    const statusRank = (status) => {
+      if (status === 'met') return 0;
+      if (status === 'partially_met') return 1;
+      if (status === 'missing') return 2;
+      return 3;
+    };
+    const priorityRank = (priority) => {
+      if (priority === 'must_have') return 0;
+      if (priority === 'constraint') return 1;
+      if (priority === 'strong_preference') return 2;
+      return 3;
+    };
+    const requirementEvidenceReasons = requirementsAssessment
+      .map((item) => {
+        const requirement = compactText(item?.requirement, 150);
+        if (!requirement) return null;
+        const status = String(item?.status || 'unknown').toLowerCase();
+        const priority = String(item?.priority || 'nice_to_have').toLowerCase();
+        const evidence = compactText(item?.evidence, 180);
+        const impact = compactText(item?.impact, 180);
+        const whyText = evidence || impact;
+        let prefix = 'Unclear evidence';
+        if (status === 'met') prefix = 'Met';
+        else if (status === 'partially_met') prefix = 'Partially met';
+        else if (status === 'missing') prefix = 'Missing';
+
+        let sentence = `${prefix}: ${requirement}`;
+        if (whyText) {
+          sentence += ` because ${whyText}`;
+        } else if (status === 'missing') {
+          sentence += ' because no clear CV evidence was found';
+        }
+
+        return {
+          text: toReason(sentence),
+          statusRank: statusRank(status),
+          priorityRank: priorityRank(priority),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => (
+        (a.statusRank - b.statusRank)
+        || (a.priorityRank - b.priorityRank)
+      ))
+      .slice(0, 3)
+      .map((item) => item.text);
+    if (requirementEvidenceReasons.length > 0) {
+      requirementsReasons.push(...requirementEvidenceReasons);
+    }
+
     const totalReq = Number(requirementsCoverage.total || 0);
-    if (totalReq > 0) {
+    if (totalReq > 0 && requirementsReasons.length < 4) {
       requirementsReasons.push(
         toReason(
           `Coverage: ${requirementsCoverage.met ?? 0}/${totalReq} met, ${requirementsCoverage.partially_met ?? 0} partial, ${requirementsCoverage.missing ?? 0} missing`
         )
       );
-    }
-
-    const metReqs = requirementsAssessment
-      .filter((item) => ['met', 'partially_met'].includes(String(item?.status || '').toLowerCase()))
-      .map((item) => String(item?.requirement || '').trim())
-      .filter(Boolean)
-      .slice(0, 2);
-    if (metReqs.length > 0) {
-      requirementsReasons.push(toReason(`Matched recruiter requirements: ${metReqs.join('; ')}`));
     }
 
     const missingCriticalReqs = requirementsAssessment
@@ -321,16 +368,16 @@ export const CandidatesTable = ({
       .map((item) => String(item?.requirement || '').trim())
       .filter(Boolean)
       .slice(0, 2);
-    if (missingCriticalReqs.length > 0) {
+    if (missingCriticalReqs.length > 0 && requirementsReasons.length < 4) {
       requirementsReasons.push(toReason(`Critical requirement gaps: ${missingCriticalReqs.join('; ')}`));
     }
 
     const modelRationale = normalizeList(details.score_rationale_bullets, 6);
     modelRationale.forEach((bullet) => {
       const lower = bullet.toLowerCase();
-      if (lower.includes('requirement')) {
+      if (lower.includes('requirement') && requirementsReasons.length < 4) {
         requirementsReasons.push(toReason(bullet));
-      } else {
+      } else if (requirementsReasons.length < 4) {
         cvReasons.push(toReason(bullet));
       }
     });
@@ -352,7 +399,7 @@ export const CandidatesTable = ({
 
     return {
       cvFit: dedupe(cvReasons, 3),
-      additionalRequirementsFit: dedupe(requirementsReasons, 3),
+      additionalRequirementsFit: dedupe(requirementsReasons, 4),
     };
   };
 

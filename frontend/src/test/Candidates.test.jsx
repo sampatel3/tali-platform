@@ -395,11 +395,13 @@ describe('CandidatesPage', () => {
                 requirement: 'Enterprise production experience',
                 priority: 'must_have',
                 status: 'met',
+                evidence: 'CV shows 7 years delivering production systems for Fortune 500 clients.',
               },
               {
                 requirement: 'Compensation alignment to role band',
                 priority: 'constraint',
                 status: 'partially_met',
+                evidence: 'Current compensation is not listed; location and seniority suggest near target band.',
               },
             ],
           },
@@ -422,6 +424,8 @@ describe('CandidatesPage', () => {
       expect(screen.getByText('Additional requirements fit')).toBeInTheDocument();
       expect(screen.getByText(/Strong skill alignment:/)).toBeInTheDocument();
       expect(screen.getByText(/Additional requirements fit score:/)).toBeInTheDocument();
+      expect(screen.getByText(/Met: Enterprise production experience because/)).toBeInTheDocument();
+      expect(screen.getByText(/Partially met: Compensation alignment to role band because/)).toBeInTheDocument();
     });
   });
 
