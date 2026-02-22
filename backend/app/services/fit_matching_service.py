@@ -24,6 +24,53 @@ _TOKENS_PER_MILLION = 1_000_000.0
 
 _MAX_REQUIREMENTS = 16
 _MAX_RATIONALE_BULLETS = 6
+_REQUIREMENT_EVIDENCE_SNIPPETS = 2
+
+_EVIDENCE_GENERIC_PATTERNS = (
+    "matched recruiter requirement",
+    "matched recruiter requirements",
+    "meets recruiter requirement",
+    "requirement met",
+    "good fit",
+    "strong fit",
+    "aligned with requirement",
+    "appears to meet",
+)
+
+_REQUIREMENT_STOPWORDS = {
+    "a",
+    "about",
+    "above",
+    "after",
+    "all",
+    "an",
+    "and",
+    "any",
+    "are",
+    "as",
+    "at",
+    "be",
+    "because",
+    "by",
+    "for",
+    "from",
+    "has",
+    "have",
+    "in",
+    "into",
+    "is",
+    "it",
+    "of",
+    "on",
+    "or",
+    "that",
+    "the",
+    "their",
+    "this",
+    "to",
+    "via",
+    "with",
+}
 
 CV_MATCH_PROMPT = """Analyze candidate CV fit for this role.
 
@@ -72,6 +119,11 @@ def _extract_recruiter_requirements(additional_requirements: Optional[str]) -> l
         return []
 
     parts = re.split(r"[\n;]+", text)
+    if len(parts) <= 1:
+        sentence_parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", text)
+        if len(sentence_parts) > 1:
+            parts = sentence_parts
+
     items: list[str] = []
     seen: set[str] = set()
     for raw in parts:
@@ -221,6 +273,190 @@ def _normalize_requirements_assessment(value: Any) -> list[dict[str, str]]:
             }
         )
     return normalized
+
+
+def _keyword_tokens(text: str, *, max_terms: int = 16) -> list[str]:
+    if not text:
+        return []
+    raw_tokens = re.findall(r"[a-z0-9][a-z0-9+#/.\-]{1,}", text.lower())
+    out: list[str] = []
+    seen: set[str] = set()
+    for token in raw_tokens:
+        if len(token) < 3 or token in _REQUIREMENT_STOPWORDS:
+            continue
+        if token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+        if len(out) >= max_terms:
+            break
+    return out
+
+
+def _is_generic_requirement_evidence(text: str) -> bool:
+    normalized = str(text or "").strip().lower()
+    if not normalized:
+        return True
+    if len(normalized) < 18:
+        return True
+    return any(pattern in normalized for pattern in _EVIDENCE_GENERIC_PATTERNS)
+
+
+def _best_cv_snippets_for_requirement(requirement: str, cv_text: str, *, max_items: int = _REQUIREMENT_EVIDENCE_SNIPPETS) -> list[str]:
+    if not requirement or not cv_text:
+        return []
+    requirement_tokens = set(_keyword_tokens(requirement, max_terms=12))
+    if not requirement_tokens:
+        return []
+
+    candidates: list[tuple[int, int, str]] = []
+    seen: set[str] = set()
+    chunks = re.split(r"[\r\n]+|(?<=[.!?])\s+", cv_text)
+    for chunk in chunks:
+        snippet = _safe_string(chunk, max_chars=140)
+        if len(snippet) < 20:
+            continue
+        key = snippet.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+
+        snippet_tokens = set(_keyword_tokens(snippet, max_terms=24))
+        overlap = requirement_tokens.intersection(snippet_tokens)
+        if not overlap:
+            continue
+        overlap_score = len(overlap)
+        length_penalty = max(0, len(snippet) - 90)
+        candidates.append((overlap_score, -length_penalty, snippet))
+
+    candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)
+    return [snippet for _, _, snippet in candidates[:max_items]]
+
+
+def _select_related_evidence(requirement: str, values: list[str], *, max_items: int, max_chars: int) -> list[str]:
+    requirement_tokens = set(_keyword_tokens(requirement, max_terms=12))
+    if not values:
+        return []
+
+    related: list[str] = []
+    fallback: list[str] = []
+    for raw in values:
+        text = _safe_string(raw, max_chars=max_chars)
+        if not text:
+            continue
+        fallback.append(text)
+        if not requirement_tokens:
+            continue
+        text_tokens = set(_keyword_tokens(text, max_terms=20))
+        if requirement_tokens.intersection(text_tokens):
+            related.append(text)
+
+    chosen = related or fallback
+    return chosen[:max_items]
+
+
+def _default_requirement_impact(status: str) -> str:
+    if status == "met":
+        return "Supports confidence that this recruiter requirement is satisfied."
+    if status == "partially_met":
+        return "Some alignment is present; confirm the exact scope in interview."
+    if status == "missing":
+        return "Potential blocker if this requirement is non-negotiable."
+    return "Evidence is inconclusive; interview validation is recommended."
+
+
+def _enrich_requirements_assessment(
+    *,
+    requirements_assessment: list[dict[str, str]],
+    recruiter_requirements: list[str],
+    cv_text: str,
+    matching_skills: list[str],
+    experience_highlights: list[str],
+) -> list[dict[str, str]]:
+    merged: list[dict[str, str]] = list(requirements_assessment)
+    known = {
+        _safe_string(item.get("requirement"), max_chars=220).lower()
+        for item in merged
+        if _safe_string(item.get("requirement"), max_chars=220)
+    }
+    for requirement in recruiter_requirements:
+        key = requirement.lower()
+        if key in known:
+            continue
+        known.add(key)
+        merged.append(
+            {
+                "requirement": requirement,
+                "priority": "must_have",
+                "status": "unknown",
+                "evidence": "",
+                "impact": "",
+            }
+        )
+
+    enriched: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for item in merged[:_MAX_REQUIREMENTS]:
+        requirement = _safe_string(item.get("requirement"), max_chars=220)
+        if not requirement:
+            continue
+        requirement_key = requirement.lower()
+        if requirement_key in seen:
+            continue
+        seen.add(requirement_key)
+
+        priority = _normalize_requirement_priority(item.get("priority"))
+        status = _normalize_requirement_status(item.get("status"))
+        evidence = _safe_string(item.get("evidence"), max_chars=260)
+        impact = _safe_string(item.get("impact"), max_chars=220)
+
+        if _is_generic_requirement_evidence(evidence):
+            cv_snippets = _best_cv_snippets_for_requirement(requirement, cv_text)
+            if cv_snippets:
+                quoted = "; ".join(f"\"{snippet}\"" for snippet in cv_snippets)
+                evidence = _safe_string(f"CV evidence: {quoted}", max_chars=260)
+            else:
+                related_experience = _select_related_evidence(
+                    requirement,
+                    experience_highlights,
+                    max_items=2,
+                    max_chars=140,
+                )
+                related_skills = _select_related_evidence(
+                    requirement,
+                    matching_skills,
+                    max_items=4,
+                    max_chars=80,
+                )
+                if related_experience:
+                    evidence = _safe_string(
+                        f"Related CV evidence: {'; '.join(related_experience)}",
+                        max_chars=260,
+                    )
+                elif related_skills:
+                    evidence = _safe_string(
+                        f"Related CV skills: {', '.join(related_skills)}",
+                        max_chars=240,
+                    )
+                elif status in {"missing", "unknown"}:
+                    evidence = "No direct CV evidence was found for this requirement."
+                else:
+                    evidence = "Model marked this as aligned, but explicit CV evidence is limited."
+
+        if not impact:
+            impact = _default_requirement_impact(status)
+
+        enriched.append(
+            {
+                "requirement": requirement,
+                "priority": priority,
+                "status": status,
+                "evidence": evidence,
+                "impact": impact,
+            }
+        )
+
+    return enriched
 
 
 def _requirements_coverage(requirements_assessment: list[dict[str, str]]) -> dict[str, Any]:
@@ -659,27 +895,23 @@ async def calculate_cv_job_match(
                 },
             }
 
-        requirements_assessment = _normalize_requirements_assessment(
+        requirements_assessment_raw = _normalize_requirements_assessment(
             result.get("requirements_assessment")
             or result.get("requirement_assessment")
             or result.get("criteria_assessment")
         )
-        if not requirements_assessment and recruiter_requirements:
-            requirements_assessment = [
-                {
-                    "requirement": requirement,
-                    "priority": "must_have",
-                    "status": "unknown",
-                    "evidence": "",
-                    "impact": "No explicit requirement-level verdict returned by model.",
-                }
-                for requirement in recruiter_requirements[:_MAX_REQUIREMENTS]
-            ]
 
         matching_skills = _safe_string_list(result.get("matching_skills"), max_items=20, max_chars=120)
         missing_skills = _safe_string_list(result.get("missing_skills"), max_items=20, max_chars=120)
         experience_highlights = _safe_string_list(result.get("experience_highlights"), max_items=12, max_chars=180)
         concerns = _safe_string_list(result.get("concerns"), max_items=12, max_chars=220)
+        requirements_assessment = _enrich_requirements_assessment(
+            requirements_assessment=requirements_assessment_raw,
+            recruiter_requirements=recruiter_requirements,
+            cv_text=cv_truncated,
+            matching_skills=matching_skills,
+            experience_highlights=experience_highlights,
+        )
 
         model_overall_score_100 = _score_to_100(
             result.get("overall_match_score")
@@ -800,7 +1032,7 @@ async def calculate_cv_job_match(
                 "custom_requirements_used": bool(recruiter_requirements),
                 "recommendation": recommendation,
                 "score_rationale_bullets": rationale_bullets,
-                "scoring_version": "cv_fit_v2_granular_100",
+                "scoring_version": "cv_fit_v3_evidence_enriched",
                 "summary": _safe_string(result.get("summary"), max_chars=600),
                 "_claude_usage": usage_ledger,
             },

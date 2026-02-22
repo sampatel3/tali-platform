@@ -79,3 +79,68 @@ def test_fit_matching_retries_when_primary_haiku_alias_is_unavailable(monkeypatc
     assert result["match_details"]["experience_relevance_score_100"] == 72.2
     assert len(result["match_details"]["score_rationale_bullets"]) >= 2
     assert result["match_details"]["_claude_usage"]["model"] == SNAPSHOT_HAIKU_MODEL
+
+
+def test_fit_matching_enriches_requirement_evidence_when_model_output_is_sparse(monkeypatch):
+    class FakeMessages:
+        def create(self, *, model, max_tokens, system, messages):
+            payload = {
+                "overall_match_score": 79,
+                "skills_match_score": 77,
+                "experience_relevance_score": 82,
+                "requirements_match_score": 74,
+                "requirements_assessment": [
+                    {
+                        "requirement": "Production experience with enterprise systems",
+                        "priority": "must_have",
+                        "status": "met",
+                        "evidence": "",
+                        "impact": "",
+                    },
+                    {
+                        "requirement": "Salary 25k-35k AED target",
+                        "priority": "constraint",
+                        "status": "partially_met",
+                        "evidence": "Good fit overall.",
+                        "impact": "",
+                    },
+                ],
+                "matching_skills": ["Python", "FastAPI", "AWS"],
+                "missing_skills": [],
+                "experience_highlights": ["Delivered production APIs for enterprise banking clients in Abu Dhabi"],
+                "concerns": [],
+                "summary": "Strong production profile with partial salary clarity.",
+            }
+            return SimpleNamespace(
+                content=[SimpleNamespace(text=json.dumps(payload))],
+                usage=SimpleNamespace(input_tokens=160, output_tokens=140),
+            )
+
+    class FakeAnthropic:
+        def __init__(self, api_key):
+            self.messages = FakeMessages()
+
+    monkeypatch.setitem(sys.modules, "anthropic", SimpleNamespace(Anthropic=FakeAnthropic))
+
+    result = calculate_cv_job_match_sync(
+        cv_text=(
+            "Senior engineer with 8 years in production. "
+            "Delivered production APIs for enterprise banking clients in Abu Dhabi. "
+            "Led incident response and on-call for mission-critical services."
+        ),
+        job_spec_text="Need enterprise production experience and compensation fit.",
+        api_key="test-key",
+        model=PRIMARY_HAIKU_MODEL,
+        additional_requirements=(
+            "Production experience with enterprise systems; "
+            "Salary 25k-35k AED target"
+        ),
+    )
+
+    requirements = result["match_details"]["requirements_assessment"]
+    assert len(requirements) == 2
+    assert requirements[0]["evidence"].startswith("CV evidence:")
+    assert "enterprise" in requirements[0]["evidence"].lower()
+    assert requirements[1]["evidence"] != "Good fit overall."
+    assert requirements[1]["impact"] != ""
+    assert result["match_details"]["scoring_version"] == "cv_fit_v3_evidence_enriched"

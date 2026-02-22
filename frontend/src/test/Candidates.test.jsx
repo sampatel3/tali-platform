@@ -383,6 +383,10 @@ describe('CandidatesPage', () => {
             score_scale: '0-100',
             matching_skills: ['Python', 'React', 'FastAPI'],
             experience_highlights: ['Built and shipped production AI features for enterprise teams'],
+            score_rationale_bullets: [
+              'Matched recruiter requirements: Production experience; Salary 25k-35k AED target.',
+              'Recruiter requirements coverage: 2/2 met, 0 partial, 0 missing.',
+            ],
             requirements_match_score_100: 78.4,
             requirements_coverage: {
               total: 2,
@@ -426,6 +430,7 @@ describe('CandidatesPage', () => {
       expect(screen.getByText(/Additional requirements fit score:/)).toBeInTheDocument();
       expect(screen.getByText(/Met: Enterprise production experience because/)).toBeInTheDocument();
       expect(screen.getByText(/Partially met: Compensation alignment to role band because/)).toBeInTheDocument();
+      expect(screen.queryByText(/Matched recruiter requirements:/)).not.toBeInTheDocument();
     });
   });
 

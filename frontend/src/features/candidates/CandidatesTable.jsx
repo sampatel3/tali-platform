@@ -352,7 +352,7 @@ export const CandidatesTable = ({
     }
 
     const totalReq = Number(requirementsCoverage.total || 0);
-    if (totalReq > 0 && requirementsReasons.length < 4) {
+    if (totalReq > 0 && requirementsReasons.length < 4 && requirementEvidenceReasons.length === 0) {
       requirementsReasons.push(
         toReason(
           `Coverage: ${requirementsCoverage.met ?? 0}/${totalReq} met, ${requirementsCoverage.partially_met ?? 0} partial, ${requirementsCoverage.missing ?? 0} missing`
@@ -368,16 +368,25 @@ export const CandidatesTable = ({
       .map((item) => String(item?.requirement || '').trim())
       .filter(Boolean)
       .slice(0, 2);
-    if (missingCriticalReqs.length > 0 && requirementsReasons.length < 4) {
+    if (missingCriticalReqs.length > 0 && requirementsReasons.length < 4 && requirementEvidenceReasons.length === 0) {
       requirementsReasons.push(toReason(`Critical requirement gaps: ${missingCriticalReqs.join('; ')}`));
     }
 
     const modelRationale = normalizeList(details.score_rationale_bullets, 6);
+    const isGenericRequirementRationale = (text) => {
+      const lower = String(text || '').toLowerCase();
+      return (
+        lower.includes('matched recruiter requirements')
+        || lower.includes('recruiter requirements coverage')
+        || lower.startsWith('coverage:')
+      );
+    };
     modelRationale.forEach((bullet) => {
       const lower = bullet.toLowerCase();
       if (lower.includes('requirement') && requirementsReasons.length < 4) {
+        if (requirementEvidenceReasons.length > 0 && isGenericRequirementRationale(bullet)) return;
         requirementsReasons.push(toReason(bullet));
-      } else if (requirementsReasons.length < 4) {
+      } else if (cvReasons.length < 3) {
         cvReasons.push(toReason(bullet));
       }
     });
