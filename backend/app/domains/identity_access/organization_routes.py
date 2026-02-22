@@ -1,4 +1,5 @@
 import re
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
@@ -15,6 +16,7 @@ from ...schemas.organization import (
     WorkableTokenConnect,
 )
 from ...platform.config import settings
+from ...platform.secrets import encrypt_text
 from .access_policy import normalize_allowed_domains
 
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
@@ -101,6 +103,8 @@ def get_my_org(
         raise HTTPException(status_code=404, detail="Organization not found")
     if getattr(org, "candidate_feedback_enabled", None) is None:
         org.candidate_feedback_enabled = True
+    if getattr(org, "default_assessment_duration_minutes", None) is None:
+        org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
     org.workable_config = _resolved_workable_config(org)
     return org
@@ -129,6 +133,15 @@ def update_my_org(
         org.saml_metadata_url = metadata_url or None
     if data.candidate_feedback_enabled is not None:
         org.candidate_feedback_enabled = bool(data.candidate_feedback_enabled)
+    if data.default_assessment_duration_minutes is not None:
+        org.default_assessment_duration_minutes = int(data.default_assessment_duration_minutes)
+    if data.invite_email_template is not None:
+        template = (data.invite_email_template or "").strip()
+        org.invite_email_template = template or None
+    if data.custom_claude_api_key is not None:
+        key = (data.custom_claude_api_key or "").strip()
+        org.claude_api_key_encrypted = encrypt_text(key, settings.SECRET_KEY) if key else None
+        org.claude_api_key_last_rotated_at = datetime.now(timezone.utc)
     if org.saml_enabled and not org.saml_metadata_url:
         raise HTTPException(status_code=400, detail="saml_metadata_url is required when saml_enabled is true")
     try:
@@ -139,6 +152,8 @@ def update_my_org(
         raise HTTPException(status_code=500, detail="Failed to update organization")
     if getattr(org, "candidate_feedback_enabled", None) is None:
         org.candidate_feedback_enabled = True
+    if getattr(org, "default_assessment_duration_minutes", None) is None:
+        org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
     org.workable_config = _resolved_workable_config(org)
     return org

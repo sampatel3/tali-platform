@@ -19,11 +19,34 @@ import {
 } from './CandidatesUI';
 import { AssessmentInviteSheet } from './AssessmentInviteSheet';
 
+const DEFAULT_INVITE_TEMPLATE = (
+  'Hi {{candidate_name}},\n\n'
+  + "You've been invited to complete a technical assessment ({{task_name}}).\n\n"
+  + 'Start here:\n{{assessment_link}}\n\n'
+  + 'Thanks,\n{{organization_name}}\n'
+);
+
+const clampDurationMinutes = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return 30;
+  return Math.max(15, Math.min(180, Math.round(numeric)));
+};
+
+const applyInviteTemplate = (template, vars) => {
+  const source = String(template || '').trim();
+  if (!source) return '';
+  return source.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
+    const value = vars?.[key];
+    return value == null ? '' : String(value);
+  });
+};
+
 export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) => {
   const { showToast } = useToast();
   const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
   const tasksApi = apiClient.tasks;
   const assessmentsApi = apiClient.assessments;
+  const orgsApi = 'organizations' in apiClient ? apiClient.organizations : null;
 
   const [roles, setRoles] = useState([]);
   const [selectedRoleId, setSelectedRoleId] = useState('');
@@ -60,6 +83,11 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [batchScoring, setBatchScoring] = useState(null);
   const [fetchCvsProgress, setFetchCvsProgress] = useState(null);
   const [interviewFocusGeneratingRoleId, setInterviewFocusGeneratingRoleId] = useState(null);
+  const [orgPreferences, setOrgPreferences] = useState({
+    defaultAssessmentDurationMinutes: 30,
+    inviteEmailTemplate: DEFAULT_INVITE_TEMPLATE,
+    organizationName: 'TAALI',
+  });
   const interviewFocusAutoAttemptedRef = useRef(new Set());
 
   const selectedRole = useMemo(
@@ -174,6 +202,30 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     loadRoles();
     loadTasks();
   }, [loadRoles, loadTasks]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const loadOrgPreferences = async () => {
+      if (!orgsApi?.get) return;
+      try {
+        const res = await orgsApi.get();
+        if (cancelled) return;
+        const data = res?.data || {};
+        setOrgPreferences({
+          defaultAssessmentDurationMinutes: clampDurationMinutes(data.default_assessment_duration_minutes),
+          inviteEmailTemplate: String(data.invite_email_template || '').trim() || DEFAULT_INVITE_TEMPLATE,
+          organizationName: String(data.name || 'TAALI').trim() || 'TAALI',
+        });
+      } catch {
+        if (cancelled) return;
+        setOrgPreferences((prev) => ({ ...prev }));
+      }
+    };
+    loadOrgPreferences();
+    return () => {
+      cancelled = true;
+    };
+  }, [orgsApi]);
 
   useEffect(() => {
     const onVisible = () => {
@@ -402,7 +454,11 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       if (!application?.cv_filename) {
         showToast('No CV uploaded — Role fit scoring will show N/A.', 'info');
       }
-      const res = await rolesApi.createAssessment(application.id, { task_id: taskNumber });
+      const durationMinutes = clampDurationMinutes(orgPreferences.defaultAssessmentDurationMinutes);
+      const res = await rolesApi.createAssessment(application.id, {
+        task_id: taskNumber,
+        duration_minutes: durationMinutes,
+      });
       await loadRoleContext(selectedRoleId);
       const created = res?.data || {};
       const candidateEmail = created.candidate_email || application?.candidate_email || '';
@@ -420,12 +476,20 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         link = `${window.location.origin}/assess/${created.token}`;
       }
       const subject = `Technical Assessment Invitation — ${taskName}`;
-      const body = (
+      const fallbackBody = (
         `Hi ${candidateName || 'there'},\n\n`
         + `You've been invited to complete a technical assessment (${taskName}).\n\n`
         + `Start here:\n${link}\n\n`
-        + `Thanks,\n${selectedRole?.name || 'TAALI'}\n`
+        + `Thanks,\n${orgPreferences.organizationName || selectedRole?.name || 'TAALI'}\n`
       );
+      const body = applyInviteTemplate(orgPreferences.inviteEmailTemplate, {
+        candidate_name: candidateName || 'there',
+        candidate_email: candidateEmail || '',
+        assessment_link: link,
+        task_name: taskName,
+        role_name: selectedRole?.name || '',
+        organization_name: orgPreferences.organizationName || 'TAALI',
+      }) || fallbackBody;
       setInviteDraft({
         to: candidateEmail,
         subject,

@@ -50,6 +50,44 @@ def _task_extra_data(task: Task) -> Dict[str, Any]:
     return extra if isinstance(extra, dict) else {}
 
 
+def _resolve_calibration_prompt(task: Task, settings_obj: Any) -> str:
+    task_extra = _task_extra_data(task)
+    return (
+        (getattr(task, "calibration_prompt", None) or "").strip()
+        or str(task_extra.get("calibration_prompt") or "").strip()
+        or (getattr(settings_obj, "DEFAULT_CALIBRATION_PROMPT", "") or "").strip()
+    )
+
+
+def _resolve_calibration_subject_prompt(assessment: Assessment, prompts: List[Dict[str, Any]]) -> str:
+    warmup_prompt = str(getattr(assessment, "calibration_warmup_prompt", "") or "").strip()
+    if warmup_prompt:
+        return warmup_prompt
+    first_prompt = str((prompts[0] or {}).get("message") if prompts else "" or "").strip()
+    return first_prompt
+
+
+def _heuristic_calibration_score(prompt_text: str) -> float | None:
+    text = str(prompt_text or "").strip()
+    if not text:
+        return None
+    words = len([token for token in re.split(r"\s+", text) if token.strip()])
+    has_question = "?" in text
+    has_code_ref = bool(re.search(r"```|line\s+\d+|[A-Za-z0-9_]+\.(py|js|ts|tsx|jsx)\b|traceback|error", text, re.I))
+    score = 3.5
+    if words >= 15:
+        score += 2.0
+    if words >= 35:
+        score += 1.5
+    if has_question:
+        score += 1.5
+    if has_code_ref:
+        score += 1.5
+    if words < 6:
+        score -= 2.0
+    return round(max(0.0, min(10.0, score)), 2)
+
+
 def _extract_process_output(result: Any) -> tuple[str, str, int | None]:
     if isinstance(result, dict):
         stdout = str(result.get("stdout") or result.get("out") or "")
@@ -292,6 +330,10 @@ def submit_assessment_impl(
     heuristics = compute_all_heuristics(assessment, prompts)
     calibration_prompt = None
     calibration_score = None
+    calibration_subject_prompt = None
+    if not settings_obj.MVP_DISABLE_CALIBRATION:
+        calibration_prompt = _resolve_calibration_prompt(task, settings_obj)
+        calibration_subject_prompt = _resolve_calibration_subject_prompt(assessment, prompts)
 
     if settings_obj.MVP_DISABLE_CLAUDE_SCORING:
         length_stats = heuristics.get("prompt_length_stats", {}) or {}
@@ -332,6 +374,8 @@ def submit_assessment_impl(
             "requirement_comprehension": round(requirement_comprehension_score, 2),
         }
         prompt_analysis["fraud_flags"] = copy_paste.get("flags", []) or []
+        if calibration_prompt and calibration_subject_prompt:
+            calibration_score = _heuristic_calibration_score(calibration_subject_prompt)
     else:
         claude = claude_service_cls(settings_obj.ANTHROPIC_API_KEY)
         try:
@@ -356,19 +400,18 @@ def submit_assessment_impl(
                 pass
         ai_scores = prompt_analysis.get("scores", {})
 
-        if not settings_obj.MVP_DISABLE_CALIBRATION:
-            calibration_prompt = (
-                task.calibration_prompt or settings_obj.DEFAULT_CALIBRATION_PROMPT or ""
-            ).strip()
-            if calibration_prompt and prompts:
-                try:
-                    calibration = claude.analyze_prompt_session([prompts[0]], calibration_prompt)
-                    if calibration.get("success"):
-                        raw_score = calibration.get("scores", {}).get("prompt_clarity")
-                        if raw_score is not None:
-                            calibration_score = float(raw_score)
-                except Exception:
-                    calibration_score = None
+        if calibration_prompt and calibration_subject_prompt:
+            try:
+                calibration = claude.analyze_prompt_session(
+                    [{"message": calibration_subject_prompt}],
+                    calibration_prompt,
+                )
+                if calibration.get("success"):
+                    raw_score = calibration.get("scores", {}).get("prompt_clarity")
+                    if raw_score is not None:
+                        calibration_score = float(raw_score)
+            except Exception:
+                calibration_score = _heuristic_calibration_score(calibration_subject_prompt)
 
     # --- 3. CV-Job fit matching (single Claude call — done first so it feeds into scoring) ---
     scoring_errors = []

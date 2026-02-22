@@ -105,6 +105,12 @@ export const CandidateDetailPage = ({
   const normalizedStatus = String(candidate?._raw?.status || candidate?.status || '').toLowerCase();
   const canResendInvite = normalizedStatus === 'pending' || normalizedStatus === 'expired';
   const canGenerateInterviewGuide = normalizedStatus === 'completed' || normalizedStatus === 'completed_due_to_timeout';
+  const hasCvOnFile = Boolean(
+    candidate?._raw?.candidate_cv_filename
+    || candidate?._raw?.cv_filename
+    || candidate?._raw?.cv_uploaded
+  );
+  const canRequestCvUpload = Boolean(!hasCvOnFile && assessmentId && candidate?.email);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -320,6 +326,19 @@ export const CandidateDetailPage = ({
       showToast('Assessment invite resent.', 'success');
     } catch (err) {
       showToast(err?.response?.data?.detail || 'Failed to resend invite.', 'error');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const handleRequestCvUpload = async () => {
+    if (!assessmentId) return;
+    setBusyAction('request-cv');
+    try {
+      await assessmentsApi.resend(assessmentId);
+      showToast('CV request sent. The candidate can upload their CV from the assessment link.', 'success');
+    } catch (err) {
+      showToast(err?.response?.data?.detail || 'Failed to send CV request.', 'error');
     } finally {
       setBusyAction('');
     }
@@ -666,6 +685,11 @@ export const CandidateDetailPage = ({
                 {busyAction === 'resend' ? 'Resending...' : 'Resend Invite'}
               </Button>
             ) : null}
+            {canRequestCvUpload ? (
+              <Button type="button" variant="secondary" className="font-mono" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
+                {busyAction === 'request-cv' ? 'Sending CV request...' : 'Request CV Upload'}
+              </Button>
+            ) : null}
             <Button type="button" variant="danger" className="font-mono" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
               {busyAction === 'delete' ? 'Deleting...' : 'Delete'}
             </Button>
@@ -741,7 +765,12 @@ export const CandidateDetailPage = ({
         ) : null}
 
         {activeTab === 'cv-fit' ? (
-          <CandidateCvFitTab candidate={candidate} onDownloadCandidateDoc={handleDownloadCandidateDoc} />
+          <CandidateCvFitTab
+            candidate={candidate}
+            onDownloadCandidateDoc={handleDownloadCandidateDoc}
+            onRequestCvUpload={canRequestCvUpload ? handleRequestCvUpload : null}
+            requestingCvUpload={busyAction === 'request-cv'}
+          />
         ) : null}
 
         {activeTab === 'evaluate' ? (

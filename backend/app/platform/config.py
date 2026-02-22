@@ -180,7 +180,7 @@ class Settings(BaseSettings):
     MVP_DISABLE_WORKABLE: bool = True
     MVP_DISABLE_CELERY: bool = True
     MVP_DISABLE_CLAUDE_SCORING: bool = True
-    MVP_DISABLE_CALIBRATION: bool = True
+    MVP_DISABLE_CALIBRATION: bool = False
     MVP_DISABLE_PROCTORING: bool = True
     SCORING_V2_ENABLED: bool = False
 

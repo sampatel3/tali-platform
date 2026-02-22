@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
   CheckCircle2,
@@ -188,7 +188,12 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
   );
 };
 
-export const CandidateCvFitTab = ({ candidate, onDownloadCandidateDoc }) => {
+export const CandidateCvFitTab = ({
+  candidate,
+  onDownloadCandidateDoc,
+  onRequestCvUpload = null,
+  requestingCvUpload = false,
+}) => {
   const assessment = candidate._raw || {};
   const cvMatch = assessment.cv_job_match_details || assessment.prompt_analytics?.cv_job_match?.details || {};
   const matchScores = assessment.prompt_analytics?.cv_job_match || {};
@@ -279,6 +284,19 @@ export const CandidateCvFitTab = ({ candidate, onDownloadCandidateDoc }) => {
               ? 'Fit analysis requires both a CV and a job specification to be uploaded for this candidate. Upload documents on the Candidates page.'
               : 'Upload a CV from the Candidates page to enable CV ↔ Job role fit scoring.'}
           </div>
+          {!hasCv && typeof onRequestCvUpload === 'function' ? (
+            <div className="mt-4">
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={onRequestCvUpload}
+                disabled={requestingCvUpload}
+              >
+                {requestingCvUpload ? 'Sending CV request...' : 'Request CV upload from candidate'}
+              </Button>
+            </div>
+          ) : null}
         </Card>
       )}
 
@@ -521,9 +539,96 @@ const normalizeTimelineEvents = (timeline) => {
   return withQuietPeriods;
 };
 
+const snapshotLabel = (promptIndex, stage) => {
+  if (stage === 'final') return 'Final submission';
+  const humanIndex = Number.isFinite(Number(promptIndex)) ? Number(promptIndex) + 1 : null;
+  if (humanIndex == null) return stage === 'before' ? 'Code state (before)' : 'Code state (after)';
+  return stage === 'before' ? `Prompt #${humanIndex} · before` : `Prompt #${humanIndex} · after`;
+};
+
+const buildReplayFrames = (rawSnapshots) => {
+  const snapshots = Array.isArray(rawSnapshots) ? rawSnapshots : [];
+  const frames = [];
+  let frameCounter = 0;
+  const pushFrame = ({ stage, promptIndex = null, code }) => {
+    if (typeof code !== 'string') return;
+    const normalizedCode = code;
+    if (frames.length > 0 && frames[frames.length - 1].code === normalizedCode) return;
+    frames.push({
+      id: `frame-${frameCounter}`,
+      order: frameCounter,
+      stage,
+      promptIndex,
+      label: snapshotLabel(promptIndex, stage),
+      code: normalizedCode,
+    });
+    frameCounter += 1;
+  };
+
+  snapshots.forEach((entry) => {
+    if (!entry || typeof entry !== 'object') return;
+    if (typeof entry.final === 'string') return;
+    const promptIndex = Number.isFinite(Number(entry.prompt_index)) ? Number(entry.prompt_index) : null;
+    if (typeof entry.code_before === 'string') {
+      pushFrame({ stage: 'before', promptIndex, code: entry.code_before });
+    }
+    if (typeof entry.code_after === 'string') {
+      pushFrame({ stage: 'after', promptIndex, code: entry.code_after });
+    }
+  });
+
+  const finalSnapshot = snapshots.find((entry) => entry && typeof entry === 'object' && typeof entry.final === 'string');
+  if (finalSnapshot && typeof finalSnapshot.final === 'string') {
+    pushFrame({ stage: 'final', promptIndex: null, code: finalSnapshot.final });
+  }
+
+  return frames;
+};
+
+const buildReplayEventIndexMap = (events, frameCount) => {
+  if (!Array.isArray(events) || frameCount <= 0) return {};
+  const map = {};
+  let promptProgress = 0;
+  const promptLikeTypes = new Set(['first_prompt', 'ai_prompt', 'code_change', 'code_run']);
+
+  events.forEach((event, index) => {
+    if (promptLikeTypes.has(event.type)) {
+      promptProgress += 1;
+    }
+    if (event.type === 'started') {
+      map[event.id] = 0;
+      return;
+    }
+    if (event.type === 'submitted') {
+      map[event.id] = frameCount - 1;
+      return;
+    }
+    if (promptProgress > 0) {
+      map[event.id] = Math.min(frameCount - 1, Math.max(0, promptProgress * 2 - 1));
+      return;
+    }
+    const ratio = index / Math.max(1, events.length - 1);
+    map[event.id] = Math.max(0, Math.min(frameCount - 1, Math.round(ratio * (frameCount - 1))));
+  });
+  return map;
+};
+
 export const CandidateTimelineTab = ({ candidate }) => {
-  const events = normalizeTimelineEvents(candidate?.timeline || []);
+  const events = useMemo(() => normalizeTimelineEvents(candidate?.timeline || []), [candidate?.timeline]);
   const assessment = candidate?._raw || {};
+  const replayFrames = useMemo(
+    () => buildReplayFrames(assessment.code_snapshots),
+    [assessment.code_snapshots]
+  );
+  const replayEventIndexMap = useMemo(
+    () => buildReplayEventIndexMap(events, replayFrames.length),
+    [events, replayFrames.length]
+  );
+  const [activeReplayIndex, setActiveReplayIndex] = useState(0);
+  useEffect(() => {
+    setActiveReplayIndex(0);
+  }, [candidate?.id, replayFrames.length]);
+  const selectedReplayFrame = replayFrames[Math.max(0, Math.min(activeReplayIndex, replayFrames.length - 1))] || null;
   const totalPrompts = Number(assessment.total_prompts ?? (candidate?.promptsList || []).length ?? 0);
   const totalTokens = Number((assessment.total_input_tokens || 0) + (assessment.total_output_tokens || 0));
   const avgPromptWords = (() => {
@@ -555,6 +660,34 @@ export const CandidateTimelineTab = ({ candidate }) => {
         </div>
       </Panel>
 
+      {replayFrames.length > 0 ? (
+        <Panel className="p-4">
+          <div className="mb-1 font-bold text-[var(--taali-text)]">Replay mode</div>
+          <div className="mb-3 text-xs text-[var(--taali-muted)]">
+            Click any timeline replay button to jump to the closest code state.
+          </div>
+          <div className="mb-3 flex flex-wrap gap-2">
+            {replayFrames.map((frame, index) => (
+              <Button
+                key={frame.id}
+                type="button"
+                variant={index === activeReplayIndex ? 'primary' : 'secondary'}
+                size="sm"
+                onClick={() => setActiveReplayIndex(index)}
+              >
+                {frame.label}
+              </Button>
+            ))}
+          </div>
+          <div className="mb-1 font-mono text-xs text-[var(--taali-muted)]">
+            {selectedReplayFrame?.label || 'Code state'}
+          </div>
+          <pre className="max-h-96 overflow-auto whitespace-pre-wrap bg-[#151122] p-3 font-mono text-xs text-gray-200">
+            {(selectedReplayFrame?.code || '').trim() || '# No code snapshot captured for this step'}
+          </pre>
+        </Panel>
+      ) : null}
+
       <Panel className="p-4">
         <div className="mb-3 font-bold text-[var(--taali-text)]">Assessment Timeline</div>
         <div className="relative pl-8">
@@ -578,7 +711,22 @@ export const CandidateTimelineTab = ({ candidate }) => {
                   <Icon size={14} />
                 </div>
                 <div className="mb-1 font-mono text-xs text-[var(--taali-muted)]">{when}</div>
-                <div className="font-bold text-[var(--taali-text)]">{event.label}</div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="font-bold text-[var(--taali-text)]">{event.label}</div>
+                  {replayFrames.length > 0 ? (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="sm"
+                      onClick={() => {
+                        const replayIndex = replayEventIndexMap[event.id] ?? 0;
+                        setActiveReplayIndex(replayIndex);
+                      }}
+                    >
+                      Replay
+                    </Button>
+                  ) : null}
+                </div>
                 {event.details.length > 0 ? (
                   <details className="mt-1">
                     <summary className="cursor-pointer font-mono text-xs text-[var(--taali-purple)]">Details</summary>

@@ -3,6 +3,7 @@
   "name": "Engineering Manager - PR Review and Risk Judgment",
   "role": "engineering_manager",
   "duration_minutes": 20,
+  "calibration_prompt": "You have 2 minutes. Ask Claude to pressure-test a release recommendation using a short PR diff. Include policy constraints and what evidence would change your decision.",
   "scoring_hints": {
     "min_reading_time_seconds": 180
   },

@@ -37,6 +37,7 @@ from ...services.candidate_feedback_engine import (
 from ...services.task_spec_loader import candidate_rubric_view
 from ...schemas.assessment import (
     AssessmentStart,
+    AssessmentStartRequest,
     CodeExecutionRequest,
     DemoAssessmentStartRequest,
     SubmitRequest,
@@ -166,12 +167,20 @@ def _feedback_payload_response(assessment: Assessment) -> dict:
 
 
 @router.post("/token/{token}/start", response_model=AssessmentStart)
-def start_assessment(token: str, db: Session = Depends(get_db)):
+def start_assessment(
+    token: str,
+    payload: AssessmentStartRequest | None = None,
+    db: Session = Depends(get_db),
+):
     """Candidate starts or resumes an assessment via token."""
     assessment = db.query(Assessment).filter(Assessment.token == token).with_for_update().first()
     if not assessment:
         raise HTTPException(status_code=404, detail="Invalid assessment token")
-    return start_or_resume_assessment(assessment, db)
+    return start_or_resume_assessment(
+        assessment,
+        db,
+        calibration_warmup_prompt=(payload.calibration_warmup_prompt if payload else None),
+    )
 
 
 @router.get("/token/{token}/preview")
@@ -188,6 +197,11 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Task not found")
 
     extra_data = task.extra_data if isinstance(task.extra_data, dict) else {}
+    task_calibration_prompt = (
+        (task.calibration_prompt or "").strip()
+        or str(extra_data.get("calibration_prompt") or "").strip()
+        or (settings.DEFAULT_CALIBRATION_PROMPT or "").strip()
+    )
     return {
         "assessment_id": assessment.id,
         "token": assessment.token,
@@ -202,6 +216,12 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
             "duration_minutes": assessment.duration_minutes,
             "rubric_categories": candidate_rubric_view(task.evaluation_rubric),
             "expected_candidate_journey": extra_data.get("expected_candidate_journey"),
+            "calibration_enabled": not settings.MVP_DISABLE_CALIBRATION,
+            "calibration_prompt": task_calibration_prompt if not settings.MVP_DISABLE_CALIBRATION else None,
+            "has_cv_on_file": bool(
+                assessment.cv_filename
+                or (assessment.candidate.cv_filename if getattr(assessment, "candidate", None) else None)
+            ),
         },
     }
 

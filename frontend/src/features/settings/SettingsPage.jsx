@@ -29,6 +29,7 @@ const WORKABLE_SCOPE_OPTIONS = [
 ];
 
 const WORKABLE_REQUIRED_SCOPES = ['r_jobs', 'r_candidates'];
+const DEFAULT_INVITE_TEMPLATE = 'Hi {{candidate_name}}, your TAALI assessment is ready: {{assessment_link}}';
 
 const normalizeWorkableError = (input) => {
   const raw = (input || '').toString();
@@ -93,22 +94,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [inviteName, setInviteName] = useState('');
   const [inviteLoading, setInviteLoading] = useState(false);
   const [darkMode, setDarkMode] = useState(() => readDarkModePreference());
-  const [defaultAssessmentMinutes, setDefaultAssessmentMinutes] = useState(() => {
-    if (typeof window === 'undefined') return 30;
-    const raw = Number(window.localStorage.getItem('taali_pref_default_duration_minutes') || 30);
-    return Number.isFinite(raw) && raw >= 15 && raw <= 180 ? raw : 30;
-  });
-  const [customClaudeApiKey, setCustomClaudeApiKey] = useState(() => {
-    if (typeof window === 'undefined') return '';
-    return window.localStorage.getItem('taali_pref_custom_claude_api_key') || '';
-  });
-  const [emailTemplatePreview, setEmailTemplatePreview] = useState(() => {
-    if (typeof window === 'undefined') return 'Hi {{candidate_name}}, your TAALI assessment is ready: {{assessment_link}}';
-    return (
-      window.localStorage.getItem('taali_pref_email_template_preview')
-      || 'Hi {{candidate_name}}, your TAALI assessment is ready: {{assessment_link}}'
-    );
-  });
+  const [defaultAssessmentMinutes, setDefaultAssessmentMinutes] = useState(30);
+  const [customClaudeApiKey, setCustomClaudeApiKey] = useState('');
+  const [customClaudeApiKeyTouched, setCustomClaudeApiKeyTouched] = useState(false);
+  const [hasCustomClaudeApiKey, setHasCustomClaudeApiKey] = useState(false);
+  const [emailTemplatePreview, setEmailTemplatePreview] = useState(DEFAULT_INVITE_TEMPLATE);
+  const [preferencesSaving, setPreferencesSaving] = useState(false);
+  const [preferencesSavedAt, setPreferencesSavedAt] = useState(null);
   const [enterpriseSaving, setEnterpriseSaving] = useState(false);
   const [enterpriseForm, setEnterpriseForm] = useState({
     allowedEmailDomains: '',
@@ -186,21 +178,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   }, [darkMode]);
 
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem('taali_pref_default_duration_minutes', String(defaultAssessmentMinutes));
-  }, [defaultAssessmentMinutes]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem('taali_pref_custom_claude_api_key', customClaudeApiKey);
-  }, [customClaudeApiKey]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined') return;
-    window.localStorage.setItem('taali_pref_email_template_preview', emailTemplatePreview);
-  }, [emailTemplatePreview]);
-
-  useEffect(() => {
     return subscribeThemePreference((next) => {
       setDarkMode(Boolean(next));
     });
@@ -232,6 +209,26 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       subdomain: prev.subdomain || orgData.workable_subdomain || '',
     }));
   }, [orgData]);
+
+  useEffect(() => {
+    if (!orgData) return;
+    const configuredMinutes = Number(orgData.default_assessment_duration_minutes ?? 30);
+    const clampedMinutes = Number.isFinite(configuredMinutes)
+      ? Math.max(15, Math.min(180, configuredMinutes))
+      : 30;
+    setDefaultAssessmentMinutes(clampedMinutes);
+    setEmailTemplatePreview(
+      String(orgData.invite_email_template || '').trim() || DEFAULT_INVITE_TEMPLATE
+    );
+    setHasCustomClaudeApiKey(Boolean(orgData.has_custom_claude_api_key));
+    setCustomClaudeApiKey('');
+    setCustomClaudeApiKeyTouched(false);
+  }, [
+    orgData?.id,
+    orgData?.default_assessment_duration_minutes,
+    orgData?.invite_email_template,
+    orgData?.has_custom_claude_api_key,
+  ]);
 
   const handleAddCredits = async (packId) => {
     const base = `${window.location.origin}/settings`;
@@ -589,6 +586,40 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       showToast(err?.response?.data?.detail || 'Failed to save enterprise settings', 'error');
     } finally {
       setEnterpriseSaving(false);
+    }
+  };
+
+  const handleSavePreferences = async () => {
+    const clampedMinutes = Math.max(15, Math.min(180, Number(defaultAssessmentMinutes || 30)));
+    const trimmedTemplate = String(emailTemplatePreview || '').trim();
+    const payload = {
+      default_assessment_duration_minutes: clampedMinutes,
+      invite_email_template: trimmedTemplate || null,
+    };
+    if (customClaudeApiKeyTouched) {
+      payload.custom_claude_api_key = String(customClaudeApiKey || '').trim();
+    }
+
+    setPreferencesSaving(true);
+    try {
+      const res = await orgsApi.update(payload);
+      const updated = res?.data || {};
+      setOrgData((prev) => ({ ...(prev || {}), ...updated }));
+      setDefaultAssessmentMinutes(
+        Math.max(15, Math.min(180, Number(updated.default_assessment_duration_minutes ?? clampedMinutes)))
+      );
+      setEmailTemplatePreview(
+        String(updated.invite_email_template || '').trim() || DEFAULT_INVITE_TEMPLATE
+      );
+      setHasCustomClaudeApiKey(Boolean(updated.has_custom_claude_api_key));
+      setCustomClaudeApiKey('');
+      setCustomClaudeApiKeyTouched(false);
+      setPreferencesSavedAt(new Date().toISOString());
+      showToast('Preferences saved.', 'success');
+    } catch (err) {
+      showToast(err?.response?.data?.detail || 'Failed to save preferences', 'error');
+    } finally {
+      setPreferencesSaving(false);
     }
   };
 
@@ -1245,23 +1276,44 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     />
                   </label>
                   <p className="mt-2 text-xs text-[var(--taali-muted)]">
-                    Stored locally in this browser. New assessments can use this as your default duration.
+                    Applied to newly created assessments.
                   </p>
                 </Panel>
 
                 <Panel className="p-6">
                   <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Custom Claude API Key (Optional)</h3>
                   <label className="block">
-                    <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">API key override</span>
+                    <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Rotate API key</span>
                     <Input
                       type="password"
-                      placeholder="sk-ant-..."
+                      placeholder="Leave blank to keep current key"
                       value={customClaudeApiKey}
-                      onChange={(event) => setCustomClaudeApiKey(event.target.value)}
+                      onChange={(event) => {
+                        setCustomClaudeApiKey(event.target.value);
+                        setCustomClaudeApiKeyTouched(true);
+                      }}
                     />
                   </label>
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Badge variant={hasCustomClaudeApiKey ? 'success' : 'muted'} className="font-mono text-[11px]">
+                      {hasCustomClaudeApiKey ? 'Configured' : 'Not configured'}
+                    </Badge>
+                    {hasCustomClaudeApiKey ? (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          setCustomClaudeApiKey('');
+                          setCustomClaudeApiKeyTouched(true);
+                        }}
+                      >
+                        Clear stored key
+                      </Button>
+                    ) : null}
+                  </div>
                   <p className="mt-2 text-xs text-[var(--taali-muted)]">
-                    Stored locally for now. Server-side key management can be enabled for enterprise workspaces.
+                    Key is stored encrypted server-side for this workspace.
                   </p>
                 </Panel>
 
@@ -1277,6 +1329,24 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   <p className="mt-2 text-xs text-[var(--taali-muted)]">
                     Supports placeholders like {'{{candidate_name}}'} and {'{{assessment_link}}'}.
                   </p>
+                </Panel>
+
+                <Panel className="p-6">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div className="font-mono text-xs text-[var(--taali-muted)]">
+                      {preferencesSavedAt
+                        ? `Last saved ${new Date(preferencesSavedAt).toLocaleTimeString()}`
+                        : 'Save to apply workspace preferences'}
+                    </div>
+                    <Button
+                      type="button"
+                      variant="primary"
+                      disabled={preferencesSaving}
+                      onClick={handleSavePreferences}
+                    >
+                      {preferencesSaving ? 'Saving…' : 'Save preferences'}
+                    </Button>
+                  </div>
                 </Panel>
               </div>
             )}

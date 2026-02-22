@@ -74,6 +74,7 @@ class Assessment(Base):
     error_recovery_score = Column(Float, nullable=True)
     requirement_comprehension_score = Column(Float, nullable=True)
     calibration_score = Column(Float, nullable=True)
+    calibration_warmup_prompt = Column(Text, nullable=True)
     prompt_fraud_flags = Column(JSON, nullable=True)
     prompt_analytics = Column(JSON, nullable=True)
     browser_focus_ratio = Column(Float, nullable=True)

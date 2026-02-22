@@ -3,6 +3,7 @@
   "name": "Backend Engineer - API Reliability Incident",
   "role": "backend_engineer",
   "duration_minutes": 30,
+  "calibration_prompt": "You have 2 minutes. Ask Claude for a minimal reproducible FastAPI failing test for duplicate webhook events. Include endpoint, payload example, and expected behavior.",
   "scoring_hints": {
     "min_reading_time_seconds": 240
   },

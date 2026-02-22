@@ -166,21 +166,72 @@ def _collect_git_evidence_from_sandbox(sandbox: Any, repo_root: str) -> Dict[str
         result = sandbox.run_code(
             "import json,subprocess,pathlib\n"
             f"repo=pathlib.Path({repo_root!r})\n"
+            "MAX_CHARS = 50000\n"
+            "def trim(txt):\n"
+            "  text = (txt or '').strip()\n"
+            "  return text[-MAX_CHARS:]\n"
             "def run(cmd):\n"
             "  p=subprocess.run(cmd,cwd=repo,capture_output=True,text=True)\n"
-            "  return p.stdout.strip()\n"
+            "  return {'rc': p.returncode, 'stdout': trim(p.stdout), 'stderr': trim(p.stderr)}\n"
             "payload={\n"
-            " 'head_sha': run(['git','rev-parse','HEAD']),\n"
-            " 'status_porcelain': run(['git','status','--porcelain']),\n"
-            " 'diff_main': run(['git','diff','main...HEAD']),\n"
-            " 'diff_staged': run(['git','diff','--cached']),\n"
-            " 'commits': run(['git','log','--oneline','--decorate','-n','50'])\n"
+            " 'head_sha': None,\n"
+            " 'status_porcelain': '',\n"
+            " 'diff_main': '',\n"
+            " 'diff_staged': '',\n"
+            " 'commits': '',\n"
+            " 'diff_base_ref': None,\n"
             "}\n"
+            "if not repo.exists():\n"
+            "  payload['error'] = 'repo_root_missing'\n"
+            "else:\n"
+            "  probe = run(['git','rev-parse','--is-inside-work-tree'])\n"
+            "  if probe['rc'] != 0 or probe['stdout'].lower() != 'true':\n"
+            "    payload['error'] = 'not_a_git_repository'\n"
+            "    if probe['stderr']:\n"
+            "      payload['git_probe_stderr'] = probe['stderr']\n"
+            "  else:\n"
+            "    head = run(['git','rev-parse','HEAD'])\n"
+            "    payload['head_sha'] = head['stdout'] or None\n"
+            "    status = run(['git','status','--porcelain'])\n"
+            "    payload['status_porcelain'] = status['stdout']\n"
+            "    staged = run(['git','diff','--cached'])\n"
+            "    payload['diff_staged'] = staged['stdout']\n"
+            "    log = run(['git','log','--oneline','--decorate','-n','50'])\n"
+            "    payload['commits'] = log['stdout']\n"
+            "    base_ref = None\n"
+            "    for ref in ('origin/main','main','origin/master','master'):\n"
+            "      check = run(['git','rev-parse','--verify',ref])\n"
+            "      if check['rc'] == 0:\n"
+            "        base_ref = ref\n"
+            "        break\n"
+            "    if base_ref:\n"
+            "      diff = run(['git','diff',f'{base_ref}...HEAD'])\n"
+            "      payload['diff_main'] = diff['stdout']\n"
+            "      payload['diff_base_ref'] = base_ref\n"
+            "      if diff['rc'] != 0 and not payload['diff_main'] and diff['stderr']:\n"
+            "        payload['diff_main_error'] = diff['stderr']\n"
+            "    if not payload['diff_main']:\n"
+            "      fallback = run(['git','diff','HEAD~1','HEAD'])\n"
+            "      if fallback['rc'] == 0:\n"
+            "        payload['diff_main'] = fallback['stdout']\n"
+            "        payload['diff_base_ref'] = payload['diff_base_ref'] or 'HEAD~1'\n"
+            "    if not payload['diff_main'] and payload['status_porcelain']:\n"
+            "      worktree = run(['git','diff'])\n"
+            "      if worktree['rc'] == 0:\n"
+            "        payload['diff_main'] = worktree['stdout']\n"
+            "        payload['diff_base_ref'] = payload['diff_base_ref'] or 'WORKTREE'\n"
             "print(json.dumps(payload))\n"
         )
         out = (result.get("stdout") or "").strip().splitlines()
         if out:
-            return json.loads(out[-1])
+            payload = json.loads(out[-1])
+            payload.setdefault("head_sha", None)
+            payload.setdefault("status_porcelain", "")
+            payload.setdefault("diff_main", "")
+            payload.setdefault("diff_staged", "")
+            payload.setdefault("commits", "")
+            payload.setdefault("diff_base_ref", None)
+            return payload
     except Exception:
         logger.exception("Failed to capture git evidence from sandbox")
     return {
@@ -189,6 +240,7 @@ def _collect_git_evidence_from_sandbox(sandbox: Any, repo_root: str) -> Dict[str
         "diff_main": "",
         "diff_staged": "",
         "commits": "",
+        "diff_base_ref": None,
     }
 
 
@@ -353,7 +405,11 @@ def store_cv_upload(assessment: Assessment, upload: UploadFile, db: Session) -> 
 # Start / resume
 # ---------------------------------------------------------------------------
 
-def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str, Any]:
+def start_or_resume_assessment(
+    assessment: Assessment,
+    db: Session,
+    calibration_warmup_prompt: str | None = None,
+) -> Dict[str, Any]:
     """Start a new assessment or resume an in-progress one. Returns AssessmentStart payload."""
     if assessment.status == AssessmentStatus.COMPLETED:
         raise HTTPException(status_code=400, detail="Assessment has already been submitted")
@@ -415,6 +471,9 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         if was_pending or not assessment.started_at:
             assessment.started_at = utcnow()
             started_now = True
+        warmup_text = (calibration_warmup_prompt or "").strip()
+        if warmup_text and (started_now or not getattr(assessment, "calibration_warmup_prompt", None)):
+            assessment.calibration_warmup_prompt = warmup_text[:4000]
         # Assessments are terminal-only.
         assessment.ai_mode = required_ai_mode
         assessment.e2b_session_id = sandbox_id
@@ -464,6 +523,11 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
         is_demo=bool(getattr(assessment, "is_demo", False)),
         task_budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
     )
+    task_extra_data = task.extra_data if isinstance(task.extra_data, dict) else {}
+    task_calibration_prompt = (
+        (task.calibration_prompt or "").strip()
+        or str(task_extra_data.get("calibration_prompt") or "").strip()
+    )
     claude_budget = build_claude_budget_snapshot(
         budget_limit_usd=effective_budget_limit,
         prompts=assessment.ai_prompts or [],
@@ -484,7 +548,7 @@ def start_or_resume_assessment(assessment: Assessment, db: Session) -> Dict[str,
             "rubric_categories": candidate_rubric_view(task.evaluation_rubric),
             "evaluation_rubric": None,
             "extra_data": None,
-            "calibration_prompt": None if settings.MVP_DISABLE_CALIBRATION else (task.calibration_prompt if task else None),
+            "calibration_prompt": None if settings.MVP_DISABLE_CALIBRATION else (task_calibration_prompt or None),
             "proctoring_enabled": False if settings.MVP_DISABLE_PROCTORING else (task.proctoring_enabled if task else False),
             "claude_budget_limit_usd": effective_budget_limit,
         },

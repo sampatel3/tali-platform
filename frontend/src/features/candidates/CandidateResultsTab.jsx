@@ -179,6 +179,9 @@ export const CandidateResultsTab = ({
   const overallScore10 = Number.isFinite(Number(assessment.score))
     ? Number(assessment.score)
     : (Number.isFinite(Number(candidate.score)) ? Number(candidate.score) : null);
+  const calibrationScore = Number.isFinite(Number(assessment.calibration_score))
+    ? Number(assessment.calibration_score)
+    : null;
 
   const overallSummaryText = heuristicSummary || fallbackOverallSummary(catScores);
 
@@ -263,6 +266,18 @@ export const CandidateResultsTab = ({
             </Button>
           </div>
           <p className="mt-2 text-xs text-[var(--taali-muted)]">{overallSummaryText}</p>
+        </Panel>
+      ) : null}
+
+      {calibrationScore != null ? (
+        <Panel className="p-4">
+          <div className="font-mono text-xs text-[var(--taali-muted)]">Baseline AI collaboration (calibration)</div>
+          <div className="font-mono text-xl font-bold" style={{ color: scoreColor(calibrationScore) }}>
+            {calibrationScore.toFixed(1)}/10 · {scoreLabel(calibrationScore)}
+          </div>
+          <div className="mt-1 text-xs text-[var(--taali-muted)]">
+            Captured in the 2-minute warmup before the main task.
+          </div>
         </Panel>
       ) : null}
 

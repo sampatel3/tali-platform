@@ -14,7 +14,7 @@ export const assessments = {
   create: (data) => api.post('/assessments/', data),
   startDemo: (data) => api.post('/assessments/demo/start', data),
   preview: (token) => api.get(`/assessments/token/${token}/preview`),
-  start: (token) => api.post(`/assessments/token/${token}/start`),
+  start: (token, data = {}) => api.post(`/assessments/token/${token}/start`, data),
   execute: (id, code, assessmentToken) =>
     api.post(`/assessments/${id}/execute`, { code }, {
       headers: { 'X-Assessment-Token': assessmentToken },

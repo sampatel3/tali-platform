@@ -41,6 +41,9 @@ class OrgResponse(BaseModel):
     assessments_limit: Optional[int] = None
     billing_provider: str = "lemon"
     credits_balance: int = 0
+    default_assessment_duration_minutes: int = 30
+    invite_email_template: Optional[str] = None
+    has_custom_claude_api_key: bool = False
     allowed_email_domains: List[str] = Field(default_factory=list)
     sso_enforced: bool = False
     saml_enabled: bool = False
@@ -59,6 +62,9 @@ class OrgUpdate(BaseModel):
     saml_enabled: Optional[bool] = None
     saml_metadata_url: Optional[str] = None
     candidate_feedback_enabled: Optional[bool] = None
+    default_assessment_duration_minutes: Optional[int] = Field(default=None, ge=15, le=180)
+    invite_email_template: Optional[str] = Field(default=None, max_length=10000)
+    custom_claude_api_key: Optional[str] = Field(default=None, min_length=0, max_length=2000)
 
 
 class WorkableConnect(BaseModel):

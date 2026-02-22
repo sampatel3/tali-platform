@@ -18,6 +18,11 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [previewError, setPreviewError] = useState('');
+  const [warmupPrompt, setWarmupPrompt] = useState('');
+  const [cvUploading, setCvUploading] = useState(false);
+  const [cvUploadError, setCvUploadError] = useState('');
+  const [cvUploadSuccess, setCvUploadSuccess] = useState('');
+  const [hasCvOnFile, setHasCvOnFile] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -29,10 +34,12 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
         const res = await assessmentsApi.preview(token);
         if (cancelled) return;
         setPreviewData(res.data || null);
+        setHasCvOnFile(Boolean(res?.data?.task?.has_cv_on_file));
       } catch (err) {
         if (cancelled) return;
         setPreviewData(null);
         setPreviewError(err?.response?.data?.detail || 'Task preview is not available yet.');
+        setHasCvOnFile(false);
       } finally {
         if (!cancelled) setPreviewLoading(false);
       }
@@ -48,10 +55,18 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
       setStartError('Assessment token is missing from the link.');
       return;
     }
+    const requiresWarmup = Boolean(taskPreview?.calibration_enabled);
+    const warmupText = String(warmupPrompt || '').trim();
+    if (requiresWarmup && !warmupText) {
+      setStartError('Complete the 2-minute warmup prompt before starting.');
+      return;
+    }
     setLoadingStart(true);
     setStartError('');
     try {
-      const res = await assessmentsApi.start(token);
+      const res = await assessmentsApi.start(token, {
+        calibration_warmup_prompt: warmupText || undefined,
+      });
       const data = res.data;
       if (onStarted) onStarted(data);
       onNavigate('assessment');
@@ -63,8 +78,27 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
     }
   };
 
+  const handleCvUpload = async (event) => {
+    const file = event?.target?.files?.[0];
+    if (!file || !token) return;
+    setCvUploading(true);
+    setCvUploadError('');
+    setCvUploadSuccess('');
+    try {
+      await assessmentsApi.uploadCv(null, token, file);
+      setHasCvOnFile(true);
+      setCvUploadSuccess(`Uploaded ${file.name}.`);
+    } catch (err) {
+      setCvUploadError(err?.response?.data?.detail || 'Failed to upload CV.');
+    } finally {
+      setCvUploading(false);
+      if (event?.target) event.target.value = '';
+    }
+  };
+
   const taskPreview = previewData?.task || {};
   const scenarioMarkdown = String(taskPreview?.scenario || '').trim();
+  const calibrationPromptText = String(taskPreview?.calibration_prompt || '').trim();
   const expectedJourney = taskPreview?.expected_candidate_journey && typeof taskPreview.expected_candidate_journey === 'object'
     ? taskPreview.expected_candidate_journey
     : null;
@@ -107,6 +141,9 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
           ) : previewError ? (
             <p className="mt-2 text-xs text-[var(--taali-warning)]">{previewError}</p>
           ) : null}
+          {hasCvOnFile ? (
+            <p className="mt-2 text-xs text-[var(--taali-success)]">CV on file: yes</p>
+          ) : null}
         </div>
 
         <div className="border-2 border-[var(--taali-border)] p-8 mb-8">
@@ -141,6 +178,46 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
             TAALI evaluates your collaboration process with AI, not just the final output.
           </p>
         </div>
+
+        {!hasCvOnFile ? (
+          <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-white">
+            <h2 className="text-xl font-bold mb-2">Optional: Upload your CV</h2>
+            <p className="text-sm text-[var(--taali-muted)] mb-3">
+              Uploading a CV helps role-fit analysis. You can still continue without it.
+            </p>
+            <input
+              type="file"
+              accept=".pdf,.doc,.docx"
+              onChange={handleCvUpload}
+              disabled={cvUploading}
+              className="block w-full text-sm text-[var(--taali-text)]"
+            />
+            {cvUploading ? <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">Uploading…</p> : null}
+            {cvUploadSuccess ? <p className="mt-2 font-mono text-xs text-[var(--taali-success)]">{cvUploadSuccess}</p> : null}
+            {cvUploadError ? <p className="mt-2 font-mono text-xs text-[var(--taali-danger)]">{cvUploadError}</p> : null}
+          </div>
+        ) : null}
+
+        {taskPreview?.calibration_enabled && calibrationPromptText ? (
+          <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-[var(--taali-bg)]">
+            <h2 className="text-xl font-bold mb-2">2-minute warmup (calibration)</h2>
+            <p className="text-sm text-[var(--taali-muted)] mb-3">
+              This captures your baseline AI-collaboration style before the main task.
+            </p>
+            <div className="mb-3 border border-[var(--taali-border)] bg-white p-3 font-mono text-xs text-[var(--taali-text)]">
+              {calibrationPromptText}
+            </div>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Your prompt to Claude</span>
+              <textarea
+                className="w-full min-h-[110px] border-2 border-[var(--taali-border)] bg-white p-3 font-mono text-sm text-[var(--taali-text)] outline-none focus:border-[var(--taali-purple)]"
+                value={warmupPrompt}
+                onChange={(event) => setWarmupPrompt(event.target.value)}
+                placeholder="Write the prompt you would send to Claude for this warmup..."
+              />
+            </label>
+          </div>
+        ) : null}
 
         {scenarioMarkdown ? (
           <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-white">

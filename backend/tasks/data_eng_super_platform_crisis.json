@@ -3,6 +3,7 @@
   "name": "Data Platform Incident Triage and Recovery",
   "role": "data_engineer",
   "duration_minutes": 30,
+  "calibration_prompt": "You have 2 minutes. Ask Claude to draft a SQL query for counting duplicate transaction_ids by day, and include assumptions, table/column context, and validation steps in your prompt.",
   "scoring_hints": {
     "min_reading_time_seconds": 300
   },

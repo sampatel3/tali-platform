@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from ..platform.database import Base
@@ -28,6 +28,8 @@ class Organization(Base):
     credits_balance = Column(Integer, default=0)
     claude_api_key_encrypted = Column(String, nullable=True)
     claude_api_key_last_rotated_at = Column(DateTime(timezone=True), nullable=True)
+    default_assessment_duration_minutes = Column(Integer, default=30, nullable=False)
+    invite_email_template = Column(Text, nullable=True)
     plan = Column(String, default="pay_per_use")
     assessments_used = Column(Integer, default=0)
     assessments_limit = Column(Integer, default=None)
@@ -56,3 +58,7 @@ class Organization(Base):
     def active_claude_scoring_model(self) -> str:
         from ..platform.config import settings
         return settings.resolved_claude_scoring_model
+
+    @property
+    def has_custom_claude_api_key(self) -> bool:
+        return bool((self.claude_api_key_encrypted or "").strip())

@@ -39,6 +39,7 @@ class AssessmentResponse(BaseModel):
     ai_usage_score: Optional[float] = None
     test_results: Optional[Dict[str, Any]] = None
     ai_prompts: Optional[List[Dict[str, Any]]] = None
+    code_snapshots: Optional[List[Dict[str, Any]]] = None
     timeline: Optional[List[Dict[str, Any]]] = None
     created_at: datetime
     # Computed for candidate detail UI (snake_case for API; frontend maps to camelCase)
@@ -64,6 +65,7 @@ class AssessmentResponse(BaseModel):
     error_recovery_score: Optional[float] = None
     requirement_comprehension_score: Optional[float] = None
     calibration_score: Optional[float] = None
+    calibration_warmup_prompt: Optional[str] = None
     prompt_fraud_flags: Optional[List[Dict[str, Any]]] = None
     prompt_analytics: Optional[Dict[str, Any]] = None
     browser_focus_ratio: Optional[float] = None
@@ -140,6 +142,10 @@ class AssessmentStart(BaseModel):
     ai_mode: str = "claude_cli_terminal"
     terminal_mode: bool = False
     terminal_capabilities: Dict[str, Any] = Field(default_factory=dict)
+
+
+class AssessmentStartRequest(BaseModel):
+    calibration_warmup_prompt: Optional[str] = Field(default=None, min_length=1, max_length=4000)
 
 
 class CodeExecutionRequest(BaseModel):

@@ -3,6 +3,7 @@
   "name": "AI Feature Production Readiness Assessment",
   "role": "ai_engineer",
   "duration_minutes": 30,
+  "calibration_prompt": "You have 2 minutes. Ask Claude for help designing a safe prompt strategy for a tiny utility function. Show how you provide context, constraints, and acceptance criteria before requesting code.",
   "scoring_hints": {
     "min_reading_time_seconds": 300
   },

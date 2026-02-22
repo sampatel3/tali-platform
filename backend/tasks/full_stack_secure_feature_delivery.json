@@ -3,6 +3,7 @@
   "name": "Full-Stack Engineer - Secure Feature Delivery",
   "role": "full_stack_engineer",
   "duration_minutes": 30,
+  "calibration_prompt": "You have 2 minutes. Ask Claude for a secure token design for share links. Include threat model assumptions, expiry requirements, and what not to expose.",
   "scoring_hints": {
     "min_reading_time_seconds": 240
   },

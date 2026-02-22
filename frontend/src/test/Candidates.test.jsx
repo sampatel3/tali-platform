@@ -449,7 +449,10 @@ describe('CandidatesPage', () => {
     fireEvent.click(screen.getAllByRole('button', { name: 'Send assessment' })[1]);
 
     await waitFor(() => {
-      expect(rolesApi.createAssessment).toHaveBeenCalledWith(501, { task_id: 700 });
+      expect(rolesApi.createAssessment).toHaveBeenCalledWith(
+        501,
+        expect.objectContaining({ task_id: 700, duration_minutes: 30 })
+      );
     });
 
     alertMock.mockRestore();
