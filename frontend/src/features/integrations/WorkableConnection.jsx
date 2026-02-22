@@ -7,15 +7,15 @@ const normalizeWorkableError = (input) => {
   const raw = (input || '').toString();
   const lower = raw.toLowerCase();
   if (lower.includes('not configured')) {
-    return 'Workable OAuth is not configured. Add WORKABLE_CLIENT_ID and WORKABLE_CLIENT_SECRET in backend environment variables first.';
+    return 'Workable integration is not yet set up for this account. Please contact support to enable it.';
   }
   if (lower.includes('disabled for mvp')) {
-    return 'Workable integration is currently disabled by environment flag.';
+    return 'Workable integration is not available on your current plan. Contact support to upgrade.';
   }
   if (lower.includes('oauth failed')) {
     return 'Workable OAuth failed. Verify callback URL and scopes in your Workable app, then try again.';
   }
-  return raw || 'Failed to connect';
+  return raw || 'Workable connection failed.';
 };
 
 export const ConnectWorkableButton = ({ authorizeUrl = '', setupError = '', onClick = null }) => {
