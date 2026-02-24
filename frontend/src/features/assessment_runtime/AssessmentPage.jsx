@@ -41,6 +41,7 @@ export default function AssessmentPage({
   const [pauseMessage, setPauseMessage] = useState("");
   const [timeMilestoneNotice, setTimeMilestoneNotice] = useState(null);
   const [submittedAtIso, setSubmittedAtIso] = useState(null);
+  const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
   const [claudeBudget, setClaudeBudget] = useState(null);
   const [selectedRepoFile, setSelectedRepoFile] = useState(null);
   const [repoFileEdits, setRepoFileEdits] = useState({});
@@ -106,6 +107,7 @@ export default function AssessmentPage({
     milestoneFlagsRef.current = { halfway: false, warning80: false, warning90: false };
     setTimeMilestoneNotice(null);
     setSubmittedAtIso(null);
+    setSubmitConfirmOpen(false);
 
     if (startData) {
       const normalized = normalizeStartData(startData);
@@ -625,12 +627,11 @@ export default function AssessmentPage({
       }
 
       if (!autoSubmit) {
-        const confirmed = window.confirm(
-          "Are you sure you want to submit? You cannot make changes after submitting.",
-        );
-        if (!confirmed) return;
+        setSubmitConfirmOpen(true);
+        return;
       }
 
+      setSubmitConfirmOpen(false);
       setSubmitted(true);
       setSubmittedAtIso(new Date().toISOString());
       clearInterval(timerRef.current);
@@ -800,6 +801,40 @@ export default function AssessmentPage({
         claudePromptDisabled={isTimerPaused || submitted}
         lightMode={assessmentLightMode}
       />
+
+      {submitConfirmOpen ? (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="assessment-submit-confirm-title"
+        >
+          <div className={`w-full max-w-xl border p-6 shadow-xl ${assessmentLightMode ? 'border-gray-300 bg-white text-gray-900' : 'border-white/15 bg-[#101722] text-gray-100'}`}>
+            <h2 id="assessment-submit-confirm-title" className="font-mono text-sm font-bold uppercase tracking-wide text-[var(--taali-purple)]">
+              Confirm Submission
+            </h2>
+            <p className={`mt-3 font-mono text-sm ${assessmentLightMode ? 'text-gray-700' : 'text-gray-300'}`}>
+              Are you sure you want to submit? You cannot make changes after submitting.
+            </p>
+            <div className="mt-5 flex items-center justify-end gap-3">
+              <button
+                type="button"
+                className={`border px-4 py-2 font-mono text-xs font-bold uppercase tracking-wide ${assessmentLightMode ? 'border-gray-300 bg-gray-100 text-gray-700 hover:bg-gray-200' : 'border-white/25 bg-[#0c1119] text-gray-200 hover:bg-[#111b2a]'}`}
+                onClick={() => setSubmitConfirmOpen(false)}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="border border-[var(--taali-purple)] bg-[var(--taali-purple)] px-4 py-2 font-mono text-xs font-bold uppercase tracking-wide text-white transition-colors hover:bg-[#aa4dff]"
+                onClick={() => handleSubmit(true)}
+              >
+                Submit
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
