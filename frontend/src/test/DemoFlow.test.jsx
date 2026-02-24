@@ -182,6 +182,7 @@ describe('Demo flow', () => {
     expect(screen.getByRole('button', { name: /Data Platform Incident Triage and Recovery/i })).toBeInTheDocument();
     const aiTrackButton = screen.getByRole('button', { name: /AI Feature Production Readiness Assessment/i });
     expect(aiTrackButton).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Full-Stack Engineer - Secure Feature Delivery/i })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'Jane Doe' } });
     fireEvent.change(screen.getByLabelText('Position'), { target: { value: 'Engineering Manager' } });

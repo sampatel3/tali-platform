@@ -57,6 +57,7 @@ DEMO_TRACK_TASK_KEYS = {
     # Primary demo track: canonical tasks for product demos (from tasks/*.json).
     "data_eng_super_platform_crisis": "data_eng_super_platform_crisis",
     "ai_eng_super_production_launch": "ai_eng_super_production_launch",
+    "full_stack_secure_feature_delivery": "full_stack_secure_feature_delivery",
     # Backward-compatible aliases (route to current tasks; legacy keys removed from repo).
     "data_eng_a_pipeline_reliability": "data_eng_super_platform_crisis",
     "data_eng_b_cdc_fix": "data_eng_super_platform_crisis",

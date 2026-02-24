@@ -13,6 +13,13 @@ const demoTasks = [
     durationLabel: '30 min',
     difficulty: 'Medium',
   },
+  {
+    id: 'full_stack_secure_feature_delivery',
+    title: 'Full-Stack Engineer - Secure Feature Delivery',
+    description: 'Ship a secure share-link feature under deadline pressure with aligned frontend and backend protections.',
+    durationLabel: '30 min',
+    difficulty: 'Medium',
+  },
 ];
 
 export const DEMO_ASSESSMENTS = demoTasks;
