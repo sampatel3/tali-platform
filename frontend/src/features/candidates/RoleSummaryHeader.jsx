@@ -84,6 +84,8 @@ export const RoleSummaryHeader = ({
   const roleText = toPlainText(specContent);
   const rolePreview = roleText.length > 180 ? `${roleText.slice(0, 180)}…` : roleText;
   const hasSpecContent = specContent.length > 0;
+  const additionalRequirements = role.additional_requirements?.trim() || '';
+  const hasAdditionalRequirements = additionalRequirements.length > 0;
   const jobSpecReady = Boolean(role.job_spec_present || role.job_spec_filename || hasSpecContent);
   const jobSpecLabel = role.job_spec_filename
     || (jobSpecReady
@@ -92,8 +94,8 @@ export const RoleSummaryHeader = ({
 
   useEffect(() => {
     setFocusExpanded(true);
-    setSpecExpanded(Boolean(hasSpecContent));
-  }, [role.id, hasSpecContent]);
+    setSpecExpanded(Boolean(hasSpecContent || hasAdditionalRequirements));
+  }, [role.id, hasSpecContent, hasAdditionalRequirements]);
 
   return (
     <Panel className="p-5">
@@ -150,15 +152,15 @@ export const RoleSummaryHeader = ({
           </Button>
         </div>
       </div>
-      <Card className="mt-4 p-3 bg-[#faf8ff]">
-        <div className="flex flex-col gap-3">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+      <Card className="mt-4 overflow-hidden border-[var(--taali-border-muted)] bg-[linear-gradient(180deg,#faf8ff_0%,#ffffff_60%)] p-0">
+        <div className="flex flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
             <div className="inline-flex items-center gap-2 text-sm text-gray-700">
               <FileText size={15} className="text-gray-500" />
               <span className="font-medium">Job spec:</span>
               <span className="text-gray-600">{jobSpecLabel}</span>
             </div>
-            {jobSpecReady ? (
+            {jobSpecReady || hasAdditionalRequirements ? (
               <Button
                 type="button"
                 variant="ghost"
@@ -167,56 +169,65 @@ export const RoleSummaryHeader = ({
                 aria-controls={specPanelId}
                 onClick={() => setSpecExpanded((prev) => !prev)}
               >
-                {specExpanded ? 'Hide details' : 'Details'}
+                {specExpanded ? 'Hide details' : 'Show details'}
               </Button>
             ) : null}
           </div>
 
           {specExpanded ? (
-            <div id={specPanelId} className="border border-[var(--taali-border-muted)] bg-white rounded-lg p-5 max-h-[400px] overflow-auto">
-              {roleDescription ? (
-                <div className="job-spec-content text-sm text-gray-800 leading-relaxed">
-                  <ReactMarkdown
-                    components={{
-                      h1: ({ node, ...p }) => <h1 className="text-lg font-bold mt-4 mb-2 first:mt-0 border-b border-gray-200 pb-1" {...p} />,
-                      h2: ({ node, ...p }) => <h2 className="text-base font-bold mt-4 mb-2" {...p} />,
-                      h3: ({ node, ...p }) => <h3 className="text-sm font-semibold mt-3 mb-1" {...p} />,
-                      p: ({ node, ...p }) => <p className="my-2 leading-relaxed" {...p} />,
-                      ul: ({ node, ...p }) => <ul className="list-disc pl-5 my-2 space-y-1" {...p} />,
-                      ol: ({ node, ...p }) => <ol className="list-decimal pl-5 my-2 space-y-1" {...p} />,
-                      li: ({ node, ...p }) => <li className="leading-relaxed" {...p} />,
-                      strong: ({ node, ...p }) => <strong className="font-semibold text-gray-900" {...p} />,
-                      br: () => <br />,
-                    }}
-                  >
-                    {roleDescription}
-                  </ReactMarkdown>
-                </div>
-              ) : (
-                <span className="text-gray-500">—</span>
-              )}
-            </div>
-          ) : null}
-
-          {role.additional_requirements?.trim() ? (
-            <div className="text-sm text-gray-700">
-              <span className="font-medium">Additional requirements (for CV scoring):</span>
-              <p className="mt-1 text-xs text-gray-600 whitespace-pre-wrap">{role.additional_requirements.trim()}</p>
-            </div>
-          ) : null}
-
-          <div className="inline-flex items-center gap-2 text-sm text-gray-700">
-            <BriefcaseBusiness size={15} className="text-gray-500" />
-            <span className="font-medium">Tasks ({roleTasks.length}):</span>
-            {roleTasks.length > 0 ? (
-              <div className="flex flex-wrap gap-1.5">
-                {roleTasks.map((task) => (
-                  <Badge key={task.id} variant="muted">{task.name}</Badge>
-                ))}
+            <div id={specPanelId} className="space-y-3 border-y border-[var(--taali-border-muted)] p-4">
+              <div className="border border-[var(--taali-border-muted)] bg-white p-4">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">Job role spec</p>
+                {roleDescription ? (
+                  <div className="max-h-[360px] overflow-auto pr-1">
+                    <div className="job-spec-content text-sm text-gray-800 leading-relaxed">
+                      <ReactMarkdown
+                        components={{
+                          h1: ({ node, ...p }) => <h1 className="text-lg font-bold mt-4 mb-2 first:mt-0 border-b border-gray-200 pb-1" {...p} />,
+                          h2: ({ node, ...p }) => <h2 className="text-base font-bold mt-4 mb-2" {...p} />,
+                          h3: ({ node, ...p }) => <h3 className="text-sm font-semibold mt-3 mb-1" {...p} />,
+                          p: ({ node, ...p }) => <p className="my-2 leading-relaxed" {...p} />,
+                          ul: ({ node, ...p }) => <ul className="list-disc pl-5 my-2 space-y-1" {...p} />,
+                          ol: ({ node, ...p }) => <ol className="list-decimal pl-5 my-2 space-y-1" {...p} />,
+                          li: ({ node, ...p }) => <li className="leading-relaxed" {...p} />,
+                          strong: ({ node, ...p }) => <strong className="font-semibold text-gray-900" {...p} />,
+                          br: () => <br />,
+                        }}
+                      >
+                        {roleDescription}
+                      </ReactMarkdown>
+                    </div>
+                  </div>
+                ) : (
+                  <span className="text-sm text-gray-500">No job spec text available.</span>
+                )}
               </div>
-            ) : (
-              <span className="text-gray-500">No linked tasks</span>
-            )}
+
+              {hasAdditionalRequirements ? (
+                <div className="border border-[var(--taali-border-muted)] bg-[#fffcf5] p-4">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">Additional requirements</p>
+                  <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{additionalRequirements}</p>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+
+          <div className="p-4">
+            <div className="border border-[var(--taali-border-muted)] bg-white px-3 py-2">
+              <div className="inline-flex items-center gap-2 text-sm text-gray-700">
+                <BriefcaseBusiness size={15} className="text-gray-500" />
+                <span className="font-medium">Tasks ({roleTasks.length}):</span>
+                {roleTasks.length > 0 ? (
+                  <div className="flex flex-wrap gap-1.5">
+                    {roleTasks.map((task) => (
+                      <Badge key={task.id} variant="muted">{task.name}</Badge>
+                    ))}
+                  </div>
+                ) : (
+                  <span className="text-gray-500">No linked tasks</span>
+                )}
+              </div>
+            </div>
           </div>
         </div>
       </Card>

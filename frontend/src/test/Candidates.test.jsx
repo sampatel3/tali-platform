@@ -240,6 +240,38 @@ describe('CandidatesPage', () => {
     });
   });
 
+  it('hides additional requirements when job spec details are collapsed', async () => {
+    rolesApi.list.mockResolvedValue({
+      data: [
+        {
+          ...baseRoles[0],
+          additional_requirements: 'Production experience with global enterprise teams.',
+        },
+      ],
+    });
+
+    await renderAppOnCandidatesPage();
+
+    await waitFor(() => {
+      expect(screen.getByText('Additional requirements')).toBeInTheDocument();
+      expect(screen.getByText('Production experience with global enterprise teams.')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Hide details/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText('Additional requirements')).not.toBeInTheDocument();
+      expect(screen.queryByText('Production experience with global enterprise teams.')).not.toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Show details/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Additional requirements')).toBeInTheDocument();
+      expect(screen.getByText('Production experience with global enterprise teams.')).toBeInTheDocument();
+    });
+  });
+
   it('allows collapsing and expanding interview focus guidance', async () => {
     rolesApi.list.mockResolvedValue({
       data: [
