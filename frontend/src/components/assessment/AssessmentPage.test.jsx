@@ -382,4 +382,25 @@ describe('AssessmentPage tracking metadata', () => {
     expect(await screen.findByText(/Claude Credit: \$0.75 left of \$1.00/i)).toBeInTheDocument();
   });
 
+  it('toggles assessment runtime light mode from the top bar button', async () => {
+    const startData = {
+      assessment_id: 24,
+      token: 'tok-theme',
+      time_remaining: 1200,
+      task: {
+        name: 'Theme toggle task',
+        starter_code: 'print("start")',
+        duration_minutes: 30,
+      },
+    };
+
+    render(<AssessmentPage token="tok-theme" startData={startData} />);
+
+    const toggleButton = await screen.findByRole('button', { name: 'Light UI' });
+    fireEvent.click(toggleButton);
+
+    expect(await screen.findByRole('button', { name: 'Dark UI' })).toBeInTheDocument();
+    expect(localStorage.getItem('taali_assessment_theme')).toBe('light');
+  });
+
 });

@@ -152,6 +152,16 @@ describe('Demo flow', () => {
     ).toBeInTheDocument();
   });
 
+  it('hides the global theme switch on demo pages', async () => {
+    renderApp();
+    expect(screen.getByRole('switch')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
+    await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 });
+
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+  });
+
   it('requires credential fields before starting demo', async () => {
     renderApp();
     fireEvent.click(screen.getByRole('button', { name: 'Demo' }));

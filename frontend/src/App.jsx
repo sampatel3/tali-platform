@@ -92,6 +92,12 @@ function AppContent() {
     return null;
   }, [assessmentIdFromLink, location.pathname, searchParams]);
 
+  const hideGlobalThemeToggle = useMemo(() => (
+    location.pathname === '/demo'
+    || location.pathname.startsWith('/assess/')
+    || location.pathname.startsWith('/assessment/')
+  ), [location.pathname]);
+
   const resetPasswordToken = location.pathname === '/reset-password'
     ? (searchParams.get('token') || '')
     : '';
@@ -385,7 +391,7 @@ function AppContent() {
 
       <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      <GlobalThemeToggle className="fixed top-4 right-4 z-[90] shadow-lg" />
+      {!hideGlobalThemeToggle ? <GlobalThemeToggle className="fixed top-4 right-4 z-[90] shadow-lg" /> : null}
     </>
   );
 }
