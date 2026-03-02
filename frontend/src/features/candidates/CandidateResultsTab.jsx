@@ -244,7 +244,7 @@ export const CandidateResultsTab = ({
         </div>
       </Card>
 
-      <Panel className="p-4">
+      <Panel className="p-3.5">
         <div className="mb-2 flex items-center justify-between gap-2">
           <div className="font-bold">Recruiter Insight Summary</div>
           <Badge variant="muted" className="font-mono text-[11px]">Auto-generated · AI-assisted analysis · Not a hiring decision</Badge>
@@ -253,11 +253,11 @@ export const CandidateResultsTab = ({
       </Panel>
 
       {overallScore10 != null ? (
-        <Panel className="p-4">
+        <Panel className="p-3.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <div className="font-mono text-xs text-[var(--taali-muted)]">Overall score</div>
-              <div className="font-mono text-2xl font-bold" style={{ color: scoreColor(overallScore10) }}>
+              <div className="font-mono text-xl font-bold" style={{ color: scoreColor(overallScore10) }}>
                 {overallScore10.toFixed(1)}/10 · {scoreLabel(overallScore10)}
               </div>
             </div>
@@ -270,7 +270,7 @@ export const CandidateResultsTab = ({
       ) : null}
 
       {calibrationScore != null ? (
-        <Panel className="p-4">
+        <Panel className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Baseline AI collaboration (calibration)</div>
           <div className="font-mono text-xl font-bold" style={{ color: scoreColor(calibrationScore) }}>
             {calibrationScore.toFixed(1)}/10 · {scoreLabel(calibrationScore)}
@@ -282,9 +282,9 @@ export const CandidateResultsTab = ({
       ) : null}
 
       {hasAnyCategoryScore ? (
-        <Panel className="p-4">
-          <div className="mb-4 text-base font-bold">Category Breakdown</div>
-          <div style={{ width: '100%', height: 350 }}>
+        <Panel className="p-3.5">
+          <div className="mb-3 text-base font-bold">Category Breakdown</div>
+          <div style={{ width: '100%', height: 320 }}>
             <ResponsiveContainer>
               <RadarChart data={radarData}>
                 <PolarGrid stroke="var(--taali-purple-soft)" />
@@ -316,7 +316,7 @@ export const CandidateResultsTab = ({
             <Panel key={cat.key} className="overflow-hidden">
               <button
                 type="button"
-                className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-[var(--taali-purple-soft)]"
+                className="flex w-full items-center justify-between px-3.5 py-2.5 text-left transition hover:bg-[var(--taali-purple-soft)]"
                 onClick={() => setExpandedCategory(isExpanded ? null : cat.key)}
               >
                 <div className="flex min-w-0 items-center gap-3">

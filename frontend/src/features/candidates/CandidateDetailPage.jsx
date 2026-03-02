@@ -300,8 +300,8 @@ export const AssessmentResultsPage = ({
 
   if (!candidate) {
     return (
-      <PageContainer className="max-w-5xl">
-        <Panel className="p-6 font-mono text-sm text-gray-600">
+      <PageContainer className="max-w-5xl" density="compact">
+        <Panel className="p-4 font-mono text-sm text-gray-600">
           Candidate assessment not found.
         </Panel>
       </PageContainer>
@@ -634,18 +634,18 @@ export const AssessmentResultsPage = ({
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="assessments" onNavigate={onNavigate} /> : null}
-      <PageContainer>
+      <PageContainer density="compact" width="wide">
         <Button
           variant="ghost"
-          size="sm"
-          className="mb-5 font-mono"
+          size="xs"
+          className="mb-4 font-mono"
           onClick={() => onNavigate(backTo.page)}
         >
           <ArrowLeft size={16} /> {backTo.label}
         </Button>
 
         {isVoided ? (
-          <Panel className="mb-4 border-2 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <Panel className="mb-3 border-2 border-amber-300 bg-amber-50 p-3.5 text-sm text-amber-900">
             <p className="font-semibold">This assessment was voided and superseded.</p>
             <p className="mt-1">
               {voidedAt ? `Voided ${new Date(voidedAt).toLocaleString()}. ` : ''}
@@ -655,12 +655,12 @@ export const AssessmentResultsPage = ({
           </Panel>
         ) : null}
 
-        <Panel className="mb-6 p-5">
-          <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_340px]">
+        <Panel className="mb-4 p-4">
+          <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_300px] xl:grid-cols-[minmax(0,1fr)_320px]">
             <div>
               <p className="mb-2 font-mono text-xs uppercase tracking-[0.08em] text-gray-500">Assessment Results</p>
-              <h1 className="text-4xl font-bold text-gray-900">{candidate.name}</h1>
-              <p className="mb-4 font-mono text-gray-500">{candidate.email}</p>
+              <h1 className="text-3xl font-bold text-gray-900">{candidate.name}</h1>
+              <p className="mb-3 font-mono text-sm text-gray-500">{candidate.email}</p>
               <div className="flex flex-wrap gap-2">
                 <Badge variant="muted" className="font-mono text-[11px]">{candidate.position}</Badge>
                 <Badge variant="muted" className="font-mono text-[11px]">Task: {candidate.task}</Badge>
@@ -672,27 +672,27 @@ export const AssessmentResultsPage = ({
             </div>
 
             {(taaliScore100 != null || candidate.score) ? (
-              <div className="border-2 border-[var(--taali-purple)] bg-[#151122] p-5 text-white">
+              <div className="border-2 border-[var(--taali-purple)] bg-[#151122] p-4 text-white">
                 <div className="mb-2 font-mono text-xs uppercase tracking-[0.08em] text-white/60">TAALI Score</div>
-                <div className="mb-1 text-5xl font-bold text-[var(--taali-purple)]">
+                <div className="mb-1 text-4xl font-bold text-[var(--taali-purple)]">
                   {taaliScore100 != null ? `${Math.round(taaliScore100)}` : candidate.score}
-                  <span className="text-lg text-gray-400">/{taaliScore100 != null ? '100' : '10'}</span>
+                  <span className="text-base text-gray-400">/{taaliScore100 != null ? '100' : '10'}</span>
                 </div>
 
                 {rec ? (
-                  <div className="mb-3 inline-flex px-3 py-1 font-mono text-xs font-bold text-white" style={{ backgroundColor: rec.color }}>
+                  <div className="mb-2.5 inline-flex px-2.5 py-1 font-mono text-[11px] font-bold text-white" style={{ backgroundColor: rec.color }}>
                     {rec.label}
                   </div>
                 ) : null}
 
-                <div className="mb-4 grid gap-2 md:grid-cols-2">
+                <div className="mb-3 grid gap-2 md:grid-cols-2">
                   <div className="border border-white/10 bg-white/5 px-3 py-2">
                     <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/60">Assessment Score</div>
-                    <div className="mt-1 text-lg font-semibold text-white">{formatScore100(assessmentScore100)}</div>
+                    <div className="mt-1 text-base font-semibold text-white">{formatScore100(assessmentScore100)}</div>
                   </div>
                   <div className="border border-white/10 bg-white/5 px-3 py-2">
                     <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/60">CV Fit</div>
-                    <div className="mt-1 text-lg font-semibold text-white">{formatScore100(cvFitScore100)}</div>
+                    <div className="mt-1 text-base font-semibold text-white">{formatScore100(cvFitScore100)}</div>
                   </div>
                 </div>
 
@@ -724,31 +724,31 @@ export const AssessmentResultsPage = ({
           </div>
         </Panel>
 
-        <Panel className="mb-4 p-3">
+        <Panel className="mb-3 p-2.5">
           <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="secondary" className="font-mono" onClick={handleDownloadReport} disabled={busyAction !== ''}>
+            <Button type="button" size="sm" variant="secondary" className="font-mono" onClick={handleDownloadReport} disabled={busyAction !== ''}>
               {busyAction === 'report' ? 'Downloading...' : 'Download PDF'}
             </Button>
-            <Button type="button" variant="secondary" className="font-mono" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
+            <Button type="button" size="sm" variant="secondary" className="font-mono" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
               {busyAction === 'workable' ? 'Posting...' : 'Post to Workable'}
             </Button>
             {canResendInvite ? (
-              <Button type="button" variant="secondary" className="font-mono" onClick={handleResendInvite} disabled={busyAction !== ''}>
+              <Button type="button" size="sm" variant="secondary" className="font-mono" onClick={handleResendInvite} disabled={busyAction !== ''}>
                 {busyAction === 'resend' ? 'Resending...' : 'Resend Invite'}
               </Button>
             ) : null}
             {canRequestCvUpload ? (
-              <Button type="button" variant="secondary" className="font-mono" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
+              <Button type="button" size="sm" variant="secondary" className="font-mono" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
                 {busyAction === 'request-cv' ? 'Sending CV request...' : 'Request CV Upload'}
               </Button>
             ) : null}
-            <Button type="button" variant="danger" className="font-mono" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
+            <Button type="button" size="sm" variant="danger" className="font-mono" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
               {busyAction === 'delete' ? 'Deleting...' : 'Delete'}
             </Button>
           </div>
         </Panel>
 
-        <Panel className="mb-4 bg-[var(--taali-surface-subtle)] p-3">
+        <Panel className="mb-3 bg-[var(--taali-surface-subtle)] p-2.5">
           <div className="font-mono text-xs">
             <span className="text-gray-500">Workable status:</span>{' '}
             <span className={workableStatus.posted ? 'font-bold text-green-700' : 'text-gray-700'}>
@@ -760,7 +760,7 @@ export const AssessmentResultsPage = ({
           </div>
         </Panel>
 
-        <Panel className="mb-6 p-4">
+        <Panel className="mb-4 p-3.5">
           <div className="mb-2 font-mono text-xs text-gray-500">Recruiter Notes</div>
           <div className="flex gap-2">
             <Input
@@ -770,20 +770,20 @@ export const AssessmentResultsPage = ({
               value={noteText}
               onChange={(e) => setNoteText(e.target.value)}
             />
-            <Button type="button" variant="secondary" className="font-mono" onClick={handleAddNote} disabled={busyAction !== ''}>
+            <Button type="button" size="sm" variant="secondary" className="font-mono" onClick={handleAddNote} disabled={busyAction !== ''}>
               {busyAction === 'note' ? 'Saving...' : 'Save Note'}
             </Button>
           </div>
         </Panel>
 
-        <Panel className="mb-6 overflow-hidden p-0">
+        <Panel className="mb-4 overflow-hidden p-0">
           <div className="flex flex-wrap">
             {topTabs.map((tab, index) => (
               <button
                 key={tab.id}
                 type="button"
                 className={cx(
-                  'min-w-[108px] flex-1 px-4 py-3 font-mono text-sm font-bold transition-colors',
+                  'min-w-[96px] flex-1 px-3 py-2 font-mono text-xs font-bold transition-colors',
                   index < topTabs.length - 1 ? 'border-r border-[var(--taali-border-muted)]' : '',
                   activeTab === tab.id
                     ? 'bg-[var(--taali-purple)] text-white'
@@ -868,7 +868,7 @@ export const AssessmentResultsPage = ({
           footer={(
             <div className="flex items-center justify-between gap-3">
               <span className="font-mono text-xs text-[var(--taali-muted)]">{compareSelectedIds.length} selected</span>
-              <Button type="button" variant="secondary" onClick={() => setCompareSheetOpen(false)}>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setCompareSheetOpen(false)}>
                 Close
               </Button>
             </div>
@@ -931,7 +931,7 @@ export const AssessmentResultsPage = ({
           description="Generated from TAALI assessment evidence."
           footer={(
             <div className="flex items-center justify-end gap-2">
-              <Button type="button" variant="secondary" onClick={() => setInterviewDebriefSheetOpen(false)}>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setInterviewDebriefSheetOpen(false)}>
                 Close
               </Button>
             </div>
@@ -955,7 +955,7 @@ export const AssessmentResultsPage = ({
           description="A quick guide to reading TAALI results."
           footer={(
             <div className="flex items-center justify-end gap-2">
-              <Button type="button" variant="secondary" onClick={handleDismissResultsOnboarding}>
+              <Button type="button" size="sm" variant="secondary" onClick={handleDismissResultsOnboarding}>
                 Got it
               </Button>
             </div>

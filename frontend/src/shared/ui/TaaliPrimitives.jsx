@@ -160,7 +160,7 @@ export const Spinner = ({ size = 24, className = '' }) => (
   <Loader2 size={size} className={cx('animate-spin text-[var(--taali-purple)]', className)} aria-hidden />
 );
 
-export const TabBar = ({ tabs, activeTab, onChange, className = '' }) => (
+export const TabBar = ({ tabs, activeTab, onChange, className = '', density = 'default' }) => (
   <div
     role="tablist"
     className={cx('flex flex-wrap gap-0 border-b-2 border-[var(--taali-border)]', className)}
@@ -178,7 +178,9 @@ export const TabBar = ({ tabs, activeTab, onChange, className = '' }) => (
           type="button"
           onClick={() => onChange(tab.id)}
           className={cx(
-            'px-4 py-3 text-sm font-semibold transition-colors -mb-[2px] border-b-2',
+            density === 'compact'
+              ? 'px-3 py-2 text-xs font-semibold transition-colors -mb-[2px] border-b-2'
+              : 'px-4 py-3 text-sm font-semibold transition-colors -mb-[2px] border-b-2',
             isActive
               ? 'border-[var(--taali-border)] bg-[var(--taali-surface)] text-[var(--taali-text)]'
               : 'border-transparent text-[var(--taali-muted)] hover:text-[var(--taali-text)] hover:bg-[var(--taali-bg)]'

@@ -55,31 +55,31 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
   const promptEmptyMessage = promptEmptyMessageForStatus(assessmentStatus);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <Card className="p-4">
+        <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Avg Prompt clarity</div>
-          <div className="text-2xl font-bold text-[var(--taali-text)]">{assessment.prompt_quality_score?.toFixed(1) || '--'}<span className="text-sm text-[var(--taali-muted)]">/10</span></div>
+          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.prompt_quality_score?.toFixed(1) || '--'}<span className="text-xs text-[var(--taali-muted)]">/10</span></div>
         </Card>
-        <Card className="p-4">
+        <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Time to First Prompt</div>
-          <div className="text-2xl font-bold text-[var(--taali-text)]">{assessment.time_to_first_prompt_seconds ? `${Math.floor(assessment.time_to_first_prompt_seconds / 60)}m ${Math.round(assessment.time_to_first_prompt_seconds % 60)}s` : '--'}</div>
+          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.time_to_first_prompt_seconds ? `${Math.floor(assessment.time_to_first_prompt_seconds / 60)}m ${Math.round(assessment.time_to_first_prompt_seconds % 60)}s` : '--'}</div>
         </Card>
-        <Card className="p-4">
+        <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Browser Focus</div>
           <div
-            className={`text-2xl font-bold ${assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}
+            className={`text-xl font-bold ${assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}
           >
             {assessment.browser_focus_ratio != null ? `${Math.round(assessment.browser_focus_ratio * 100)}%` : '--'}
           </div>
         </Card>
-        <Card className="p-4">
+        <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Tab Switches</div>
-          <div className={`text-2xl font-bold ${assessment.tab_switch_count > 5 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}>{assessment.tab_switch_count ?? '--'}</div>
+          <div className={`text-xl font-bold ${assessment.tab_switch_count > 5 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}>{assessment.tab_switch_count ?? '--'}</div>
         </Card>
-        <Card className="p-4">
+        <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Calibration</div>
-          <div className="text-2xl font-bold text-[var(--taali-text)]">{assessment.calibration_score != null ? `${assessment.calibration_score.toFixed(1)}/10` : '--'}</div>
+          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.calibration_score != null ? `${assessment.calibration_score.toFixed(1)}/10` : '--'}</div>
           <div className="mt-1 font-mono text-xs text-[var(--taali-muted)]">vs avg {avgCalibrationScore != null ? `${avgCalibrationScore.toFixed(1)}/10` : '--'}</div>
         </Card>
       </div>
@@ -92,7 +92,7 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
       ) : null}
 
       {assessment.prompt_analytics?.per_prompt_scores?.length > 0 ? (
-        <Panel className="p-4">
+        <Panel className="p-3.5">
           <div className="mb-4 font-bold">Prompt clarity progression</div>
           <div style={{ width: '100%', height: 220 }}>
             <ResponsiveContainer>
@@ -117,7 +117,7 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
         </Panel>
       ) : null}
 
-      <Panel className="p-4">
+      <Panel className="p-3.5">
         <div className="mb-4 font-bold">Prompt Log ({(candidate.promptsList || []).length} prompts)</div>
         <div className="mb-3 font-mono text-xs text-[var(--taali-muted)]">
           Clarity = clear, structured asks · Specificity = concrete context and references · Efficiency = prompt-to-action quality (all /10)
@@ -222,21 +222,21 @@ export const CandidateCvFitTab = ({
   const hasCv = Boolean(assessment.candidate_cv_filename || assessment.cv_filename);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {overall != null ? (
         <>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <Card className="p-6 text-center">
+            <Card className="p-4 text-center">
               <div className="mb-1 font-mono text-xs text-gray-500">Overall Match</div>
-              <div className="text-4xl font-bold" style={{ color: cvScoreColor(overall, cvMatch) }}>{formatCvScore100(overall, cvMatch)}</div>
+              <div className="text-3xl font-bold" style={{ color: cvScoreColor(overall, cvMatch) }}>{formatCvScore100(overall, cvMatch)}</div>
             </Card>
-            <Card className="p-6 text-center">
+            <Card className="p-4 text-center">
               <div className="mb-1 font-mono text-xs text-gray-500">Skills Match</div>
-              <div className="text-4xl font-bold" style={{ color: skills != null ? cvScoreColor(skills, cvMatch) : 'var(--taali-muted)' }}>{skills != null ? formatCvScore100(skills, cvMatch) : '—'}</div>
+              <div className="text-3xl font-bold" style={{ color: skills != null ? cvScoreColor(skills, cvMatch) : 'var(--taali-muted)' }}>{skills != null ? formatCvScore100(skills, cvMatch) : '—'}</div>
             </Card>
-            <Card className="p-6 text-center">
+            <Card className="p-4 text-center">
               <div className="mb-1 font-mono text-xs text-gray-500">Experience</div>
-              <div className="text-4xl font-bold" style={{ color: experience != null ? cvScoreColor(experience, cvMatch) : 'var(--taali-muted)' }}>{experience != null ? formatCvScore100(experience, cvMatch) : '—'}</div>
+              <div className="text-3xl font-bold" style={{ color: experience != null ? cvScoreColor(experience, cvMatch) : 'var(--taali-muted)' }}>{experience != null ? formatCvScore100(experience, cvMatch) : '—'}</div>
             </Card>
           </div>
 
