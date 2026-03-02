@@ -571,6 +571,33 @@ describe('CandidatesPage', () => {
     alertMock.mockRestore();
   });
 
+  it('creates assessment from candidate details sheet and closes the sheet on success', async () => {
+    rolesApi.createAssessment.mockResolvedValue({ data: { id: 1001 } });
+
+    await renderAppOnCandidatesPage();
+
+    const candidateCell = await screen.findByText('Apply Person');
+    const candidateRow = candidateCell.closest('tr');
+    expect(candidateRow).not.toBeNull();
+
+    fireEvent.click(within(candidateRow).getByRole('button', { name: 'Details' }));
+
+    const detailsDialog = await screen.findByRole('dialog', { name: 'Apply Person' });
+    fireEvent.click(within(detailsDialog).getByRole('button', { name: 'Send assessment' }));
+
+    await waitFor(() => {
+      expect(rolesApi.createAssessment).toHaveBeenCalledWith(
+        501,
+        expect.objectContaining({ task_id: 700, duration_minutes: 30 })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('dialog', { name: 'Send assessment manually' })).toBeInTheDocument();
+      expect(screen.queryByRole('dialog', { name: 'Apply Person' })).not.toBeInTheDocument();
+    });
+  });
+
   it('switches active role from header selector and reloads role context', async () => {
     rolesApi.list.mockResolvedValue({
       data: [

@@ -317,11 +317,16 @@ export function CandidateScoreSummarySheet({
               type="button"
               variant="primary"
               disabled={!selectedTask || creatingAssessmentId === application.id}
-              onClick={() => onLaunchAssessment?.(
-                application,
-                selectedTask,
-                { retake: hasValidAssessment, voidReason: retakeReason }
-              )}
+              onClick={async () => {
+                const success = await onLaunchAssessment?.(
+                  application,
+                  selectedTask,
+                  { retake: hasValidAssessment, voidReason: retakeReason }
+                );
+                if (success) {
+                  onClose?.();
+                }
+              }}
             >
               {creatingAssessmentId === application.id
                 ? (hasValidAssessment ? 'Creating retake...' : 'Sending...')
