@@ -15,7 +15,6 @@ import { useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import { assessments as assessmentsApi } from './shared/api';
 import { pathForPage } from './app/routing';
-import { GlobalThemeToggle } from './shared/ui/GlobalThemeToggle';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
 
 import { LandingPage } from './features/marketing/LandingPage';
@@ -96,12 +95,6 @@ function AppContent() {
     }
     return null;
   }, [assessmentIdFromLink, location.pathname, searchParams]);
-
-  const hideGlobalThemeToggle = useMemo(() => (
-    location.pathname === '/demo'
-    || location.pathname.startsWith('/assess/')
-    || location.pathname.startsWith('/assessment/')
-  ), [location.pathname]);
 
   const resetPasswordToken = location.pathname === '/reset-password'
     ? (searchParams.get('token') || '')
@@ -413,7 +406,6 @@ function AppContent() {
 
       <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
-      {!hideGlobalThemeToggle ? <GlobalThemeToggle className="fixed top-4 right-4 z-[90] shadow-lg" /> : null}
     </>
   );
 }

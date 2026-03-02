@@ -13,6 +13,7 @@ import { BRAND } from '../../config/brand';
 import { aedToUsd } from '../../lib/currency';
 import { dimensionOrder, getDimensionById } from '../../scoring/scoringDimensions';
 import { BrandGlyph, Logo } from '../../shared/ui/Branding';
+import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
 import {
   Button,
   Card,
@@ -33,29 +34,31 @@ const LandingNav = ({ onNavigate }) => {
     <nav className="taali-nav sticky top-0 z-40">
       <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-4">
         <Logo onClick={() => onNavigate('landing')} />
-        <Button
-          type="button"
-          variant="ghost"
-          size="sm"
-          className="md:hidden !px-2 !py-2"
-          onClick={() => setMobileOpen((open) => !open)}
-          aria-label="Toggle navigation"
-        >
-          {mobileOpen ? <X size={18} /> : <Menu size={18} />}
-        </Button>
-
-        <div className="hidden items-center gap-2 md:flex">
-          <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => scrollTo('pricing')}>
-            Pricing
-          </Button>
-          <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => onNavigate('demo')}>
-            Demo
-          </Button>
-          <Button type="button" variant="secondary" size="sm" className="font-mono" onClick={() => onNavigate('login')}>
-            Sign In
-          </Button>
-          <Button type="button" variant="primary" size="sm" className="font-mono" onClick={() => onNavigate('login')}>
-            Get Started
+        <div className="flex items-center gap-2">
+          <div className="hidden items-center gap-2 md:flex">
+            <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => scrollTo('pricing')}>
+              Pricing
+            </Button>
+            <Button type="button" variant="ghost" size="sm" className="font-mono" onClick={() => onNavigate('demo')}>
+              Demo
+            </Button>
+            <Button type="button" variant="secondary" size="sm" className="font-mono" onClick={() => onNavigate('login')}>
+              Sign In
+            </Button>
+            <Button type="button" variant="primary" size="sm" className="font-mono" onClick={() => onNavigate('login')}>
+              Get Started
+            </Button>
+          </div>
+          <GlobalThemeToggle className="shrink-0" />
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="md:hidden !px-2 !py-2"
+            onClick={() => setMobileOpen((open) => !open)}
+            aria-label="Toggle navigation"
+          >
+            {mobileOpen ? <X size={18} /> : <Menu size={18} />}
           </Button>
         </div>
       </div>

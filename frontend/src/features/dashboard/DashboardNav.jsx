@@ -3,6 +3,7 @@ import { LogOut, Menu, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { organizations as organizationsApi } from '../../shared/api';
 import { Logo } from '../../shared/ui/Branding';
+import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
 import { Button } from '../../shared/ui/TaaliPrimitives';
 
 const pickUserName = (user) => {
@@ -96,6 +97,7 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
           </div>
         </div>
         <div className="flex items-center gap-4">
+          <GlobalThemeToggle className="shrink-0" />
           <div className="hidden sm:flex flex-col text-right leading-tight">
             <span className="font-mono text-sm text-[var(--taali-text)]">{displayName}</span>
             <span className="font-mono text-xs text-[var(--taali-muted)]">{orgName}</span>

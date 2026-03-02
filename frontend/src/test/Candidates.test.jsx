@@ -191,6 +191,12 @@ describe('CandidatesPage', () => {
     expect(screen.getByPlaceholderText('Search by name, email, position, or status')).toBeInTheDocument();
   });
 
+  it('renders the global theme switch inside the candidates top nav', async () => {
+    await renderAppOnCandidatesPage();
+
+    expect(within(screen.getByRole('navigation')).getByRole('switch')).toBeInTheDocument();
+  });
+
   it('shows role list and role summary context', async () => {
     await renderAppOnCandidatesPage();
 

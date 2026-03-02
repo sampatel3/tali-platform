@@ -5,6 +5,7 @@ import AssessmentPage from '../assessment_runtime/AssessmentPage';
 import { DEMO_ASSESSMENTS, DEFAULT_DEMO_ASSESSMENT_ID } from './demoAssessments';
 import { Logo } from '../../shared/ui/Branding';
 import { assessments as assessmentsApi } from '../../shared/api';
+import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
 import {
   Button,
   Card,
@@ -104,10 +105,11 @@ export const DemoExperiencePage = ({ onNavigate }) => {
 
   return (
     <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
-      <nav className="border-b-2 border-black bg-white">
-        <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-4">
+      <nav className="taali-nav border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-4">
           <Logo onClick={() => onNavigate('landing')} />
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center justify-end gap-2">
+            <GlobalThemeToggle className="shrink-0" />
             <Button type="button" variant="secondary" size="sm" className="font-mono" onClick={() => onNavigate('landing')}>
               Back to landing
             </Button>

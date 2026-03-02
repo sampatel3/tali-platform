@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import App from '../App';
@@ -152,14 +152,14 @@ describe('Demo flow', () => {
     ).toBeInTheDocument();
   });
 
-  it('hides the global theme switch on demo pages', async () => {
+  it('keeps the global theme switch inside the landing and demo nav bars', async () => {
     renderApp();
-    expect(screen.getByRole('switch')).toBeInTheDocument();
+    expect(within(screen.getByRole('navigation')).getByRole('switch')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
     await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 });
 
-    expect(screen.queryByRole('switch')).not.toBeInTheDocument();
+    expect(within(screen.getByRole('navigation')).getByRole('switch')).toBeInTheDocument();
   });
 
   it('requires credential fields before starting demo', async () => {
@@ -217,6 +217,8 @@ describe('Demo flow', () => {
 
     const submitButton = await screen.findByRole('button', { name: 'Submit' });
     fireEvent.click(submitButton);
+    const confirmDialog = await screen.findByRole('dialog');
+    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Submit' }));
 
     await waitFor(() => {
       expect(screen.getByText('TAALI PROFILE')).toBeInTheDocument();
