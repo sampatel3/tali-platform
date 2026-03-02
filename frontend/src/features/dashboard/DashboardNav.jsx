@@ -126,7 +126,7 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
         </div>
       </div>
       {mobileOpen && (
-        <div className="md:hidden border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-6 py-4 flex flex-col gap-2">
+        <div className="flex flex-col gap-2 border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-4 py-3 md:hidden">
           {NAV_ITEMS.map((item) => (
             <Button
               key={item.id}

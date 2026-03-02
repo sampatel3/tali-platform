@@ -1,7 +1,7 @@
 import React from 'react';
 import { Code, Eye, Pencil, Plus, Trash2 } from 'lucide-react';
 
-import { Button, Badge, Panel } from '../../shared/ui/TaaliPrimitives';
+import { Badge, Button, PageContainer, PageHeader, Panel } from '../../shared/ui/TaaliPrimitives';
 import { CardSkeleton } from '../../shared/ui/Skeletons';
 import { ScoringGlossaryPanel, SCORING_GLOSSARY_METRIC_COUNT } from '../../shared/ui/ScoringGlossaryPanel';
 
@@ -13,11 +13,11 @@ const DIFFICULTY_LEVEL_CLASS = {
 };
 
 const TaskCard = ({ task, onViewTask, onEditTask, onDeleteTask, taskAuthoringEnabled }) => (
-  <Panel key={task.id} as="div" className="p-6 hover:shadow-lg transition-shadow">
-    <div className="flex items-center justify-between mb-3">
+  <Panel key={task.id} as="div" className="p-4 transition-shadow hover:shadow-md">
+    <div className="mb-2 flex items-center justify-between gap-3">
       <span
         className={[
-          'px-3 py-1 text-xs font-mono font-bold border-2',
+          'border-2 px-2.5 py-1 font-mono text-[11px] font-bold tracking-wide',
           DIFFICULTY_LEVEL_CLASS[task.difficulty] || 'bg-[var(--taali-purple)] text-white border-[var(--taali-border)]',
         ].join(' ')}
       >
@@ -25,10 +25,10 @@ const TaskCard = ({ task, onViewTask, onEditTask, onDeleteTask, taskAuthoringEna
       </span>
       <span className="font-mono text-xs text-[var(--taali-muted)]">{task.duration_minutes}min</span>
     </div>
-    <h3 className="font-bold text-lg mb-2 text-[var(--taali-text)]">{task.name}</h3>
-    <p className="text-sm text-[var(--taali-muted)] mb-4 line-clamp-3">{task.description}</p>
-    <div className="flex items-center justify-between flex-wrap gap-2">
-      <div className="flex flex-wrap gap-1">
+    <h3 className="mb-1.5 text-base font-bold leading-snug text-[var(--taali-text)]">{task.name}</h3>
+    <p className="mb-3 line-clamp-3 text-[13px] leading-5 text-[var(--taali-muted)]">{task.description}</p>
+    <div className="flex flex-wrap items-end justify-between gap-2">
+      <div className="flex flex-wrap gap-1.5">
         <Badge variant="muted" className="font-mono">{task.task_type?.replace('_', ' ')}</Badge>
         {task.role ? (
           <Badge variant="muted" className="font-mono">{String(task.role).replace(/_/g, ' ')}</Badge>
@@ -40,10 +40,10 @@ const TaskCard = ({ task, onViewTask, onEditTask, onDeleteTask, taskAuthoringEna
           <Badge variant="warning" className="font-mono">${task.claude_budget_limit_usd.toFixed(2)} Claude cap</Badge>
         ) : null}
       </div>
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5">
         <Button
           variant="secondary"
-          size="sm"
+          size="xs"
           title="View task"
           onClick={() => onViewTask(task)}
         >
@@ -53,7 +53,7 @@ const TaskCard = ({ task, onViewTask, onEditTask, onDeleteTask, taskAuthoringEna
           <>
             <Button
               variant="secondary"
-              size="sm"
+              size="xs"
               title="Edit task"
               onClick={() => onEditTask(task)}
             >
@@ -61,7 +61,7 @@ const TaskCard = ({ task, onViewTask, onEditTask, onDeleteTask, taskAuthoringEna
             </Button>
             <Button
               variant="danger"
-              size="sm"
+              size="xs"
               title="Delete task"
               onClick={() => onDeleteTask(task)}
             >
@@ -86,32 +86,31 @@ export const TasksListView = ({
   onCreateTask,
   taskAuthoringEnabled,
 }) => (
-  <div className="max-w-7xl mx-auto px-6 py-8">
-    <div className="flex items-center justify-between mb-8">
-      <div>
-        <h1 className="text-3xl font-bold text-[var(--taali-text)]">Tasks</h1>
-        <p className="text-sm text-[var(--taali-muted)] mt-1">Assessment task catalog</p>
-      </div>
-      {taskAuthoringEnabled ? (
-        <Button type="button" variant="primary" onClick={onCreateTask}>
+  <PageContainer density="compact" width="wide">
+    <PageHeader
+      title="Tasks"
+      subtitle="Assessment task catalog"
+      density="compact"
+      actions={taskAuthoringEnabled ? (
+        <Button type="button" variant="primary" size="sm" onClick={onCreateTask}>
           <Plus size={14} />
           Create Task
         </Button>
       ) : (
         <span className="font-mono text-xs text-[var(--taali-muted)]">Task authoring is disabled.</span>
       )}
-    </div>
+    />
 
     {loading ? (
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {Array.from({ length: 6 }).map((_, index) => (
           <CardSkeleton key={`tasks-skeleton-${index}`} lines={3} />
         ))}
       </div>
     ) : tasksList.length === 0 ? (
-      <div className="taali-empty-state p-16 text-center border-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
-        <Code size={48} className="mx-auto mb-4 text-[var(--taali-border-muted)]" />
-        <h3 className="text-xl font-bold mb-2 text-[var(--taali-text)]">No tasks available</h3>
+      <div className="taali-empty-state border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-5 py-10 text-center">
+        <Code size={42} className="mx-auto mb-3 text-[var(--taali-border-muted)]" />
+        <h3 className="mb-2 text-lg font-bold text-[var(--taali-text)]">No tasks available</h3>
         <p className="text-sm text-[var(--taali-muted)]">
           {taskAuthoringEnabled
             ? 'Create your first task to start evaluating candidates.'
@@ -119,7 +118,7 @@ export const TasksListView = ({
         </p>
       </div>
     ) : (
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {tasksList.map((task) => (
           <TaskCard
             key={task.id}
@@ -134,7 +133,7 @@ export const TasksListView = ({
     )}
 
     {!loading ? (
-      <Panel as="div" className="mt-8 p-4">
+      <Panel as="div" className="mt-6 p-3">
         <details>
           <summary className="cursor-pointer font-mono text-xs text-[var(--taali-purple)] hover:underline">
             View TAALI scoring glossary ({SCORING_GLOSSARY_METRIC_COUNT} metrics) →
@@ -143,5 +142,5 @@ export const TasksListView = ({
         </details>
       </Panel>
     ) : null}
-  </div>
+  </PageContainer>
 );

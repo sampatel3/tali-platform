@@ -1045,7 +1045,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   <div className="flex items-start justify-between flex-wrap gap-4">
                     <div>
                       <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Current Plan</div>
-                      <div className="text-xl font-bold text-[var(--taali-text)]">{billingPlan}</div>
+                      <div className="text-lg font-bold text-[var(--taali-text)]">{billingPlan}</div>
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Total usage</div>
@@ -1080,14 +1080,14 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <div className="mb-5 grid gap-4 md:grid-cols-2">
                   <Panel className="p-4">
                     <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Daily spend threshold</div>
-                    <div className="text-xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.daily_spend_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
+                    <div className="text-lg font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.daily_spend_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
                     <div className={`font-mono text-xs mt-2 ${thresholdStatus.daily_spend_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
                       Today: {toAedWithUsdLabel(Number(spendSummary.daily_spend_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.daily_spend_exceeded ? 'Exceeded' : 'Within threshold'}
                     </div>
                   </Panel>
                   <Panel className="p-4">
                     <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Cost / completed assessment threshold</div>
-                    <div className="text-xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.cost_per_completed_assessment_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
+                    <div className="text-lg font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.cost_per_completed_assessment_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
                     <div className={`font-mono text-xs mt-2 ${thresholdStatus.cost_per_completed_assessment_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
                       Current: {toAedWithUsdLabel(Number(spendSummary.cost_per_completed_assessment_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.cost_per_completed_assessment_exceeded ? 'Exceeded' : 'Within threshold'}
                     </div>
@@ -1110,7 +1110,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <tbody>
                       {usageHistory.length === 0 ? (
                         <tr>
-                          <td colSpan={4} className="px-6 py-8 font-mono text-sm text-[var(--taali-muted)] text-center">
+                          <td colSpan={4} className="px-4 py-6 text-center font-mono text-sm text-[var(--taali-muted)]">
                             No usage yet. Completed assessments will appear here.
                           </td>
                         </tr>
@@ -1169,7 +1169,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     </thead>
                     <tbody>
                       {teamMembers.length === 0 ? (
-                        <tr><td colSpan={2} className="px-6 py-8 font-mono text-sm text-[var(--taali-muted)] text-center">No members yet.</td></tr>
+                        <tr><td colSpan={2} className="px-4 py-6 text-center font-mono text-sm text-[var(--taali-muted)]">No members yet.</td></tr>
                       ) : teamMembers.map((m) => (
                         <tr key={m.id} className="border-b border-[var(--taali-border-muted)]">
                           <td className="px-4 py-2.5 text-[var(--taali-text)]">{m.full_name || '—'}</td>

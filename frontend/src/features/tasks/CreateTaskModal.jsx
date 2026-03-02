@@ -186,12 +186,12 @@ export const CreateTaskModal = ({
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <div
-        className="bg-[var(--taali-surface)] border-2 border-[var(--taali-border)] w-full max-w-5xl max-h-[92vh] overflow-y-auto"
+        className="max-h-[92vh] w-full max-w-6xl overflow-y-auto border-2 border-[var(--taali-border)] bg-[var(--taali-surface)]"
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="sticky top-0 z-10 flex items-center justify-between px-8 py-5 border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
+        <div className="sticky top-0 z-10 flex items-center justify-between border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-5 py-4">
           <div>
-            <h2 className="text-xl font-bold text-[var(--taali-text)]">{title}</h2>
+            <h2 className="text-lg font-bold text-[var(--taali-text)]">{title}</h2>
             {!taskAuthoringEnabled && !isViewOnly ? (
               <p className="font-mono text-xs text-[var(--taali-warning)] mt-1">Task authoring is disabled by feature flag.</p>
             ) : null}
@@ -201,9 +201,9 @@ export const CreateTaskModal = ({
           </Button>
         </div>
 
-        <div className="px-8 py-6 space-y-5">
+        <div className="space-y-4 px-5 py-4">
           {!isViewOnly ? (
-            <Panel as="div" className="p-4">
+            <Panel as="div" className="p-3.5">
               <div className="font-mono text-xs text-[var(--taali-muted)] mb-2">Start from template</div>
               <div className="flex flex-wrap gap-2">
                 {TASK_TEMPLATES.map((template) => (
@@ -221,7 +221,7 @@ export const CreateTaskModal = ({
             </Panel>
           ) : null}
 
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2">
             <label className="block">
               <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Task name</span>
               <Input
@@ -290,7 +290,7 @@ export const CreateTaskModal = ({
           <label className="block">
             <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Description</span>
             <Textarea
-              className="min-h-[90px]"
+              className="min-h-[80px]"
               value={form.description || ''}
               onChange={(event) => handleChange('description', event.target.value)}
               disabled={isViewOnly}
@@ -300,18 +300,18 @@ export const CreateTaskModal = ({
           <label className="block">
             <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Scenario</span>
             <Textarea
-              className="min-h-[80px]"
+              className="min-h-[72px]"
               value={form.scenario || ''}
               onChange={(event) => handleChange('scenario', event.target.value)}
               disabled={isViewOnly}
             />
           </label>
 
-          <div className="grid gap-4 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-2">
             <label className="block">
               <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Starter code</span>
               <Textarea
-                className="min-h-[220px] font-mono text-xs"
+                className="min-h-[200px] font-mono text-xs"
                 value={form.starter_code || ''}
                 onChange={(event) => handleChange('starter_code', event.target.value)}
                 disabled={isViewOnly}
@@ -320,7 +320,7 @@ export const CreateTaskModal = ({
             <label className="block">
               <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Test suite</span>
               <Textarea
-                className="min-h-[220px] font-mono text-xs"
+                className="min-h-[200px] font-mono text-xs"
                 value={form.test_code || ''}
                 onChange={(event) => handleChange('test_code', event.target.value)}
                 disabled={isViewOnly}
@@ -328,7 +328,7 @@ export const CreateTaskModal = ({
             </label>
           </div>
 
-          <Panel as="div" className="p-4">
+          <Panel as="div" className="p-3.5">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <div className="font-mono text-xs text-[var(--taali-muted)]">Score weights (%)</div>
               <div className="font-mono text-xs text-[var(--taali-muted)]">
@@ -336,7 +336,7 @@ export const CreateTaskModal = ({
                 {weightTotal !== 100 ? ' (will be normalized to 100%)' : ''}
               </div>
             </div>
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-2.5 md:grid-cols-2">
               {SCORE_WEIGHT_FIELDS.map((field) => (
                 <label key={field.key} className="block">
                   <div className="mb-1 flex items-center justify-between">
@@ -359,7 +359,7 @@ export const CreateTaskModal = ({
             </div>
           </Panel>
 
-          <Panel as="div" className="p-4">
+          <Panel as="div" className="p-3.5">
             <details>
               <summary className="cursor-pointer font-mono text-xs text-[var(--taali-purple)] hover:underline">
                 View TAALI scoring glossary ({SCORING_GLOSSARY_METRIC_COUNT} metrics) →
@@ -376,7 +376,7 @@ export const CreateTaskModal = ({
           ) : null}
         </div>
 
-        <div className="sticky bottom-0 border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-8 py-4 flex justify-end gap-2">
+        <div className="sticky bottom-0 flex justify-end gap-2 border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-5 py-3">
           <Button type="button" variant="ghost" onClick={onClose}>Cancel</Button>
           {!isViewOnly ? (
             <Button type="button" variant="primary" onClick={handleSubmit} disabled={saving}>
