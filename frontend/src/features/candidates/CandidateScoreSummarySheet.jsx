@@ -3,7 +3,13 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Panel, Select, Sheet, Spinner, Textarea } from '../../shared/ui/TaaliPrimitives';
 import { ComparisonRadar } from '../../shared/ui/ComparisonRadar';
 import { getDimensionById } from '../../scoring/scoringDimensions';
-import { formatCvScore100, formatDateTime } from './candidatesUiUtils';
+import { CandidateScoreRing } from './CandidateScoreRing';
+import { CandidateSidebarHeader } from './CandidateSidebarHeader';
+import {
+  buildApplicationStatusMeta,
+  formatCvScore100,
+  formatDateTime,
+} from './candidatesUiUtils';
 
 const COMPLETED_ASSESSMENT_STATUSES = new Set(['completed', 'completed_due_to_timeout']);
 
@@ -14,12 +20,12 @@ const modeMeta = (mode) => {
   return { label: 'CV fit only', variant: 'muted' };
 };
 
-const formatScore = (value) => {
+const formatScore = (value, { includeScale = true, empty = '—' } = {}) => {
   const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '—';
+  if (!Number.isFinite(numeric)) return empty;
   const rounded = Math.round(numeric * 10) / 10;
   const display = Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1);
-  return `${display}/100`;
+  return includeScale ? `${display}/100` : display;
 };
 
 const compactText = (value, maxChars = 180) => {
@@ -182,11 +188,26 @@ const buildScoreWhySections = (app) => {
   };
 };
 
-const ScoreCard = ({ label, value }) => (
+const InfoCard = ({ label, value }) => (
   <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] px-3 py-3">
     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{label}</p>
-    <p className="mt-1 text-lg font-semibold text-[var(--taali-text)]">{value}</p>
+    <p className="mt-2 text-sm font-semibold text-[var(--taali-text)]">{value}</p>
   </div>
+);
+
+const BreakdownCard = ({ label, value, badge = null, children }) => (
+  <Panel className="overflow-hidden p-0">
+    <div className="border-b border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] px-4 py-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{label}</p>
+          <p className="mt-2 font-mono text-3xl font-bold text-[var(--taali-text)]">{value}</p>
+        </div>
+        {badge ? <Badge variant={badge.variant}>{badge.label}</Badge> : null}
+      </div>
+    </div>
+    <div className="space-y-4 px-4 py-4">{children}</div>
+  </Panel>
 );
 
 const ReasonList = ({ title, items }) => {
@@ -204,6 +225,17 @@ const ReasonList = ({ title, items }) => {
       </ul>
     </div>
   );
+};
+
+const toDimensionLabel = (dimensionId) => {
+  const dimension = getDimensionById(dimensionId);
+  return dimension?.label || compactText(dimensionId, 40) || '—';
+};
+
+const toAssessmentStatusText = (status) => {
+  const cleaned = String(status || '').trim();
+  if (!cleaned) return 'not started';
+  return cleaned.replace(/_/g, ' ');
 };
 
 export function CandidateScoreSummarySheet({
@@ -239,6 +271,7 @@ export function CandidateScoreSummarySheet({
     && Boolean(scoreSummary.assessment_id);
   const hasValidAssessment = Boolean(application?.valid_assessment_id);
   const hasCv = Boolean(application?.cv_filename || application?.cv_text);
+  const statusMeta = buildApplicationStatusMeta(application?.status, application?.workable_stage);
 
   const currentAssessmentPreview = useMemo(() => {
     if (!assessmentPreview?.assessment_id) return [];
@@ -255,12 +288,12 @@ export function CandidateScoreSummarySheet({
     ];
   }, [application?.candidate_name, assessmentPreview]);
 
-  const strongestLabel = assessmentPreview?.strongest_dimension
-    ? getDimensionById(assessmentPreview.strongest_dimension).label
-    : null;
-  const weakestLabel = assessmentPreview?.weakest_dimension
-    ? getDimensionById(assessmentPreview.weakest_dimension).label
-    : null;
+  const strongestLabel = toDimensionLabel(assessmentPreview?.strongest_dimension);
+  const weakestLabel = toDimensionLabel(assessmentPreview?.weakest_dimension);
+  const updatedAt = formatDateTime(application?.updated_at || application?.created_at);
+  const assessmentValue = hasCompletedAssessment
+    ? formatScore(scoreSummary.assessment_score)
+    : (hasValidAssessment ? 'In progress' : 'Not started');
 
   const footer = loading ? (
     <div className="flex items-center gap-2 text-sm text-[var(--taali-muted)]">
@@ -342,6 +375,7 @@ export function CandidateScoreSummarySheet({
       onClose={onClose}
       title={application?.candidate_name || application?.candidate_email || 'Candidate summary'}
       description={application?.role_name || application?.candidate_position || 'Role scoring summary'}
+      headerContent={<CandidateSidebarHeader application={application} />}
       footer={footer}
     >
       {loading ? (
@@ -353,83 +387,122 @@ export function CandidateScoreSummarySheet({
           Candidate summary unavailable.
         </Panel>
       ) : (
-        <div className="space-y-5">
-          <Panel className="border-2 border-[var(--taali-purple)] bg-[#151122] p-5 text-white">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/60">TAALI Score</p>
-                <p className="mt-2 text-5xl font-bold text-[var(--taali-purple)]">{formatScore(scoreSummary.taali_score)}</p>
+        <div className="space-y-4">
+          <Panel className="overflow-hidden border-2 border-[var(--taali-border)] bg-[linear-gradient(135deg,rgba(190,171,255,0.18),rgba(255,255,255,0.98))] p-5">
+            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-center gap-4">
+                <CandidateScoreRing
+                  score={scoreSummary.taali_score}
+                  details={{ score_scale: '0-100' }}
+                  size={112}
+                  strokeWidth={10}
+                  label={`TAALI Score for ${application?.candidate_name || application?.candidate_email || 'candidate'}`}
+                  valueClassName="text-[1.75rem]"
+                />
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">TAALI Score</p>
+                  <p className="mt-2 font-mono text-4xl font-bold text-[var(--taali-text)]">
+                    {formatScore(scoreSummary.taali_score)}
+                  </p>
+                  <p className="mt-2 max-w-[320px] text-sm text-[var(--taali-muted)]">
+                    {scoreSummary.formula_label || 'Current recruiter-facing score.'}
+                  </p>
+                </div>
               </div>
-              <div className="space-y-2 text-right">
+              <div className="space-y-3 sm:text-right">
                 <Badge variant={mode.variant}>{mode.label}</Badge>
-                <p className="max-w-[260px] text-sm text-white/70">{scoreSummary.formula_label || 'Current recruiter-facing score.'}</p>
+                <p className="text-xs text-[var(--taali-muted)]">Updated {updatedAt}</p>
               </div>
             </div>
           </Panel>
 
-          <div className="grid gap-3 md:grid-cols-3">
-            <ScoreCard label="Assessment Score" value={formatScore(scoreSummary.assessment_score)} />
-            <ScoreCard label="CV Fit" value={formatScore(scoreSummary.cv_fit_score)} />
-            <ScoreCard label="Requirements Fit" value={formatScore(scoreSummary.requirements_fit_score)} />
-          </div>
-
           <Panel className="p-4">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role status</p>
-                <p className="mt-1 text-sm text-[var(--taali-text)]">
-                  {application.status || 'applied'}
-                  {application.workable_stage ? ` • ${application.workable_stage}` : ''}
-                </p>
-              </div>
-              <p className="text-xs text-[var(--taali-muted)]">Updated {formatDateTime(application.updated_at || application.created_at)}</p>
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {statusMeta.map((item) => (
+                <InfoCard key={item.label} label={item.label} value={item.value} />
+              ))}
+              <InfoCard label="Role" value={application.role_name || application.candidate_position || '—'} />
             </div>
+          </Panel>
 
+          <BreakdownCard
+            label="Assessment score"
+            value={assessmentValue}
+            badge={hasCompletedAssessment
+              ? { label: 'Completed', variant: 'purple' }
+              : { label: hasValidAssessment ? 'Active attempt' : 'Awaiting assessment', variant: 'muted' }}
+          >
             {hasCompletedAssessment && assessmentPreview ? (
-              <div className="space-y-4">
+              <>
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Assessment summary</p>
-                    <p className="mt-2 text-sm leading-6 text-[var(--taali-text)]">
-                      {assessmentPreview.heuristic_summary || 'Assessment completed. Review the dimension breakdown and strongest areas before moving this candidate forward.'}
-                    </p>
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <ScoreCard label="Strongest dimension" value={strongestLabel || '—'} />
-                      <ScoreCard label="Weakest dimension" value={weakestLabel || '—'} />
+                  <div className="space-y-4">
+                    <div>
+                      <p className="text-sm leading-6 text-[var(--taali-text)]">
+                        {assessmentPreview.heuristic_summary || 'Assessment completed. Review the dimension breakdown and strongest areas before moving this candidate forward.'}
+                      </p>
+                    </div>
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <InfoCard label="Strongest dimension" value={strongestLabel} />
+                      <InfoCard label="Weakest dimension" value={weakestLabel} />
                     </div>
                     {scoreSummary.mode === 'assessment_only_fallback' ? (
-                      <p className="mt-3 text-sm text-amber-700">
+                      <p className="text-sm text-amber-700">
                         CV fit unavailable for this completed attempt; TAALI Score currently reflects assessment only.
                       </p>
                     ) : null}
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        onClick={() => onViewResults?.(scoreSummary.assessment_id, application)}
+                      >
+                        View full assessment results
+                      </Button>
+                    </div>
                   </div>
                   <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] p-3">
                     <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Assessment chart</p>
-                    <ComparisonRadar assessments={currentAssessmentPreview} highlightAssessmentId={assessmentPreview.assessment_id} className="-mx-3" />
+                    <ComparisonRadar
+                      assessments={currentAssessmentPreview}
+                      highlightAssessmentId={assessmentPreview.assessment_id}
+                      showLegend={false}
+                      height={220}
+                      className="-mx-1"
+                    />
                   </div>
                 </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="md:col-span-2">
-                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Why this score</p>
-                  </div>
-                  <ReasonList title="CV fit rationale" items={scoreWhy.cvFit} />
-                  <ReasonList title="Requirements fit" items={scoreWhy.additionalRequirementsFit} />
-                </div>
-              </div>
+              </>
             ) : (
-              <div className="space-y-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Why this score</p>
-                <ReasonList title="CV fit" items={scoreWhy.cvFit} />
-                <ReasonList title="Additional requirements fit" items={scoreWhy.additionalRequirementsFit} />
-                {scoreWhy.cvFit.length === 0 && scoreWhy.additionalRequirementsFit.length === 0 ? (
-                  <p className="text-sm text-[var(--taali-muted)]">
-                    CV-fit rationale is not available yet. Upload a CV or generate role-fit scoring to populate this summary.
-                  </p>
+              <div className="space-y-3">
+                <p className="text-sm leading-6 text-[var(--taali-text)]">
+                  {hasValidAssessment
+                    ? `Current assessment is ${toAssessmentStatusText(scoreSummary.assessment_status)}. Until it completes, the TAALI Score continues to reflect CV fit.`
+                    : 'No assessment has been completed for this role yet. The current TAALI Score is driven by CV fit until a recruiter sends and the candidate completes one assessment.'}
+                </p>
+                {roleTasks.length === 0 ? (
+                  <p className="text-sm text-amber-700">Link a task to this role to enable assessment sending.</p>
                 ) : null}
               </div>
             )}
-          </Panel>
+          </BreakdownCard>
+
+          <BreakdownCard label="CV fit" value={formatScore(scoreSummary.cv_fit_score)}>
+            <ReasonList title="CV evidence" items={scoreWhy.cvFit} />
+            {scoreWhy.cvFit.length === 0 ? (
+              <p className="text-sm text-[var(--taali-muted)]">
+                CV-fit rationale is not available yet. Upload a CV or regenerate scoring to populate this summary.
+              </p>
+            ) : null}
+          </BreakdownCard>
+
+          <BreakdownCard label="Requirements fit" value={formatScore(scoreSummary.requirements_fit_score)}>
+            <ReasonList title="Requirements evidence" items={scoreWhy.additionalRequirementsFit} />
+            {scoreWhy.additionalRequirementsFit.length === 0 ? (
+              <p className="text-sm text-[var(--taali-muted)]">
+                Recruiter requirement coverage is not available yet for this role.
+              </p>
+            ) : null}
+          </BreakdownCard>
 
           <Panel className="p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
@@ -453,7 +526,7 @@ export function CandidateScoreSummarySheet({
                             {item.is_voided ? <Badge variant="warning">Voided</Badge> : <Badge variant="muted">Current</Badge>}
                           </div>
                           <p className="mt-1 text-sm text-[var(--taali-muted)]">
-                            Status: {String(item.status || 'pending').replace(/_/g, ' ')}
+                            Status: {toAssessmentStatusText(item.status)}
                             {item.completed_at ? ` • Completed ${formatDateTime(item.completed_at)}` : ''}
                             {!item.completed_at && item.created_at ? ` • Created ${formatDateTime(item.created_at)}` : ''}
                           </p>

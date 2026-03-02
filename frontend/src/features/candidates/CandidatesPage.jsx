@@ -862,7 +862,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   Sort by
                 </span>
                 <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-                  <option value="taali_score">TAALI Score (/100)</option>
+                  <option value="taali_score">TAALI Score</option>
                   <option value="cv_match_score">CV fit (/100)</option>
                   <option value="created_at">Added</option>
                 </Select>

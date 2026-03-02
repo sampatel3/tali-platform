@@ -17,6 +17,8 @@ export const ComparisonRadar = ({
   assessments = [],
   highlightAssessmentId = null,
   className = '',
+  height = 340,
+  showLegend = true,
 }) => {
   if (!Array.isArray(assessments) || assessments.length === 0) {
     return <div className="text-sm text-[var(--taali-muted)]">No comparison data selected.</div>;
@@ -34,7 +36,7 @@ export const ComparisonRadar = ({
 
   return (
     <div className={className}>
-      <div className="w-full h-[340px]">
+      <div className="w-full" style={{ height }}>
         <ResponsiveContainer>
           <RadarChart data={radarData}>
             <PolarGrid />
@@ -55,11 +57,10 @@ export const ComparisonRadar = ({
                 />
               );
             })}
-            <Legend />
+            {showLegend ? <Legend /> : null}
           </RadarChart>
         </ResponsiveContainer>
       </div>
     </div>
   );
 };
-

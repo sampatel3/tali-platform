@@ -11,6 +11,7 @@ import {
 } from '../../shared/ui/TaaliPrimitives';
 import { TableRowSkeleton } from '../../shared/ui/Skeletons';
 import { formatCvScore100, formatDateTime, statusVariant } from './candidatesUiUtils';
+import { CandidateScoreRing } from './CandidateScoreRing';
 
 const COLUMN_STORAGE_KEY = 'taali_candidates_table_columns_v2';
 const PAGE_SIZE = 20;
@@ -66,15 +67,23 @@ const renderModeLabel = (application) => {
   return 'CV fit only';
 };
 
-const renderTaaliScore = (application) => {
+const getTaaliScorePayload = (application) => {
   if (typeof application.taali_score === 'number') {
-    return formatCvScore100(application.taali_score, { score_scale: '0-100' });
+    return { score: application.taali_score, details: { score_scale: '0-100' } };
   }
   if (typeof application.score_summary?.taali_score === 'number') {
-    return formatCvScore100(application.score_summary.taali_score, { score_scale: '0-100' });
+    return { score: application.score_summary.taali_score, details: { score_scale: '0-100' } };
   }
   if (typeof application.cv_match_score === 'number') {
-    return formatCvScore100(application.cv_match_score, application.cv_match_details);
+    return { score: application.cv_match_score, details: application.cv_match_details };
+  }
+  return { score: null, details: null };
+};
+
+const renderTaaliScore = (application) => {
+  const payload = getTaaliScorePayload(application);
+  if (typeof payload.score === 'number') {
+    return formatCvScore100(payload.score, payload.details);
   }
   if (!application.cv_filename) return '—';
   return 'Pending';
@@ -84,7 +93,7 @@ const columnLabel = (column) => ({
   candidate: 'Candidate',
   cv: 'CV',
   send: 'Assessment',
-  taali_ai: 'TAALI Score (/100)',
+  taali_ai: 'TAALI Score',
   workable_stage: 'Workable stage',
   workable_candidate_id: 'Workable id',
   status: 'Status',
@@ -332,7 +341,7 @@ export const CandidatesTable = ({
                 const widthClass = {
                   candidate: 'w-[280px]',
                   cv: 'w-[140px]',
-                  taali_ai: 'w-[130px]',
+                  taali_ai: 'w-[150px]',
                   send: 'w-[180px]',
                   workable_stage: 'w-[150px]',
                   workable_candidate_id: 'w-[200px]',
@@ -362,7 +371,7 @@ export const CandidatesTable = ({
                         className="inline-flex items-center gap-1 uppercase tracking-[0.08em] text-gray-600 transition-colors hover:text-gray-900"
                         onClick={() => handleSortToggle('taali_score')}
                       >
-                        TAALI Score (/100)
+                        TAALI Score
                         <span className="text-[0.65rem] text-gray-500">{renderSortIndicator('taali_score')}</span>
                       </button>
                     </th>
@@ -537,10 +546,21 @@ export const CandidatesTable = ({
                       }
 
                       if (column === 'taali_ai') {
+                        const taaliScore = getTaaliScorePayload(application);
                         return (
-                          <td key={column} className="px-3 py-2 text-right">
-                            <div className="font-mono text-sm tabular-nums text-gray-700">{renderTaaliScore(application)}</div>
-                            <div className="text-[11px] text-gray-500">{renderModeLabel(application)}</div>
+                          <td key={column} className="px-3 py-2">
+                            <div className="flex flex-col items-center gap-2 text-center">
+                              <CandidateScoreRing
+                                score={taaliScore.score}
+                                details={taaliScore.details}
+                                size={56}
+                                strokeWidth={6}
+                                label={`TAALI Score for ${application.candidate_name || application.candidate_email || 'candidate'}`}
+                              />
+                              <div className="max-w-[92px] text-[11px] leading-4 text-gray-500" title={renderTaaliScore(application)}>
+                                {renderModeLabel(application)}
+                              </div>
+                            </div>
                           </td>
                         );
                       }
