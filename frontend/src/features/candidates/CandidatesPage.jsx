@@ -787,7 +787,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       <PageContainer density="compact" width="wide">
         <PageHeader
           density="compact"
-          className="mb-5"
+          className="mb-4"
           title="Candidates"
           subtitle="Manage role pipelines and assessments in one place."
           actions={(
@@ -812,7 +812,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
             </>
           )}
         >
-          <div className="grid gap-3 md:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(0,1fr)]">
+          <div className="grid gap-2.5 md:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[240px_minmax(0,1fr)]">
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Active role
@@ -841,8 +841,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
               />
             </label>
           </div>
-          <div className="mt-3 border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-3">
-            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
+          <div className="mt-3 border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-2.5">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Sorting and filters
               </p>
@@ -859,7 +859,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 </Button>
               </div>
             </div>
-            <div className="grid gap-2.5 md:grid-cols-2 lg:grid-cols-5">
+            <div className="grid gap-2 md:grid-cols-2 lg:grid-cols-5">
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Sort by
@@ -926,7 +926,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
           </div>
         </PageHeader>
 
-        <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]">
+        <div className="grid gap-4 lg:grid-cols-[264px_minmax(0,1fr)] xl:grid-cols-[284px_minmax(0,1fr)]">
           <RolesList
             roles={roles}
             selectedRoleId={selectedRoleId}
@@ -937,7 +937,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
             onRefresh={() => loadRoles()}
           />
 
-          <div className="space-y-3">
+          <div className="space-y-2.5">
             {!selectedRole ? (
               <EmptyRoleDetail onCreateRole={() => handleOpenRoleSheet('create')} />
             ) : (

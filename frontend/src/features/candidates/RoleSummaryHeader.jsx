@@ -98,11 +98,11 @@ export const RoleSummaryHeader = ({
   }, [role.id, hasSpecContent, hasAdditionalRequirements]);
 
   return (
-    <Panel className="p-4">
-      <div className="flex flex-wrap items-start justify-between gap-4">
+    <Panel className="p-3.5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="space-y-1">
-          <h2 className="text-xl font-bold tracking-tight text-[var(--taali-text)]">{role.name}</h2>
-          {rolePreview ? <p className="text-sm text-[var(--taali-muted)]">{rolePreview}</p> : null}
+          <h2 className="text-lg font-bold tracking-tight text-[var(--taali-text)]">{role.name}</h2>
+          {rolePreview ? <p className="text-[13px] leading-5 text-[var(--taali-muted)]">{rolePreview}</p> : null}
         </div>
         <div className="flex items-center gap-2">
           {onFetchCvs ? (
@@ -153,11 +153,11 @@ export const RoleSummaryHeader = ({
         </div>
       </div>
       <Card
-        className="mt-3 overflow-hidden border-[var(--taali-border-muted)] p-0"
+        className="mt-2.5 overflow-hidden border-[var(--taali-border-muted)] p-0"
         style={{ background: 'linear-gradient(180deg, var(--taali-surface-subtle) 0%, var(--taali-surface) 60%)' }}
       >
         <div className="flex flex-col">
-          <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-3 py-2">
             <div className="inline-flex items-center gap-2 text-sm text-gray-700">
               <FileText size={15} className="text-gray-500" />
               <span className="font-medium">Job spec:</span>
@@ -178,12 +178,12 @@ export const RoleSummaryHeader = ({
           </div>
 
           {specExpanded ? (
-            <div id={specPanelId} className="space-y-3 border-y border-[var(--taali-border-muted)] p-3.5">
-              <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-4">
+            <div id={specPanelId} className="space-y-3 border-y border-[var(--taali-border-muted)] p-3">
+              <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-3">
                 <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">Job role spec</p>
                 {roleDescription ? (
-                  <div className="max-h-[360px] overflow-auto pr-1">
-                    <div className="job-spec-content text-sm text-gray-800 leading-relaxed">
+                  <div className="max-h-[320px] overflow-auto pr-1">
+                    <div className="job-spec-content text-[13px] text-gray-800 leading-relaxed">
                       <ReactMarkdown
                         components={{
                           h1: ({ node, ...p }) => <h1 className="text-lg font-bold mt-4 mb-2 first:mt-0 border-b border-gray-200 pb-1" {...p} />,
@@ -207,16 +207,16 @@ export const RoleSummaryHeader = ({
               </div>
 
               {hasAdditionalRequirements ? (
-                <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-warm)] p-4">
+                <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-warm)] p-3">
                   <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">Additional requirements</p>
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{additionalRequirements}</p>
+                  <p className="whitespace-pre-wrap text-[13px] leading-relaxed text-gray-700">{additionalRequirements}</p>
                 </div>
               ) : null}
             </div>
           ) : null}
 
-          <div className="p-3.5">
-            <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] px-3 py-2">
+          <div className="p-3">
+            <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] px-2.5 py-1.5">
               <div className="inline-flex items-center gap-2 text-sm text-gray-700">
                 <BriefcaseBusiness size={15} className="text-gray-500" />
                 <span className="font-medium">Tasks ({roleTasks.length}):</span>
@@ -236,7 +236,7 @@ export const RoleSummaryHeader = ({
       </Card>
 
       {hasInterviewFocus ? (
-        <Card className="mt-3 p-3.5">
+        <Card className="mt-2.5 p-3">
           <button
             type="button"
             className="flex w-full items-start justify-between gap-3 text-left"
@@ -264,7 +264,7 @@ export const RoleSummaryHeader = ({
           {focusExpanded ? (
             <div id={focusPanelId}>
               {focus?.role_summary ? (
-                <p className="mt-2 text-sm text-gray-700">{focus.role_summary}</p>
+                <p className="mt-2 text-[13px] leading-5 text-gray-700">{focus.role_summary}</p>
               ) : null}
 
               {focusTriggers.length > 0 ? (
@@ -275,9 +275,9 @@ export const RoleSummaryHeader = ({
                 </div>
               ) : null}
 
-              <div className="mt-2.5 space-y-2">
+              <div className="mt-2.5 space-y-1.5">
                 {focusQuestions.map((item, index) => (
-                  <Card key={`${item.question}-${index}`} className="border-[var(--taali-border-muted)] bg-[var(--taali-surface-warm)] px-3 py-2">
+                  <Card key={`${item.question}-${index}`} className="border-[var(--taali-border-muted)] bg-[var(--taali-surface-warm)] px-2.5 py-2">
                     <p className="text-sm font-semibold text-gray-900">
                       {`Q${index + 1}. `}
                       {item.question}
@@ -303,14 +303,14 @@ export const RoleSummaryHeader = ({
           ) : null}
         </Card>
       ) : jobSpecReady && interviewFocusGenerating ? (
-        <Card className="mt-3 border-[var(--taali-border)] bg-[var(--taali-surface)] p-3 text-sm text-[var(--taali-muted)]">
+        <Card className="mt-2.5 border-[var(--taali-border)] bg-[var(--taali-surface)] p-3 text-sm text-[var(--taali-muted)]">
           <div className="inline-flex items-center gap-2">
             <Loader2 size={15} className="animate-spin" />
             Generating interview focus...
           </div>
         </Card>
       ) : jobSpecReady ? (
-        <Card className="mt-3 border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+        <Card className="mt-2.5 border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span>Interview focus pointers are generated automatically after job spec upload.</span>
             {onRegenerateInterviewFocus ? (
@@ -326,7 +326,7 @@ export const RoleSummaryHeader = ({
           </div>
         </Card>
       ) : (
-        <Card className="mt-3 border-[var(--taali-border)] bg-[var(--taali-surface)] p-3.5">
+        <Card className="mt-2.5 border-[var(--taali-border)] bg-[var(--taali-surface)] p-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div className="inline-flex items-center gap-2 text-sm text-[var(--taali-muted)]">
               <Lock size={14} />

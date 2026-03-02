@@ -197,16 +197,16 @@ const InfoCard = ({ label, value }) => (
 
 const BreakdownCard = ({ label, value, badge = null, children }) => (
   <Panel className="overflow-hidden p-0">
-    <div className="border-b border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] px-4 py-4">
+    <div className="border-b border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] px-3.5 py-3">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{label}</p>
-          <p className="mt-2 font-mono text-3xl font-bold text-[var(--taali-text)]">{value}</p>
+          <p className="mt-1.5 font-mono text-2xl font-bold text-[var(--taali-text)]">{value}</p>
         </div>
         {badge ? <Badge variant={badge.variant}>{badge.label}</Badge> : null}
       </div>
     </div>
-    <div className="space-y-4 px-4 py-4">{children}</div>
+    <div className="space-y-3 px-3.5 py-3">{children}</div>
   </Panel>
 );
 
@@ -381,11 +381,11 @@ export function CandidateScoreSummarySheet({
           <Spinner size={22} />
         </div>
       ) : !application ? (
-        <Panel className="p-4 text-sm text-[var(--taali-muted)]">
+        <Panel className="p-3.5 text-sm text-[var(--taali-muted)]">
           Candidate summary unavailable.
         </Panel>
       ) : (
-        <div className="space-y-4">
+        <div className="space-y-3">
           <CandidateSidebarScoreHero
             application={application}
             score={scoreSummary.taali_score}
@@ -404,8 +404,8 @@ export function CandidateScoreSummarySheet({
           >
             {hasCompletedAssessment && assessmentPreview ? (
               <>
-                <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
-                  <div className="space-y-4">
+                <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_220px]">
+                  <div className="space-y-3">
                     <div>
                       <p className="text-sm leading-6 text-[var(--taali-text)]">
                         {assessmentPreview.heuristic_summary || 'Assessment completed. Review the dimension breakdown and strongest areas before moving this candidate forward.'}
@@ -430,13 +430,13 @@ export function CandidateScoreSummarySheet({
                       </Button>
                     </div>
                   </div>
-                  <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] p-3">
+                  <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] p-2.5">
                     <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Assessment chart</p>
                     <ComparisonRadar
                       assessments={currentAssessmentPreview}
                       highlightAssessmentId={assessmentPreview.assessment_id}
                       showLegend={false}
-                      height={220}
+                      height={200}
                       className="-mx-1"
                     />
                   </div>
@@ -474,7 +474,7 @@ export function CandidateScoreSummarySheet({
             ) : null}
           </BreakdownCard>
 
-          <Panel className="p-4">
+          <Panel className="p-3.5">
             <div className="mb-3 flex items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Assessment history</p>
               {scoreSummary.has_voided_attempts ? <Badge variant="warning">Includes voided attempts</Badge> : null}
@@ -488,7 +488,7 @@ export function CandidateScoreSummarySheet({
                     COMPLETED_ASSESSMENT_STATUSES.has(String(item.status || '').toLowerCase()) || Boolean(item.is_voided)
                   );
                   return (
-                    <div key={item.assessment_id} className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] px-3 py-3">
+                    <div key={item.assessment_id} className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] px-3 py-2.5">
                       <div className="flex flex-wrap items-start justify-between gap-3">
                         <div>
                           <div className="flex flex-wrap items-center gap-2">
