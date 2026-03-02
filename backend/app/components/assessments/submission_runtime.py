@@ -469,6 +469,9 @@ def submit_assessment_impl(
     if isinstance(task_extra_data.get("scoring_hints"), dict):
         task_scoring_hints = task_extra_data.get("scoring_hints")
 
+    score_weights = dict(task.score_weights or {})
+    score_weights["cv_match"] = 0.0
+
     composite = calculate_mvp_score(
         interactions=interactions,
         tests_passed=passed,
@@ -476,24 +479,34 @@ def submit_assessment_impl(
         total_duration_seconds=duration_seconds,
         time_limit_minutes=assessment.duration_minutes or 30,
         v2_enabled=settings_obj.SCORING_V2_ENABLED,
-        weights=task.score_weights if task.score_weights else None,
+        weights=score_weights,
         cv_match_result=cv_match_result,
         task_scoring_hints=task_scoring_hints,
     )
-    final_score_100 = composite["final_score"]
-    final_score = round(final_score_100 / 10.0, 1)
+    assessment_score_100 = composite["final_score"]
+    assessment_score_10 = round(assessment_score_100 / 10.0, 1)
     component_scores = composite["component_scores"]
     category_scores = composite.get("category_scores", {})
     per_prompt_scores = composite.get("per_prompt_scores", [])
     detailed_scores = composite.get("detailed_scores", {})
     explanations = composite.get("explanations", {})
 
+    cv_fit_score_100 = cv_match_result.get("cv_job_match_score")
+    if cv_fit_score_100 is not None:
+        taali_score_100 = round((assessment_score_100 + float(cv_fit_score_100)) / 2.0, 1)
+        score_mode = "assessment_plus_cv"
+    else:
+        taali_score_100 = round(float(assessment_score_100), 1)
+        score_mode = "assessment_only_fallback"
+
     # --- 4. Persist ---
     assessment.status = AssessmentStatus.COMPLETED
     assessment.completed_due_to_timeout = False
     assessment.completed_at = datetime.now(timezone.utc)
-    assessment.score = final_score
-    assessment.final_score = final_score_100
+    assessment.score = assessment_score_10
+    assessment.final_score = assessment_score_100
+    assessment.assessment_score = assessment_score_100
+    assessment.taali_score = taali_score_100
     assessment.tests_passed = passed
     assessment.tests_total = total
     assessment.tests_run_count = total
@@ -573,6 +586,19 @@ def submit_assessment_impl(
         "category_scores": category_scores,
         "detailed_scores": detailed_scores,
         "explanations": explanations,
+        "score_formula_version": "taali_v2_blended_50_50",
+        "score_mode": score_mode,
+        "score_components": {
+            "taali_score": taali_score_100,
+            "assessment_score": assessment_score_100,
+            "cv_fit_score": cv_fit_score_100,
+            "requirements_fit_score": (
+                cv_match_result.get("match_details", {}).get("requirements_match_score_100")
+                if isinstance(cv_match_result.get("match_details", {}), dict)
+                else None
+            ),
+            "weights": {"assessment_score": 0.5, "cv_fit_score": 0.5},
+        },
         "cv_job_match": {
             "overall": cv_match_result.get("cv_job_match_score"),
             "skills": cv_match_result.get("skills_match"),
@@ -643,7 +669,10 @@ def submit_assessment_impl(
         "metric_details": composite.get("metric_details", {}),
         "soft_signals": composite.get("soft_signals", {}),
         "fraud": composite.get("fraud", {}),
-        "final_score": final_score_100,
+        "final_score": assessment_score_100,
+        "assessment_score": assessment_score_100,
+        "taali_score": taali_score_100,
+        "score_mode": score_mode,
         "uncapped_final_score": composite.get("uncapped_final_score"),
         "applied_caps": composite.get("applied_caps", []),
         "heuristic_summary": heuristic_summary,
@@ -734,7 +763,7 @@ def submit_assessment_impl(
                 "tests_passed": assessment.tests_passed or 0,
                 "tests_total": assessment.tests_total or 0,
                 "time_taken": assessment.duration_minutes,
-                "results_url": f"{settings_obj.FRONTEND_URL}/dashboard",
+                "results_url": f"{settings_obj.FRONTEND_URL}/assessments/{assessment.id}",
             },
             request_id=get_request_id(),
         )

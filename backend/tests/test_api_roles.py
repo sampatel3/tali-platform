@@ -1,9 +1,11 @@
 """API tests for role-first recruiting workflow endpoints."""
 
 import io
+from datetime import datetime, timezone
 
 from app.domains.assessments_runtime import applications_routes
 from app.domains.assessments_runtime import roles_management_routes
+from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate_application import CandidateApplication
 from tests.conftest import auth_headers, create_task_via_api
 
@@ -187,6 +189,152 @@ def test_allow_assessment_creation_without_application_cv(client):
     body = resp.json()
     assert body["application_id"] == app["id"]
     assert body["task_id"] == task["id"]
+
+
+def test_duplicate_role_assessment_requires_retake(client):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Retake guard task").json()
+    role = client.post("/api/v1/roles", json={"name": "Retake guard role"}, headers=headers).json()
+    spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Retake guard requirements"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "retake-guard@example.com"},
+        headers=headers,
+    ).json()
+
+    first = client.post(
+        f"/api/v1/applications/{app['id']}/assessments",
+        json={"task_id": task["id"], "duration_minutes": 45},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+    first_assessment = first.json()
+
+    duplicate = client.post(
+        f"/api/v1/applications/{app['id']}/assessments",
+        json={"task_id": task["id"], "duration_minutes": 45},
+        headers=headers,
+    )
+    assert duplicate.status_code == 409, duplicate.text
+    detail = duplicate.json()["detail"]
+    assert detail["code"] == "retake_required"
+    assert detail["assessment_id"] == first_assessment["id"]
+
+
+def test_role_assessment_retake_voids_previous_attempt(client, db):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Retake lifecycle task").json()
+    role = client.post("/api/v1/roles", json={"name": "Retake lifecycle role"}, headers=headers).json()
+    spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Retake lifecycle requirements"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "retake-lifecycle@example.com"},
+        headers=headers,
+    ).json()
+
+    first = client.post(
+        f"/api/v1/applications/{app['id']}/assessments",
+        json={"task_id": task["id"], "duration_minutes": 45},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+    first_assessment = first.json()
+
+    retake = client.post(
+        f"/api/v1/applications/{app['id']}/assessments/retake",
+        json={"task_id": task["id"], "duration_minutes": 30, "void_reason": "Candidate hit an environment issue"},
+        headers=headers,
+    )
+    assert retake.status_code == 201, retake.text
+    retake_assessment = retake.json()
+    assert retake_assessment["id"] != first_assessment["id"]
+
+    old_row = db.query(Assessment).filter(Assessment.id == first_assessment["id"]).first()
+    new_row = db.query(Assessment).filter(Assessment.id == retake_assessment["id"]).first()
+    assert old_row is not None
+    assert new_row is not None
+    assert old_row.is_voided is True
+    assert old_row.superseded_by_assessment_id == new_row.id
+    assert old_row.void_reason == "Candidate hit an environment issue"
+    assert new_row.is_voided is False
+
+    default_list = client.get("/api/v1/assessments/", headers=headers)
+    assert default_list.status_code == 200, default_list.text
+    default_ids = [item["id"] for item in default_list.json()["items"]]
+    assert new_row.id in default_ids
+    assert old_row.id not in default_ids
+
+    history_list = client.get("/api/v1/assessments/?include_voided=true", headers=headers)
+    assert history_list.status_code == 200, history_list.text
+    history_ids = [item["id"] for item in history_list.json()["items"]]
+    assert new_row.id in history_ids
+    assert old_row.id in history_ids
+
+
+def test_role_application_summary_uses_cv_fit_before_completion_and_blended_score_after_completion(client, db):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Score summary task").json()
+    role = client.post("/api/v1/roles", json={"name": "Score summary role"}, headers=headers).json()
+    spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Score summary requirements"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "summary-score@example.com", "candidate_name": "Summary Score"},
+        headers=headers,
+    ).json()
+
+    app_row = db.query(CandidateApplication).filter(CandidateApplication.id == app["id"]).first()
+    app_row.cv_match_score = 82.0
+    app_row.cv_match_details = {
+        "score_scale": "0-100",
+        "requirements_match_score_100": 74.0,
+    }
+    db.commit()
+
+    pre = client.get(f"/api/v1/roles/{role['id']}/applications?sort_by=taali_score", headers=headers)
+    assert pre.status_code == 200, pre.text
+    pre_item = pre.json()[0]
+    assert pre_item["taali_score"] == 82.0
+    assert pre_item["score_mode"] == "cv_fit_only"
+    assert pre_item["score_summary"]["assessment_score"] is None
+    assert pre_item["score_summary"]["requirements_fit_score"] == 74.0
+
+    created = client.post(
+        f"/api/v1/applications/{app['id']}/assessments",
+        json={"task_id": task["id"], "duration_minutes": 45},
+        headers=headers,
+    )
+    assert created.status_code == 201, created.text
+    assessment_id = created.json()["id"]
+
+    assessment_row = db.query(Assessment).filter(Assessment.id == assessment_id).first()
+    assessment_row.status = AssessmentStatus.COMPLETED
+    assessment_row.completed_at = datetime.now(timezone.utc)
+    assessment_row.assessment_score = 70.0
+    assessment_row.taali_score = 76.0
+    assessment_row.final_score = 70.0
+    assessment_row.cv_job_match_score = 82.0
+    assessment_row.cv_job_match_details = {
+        "score_scale": "0-100",
+        "requirements_match_score_100": 74.0,
+    }
+    db.commit()
+
+    post = client.get(f"/api/v1/roles/{role['id']}/applications?sort_by=taali_score", headers=headers)
+    assert post.status_code == 200, post.text
+    post_item = post.json()[0]
+    assert post_item["taali_score"] == 76.0
+    assert post_item["score_mode"] == "assessment_plus_cv"
+    assert post_item["valid_assessment_id"] == assessment_id
+    assert post_item["valid_assessment_status"] == AssessmentStatus.COMPLETED.value
+    assert post_item["score_summary"]["assessment_score"] == 70.0
+    assert post_item["score_summary"]["cv_fit_score"] == 82.0
+    assert post_item["score_summary"]["taali_score"] == 76.0
 
 
 def test_reject_delete_role_with_existing_application(client):

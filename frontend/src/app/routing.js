@@ -13,19 +13,22 @@ export const pathForPage = (page, options = {}) => {
     case 'verify-email':
       return `/verify-email${options.verifyEmailToken ? `?token=${encodeURIComponent(options.verifyEmailToken)}` : ''}`;
     case 'dashboard':
-      return '/dashboard';
+    case 'assessments':
+      return '/assessments';
     case 'demo':
       return '/demo';
     case 'candidates':
       return '/candidates';
     case 'candidate-detail':
+    case 'assessment-results':
       return options.candidateDetailAssessmentId
-        ? `/candidate-detail?assessmentId=${encodeURIComponent(options.candidateDetailAssessmentId)}`
-        : '/candidate-detail';
+        ? `/assessments/${encodeURIComponent(options.candidateDetailAssessmentId)}`
+        : '/assessments';
     case 'tasks':
       return '/tasks';
     case 'analytics':
-      return '/analytics';
+    case 'reporting':
+      return '/reporting';
     case 'settings':
       return '/settings';
     case 'settings-workable':

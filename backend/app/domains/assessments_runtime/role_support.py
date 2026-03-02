@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from typing import Any
+
 from fastapi import HTTPException
 from sqlalchemy.orm import Session, joinedload
 
+from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...schemas.role import ApplicationResponse, RoleResponse
@@ -55,7 +59,11 @@ def get_role(role_id: int, org_id: int, db: Session) -> Role:
 def get_application(application_id: int, org_id: int, db: Session) -> CandidateApplication:
     app = (
         db.query(CandidateApplication)
-        .options(joinedload(CandidateApplication.candidate), joinedload(CandidateApplication.role))
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+        )
         .filter(
             CandidateApplication.id == application_id,
             CandidateApplication.organization_id == org_id,
@@ -112,6 +120,291 @@ def _candidate_location(candidate) -> str | None:
     return city or country or None
 
 
+def _assessment_status_value(assessment: Assessment | None) -> str | None:
+    if not assessment:
+        return None
+    status = getattr(assessment, "status", None)
+    return status.value if hasattr(status, "value") else (str(status) if status is not None else None)
+
+
+def _is_completed_assessment(assessment: Assessment | None) -> bool:
+    status = _assessment_status_value(assessment)
+    return status in {
+        AssessmentStatus.COMPLETED.value,
+        AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT.value,
+    }
+
+
+def _sort_dt(value: datetime | None) -> datetime:
+    if value is None:
+        return datetime.min.replace(tzinfo=timezone.utc)
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value
+
+
+def _requirements_fit_score(details: dict | None) -> float | None:
+    if not isinstance(details, dict):
+        return None
+    raw = details.get("requirements_match_score_100")
+    try:
+        numeric = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return round(max(0.0, min(100.0, numeric)), 1)
+
+
+def _assessment_score_100(assessment: Assessment | None) -> float | None:
+    if not assessment:
+        return None
+    for value in (
+        getattr(assessment, "assessment_score", None),
+        getattr(assessment, "final_score", None),
+    ):
+        try:
+            if value is not None:
+                return round(max(0.0, min(100.0, float(value))), 1)
+        except (TypeError, ValueError):
+            continue
+
+    score_10 = getattr(assessment, "score", None)
+    try:
+        if score_10 is not None:
+            return round(max(0.0, min(100.0, float(score_10) * 10.0)), 1)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _assessment_taali_score_100(assessment: Assessment | None) -> float | None:
+    if not assessment:
+        return None
+    try:
+        if getattr(assessment, "taali_score", None) is not None:
+            return round(max(0.0, min(100.0, float(assessment.taali_score))), 1)
+    except (TypeError, ValueError):
+        return None
+
+    assessment_score = _assessment_score_100(assessment)
+    raw_details = (
+        assessment.cv_job_match_details
+        if isinstance(getattr(assessment, "cv_job_match_details", None), dict)
+        else None
+    )
+    cv_fit_score = _normalize_cv_match_score_for_response(
+        getattr(assessment, "cv_job_match_score", None),
+        raw_details,
+    )
+    if assessment_score is None:
+        return cv_fit_score
+    if cv_fit_score is None:
+        return assessment_score
+    return round((assessment_score + cv_fit_score) / 2.0, 1)
+
+
+def _dimension_extremes(category_scores: dict[str, Any] | None) -> tuple[str | None, str | None]:
+    numeric_scores = []
+    for key, value in (category_scores or {}).items():
+        try:
+            numeric = float(value)
+        except (TypeError, ValueError):
+            continue
+        numeric_scores.append((key, numeric))
+    if not numeric_scores:
+        return None, None
+    strongest = max(numeric_scores, key=lambda item: item[1])[0]
+    weakest = min(numeric_scores, key=lambda item: item[1])[0]
+    return strongest, weakest
+
+
+def _active_assessments_for_application(app: CandidateApplication) -> list[Assessment]:
+    assessments = [
+        assessment
+        for assessment in (app.assessments or [])
+        if not bool(getattr(assessment, "is_voided", False))
+    ]
+    return sorted(
+        assessments,
+        key=lambda assessment: (
+            _sort_dt(getattr(assessment, "completed_at", None)),
+            _sort_dt(getattr(assessment, "created_at", None)),
+            int(getattr(assessment, "id", 0) or 0),
+        ),
+        reverse=True,
+    )
+
+
+def latest_valid_role_assessment(
+    *,
+    candidate_id: int | None,
+    role_id: int | None,
+    org_id: int,
+    db: Session,
+) -> Assessment | None:
+    if not candidate_id or not role_id:
+        return None
+    return (
+        db.query(Assessment)
+        .filter(
+            Assessment.organization_id == org_id,
+            Assessment.candidate_id == candidate_id,
+            Assessment.role_id == role_id,
+            Assessment.is_voided.is_(False),
+        )
+        .order_by(Assessment.created_at.desc(), Assessment.id.desc())
+        .first()
+    )
+
+
+def completed_valid_role_assessment(
+    *,
+    candidate_id: int | None,
+    role_id: int | None,
+    org_id: int,
+    db: Session,
+) -> Assessment | None:
+    if not candidate_id or not role_id:
+        return None
+    return (
+        db.query(Assessment)
+        .filter(
+            Assessment.organization_id == org_id,
+            Assessment.candidate_id == candidate_id,
+            Assessment.role_id == role_id,
+            Assessment.is_voided.is_(False),
+            Assessment.status.in_(
+                [
+                    AssessmentStatus.COMPLETED,
+                    AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
+                ]
+            ),
+        )
+        .order_by(Assessment.completed_at.desc(), Assessment.created_at.desc(), Assessment.id.desc())
+        .first()
+    )
+
+
+def _score_summary_for_application(app: CandidateApplication) -> dict[str, Any]:
+    active_assessments = _active_assessments_for_application(app)
+    latest_assessment = active_assessments[0] if active_assessments else None
+    completed_assessment = next((assessment for assessment in active_assessments if _is_completed_assessment(assessment)), None)
+
+    app_cv_details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
+    app_cv_fit = _normalize_cv_match_score_for_response(app.cv_match_score, app_cv_details)
+    app_requirements_fit = _requirements_fit_score(app_cv_details)
+
+    if completed_assessment:
+        assessment_details = (
+            completed_assessment.cv_job_match_details
+            if isinstance(getattr(completed_assessment, "cv_job_match_details", None), dict)
+            else {}
+        )
+        cv_fit_score = _normalize_cv_match_score_for_response(
+            getattr(completed_assessment, "cv_job_match_score", None),
+            assessment_details,
+        )
+        requirements_fit_score = _requirements_fit_score(assessment_details)
+        assessment_score = _assessment_score_100(completed_assessment)
+        taali_score = _assessment_taali_score_100(completed_assessment)
+        mode = "assessment_plus_cv" if cv_fit_score is not None else "assessment_only_fallback"
+        assessment_status = _assessment_status_value(completed_assessment)
+        assessment_id = completed_assessment.id
+        assessment_completed_at = completed_assessment.completed_at
+    else:
+        cv_fit_score = app_cv_fit
+        requirements_fit_score = app_requirements_fit
+        assessment_score = None
+        taali_score = app_cv_fit
+        assessment_status = _assessment_status_value(latest_assessment)
+        assessment_id = latest_assessment.id if latest_assessment else None
+        assessment_completed_at = None
+        mode = "cv_fit_only" if app_cv_fit is not None else "pending"
+
+    return {
+        "taali_score": taali_score,
+        "assessment_score": assessment_score,
+        "cv_fit_score": cv_fit_score,
+        "requirements_fit_score": requirements_fit_score,
+        "mode": mode,
+        "formula_label": (
+            "TAALI Score = 50% Assessment Score + 50% CV Fit"
+            if mode == "assessment_plus_cv"
+            else (
+                "TAALI Score currently reflects Assessment Score only"
+                if mode == "assessment_only_fallback"
+                else "TAALI Score currently reflects CV Fit"
+            )
+        ),
+        "assessment_id": assessment_id,
+        "assessment_status": assessment_status,
+        "assessment_completed_at": assessment_completed_at,
+        "has_voided_attempts": any(bool(getattr(assessment, "is_voided", False)) for assessment in (app.assessments or [])),
+    }
+
+
+def _assessment_preview_for_application(app: CandidateApplication) -> dict[str, Any] | None:
+    completed_assessment = next(
+        (assessment for assessment in _active_assessments_for_application(app) if _is_completed_assessment(assessment)),
+        None,
+    )
+    if not completed_assessment:
+        return None
+
+    score_breakdown = (
+        completed_assessment.score_breakdown
+        if isinstance(getattr(completed_assessment, "score_breakdown", None), dict)
+        else {}
+    )
+    category_scores = score_breakdown.get("category_scores") or (
+        completed_assessment.prompt_analytics.get("category_scores")
+        if isinstance(getattr(completed_assessment, "prompt_analytics", None), dict)
+        else {}
+    )
+    strongest_dimension, weakest_dimension = _dimension_extremes(category_scores if isinstance(category_scores, dict) else {})
+
+    return {
+        "assessment_id": completed_assessment.id,
+        "task_name": completed_assessment.task.name if getattr(completed_assessment, "task", None) else None,
+        "taali_score": _assessment_taali_score_100(completed_assessment),
+        "assessment_score": _assessment_score_100(completed_assessment),
+        "category_scores": category_scores if isinstance(category_scores, dict) else {},
+        "heuristic_summary": score_breakdown.get("heuristic_summary"),
+        "strongest_dimension": strongest_dimension,
+        "weakest_dimension": weakest_dimension,
+        "completed_at": completed_assessment.completed_at,
+        "status": _assessment_status_value(completed_assessment),
+        "is_voided": bool(getattr(completed_assessment, "is_voided", False)),
+    }
+
+
+def _assessment_history_for_application(app: CandidateApplication) -> list[dict[str, Any]]:
+    history = sorted(
+        list(app.assessments or []),
+        key=lambda assessment: (
+            _sort_dt(getattr(assessment, "completed_at", None)),
+            _sort_dt(getattr(assessment, "created_at", None)),
+            int(getattr(assessment, "id", 0) or 0),
+        ),
+        reverse=True,
+    )
+    return [
+        {
+            "assessment_id": assessment.id,
+            "task_name": assessment.task.name if getattr(assessment, "task", None) else None,
+            "status": _assessment_status_value(assessment),
+            "assessment_score": _assessment_score_100(assessment),
+            "taali_score": _assessment_taali_score_100(assessment),
+            "created_at": assessment.created_at,
+            "completed_at": assessment.completed_at,
+            "is_voided": bool(getattr(assessment, "is_voided", False)),
+            "voided_at": getattr(assessment, "voided_at", None),
+            "void_reason": getattr(assessment, "void_reason", None),
+            "superseded_by_assessment_id": getattr(assessment, "superseded_by_assessment_id", None),
+        }
+        for assessment in history
+    ]
+
+
 def application_to_response(app: CandidateApplication) -> ApplicationResponse:
     candidate = app.candidate
     raw_details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
@@ -119,6 +412,7 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
     cv_match_details = dict(raw_details)
     if cv_match_score is not None and "score_scale" not in cv_match_details:
         cv_match_details["score_scale"] = "0-100"
+    score_summary = _score_summary_for_application(app)
 
     return ApplicationResponse(
         id=app.id,
@@ -157,6 +451,26 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
         workable_sourced=app.workable_sourced,
         workable_profile_url=app.workable_profile_url,
         workable_enriched=(candidate.workable_enriched if candidate else None),
+        taali_score=score_summary.get("taali_score"),
+        score_mode=score_summary.get("mode"),
+        valid_assessment_id=score_summary.get("assessment_id"),
+        valid_assessment_status=score_summary.get("assessment_status"),
+        score_summary=score_summary,
         created_at=app.created_at,
         updated_at=app.updated_at,
     )
+
+
+def application_detail_payload(app: CandidateApplication, *, include_cv_text: bool) -> dict[str, Any]:
+    data = application_to_response(app)
+    payload = data.model_dump()
+    if include_cv_text:
+        cv = (app.cv_text or "").strip()
+        if not cv and app.candidate:
+            cv = (app.candidate.cv_text or "").strip()
+        payload["cv_text"] = cv or None
+    else:
+        payload["cv_text"] = None
+    payload["assessment_preview"] = _assessment_preview_for_application(app)
+    payload["assessment_history"] = _assessment_history_for_application(app)
+    return payload

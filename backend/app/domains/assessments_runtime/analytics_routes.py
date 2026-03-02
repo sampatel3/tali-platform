@@ -87,6 +87,12 @@ def _parse_filter_datetime(value: Optional[str], *, end_of_day: bool = False) ->
 
 
 def _score_100(assessment: Assessment) -> Optional[float]:
+    taali_score = getattr(assessment, "taali_score", None)
+    if isinstance(taali_score, (int, float)):
+        return float(taali_score)
+    assessment_score = getattr(assessment, "assessment_score", None)
+    if isinstance(assessment_score, (int, float)):
+        return float(assessment_score)
     final_score = getattr(assessment, "final_score", None)
     if isinstance(final_score, (int, float)):
         return float(final_score)
@@ -97,13 +103,13 @@ def _score_100(assessment: Assessment) -> Optional[float]:
 
 
 def _score_10(assessment: Assessment) -> Optional[float]:
+    score100 = _score_100(assessment)
+    if score100 is not None:
+        return score100 / 10.0
     score = getattr(assessment, "score", None)
     if isinstance(score, (int, float)):
         return float(score)
-    score100 = _score_100(assessment)
-    if score100 is None:
-        return None
-    return score100 / 10.0
+    return None
 
 
 def _extract_category_scores(assessment: Assessment) -> Dict[str, float]:
@@ -220,7 +226,10 @@ def get_analytics(
     if parsed_from and parsed_to and parsed_from > parsed_to:
         raise HTTPException(status_code=400, detail="date_from must be before date_to")
 
-    query = db.query(Assessment).filter(Assessment.organization_id == org_id)
+    query = db.query(Assessment).filter(
+        Assessment.organization_id == org_id,
+        Assessment.is_voided.is_(False),
+    )
     if role_id is not None:
         query = query.filter(Assessment.role_id == role_id)
     if task_id is not None:
@@ -316,6 +325,7 @@ def get_task_benchmarks(
             .filter(
                 Assessment.organization_id == org_id,
                 Assessment.task_id == task_id,
+                Assessment.is_voided.is_(False),
                 Assessment.status.in_(
                     [
                         AssessmentStatus.COMPLETED,
@@ -362,6 +372,7 @@ def get_task_benchmarks(
                 Assessment.id == assessment_id,
                 Assessment.organization_id == org_id,
                 Assessment.task_id == task_id,
+                Assessment.is_voided.is_(False),
             )
             .first()
         )
@@ -371,6 +382,7 @@ def get_task_benchmarks(
                 .filter(
                     Assessment.organization_id == org_id,
                     Assessment.task_id == task_id,
+                    Assessment.is_voided.is_(False),
                     Assessment.status.in_(
                         [
                             AssessmentStatus.COMPLETED,

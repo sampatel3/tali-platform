@@ -78,10 +78,17 @@ class AssessmentResponse(BaseModel):
     cv_job_match_score: Optional[float] = None
     cv_job_match_details: Optional[Dict[str, Any]] = None
     final_score: Optional[float] = None
+    assessment_score: Optional[float] = None
+    taali_score: Optional[float] = None
+    score_mode: Optional[str] = None
     score_breakdown: Optional[Dict[str, Any]] = None
     score_weights_used: Optional[Dict[str, float]] = None
     flags: Optional[List[str]] = None
     scored_at: Optional[datetime] = None
+    is_voided: Optional[bool] = False
+    voided_at: Optional[datetime] = None
+    void_reason: Optional[str] = None
+    superseded_by_assessment_id: Optional[int] = None
     posted_to_workable: Optional[bool] = None
     posted_to_workable_at: Optional[datetime] = None
     invite_channel: Optional[str] = None

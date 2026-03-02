@@ -27,7 +27,7 @@ import {
   VerifyEmailPage,
 } from './features/auth';
 import { DashboardNav } from './features/dashboard/DashboardNav';
-import { AnalyticsPage } from './features/analytics/AnalyticsPage';
+import { ReportingPage } from './features/analytics/AnalyticsPage';
 import { CandidateWelcomePage } from './features/assessment_runtime/CandidateWelcomePage';
 import {
   ConnectWorkableButton,
@@ -42,11 +42,11 @@ const CandidateFeedbackPage = lazy(() =>
 const DemoExperiencePage = lazy(() =>
   import('./features/demo/DemoExperiencePage').then((m) => ({ default: m.DemoExperiencePage }))
 );
-const LazyCandidateDetailPage = lazy(() =>
-  import('./features/candidates/CandidateDetailPage').then((m) => ({ default: m.CandidateDetailPage }))
+const LazyAssessmentResultsPage = lazy(() =>
+  import('./features/assessments/AssessmentResultsPage').then((m) => ({ default: m.AssessmentResultsPage }))
 );
-const DashboardPage = lazy(() =>
-  import('./features/dashboard/DashboardPage').then((m) => ({ default: m.DashboardPage }))
+const AssessmentsPage = lazy(() =>
+  import('./features/assessments/AssessmentsPage').then((m) => ({ default: m.AssessmentsPage }))
 );
 const CandidatesPage = lazy(() =>
   import('./features/candidates/CandidatesPage').then((m) => ({ default: m.CandidatesPage }))
@@ -65,13 +65,18 @@ function AppContent() {
   const [searchParams] = useSearchParams();
 
   const [selectedCandidate, setSelectedCandidate] = useState(null);
-  const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'dashboard', label: 'Back to Assessments' });
+  const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'assessments', label: 'Back to Assessments' });
   const [loadingCandidateDetail, setLoadingCandidateDetail] = useState(false);
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
 
-  const candidateDetailAssessmentId = searchParams.get('assessmentId')
-    ? Number(searchParams.get('assessmentId'))
-    : null;
+  const candidateDetailAssessmentId = useMemo(() => {
+    const recruiterAssessmentMatch = location.pathname.match(/^\/assessments\/(\d+)$/);
+    if (recruiterAssessmentMatch?.[1]) {
+      return Number(recruiterAssessmentMatch[1]);
+    }
+    const legacyAssessmentId = searchParams.get('assessmentId');
+    return legacyAssessmentId ? Number(legacyAssessmentId) : null;
+  }, [location.pathname, searchParams]);
 
   const assessmentIdFromLink = useMemo(() => {
     const m = location.pathname.match(/^\/assessment\/(\d+)$/);
@@ -130,7 +135,7 @@ function AppContent() {
 
   useEffect(() => {
     if (isAuthenticated && ['/', '/login', '/forgot-password'].includes(location.pathname)) {
-      navigate('/dashboard', { replace: true });
+      navigate('/assessments', { replace: true });
     }
   }, [isAuthenticated, location.pathname, navigate]);
 
@@ -139,7 +144,8 @@ function AppContent() {
       !authLoading &&
       !isAuthenticated &&
       (
-        ['/dashboard', '/candidates', '/analytics', '/tasks', '/candidate-detail'].includes(location.pathname)
+        ['/dashboard', '/assessments', '/candidates', '/analytics', '/reporting', '/tasks', '/candidate-detail'].includes(location.pathname)
+        || location.pathname.startsWith('/assessments/')
         || location.pathname.startsWith('/settings')
       )
     ) {
@@ -176,12 +182,12 @@ function AppContent() {
     setStartedAssessmentData(startData);
   };
 
-  const navigateToCandidate = (candidate, sourcePage = 'dashboard') => {
+  const navigateToCandidate = (candidate, sourcePage = 'assessments') => {
     setSelectedCandidate(candidate);
     if (sourcePage === 'candidates') {
       setCandidateDetailBackTo({ page: 'candidates', label: 'Back to Candidates' });
     } else {
-      setCandidateDetailBackTo({ page: 'dashboard', label: 'Back to Assessments' });
+      setCandidateDetailBackTo({ page: 'assessments', label: 'Back to Assessments' });
     }
     navigateToPage('candidate-detail', {
       candidateDetailAssessmentId: candidate?.id || candidate?._raw?.id || null,
@@ -189,7 +195,8 @@ function AppContent() {
   };
 
   useEffect(() => {
-    if (location.pathname !== '/candidate-detail' || !candidateDetailAssessmentId || !isAuthenticated) {
+    const isAssessmentResultsRoute = location.pathname === '/candidate-detail' || /^\/assessments\/\d+$/.test(location.pathname);
+    if (!isAssessmentResultsRoute || !candidateDetailAssessmentId || !isAuthenticated) {
       return;
     }
     if (selectedCandidate && Number(selectedCandidate.id) === Number(candidateDetailAssessmentId)) {
@@ -294,11 +301,16 @@ function AppContent() {
 
       <Route
         path="/dashboard"
+        element={<Navigate replace to="/assessments" />}
+      />
+
+      <Route
+        path="/assessments"
         element={(
           <Suspense fallback={lazyFallback}>
-            <DashboardPage
+            <AssessmentsPage
               onNavigate={navigateToPage}
-              onViewCandidate={(candidate) => navigateToCandidate(candidate, 'dashboard')}
+              onViewCandidate={(candidate) => navigateToCandidate(candidate, 'assessments')}
               NavComponent={DashboardNav}
               StatsCardComponent={StatsCard}
               StatusBadgeComponent={StatusBadge}
@@ -322,6 +334,11 @@ function AppContent() {
 
       <Route
         path="/candidate-detail"
+        element={<Navigate replace to={candidateDetailAssessmentId ? `/assessments/${candidateDetailAssessmentId}` : '/assessments'} />}
+      />
+
+      <Route
+        path="/assessments/:assessmentId"
         element={
           loadingCandidateDetail ? (
             <div className="min-h-screen flex items-center justify-center">
@@ -329,7 +346,7 @@ function AppContent() {
             </div>
           ) : (
             <Suspense fallback={lazyFallback}>
-              <LazyCandidateDetailPage
+              <LazyAssessmentResultsPage
                 candidate={selectedCandidate}
                 assessmentId={candidateDetailAssessmentId}
                 onNavigate={navigateToPage}
@@ -356,7 +373,12 @@ function AppContent() {
 
       <Route
         path="/analytics"
-        element={<AnalyticsPage onNavigate={navigateToPage} NavComponent={DashboardNav} />}
+        element={<Navigate replace to="/reporting" />}
+      />
+
+      <Route
+        path="/reporting"
+        element={<ReportingPage onNavigate={navigateToPage} NavComponent={DashboardNav} />}
       />
 
       <Route
@@ -409,4 +431,4 @@ function App() {
 }
 
 export default App;
-export { CandidateDetailPage } from './features/candidates/CandidateDetailPage';
+export { CandidateDetailPage, AssessmentResultsPage } from './features/candidates/CandidateDetailPage';

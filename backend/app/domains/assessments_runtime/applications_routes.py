@@ -6,6 +6,7 @@ import threading
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy import asc, desc
 from sqlalchemy.orm import Session, joinedload
 
@@ -29,6 +30,7 @@ from ...schemas.role import (
     ApplicationResponse,
     ApplicationUpdate,
     AssessmentFromApplicationCreate,
+    AssessmentRetakeCreate,
 )
 from ...components.integrations.workable.service import WorkableRateLimitError, WorkableService
 from ...services.document_service import (
@@ -45,9 +47,11 @@ from ...services.assessment_repository_service import (
     AssessmentRepositoryService,
 )
 from .role_support import (
+    application_detail_payload,
     application_to_response,
     get_application,
     get_role,
+    latest_valid_role_assessment,
     role_has_job_spec,
 )
 
@@ -129,6 +133,116 @@ def _compute_cv_match_for_application(app: CandidateApplication, *, reset_if_una
     return True
 
 
+def _latest_active_assessment_for_application(app: CandidateApplication, db: Session) -> Assessment | None:
+    return latest_valid_role_assessment(
+        candidate_id=app.candidate_id,
+        role_id=app.role_id,
+        org_id=app.organization_id,
+        db=db,
+    )
+
+
+def _assessment_create_conflict_response(existing: Assessment) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": "A valid assessment already exists for this candidate and role. Use retake instead.",
+            "code": "retake_required",
+            "assessment_id": existing.id,
+            "assessment_status": (
+                existing.status.value if hasattr(existing.status, "value") else str(existing.status)
+            ),
+        },
+    )
+
+
+def _is_active_role_assessment_integrity_error(err: Exception) -> bool:
+    if not isinstance(err, IntegrityError):
+        return False
+    message = str(getattr(err, "orig", err)).lower()
+    return (
+        "uq_assessments_candidate_role_active" in message
+        or ("assessments.candidate_id" in message and "assessments.role_id" in message and "unique" in message)
+    )
+
+
+def _provision_assessment_branch(assessment: Assessment, task: Task) -> None:
+    repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
+    branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
+    assessment.assessment_repo_url = branch_ctx.repo_url
+    assessment.assessment_branch = branch_ctx.branch_name
+    assessment.clone_command = branch_ctx.clone_command
+
+
+def _create_application_assessment(
+    *,
+    app: CandidateApplication,
+    role: Role,
+    task: Task,
+    duration_minutes: int,
+    current_user: User,
+    db: Session,
+    void_existing: Assessment | None = None,
+    void_reason: str | None = None,
+) -> Assessment:
+    token = secrets.token_urlsafe(32)
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if void_existing is not None:
+        void_existing.is_voided = True
+        void_existing.voided_at = utcnow()
+        void_existing.void_reason = (void_reason or "").strip() or "Superseded by retake"
+    assessment = Assessment(
+        organization_id=current_user.organization_id,
+        candidate_id=app.candidate_id,
+        task_id=task.id,
+        role_id=role.id,
+        application_id=app.id,
+        token=token,
+        duration_minutes=duration_minutes,
+        expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
+        workable_candidate_id=app.workable_candidate_id,
+        workable_job_id=role.workable_job_id,
+        candidate_feedback_enabled=bool(getattr(org, "candidate_feedback_enabled", True)) if org else True,
+    )
+    db.add(assessment)
+    db.flush()
+
+    if void_existing is not None:
+        void_existing.superseded_by_assessment_id = assessment.id
+
+    _provision_assessment_branch(assessment, task)
+    db.commit()
+    db.refresh(assessment)
+
+    assessment = (
+        db.query(Assessment)
+        .options(joinedload(Assessment.candidate), joinedload(Assessment.task), joinedload(Assessment.role), joinedload(Assessment.application))
+        .filter(Assessment.id == assessment.id)
+        .first()
+    )
+
+    candidate_email = app.candidate.email if app.candidate else None
+    if not candidate_email:
+        raise HTTPException(status_code=400, detail="Application has no candidate email")
+    candidate_name = app.candidate.full_name or app.candidate.email
+
+    if org:
+        dispatch_assessment_invite(
+            assessment=assessment,
+            org=org,
+            candidate_email=candidate_email,
+            candidate_name=candidate_name,
+            position=task.name or "Technical assessment",
+        )
+        try:
+            db.commit()
+            db.refresh(assessment)
+        except Exception:
+            db.rollback()
+            logger.exception("Failed to persist invite metadata for assessment_id=%s", assessment.id)
+    return assessment
+
+
 @router.post("/roles/{role_id}/applications", response_model=ApplicationResponse, status_code=status.HTTP_201_CREATED)
 def create_application(
     role_id: int,
@@ -190,7 +304,7 @@ def create_application(
 @router.get("/roles/{role_id}/applications")
 def list_role_applications(
     role_id: int,
-    sort_by: str = Query(default="created_at", pattern="^(rank_score|workable_score|cv_match_score|created_at)$"),
+    sort_by: str = Query(default="created_at", pattern="^(rank_score|workable_score|cv_match_score|taali_score|created_at)$"),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
     min_rank_score: float | None = Query(default=None),
     min_workable_score: float | None = Query(default=None),
@@ -204,7 +318,11 @@ def list_role_applications(
     get_role(role_id, current_user.organization_id, db)
     query = (
         db.query(CandidateApplication)
-        .options(joinedload(CandidateApplication.candidate), joinedload(CandidateApplication.role))
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+        )
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
             CandidateApplication.role_id == role_id,
@@ -225,15 +343,7 @@ def list_role_applications(
             threshold *= 10.0
         query = query.filter(CandidateApplication.cv_match_score >= threshold)
 
-    sort_map = {
-        "created_at": CandidateApplication.created_at,
-        "rank_score": CandidateApplication.rank_score,
-        "workable_score": CandidateApplication.workable_score,
-        "cv_match_score": CandidateApplication.cv_match_score,
-    }
-    sort_column = sort_map.get(sort_by, CandidateApplication.created_at)
-    sort_fn = asc if sort_order == "asc" else desc
-    apps = query.order_by(sort_fn(sort_column), CandidateApplication.created_at.desc()).all()
+    apps = query.all()
 
     updated = False
     for app in apps:
@@ -253,18 +363,24 @@ def list_role_applications(
             db.rollback()
             logger.exception("Failed to persist backfilled cv_match_score values")
 
-    out = []
-    for app in apps:
-        data = application_to_response(app)
-        payload = data.model_dump()
-        if include_cv_text:
-            cv = (app.cv_text or "").strip()
-            if not cv and app.candidate:
-                cv = (app.candidate.cv_text or "").strip()
-            payload["cv_text"] = cv or None
-        else:
-            payload["cv_text"] = None
-        out.append(ApplicationDetailResponse(**payload))
+    out = [ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text)) for app in apps]
+
+    def _sort_value(item: ApplicationDetailResponse):
+        if sort_by == "taali_score":
+            return item.taali_score if item.taali_score is not None else float("-inf")
+        if sort_by == "rank_score":
+            return item.rank_score if item.rank_score is not None else float("-inf")
+        if sort_by == "workable_score":
+            return item.workable_score if item.workable_score is not None else float("-inf")
+        if sort_by == "cv_match_score":
+            return item.cv_match_score if item.cv_match_score is not None else float("-inf")
+        return item.created_at or datetime.min.replace(tzinfo=timezone.utc)
+
+    reverse = sort_order != "asc"
+    out.sort(
+        key=lambda item: (_sort_value(item), item.created_at or datetime.min.replace(tzinfo=timezone.utc)),
+        reverse=reverse,
+    )
     return out
 
 
@@ -277,16 +393,7 @@ def get_application_detail(
 ):
     """Get a single application; optionally include full cv_text for CV viewer sidebar."""
     app = get_application(application_id, current_user.organization_id, db)
-    data = application_to_response(app)
-    payload = data.model_dump()
-    if include_cv_text:
-        cv = (app.cv_text or "").strip()
-        if not cv and app.candidate:
-            cv = (app.candidate.cv_text or "").strip()
-        payload["cv_text"] = cv or None
-    else:
-        payload["cv_text"] = None
-    return ApplicationDetailResponse(**payload)
+    return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
 
 
 @router.patch("/applications/{application_id}", response_model=ApplicationResponse)
@@ -902,7 +1009,61 @@ def create_assessment_for_application(
     current_user: User = Depends(get_current_user),
 ):
     app = get_application(application_id, current_user.organization_id, db)
-    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    role = (
+        db.query(Role)
+        .options(joinedload(Role.tasks))
+        .filter(Role.id == app.role_id, Role.organization_id == current_user.organization_id)
+        .first()
+    )
+    if not role:
+        raise HTTPException(status_code=404, detail="Role not found")
+    if not any(task.id == data.task_id for task in (role.tasks or [])):
+        raise HTTPException(status_code=400, detail="Task is not linked to this role")
+    task = db.query(Task).filter(
+        Task.id == data.task_id,
+        (Task.organization_id == current_user.organization_id) | (Task.organization_id == None),  # noqa: E711
+    ).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    existing = _latest_active_assessment_for_application(app, db)
+    if existing is not None:
+        raise _assessment_create_conflict_response(existing)
+
+    try:
+        assessment = _create_application_assessment(
+            app=app,
+            role=role,
+            task=task,
+            duration_minutes=data.duration_minutes,
+            current_user=current_user,
+            db=db,
+        )
+    except AssessmentRepositoryError:
+        db.rollback()
+        logger.exception("Assessment repository provisioning failed for application_id=%s", app.id)
+        raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as exc:
+        db.rollback()
+        if _is_active_role_assessment_integrity_error(exc):
+            existing = _latest_active_assessment_for_application(app, db)
+            if existing is not None:
+                raise _assessment_create_conflict_response(existing)
+        logger.exception("Failed to create assessment for application_id=%s", app.id)
+        raise HTTPException(status_code=500, detail="Failed to create assessment")
+    return assessment_to_response(assessment, db)
+
+
+@router.post("/applications/{application_id}/assessments/retake", status_code=status.HTTP_201_CREATED)
+def retake_assessment_for_application(
+    application_id: int,
+    data: AssessmentRetakeCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    app = get_application(application_id, current_user.organization_id, db)
     role = (
         db.query(Role)
         .options(joinedload(Role.tasks))
@@ -920,63 +1081,34 @@ def create_assessment_for_application(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    token = secrets.token_urlsafe(32)
-    assessment = Assessment(
-        organization_id=current_user.organization_id,
-        candidate_id=app.candidate_id,
-        task_id=task.id,
-        role_id=role.id,
-        application_id=app.id,
-        token=token,
-        duration_minutes=data.duration_minutes,
-        expires_at=utcnow() + timedelta(days=settings.ASSESSMENT_EXPIRY_DAYS),
-        workable_candidate_id=app.workable_candidate_id,
-        workable_job_id=role.workable_job_id,
-        candidate_feedback_enabled=bool(getattr(org, "candidate_feedback_enabled", True)),
-    )
-    db.add(assessment)
-    try:
-        db.flush()
-        repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
-        branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
-        assessment.assessment_repo_url = branch_ctx.repo_url
-        assessment.assessment_branch = branch_ctx.branch_name
-        assessment.clone_command = branch_ctx.clone_command
+    existing = _latest_active_assessment_for_application(app, db)
+    if existing is None:
+        raise HTTPException(status_code=400, detail="No valid assessment exists for this candidate and role")
 
-        db.commit()
-        db.refresh(assessment)
+    try:
+        assessment = _create_application_assessment(
+            app=app,
+            role=role,
+            task=task,
+            duration_minutes=data.duration_minutes,
+            current_user=current_user,
+            db=db,
+            void_existing=existing,
+            void_reason=data.void_reason,
+        )
     except AssessmentRepositoryError:
         db.rollback()
-        logger.exception("Assessment repository provisioning failed for assessment_id=%s", assessment.id)
+        logger.exception("Assessment retake provisioning failed for application_id=%s", app.id)
         raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
-    except Exception:
+    except HTTPException:
         db.rollback()
-        raise HTTPException(status_code=500, detail="Failed to create assessment")
-
-    assessment = (
-        db.query(Assessment)
-        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
-        .filter(Assessment.id == assessment.id)
-        .first()
-    )
-
-    candidate_email = app.candidate.email if app.candidate else None
-    if not candidate_email:
-        raise HTTPException(status_code=400, detail="Application has no candidate email")
-    candidate_name = app.candidate.full_name or app.candidate.email
-
-    if org:
-        dispatch_assessment_invite(
-            assessment=assessment,
-            org=org,
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            position=task.name or "Technical assessment",
-        )
-        try:
-            db.commit()
-            db.refresh(assessment)
-        except Exception:
-            db.rollback()
-            logger.exception("Failed to persist invite metadata for assessment_id=%s", assessment.id)
+        raise
+    except Exception as exc:
+        db.rollback()
+        if _is_active_role_assessment_integrity_error(exc):
+            existing = _latest_active_assessment_for_application(app, db)
+            if existing is not None:
+                raise _assessment_create_conflict_response(existing)
+        logger.exception("Failed to retake assessment for application_id=%s", app.id)
+        raise HTTPException(status_code=500, detail="Failed to create retake assessment")
     return assessment_to_response(assessment, db)

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -110,6 +110,11 @@ class ApplicationResponse(BaseModel):
     workable_sourced: Optional[bool] = None
     workable_profile_url: Optional[str] = None
     workable_enriched: Optional[bool] = None
+    taali_score: Optional[float] = None
+    score_mode: Optional[str] = None
+    valid_assessment_id: Optional[int] = None
+    valid_assessment_status: Optional[str] = None
+    score_summary: Optional[dict[str, Any]] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -119,6 +124,8 @@ class ApplicationResponse(BaseModel):
 class ApplicationDetailResponse(ApplicationResponse):
     """Application with optional full CV text for viewer."""
     cv_text: Optional[str] = None
+    assessment_preview: Optional[dict[str, Any]] = None
+    assessment_history: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ApplicationCvUploadResponse(BaseModel):
@@ -132,3 +139,7 @@ class ApplicationCvUploadResponse(BaseModel):
 class AssessmentFromApplicationCreate(BaseModel):
     task_id: int = Field(gt=0)
     duration_minutes: int = Field(default=30, ge=15, le=180)
+
+
+class AssessmentRetakeCreate(AssessmentFromApplicationCreate):
+    void_reason: Optional[str] = Field(default=None, max_length=2000)

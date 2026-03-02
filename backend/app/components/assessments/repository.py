@@ -78,6 +78,7 @@ def get_active_assessment(assessment_id: int, db: Session) -> Assessment:
     assessment = db.query(Assessment).filter(
         Assessment.id == assessment_id,
         Assessment.status == AssessmentStatus.IN_PROGRESS,
+        Assessment.is_voided.is_(False),
     ).first()
     if not assessment:
         raise HTTPException(status_code=404, detail="Active assessment not found")
@@ -251,7 +252,11 @@ def build_breakdown(assessment: Assessment) -> Dict[str, Any]:
             breakdown["appliedCaps"] = sb.get("applied_caps") or []
 
     # Recommendation badge
-    score_100 = assessment.final_score or (assessment.score * 10 if assessment.score else None)
+    score_100 = getattr(assessment, "taali_score", None)
+    if score_100 is None:
+        score_100 = getattr(assessment, "assessment_score", None)
+    if score_100 is None:
+        score_100 = assessment.final_score or (assessment.score * 10 if assessment.score else None)
     if score_100 is not None:
         if score_100 >= 80:
             breakdown["recommendation"] = "STRONG HIRE"
@@ -267,6 +272,17 @@ def build_breakdown(assessment: Assessment) -> Dict[str, Any]:
             breakdown["recommendationColor"] = "red"
 
     return breakdown
+
+
+def _score_mode_for_assessment(assessment: Assessment) -> str | None:
+    assessment_score = getattr(assessment, "assessment_score", None)
+    if assessment_score is None:
+        assessment_score = getattr(assessment, "final_score", None)
+    if assessment_score is None and getattr(assessment, "score", None) is None:
+        return None
+    if getattr(assessment, "cv_job_match_score", None) is None:
+        return "assessment_only_fallback"
+    return "assessment_plus_cv"
 
 
 def assessment_to_response(assessment: Assessment, db: Optional[Session] = None) -> Dict[str, Any]:
@@ -347,10 +363,17 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "cv_job_match_score": getattr(assessment, "cv_job_match_score", None),
         "cv_job_match_details": getattr(assessment, "cv_job_match_details", None),
         "final_score": assessment.final_score,
+        "assessment_score": getattr(assessment, "assessment_score", None),
+        "taali_score": getattr(assessment, "taali_score", None),
+        "score_mode": _score_mode_for_assessment(assessment),
         "score_breakdown": assessment.score_breakdown,
         "score_weights_used": assessment.score_weights_used,
         "flags": assessment.flags,
         "scored_at": assessment.scored_at,
+        "is_voided": bool(getattr(assessment, "is_voided", False)),
+        "voided_at": getattr(assessment, "voided_at", None),
+        "void_reason": getattr(assessment, "void_reason", None),
+        "superseded_by_assessment_id": getattr(assessment, "superseded_by_assessment_id", None),
         "total_duration_seconds": assessment.total_duration_seconds,
         "total_prompts": assessment.total_prompts,
         "total_input_tokens": assessment.total_input_tokens,

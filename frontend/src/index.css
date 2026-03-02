@@ -5,6 +5,10 @@
 :root {
   --taali-bg: #f5f4fa;
   --taali-surface: #ffffff;
+  --taali-surface-subtle: #faf8ff;
+  --taali-surface-muted: #fcfbff;
+  --taali-surface-warm: #fffcf5;
+  --taali-table-header: #f4f1fb;
   --taali-border: #232338;
   --taali-border-muted: #d5d5e8;
   --taali-text: #111827;
@@ -266,7 +270,7 @@ code {
 }
 
 .taali-table-shell thead tr {
-  background: #f4f1fb;
+  background: var(--taali-table-header);
 }
 
 .taali-table-shell th,
@@ -290,6 +294,10 @@ code {
 .dark {
   --taali-bg: #0f172a;
   --taali-surface: #111827;
+  --taali-surface-subtle: #162033;
+  --taali-surface-muted: #192334;
+  --taali-surface-warm: #1b2434;
+  --taali-table-header: #1e293b;
   --taali-border: #475569;
   --taali-border-muted: #334155;
   --taali-text: #f8fafc;
@@ -332,7 +340,7 @@ code {
 }
 
 .dark .taali-table-shell thead tr {
-  background: #1e293b;
+  background: var(--taali-table-header);
 }
 
 .dark .taali-table-shell th,

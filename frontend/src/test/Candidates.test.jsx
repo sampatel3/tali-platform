@@ -46,6 +46,7 @@ vi.mock('../shared/api', () => ({
   roles: {
     list: vi.fn().mockResolvedValue({ data: [] }),
     get: vi.fn(),
+    getApplication: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
@@ -58,6 +59,7 @@ vi.mock('../shared/api', () => ({
     updateApplication: vi.fn(),
     uploadApplicationCv: vi.fn(),
     createAssessment: vi.fn(),
+    retakeAssessment: vi.fn(),
   },
   team: { list: vi.fn(), invite: vi.fn() },
   default: {

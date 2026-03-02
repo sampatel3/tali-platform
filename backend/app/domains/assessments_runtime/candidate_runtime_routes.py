@@ -177,6 +177,8 @@ def start_assessment(
     assessment = db.query(Assessment).filter(Assessment.token == token).with_for_update().first()
     if not assessment:
         raise HTTPException(status_code=404, detail="Invalid assessment token")
+    if bool(getattr(assessment, "is_voided", False)):
+        raise HTTPException(status_code=400, detail="assessment_voided")
     return start_or_resume_assessment(
         assessment,
         db,
@@ -190,6 +192,8 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
     assessment = db.query(Assessment).filter(Assessment.token == token).first()
     if not assessment:
         raise HTTPException(status_code=404, detail="Invalid assessment token")
+    if bool(getattr(assessment, "is_voided", False)):
+        raise HTTPException(status_code=400, detail="assessment_voided")
     if assessment.expires_at and ensure_utc(assessment.expires_at) < utcnow():
         raise HTTPException(status_code=400, detail="Assessment link has expired")
 
@@ -341,6 +345,8 @@ def upload_assessment_cv(
     assessment = db.query(Assessment).filter(Assessment.id == assessment_id).first()
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
+    if bool(getattr(assessment, "is_voided", False)):
+        raise HTTPException(status_code=400, detail="assessment_voided")
     if not secrets.compare_digest(assessment.token or "", token or ""):
         raise HTTPException(status_code=401, detail="Invalid assessment token")
     if assessment.status == AssessmentStatus.COMPLETED:

@@ -14,10 +14,10 @@ import {
   RolesList,
   SearchInput,
   getErrorMessage,
-  parseCollection,
   trimOrUndefined,
 } from './CandidatesUI';
 import { AssessmentInviteSheet } from './AssessmentInviteSheet';
+import { CandidateScoreSummarySheet } from './CandidateScoreSummarySheet';
 
 const DEFAULT_INVITE_TEMPLATE = (
   'Hi {{candidate_name}},\n\n'
@@ -54,7 +54,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [roleApplications, setRoleApplications] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState('cv_match_score');
+  const [sortBy, setSortBy] = useState('taali_score');
   const [sortOrder, setSortOrder] = useState('desc');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [statusFilter, setStatusFilter] = useState('all');
@@ -80,6 +80,9 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [inviteSheetOpen, setInviteSheetOpen] = useState(false);
   const [inviteDraft, setInviteDraft] = useState(null);
   const [cvSidebarApplicationId, setCvSidebarApplicationId] = useState(null);
+  const [scoreSheetApplicationId, setScoreSheetApplicationId] = useState(null);
+  const [applicationDetailsById, setApplicationDetailsById] = useState({});
+  const [loadingApplicationDetailId, setLoadingApplicationDetailId] = useState(null);
   const [batchScoring, setBatchScoring] = useState(null);
   const [fetchCvsProgress, setFetchCvsProgress] = useState(null);
   const [interviewFocusGeneratingRoleId, setInterviewFocusGeneratingRoleId] = useState(null);
@@ -106,7 +109,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const activeFilterCount = useMemo(() => (
     [
       searchQuery.trim() !== '',
-      sortBy !== 'cv_match_score',
+      sortBy !== 'taali_score',
       sortOrder !== 'desc',
       sourceFilter !== 'all',
       statusFilter !== 'all',
@@ -161,7 +164,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       const appParams = {
         sort_by: sortBy,
         sort_order: sortOrder,
-        include_cv_text: true,
       };
       if (sourceFilter !== 'all') appParams.source = sourceFilter;
       if (statusFilter !== 'all') appParams.status = statusFilter;
@@ -249,7 +251,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
 
   const resetFilters = useCallback(() => {
     setSearchQuery('');
-    setSortBy('cv_match_score');
+    setSortBy('taali_score');
     setSortOrder('desc');
     setSourceFilter('all');
     setStatusFilter('all');
@@ -260,6 +262,43 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     setSortBy(nextSortBy);
     setSortOrder(nextSortOrder);
   }, []);
+
+  const mergeApplicationData = useCallback((application) => {
+    if (!application) return null;
+    return {
+      ...application,
+      role_name: application.role_name || selectedRole?.name || '',
+    };
+  }, [selectedRole?.name]);
+
+  const loadApplicationDetail = useCallback(async (applicationId, { includeCvText = false, force = false } = {}) => {
+    if (!rolesApi?.getApplication || !applicationId) return null;
+    const cacheKey = String(applicationId);
+    const cached = applicationDetailsById[cacheKey];
+    if (!force && cached && (!includeCvText || cached.cv_text)) {
+      return cached;
+    }
+
+    setLoadingApplicationDetailId(applicationId);
+    try {
+      const res = await rolesApi.getApplication(applicationId, {
+        params: { include_cv_text: includeCvText },
+      });
+      const detail = res?.data || null;
+      if (detail) {
+        setApplicationDetailsById((prev) => ({
+          ...prev,
+          [cacheKey]: detail,
+        }));
+      }
+      return detail;
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to load candidate summary.'), 'error');
+      return null;
+    } finally {
+      setLoadingApplicationDetailId((current) => (Number(current) === Number(applicationId) ? null : current));
+    }
+  }, [applicationDetailsById, rolesApi, showToast]);
 
   const mapAssessmentForDetail = (assessment, fallbackApp) => ({
     id: assessment.id,
@@ -420,30 +459,44 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
   }, [loadRoleContext, rolesApi, selectedRoleId, showToast]);
 
-  const handleViewFromApplication = async (application) => {
-    setViewingApplicationId(application.id);
+  const openAssessmentResults = useCallback(async (assessmentId, fallbackApplication = null) => {
+    if (!assessmentId) return;
+    setViewingApplicationId(fallbackApplication?.id ?? assessmentId);
     try {
-      const res = await assessmentsApi.list({
-        candidate_id: application.candidate_id,
-        role_id: selectedRoleId,
-        limit: 1,
-        offset: 0,
-      });
-      const items = parseCollection(res.data);
-      if (items.length === 0) {
-        showToast('No assessments found for this candidate yet.', 'info');
-        return;
-      }
-      onViewCandidate(mapAssessmentForDetail(items[0], application));
+      const res = await assessmentsApi.get(assessmentId);
+      onViewCandidate(mapAssessmentForDetail(res.data || {}, fallbackApplication));
     } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to load candidate details.'), 'error');
+      showToast(getErrorMessage(err, 'Failed to load assessment results.'), 'error');
     } finally {
       setViewingApplicationId(null);
     }
+  }, [assessmentsApi, onViewCandidate, showToast]);
+
+  const handleViewFromApplication = async (application) => {
+    const status = String(application?.valid_assessment_status || '').toLowerCase();
+    if (application?.valid_assessment_id && ['completed', 'completed_due_to_timeout'].includes(status)) {
+      await openAssessmentResults(application.valid_assessment_id, application);
+      return;
+    }
+    setScoreSheetApplicationId(application.id);
+    await loadApplicationDetail(application.id);
   };
 
-  const handleCreateAssessment = async (application, taskId) => {
-    if (!rolesApi?.createAssessment) return false;
+  const handleOpenScoreSummary = useCallback(async (application) => {
+    if (!application?.id) return;
+    setScoreSheetApplicationId(application.id);
+    await loadApplicationDetail(application.id);
+  }, [loadApplicationDetail]);
+
+  const handleOpenCvSidebar = useCallback(async (application) => {
+    if (!application?.id) return;
+    setCvSidebarApplicationId(application.id);
+    await loadApplicationDetail(application.id, { includeCvText: true });
+  }, [loadApplicationDetail]);
+
+  const handleLaunchAssessment = async (application, taskId, { retake = false, voidReason = '' } = {}) => {
+    const createFn = retake ? rolesApi?.retakeAssessment : rolesApi?.createAssessment;
+    if (!createFn) return false;
     const taskNumber = Number(taskId);
     if (!taskNumber) {
       showToast('Select a task first.', 'info');
@@ -455,11 +508,17 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         showToast('No CV uploaded — Role fit scoring will show N/A.', 'info');
       }
       const durationMinutes = clampDurationMinutes(orgPreferences.defaultAssessmentDurationMinutes);
-      const res = await rolesApi.createAssessment(application.id, {
+      const resolvedVoidReason = String(voidReason || '').trim() || 'Superseded by recruiter retake';
+      const res = await createFn(application.id, {
         task_id: taskNumber,
         duration_minutes: durationMinutes,
+        ...(retake ? { void_reason: resolvedVoidReason } : {}),
       });
       await loadRoleContext(selectedRoleId);
+      const refreshedDetail = await loadApplicationDetail(application.id, { force: true, includeCvText: cvSidebarApplicationId === application.id });
+      if (scoreSheetApplicationId === application.id && !refreshedDetail) {
+        setScoreSheetApplicationId(application.id);
+      }
       const created = res?.data || {};
       const candidateEmail = created.candidate_email || application?.candidate_email || '';
       const candidateName = created.candidate_name || application?.candidate_name || '';
@@ -502,6 +561,22 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       setInviteSheetOpen(true);
       return true;
     } catch (err) {
+      if (!retake && err?.response?.status === 409 && err?.response?.data?.detail?.code === 'retake_required' && rolesApi?.retakeAssessment) {
+        const shouldRetake = window.confirm('A valid assessment already exists for this candidate in this role. Void it and create a retake?');
+        if (!shouldRetake) {
+          showToast('Retake cancelled.', 'info');
+          return false;
+        }
+        const promptedReason = window.prompt(
+          'Optional: why is this retake replacing the previous assessment?',
+          'Superseded by recruiter retake'
+        );
+        if (promptedReason === null) {
+          showToast('Retake cancelled.', 'info');
+          return false;
+        }
+        return handleLaunchAssessment(application, taskNumber, { retake: true, voidReason: promptedReason });
+      }
       showToast(getErrorMessage(err, 'Failed to create assessment.'), 'error');
       return false;
     } finally {
@@ -519,6 +594,14 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         setRoleApplications((prev) =>
           prev.map((app) => (Number(app.id) === Number(updated.id) ? { ...app, ...updated } : app))
         );
+        setApplicationDetailsById((prev) => {
+          const existing = prev[String(updated.id)];
+          if (!existing) return prev;
+          return {
+            ...prev,
+            [String(updated.id)]: { ...existing, ...updated },
+          };
+        });
       }
     } catch (err) {
       const msg = getErrorMessage(err, 'Failed to generate TAALI score.');
@@ -662,12 +745,40 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         setRoleApplications((prev) =>
           prev.map((app) => (Number(app.id) === Number(updated.id) ? { ...app, ...updated } : app))
         );
+        setApplicationDetailsById((prev) => {
+          const existing = prev[String(updated.id)];
+          if (!existing) return prev;
+          return {
+            ...prev,
+            [String(updated.id)]: { ...existing, ...updated },
+          };
+        });
       }
       showToast('Profile enriched from Workable.', 'success');
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to enrich candidate.'), 'error');
     }
   }, [rolesApi, showToast]);
+
+  const selectedScoreBaseApplication = roleApplications.find((app) => Number(app.id) === Number(scoreSheetApplicationId)) ?? null;
+  const selectedScoreDetail = scoreSheetApplicationId != null
+    ? (applicationDetailsById[String(scoreSheetApplicationId)] ?? null)
+    : null;
+  const selectedScoreApplication = mergeApplicationData(
+    selectedScoreBaseApplication || selectedScoreDetail
+      ? { ...(selectedScoreBaseApplication || {}), ...(selectedScoreDetail || {}) }
+      : null
+  );
+
+  const selectedCvBaseApplication = roleApplications.find((app) => Number(app.id) === Number(cvSidebarApplicationId)) ?? null;
+  const selectedCvDetail = cvSidebarApplicationId != null
+    ? (applicationDetailsById[String(cvSidebarApplicationId)] ?? null)
+    : null;
+  const selectedCvApplication = mergeApplicationData(
+    selectedCvBaseApplication || selectedCvDetail
+      ? { ...(selectedCvBaseApplication || {}), ...(selectedCvDetail || {}) }
+      : null
+  );
 
   return (
     <div>
@@ -751,7 +862,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   Sort by
                 </span>
                 <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-                  <option value="cv_match_score">Taali AI (CV match /100)</option>
+                  <option value="taali_score">TAALI Score (/100)</option>
+                  <option value="cv_match_score">CV fit (/100)</option>
                   <option value="created_at">Added</option>
                 </Select>
               </label>
@@ -793,14 +905,14 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
               </label>
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                  Min taali
+                  Min CV fit
                 </span>
                 <Input
                   type="number"
                   min="0"
                   max="100"
                   step="1"
-                  aria-label="Minimum CV match score"
+                  aria-label="Minimum CV fit score"
                   placeholder="0"
                   value={minCvMatchScore}
                   onChange={(event) => setMinCvMatchScore(event.target.value)}
@@ -870,8 +982,9 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                     setCandidateSheetOpen(true);
                   }}
                   onViewCandidate={handleViewFromApplication}
-                  onOpenCvSidebar={(app) => setCvSidebarApplicationId(app?.id ?? null)}
-                  onCreateAssessment={handleCreateAssessment}
+                  onOpenDetails={handleOpenScoreSummary}
+                  onOpenCvSidebar={handleOpenCvSidebar}
+                  onCreateAssessment={handleLaunchAssessment}
                   onUploadCv={handleUploadApplicationCv}
                   uploadingCvId={uploadingCvId}
                   onGenerateTaaliCvAi={handleGenerateTaaliCvAi}
@@ -910,9 +1023,21 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         draft={inviteDraft}
       />
 
+      <CandidateScoreSummarySheet
+        open={scoreSheetApplicationId != null}
+        loading={scoreSheetApplicationId != null && loadingApplicationDetailId === scoreSheetApplicationId}
+        application={selectedScoreApplication}
+        roleTasks={roleTasks}
+        creatingAssessmentId={creatingAssessmentId}
+        onClose={() => setScoreSheetApplicationId(null)}
+        onLaunchAssessment={handleLaunchAssessment}
+        onOpenCvSidebar={handleOpenCvSidebar}
+        onViewResults={openAssessmentResults}
+      />
+
       <CandidateCvSidebar
         open={cvSidebarApplicationId != null}
-        application={roleApplications.find((a) => Number(a.id) === Number(cvSidebarApplicationId)) ?? null}
+        application={selectedCvApplication}
         onClose={() => setCvSidebarApplicationId(null)}
         onFetchCvFromWorkable={handleGenerateTaaliCvAi}
         fetchingCvApplicationId={generatingTaaliId}

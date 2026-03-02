@@ -7,6 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from fastapi.responses import Response
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from ...components.assessments.repository import assessment_to_response, utcnow
@@ -27,9 +28,34 @@ from ...services.assessment_repository_service import (
     AssessmentRepositoryError,
     AssessmentRepositoryService,
 )
+from .role_support import latest_valid_role_assessment
 
 router = APIRouter()
 logger = logging.getLogger("taali.assessments")
+
+
+def _assessment_create_conflict(existing: Assessment) -> HTTPException:
+    return HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "message": "A valid assessment already exists for this candidate and role. Use retake instead.",
+            "code": "retake_required",
+            "assessment_id": existing.id,
+            "assessment_status": (
+                existing.status.value if hasattr(existing.status, "value") else str(existing.status)
+            ),
+        },
+    )
+
+
+def _is_active_role_assessment_integrity_error(err: Exception) -> bool:
+    if not isinstance(err, IntegrityError):
+        return False
+    message = str(getattr(err, "orig", err)).lower()
+    return (
+        "uq_assessments_candidate_role_active" in message
+        or ("assessments.candidate_id" in message and "assessments.role_id" in message and "unique" in message)
+    )
 
 
 @router.post("/", response_model=AssessmentResponse, status_code=status.HTTP_201_CREATED)
@@ -130,6 +156,16 @@ def create_assessment(
             candidate_email = candidate.email
             candidate_name = candidate.full_name or candidate.email
 
+        if resolved_role_id:
+            existing = latest_valid_role_assessment(
+                candidate_id=(candidate.id if candidate else None),
+                role_id=resolved_role_id,
+                org_id=current_user.organization_id,
+                db=db,
+            )
+            if existing is not None:
+                raise _assessment_create_conflict(existing)
+
         token = secrets.token_urlsafe(32)
         assessment = Assessment(
             organization_id=current_user.organization_id,
@@ -163,8 +199,17 @@ def create_assessment(
     except HTTPException:
         db.rollback()
         raise
-    except Exception:
+    except Exception as exc:
         db.rollback()
+        if resolved_role_id and _is_active_role_assessment_integrity_error(exc):
+            existing = latest_valid_role_assessment(
+                candidate_id=(candidate.id if candidate else None),
+                role_id=resolved_role_id,
+                org_id=current_user.organization_id,
+                db=db,
+            )
+            if existing is not None:
+                raise _assessment_create_conflict(existing)
         logger.exception("Failed to create assessment")
         raise HTTPException(status_code=500, detail="Failed to create assessment")
 
@@ -204,6 +249,7 @@ def list_assessments(
     candidate_id: Optional[int] = None,
     role_id: Optional[int] = None,
     application_id: Optional[int] = None,
+    include_voided: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
@@ -220,6 +266,8 @@ def list_assessments(
         )
         .filter(Assessment.organization_id == current_user.organization_id)
     )
+    if not include_voided:
+        q = q.filter(Assessment.is_voided.is_(False))
     if status:
         q = q.filter(Assessment.status == status)
     if task_id is not None:
@@ -305,6 +353,8 @@ def resend_assessment_invite(
     )
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
+    if bool(getattr(assessment, "is_voided", False)):
+        raise HTTPException(status_code=400, detail="Voided assessments cannot be resent")
     if not assessment.candidate:
         raise HTTPException(status_code=400, detail="Assessment has no candidate")
 
@@ -340,6 +390,8 @@ def post_assessment_to_workable(
     )
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
+    if bool(getattr(assessment, "is_voided", False)):
+        raise HTTPException(status_code=400, detail="Voided assessments cannot be posted to Workable")
     if assessment.posted_to_workable:
         return {
             "success": True,
@@ -365,7 +417,7 @@ def post_assessment_to_workable(
             "tests_passed": assessment.tests_passed or 0,
             "tests_total": assessment.tests_total or 0,
             "time_taken": assessment.duration_minutes,
-            "results_url": f"{settings.FRONTEND_URL}/dashboard",
+            "results_url": f"{settings.FRONTEND_URL}/assessments/{assessment.id}",
         },
     )
     if not result.get("success"):

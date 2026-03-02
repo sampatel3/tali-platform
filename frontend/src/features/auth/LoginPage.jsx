@@ -59,7 +59,7 @@ export const LoginPage = ({ onNavigate }) => {
     setLoading(true);
     try {
       await login(email, password);
-      onNavigate('dashboard');
+      onNavigate('assessments');
     } catch (err) {
       const status = err.response?.status;
       const rawDetail = err.response?.data?.detail;

@@ -26,13 +26,30 @@ import { CandidateInterviewDebrief } from './CandidateInterviewDebrief';
 
 const RESULTS_ONBOARDING_KEY = 'taali_results_onboarding_seen_v1';
 
-export const CandidateDetailPage = ({
+const normalizeScore100 = (value, scoreScale = '') => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return null;
+  const scale = String(scoreScale || '').toLowerCase();
+  if (scale.includes('100')) return numeric;
+  if (numeric <= 10) return numeric * 10;
+  return numeric;
+};
+
+const formatScore100 = (value) => {
+  const numeric = normalizeScore100(value);
+  if (!Number.isFinite(numeric)) return '—';
+  const rounded = Math.round(numeric * 10) / 10;
+  const display = Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1);
+  return `${display}/100`;
+};
+
+export const AssessmentResultsPage = ({
   candidate,
   onNavigate,
   onDeleted,
   onNoteAdded,
   NavComponent = null,
-  backTo = { page: 'dashboard', label: 'Back to Assessments' },
+  backTo = { page: 'assessments', label: 'Back to Assessments' },
 }) => {
   const { showToast } = useToast();
   const assessmentsApi = apiClient.assessments;
@@ -95,8 +112,15 @@ export const CandidateDetailPage = ({
     return { label: 'NOT RECOMMENDED', color: 'var(--taali-danger)' };
   };
 
-  const score100 = candidate?._raw?.final_score || (candidate?.score ? candidate.score * 10 : null);
-  const rec = score100 != null ? getRecommendation(score100) : null;
+  const taaliScore100 = candidate?._raw?.taali_score ?? candidate?._raw?.final_score ?? (candidate?.score ? candidate.score * 10 : null);
+  const assessmentScore100 = candidate?._raw?.assessment_score ?? candidate?._raw?.final_score ?? (candidate?.score ? candidate.score * 10 : null);
+  const cvFitScore100 = normalizeScore100(
+    candidate?._raw?.cv_job_match_score
+    ?? candidate?._raw?.score_breakdown?.score_components?.cv_fit_score
+    ?? null,
+    candidate?._raw?.cv_job_match_details?.score_scale || candidate?._raw?.score_breakdown?.score_components?.score_scale
+  );
+  const rec = taaliScore100 != null ? getRecommendation(taaliScore100) : null;
   const assessmentId = candidate?._raw?.id;
   const taskId = candidate?._raw?.task_id || candidate?._raw?.task?.id || null;
   const roleId = candidate?._raw?.role_id || null;
@@ -105,6 +129,10 @@ export const CandidateDetailPage = ({
   const normalizedStatus = String(candidate?._raw?.status || candidate?.status || '').toLowerCase();
   const canResendInvite = normalizedStatus === 'pending' || normalizedStatus === 'expired';
   const canGenerateInterviewGuide = normalizedStatus === 'completed' || normalizedStatus === 'completed_due_to_timeout';
+  const isVoided = Boolean(candidate?._raw?.is_voided);
+  const voidedAt = candidate?._raw?.voided_at || null;
+  const voidReason = candidate?._raw?.void_reason || null;
+  const supersededByAssessmentId = candidate?._raw?.superseded_by_assessment_id || null;
   const hasCvOnFile = Boolean(
     candidate?._raw?.candidate_cv_filename
     || candidate?._raw?.cv_filename
@@ -535,7 +563,7 @@ export const CandidateDetailPage = ({
     try {
       await assessmentsApi.remove(assessmentId);
       if (onDeleted) onDeleted();
-      onNavigate('dashboard');
+      onNavigate('assessments');
     } catch (err) {
       showToast(err?.response?.data?.detail || 'Failed to delete assessment', 'error');
     } finally {
@@ -605,7 +633,7 @@ export const CandidateDetailPage = ({
 
   return (
     <div>
-      {NavComponent ? <NavComponent currentPage="dashboard" onNavigate={onNavigate} /> : null}
+      {NavComponent ? <NavComponent currentPage="assessments" onNavigate={onNavigate} /> : null}
       <PageContainer>
         <Button
           variant="ghost"
@@ -616,9 +644,21 @@ export const CandidateDetailPage = ({
           <ArrowLeft size={16} /> {backTo.label}
         </Button>
 
+        {isVoided ? (
+          <Panel className="mb-4 border-2 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+            <p className="font-semibold">This assessment was voided and superseded.</p>
+            <p className="mt-1">
+              {voidedAt ? `Voided ${new Date(voidedAt).toLocaleString()}. ` : ''}
+              {voidReason ? `Reason: ${voidReason}. ` : ''}
+              {supersededByAssessmentId ? `Superseded by assessment #${supersededByAssessmentId}.` : ''}
+            </p>
+          </Panel>
+        ) : null}
+
         <Panel className="mb-6 p-5">
           <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_340px]">
             <div>
+              <p className="mb-2 font-mono text-xs uppercase tracking-[0.08em] text-gray-500">Assessment Results</p>
               <h1 className="text-4xl font-bold text-gray-900">{candidate.name}</h1>
               <p className="mb-4 font-mono text-gray-500">{candidate.email}</p>
               <div className="flex flex-wrap gap-2">
@@ -631,11 +671,12 @@ export const CandidateDetailPage = ({
               </div>
             </div>
 
-            {(score100 != null || candidate.score) ? (
+            {(taaliScore100 != null || candidate.score) ? (
               <div className="border-2 border-[var(--taali-purple)] bg-[#151122] p-5 text-white">
+                <div className="mb-2 font-mono text-xs uppercase tracking-[0.08em] text-white/60">TAALI Score</div>
                 <div className="mb-1 text-5xl font-bold text-[var(--taali-purple)]">
-                  {score100 != null ? `${Math.round(score100)}` : candidate.score}
-                  <span className="text-lg text-gray-400">/{score100 != null ? '100' : '10'}</span>
+                  {taaliScore100 != null ? `${Math.round(taaliScore100)}` : candidate.score}
+                  <span className="text-lg text-gray-400">/{taaliScore100 != null ? '100' : '10'}</span>
                 </div>
 
                 {rec ? (
@@ -643,6 +684,17 @@ export const CandidateDetailPage = ({
                     {rec.label}
                   </div>
                 ) : null}
+
+                <div className="mb-4 grid gap-2 md:grid-cols-2">
+                  <div className="border border-white/10 bg-white/5 px-3 py-2">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/60">Assessment Score</div>
+                    <div className="mt-1 text-lg font-semibold text-white">{formatScore100(assessmentScore100)}</div>
+                  </div>
+                  <div className="border border-white/10 bg-white/5 px-3 py-2">
+                    <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/60">CV Fit</div>
+                    <div className="mt-1 text-lg font-semibold text-white">{formatScore100(cvFitScore100)}</div>
+                  </div>
+                </div>
 
                 {Object.keys(headerCategoryScores).length > 0 ? (
                   <div className="space-y-1.5 font-mono text-xs">
@@ -696,7 +748,7 @@ export const CandidateDetailPage = ({
           </div>
         </Panel>
 
-        <Panel className="mb-4 bg-[#faf8ff] p-3">
+        <Panel className="mb-4 bg-[var(--taali-surface-subtle)] p-3">
           <div className="font-mono text-xs">
             <span className="text-gray-500">Workable status:</span>{' '}
             <span className={workableStatus.posted ? 'font-bold text-green-700' : 'text-gray-700'}>
@@ -732,8 +784,10 @@ export const CandidateDetailPage = ({
                 type="button"
                 className={cx(
                   'min-w-[108px] flex-1 px-4 py-3 font-mono text-sm font-bold transition-colors',
-                  index < topTabs.length - 1 ? 'border-r border-[#e7e3f4]' : '',
-                  activeTab === tab.id ? 'bg-[var(--taali-purple)] text-white' : 'bg-white hover:bg-[#faf8ff]'
+                  index < topTabs.length - 1 ? 'border-r border-[var(--taali-border-muted)]' : '',
+                  activeTab === tab.id
+                    ? 'bg-[var(--taali-purple)] text-white'
+                    : 'bg-[var(--taali-surface)] hover:bg-[var(--taali-surface-subtle)]'
                 )}
                 onClick={() => setActiveTab(tab.id)}
               >
@@ -938,3 +992,5 @@ export const CandidateDetailPage = ({
     </div>
   );
 };
+
+export const CandidateDetailPage = AssessmentResultsPage;

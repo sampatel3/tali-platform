@@ -44,7 +44,7 @@ const getDateRangeParams = (range) => {
 
 const safeNumber = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
 
-export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
+export const ReportingPage = ({ onNavigate, NavComponent }) => {
   const [roles, setRoles] = useState([]);
   const [tasks, setTasks] = useState([]);
   const [roleFilter, setRoleFilter] = useState('');
@@ -246,12 +246,12 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
 
   return (
     <div>
-      <NavComponent currentPage="analytics" onNavigate={onNavigate} />
+      <NavComponent currentPage="reporting" onNavigate={onNavigate} />
       <div className="max-w-7xl mx-auto px-6 py-8">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold">Analytics</h1>
-            <p className="text-sm text-[var(--taali-muted)]">Performance insights across assessments and AI-collaboration dimensions.</p>
+            <h1 className="text-3xl font-bold">Reporting</h1>
+            <p className="text-sm text-[var(--taali-muted)]">Aggregate reporting across completion trends, scores, and assessment dimensions.</p>
           </div>
           <Button type="button" variant="secondary" onClick={handleExportCsv} disabled={loading || exporting}>
             {exporting ? 'Exporting...' : 'Export CSV'}
@@ -391,3 +391,5 @@ export const AnalyticsPage = ({ onNavigate, NavComponent }) => {
     </div>
   );
 };
+
+export const AnalyticsPage = ReportingPage;

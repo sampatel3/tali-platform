@@ -433,7 +433,7 @@ describe('CandidateDetailPage', () => {
     const backButton = screen.getByText('Back to Assessments');
     fireEvent.click(backButton);
 
-    expect(mockOnNavigate).toHaveBeenCalledWith('dashboard');
+    expect(mockOnNavigate).toHaveBeenCalledWith('assessments');
   });
 
   it('renders assessment metadata in results tab', async () => {

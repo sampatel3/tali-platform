@@ -110,7 +110,7 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
         className="fixed left-0 top-0 bottom-0 z-50 w-full max-w-[480px] bg-[var(--taali-surface)] border-r-2 border-[var(--taali-border)] shadow-xl flex flex-col focus:outline-none"
       >
         {/* Header */}
-        <div className="shrink-0 flex items-start justify-between gap-3 px-5 py-4 border-b border-[var(--taali-border-muted)] bg-[#faf8ff]">
+        <div className="shrink-0 flex items-start justify-between gap-3 px-5 py-4 border-b border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)]">
           <div className="flex items-start gap-3 min-w-0 flex-1">
             {data?.candidate_image_url ? (
               <img
@@ -149,7 +149,7 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
 
         {/* Profile summary */}
         {hasProfileSummary ? (
-          <div className="shrink-0 px-5 py-3 border-b border-[var(--taali-border-muted)] bg-white space-y-2">
+          <div className="shrink-0 px-5 py-3 border-b border-[var(--taali-border-muted)] bg-[var(--taali-surface)] space-y-2">
             <div className="flex flex-wrap items-center gap-2 text-xs text-gray-600">
               {data.candidate_location ? (
                 <span className="inline-flex items-center gap-0.5">
@@ -192,13 +192,13 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
 
         {/* Meta row */}
         {data ? (
-          <div className="shrink-0 px-5 py-3 flex flex-wrap items-center gap-2 border-b border-[var(--taali-border-muted)] bg-white">
+          <div className="shrink-0 px-5 py-3 flex flex-wrap items-center gap-2 border-b border-[var(--taali-border-muted)] bg-[var(--taali-surface)]">
             {data.candidate_position ? (
               <span className="text-xs text-gray-600">{data.candidate_position}</span>
             ) : null}
             <Badge variant={statusVariant(data.status)}>{data.status || 'applied'}</Badge>
             <span className="text-xs text-gray-500">
-              Taali: {formatCvScore100(data.cv_match_score, data.cv_match_details)}
+              TAALI Score: {formatCvScore100(data.taali_score ?? data.cv_match_score, data.taali_score != null ? { score_scale: '0-100' } : data.cv_match_details)}
             </span>
           </div>
         ) : null}
@@ -211,7 +211,7 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
                 <FileText size={14} />
                 CV
               </div>
-              <div className="rounded-lg border border-[var(--taali-border-muted)] bg-white p-4 font-[inherit]">
+              <div className="rounded-lg border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-4 font-[inherit]">
                 {formatCvWithSections(data.cv_text)}
               </div>
             </div>

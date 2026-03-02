@@ -20,10 +20,10 @@ const pickOrganizationName = (user) => String(
 ).trim();
 
 const NAV_ITEMS = [
-  { id: 'dashboard', label: 'Assessments' },
+  { id: 'assessments', label: 'Assessments' },
   { id: 'candidates', label: 'Candidates' },
   { id: 'tasks', label: 'Tasks' },
-  { id: 'analytics', label: 'Analytics' },
+  { id: 'reporting', label: 'Reporting' },
   { id: 'settings', label: 'Settings' },
 ];
 
@@ -80,7 +80,7 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
     <nav className="taali-nav border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
       <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
         <div className="flex items-center gap-8">
-          <Logo onClick={() => onNavigate('dashboard')} />
+          <Logo onClick={() => onNavigate('assessments')} />
           <div className="hidden md:flex items-center gap-1">
             {NAV_ITEMS.map((item) => (
               <Button

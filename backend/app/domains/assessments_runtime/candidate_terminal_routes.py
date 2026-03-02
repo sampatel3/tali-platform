@@ -228,6 +228,7 @@ async def terminal_ws(
     assessment = db.query(Assessment).filter(
         Assessment.id == assessment_id,
         Assessment.status == AssessmentStatus.IN_PROGRESS,
+        Assessment.is_voided.is_(False),
     ).first()
 
     if not assessment:

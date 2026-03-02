@@ -39,4 +39,5 @@ export const roles = {
   fetchCvs: (roleId) => api.post(`/roles/${roleId}/fetch-cvs`),
   fetchCvsStatus: (roleId) => api.get(`/roles/${roleId}/fetch-cvs/status`),
   createAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments`, data),
+  retakeAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments/retake`, data),
 };

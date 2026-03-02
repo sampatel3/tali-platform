@@ -1,4 +1,17 @@
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, JSON, Float, Text, Enum, Boolean
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    String,
+    Text,
+    text,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from ..platform.database import Base
@@ -15,6 +28,16 @@ class AssessmentStatus(str, enum.Enum):
 
 class Assessment(Base):
     __tablename__ = "assessments"
+    __table_args__ = (
+        Index(
+            "uq_assessments_candidate_role_active",
+            "candidate_id",
+            "role_id",
+            unique=True,
+            sqlite_where=text("role_id IS NOT NULL AND is_voided = 0"),
+            postgresql_where=text("role_id IS NOT NULL AND is_voided = false"),
+        ),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), index=True)
@@ -84,6 +107,8 @@ class Assessment(Base):
     cv_filename = Column(String, nullable=True)
     cv_uploaded_at = Column(DateTime(timezone=True), nullable=True)
     final_score = Column(Float, nullable=True)
+    assessment_score = Column(Float, nullable=True)
+    taali_score = Column(Float, nullable=True)
     score_breakdown = Column(JSON, nullable=True)
     score_weights_used = Column(JSON, nullable=True)
     flags = Column(JSON, nullable=True)
@@ -98,6 +123,10 @@ class Assessment(Base):
     cv_job_match_score = Column(Float, nullable=True)
     cv_job_match_details = Column(JSON, nullable=True)
     manual_evaluation = Column(JSON, nullable=True)  # { category_scores: { key: { score, evidence } }, overall_score?, strengths?, improvements? }
+    is_voided = Column(Boolean, default=False, nullable=False)
+    voided_at = Column(DateTime(timezone=True), nullable=True)
+    void_reason = Column(Text, nullable=True)
+    superseded_by_assessment_id = Column(Integer, ForeignKey("assessments.id"), nullable=True)
     candidate_feedback_json = Column(JSON, nullable=True)
     candidate_feedback_generated_at = Column(DateTime(timezone=True), nullable=True)
     candidate_feedback_sent_at = Column(DateTime(timezone=True), nullable=True)

@@ -88,6 +88,7 @@ vi.mock('@monaco-editor/react', () => ({
 import {
   auth,
   assessments as assessmentsApi,
+  analytics as analyticsApi,
   tasks as tasksApi,
   roles as rolesApi,
   organizations as organizationsApi,
@@ -187,7 +188,7 @@ const renderApp = () => {
   );
 };
 
-describe('DashboardPage', () => {
+describe('AssessmentsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
@@ -210,8 +211,7 @@ describe('DashboardPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('Recent Assessments')).toBeInTheDocument();
-      expect(screen.queryByText('Loading assessments...')).not.toBeInTheDocument();
+      expect(screen.getByText('Assessment Inbox')).toBeInTheDocument();
     });
   });
 
@@ -260,10 +260,10 @@ describe('DashboardPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('Active Assessments')).toBeInTheDocument();
-      expect(screen.getByText('Completion Rate')).toBeInTheDocument();
-      expect(screen.getByText('Avg Score')).toBeInTheDocument();
-      expect(screen.getByText('This Month Cost')).toBeInTheDocument();
+      expect(screen.getAllByText('Invited').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Completed Awaiting Review')).toBeInTheDocument();
+      expect(screen.getByText('Expiring Soon')).toBeInTheDocument();
     });
   });
 
@@ -272,8 +272,8 @@ describe('DashboardPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('1')).toBeInTheDocument();
-      expect(screen.getAllByText('2 completed').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('1').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('2').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -305,13 +305,13 @@ describe('DashboardPage', () => {
     });
   });
 
-  it('groups assessment rows by role when no role filter is selected', async () => {
+  it('renders role names in the assessment inbox table', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('— Backend Engineer —')).toBeInTheDocument();
-      expect(screen.getByText('— ML Engineer —')).toBeInTheDocument();
+      expect(screen.getAllByText('Backend Engineer').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('ML Engineer')).toBeInTheDocument();
     });
   });
 
@@ -346,6 +346,7 @@ describe('DashboardPage', () => {
     renderApp();
 
     await waitFor(() => {
+      expect(window.location.pathname).toBe('/assessments/1');
       expect(assessmentsApi.get).toHaveBeenCalledWith(1);
     });
 
@@ -356,15 +357,37 @@ describe('DashboardPage', () => {
     });
   });
 
+  it('redirects /dashboard to /assessments', async () => {
+    window.history.pushState({}, '', '/dashboard');
+    assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
+    renderApp();
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/assessments');
+      expect(screen.getByRole('heading', { name: 'Assessments' })).toBeInTheDocument();
+    });
+  });
+
+  it('redirects /analytics to /reporting', async () => {
+    window.history.pushState({}, '', '/analytics');
+    renderApp();
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/reporting');
+      expect(analyticsApi.get).toHaveBeenCalled();
+      expect(screen.getByRole('heading', { name: 'Reporting' })).toBeInTheDocument();
+    });
+  });
+
   it('filter by task re-fetches assessments', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('All job roles')).toBeInTheDocument();
+      expect(screen.getByText('All tasks')).toBeInTheDocument();
     });
 
-    const taskSelect = screen.getByDisplayValue('All job roles');
+    const taskSelect = screen.getByDisplayValue('All tasks');
     fireEvent.change(taskSelect, { target: { value: '10' } });
 
     await waitFor(() => {
@@ -398,8 +421,8 @@ describe('DashboardPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('8.5/10')).toBeInTheDocument();
-      expect(screen.getByText('6/10')).toBeInTheDocument();
+      expect(screen.getAllByText('85/100').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('60/100').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -415,22 +438,22 @@ describe('DashboardPage', () => {
     });
   });
 
-  it('renders export buttons', async () => {
+  it('does not render export buttons on the assessments inbox', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('Export CSV')).toBeInTheDocument();
-      expect(screen.getByText('Export JSON')).toBeInTheDocument();
+      expect(screen.queryByText('Export CSV')).not.toBeInTheDocument();
+      expect(screen.queryByText('Export JSON')).not.toBeInTheDocument();
     });
   });
 
-  it('renders View button for completed assessments', async () => {
+  it('renders View results button for completed assessments', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
     renderApp();
 
     await waitFor(() => {
-      const viewButtons = screen.getAllByText('View');
+      const viewButtons = screen.getAllByText('View results');
       expect(viewButtons.length).toBeGreaterThanOrEqual(1);
     });
   });
@@ -444,13 +467,12 @@ describe('DashboardPage', () => {
     });
   });
 
-  it('shows recent notifications for completed assessments', async () => {
+  it('does not render legacy recent notifications panel', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('Recent Notifications')).toBeInTheDocument();
-      expect(screen.getByText(/Alice Johnson completed Async Debugging/)).toBeInTheDocument();
+      expect(screen.queryByText('Recent Notifications')).not.toBeInTheDocument();
     });
   });
 
@@ -459,16 +481,38 @@ describe('DashboardPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('Candidate')).toBeInTheDocument();
-      expect(screen.getByText('Task')).toBeInTheDocument();
-      expect(screen.getByText('Status')).toBeInTheDocument();
-      expect(screen.getByText('Score')).toBeInTheDocument();
-      expect(screen.getByText('Time')).toBeInTheDocument();
+      expect(screen.getAllByText('Candidate').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Role').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Task').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Status').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('TAALI Score').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Assessment Score').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Sent').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Completed').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Actions').length).toBeGreaterThanOrEqual(1);
     });
   });
 
-  it('renders Copy link button for assessments with tokens', async () => {
-    assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
+  it('renders Copy link button for pending assessments with tokens', async () => {
+    assessmentsApi.list.mockResolvedValue({
+      data: {
+        items: [
+          ...mockAssessments,
+          {
+            id: 4,
+            candidate_name: 'Dana Pending',
+            candidate_email: 'dana@example.com',
+            role_name: 'Backend Engineer',
+            task: { name: 'Async Debugging' },
+            task_name: 'Async Debugging',
+            status: 'pending',
+            score: null,
+            token: 'tok-dana',
+          },
+        ],
+        total: 4,
+      },
+    });
     renderApp();
 
     await waitFor(() => {
