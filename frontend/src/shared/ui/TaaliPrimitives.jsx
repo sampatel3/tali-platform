@@ -10,7 +10,38 @@ const FOCUSABLE_SELECTOR = [
   '[tabindex]:not([tabindex="-1"])',
 ].join(',');
 
+const SHEET_LOCK_COUNT_ATTR = 'data-taali-sheet-lock-count';
+const SHEET_PREVIOUS_OVERFLOW_ATTR = 'data-taali-sheet-previous-overflow';
+
 export const cx = (...parts) => parts.filter(Boolean).join(' ');
+
+const lockBodyScrollForSheet = () => {
+  const body = document.body;
+  const currentCount = Number(body.getAttribute(SHEET_LOCK_COUNT_ATTR) || '0');
+
+  if (currentCount === 0) {
+    body.setAttribute(SHEET_PREVIOUS_OVERFLOW_ATTR, body.style.overflow || '');
+    body.style.overflow = 'hidden';
+  }
+
+  body.setAttribute(SHEET_LOCK_COUNT_ATTR, String(currentCount + 1));
+};
+
+const unlockBodyScrollForSheet = () => {
+  const body = document.body;
+  const currentCount = Number(body.getAttribute(SHEET_LOCK_COUNT_ATTR) || '0');
+  const nextCount = Math.max(0, currentCount - 1);
+
+  if (nextCount === 0) {
+    const previousOverflow = body.getAttribute(SHEET_PREVIOUS_OVERFLOW_ATTR) || '';
+    body.style.overflow = previousOverflow;
+    body.removeAttribute(SHEET_LOCK_COUNT_ATTR);
+    body.removeAttribute(SHEET_PREVIOUS_OVERFLOW_ATTR);
+    return;
+  }
+
+  body.setAttribute(SHEET_LOCK_COUNT_ATTR, String(nextCount));
+};
 
 export const PageContainer = ({ className = '', children }) => (
   <div className={cx('taali-page', className)}>{children}</div>
@@ -173,9 +204,8 @@ export const Sheet = ({
   useEffect(() => {
     if (!open) return undefined;
 
-    const previousOverflow = document.body.style.overflow;
     previousFocusRef.current = document.activeElement;
-    document.body.style.overflow = 'hidden';
+    lockBodyScrollForSheet();
 
     const focusables = panelRef.current?.querySelectorAll(FOCUSABLE_SELECTOR);
     if (focusables && focusables.length > 0) {
@@ -211,7 +241,7 @@ export const Sheet = ({
 
     return () => {
       document.removeEventListener('keydown', handleKeyDown);
-      document.body.style.overflow = previousOverflow;
+      unlockBodyScrollForSheet();
       if (previousFocusRef.current && typeof previousFocusRef.current.focus === 'function') {
         previousFocusRef.current.focus();
       }
