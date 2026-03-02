@@ -3,10 +3,10 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Panel, Select, Sheet, Spinner, Textarea } from '../../shared/ui/TaaliPrimitives';
 import { ComparisonRadar } from '../../shared/ui/ComparisonRadar';
 import { getDimensionById } from '../../scoring/scoringDimensions';
-import { CandidateScoreRing } from './CandidateScoreRing';
 import { CandidateSidebarHeader } from './CandidateSidebarHeader';
+import { CandidateSidebarScoreHero } from './CandidateSidebarScoreHero';
+import { CandidateStatusSnapshot } from './CandidateStatusSnapshot';
 import {
-  buildApplicationStatusMeta,
   formatCvScore100,
   formatDateTime,
 } from './candidatesUiUtils';
@@ -271,7 +271,6 @@ export function CandidateScoreSummarySheet({
     && Boolean(scoreSummary.assessment_id);
   const hasValidAssessment = Boolean(application?.valid_assessment_id);
   const hasCv = Boolean(application?.cv_filename || application?.cv_text);
-  const statusMeta = buildApplicationStatusMeta(application?.status, application?.workable_stage);
 
   const currentAssessmentPreview = useMemo(() => {
     if (!assessmentPreview?.assessment_id) return [];
@@ -290,7 +289,6 @@ export function CandidateScoreSummarySheet({
 
   const strongestLabel = toDimensionLabel(assessmentPreview?.strongest_dimension);
   const weakestLabel = toDimensionLabel(assessmentPreview?.weakest_dimension);
-  const updatedAt = formatDateTime(application?.updated_at || application?.created_at);
   const assessmentValue = hasCompletedAssessment
     ? formatScore(scoreSummary.assessment_score)
     : (hasValidAssessment ? 'In progress' : 'Not started');
@@ -388,42 +386,14 @@ export function CandidateScoreSummarySheet({
         </Panel>
       ) : (
         <div className="space-y-4">
-          <Panel className="overflow-hidden border-2 border-[var(--taali-border)] bg-[linear-gradient(135deg,rgba(190,171,255,0.18),rgba(255,255,255,0.98))] p-5">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-4">
-                <CandidateScoreRing
-                  score={scoreSummary.taali_score}
-                  details={{ score_scale: '0-100' }}
-                  size={112}
-                  strokeWidth={10}
-                  label={`TAALI Score for ${application?.candidate_name || application?.candidate_email || 'candidate'}`}
-                  valueClassName="text-[1.75rem]"
-                />
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">TAALI Score</p>
-                  <p className="mt-2 font-mono text-4xl font-bold text-[var(--taali-text)]">
-                    {formatScore(scoreSummary.taali_score)}
-                  </p>
-                  <p className="mt-2 max-w-[320px] text-sm text-[var(--taali-muted)]">
-                    {scoreSummary.formula_label || 'Current recruiter-facing score.'}
-                  </p>
-                </div>
-              </div>
-              <div className="space-y-3 sm:text-right">
-                <Badge variant={mode.variant}>{mode.label}</Badge>
-                <p className="text-xs text-[var(--taali-muted)]">Updated {updatedAt}</p>
-              </div>
-            </div>
-          </Panel>
+          <CandidateSidebarScoreHero
+            application={application}
+            score={scoreSummary.taali_score}
+            scoreDetails={{ score_scale: '0-100' }}
+            mode={mode}
+          />
 
-          <Panel className="p-4">
-            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              {statusMeta.map((item) => (
-                <InfoCard key={item.label} label={item.label} value={item.value} />
-              ))}
-              <InfoCard label="Role" value={application.role_name || application.candidate_position || '—'} />
-            </div>
-          </Panel>
+          <CandidateStatusSnapshot application={application} />
 
           <BreakdownCard
             label="Assessment score"

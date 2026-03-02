@@ -5,17 +5,15 @@ import {
   Github,
   Linkedin,
   Loader2,
-  MapPin,
   Twitter,
 } from 'lucide-react';
 
 import { Badge, Button, Panel, Sheet } from '../../shared/ui/TaaliPrimitives';
-import { CandidateScoreRing } from './CandidateScoreRing';
 import { CandidateSidebarHeader } from './CandidateSidebarHeader';
+import { CandidateSidebarScoreHero } from './CandidateSidebarScoreHero';
+import { CandidateStatusSnapshot } from './CandidateStatusSnapshot';
 import {
-  buildApplicationStatusMeta,
-  formatCvScore100,
-  formatDateTime,
+  trimOrUndefined,
 } from './candidatesUiUtils';
 
 const SOCIAL_ICONS = {
@@ -74,18 +72,11 @@ function formatCvWithSections(text) {
   return <div className="space-y-2">{elements}</div>;
 }
 
-const InfoCard = ({ label, value }) => (
-  <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] px-3 py-3">
-    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{label}</p>
-    <p className="mt-2 text-sm font-semibold text-[var(--taali-text)]">{value}</p>
-  </div>
-);
-
 export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWorkable, fetchingCvApplicationId }) {
   const data = application ?? null;
   const socials = Array.isArray(data?.candidate_social_profiles) ? data.candidate_social_profiles : [];
   const skills = Array.isArray(data?.candidate_skills) ? data.candidate_skills : [];
-  const statusMeta = buildApplicationStatusMeta(data?.status, data?.workable_stage);
+  const candidateLocation = trimOrUndefined(data?.candidate_location);
   const taaliScore = data?.score_summary?.taali_score ?? data?.taali_score ?? data?.cv_match_score ?? null;
   const taaliScoreDetails = data?.score_summary?.taali_score != null || data?.taali_score != null
     ? { score_scale: '0-100' }
@@ -143,48 +134,26 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
         <Panel className="p-4 text-sm text-[var(--taali-muted)]">Candidate details unavailable.</Panel>
       ) : (
         <div className="space-y-4">
-          <Panel className="overflow-hidden border-2 border-[var(--taali-border)] bg-[linear-gradient(135deg,rgba(190,171,255,0.16),rgba(255,255,255,0.98))] p-5">
-            <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-              <div className="flex items-center gap-4">
-                <CandidateScoreRing
-                  score={taaliScore}
-                  details={taaliScoreDetails}
-                  size={96}
-                  strokeWidth={9}
-                  label={`TAALI Score for ${data.candidate_name || data.candidate_email || 'candidate'}`}
-                  valueClassName="text-[1.45rem]"
-                />
-                <div>
-                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">TAALI Score</p>
-                  <p className="mt-2 font-mono text-3xl font-bold text-[var(--taali-text)]">
-                    {formatCvScore100(taaliScore, taaliScoreDetails)}
-                  </p>
-                  <p className="mt-2 text-sm text-[var(--taali-muted)]">
-                    {data.role_name || data.candidate_position || 'Candidate CV review'}
-                  </p>
-                </div>
-              </div>
-              <div className="space-y-3 sm:text-right">
-                <Badge variant={mode.variant}>{mode.label}</Badge>
-                <p className="text-xs text-[var(--taali-muted)]">Updated {formatDateTime(data.updated_at || data.created_at)}</p>
-              </div>
-            </div>
-          </Panel>
+          <CandidateSidebarScoreHero
+            application={data}
+            score={taaliScore}
+            scoreDetails={taaliScoreDetails}
+            mode={mode}
+          />
 
-          <Panel className="p-4">
-            <div className="grid gap-3 sm:grid-cols-2">
-              {statusMeta.map((item) => (
-                <InfoCard key={item.label} label={item.label} value={item.value} />
-              ))}
-              {data.candidate_location ? (
-                <InfoCard label="Location" value={data.candidate_location} />
+          <CandidateStatusSnapshot application={data} />
+
+          {candidateLocation || socials.length > 0 || skills.length > 0 ? (
+            <Panel className="p-4">
+              <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Candidate profile</p>
+              {candidateLocation ? (
+                <div className="mb-4">
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Location</p>
+                  <p className="mt-2 text-sm text-[var(--taali-text)]">{candidateLocation}</p>
+                </div>
               ) : null}
-              {data.candidate_phone ? (
-                <InfoCard label="Phone" value={data.candidate_phone} />
-              ) : null}
-            </div>
             {socials.length > 0 ? (
-              <div className="mt-4">
+              <div className={candidateLocation ? '' : 'mb-4'}>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Profiles</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {socials.map((profile, index) => {
@@ -207,7 +176,7 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
               </div>
             ) : null}
             {skills.length > 0 ? (
-              <div className="mt-4">
+              <div className={socials.length > 0 || candidateLocation ? 'mt-4' : ''}>
                 <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Skills</p>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {skills.map((skill) => (
@@ -216,7 +185,8 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
                 </div>
               </div>
             ) : null}
-          </Panel>
+            </Panel>
+          ) : null}
 
           <Panel className="p-4">
             <div className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
@@ -230,12 +200,6 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
             ) : (
               <div className="border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800">
                 No CV text is available for this candidate yet.
-                {data.candidate_location ? (
-                  <div className="mt-2 inline-flex items-center gap-1.5 text-xs text-amber-700">
-                    <MapPin size={12} />
-                    {data.candidate_location}
-                  </div>
-                ) : null}
               </div>
             )}
           </Panel>

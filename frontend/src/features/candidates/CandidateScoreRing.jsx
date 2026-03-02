@@ -1,7 +1,7 @@
 import React from 'react';
 
 import { cx } from '../../shared/ui/TaaliPrimitives';
-import { cvScoreColor, formatCvScore100, toCvScore100 } from './candidatesUiUtils';
+import { formatCvScore100, toCvScore100 } from './candidatesUiUtils';
 
 const formatInnerValue = (value) => {
   const numeric = Number(value);
@@ -24,7 +24,7 @@ export function CandidateScoreRing({
   const circumference = 2 * Math.PI * radius;
   const clamped = normalized == null ? 0 : Math.max(0, Math.min(100, normalized));
   const offset = circumference * (1 - (clamped / 100));
-  const ringColor = normalized == null ? 'var(--taali-border)' : cvScoreColor(normalized, { score_scale: '0-100' });
+  const ringColor = normalized == null ? 'var(--taali-border)' : 'var(--taali-purple)';
   const ariaLabel = normalized == null
     ? `${label}: unavailable`
     : `${label}: ${formatCvScore100(normalized, { score_scale: '0-100' })}`;

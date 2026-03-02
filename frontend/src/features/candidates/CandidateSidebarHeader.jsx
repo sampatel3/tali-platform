@@ -3,6 +3,7 @@ import React from 'react';
 export function CandidateSidebarHeader({ application }) {
   const displayName = application?.candidate_name || application?.candidate_email || 'Candidate';
   const secondaryLine = application?.candidate_headline || application?.candidate_position || application?.role_name || null;
+  const phoneNumber = String(application?.candidate_phone || '').trim();
   const initials = displayName
     .split(/\s+/)
     .map((word) => word[0])
@@ -32,6 +33,9 @@ export function CandidateSidebarHeader({ application }) {
         ) : null}
         {application?.candidate_email ? (
           <p className="mt-1 truncate text-sm text-[var(--taali-muted)]">{application.candidate_email}</p>
+        ) : null}
+        {phoneNumber ? (
+          <p className="mt-1 truncate text-sm text-[var(--taali-muted)]">{phoneNumber}</p>
         ) : null}
       </div>
     </div>
