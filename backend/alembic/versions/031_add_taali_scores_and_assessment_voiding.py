@@ -52,14 +52,16 @@ def upgrade() -> None:
             """
             UPDATE assessments
             SET taali_score = ROUND(
-                CASE
-                    WHEN taali_score IS NOT NULL THEN taali_score
-                    WHEN assessment_score IS NOT NULL AND cv_job_match_score IS NOT NULL THEN (assessment_score + cv_job_match_score) / 2.0
-                    WHEN assessment_score IS NOT NULL THEN assessment_score
-                    ELSE NULL
-                END,
+                CAST(
+                    CASE
+                        WHEN taali_score IS NOT NULL THEN taali_score
+                        WHEN assessment_score IS NOT NULL AND cv_job_match_score IS NOT NULL THEN (assessment_score + cv_job_match_score) / 2.0
+                        WHEN assessment_score IS NOT NULL THEN assessment_score
+                        ELSE NULL
+                    END AS numeric
+                ),
                 1
-            )
+            )::double precision
             """
         )
     )
