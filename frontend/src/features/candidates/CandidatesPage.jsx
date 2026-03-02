@@ -784,20 +784,22 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     <div>
       <NavComponent currentPage="candidates" onNavigate={onNavigate} />
 
-      <PageContainer>
+      <PageContainer density="compact" width="wide">
         <PageHeader
-          className="mb-6"
+          density="compact"
+          className="mb-5"
           title="Candidates"
           subtitle="Manage role pipelines and assessments in one place."
           actions={(
             <>
-              <Button type="button" variant="primary" onClick={() => handleOpenRoleSheet('create')}>
+              <Button type="button" variant="primary" size="sm" onClick={() => handleOpenRoleSheet('create')}>
                 <Plus size={15} />
                 New role
               </Button>
               <Button
                 type="button"
                 variant="secondary"
+                size="sm"
                 disabled={!selectedRoleId}
                 onClick={() => {
                   setCandidateSheetError('');
@@ -810,7 +812,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
             </>
           )}
         >
-          <div className="grid gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
+          <div className="grid gap-3 md:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(0,1fr)]">
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Active role
@@ -835,11 +837,12 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder="Search by name, email, position, or status"
+                inputClassName="min-h-[2.35rem] text-sm"
               />
             </label>
           </div>
           <div className="mt-3 border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-3">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Sorting and filters
               </p>
@@ -848,7 +851,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
+                  size="xs"
                   onClick={resetFilters}
                   disabled={activeFilterCount === 0}
                 >
@@ -856,14 +859,14 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 </Button>
               </div>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+            <div className="grid gap-2.5 md:grid-cols-2 lg:grid-cols-5">
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Sort by
                 </span>
-                <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
+                <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)} className="min-h-[2.35rem] text-xs">
                   <option value="taali_score">TAALI Score</option>
-                  <option value="cv_match_score">CV fit (/100)</option>
+                  <option value="cv_match_score">CV fit</option>
                   <option value="created_at">Added</option>
                 </Select>
               </label>
@@ -871,7 +874,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Order
                 </span>
-                <Select aria-label="Sort order" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
+                <Select aria-label="Sort order" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} className="min-h-[2.35rem] text-xs">
                   <option value="desc">Descending</option>
                   <option value="asc">Ascending</option>
                 </Select>
@@ -880,7 +883,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Source
                 </span>
-                <Select aria-label="Source filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+                <Select aria-label="Source filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className="min-h-[2.35rem] text-xs">
                   <option value="all">All</option>
                   <option value="manual">Manual</option>
                   <option value="workable">Workable</option>
@@ -890,7 +893,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Status
                 </span>
-                <Select aria-label="Status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                <Select aria-label="Status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="min-h-[2.35rem] text-xs">
                   {statusOptions.map((status) => (
                     <option key={status} value={status}>
                       {status === 'all'
@@ -914,6 +917,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   step="1"
                   aria-label="Minimum CV fit score"
                   placeholder="0"
+                  className="min-h-[2.35rem] text-xs"
                   value={minCvMatchScore}
                   onChange={(event) => setMinCvMatchScore(event.target.value)}
                 />
@@ -922,7 +926,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
           </div>
         </PageHeader>
 
-        <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]">
           <RolesList
             roles={roles}
             selectedRoleId={selectedRoleId}
@@ -933,7 +937,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
             onRefresh={() => loadRoles()}
           />
 
-          <div className="space-y-4">
+          <div className="space-y-3">
             {!selectedRole ? (
               <EmptyRoleDetail onCreateRole={() => handleOpenRoleSheet('create')} />
             ) : (

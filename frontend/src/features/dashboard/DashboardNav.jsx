@@ -79,16 +79,16 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
 
   return (
     <nav className="taali-nav border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
-      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-8">
+      <div className="mx-auto flex max-w-[92rem] items-center justify-between gap-3 px-4 py-3 md:px-5">
+        <div className="flex items-center gap-6">
           <Logo onClick={() => onNavigate('assessments')} />
           <div className="hidden md:flex items-center gap-1">
             {NAV_ITEMS.map((item) => (
               <Button
                 key={item.id}
                 variant={currentPage === item.id ? 'primary' : 'ghost'}
-                size="sm"
-                className="font-mono min-w-[92px]"
+                size="xs"
+                className="font-mono min-w-[84px]"
                 onClick={() => onNavigate(item.id)}
               >
                 {item.label}
@@ -96,13 +96,13 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
             ))}
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
           <GlobalThemeToggle className="shrink-0" />
           <div className="hidden sm:flex flex-col text-right leading-tight">
-            <span className="font-mono text-sm text-[var(--taali-text)]">{displayName}</span>
+            <span className="font-mono text-xs text-[var(--taali-text)]">{displayName}</span>
             <span className="font-mono text-xs text-[var(--taali-muted)]">{orgName}</span>
           </div>
-          <div className="w-9 h-9 border-2 border-[var(--taali-border)] flex items-center justify-center text-white font-bold text-sm bg-[var(--taali-purple)]">
+          <div className="flex h-8 w-8 items-center justify-center border-2 border-[var(--taali-border)] bg-[var(--taali-purple)] text-xs font-bold text-white">
             {initials}
           </div>
           <Button

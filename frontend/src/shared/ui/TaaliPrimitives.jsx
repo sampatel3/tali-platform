@@ -43,20 +43,41 @@ const unlockBodyScrollForSheet = () => {
   body.setAttribute(SHEET_LOCK_COUNT_ATTR, String(nextCount));
 };
 
-export const PageContainer = ({ className = '', children }) => (
-  <div className={cx('taali-page', className)}>{children}</div>
+export const PageContainer = ({
+  className = '',
+  density = 'default',
+  width = 'default',
+  children,
+}) => (
+  <div
+    className={cx(
+      'taali-page',
+      density === 'compact' ? 'taali-page-compact' : '',
+      width === 'wide' ? 'taali-page-wide' : '',
+      className
+    )}
+  >
+    {children}
+  </div>
 );
 
-export const PageHeader = ({ title, subtitle, actions, className = '', children }) => (
-  <header className={cx('taali-page-header', className)}>
+export const PageHeader = ({
+  title,
+  subtitle,
+  actions,
+  className = '',
+  density = 'default',
+  children,
+}) => (
+  <header className={cx('taali-page-header', density === 'compact' ? 'taali-page-header-compact' : '', className)}>
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div>
-        {title ? <h1 className="text-3xl font-bold tracking-tight">{title}</h1> : null}
-        {subtitle ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{subtitle}</p> : null}
+        {title ? <h1 className="taali-page-title text-3xl font-bold tracking-tight">{title}</h1> : null}
+        {subtitle ? <p className="taali-page-subtitle mt-1 text-sm text-[var(--taali-muted)]">{subtitle}</p> : null}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
     </div>
-    {children ? <div className="mt-4">{children}</div> : null}
+    {children ? <div className={density === 'compact' ? 'mt-3' : 'mt-4'}>{children}</div> : null}
   </header>
 );
 
@@ -80,6 +101,7 @@ const BUTTON_VARIANT_CLASS = {
 };
 
 const BUTTON_SIZE_CLASS = {
+  xs: 'px-2 py-1 text-xs',
   sm: 'px-2.5 py-1.5 text-xs',
   md: 'px-3 py-2 text-sm',
   lg: 'px-4 py-2.5 text-base',

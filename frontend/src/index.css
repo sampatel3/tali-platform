@@ -81,9 +81,21 @@ code {
   padding: calc(var(--taali-spacing) * 3) calc(var(--taali-spacing) * 2);
 }
 
+.taali-page-wide {
+  max-width: 92rem;
+}
+
+.taali-page-compact {
+  padding: calc(var(--taali-spacing) * 2.5) calc(var(--taali-spacing) * 2);
+}
+
 @media (min-width: 768px) {
   .taali-page {
     padding: calc(var(--taali-spacing) * 4) calc(var(--taali-spacing) * 3);
+  }
+
+  .taali-page-compact {
+    padding: calc(var(--taali-spacing) * 3) calc(var(--taali-spacing) * 2.5);
   }
 }
 
@@ -104,6 +116,23 @@ code {
   border-radius: var(--taali-radius);
   background: var(--taali-surface);
   padding: calc(var(--taali-spacing) * 2.5);
+}
+
+.taali-page-title {
+  line-height: 1.05;
+}
+
+.taali-page-header-compact {
+  padding: calc(var(--taali-spacing) * 2);
+}
+
+.taali-page-header-compact .taali-page-title {
+  font-size: 2rem;
+}
+
+.taali-page-header-compact .taali-page-subtitle {
+  font-size: 0.875rem;
+  line-height: 1.35;
 }
 
 .taali-btn {

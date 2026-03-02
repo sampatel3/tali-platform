@@ -230,11 +230,11 @@ export const CandidatesTable = ({
 
   if (loading) {
     return (
-      <div className="space-y-2">
+      <div className="space-y-1.5">
         <div className="px-1">
           <div className="h-3 w-28 animate-pulse rounded bg-[var(--taali-border)]" />
         </div>
-        <TableShell className="max-h-[68vh]">
+        <TableShell className="max-h-[70vh]">
           <table className="w-full table-fixed min-w-[900px]">
             <thead>
               <tr className="text-left text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">
@@ -295,14 +295,14 @@ export const CandidatesTable = ({
   ];
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-1.5">
       <div className="relative flex flex-wrap items-center justify-between gap-2 px-1">
         <p className="text-xs text-gray-500">
           {filtered.length}
           {' '}
           candidate{filtered.length === 1 ? '' : 's'}
         </p>
-        <Button type="button" variant="ghost" size="sm" onClick={() => setColumnsOpen((prev) => !prev)}>
+        <Button type="button" variant="ghost" size="xs" onClick={() => setColumnsOpen((prev) => !prev)}>
           Columns
         </Button>
         {columnsOpen ? (
@@ -321,7 +321,7 @@ export const CandidatesTable = ({
               ))}
             </div>
             <div className="mt-3 flex justify-end">
-              <Button type="button" variant="secondary" size="sm" onClick={() => setColumnsOpen(false)}>
+              <Button type="button" variant="secondary" size="xs" onClick={() => setColumnsOpen(false)}>
                 Close
               </Button>
             </div>
@@ -329,7 +329,7 @@ export const CandidatesTable = ({
         ) : null}
       </div>
 
-      <TableShell className="max-h-[68vh]">
+      <TableShell className="max-h-[70vh]">
         <table className="w-full table-fixed min-w-[900px]">
           <thead>
             <tr className="text-left text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">
@@ -339,10 +339,10 @@ export const CandidatesTable = ({
                   ? 'sticky left-0 top-0 z-30 bg-[var(--taali-table-header)]'
                   : 'sticky top-0 z-20 bg-[var(--taali-table-header)]';
                 const widthClass = {
-                  candidate: 'w-[280px]',
+                  candidate: 'w-[250px]',
                   cv: 'w-[140px]',
-                  taali_ai: 'w-[150px]',
-                  send: 'w-[180px]',
+                  taali_ai: 'w-[126px]',
+                  send: 'w-[170px]',
                   workable_stage: 'w-[150px]',
                   workable_candidate_id: 'w-[200px]',
                   status: 'w-[140px]',
@@ -425,7 +425,7 @@ export const CandidatesTable = ({
                               <CandidateAvatar
                                 name={application.candidate_name}
                                 imageUrl={application.candidate_image_url}
-                                size={32}
+                                size={28}
                               />
                               <div className="min-w-0 flex-1">
                                 <button
@@ -455,10 +455,10 @@ export const CandidatesTable = ({
                                   </button>
                                   {onOpenCvSidebar ? (
                                     <button
-                                      type="button"
-                                      className="text-xs font-medium text-[var(--taali-primary)] hover:underline"
-                                      onClick={() => onOpenCvSidebar(application)}
-                                    >
+                                    type="button"
+                                    className="text-xs font-medium text-[var(--taali-primary)] hover:underline"
+                                    onClick={() => onOpenCvSidebar(application)}
+                                  >
                                       View CV
                                     </button>
                                   ) : null}
@@ -496,7 +496,7 @@ export const CandidatesTable = ({
                                   <Button
                                     type="button"
                                     variant="ghost"
-                                    size="sm"
+                                    size="xs"
                                     className="!px-0 text-[11px]"
                                     disabled={uploadingCvId === application.id}
                                     onClick={() => document.getElementById(uploadInputId)?.click()}
@@ -518,7 +518,7 @@ export const CandidatesTable = ({
                               <Button
                                 type="button"
                                 variant="primary"
-                                size="sm"
+                                size="xs"
                                 className="whitespace-nowrap"
                                 disabled={!canCreateAssessment || roleTasks.length === 0}
                                 onClick={() => {
@@ -553,11 +553,11 @@ export const CandidatesTable = ({
                               <CandidateScoreRing
                                 score={taaliScore.score}
                                 details={taaliScore.details}
-                                size={56}
-                                strokeWidth={6}
+                                size={48}
+                                strokeWidth={5}
                                 label={`TAALI Score for ${application.candidate_name || application.candidate_email || 'candidate'}`}
                               />
-                              <div className="max-w-[92px] text-[11px] leading-4 text-gray-500" title={renderTaaliScore(application)}>
+                              <div className="max-w-[80px] text-[11px] leading-4 text-gray-500" title={renderTaaliScore(application)}>
                                 {renderModeLabel(application)}
                               </div>
                             </div>
@@ -644,7 +644,7 @@ export const CandidatesTable = ({
                           <Button
                             type="button"
                             variant="primary"
-                            size="sm"
+                            size="xs"
                             disabled={!selectedTask || creatingAssessmentId === application.id}
                             onClick={async () => {
                               const success = await onCreateAssessment(application, selectedTask, { retake: hasValidAssessment });
@@ -655,7 +655,7 @@ export const CandidatesTable = ({
                               ? 'Creating...'
                               : (hasValidAssessment ? 'Retake assessment' : 'Send assessment')}
                           </Button>
-                          <Button type="button" variant="ghost" size="sm" onClick={() => setComposerApplicationId(null)}>
+                          <Button type="button" variant="ghost" size="xs" onClick={() => setComposerApplicationId(null)}>
                             Cancel
                           </Button>
                         </div>
@@ -670,13 +670,13 @@ export const CandidatesTable = ({
       </TableShell>
 
       {totalFiltered > PAGE_SIZE ? (
-        <div className="flex items-center justify-between border-t border-[var(--taali-border)] pt-4 font-mono text-xs text-[var(--taali-muted)]">
+        <div className="flex items-center justify-between border-t border-[var(--taali-border)] pt-3 font-mono text-xs text-[var(--taali-muted)]">
           <span>
             Showing {startIndex + 1}-{Math.min(startIndex + PAGE_SIZE, totalFiltered)} of {totalFiltered}
           </span>
           <div className="flex items-center gap-2">
             <Button
-              size="sm"
+              size="xs"
               variant="ghost"
               disabled={safePage === 0}
               onClick={() => setPage((prev) => Math.max(0, prev - 1))}
@@ -685,7 +685,7 @@ export const CandidatesTable = ({
             </Button>
             <span>Page {safePage + 1} of {totalPages}</span>
             <Button
-              size="sm"
+              size="xs"
               variant="ghost"
               disabled={safePage >= totalPages - 1}
               onClick={() => setPage((prev) => Math.min(totalPages - 1, prev + 1))}
