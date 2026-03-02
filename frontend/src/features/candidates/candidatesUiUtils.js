@@ -6,6 +6,43 @@ export const trimOrUndefined = (value) => {
   return trimmed.length > 0 ? trimmed : undefined;
 };
 
+export const normalizeStatusKey = (value) => String(value || '')
+  .trim()
+  .toLowerCase()
+  .replace(/[_-]+/g, ' ')
+  .replace(/\s+/g, ' ');
+
+export const formatStatusLabel = (value) => {
+  const normalized = normalizeStatusKey(value);
+  if (!normalized) return '—';
+  return normalized
+    .split(' ')
+    .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
+    .join(' ');
+};
+
+export const buildApplicationStatusMeta = (status, workableStage) => {
+  const pipelineStatus = trimOrUndefined(status);
+  const workable = trimOrUndefined(workableStage);
+  const items = [];
+
+  if (pipelineStatus) {
+    items.push({
+      label: 'Pipeline status',
+      value: formatStatusLabel(pipelineStatus),
+    });
+  }
+
+  if (workable && normalizeStatusKey(workable) !== normalizeStatusKey(pipelineStatus)) {
+    items.push({
+      label: 'Workable stage',
+      value: formatStatusLabel(workable),
+    });
+  }
+
+  return items;
+};
+
 export const statusVariant = (status) => {
   const normalized = String(status || '').toLowerCase();
   if (normalized === 'pending') return 'muted';

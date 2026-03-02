@@ -152,7 +152,21 @@ export const TableShell = ({ className = '', children }) => (
   </div>
 );
 
-export const Sheet = ({ open, onClose, title, description, children, footer }) => {
+export const Sheet = ({
+  open,
+  onClose,
+  title,
+  description,
+  children,
+  footer,
+  side = 'right',
+  headerContent = null,
+  overlayClassName = '',
+  panelClassName = '',
+  headerClassName = '',
+  bodyClassName = '',
+  footerClassName = '',
+}) => {
   const panelRef = useRef(null);
   const previousFocusRef = useRef(null);
 
@@ -208,7 +222,7 @@ export const Sheet = ({ open, onClose, title, description, children, footer }) =
 
   return (
     <div
-      className="fixed inset-0 z-50 bg-black/55"
+      className={cx('fixed inset-0 z-50 bg-black/55', overlayClassName)}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -219,13 +233,23 @@ export const Sheet = ({ open, onClose, title, description, children, footer }) =
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
-        className="absolute inset-x-0 bottom-0 max-h-[92vh] border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] focus:outline-none md:inset-y-0 md:right-0 md:left-auto md:h-full md:max-h-none md:w-[640px] md:border-t-0 md:border-l-2"
+        className={cx(
+          'absolute inset-x-0 bottom-0 max-h-[92vh] border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] focus:outline-none md:inset-y-0 md:h-full md:max-h-none md:w-[640px] md:border-t-0',
+          side === 'left'
+            ? 'md:left-0 md:right-auto md:border-r-2 md:border-l-0'
+            : 'md:right-0 md:left-auto md:border-l-2',
+          panelClassName
+        )}
       >
-        <div className="sticky top-0 z-10 border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-5 py-4">
+        <div className={cx('sticky top-0 z-10 border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-5 py-4', headerClassName)}>
           <div className="flex items-start justify-between gap-4">
-            <div>
-              <h2 className="text-xl font-bold tracking-tight">{title}</h2>
-              {description ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{description}</p> : null}
+            <div className="min-w-0 flex-1">
+              {headerContent || (
+                <>
+                  <h2 className="text-xl font-bold tracking-tight">{title}</h2>
+                  {description ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{description}</p> : null}
+                </>
+              )}
             </div>
             <Button
               type="button"
@@ -239,12 +263,17 @@ export const Sheet = ({ open, onClose, title, description, children, footer }) =
             </Button>
           </div>
         </div>
-        <div className="overflow-y-auto px-5 py-5" style={{ maxHeight: 'calc(92vh - 150px)' }}>
+        <div
+          className={cx('overflow-y-auto px-5 py-5', bodyClassName)}
+          style={{ maxHeight: footer ? 'calc(92vh - 150px)' : 'calc(92vh - 96px)' }}
+        >
           {children}
         </div>
-        <div className="sticky bottom-0 border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-5 py-4">
-          {footer}
-        </div>
+        {footer ? (
+          <div className={cx('sticky bottom-0 border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-5 py-4', footerClassName)}>
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>
   );
