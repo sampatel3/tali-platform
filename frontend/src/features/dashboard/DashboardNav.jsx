@@ -3,6 +3,7 @@ import { LogOut, Menu, X } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import { organizations as organizationsApi } from '../../shared/api';
 import { Logo } from '../../shared/ui/Branding';
+import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
 import { Button } from '../../shared/ui/TaaliPrimitives';
 
 const pickUserName = (user) => {
@@ -77,17 +78,17 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
   };
 
   return (
-    <nav className="taali-nav border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
-      <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between gap-4">
-        <div className="flex items-center gap-8">
+    <nav className="taali-nav sticky top-0 z-40 border-b border-[var(--taali-border-soft)] bg-[rgba(255,252,248,0.84)] backdrop-blur-md">
+      <div className="mx-auto flex max-w-[92rem] items-center justify-between gap-3 px-4 py-3 md:px-5">
+        <div className="flex items-center gap-6">
           <Logo onClick={() => onNavigate('assessments')} />
           <div className="hidden md:flex items-center gap-1">
             {NAV_ITEMS.map((item) => (
               <Button
                 key={item.id}
-                variant={currentPage === item.id ? 'primary' : 'ghost'}
-                size="sm"
-                className="font-mono min-w-[92px]"
+                variant={currentPage === item.id ? 'secondary' : 'ghost'}
+                size="xs"
+                className={currentPage === item.id ? 'min-w-[84px] !bg-[var(--taali-purple-soft)] !text-[var(--taali-text)]' : 'min-w-[84px]'}
                 onClick={() => onNavigate(item.id)}
               >
                 {item.label}
@@ -95,12 +96,13 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
             ))}
           </div>
         </div>
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          <GlobalThemeToggle className="shrink-0" />
           <div className="hidden sm:flex flex-col text-right leading-tight">
-            <span className="font-mono text-sm text-[var(--taali-text)]">{displayName}</span>
+            <span className="font-mono text-xs text-[var(--taali-text)]">{displayName}</span>
             <span className="font-mono text-xs text-[var(--taali-muted)]">{orgName}</span>
           </div>
-          <div className="w-9 h-9 border-2 border-[var(--taali-border)] flex items-center justify-center text-white font-bold text-sm bg-[var(--taali-purple)]">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,var(--taali-purple),#6b4dff)] text-xs font-bold text-white shadow-[var(--taali-shadow-soft)]">
             {initials}
           </div>
           <Button

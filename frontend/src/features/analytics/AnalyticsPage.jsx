@@ -17,7 +17,7 @@ import {
 import { assessments as assessmentsApi, analytics as analyticsApi, roles as rolesApi, tasks as tasksApi } from '../../shared/api';
 import { getCategoryScoresFromAssessment } from '../../lib/comparisonCategories';
 import { dimensionOrder, getDimensionById } from '../../scoring/scoringDimensions';
-import { Button, Panel, Select } from '../../shared/ui/TaaliPrimitives';
+import { Button, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
 import { CardSkeleton, StatCardSkeleton } from '../../shared/ui/Skeletons';
 
 const DATE_RANGE_OPTIONS = [
@@ -247,20 +247,23 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
   return (
     <div>
       <NavComponent currentPage="reporting" onNavigate={onNavigate} />
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <div className="mb-6 flex flex-wrap items-center justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold">Reporting</h1>
-            <p className="text-sm text-[var(--taali-muted)]">Aggregate reporting across completion trends, scores, and assessment dimensions.</p>
-          </div>
-          <Button type="button" variant="secondary" onClick={handleExportCsv} disabled={loading || exporting}>
-            {exporting ? 'Exporting...' : 'Export CSV'}
-          </Button>
-        </div>
+      <PageContainer density="compact" width="wide">
+        <PageHeader
+          density="compact"
+          className="mb-5"
+          title="Reporting"
+          subtitle="Aggregate reporting across completion trends, score distribution, and dimension performance."
+          actions={(
+            <Button type="button" variant="secondary" size="sm" onClick={handleExportCsv} disabled={loading || exporting}>
+              {exporting ? 'Exporting...' : 'Export CSV'}
+            </Button>
+          )}
+        />
 
-        <div className="mb-6 grid gap-3 md:grid-cols-4">
+        <Panel className="mb-5 p-4">
+          <div className="grid gap-3 md:grid-cols-4">
           <label className="block">
-            <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Role</span>
+            <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role</span>
             <Select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
               <option value="">All roles</option>
               {roles.map((role) => (
@@ -269,7 +272,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
             </Select>
           </label>
           <label className="block">
-            <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Task</span>
+            <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Task</span>
             <Select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>
               <option value="">All tasks</option>
               {tasks.map((task) => (
@@ -278,7 +281,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
             </Select>
           </label>
           <label className="block">
-            <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Date range</span>
+            <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Date range</span>
             <Select value={dateRange} onChange={(event) => setDateRange(event.target.value)}>
               {DATE_RANGE_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>{option.label}</option>
@@ -289,6 +292,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
             <Button
               type="button"
               variant="ghost"
+              size="sm"
               onClick={() => {
                 setRoleFilter('');
                 setTaskFilter('');
@@ -299,51 +303,52 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
               Reset filters
             </Button>
           </div>
-        </div>
+          </div>
+        </Panel>
 
         {loading ? (
-          <div className="space-y-6">
+          <div className="space-y-5">
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               <StatCardSkeleton />
               <StatCardSkeleton />
               <StatCardSkeleton />
               <StatCardSkeleton />
             </div>
-            <div className="grid gap-6 lg:grid-cols-2">
+            <div className="grid gap-5 lg:grid-cols-2">
               <CardSkeleton lines={8} />
               <CardSkeleton lines={8} />
             </div>
             <CardSkeleton lines={10} />
           </div>
         ) : (
-          <div className="space-y-6">
+          <div className="space-y-5">
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-              <Panel className="p-5">
-                <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Total Assessments</div>
-                <div className="text-3xl font-bold text-[var(--taali-text)]">{data.total_assessments}</div>
+              <Panel className="p-4">
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Total Assessments</div>
+                <div className="text-2xl font-bold text-[var(--taali-text)]">{data.total_assessments}</div>
               </Panel>
-              <Panel className="p-5">
-                <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Avg Score</div>
-                <div className="text-3xl font-bold text-[var(--taali-purple)]">
+              <Panel className="p-4">
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Avg Score</div>
+                <div className="text-2xl font-bold text-[var(--taali-purple)]">
                   {data.avg_score != null ? `${Number(data.avg_score).toFixed(1)}/10` : '—'}
                 </div>
               </Panel>
-              <Panel className="p-5">
-                <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Completion Rate</div>
-                <div className="text-3xl font-bold text-[var(--taali-text)]">{safeNumber(data.completion_rate).toFixed(1)}%</div>
+              <Panel className="p-4">
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Completion Rate</div>
+                <div className="text-2xl font-bold text-[var(--taali-text)]">{safeNumber(data.completion_rate).toFixed(1)}%</div>
               </Panel>
-              <Panel className="p-5">
-                <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Avg Time</div>
-                <div className="text-3xl font-bold text-[var(--taali-text)]">
+              <Panel className="p-4">
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Avg Time</div>
+                <div className="text-2xl font-bold text-[var(--taali-text)]">
                   {data.avg_time_minutes != null ? `${data.avg_time_minutes}m` : '—'}
                 </div>
               </Panel>
             </div>
 
-            <div className="grid gap-6 lg:grid-cols-2">
-              <Panel className="p-5">
-                <h2 className="mb-4 font-bold text-lg">Completion Rate Trend</h2>
-                <div className="h-[280px]">
+            <div className="grid gap-5 lg:grid-cols-2">
+              <Panel className="p-4">
+                <h2 className="mb-3 font-bold text-base">Completion Rate Trend</h2>
+                <div className="h-[260px]">
                   <ResponsiveContainer>
                     <BarChart data={weekly}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--taali-border-muted)" />
@@ -356,9 +361,9 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                 </div>
               </Panel>
 
-              <Panel className="p-5">
-                <h2 className="mb-4 font-bold text-lg">Score Distribution</h2>
-                <div className="h-[280px]">
+              <Panel className="p-4">
+                <h2 className="mb-3 font-bold text-base">Score Distribution</h2>
+                <div className="h-[260px]">
                   <ResponsiveContainer>
                     <BarChart data={histogramData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--taali-border-muted)" />
@@ -372,9 +377,9 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
               </Panel>
             </div>
 
-            <Panel className="p-5">
-              <h2 className="mb-4 font-bold text-lg">Per-Dimension Averages</h2>
-              <div className="h-[360px]">
+            <Panel className="p-4">
+              <h2 className="mb-3 font-bold text-base">Per-Dimension Averages</h2>
+              <div className="h-[320px]">
                 <ResponsiveContainer>
                   <RadarChart data={radarData}>
                     <PolarGrid stroke="var(--taali-border-muted)" />
@@ -387,7 +392,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
             </Panel>
           </div>
         )}
-      </div>
+      </PageContainer>
     </div>
   );
 };

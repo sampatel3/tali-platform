@@ -5,18 +5,18 @@ import { Badge } from './TaaliPrimitives';
 export const StatsCard = ({ icon: Icon, label, value, subValue, change, onClick }) => (
   <div
     className={[
-      'border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] p-6 hover:shadow-lg transition-shadow',
+      'rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,rgba(255,255,255,0.98),rgba(247,243,255,0.82))] p-4 shadow-[var(--taali-shadow-soft)] transition-transform duration-200 hover:-translate-y-0.5 hover:shadow-[var(--taali-shadow-strong)]',
       onClick ? 'cursor-pointer' : 'cursor-default',
     ].join(' ')}
     onClick={onClick}
   >
-    <Icon size={32} className="mb-4 text-[var(--taali-text)]" />
-    <div className="font-mono text-sm text-[var(--taali-muted)] mb-2">{label}</div>
-    <div className="text-3xl font-bold mb-1 text-[var(--taali-text)]">{value}</div>
+    <Icon size={24} className="mb-3 text-[var(--taali-purple)]" />
+    <div className="text-xs uppercase tracking-[0.1em] text-[var(--taali-muted)] mb-1.5">{label}</div>
+    <div className="taali-display text-3xl font-semibold mb-1 text-[var(--taali-text)]">{value}</div>
     {subValue ? (
       <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">{subValue}</div>
     ) : null}
-    <div className="font-mono text-xs text-[var(--taali-muted)]">{change}</div>
+    <div className="font-mono text-[11px] leading-4 text-[var(--taali-muted)]">{change}</div>
   </div>
 );
 

@@ -4,8 +4,9 @@ import { CheckCircle, ClipboardList, Eye, Link2, Timer, TriangleAlert } from 'lu
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { getDocumentTitle } from '../../config/brand';
+import { formatScale100Score } from '../../lib/scoreDisplay';
 import * as apiClient from '../../shared/api';
-import { Button, TableShell } from '../../shared/ui/TaaliPrimitives';
+import { Button, PageContainer, PageHeader, Panel, TableShell } from '../../shared/ui/TaaliPrimitives';
 import { StatCardSkeleton, TableRowSkeleton } from '../../shared/ui/Skeletons';
 
 const PAGE_SIZE = 10;
@@ -35,14 +36,6 @@ const daysUntil = (value) => {
   if (Number.isNaN(target.getTime())) return null;
   const now = new Date();
   return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-};
-
-const formatScore100 = (value) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '—';
-  const rounded = Math.round(numeric * 10) / 10;
-  const display = Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1);
-  return `${display}/100`;
 };
 
 const formatDate = (value) => {
@@ -261,41 +254,41 @@ export const DashboardPage = ({
   return (
     <div>
       <NavComponent currentPage="assessments" onNavigate={onNavigate} />
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <div className="mb-8 flex items-center justify-between">
-          <div>
-            <h1 className="text-3xl font-bold text-[var(--taali-text)]">Assessments</h1>
-            <p className="mt-1 text-sm text-[var(--taali-muted)]">Welcome back, {userName}</p>
-          </div>
-        </div>
+      <PageContainer density="compact" width="wide">
+        <PageHeader
+          density="compact"
+          className="mb-5 bg-[linear-gradient(145deg,rgba(255,255,255,0.96),rgba(246,242,255,0.88))]"
+          title="Assessments"
+          subtitle={`Welcome back, ${userName}. Review active invites, candidate progress, and completed assessments in one place.`}
+        />
 
         {totalAssessmentsCount === 0 && !onboardingDismissed ? (
-          <div className="mb-8 border-2 border-[var(--taali-purple)] bg-[var(--taali-surface)] p-6">
-            <div className="mb-4 flex items-start justify-between gap-4">
-              <h2 className="text-lg font-bold text-[var(--taali-text)]">Get started with TAALI</h2>
+          <div className="mb-5 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,rgba(255,255,255,0.98),rgba(240,234,255,0.86))] p-5 shadow-[var(--taali-shadow-soft)]">
+            <div className="mb-3 flex items-start justify-between gap-4">
+              <h2 className="taali-display text-xl font-semibold text-[var(--taali-text)]">Get started with TAALI</h2>
               <Button variant="ghost" size="sm" onClick={dismissOnboarding}>Dismiss</Button>
             </div>
-            <ol className="space-y-2 font-mono text-sm text-[var(--taali-text)]">
+            <ol className="space-y-2 text-sm text-[var(--taali-text)]">
               <li>{hasRoles ? '✓' : '○'} Create a role</li>
               <li>{hasCandidates ? '✓' : '○'} Add a candidate with their CV</li>
               <li>{hasSentAssessment ? '✓' : '○'} Send them an assessment link</li>
               <li>○ Manage setup in Candidates, then review completed attempts here.</li>
             </ol>
-            <div className="mt-4">
+            <div className="mt-3">
               <Button variant="secondary" size="sm" onClick={() => onNavigate('candidates')}>Go to Candidates</Button>
             </div>
           </div>
         ) : null}
 
         {loading ? (
-          <div className="mb-8 grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+          <div className="mb-5 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <StatCardSkeleton />
             <StatCardSkeleton />
             <StatCardSkeleton />
             <StatCardSkeleton />
           </div>
         ) : (
-          <div className="mb-8 grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+          <div className="mb-5 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
             <StatsCardComponent
               icon={ClipboardList}
               label="Invited"
@@ -339,56 +332,84 @@ export const DashboardPage = ({
           </div>
         )}
 
-        <div className="mb-4 flex flex-wrap items-center gap-4">
-          <span className="font-mono text-sm font-bold text-[var(--taali-text)]">Filters:</span>
-          <select
-            className="taali-select w-auto min-w-[140px]"
-            value={roleFilter}
-            onChange={(event) => {
-              setRoleFilter(event.target.value);
-              setPage(0);
-            }}
-          >
-            <option value="">All roles</option>
-            {rolesForFilter.map((role) => (
-              <option key={role.id} value={role.id}>{role.name}</option>
-            ))}
-          </select>
-          <select
-            className="taali-select w-auto min-w-[140px]"
-            value={taskFilter}
-            onChange={(event) => {
-              setTaskFilter(event.target.value);
-              setPage(0);
-            }}
-          >
-            <option value="">All tasks</option>
-            {tasksForFilter.map((task) => (
-              <option key={task.id} value={task.id}>{task.name}</option>
-            ))}
-          </select>
-          <select
-            className="taali-select w-auto min-w-[160px]"
-            value={statusFilter}
-            onChange={(event) => {
-              setStatusFilter(event.target.value);
-              setPage(0);
-            }}
-          >
-            <option value="">All statuses</option>
-            <option value="pending">Invited</option>
-            <option value="in_progress">In progress</option>
-            <option value="completed">Completed</option>
-            <option value="completed_due_to_timeout">Timed out</option>
-            <option value="expired">Expired</option>
-          </select>
-        </div>
+        <Panel className="mb-4 bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(248,246,255,0.86))] p-4">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <span className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Filters</span>
+            {(roleFilter || taskFilter || statusFilter) ? (
+              <Button
+                type="button"
+                variant="ghost"
+                size="xs"
+                onClick={() => {
+                  setRoleFilter('');
+                  setTaskFilter('');
+                  setStatusFilter('');
+                  setPage(0);
+                }}
+              >
+                Reset
+              </Button>
+            ) : null}
+          </div>
+          <div className="grid gap-3 md:grid-cols-3">
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role</span>
+              <select
+                className="taali-select min-h-[2.35rem] text-xs"
+                value={roleFilter}
+                onChange={(event) => {
+                  setRoleFilter(event.target.value);
+                  setPage(0);
+                }}
+              >
+                <option value="">All roles</option>
+                {rolesForFilter.map((role) => (
+                  <option key={role.id} value={role.id}>{role.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Task</span>
+              <select
+                className="taali-select min-h-[2.35rem] text-xs"
+                value={taskFilter}
+                onChange={(event) => {
+                  setTaskFilter(event.target.value);
+                  setPage(0);
+                }}
+              >
+                <option value="">All tasks</option>
+                {tasksForFilter.map((task) => (
+                  <option key={task.id} value={task.id}>{task.name}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Status</span>
+              <select
+                className="taali-select min-h-[2.35rem] text-xs"
+                value={statusFilter}
+                onChange={(event) => {
+                  setStatusFilter(event.target.value);
+                  setPage(0);
+                }}
+              >
+                <option value="">All statuses</option>
+                <option value="pending">Invited</option>
+                <option value="in_progress">In progress</option>
+                <option value="completed">Completed</option>
+                <option value="completed_due_to_timeout">Timed out</option>
+                <option value="expired">Expired</option>
+              </select>
+            </label>
+          </div>
+        </Panel>
 
         <TableShell>
-          <div className="flex items-center justify-between border-b-2 border-[var(--taali-border)] bg-[var(--taali-border)] px-6 py-4 text-white">
-            <h2 className="text-lg font-bold">Assessment Inbox</h2>
+          <div className="flex items-center justify-between border-b border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,#181328,#242038)] px-4 py-3 text-white">
+            <h2 className="taali-display text-xl font-semibold">Assessment Inbox</h2>
             {totalAssessmentsCount > 0 ? (
-              <span className="font-mono text-sm text-white/80">
+              <span className="font-mono text-xs text-white/80">
                 Showing {startRow}–{endRow} of {totalAssessmentsCount}
               </span>
             ) : null}
@@ -397,9 +418,9 @@ export const DashboardPage = ({
           {loading ? (
             <table className="w-full">
               <thead>
-                <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-purple-soft)]">
+                <tr className="border-b border-[var(--taali-border-soft)] bg-[rgba(245,241,255,0.9)]">
                   {['Candidate', 'Role', 'Task', 'Status', 'TAALI Score', 'Assessment Score', 'Sent', 'Completed', 'Actions'].map((label) => (
-                    <th key={label} className="px-6 py-3 text-left font-mono text-xs font-bold uppercase">{label}</th>
+                    <th key={label} className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase tracking-[0.08em]">{label}</th>
                   ))}
                 </tr>
               </thead>
@@ -412,16 +433,16 @@ export const DashboardPage = ({
           ) : (
             <table className="w-full">
               <thead>
-                <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-purple-soft)]">
+                <tr className="border-b border-[var(--taali-border-soft)] bg-[rgba(245,241,255,0.9)]">
                   {['Candidate', 'Role', 'Task', 'Status', 'TAALI Score', 'Assessment Score', 'Sent', 'Completed', 'Actions'].map((label) => (
-                    <th key={label} className="px-6 py-3 text-left font-mono text-xs font-bold uppercase">{label}</th>
+                    <th key={label} className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase tracking-[0.08em]">{label}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
                 {displayAssessments.length === 0 ? (
                   <tr>
-                    <td colSpan={9} className="px-6 py-12 text-center font-mono text-sm text-[var(--taali-muted)]">
+                    <td colSpan={9} className="px-4 py-10 text-center font-mono text-sm text-[var(--taali-muted)]">
                       No assessments yet. Create an assessment from the Candidates page.
                     </td>
                   </tr>
@@ -433,34 +454,34 @@ export const DashboardPage = ({
                         key={assessment.id}
                         className="border-b border-[var(--taali-border-muted)] transition-colors hover:bg-[var(--taali-surface-hover,rgba(0,0,0,0.04))]"
                       >
-                        <td className="px-6 py-4">
+                        <td className="px-4 py-3">
                           <div className="font-semibold text-[var(--taali-text)]">{assessment.candidateName}</div>
                           <div className="font-mono text-xs text-[var(--taali-muted)]">{assessment.candidateEmail || '—'}</div>
                         </td>
-                        <td className="px-6 py-4 text-sm text-[var(--taali-text)]">{assessment.roleName}</td>
-                        <td className="px-6 py-4 text-sm text-[var(--taali-text)]">{assessment.taskName}</td>
-                        <td className="px-6 py-4">
+                        <td className="px-4 py-3 text-sm text-[var(--taali-text)]">{assessment.roleName}</td>
+                        <td className="px-4 py-3 text-sm text-[var(--taali-text)]">{assessment.taskName}</td>
+                        <td className="px-4 py-3">
                           <StatusBadgeComponent status={assessment.status} />
                         </td>
-                        <td className="px-6 py-4 font-mono text-sm text-[var(--taali-text)]">
-                          {formatScore100(assessment.taaliScore)}
+                        <td className="px-4 py-3 font-mono text-sm text-[var(--taali-text)]">
+                          {formatScale100Score(assessment.taaliScore, '0-100')}
                         </td>
-                        <td className="px-6 py-4 font-mono text-sm text-[var(--taali-text)]">
-                          {formatScore100(assessment.assessmentScore)}
+                        <td className="px-4 py-3 font-mono text-sm text-[var(--taali-text)]">
+                          {formatScale100Score(assessment.assessmentScore, '0-100')}
                         </td>
-                        <td className="px-6 py-4 font-mono text-sm text-[var(--taali-muted)]">
+                        <td className="px-4 py-3 font-mono text-xs text-[var(--taali-muted)]">
                           {formatDate(assessment.inviteSentAt)}
                         </td>
-                        <td className="px-6 py-4 font-mono text-sm text-[var(--taali-muted)]">
+                        <td className="px-4 py-3 font-mono text-xs text-[var(--taali-muted)]">
                           {formatDate(assessment.completedAt)}
                         </td>
-                        <td className="px-6 py-4">
+                        <td className="px-4 py-3">
                           <div className="flex flex-wrap items-center gap-2">
                             {isCompletedStatus(assessment.status) ? (
                               <Button
                                 type="button"
                                 variant="primary"
-                                size="sm"
+                                size="xs"
                                 disabled={loadingViewId === assessment.id}
                                 onClick={() => handleViewResults(assessment)}
                               >
@@ -473,7 +494,7 @@ export const DashboardPage = ({
                                 <Button
                                   type="button"
                                   variant="secondary"
-                                  size="sm"
+                                  size="xs"
                                   onClick={() => copyAssessmentLink(assessment)}
                                 >
                                   <Link2 size={14} />
@@ -482,7 +503,7 @@ export const DashboardPage = ({
                                 <Button
                                   type="button"
                                   variant="secondary"
-                                  size="sm"
+                                  size="xs"
                                   disabled={loadingResendId === assessment.id}
                                   onClick={() => handleResend(assessment.id)}
                                 >
@@ -508,7 +529,7 @@ export const DashboardPage = ({
         </TableShell>
 
         {totalAssessmentsCount > PAGE_SIZE ? (
-          <div className="mt-4 flex items-center justify-between font-mono text-xs text-[var(--taali-muted)]">
+          <div className="mt-3 flex items-center justify-between font-mono text-xs text-[var(--taali-muted)]">
             <span>
               Showing {startRow}–{endRow} of {totalAssessmentsCount}
             </span>
@@ -533,7 +554,7 @@ export const DashboardPage = ({
             </div>
           </div>
         ) : null}
-      </div>
+      </PageContainer>
     </div>
   );
 };

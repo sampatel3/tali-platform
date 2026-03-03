@@ -3,6 +3,7 @@ import { ArrowLeft } from 'lucide-react';
 import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { getMetricMeta, buildGlossaryFromMetadata } from '../../lib/scoringGlossary';
+import { formatScale100Score, normalizeScore } from '../../lib/scoreDisplay';
 import { dimensionOrder, getDimensionById, normalizeScores } from '../../scoring/scoringDimensions';
 import {
   Badge,
@@ -25,23 +26,6 @@ import { CandidateEvaluateTab, CandidateResultsTab } from './CandidateDetailPrim
 import { CandidateInterviewDebrief } from './CandidateInterviewDebrief';
 
 const RESULTS_ONBOARDING_KEY = 'taali_results_onboarding_seen_v1';
-
-const normalizeScore100 = (value, scoreScale = '') => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return null;
-  const scale = String(scoreScale || '').toLowerCase();
-  if (scale.includes('100')) return numeric;
-  if (numeric <= 10) return numeric * 10;
-  return numeric;
-};
-
-const formatScore100 = (value) => {
-  const numeric = normalizeScore100(value);
-  if (!Number.isFinite(numeric)) return '—';
-  const rounded = Math.round(numeric * 10) / 10;
-  const display = Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1);
-  return `${display}/100`;
-};
 
 export const AssessmentResultsPage = ({
   candidate,
@@ -114,7 +98,7 @@ export const AssessmentResultsPage = ({
 
   const taaliScore100 = candidate?._raw?.taali_score ?? candidate?._raw?.final_score ?? (candidate?.score ? candidate.score * 10 : null);
   const assessmentScore100 = candidate?._raw?.assessment_score ?? candidate?._raw?.final_score ?? (candidate?.score ? candidate.score * 10 : null);
-  const cvFitScore100 = normalizeScore100(
+  const cvFitScore100 = normalizeScore(
     candidate?._raw?.cv_job_match_score
     ?? candidate?._raw?.score_breakdown?.score_components?.cv_fit_score
     ?? null,
@@ -300,8 +284,8 @@ export const AssessmentResultsPage = ({
 
   if (!candidate) {
     return (
-      <PageContainer className="max-w-5xl">
-        <Panel className="p-6 font-mono text-sm text-gray-600">
+      <PageContainer className="max-w-5xl" density="compact">
+        <Panel className="p-4 font-mono text-sm text-gray-600">
           Candidate assessment not found.
         </Panel>
       </PageContainer>
@@ -634,18 +618,18 @@ export const AssessmentResultsPage = ({
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="assessments" onNavigate={onNavigate} /> : null}
-      <PageContainer>
+      <PageContainer density="compact" width="wide">
         <Button
           variant="ghost"
-          size="sm"
-          className="mb-5 font-mono"
+          size="xs"
+          className="mb-4 font-mono"
           onClick={() => onNavigate(backTo.page)}
         >
           <ArrowLeft size={16} /> {backTo.label}
         </Button>
 
         {isVoided ? (
-          <Panel className="mb-4 border-2 border-amber-300 bg-amber-50 p-4 text-sm text-amber-900">
+          <Panel className="mb-3 border-2 border-amber-300 bg-amber-50 p-3.5 text-sm text-amber-900">
             <p className="font-semibold">This assessment was voided and superseded.</p>
             <p className="mt-1">
               {voidedAt ? `Voided ${new Date(voidedAt).toLocaleString()}. ` : ''}
@@ -655,13 +639,13 @@ export const AssessmentResultsPage = ({
           </Panel>
         ) : null}
 
-        <Panel className="mb-6 p-5">
-          <div className="grid gap-6 md:grid-cols-[minmax(0,1fr)_340px]">
-            <div>
-              <p className="mb-2 font-mono text-xs uppercase tracking-[0.08em] text-gray-500">Assessment Results</p>
-              <h1 className="text-4xl font-bold text-gray-900">{candidate.name}</h1>
-              <p className="mb-4 font-mono text-gray-500">{candidate.email}</p>
-              <div className="flex flex-wrap gap-2">
+        <Panel className="mb-4 overflow-hidden p-0">
+          <div className="grid gap-0 xl:grid-cols-[minmax(0,1fr)_360px]">
+            <div className="bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(247,244,255,0.82))] px-5 py-5 md:px-6">
+              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Assessment results</p>
+              <h1 className="taali-display text-4xl font-semibold text-[var(--taali-text)]">{candidate.name}</h1>
+              <p className="mt-2 text-sm text-[var(--taali-muted)]">{candidate.email}</p>
+              <div className="mt-4 flex flex-wrap gap-2">
                 <Badge variant="muted" className="font-mono text-[11px]">{candidate.position}</Badge>
                 <Badge variant="muted" className="font-mono text-[11px]">Task: {candidate.task}</Badge>
                 {roleName ? <Badge variant="muted" className="font-mono text-[11px]">Role: {roleName}</Badge> : null}
@@ -669,121 +653,126 @@ export const AssessmentResultsPage = ({
                 <Badge variant="muted" className="font-mono text-[11px]">Duration: {candidate.time}</Badge>
                 {candidate.completedDate ? <Badge variant="muted" className="font-mono text-[11px]">Completed: {candidate.completedDate}</Badge> : null}
               </div>
-            </div>
 
-            {(taaliScore100 != null || candidate.score) ? (
-              <div className="border-2 border-[var(--taali-purple)] bg-[#151122] p-5 text-white">
-                <div className="mb-2 font-mono text-xs uppercase tracking-[0.08em] text-white/60">TAALI Score</div>
-                <div className="mb-1 text-5xl font-bold text-[var(--taali-purple)]">
-                  {taaliScore100 != null ? `${Math.round(taaliScore100)}` : candidate.score}
-                  <span className="text-lg text-gray-400">/{taaliScore100 != null ? '100' : '10'}</span>
-                </div>
-
-                {rec ? (
-                  <div className="mb-3 inline-flex px-3 py-1 font-mono text-xs font-bold text-white" style={{ backgroundColor: rec.color }}>
-                    {rec.label}
-                  </div>
-                ) : null}
-
-                <div className="mb-4 grid gap-2 md:grid-cols-2">
-                  <div className="border border-white/10 bg-white/5 px-3 py-2">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/60">Assessment Score</div>
-                    <div className="mt-1 text-lg font-semibold text-white">{formatScore100(assessmentScore100)}</div>
-                  </div>
-                  <div className="border border-white/10 bg-white/5 px-3 py-2">
-                    <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/60">CV Fit</div>
-                    <div className="mt-1 text-lg font-semibold text-white">{formatScore100(cvFitScore100)}</div>
-                  </div>
-                </div>
-
-                {Object.keys(headerCategoryScores).length > 0 ? (
-                  <div className="space-y-1.5 font-mono text-xs">
+              {Object.keys(headerCategoryScores).length > 0 ? (
+                <div className="mt-6 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[rgba(255,255,255,0.84)] p-4">
+                  <div className="mb-3 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Dimension profile</div>
+                  <div className="space-y-2 font-mono text-xs">
                     {dimensionOrder.map((key) => {
                       const val = headerCategoryScores[key];
                       const label = getDimensionById(key).label;
                       return val != null ? (
-                        <div key={key} className="flex items-center gap-2">
-                          <span className="w-36 truncate text-gray-400">{label}</span>
-                          <div className="h-1.5 flex-1 overflow-hidden bg-gray-700">
+                        <div key={key} className="flex items-center gap-3">
+                          <span className="w-36 truncate text-[var(--taali-muted)]">{label}</span>
+                          <div className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--taali-border-subtle)]">
                             <div
-                              className="h-full"
+                              className="h-full rounded-full"
                               style={{
                                 width: `${(val / 10) * 100}%`,
                                 backgroundColor: val >= 7 ? '#16a34a' : val >= 5 ? '#d97706' : '#dc2626',
                               }}
                             />
                           </div>
-                          <span className="w-7 text-right">{val}</span>
+                          <span className="w-10 text-right text-[var(--taali-text)]">{Number(val).toFixed(1)}</span>
                         </div>
                       ) : null;
                     })}
                   </div>
+                </div>
+              ) : null}
+            </div>
+
+            {(taaliScore100 != null || candidate.score) ? (
+              <div className="border-t border-[var(--taali-border-soft)] bg-[linear-gradient(180deg,#161127,#0f1220)] p-5 text-white xl:border-l xl:border-t-0">
+                <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/60">TAALI score</div>
+                <div className="mt-3 taali-display text-6xl font-semibold text-white">
+                  {formatScale100Score(taaliScore100 ?? candidate.score, taaliScore100 != null ? '0-100' : '0-10')}
+                </div>
+
+                {rec ? (
+                  <div className="mt-3 inline-flex rounded-full px-3 py-1 text-[11px] font-semibold tracking-[0.08em] text-white" style={{ backgroundColor: rec.color }}>
+                    {rec.label}
+                  </div>
                 ) : null}
+
+                <div className="mt-5 grid gap-3">
+                  <div className="rounded-[var(--taali-radius-card)] border border-white/10 bg-white/5 px-4 py-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/60">Assessment score</div>
+                    <div className="mt-2 text-xl font-semibold text-white">{formatScale100Score(assessmentScore100, '0-100')}</div>
+                  </div>
+                  <div className="rounded-[var(--taali-radius-card)] border border-white/10 bg-white/5 px-4 py-3">
+                    <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/60">CV fit</div>
+                    <div className="mt-2 text-xl font-semibold text-white">{formatScale100Score(cvFitScore100, '0-100')}</div>
+                  </div>
+                </div>
               </div>
             ) : null}
           </div>
         </Panel>
 
-        <Panel className="mb-4 p-3">
-          <div className="flex flex-wrap gap-2">
-            <Button type="button" variant="secondary" className="font-mono" onClick={handleDownloadReport} disabled={busyAction !== ''}>
-              {busyAction === 'report' ? 'Downloading...' : 'Download PDF'}
-            </Button>
-            <Button type="button" variant="secondary" className="font-mono" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
-              {busyAction === 'workable' ? 'Posting...' : 'Post to Workable'}
-            </Button>
-            {canResendInvite ? (
-              <Button type="button" variant="secondary" className="font-mono" onClick={handleResendInvite} disabled={busyAction !== ''}>
-                {busyAction === 'resend' ? 'Resending...' : 'Resend Invite'}
-              </Button>
-            ) : null}
-            {canRequestCvUpload ? (
-              <Button type="button" variant="secondary" className="font-mono" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
-                {busyAction === 'request-cv' ? 'Sending CV request...' : 'Request CV Upload'}
-              </Button>
-            ) : null}
-            <Button type="button" variant="danger" className="font-mono" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
-              {busyAction === 'delete' ? 'Deleting...' : 'Delete'}
-            </Button>
+        <Panel className="mb-4 p-4">
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <div>
+              <div className="mb-3 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Recruiter actions</div>
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" size="sm" variant="secondary" onClick={handleDownloadReport} disabled={busyAction !== ''}>
+                  {busyAction === 'report' ? 'Downloading...' : 'Download PDF'}
+                </Button>
+                <Button type="button" size="sm" variant="secondary" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
+                  {busyAction === 'workable' ? 'Posting...' : 'Post to Workable'}
+                </Button>
+                {canResendInvite ? (
+                  <Button type="button" size="sm" variant="secondary" onClick={handleResendInvite} disabled={busyAction !== ''}>
+                    {busyAction === 'resend' ? 'Resending...' : 'Resend Invite'}
+                  </Button>
+                ) : null}
+                {canRequestCvUpload ? (
+                  <Button type="button" size="sm" variant="secondary" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
+                    {busyAction === 'request-cv' ? 'Sending CV request...' : 'Request CV Upload'}
+                  </Button>
+                ) : null}
+                <Button type="button" size="sm" variant="danger" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
+                  {busyAction === 'delete' ? 'Deleting...' : 'Delete'}
+                </Button>
+              </div>
+
+              <div className="mt-4">
+                <div className="mb-2 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Recruiter notes</div>
+                <div className="flex gap-2">
+                  <Input
+                    type="text"
+                    className="flex-1"
+                    placeholder="Add note about this candidate"
+                    value={noteText}
+                    onChange={(e) => setNoteText(e.target.value)}
+                  />
+                  <Button type="button" size="sm" variant="secondary" onClick={handleAddNote} disabled={busyAction !== ''}>
+                    {busyAction === 'note' ? 'Saving...' : 'Save Note'}
+                  </Button>
+                </div>
+              </div>
+            </div>
+
+            <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-4 py-4">
+              <div className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Workable status</div>
+              <div className="mt-3 text-sm text-[var(--taali-text)]">
+                <span className={workableStatus.posted ? 'font-semibold text-[var(--taali-success)]' : 'font-semibold text-[var(--taali-text)]'}>
+                  {workableStatus.posted ? 'Posted' : 'Not posted'}
+                </span>
+                {workableStatus.postedAt ? ` on ${new Date(workableStatus.postedAt).toLocaleString()}` : ''}
+              </div>
+            </div>
           </div>
         </Panel>
 
-        <Panel className="mb-4 bg-[var(--taali-surface-subtle)] p-3">
-          <div className="font-mono text-xs">
-            <span className="text-gray-500">Workable status:</span>{' '}
-            <span className={workableStatus.posted ? 'font-bold text-green-700' : 'text-gray-700'}>
-              {workableStatus.posted ? 'Posted' : 'Not posted'}
-            </span>
-            {workableStatus.postedAt ? (
-              <span className="text-gray-500"> on {new Date(workableStatus.postedAt).toLocaleString()}</span>
-            ) : null}
-          </div>
-        </Panel>
-
-        <Panel className="mb-6 p-4">
-          <div className="mb-2 font-mono text-xs text-gray-500">Recruiter Notes</div>
-          <div className="flex gap-2">
-            <Input
-              type="text"
-              className="flex-1 font-mono"
-              placeholder="Add note about this candidate"
-              value={noteText}
-              onChange={(e) => setNoteText(e.target.value)}
-            />
-            <Button type="button" variant="secondary" className="font-mono" onClick={handleAddNote} disabled={busyAction !== ''}>
-              {busyAction === 'note' ? 'Saving...' : 'Save Note'}
-            </Button>
-          </div>
-        </Panel>
-
-        <Panel className="mb-6 overflow-hidden p-0">
+        <Panel className="mb-4 overflow-hidden p-0">
           <div className="flex flex-wrap">
             {topTabs.map((tab, index) => (
               <button
                 key={tab.id}
                 type="button"
                 className={cx(
-                  'min-w-[108px] flex-1 px-4 py-3 font-mono text-sm font-bold transition-colors',
+                  'min-w-[96px] flex-1 px-3 py-2 font-mono text-xs font-bold transition-colors',
                   index < topTabs.length - 1 ? 'border-r border-[var(--taali-border-muted)]' : '',
                   activeTab === tab.id
                     ? 'bg-[var(--taali-purple)] text-white'
@@ -868,7 +857,7 @@ export const AssessmentResultsPage = ({
           footer={(
             <div className="flex items-center justify-between gap-3">
               <span className="font-mono text-xs text-[var(--taali-muted)]">{compareSelectedIds.length} selected</span>
-              <Button type="button" variant="secondary" onClick={() => setCompareSheetOpen(false)}>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setCompareSheetOpen(false)}>
                 Close
               </Button>
             </div>
@@ -931,7 +920,7 @@ export const AssessmentResultsPage = ({
           description="Generated from TAALI assessment evidence."
           footer={(
             <div className="flex items-center justify-end gap-2">
-              <Button type="button" variant="secondary" onClick={() => setInterviewDebriefSheetOpen(false)}>
+              <Button type="button" size="sm" variant="secondary" onClick={() => setInterviewDebriefSheetOpen(false)}>
                 Close
               </Button>
             </div>
@@ -955,7 +944,7 @@ export const AssessmentResultsPage = ({
           description="A quick guide to reading TAALI results."
           footer={(
             <div className="flex items-center justify-end gap-2">
-              <Button type="button" variant="secondary" onClick={handleDismissResultsOnboarding}>
+              <Button type="button" size="sm" variant="secondary" onClick={handleDismissResultsOnboarding}>
                 Got it
               </Button>
             </div>

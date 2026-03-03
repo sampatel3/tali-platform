@@ -12,19 +12,19 @@ import {
 import { CardSkeleton } from '../../shared/ui/Skeletons';
 
 export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole, onCreateRole, onRefresh }) => (
-  <Panel className="p-4 flex flex-col max-h-[calc(100vh-200px)]">
-    <div className="mb-4 flex items-center justify-between shrink-0">
+  <Panel className="flex max-h-[calc(100vh-180px)] flex-col p-3.5">
+    <div className="mb-3 flex items-center justify-between shrink-0">
       <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-gray-600">
         Roles
         {roles.length > 0 ? ` (${roles.length})` : ''}
       </h2>
       <div className="flex items-center gap-1">
         {onRefresh ? (
-          <Button type="button" variant="ghost" size="sm" onClick={onRefresh} title="Refresh roles">
+          <Button type="button" variant="ghost" size="xs" onClick={onRefresh} title="Refresh roles">
             ↻
           </Button>
         ) : null}
-        <Button type="button" variant="ghost" size="sm" onClick={onCreateRole}>
+        <Button type="button" variant="ghost" size="xs" onClick={onCreateRole}>
           <Plus size={14} />
           New
         </Button>
@@ -59,7 +59,7 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
     ) : null}
 
     {!loading && !error && roles.length > 0 ? (
-      <ul className="space-y-2 overflow-y-auto min-h-0 flex-1 -mr-1 pr-1">
+      <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto -mr-1 pr-1">
         {roles.map((role) => {
           const selected = String(role.id) === String(selectedRoleId);
           const specReady = Boolean(role.job_spec_present || role.job_spec_filename);
@@ -74,7 +74,7 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
                 type="button"
                 onClick={() => onSelectRole(String(role.id))}
                 className={cx(
-                  'w-full text-left border-2 px-3 py-3 transition',
+                  'w-full border-2 px-3 py-2.5 text-left transition',
                   selected
                     ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)]'
                     : 'border-[var(--taali-border-muted)] bg-[var(--taali-surface)] hover:border-[var(--taali-border)]'
@@ -82,14 +82,14 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
               >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
-                    <p className="truncate font-semibold text-[var(--taali-text)]">{role.name}</p>
-                    <p className="mt-0.5 text-xs text-[var(--taali-muted)]">
+                    <p className="truncate text-sm font-semibold text-[var(--taali-text)]">{role.name}</p>
+                    <p className="mt-0.5 text-[11px] text-[var(--taali-muted)]">
                       {role.applications_count || 0} candidate{(role.applications_count || 0) === 1 ? '' : 's'}
                     </p>
                   </div>
                   <ChevronsUpDown size={14} className="mt-0.5 shrink-0 text-gray-400" />
                 </div>
-                <div className="mt-2 flex flex-wrap gap-1.5">
+                <div className="mt-1.5 flex flex-wrap gap-1.5">
                   <Badge variant={specReady ? 'success' : 'warning'}>
                     {specLabel}
                   </Badge>

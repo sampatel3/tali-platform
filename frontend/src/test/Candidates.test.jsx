@@ -191,6 +191,12 @@ describe('CandidatesPage', () => {
     expect(screen.getByPlaceholderText('Search by name, email, position, or status')).toBeInTheDocument();
   });
 
+  it('renders the global theme switch inside the candidates top nav', async () => {
+    await renderAppOnCandidatesPage();
+
+    expect(within(screen.getByRole('navigation')).getByRole('switch')).toBeInTheDocument();
+  });
+
   it('shows role list and role summary context', async () => {
     await renderAppOnCandidatesPage();
 
@@ -397,7 +403,7 @@ describe('CandidatesPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Match Candidate')).toBeInTheDocument();
-      expect(screen.getByText('82/100')).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: /TAALI Score for Match Candidate: 82\.0/i })).toBeInTheDocument();
     });
   });
 
@@ -411,6 +417,7 @@ describe('CandidatesPage', () => {
           candidate_name: 'Rationale Candidate',
           candidate_position: 'AI Full Stack Engineer',
           status: 'applied',
+          workable_stage: 'applied',
           cv_filename: 'rationale.pdf',
           cv_match_score: 84.2,
           cv_match_details: {
@@ -457,14 +464,19 @@ describe('CandidatesPage', () => {
     fireEvent.click(within(candidateRow).getByRole('button', { name: 'Details' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Why this score')).toBeInTheDocument();
-      expect(screen.getByText('CV fit')).toBeInTheDocument();
-      expect(screen.getByText('Additional requirements fit')).toBeInTheDocument();
-      expect(screen.getByText(/Strong skill alignment:/)).toBeInTheDocument();
-      expect(screen.getByText(/Additional requirements fit score:/)).toBeInTheDocument();
-      expect(screen.getByText(/Met: Enterprise production experience because/)).toBeInTheDocument();
-      expect(screen.getByText(/Partially met: Compensation alignment to role band because/)).toBeInTheDocument();
-      expect(screen.queryByText(/Matched recruiter requirements:/)).not.toBeInTheDocument();
+      const dialog = screen.getByRole('dialog', { name: 'Rationale Candidate' });
+      expect(within(dialog).getByText('Assessment score')).toBeInTheDocument();
+      expect(within(dialog).getByText('CV fit')).toBeInTheDocument();
+      expect(within(dialog).getByText('Requirements fit')).toBeInTheDocument();
+      expect(within(dialog).getByText('Pipeline status')).toBeInTheDocument();
+      expect(within(dialog).queryByText('Workable stage')).not.toBeInTheDocument();
+      expect(within(dialog).getByText('Why this score')).toBeInTheDocument();
+      expect(within(dialog).getByText('Recruiter requirements fit')).toBeInTheDocument();
+      expect(within(dialog).getAllByText(/Matched recruiter requirements:/).length).toBeGreaterThanOrEqual(1);
+      expect(within(dialog).getByText(/Recruiter requirements coverage: 2\/2 met/)).toBeInTheDocument();
+      expect(within(dialog).getByText('Matching skills')).toBeInTheDocument();
+      expect(within(dialog).getByText('Enterprise production experience')).toBeInTheDocument();
+      expect(within(dialog).getByText('Compensation alignment to role band')).toBeInTheDocument();
     });
   });
 

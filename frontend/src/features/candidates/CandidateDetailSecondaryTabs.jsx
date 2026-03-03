@@ -23,7 +23,8 @@ import {
   Card,
   Panel,
 } from '../../shared/ui/TaaliPrimitives';
-import { cvScoreColor, formatCvScore100, toCvScore100 } from './candidatesUiUtils';
+import { buildRoleFitEvidenceModel } from './assessmentViewModels';
+import { RoleFitEvidenceSections } from './RoleFitEvidenceSections';
 
 const normalizeAssessmentStatus = (status) => {
   const normalized = String(status || '').toLowerCase();
@@ -55,31 +56,31 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
   const promptEmptyMessage = promptEmptyMessageForStatus(assessmentStatus);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
-        <Card className="p-4">
+        <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Avg Prompt clarity</div>
-          <div className="text-2xl font-bold text-[var(--taali-text)]">{assessment.prompt_quality_score?.toFixed(1) || '--'}<span className="text-sm text-[var(--taali-muted)]">/10</span></div>
+          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.prompt_quality_score?.toFixed(1) || '--'}<span className="text-xs text-[var(--taali-muted)]">/10</span></div>
         </Card>
-        <Card className="p-4">
+        <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Time to First Prompt</div>
-          <div className="text-2xl font-bold text-[var(--taali-text)]">{assessment.time_to_first_prompt_seconds ? `${Math.floor(assessment.time_to_first_prompt_seconds / 60)}m ${Math.round(assessment.time_to_first_prompt_seconds % 60)}s` : '--'}</div>
+          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.time_to_first_prompt_seconds ? `${Math.floor(assessment.time_to_first_prompt_seconds / 60)}m ${Math.round(assessment.time_to_first_prompt_seconds % 60)}s` : '--'}</div>
         </Card>
-        <Card className="p-4">
+        <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Browser Focus</div>
           <div
-            className={`text-2xl font-bold ${assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}
+            className={`text-xl font-bold ${assessment.browser_focus_ratio != null && assessment.browser_focus_ratio < 0.8 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}
           >
             {assessment.browser_focus_ratio != null ? `${Math.round(assessment.browser_focus_ratio * 100)}%` : '--'}
           </div>
         </Card>
-        <Card className="p-4">
+        <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Tab Switches</div>
-          <div className={`text-2xl font-bold ${assessment.tab_switch_count > 5 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}>{assessment.tab_switch_count ?? '--'}</div>
+          <div className={`text-xl font-bold ${assessment.tab_switch_count > 5 ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-text)]'}`}>{assessment.tab_switch_count ?? '--'}</div>
         </Card>
-        <Card className="p-4">
+        <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Calibration</div>
-          <div className="text-2xl font-bold text-[var(--taali-text)]">{assessment.calibration_score != null ? `${assessment.calibration_score.toFixed(1)}/10` : '--'}</div>
+          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.calibration_score != null ? `${assessment.calibration_score.toFixed(1)}/10` : '--'}</div>
           <div className="mt-1 font-mono text-xs text-[var(--taali-muted)]">vs avg {avgCalibrationScore != null ? `${avgCalibrationScore.toFixed(1)}/10` : '--'}</div>
         </Card>
       </div>
@@ -92,7 +93,7 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
       ) : null}
 
       {assessment.prompt_analytics?.per_prompt_scores?.length > 0 ? (
-        <Panel className="p-4">
+        <Panel className="p-3.5">
           <div className="mb-4 font-bold">Prompt clarity progression</div>
           <div style={{ width: '100%', height: 220 }}>
             <ResponsiveContainer>
@@ -117,7 +118,7 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
         </Panel>
       ) : null}
 
-      <Panel className="p-4">
+      <Panel className="p-3.5">
         <div className="mb-4 font-bold">Prompt Log ({(candidate.promptsList || []).length} prompts)</div>
         <div className="mb-3 font-mono text-xs text-[var(--taali-muted)]">
           Clarity = clear, structured asks · Specificity = concrete context and references · Efficiency = prompt-to-action quality (all /10)
@@ -190,159 +191,19 @@ export const CandidateCvFitTab = ({
   requestingCvUpload = false,
 }) => {
   const assessment = candidate._raw || {};
-  const cvMatch = assessment.cv_job_match_details || assessment.prompt_analytics?.cv_job_match?.details || {};
-  const matchScores = assessment.prompt_analytics?.cv_job_match || {};
-  const overall = toCvScore100(matchScores.overall ?? assessment.cv_job_match_score, cvMatch);
-  const skills = toCvScore100(matchScores.skills, cvMatch);
-  const experience = toCvScore100(matchScores.experience, cvMatch);
-  const requirementsMatch = toCvScore100(cvMatch.requirements_match_score_100, cvMatch);
-  const requirementsCoverage = cvMatch.requirements_coverage || {};
-  const requirementsAssessment = Array.isArray(cvMatch.requirements_assessment) ? cvMatch.requirements_assessment : [];
-  const rationaleBullets = Array.isArray(cvMatch.score_rationale_bullets)
-    ? cvMatch.score_rationale_bullets
-      .map((item) => String(item || '').trim())
-      .filter(Boolean)
-      .slice(0, 6)
-    : [];
-  const fallbackWhyBullets = [
-    requirementsCoverage.total
-      ? `Recruiter requirements coverage: ${requirementsCoverage.met ?? 0}/${requirementsCoverage.total} met, ${requirementsCoverage.partially_met ?? 0} partial, ${requirementsCoverage.missing ?? 0} missing.`
-      : null,
-    cvMatch.matching_skills?.length
-      ? `Strong CV-to-role evidence: ${cvMatch.matching_skills.slice(0, 4).join(', ')}.`
-      : null,
-    cvMatch.missing_skills?.length
-      ? `Gaps vs role requirements: ${cvMatch.missing_skills.slice(0, 4).join(', ')}.`
-      : null,
-    cvMatch.concerns?.length
-      ? `Risk signals from CV evidence: ${cvMatch.concerns.slice(0, 2).join('; ')}.`
-      : null,
-  ].filter(Boolean);
-  const whyBullets = rationaleBullets.length > 0 ? rationaleBullets : fallbackWhyBullets;
+  const roleFitModel = buildRoleFitEvidenceModel({ application: null, completedAssessment: assessment });
+  const cvMatch = roleFitModel.details || {};
   const hasCv = Boolean(assessment.candidate_cv_filename || assessment.cv_filename);
 
   return (
-    <div className="space-y-6">
-      {overall != null ? (
+    <div className="space-y-4">
+      {roleFitModel.hasAnyEvidence ? (
         <>
-          <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
-            <Card className="p-6 text-center">
-              <div className="mb-1 font-mono text-xs text-gray-500">Overall Match</div>
-              <div className="text-4xl font-bold" style={{ color: cvScoreColor(overall, cvMatch) }}>{formatCvScore100(overall, cvMatch)}</div>
-            </Card>
-            <Card className="p-6 text-center">
-              <div className="mb-1 font-mono text-xs text-gray-500">Skills Match</div>
-              <div className="text-4xl font-bold" style={{ color: skills != null ? cvScoreColor(skills, cvMatch) : 'var(--taali-muted)' }}>{skills != null ? formatCvScore100(skills, cvMatch) : '—'}</div>
-            </Card>
-            <Card className="p-6 text-center">
-              <div className="mb-1 font-mono text-xs text-gray-500">Experience</div>
-              <div className="text-4xl font-bold" style={{ color: experience != null ? cvScoreColor(experience, cvMatch) : 'var(--taali-muted)' }}>{experience != null ? formatCvScore100(experience, cvMatch) : '—'}</div>
-            </Card>
-          </div>
-
-          {whyBullets.length > 0 ? (
-            <Panel className="p-4">
-              <div className="mb-2 font-bold">Why this score</div>
-              <ul className="space-y-1.5">
-                {whyBullets.map((item, index) => (
-                  <li key={`why-score-${index}`} className="flex items-start gap-2 text-sm text-[var(--taali-text)]">
-                    <span className="mt-0.5 text-[var(--taali-success)]">•</span>
-                    <span>{item}</span>
-                  </li>
-                ))}
-              </ul>
-            </Panel>
-          ) : null}
-
-          {(requirementsMatch != null || requirementsAssessment.length > 0) ? (
-            <Panel className="p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <div className="font-bold">Recruiter Requirements Fit</div>
-                {requirementsMatch != null ? (
-                  <Badge variant="purple" className="font-mono text-[11px]">{formatCvScore100(requirementsMatch, cvMatch)}</Badge>
-                ) : null}
-              </div>
-              {requirementsCoverage.total ? (
-                <div className="mb-3 grid grid-cols-2 gap-2 font-mono text-xs text-[var(--taali-muted)] md:grid-cols-4">
-                  <div>Total: {requirementsCoverage.total}</div>
-                  <div>Met: {requirementsCoverage.met ?? 0}</div>
-                  <div>Partial: {requirementsCoverage.partially_met ?? 0}</div>
-                  <div>Missing: {requirementsCoverage.missing ?? 0}</div>
-                </div>
-              ) : null}
-              {requirementsAssessment.length > 0 ? (
-                <div className="space-y-2">
-                  {requirementsAssessment.map((item, index) => {
-                    const priority = String(item?.priority || 'nice_to_have');
-                    const status = String(item?.status || 'unknown');
-                    const priorityBadge = priority === 'must_have' || priority === 'constraint' ? 'warning' : 'muted';
-                    const statusBadge = status === 'met' ? 'success' : (status === 'partially_met' ? 'warning' : (status === 'missing' ? 'warning' : 'muted'));
-                    return (
-                      <Card key={`${item?.requirement || 'requirement'}-${index}`} className="p-3">
-                        <div className="mb-2 flex flex-wrap items-center gap-2">
-                          <Badge variant={priorityBadge} className="font-mono text-[11px]">{priority.replace(/_/g, ' ')}</Badge>
-                          <Badge variant={statusBadge} className="font-mono text-[11px]">{status.replace(/_/g, ' ')}</Badge>
-                        </div>
-                        <div className="text-sm font-semibold text-[var(--taali-text)]">{item?.requirement || 'Unnamed requirement'}</div>
-                        {item?.evidence ? <div className="mt-1 text-xs text-[var(--taali-muted)]">Evidence: {item.evidence}</div> : null}
-                        {item?.impact ? <div className="mt-1 text-xs text-[var(--taali-muted)]">Impact: {item.impact}</div> : null}
-                      </Card>
-                    );
-                  })}
-                </div>
-              ) : (
-                <div className="font-mono text-xs text-[var(--taali-muted)]">No requirement-level breakdown was returned for this score.</div>
-              )}
-            </Panel>
-          ) : null}
-
-          {cvMatch.matching_skills?.length > 0 ? (
-            <Panel className="p-4">
-              <div className="mb-3 font-bold text-[var(--taali-success)]">Matching Skills</div>
-              <div className="flex flex-wrap gap-1.5">
-                {cvMatch.matching_skills.map((skill, i) => (
-                  <Badge key={i} variant="success" className="font-mono text-[11px]">{skill}</Badge>
-                ))}
-              </div>
-            </Panel>
-          ) : null}
-
-          {cvMatch.missing_skills?.length > 0 ? (
-            <Panel className="p-4">
-              <div className="mb-3 font-bold text-[var(--taali-danger)]">Missing Skills</div>
-              <div className="flex flex-wrap gap-1.5">
-                {cvMatch.missing_skills.map((skill, i) => (
-                  <Badge key={i} variant="warning" className="font-mono text-[11px]">{skill}</Badge>
-                ))}
-              </div>
-            </Panel>
-          ) : null}
-
-          {cvMatch.experience_highlights?.length > 0 ? (
-            <Panel className="p-4">
-              <div className="mb-3 font-bold">Relevant Experience</div>
-              <ul className="space-y-1">
-                {cvMatch.experience_highlights.map((exp, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-[var(--taali-text)]">
-                    <span className="mt-0.5 text-[var(--taali-success)]">•</span>{exp}
-                  </li>
-                ))}
-              </ul>
-            </Panel>
-          ) : null}
-
-          {cvMatch.concerns?.length > 0 ? (
-            <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
-              <div className="mb-3 font-bold text-[var(--taali-warning)]">Concerns</div>
-              <ul className="space-y-1">
-                {cvMatch.concerns.map((concern, i) => (
-                  <li key={i} className="flex items-start gap-2 text-sm text-[var(--taali-text)]">
-                    <AlertTriangle size={14} className="mt-0.5 shrink-0 text-[var(--taali-warning)]" />{concern}
-                  </li>
-                ))}
-              </ul>
-            </Panel>
-          ) : null}
+          <RoleFitEvidenceSections
+            model={roleFitModel}
+            variant="full"
+            emptyMessage="No role-fit evidence is available for this assessment."
+          />
 
           {cvMatch.summary ? (
             <Panel className="p-4">

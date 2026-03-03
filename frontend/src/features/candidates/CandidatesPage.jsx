@@ -18,6 +18,7 @@ import {
 } from './CandidatesUI';
 import { AssessmentInviteSheet } from './AssessmentInviteSheet';
 import { CandidateScoreSummarySheet } from './CandidateScoreSummarySheet';
+import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
 
 const DEFAULT_INVITE_TEMPLATE = (
   'Hi {{candidate_name}},\n\n'
@@ -83,6 +84,12 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const [scoreSheetApplicationId, setScoreSheetApplicationId] = useState(null);
   const [applicationDetailsById, setApplicationDetailsById] = useState({});
   const [loadingApplicationDetailId, setLoadingApplicationDetailId] = useState(null);
+  const [assessmentDetailsById, setAssessmentDetailsById] = useState({});
+  const [loadingAssessmentDetailId, setLoadingAssessmentDetailId] = useState(null);
+  const [retakeDialogState, setRetakeDialogState] = useState({
+    applicationId: null,
+    defaultTaskId: '',
+  });
   const [batchScoring, setBatchScoring] = useState(null);
   const [fetchCvsProgress, setFetchCvsProgress] = useState(null);
   const [interviewFocusGeneratingRoleId, setInterviewFocusGeneratingRoleId] = useState(null);
@@ -300,6 +307,31 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     }
   }, [applicationDetailsById, rolesApi, showToast]);
 
+  const loadAssessmentDetail = useCallback(async (assessmentId, { force = false } = {}) => {
+    if (!assessmentsApi?.get || !assessmentId) return null;
+    const cacheKey = String(assessmentId);
+    const cached = assessmentDetailsById[cacheKey];
+    if (!force && cached) return cached;
+
+    setLoadingAssessmentDetailId(assessmentId);
+    try {
+      const res = await assessmentsApi.get(assessmentId);
+      const detail = res?.data || null;
+      if (detail) {
+        setAssessmentDetailsById((prev) => ({
+          ...prev,
+          [cacheKey]: detail,
+        }));
+      }
+      return detail;
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to load completed assessment detail.'), 'error');
+      return null;
+    } finally {
+      setLoadingAssessmentDetailId((current) => (Number(current) === Number(assessmentId) ? null : current));
+    }
+  }, [assessmentDetailsById, assessmentsApi, showToast]);
+
   const mapAssessmentForDetail = (assessment, fallbackApp) => ({
     id: assessment.id,
     name: (assessment.candidate_name || fallbackApp?.candidate_name || assessment.candidate_email || '').trim() || 'Unknown',
@@ -485,14 +517,34 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   const handleOpenScoreSummary = useCallback(async (application) => {
     if (!application?.id) return;
     setScoreSheetApplicationId(application.id);
-    await loadApplicationDetail(application.id);
-  }, [loadApplicationDetail]);
+    const detail = await loadApplicationDetail(application.id);
+    const resolvedAssessmentId = detail?.score_summary?.assessment_id || application?.valid_assessment_id || null;
+    const resolvedStatus = String(detail?.score_summary?.assessment_status || application?.valid_assessment_status || '').toLowerCase();
+    if (resolvedAssessmentId && ['completed', 'completed_due_to_timeout'].includes(resolvedStatus)) {
+      await loadAssessmentDetail(resolvedAssessmentId);
+    }
+  }, [loadApplicationDetail, loadAssessmentDetail]);
 
   const handleOpenCvSidebar = useCallback(async (application) => {
     if (!application?.id) return;
     setCvSidebarApplicationId(application.id);
     await loadApplicationDetail(application.id, { includeCvText: true });
   }, [loadApplicationDetail]);
+
+  const handleOpenRetakeDialog = useCallback((application, defaultTaskId = '') => {
+    if (!application?.id) return;
+    setRetakeDialogState({
+      applicationId: application.id,
+      defaultTaskId: defaultTaskId ? String(defaultTaskId) : '',
+    });
+  }, []);
+
+  const handleCloseRetakeDialog = useCallback(() => {
+    setRetakeDialogState({
+      applicationId: null,
+      defaultTaskId: '',
+    });
+  }, []);
 
   const handleLaunchAssessment = async (application, taskId, { retake = false, voidReason = '' } = {}) => {
     const createFn = retake ? rolesApi?.retakeAssessment : rolesApi?.createAssessment;
@@ -562,20 +614,8 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       return true;
     } catch (err) {
       if (!retake && err?.response?.status === 409 && err?.response?.data?.detail?.code === 'retake_required' && rolesApi?.retakeAssessment) {
-        const shouldRetake = window.confirm('A valid assessment already exists for this candidate in this role. Void it and create a retake?');
-        if (!shouldRetake) {
-          showToast('Retake cancelled.', 'info');
-          return false;
-        }
-        const promptedReason = window.prompt(
-          'Optional: why is this retake replacing the previous assessment?',
-          'Superseded by recruiter retake'
-        );
-        if (promptedReason === null) {
-          showToast('Retake cancelled.', 'info');
-          return false;
-        }
-        return handleLaunchAssessment(application, taskNumber, { retake: true, voidReason: promptedReason });
+        handleOpenRetakeDialog(application, taskNumber);
+        return true;
       }
       showToast(getErrorMessage(err, 'Failed to create assessment.'), 'error');
       return false;
@@ -583,6 +623,34 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       setCreatingAssessmentId(null);
     }
   };
+
+  const handleCreateAssessmentRequest = useCallback(async (application, taskId, { retake = false } = {}) => {
+    if (retake) {
+      handleOpenRetakeDialog(application, taskId);
+      return true;
+    }
+    return handleLaunchAssessment(application, taskId);
+  }, [handleLaunchAssessment, handleOpenRetakeDialog]);
+
+  const handleConfirmRetakeDialog = useCallback(async ({ taskId, reason }) => {
+    const selectedApplication = roleApplications.find((item) => Number(item.id) === Number(retakeDialogState.applicationId))
+      || applicationDetailsById[String(retakeDialogState.applicationId)]
+      || null;
+    if (!selectedApplication) return;
+    const success = await handleLaunchAssessment(selectedApplication, taskId, {
+      retake: true,
+      voidReason: reason,
+    });
+    if (success) {
+      handleCloseRetakeDialog();
+    }
+  }, [
+    applicationDetailsById,
+    handleCloseRetakeDialog,
+    handleLaunchAssessment,
+    retakeDialogState.applicationId,
+    roleApplications,
+  ]);
 
   const handleGenerateTaaliCvAi = useCallback(async (application) => {
     if (!rolesApi?.generateTaaliCvAi) return;
@@ -769,6 +837,9 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       ? { ...(selectedScoreBaseApplication || {}), ...(selectedScoreDetail || {}) }
       : null
   );
+  const selectedScoreAssessment = selectedScoreApplication?.score_summary?.assessment_id != null
+    ? (assessmentDetailsById[String(selectedScoreApplication.score_summary.assessment_id)] ?? null)
+    : null;
 
   const selectedCvBaseApplication = roleApplications.find((app) => Number(app.id) === Number(cvSidebarApplicationId)) ?? null;
   const selectedCvDetail = cvSidebarApplicationId != null
@@ -780,24 +851,33 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       : null
   );
 
+  const retakeDialogApplication = retakeDialogState.applicationId != null
+    ? mergeApplicationData({
+      ...(roleApplications.find((app) => Number(app.id) === Number(retakeDialogState.applicationId)) || {}),
+      ...(applicationDetailsById[String(retakeDialogState.applicationId)] || {}),
+    })
+    : null;
+
   return (
     <div>
       <NavComponent currentPage="candidates" onNavigate={onNavigate} />
 
-      <PageContainer>
+      <PageContainer density="compact" width="wide">
         <PageHeader
-          className="mb-6"
+          density="compact"
+          className="mb-5"
           title="Candidates"
           subtitle="Manage role pipelines and assessments in one place."
           actions={(
             <>
-              <Button type="button" variant="primary" onClick={() => handleOpenRoleSheet('create')}>
+              <Button type="button" variant="primary" size="sm" onClick={() => handleOpenRoleSheet('create')}>
                 <Plus size={15} />
                 New role
               </Button>
               <Button
                 type="button"
                 variant="secondary"
+                size="sm"
                 disabled={!selectedRoleId}
                 onClick={() => {
                   setCandidateSheetError('');
@@ -810,7 +890,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
             </>
           )}
         >
-          <div className="grid gap-3 md:grid-cols-[280px_minmax(0,1fr)]">
+          <div className="grid gap-3 md:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(0,1fr)]">
             <label className="block">
               <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Active role
@@ -835,11 +915,12 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 value={searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
                 placeholder="Search by name, email, position, or status"
+                inputClassName="min-h-[2.35rem] text-sm"
               />
             </label>
           </div>
           <div className="mt-3 border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-3">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Sorting and filters
               </p>
@@ -848,7 +929,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 <Button
                   type="button"
                   variant="ghost"
-                  size="sm"
+                  size="xs"
                   onClick={resetFilters}
                   disabled={activeFilterCount === 0}
                 >
@@ -856,14 +937,14 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 </Button>
               </div>
             </div>
-            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4 xl:grid-cols-5">
+            <div className="grid gap-2.5 md:grid-cols-2 lg:grid-cols-5">
               <label className="block">
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Sort by
                 </span>
-                <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)}>
-                  <option value="taali_score">TAALI Score (/100)</option>
-                  <option value="cv_match_score">CV fit (/100)</option>
+                <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)} className="min-h-[2.35rem] text-xs">
+                  <option value="taali_score">TAALI Score</option>
+                  <option value="cv_match_score">CV fit</option>
                   <option value="created_at">Added</option>
                 </Select>
               </label>
@@ -871,7 +952,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Order
                 </span>
-                <Select aria-label="Sort order" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)}>
+                <Select aria-label="Sort order" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} className="min-h-[2.35rem] text-xs">
                   <option value="desc">Descending</option>
                   <option value="asc">Ascending</option>
                 </Select>
@@ -880,7 +961,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Source
                 </span>
-                <Select aria-label="Source filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)}>
+                <Select aria-label="Source filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className="min-h-[2.35rem] text-xs">
                   <option value="all">All</option>
                   <option value="manual">Manual</option>
                   <option value="workable">Workable</option>
@@ -890,7 +971,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                 <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                   Status
                 </span>
-                <Select aria-label="Status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                <Select aria-label="Status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="min-h-[2.35rem] text-xs">
                   {statusOptions.map((status) => (
                     <option key={status} value={status}>
                       {status === 'all'
@@ -914,6 +995,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   step="1"
                   aria-label="Minimum CV fit score"
                   placeholder="0"
+                  className="min-h-[2.35rem] text-xs"
                   value={minCvMatchScore}
                   onChange={(event) => setMinCvMatchScore(event.target.value)}
                 />
@@ -922,7 +1004,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
           </div>
         </PageHeader>
 
-        <div className="grid gap-6 lg:grid-cols-[320px_minmax(0,1fr)]">
+        <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]">
           <RolesList
             roles={roles}
             selectedRoleId={selectedRoleId}
@@ -933,7 +1015,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
             onRefresh={() => loadRoles()}
           />
 
-          <div className="space-y-4">
+          <div className="space-y-3">
             {!selectedRole ? (
               <EmptyRoleDetail onCreateRole={() => handleOpenRoleSheet('create')} />
             ) : (
@@ -984,7 +1066,7 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   onViewCandidate={handleViewFromApplication}
                   onOpenDetails={handleOpenScoreSummary}
                   onOpenCvSidebar={handleOpenCvSidebar}
-                  onCreateAssessment={handleLaunchAssessment}
+                  onCreateAssessment={handleCreateAssessmentRequest}
                   onUploadCv={handleUploadApplicationCv}
                   uploadingCvId={uploadingCvId}
                   onGenerateTaaliCvAi={handleGenerateTaaliCvAi}
@@ -1027,10 +1109,14 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         open={scoreSheetApplicationId != null}
         loading={scoreSheetApplicationId != null && loadingApplicationDetailId === scoreSheetApplicationId}
         application={selectedScoreApplication}
+        completedAssessment={selectedScoreAssessment}
+        completedAssessmentLoading={selectedScoreApplication?.score_summary?.assessment_id != null
+          && Number(loadingAssessmentDetailId) === Number(selectedScoreApplication.score_summary.assessment_id)}
         roleTasks={roleTasks}
         creatingAssessmentId={creatingAssessmentId}
         onClose={() => setScoreSheetApplicationId(null)}
         onLaunchAssessment={handleLaunchAssessment}
+        onOpenRetakeDialog={handleOpenRetakeDialog}
         onOpenCvSidebar={handleOpenCvSidebar}
         onViewResults={openAssessmentResults}
       />
@@ -1041,6 +1127,16 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         onClose={() => setCvSidebarApplicationId(null)}
         onFetchCvFromWorkable={handleGenerateTaaliCvAi}
         fetchingCvApplicationId={generatingTaaliId}
+      />
+
+      <RetakeAssessmentDialog
+        open={retakeDialogState.applicationId != null}
+        application={retakeDialogApplication}
+        roleTasks={roleTasks}
+        loading={creatingAssessmentId === retakeDialogState.applicationId}
+        defaultTaskId={retakeDialogState.defaultTaskId}
+        onClose={handleCloseRetakeDialog}
+        onConfirm={handleConfirmRetakeDialog}
       />
     </div>
   );

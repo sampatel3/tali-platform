@@ -12,6 +12,8 @@ import ReactMarkdown from 'react-markdown';
 import { assessments as assessmentsApi } from '../../shared/api';
 import { Logo } from '../../shared/ui/Branding';
 
+const CANDIDATE_START_BLOCKED_MESSAGE = 'This assessment is not available yet. Please contact the hiring team to continue.';
+
 export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarted }) => {
   const [loadingStart, setLoadingStart] = useState(false);
   const [startError, setStartError] = useState('');
@@ -55,6 +57,10 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
       setStartError('Assessment token is missing from the link.');
       return;
     }
+    if (isStartBlocked) {
+      setStartError(startBlockedMessage || CANDIDATE_START_BLOCKED_MESSAGE);
+      return;
+    }
     const requiresWarmup = Boolean(taskPreview?.calibration_enabled);
     const warmupText = String(warmupPrompt || '').trim();
     if (requiresWarmup && !warmupText) {
@@ -71,7 +77,9 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
       if (onStarted) onStarted(data);
       onNavigate('assessment');
     } catch (err) {
-      const msg = err.response?.data?.detail || 'Failed to start assessment';
+      const msg = err?.response?.status === 402
+        ? (err?.response?.data?.detail || CANDIDATE_START_BLOCKED_MESSAGE)
+        : (err?.response?.data?.detail || 'Failed to start assessment');
       setStartError(msg);
     } finally {
       setLoadingStart(false);
@@ -103,6 +111,12 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
     ? taskPreview.expected_candidate_journey
     : null;
   const durationMinutes = Number(taskPreview?.duration_minutes ?? previewData?.duration_minutes ?? 30);
+  const startGate = previewData?.start_gate && typeof previewData.start_gate === 'object'
+    ? previewData.start_gate
+    : null;
+  const startBlockedMessage = String(startGate?.message || '').trim();
+  const isStartBlocked = startGate?.can_start === false;
+  const visibleStartMessage = startError || startBlockedMessage;
 
   return (
     <div className="min-h-screen bg-white">
@@ -277,19 +291,21 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
           </div>
         </div>
 
-        {startError && (
+        {visibleStartMessage && (
           <div className="border-2 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4 mb-4 text-sm text-[var(--taali-danger)]">
-            {startError}
+            {visibleStartMessage}
           </div>
         )}
 
         <button
-          className="w-full border-2 border-[var(--taali-border)] py-4 font-bold text-lg text-[var(--taali-surface)] bg-[var(--taali-purple)] hover:opacity-90 transition-colors flex items-center justify-center gap-2"
+          className="w-full border-2 border-[var(--taali-border)] py-4 font-bold text-lg text-[var(--taali-surface)] bg-[var(--taali-purple)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
           onClick={handleStart}
-          disabled={loadingStart}
+          disabled={loadingStart || isStartBlocked}
         >
           {loadingStart ? (
             <><Loader2 size={20} className="animate-spin" /> Starting Assessment...</>
+          ) : isStartBlocked ? (
+            'Assessment unavailable'
           ) : (
             <>Start Assessment <ChevronRight size={20} /></>
           )}

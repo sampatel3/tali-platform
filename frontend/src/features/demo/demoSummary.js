@@ -24,7 +24,7 @@ const categoryPlaybook = {
 };
 
 const successfulCandidateBenchmarks = {
-  data_eng_super_platform_crisis: {
+  data_eng_aws_glue_pipeline_recovery: {
     problem_framing: 3.8,
     execution_rigor: 3.6,
     testing_validation: 3.7,
@@ -32,7 +32,7 @@ const successfulCandidateBenchmarks = {
     technical_communication: 3.6,
     delivery_momentum: 3.5,
   },
-  ai_eng_super_production_launch: {
+  ai_eng_genai_production_readiness: {
     problem_framing: 3.8,
     execution_rigor: 3.7,
     testing_validation: 3.6,

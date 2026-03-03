@@ -5,6 +5,8 @@ import { useLocation, useNavigate } from 'react-router-dom';
 import {
   Button,
   Input,
+  PageContainer,
+  PageHeader,
   Select,
   Spinner,
   TabBar,
@@ -693,19 +695,24 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="settings" onNavigate={onNavigate} /> : null}
-      <div className="max-w-7xl mx-auto px-6 py-8">
-        <h1 className="text-3xl font-bold mb-2">Settings</h1>
-        <p className="text-sm text-[var(--taali-muted)] mb-8">Manage integrations and billing</p>
+      <PageContainer density="compact" width="wide">
+        <PageHeader
+          density="compact"
+          className="mb-5"
+          title="Settings"
+          subtitle="Manage integrations, billing, workspace preferences, and team access."
+        />
 
         <TabBar
           tabs={settingsTabs}
           activeTab={activeSettingsTab}
           onChange={setSettingsTab}
-          className="mb-8"
+          density="compact"
+          className="mb-5"
         />
 
         {orgLoading ? (
-          <div className="space-y-6">
+          <div className="space-y-5">
             <CardSkeleton lines={3} />
             <div className="grid gap-4 md:grid-cols-2">
               <CardSkeleton lines={4} />
@@ -716,11 +723,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
           <>
             {activeSettingsTab === 'workable' && (
               <div>
-                <Panel className={`p-6 mb-8 flex items-center justify-between gap-4 flex-wrap ${workableConnected ? 'bg-[var(--taali-success-soft)]' : 'bg-[var(--taali-warning-soft)]'}`}>
+                <Panel className={`mb-5 flex flex-wrap items-center justify-between gap-4 p-4 ${workableConnected ? 'bg-[var(--taali-success-soft)]' : 'bg-[var(--taali-warning-soft)]'}`}>
                   <div className="flex items-center gap-4">
                     {workableConnected ? <CheckCircle size={24} className="text-[var(--taali-success)]" /> : <AlertTriangle size={24} className="text-[var(--taali-warning)]" />}
                     <div>
-                      <div className="font-bold text-lg text-[var(--taali-text)]">Status: {workableConnected ? 'Connected' : 'Not Connected'}</div>
+                      <div className="font-bold text-base text-[var(--taali-text)]">Status: {workableConnected ? 'Connected' : 'Not Connected'}</div>
                       <div className="text-sm text-[var(--taali-muted)]">
                         {workableConnected ? 'Workable integration is active' : 'Connect your Workable account to sync candidates'}
                       </div>
@@ -737,7 +744,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   ) : null}
                 </Panel>
 
-                <Panel className="p-6 space-y-4">
+                <Panel className="space-y-4 p-4">
                   <div>
                     <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Organization</div>
                     <div className="font-bold text-[var(--taali-text)]">{orgName}</div>
@@ -980,7 +987,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     </div>
                   </div>
 
-                  <Panel className="border-2 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-6 mt-6">
+                  <Panel className="mt-5 border-2 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
                     <div className="font-bold text-[var(--taali-danger)] mb-1">Remove all Workable data</div>
                     <p className="text-sm text-[var(--taali-text)] mb-3">
                       This will delete all roles, candidates, and applications that were imported from Workable.
@@ -1002,7 +1009,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       aria-modal="true"
                       aria-labelledby="clear-workable-title"
                     >
-                      <Panel className="border-2 border-[var(--taali-border)] shadow-xl max-w-md w-full p-6 bg-[var(--taali-surface)]">
+                      <Panel className="max-w-md w-full border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] p-5 shadow-xl">
                         <h2 id="clear-workable-title" className="text-lg font-bold mb-2 text-[var(--taali-text)]">Remove all Workable data?</h2>
                         <p className="text-sm text-[var(--taali-muted)] mb-4">
                           All roles, candidates, and applications imported from Workable will be deleted from this account.
@@ -1034,23 +1041,23 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
             {activeSettingsTab === 'billing' && (
               <div>
-                <Panel className="p-6 mb-8">
+                <Panel className="mb-5 p-4">
                   <div className="flex items-start justify-between flex-wrap gap-4">
                     <div>
                       <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Current Plan</div>
-                      <div className="text-2xl font-bold text-[var(--taali-text)]">{billingPlan}</div>
+                      <div className="text-xl font-bold text-[var(--taali-text)]">{billingPlan}</div>
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Total usage</div>
-                      <div className="text-3xl font-bold text-[var(--taali-purple)]">{toAedWithUsdLabel(monthlyCost)}</div>
+                      <div className="text-2xl font-bold text-[var(--taali-purple)]">{toAedWithUsdLabel(monthlyCost)}</div>
                       <div className="font-mono text-xs text-[var(--taali-muted)]">{monthlyAssessments} assessments</div>
                     </div>
                     <div className="text-right">
                       <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Credits balance</div>
-                      <div className="text-3xl font-bold text-[var(--taali-purple)]">{creditsBalance}</div>
+                      <div className="text-2xl font-bold text-[var(--taali-purple)]">{creditsBalance}</div>
                     </div>
                   </div>
-                  <div className="mt-5 grid md:grid-cols-3 gap-3">
+                  <div className="mt-4 grid gap-3 md:grid-cols-3">
                     {Object.entries(packCatalog).map(([packId, pack]) => (
                       <Button
                         key={packId}
@@ -1070,17 +1077,17 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </div>
                 </Panel>
 
-                <div className="grid md:grid-cols-2 gap-4 mb-8">
+                <div className="mb-5 grid gap-4 md:grid-cols-2">
                   <Panel className="p-4">
                     <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Daily spend threshold</div>
-                    <div className="text-2xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.daily_spend_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
+                    <div className="text-xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.daily_spend_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
                     <div className={`font-mono text-xs mt-2 ${thresholdStatus.daily_spend_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
                       Today: {toAedWithUsdLabel(Number(spendSummary.daily_spend_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.daily_spend_exceeded ? 'Exceeded' : 'Within threshold'}
                     </div>
                   </Panel>
                   <Panel className="p-4">
                     <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Cost / completed assessment threshold</div>
-                    <div className="text-2xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.cost_per_completed_assessment_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
+                    <div className="text-xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.cost_per_completed_assessment_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
                     <div className={`font-mono text-xs mt-2 ${thresholdStatus.cost_per_completed_assessment_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
                       Current: {toAedWithUsdLabel(Number(spendSummary.cost_per_completed_assessment_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.cost_per_completed_assessment_exceeded ? 'Exceeded' : 'Within threshold'}
                     </div>
@@ -1088,16 +1095,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 </div>
 
                 <div className="border-2 border-[var(--taali-border)]">
-                  <div className="border-b-2 border-[var(--taali-border)] px-6 py-4 bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)]">
+                  <div className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] px-4 py-3 text-[var(--taali-inverse-text)]">
                     <h3 className="font-bold">Usage History</h3>
                   </div>
                   <table className="w-full">
                     <thead>
                       <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-bg)]">
-                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Date</th>
-                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Candidate</th>
-                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Task</th>
-                        <th className="text-right px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Cost</th>
+                        <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Date</th>
+                        <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Candidate</th>
+                        <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Task</th>
+                        <th className="px-4 py-2.5 text-right font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Cost</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1110,10 +1117,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       ) : (
                         usageHistory.map((row, i) => (
                           <tr key={row.assessment_id ?? i} className="border-b border-[var(--taali-border-muted)] hover:bg-[var(--taali-bg)]">
-                            <td className="px-6 py-3 font-mono text-sm text-[var(--taali-text)]">{row.date}</td>
-                            <td className="px-6 py-3 text-sm text-[var(--taali-text)]">{row.candidate}</td>
-                            <td className="px-6 py-3 font-mono text-sm text-[var(--taali-text)]">{row.task}</td>
-                            <td className="px-6 py-3 font-mono text-sm text-right font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(row.cost)}</td>
+                            <td className="px-4 py-2.5 font-mono text-sm text-[var(--taali-text)]">{row.date}</td>
+                            <td className="px-4 py-2.5 text-sm text-[var(--taali-text)]">{row.candidate}</td>
+                            <td className="px-4 py-2.5 font-mono text-sm text-[var(--taali-text)]">{row.task}</td>
+                            <td className="px-4 py-2.5 text-right font-mono text-sm font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(row.cost)}</td>
                           </tr>
                         ))
                       )}
@@ -1125,8 +1132,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
             {activeSettingsTab === 'team' && (
               <div className="space-y-6">
-                <Panel className="p-6">
-                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Invite Team Member</h3>
+                <Panel className="p-4">
+                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Invite Team Member</h3>
                   <form className="grid md:grid-cols-3 gap-3" onSubmit={handleInvite}>
                     <Input
                       type="text"
@@ -1150,14 +1157,14 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </form>
                 </Panel>
                 <div className="border-2 border-[var(--taali-border)]">
-                  <div className="border-b-2 border-[var(--taali-border)] px-6 py-4 bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)]">
+                  <div className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] px-4 py-3 text-[var(--taali-inverse-text)]">
                     <h3 className="font-bold">Team Members</h3>
                   </div>
                   <table className="w-full">
                     <thead>
                       <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-bg)]">
-                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Name</th>
-                        <th className="text-left px-6 py-3 font-mono text-xs font-bold uppercase text-[var(--taali-text)]">Email</th>
+                        <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Name</th>
+                        <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Email</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -1165,8 +1172,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         <tr><td colSpan={2} className="px-6 py-8 font-mono text-sm text-[var(--taali-muted)] text-center">No members yet.</td></tr>
                       ) : teamMembers.map((m) => (
                         <tr key={m.id} className="border-b border-[var(--taali-border-muted)]">
-                          <td className="px-6 py-3 text-[var(--taali-text)]">{m.full_name || '—'}</td>
-                          <td className="px-6 py-3 font-mono text-sm text-[var(--taali-text)]">{m.email}</td>
+                          <td className="px-4 py-2.5 text-[var(--taali-text)]">{m.full_name || '—'}</td>
+                          <td className="px-4 py-2.5 font-mono text-sm text-[var(--taali-text)]">{m.email}</td>
                         </tr>
                       ))}
                     </tbody>
@@ -1177,8 +1184,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
             {activeSettingsTab === 'enterprise' && (
               <div className="space-y-6">
-                <Panel className="p-6">
-                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Enterprise Access Controls</h3>
+                <Panel className="p-4">
+                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Enterprise Access Controls</h3>
                   <div className="space-y-4">
                     <div>
                       <label className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Allowed email domains (comma separated)</label>
@@ -1245,8 +1252,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
             {activeSettingsTab === 'preferences' && (
               <div className="space-y-6">
-                <Panel className="p-6">
-                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Display Preferences</h3>
+                <Panel className="p-4">
+                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Display Preferences</h3>
                   <label className="flex items-center gap-3 text-sm text-[var(--taali-text)] cursor-pointer">
                     <input
                       type="checkbox"
@@ -1259,8 +1266,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   <p className="mt-2 text-xs text-[var(--taali-muted)]">Follows your system setting by default until you change it here.</p>
                 </Panel>
 
-                <Panel className="p-6">
-                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Assessment Defaults</h3>
+                <Panel className="p-4">
+                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Assessment Defaults</h3>
                   <label className="block">
                     <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Default assessment duration (minutes)</span>
                     <Input
@@ -1280,8 +1287,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </p>
                 </Panel>
 
-                <Panel className="p-6">
-                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Custom Claude API Key (Optional)</h3>
+                <Panel className="p-4">
+                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Custom Claude API Key (Optional)</h3>
                   <label className="block">
                     <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Rotate API key</span>
                     <Input
@@ -1317,8 +1324,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </p>
                 </Panel>
 
-                <Panel className="p-6">
-                  <h3 className="text-xl font-bold mb-4 text-[var(--taali-text)]">Invite Email Template Preview</h3>
+                <Panel className="p-4">
+                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Invite Email Template Preview</h3>
                   <label className="block">
                     <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Template body</span>
                     <Input
@@ -1331,7 +1338,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </p>
                 </Panel>
 
-                <Panel className="p-6">
+                <Panel className="p-4">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div className="font-mono text-xs text-[var(--taali-muted)]">
                       {preferencesSavedAt
@@ -1352,7 +1359,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
             )}
           </>
         )}
-      </div>
+      </PageContainer>
       <Sheet
         open={workableDrawerOpen && activeSettingsTab === 'workable'}
         onClose={closeWorkableDrawer}

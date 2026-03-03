@@ -183,7 +183,7 @@ export const RoleSheet = ({
 
       {step === 2 ? (
         <div className="space-y-4">
-          <Card className="bg-[#faf8ff] p-4">
+          <Card className="bg-[var(--taali-surface-subtle)] p-4">
             <p className="text-sm font-medium text-gray-900">Upload job spec (optional but recommended)</p>
             <p className="mt-1 text-xs text-gray-600">
               Adding a spec now lets recruiters add candidates without friction and auto-generates interview focus pointers.

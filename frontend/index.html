@@ -2,6 +2,27 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
+    <script>
+      (function () {
+        var legacyHosts = {
+          "frontend-psi-navy-15.vercel.app": true,
+          "frontend-sam-patels-projects.vercel.app": true,
+          "frontend-sampatel3-sam-patels-projects.vercel.app": true
+        };
+
+        if (!legacyHosts[window.location.hostname]) {
+          return;
+        }
+
+        var target =
+          "https://www.taali.ai" +
+          window.location.pathname +
+          window.location.search +
+          window.location.hash;
+
+        window.location.replace(target);
+      })();
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&display=swap" rel="stylesheet" />

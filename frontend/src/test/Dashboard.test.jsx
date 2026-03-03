@@ -221,7 +221,7 @@ describe('AssessmentsPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
-      expect(screen.getByText('Welcome back, Admin')).toBeInTheDocument();
+      expect(screen.getByText(/Welcome back, Admin\./)).toBeInTheDocument();
     });
   });
 
@@ -291,7 +291,7 @@ describe('AssessmentsPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('Filters:')).toBeInTheDocument();
+      expect(screen.getByText('Filters')).toBeInTheDocument();
     });
 
     const statusSelect = screen.getByDisplayValue('All statuses');
@@ -311,7 +311,7 @@ describe('AssessmentsPage', () => {
 
     await waitFor(() => {
       expect(screen.getAllByText('Backend Engineer').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('ML Engineer')).toBeInTheDocument();
+      expect(screen.getAllByText('ML Engineer').length).toBeGreaterThanOrEqual(1);
     });
   });
 
@@ -320,7 +320,7 @@ describe('AssessmentsPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByText('Filters:')).toBeInTheDocument();
+      expect(screen.getByText('Filters')).toBeInTheDocument();
     });
 
     const roleSelect = screen.getByDisplayValue('All roles');
@@ -421,8 +421,8 @@ describe('AssessmentsPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getAllByText('85/100').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText('60/100').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('85.0').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('60.0').length).toBeGreaterThanOrEqual(1);
     });
   });
 

@@ -16,8 +16,11 @@ import {
   Card,
   Panel,
 } from '../../shared/ui/TaaliPrimitives';
+import { formatScale100Score } from '../../lib/scoreDisplay';
 import { ScoringCardGrid } from '../../shared/ui/ScoringCardGrid';
 import { ScoringGlossaryPanel, SCORING_GLOSSARY_METRIC_COUNT } from '../../shared/ui/ScoringGlossaryPanel';
+import { buildRoleFitEvidenceModel } from './assessmentViewModels';
+import { RoleFitEvidenceSections } from './RoleFitEvidenceSections';
 
 const DIMENSION_VISUAL_CONFIG = {
   task_completion: { icon: '✅', weight: '20%' },
@@ -93,17 +96,32 @@ const getStatusAwareEmptyMessage = (status) => {
   return 'Some scoring categories or detailed metrics are unavailable for this assessment.';
 };
 
-const fallbackOverallSummary = (catScores) => {
+const fallbackOverallSummary = (catScores, assessment, roleFitModel) => {
   const scored = Object.entries(catScores || {})
     .filter(([, value]) => Number.isFinite(Number(value)))
     .map(([key, value]) => ({ key, value: Number(value), label: getDimensionById(key)?.label || key }))
     .sort((a, b) => b.value - a.value);
+
+  const testsSummary = Number.isFinite(Number(assessment?.tests_total)) && Number(assessment.tests_total) > 0
+    ? `Passed ${assessment.tests_passed ?? 0} of ${assessment.tests_total} tests.`
+    : '';
+
+  const requirementGap = roleFitModel?.requirementsAssessment?.find((item) => item.status !== 'met');
+
   if (!scored.length) {
-    return 'Assessment data is still populating. Use this tab to review score detail once processing completes.';
+    return [
+      testsSummary,
+      requirementGap ? `Role-fit gap to probe: ${requirementGap.requirement}.` : '',
+      'No scored dimensions were returned for this assessment yet.',
+    ].filter(Boolean).join(' ');
   }
   const strongest = scored[0];
   const weakest = [...scored].sort((a, b) => a.value - b.value)[0];
-  return `This candidate is strongest in ${strongest.label} and needs deeper interview probing in ${weakest.label}.`;
+  return [
+    `This candidate is strongest in ${strongest.label}.`,
+    `Interview deeper on ${weakest.label.toLowerCase()}.`,
+    requirementGap ? `Role-fit risk to probe: ${requirementGap.requirement}.` : testsSummary,
+  ].filter(Boolean).join(' ');
 };
 
 export const CandidateResultsTab = ({
@@ -182,8 +200,35 @@ export const CandidateResultsTab = ({
   const calibrationScore = Number.isFinite(Number(assessment.calibration_score))
     ? Number(assessment.calibration_score)
     : null;
+  const roleFitModel = buildRoleFitEvidenceModel({ application: null, completedAssessment: assessment });
 
-  const overallSummaryText = heuristicSummary || fallbackOverallSummary(catScores);
+  const overallSummaryText = heuristicSummary || fallbackOverallSummary(catScores, assessment, roleFitModel);
+  const integrityNotice = severeLanguageCap ? (
+    <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
+      <div className="font-bold text-[var(--taali-danger)]">Score capped due to severe unprofessional language.</div>
+      {uncappedFinalScore != null ? (
+        <div className="mt-1 font-mono text-xs text-[var(--taali-danger)]">Original computed score: {formatScale100Score(uncappedFinalScore, '0-100')}</div>
+      ) : null}
+    </Panel>
+  ) : (!severeLanguageCap && (fraudCapApplied || hasFraudFlags)) ? (
+    <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
+      <div className="font-bold text-[var(--taali-text)]">Integrity modifiers applied to this score.</div>
+      {uncappedFinalScore != null ? (
+        <div className="mt-1 font-mono text-xs text-[var(--taali-muted)]">Original computed score: {formatScale100Score(uncappedFinalScore, '0-100')}</div>
+      ) : null}
+      {hasFraudFlags ? (
+        <div className="mt-2 space-y-1">
+          {rawFraudFlags.map((flag, index) => (
+            <div key={`${flag.type}-${index}`} className="font-mono text-xs text-[var(--taali-text)]">
+              <span title={FRAUD_FLAG_EXPLANATIONS[flag.type] || 'Potential integrity signal. Human review is recommended.'}>
+                • {flag.type}: {flag.evidence}
+              </span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </Panel>
+  ) : null;
 
   const benchmarkBadgeForCategory = (key) => {
     const percentile = candidatePercentiles?.[key];
@@ -196,35 +241,6 @@ export const CandidateResultsTab = ({
 
   return (
     <div className="space-y-6">
-      {severeLanguageCap ? (
-        <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
-          <div className="font-bold text-[var(--taali-danger)]">Score capped — severe unprofessional language was used during this assessment.</div>
-          {uncappedFinalScore != null ? (
-            <div className="mt-1 font-mono text-xs text-[var(--taali-danger)]">Original computed score: {uncappedFinalScore.toFixed(2)}/100</div>
-          ) : null}
-        </Panel>
-      ) : null}
-
-      {!severeLanguageCap && (fraudCapApplied || hasFraudFlags) ? (
-        <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
-          <div className="font-bold text-[var(--taali-text)]">Score modified — fraud signals detected.</div>
-          {uncappedFinalScore != null ? (
-            <div className="mt-1 font-mono text-xs text-[var(--taali-muted)]">Original computed score: {uncappedFinalScore.toFixed(2)}/100</div>
-          ) : null}
-          {hasFraudFlags ? (
-            <div className="mt-2 space-y-1">
-              {rawFraudFlags.map((flag, index) => (
-                <div key={`${flag.type}-${index}`} className="font-mono text-xs text-[var(--taali-text)]">
-                  <span title={FRAUD_FLAG_EXPLANATIONS[flag.type] || 'Potential integrity signal. Human review is recommended.'}>
-                    • {flag.type}: {flag.evidence}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </Panel>
-      ) : null}
-
       <Card className="bg-[var(--taali-purple-soft)] px-3 py-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-xs text-[var(--taali-muted)]">Compare this candidate with others in the same role.</p>
@@ -244,47 +260,58 @@ export const CandidateResultsTab = ({
         </div>
       </Card>
 
-      <Panel className="p-4">
-        <div className="mb-2 flex items-center justify-between gap-2">
-          <div className="font-bold">Recruiter Insight Summary</div>
-          <Badge variant="muted" className="font-mono text-[11px]">Auto-generated · AI-assisted analysis · Not a hiring decision</Badge>
+      <Panel className="p-3.5">
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
+          <div>
+            <div className="mb-2 flex items-center justify-between gap-2">
+              <div className="font-bold">Overview</div>
+              <Badge variant="muted" className="font-mono text-[11px]">Evidence-backed summary</Badge>
+            </div>
+            <p className="text-sm text-[var(--taali-text)]">{overallSummaryText}</p>
+          </div>
+
+          {overallScore10 != null ? (
+            <Card className="bg-[var(--taali-surface-subtle)] p-4">
+              <div className="font-mono text-xs text-[var(--taali-muted)]">Overall score</div>
+              <div className="mt-2 font-mono text-2xl font-bold" style={{ color: scoreColor(overallScore10) }}>
+                {overallScore10.toFixed(1)}/10
+              </div>
+              <div className="mt-1 text-sm text-[var(--taali-muted)]">{scoreLabel(overallScore10)}</div>
+            </Card>
+          ) : null}
+
+          <Card className="bg-[var(--taali-surface-subtle)] p-4">
+            <div className="font-mono text-xs text-[var(--taali-muted)]">Role-fit evidence</div>
+            <div className="mt-2 taali-display text-2xl font-semibold text-[var(--taali-text)]">
+              {roleFitModel.overallScore != null ? formatScale100Score(roleFitModel.overallScore, '0-100') : '—'}
+            </div>
+            <div className="mt-1 text-sm text-[var(--taali-muted)]">
+              {roleFitModel.sourceLabel || 'Assessment evidence'}
+            </div>
+          </Card>
         </div>
-        <p className="text-sm text-[var(--taali-text)]">{overallSummaryText}</p>
       </Panel>
 
-      {overallScore10 != null ? (
-        <Panel className="p-4">
+      {calibrationScore != null ? (
+        <Panel className="p-3.5">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <div className="font-mono text-xs text-[var(--taali-muted)]">Overall score</div>
-              <div className="font-mono text-2xl font-bold" style={{ color: scoreColor(overallScore10) }}>
-                {overallScore10.toFixed(1)}/10 · {scoreLabel(overallScore10)}
+              <div className="font-mono text-xs text-[var(--taali-muted)]">Baseline AI collaboration (calibration)</div>
+              <div className="font-mono text-xl font-bold" style={{ color: scoreColor(calibrationScore) }}>
+                {calibrationScore.toFixed(1)}/10 · {scoreLabel(calibrationScore)}
               </div>
             </div>
             <Button type="button" variant="secondary" size="sm" onClick={onOpenOnboarding}>
               What does this score mean?
             </Button>
           </div>
-          <p className="mt-2 text-xs text-[var(--taali-muted)]">{overallSummaryText}</p>
-        </Panel>
-      ) : null}
-
-      {calibrationScore != null ? (
-        <Panel className="p-4">
-          <div className="font-mono text-xs text-[var(--taali-muted)]">Baseline AI collaboration (calibration)</div>
-          <div className="font-mono text-xl font-bold" style={{ color: scoreColor(calibrationScore) }}>
-            {calibrationScore.toFixed(1)}/10 · {scoreLabel(calibrationScore)}
-          </div>
-          <div className="mt-1 text-xs text-[var(--taali-muted)]">
-            Captured in the 2-minute warmup before the main task.
-          </div>
         </Panel>
       ) : null}
 
       {hasAnyCategoryScore ? (
-        <Panel className="p-4">
-          <div className="mb-4 text-base font-bold">Category Breakdown</div>
-          <div style={{ width: '100%', height: 350 }}>
+        <Panel className="p-3.5">
+          <div className="mb-3 text-base font-bold">Category Breakdown</div>
+          <div style={{ width: '100%', height: 320 }}>
             <ResponsiveContainer>
               <RadarChart data={radarData}>
                 <PolarGrid stroke="var(--taali-purple-soft)" />
@@ -303,6 +330,7 @@ export const CandidateResultsTab = ({
       )}
 
       <div className="space-y-3">
+        <div className="text-base font-bold text-[var(--taali-text)]">Evidence and interpretation</div>
         {CATEGORY_CONFIG.map((cat) => {
           const catScore = catScores[cat.key];
           const metrics = detailedScores[cat.key] || {};
@@ -316,7 +344,7 @@ export const CandidateResultsTab = ({
             <Panel key={cat.key} className="overflow-hidden">
               <button
                 type="button"
-                className="flex w-full items-center justify-between px-4 py-3 text-left transition hover:bg-[var(--taali-purple-soft)]"
+                className="flex w-full items-center justify-between px-3.5 py-2.5 text-left transition hover:bg-[var(--taali-purple-soft)]"
                 onClick={() => setExpandedCategory(isExpanded ? null : cat.key)}
               >
                 <div className="flex min-w-0 items-center gap-3">
@@ -377,45 +405,44 @@ export const CandidateResultsTab = ({
             </Panel>
           );
         })}
+
+        {roleFitModel.hasAnyEvidence ? (
+          <RoleFitEvidenceSections
+            model={roleFitModel}
+            variant="full"
+            emptyMessage="No role-fit evidence was returned for this assessment."
+          />
+        ) : null}
+
+        {candidate.results.length > 0 ? (
+          <div className="space-y-3">
+            <div className="font-bold">Test results</div>
+            {candidate.results.map((r, i) => (
+              <Panel key={i} className="flex items-start gap-3 bg-[var(--taali-success-soft)] p-4">
+                <CheckCircle size={20} className="mt-0.5 shrink-0 text-[var(--taali-purple)]" />
+                <div>
+                  <div className="font-bold text-[var(--taali-text)]">{r.title} <span className="font-mono text-sm text-[var(--taali-muted)]">({r.score})</span></div>
+                  <p className="mt-1 text-sm text-[var(--taali-muted)]">{r.description}</p>
+                </div>
+              </Panel>
+            ))}
+          </div>
+        ) : null}
+
+        {(!hasAnyCategoryScore || !hasAnyDetailedMetrics) ? (
+          <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
+            <div className="mb-1 font-bold text-[var(--taali-text)]">Partial scoring data</div>
+            <div className="text-xs text-[var(--taali-muted)]">{getStatusAwareEmptyMessage(assessmentStatus)}</div>
+          </Panel>
+        ) : null}
       </div>
 
-      {(!hasAnyCategoryScore || !hasAnyDetailedMetrics) ? (
-        <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
-          <div className="mb-1 font-bold text-[var(--taali-text)]">Partial scoring data</div>
-          <div className="text-xs text-[var(--taali-muted)]">{getStatusAwareEmptyMessage(assessmentStatus)}</div>
-        </Panel>
-      ) : null}
-
-      <Panel className="p-4">
-        <div className="mb-3 font-bold">Scoring Glossary</div>
-        <ScoringCardGrid
-          items={CATEGORY_CONFIG.map((cat) => ({
-            key: `glossary-${cat.key}`,
-            title: cat.label,
-            description: cat.description,
-          }))}
-          className="md:grid-cols-2 lg:grid-cols-2"
-          cardClassName="!p-3"
-        />
-        <details className="mt-4 border-t border-[var(--taali-border)] pt-3">
-          <summary className="cursor-pointer font-mono text-xs text-[var(--taali-purple)] hover:underline">
-            View TAALI scoring glossary ({SCORING_GLOSSARY_METRIC_COUNT} metrics) →
-          </summary>
-          <ScoringGlossaryPanel className="mt-3" />
-        </details>
-      </Panel>
-
-      <Panel className="p-4">
-        <div className="mb-3 font-bold">Assessment Metadata</div>
-        <div className="grid grid-cols-2 gap-3 font-mono text-sm md:grid-cols-3">
-          <div><span className="text-[var(--taali-muted)]">Duration:</span> {assessment.total_duration_seconds ? `${Math.floor(assessment.total_duration_seconds / 60)}m ${assessment.total_duration_seconds % 60}s` : '—'}</div>
-          <div><span className="text-[var(--taali-muted)]">Total Prompts:</span> {assessment.total_prompts ?? '—'}</div>
-          <div><span className="text-[var(--taali-muted)]">Claude Credit Used:</span> {((assessment.total_input_tokens || 0) + (assessment.total_output_tokens || 0)).toLocaleString()}</div>
-          <div><span className="text-[var(--taali-muted)]">Tests:</span> {assessment.tests_passed ?? 0}/{assessment.tests_total ?? 0}</div>
-          <div><span className="text-[var(--taali-muted)]">Started:</span> {assessment.started_at ? new Date(assessment.started_at).toLocaleString() : '—'}</div>
-          <div><span className="text-[var(--taali-muted)]">Submitted:</span> {assessment.completed_at ? new Date(assessment.completed_at).toLocaleString() : '—'}</div>
+      {integrityNotice ? (
+        <div className="space-y-3">
+          <div className="text-base font-bold text-[var(--taali-text)]">Integrity and score modifiers</div>
+          {integrityNotice}
         </div>
-      </Panel>
+      ) : null}
 
       <Panel className="p-4">
         <div className="mb-2 font-bold">Task Benchmarks</div>
@@ -451,36 +478,36 @@ export const CandidateResultsTab = ({
         )}
       </Panel>
 
-      {assessment.prompt_fraud_flags && assessment.prompt_fraud_flags.length > 0 ? (
-        <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
-          <div className="mb-2 flex items-center gap-2 font-bold text-[var(--taali-danger)]"><AlertTriangle size={18} /> Fraud Flags Detected</div>
-          {rawFraudFlags.map((flag, i) => (
-            <div key={i} className="mb-1 font-mono text-sm text-[var(--taali-danger)]">
-              <span title={FRAUD_FLAG_EXPLANATIONS[flag.type] || 'Potential integrity signal. Human review is recommended.'}>
-                • {flag.type}: {flag.evidence} (confidence: {(flag.confidence * 100).toFixed(0)}%)
-              </span>
-              {FRAUD_FLAG_EXPLANATIONS[flag.type] ? (
-                <div className="pl-4 text-xs text-[var(--taali-danger)]/80">{FRAUD_FLAG_EXPLANATIONS[flag.type]}</div>
-              ) : null}
-            </div>
-          ))}
-        </Panel>
-      ) : null}
-
-      {candidate.results.length > 0 ? (
-        <div className="space-y-3">
-          <div className="font-bold">Test Results</div>
-          {candidate.results.map((r, i) => (
-            <Panel key={i} className="flex items-start gap-3 bg-[var(--taali-success-soft)] p-4">
-              <CheckCircle size={20} className="mt-0.5 shrink-0 text-[var(--taali-purple)]" />
-              <div>
-                <div className="font-bold text-[var(--taali-text)]">{r.title} <span className="font-mono text-sm text-[var(--taali-muted)]">({r.score})</span></div>
-                <p className="mt-1 text-sm text-[var(--taali-muted)]">{r.description}</p>
-              </div>
-            </Panel>
-          ))}
+      <Panel className="p-4">
+        <div className="mb-3 font-bold">Assessment Metadata</div>
+        <div className="grid grid-cols-2 gap-3 font-mono text-sm md:grid-cols-3">
+          <div><span className="text-[var(--taali-muted)]">Duration:</span> {assessment.total_duration_seconds ? `${Math.floor(assessment.total_duration_seconds / 60)}m ${assessment.total_duration_seconds % 60}s` : '—'}</div>
+          <div><span className="text-[var(--taali-muted)]">Total Prompts:</span> {assessment.total_prompts ?? '—'}</div>
+          <div><span className="text-[var(--taali-muted)]">Claude Credit Used:</span> {((assessment.total_input_tokens || 0) + (assessment.total_output_tokens || 0)).toLocaleString()}</div>
+          <div><span className="text-[var(--taali-muted)]">Tests:</span> {assessment.tests_passed ?? 0}/{assessment.tests_total ?? 0}</div>
+          <div><span className="text-[var(--taali-muted)]">Started:</span> {assessment.started_at ? new Date(assessment.started_at).toLocaleString() : '—'}</div>
+          <div><span className="text-[var(--taali-muted)]">Submitted:</span> {assessment.completed_at ? new Date(assessment.completed_at).toLocaleString() : '—'}</div>
         </div>
-      ) : null}
+      </Panel>
+
+      <Panel className="p-4">
+        <div className="mb-3 font-bold">Scoring Glossary</div>
+        <ScoringCardGrid
+          items={CATEGORY_CONFIG.map((cat) => ({
+            key: `glossary-${cat.key}`,
+            title: cat.label,
+            description: cat.description,
+          }))}
+          className="md:grid-cols-2 lg:grid-cols-2"
+          cardClassName="!p-3"
+        />
+        <details className="mt-4 border-t border-[var(--taali-border)] pt-3">
+          <summary className="cursor-pointer font-mono text-xs text-[var(--taali-purple)] hover:underline">
+            View TAALI scoring glossary ({SCORING_GLOSSARY_METRIC_COUNT} metrics) →
+          </summary>
+          <ScoringGlossaryPanel className="mt-3" />
+        </details>
+      </Panel>
     </div>
   );
 };

@@ -1,9 +1,17 @@
 import React, { useEffect, useMemo, useState } from 'react';
 
-import { Badge, Button, Panel, Select, Sheet, Spinner, Textarea } from '../../shared/ui/TaaliPrimitives';
+import { Badge, Button, Panel, Select, Sheet, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { formatScale100Score } from '../../lib/scoreDisplay';
 import { ComparisonRadar } from '../../shared/ui/ComparisonRadar';
-import { getDimensionById } from '../../scoring/scoringDimensions';
-import { formatCvScore100, formatDateTime } from './candidatesUiUtils';
+import {
+  buildAssessmentSummaryModel,
+  buildRoleFitEvidenceModel,
+} from './assessmentViewModels';
+import { CandidateSidebarHeader } from './CandidateSidebarHeader';
+import { CandidateSidebarScoreHero } from './CandidateSidebarScoreHero';
+import { CandidateStatusSnapshot } from './CandidateStatusSnapshot';
+import { RoleFitEvidenceSections } from './RoleFitEvidenceSections';
+import { formatDateTime } from './candidatesUiUtils';
 
 const COMPLETED_ASSESSMENT_STATUSES = new Set(['completed', 'completed_due_to_timeout']);
 
@@ -14,211 +22,34 @@ const modeMeta = (mode) => {
   return { label: 'CV fit only', variant: 'muted' };
 };
 
-const formatScore = (value) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '—';
-  const rounded = Math.round(numeric * 10) / 10;
-  const display = Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1);
-  return `${display}/100`;
-};
-
-const compactText = (value, maxChars = 180) => {
-  const cleaned = String(value || '').replace(/\s+/g, ' ').trim();
-  if (!cleaned) return '';
-  if (cleaned.length <= maxChars) return cleaned;
-  return `${cleaned.slice(0, maxChars - 1).trimEnd()}…`;
-};
-
-const buildScoreWhySections = (app) => {
-  const details = (app?.cv_match_details && typeof app.cv_match_details === 'object')
-    ? app.cv_match_details
-    : {};
-  const normalizeList = (value, maxItems = 4) => (
-    Array.isArray(value)
-      ? value
-        .map((item) => String(item || '').trim())
-        .filter(Boolean)
-        .slice(0, maxItems)
-      : []
-  );
-  const toReason = (text) => {
-    const cleaned = String(text || '').trim();
-    if (!cleaned) return null;
-    return cleaned.endsWith('.') ? cleaned : `${cleaned}.`;
-  };
-
-  const cvReasons = [];
-  const requirementsReasons = [];
-
-  const matchingSkills = normalizeList(details.matching_skills, 4);
-  const experienceHighlights = normalizeList(details.experience_highlights, 2);
-  const missingSkills = normalizeList(details.missing_skills, 4);
-  const concerns = normalizeList(details.concerns, 2);
-
-  if (matchingSkills.length > 0) {
-    cvReasons.push(toReason(`Strong skill alignment: ${matchingSkills.join(', ')}`));
-  }
-  if (experienceHighlights.length > 0) {
-    cvReasons.push(toReason(`Relevant experience evidence: ${experienceHighlights.join('; ')}`));
-  }
-  if (missingSkills.length > 0) {
-    cvReasons.push(toReason(`Gaps vs role spec: ${missingSkills.join(', ')}`));
-  }
-  if (concerns.length > 0) {
-    cvReasons.push(toReason(`Risk signals from CV: ${concerns.join('; ')}`));
-  }
-
-  const requirementsCoverage = (details.requirements_coverage && typeof details.requirements_coverage === 'object')
-    ? details.requirements_coverage
-    : {};
-  const requirementsAssessment = Array.isArray(details.requirements_assessment)
-    ? details.requirements_assessment
-    : [];
-
-  if (typeof details.requirements_match_score_100 === 'number') {
-    requirementsReasons.push(
-      toReason(`Additional requirements fit score: ${formatCvScore100(details.requirements_match_score_100, details)}`)
-    );
-  }
-
-  const statusRank = (status) => {
-    if (status === 'met') return 0;
-    if (status === 'partially_met') return 1;
-    if (status === 'missing') return 2;
-    return 3;
-  };
-  const priorityRank = (priority) => {
-    if (priority === 'must_have') return 0;
-    if (priority === 'constraint') return 1;
-    if (priority === 'strong_preference') return 2;
-    return 3;
-  };
-
-  const requirementEvidenceReasons = requirementsAssessment
-    .map((item) => {
-      const requirement = compactText(item?.requirement, 150);
-      if (!requirement) return null;
-      const status = String(item?.status || 'unknown').toLowerCase();
-      const priority = String(item?.priority || 'nice_to_have').toLowerCase();
-      const evidence = compactText(item?.evidence, 180);
-      const impact = compactText(item?.impact, 180);
-      const whyText = evidence || impact;
-      let prefix = 'Unclear evidence';
-      if (status === 'met') prefix = 'Met';
-      else if (status === 'partially_met') prefix = 'Partially met';
-      else if (status === 'missing') prefix = 'Missing';
-
-      let sentence = `${prefix}: ${requirement}`;
-      if (whyText) {
-        sentence += ` because ${whyText}`;
-      } else if (status === 'missing') {
-        sentence += ' because no clear CV evidence was found';
-      }
-
-      return {
-        text: toReason(sentence),
-        statusRank: statusRank(status),
-        priorityRank: priorityRank(priority),
-      };
-    })
-    .filter(Boolean)
-    .sort((a, b) => (
-      (a.statusRank - b.statusRank)
-      || (a.priorityRank - b.priorityRank)
-    ))
-    .slice(0, 3)
-    .map((item) => item.text);
-
-  if (requirementEvidenceReasons.length > 0) {
-    requirementsReasons.push(...requirementEvidenceReasons);
-  }
-
-  const totalReq = Number(requirementsCoverage.total || 0);
-  if (totalReq > 0 && requirementsReasons.length < 4 && requirementEvidenceReasons.length === 0) {
-    requirementsReasons.push(
-      toReason(
-        `Coverage: ${requirementsCoverage.met ?? 0}/${totalReq} met, ${requirementsCoverage.partially_met ?? 0} partial, ${requirementsCoverage.missing ?? 0} missing`
-      )
-    );
-  }
-
-  const modelRationale = normalizeList(details.score_rationale_bullets, 6);
-  const isGenericRequirementRationale = (text) => {
-    const lower = String(text || '').toLowerCase();
-    return (
-      lower.includes('matched recruiter requirements')
-      || lower.includes('recruiter requirements coverage')
-      || lower.startsWith('coverage:')
-    );
-  };
-  modelRationale.forEach((bullet) => {
-    const lower = bullet.toLowerCase();
-    if (lower.includes('requirement') && requirementsReasons.length < 4) {
-      if (requirementEvidenceReasons.length > 0 && isGenericRequirementRationale(bullet)) return;
-      requirementsReasons.push(toReason(bullet));
-    } else if (cvReasons.length < 3) {
-      cvReasons.push(toReason(bullet));
-    }
-  });
-
-  const dedupe = (items, maxItems = 4) => {
-    const seen = new Set();
-    const out = [];
-    for (const item of items) {
-      const text = String(item || '').trim();
-      if (!text) continue;
-      const key = text.toLowerCase();
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push(text);
-      if (out.length >= maxItems) break;
-    }
-    return out;
-  };
-
-  return {
-    cvFit: dedupe(cvReasons, 3),
-    additionalRequirementsFit: dedupe(requirementsReasons, 4),
-  };
-};
-
-const ScoreCard = ({ label, value }) => (
-  <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] px-3 py-3">
+const InfoCard = ({ label, value }) => (
+  <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-3 py-3">
     <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{label}</p>
-    <p className="mt-1 text-lg font-semibold text-[var(--taali-text)]">{value}</p>
+    <p className="mt-2 text-sm font-semibold text-[var(--taali-text)]">{value}</p>
   </div>
 );
 
-const ReasonList = ({ title, items }) => {
-  if (!Array.isArray(items) || items.length === 0) return null;
-  return (
-    <div>
-      <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{title}</p>
-      <ul className="mt-2 space-y-2">
-        {items.map((item, index) => (
-          <li key={`${title}-${index}`} className="flex gap-2 text-sm text-[var(--taali-text)]">
-            <span className="text-[var(--taali-success)]">•</span>
-            <span>{item}</span>
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
+const toAssessmentStatusText = (status) => {
+  const cleaned = String(status || '').trim();
+  if (!cleaned) return 'not started';
+  return cleaned.replace(/_/g, ' ');
 };
 
 export function CandidateScoreSummarySheet({
   open,
   loading,
   application,
+  completedAssessment,
+  completedAssessmentLoading = false,
   roleTasks,
   creatingAssessmentId,
   onClose,
   onLaunchAssessment,
+  onOpenRetakeDialog,
   onOpenCvSidebar,
   onViewResults,
 }) {
   const [selectedTask, setSelectedTask] = useState('');
-  const [retakeReason, setRetakeReason] = useState('');
 
   useEffect(() => {
     if (!open) return;
@@ -227,40 +58,36 @@ export function CandidateScoreSummarySheet({
     } else {
       setSelectedTask('');
     }
-    setRetakeReason('');
   }, [open, roleTasks]);
 
   const scoreSummary = application?.score_summary || {};
-  const assessmentPreview = application?.assessment_preview || null;
   const assessmentHistory = Array.isArray(application?.assessment_history) ? application.assessment_history : [];
-  const scoreWhy = buildScoreWhySections(application);
   const mode = modeMeta(scoreSummary.mode);
   const hasCompletedAssessment = COMPLETED_ASSESSMENT_STATUSES.has(String(scoreSummary.assessment_status || '').toLowerCase())
     && Boolean(scoreSummary.assessment_id);
   const hasValidAssessment = Boolean(application?.valid_assessment_id);
   const hasCv = Boolean(application?.cv_filename || application?.cv_text);
+  const summaryModel = buildAssessmentSummaryModel({ application, completedAssessment });
+  const roleFitModel = buildRoleFitEvidenceModel({ application, completedAssessment });
 
   const currentAssessmentPreview = useMemo(() => {
-    if (!assessmentPreview?.assessment_id) return [];
+    if (!scoreSummary.assessment_id || !Object.keys(summaryModel.categoryScores || {}).length) return [];
     return [
       {
-        id: assessmentPreview.assessment_id,
+        id: scoreSummary.assessment_id,
         name: application?.candidate_name || 'Current assessment',
         _raw: {
           score_breakdown: {
-            category_scores: assessmentPreview.category_scores || {},
+            category_scores: summaryModel.categoryScores || {},
           },
         },
       },
     ];
-  }, [application?.candidate_name, assessmentPreview]);
+  }, [application?.candidate_name, scoreSummary.assessment_id, summaryModel.categoryScores]);
 
-  const strongestLabel = assessmentPreview?.strongest_dimension
-    ? getDimensionById(assessmentPreview.strongest_dimension).label
-    : null;
-  const weakestLabel = assessmentPreview?.weakest_dimension
-    ? getDimensionById(assessmentPreview.weakest_dimension).label
-    : null;
+  const assessmentValue = hasCompletedAssessment
+    ? formatScale100Score(summaryModel.assessmentScore, '0-100')
+    : (hasValidAssessment ? 'In progress' : 'Not started');
 
   const footer = loading ? (
     <div className="flex items-center gap-2 text-sm text-[var(--taali-muted)]">
@@ -286,31 +113,19 @@ export function CandidateScoreSummarySheet({
               type="button"
               variant="primary"
               disabled={!selectedTask || creatingAssessmentId === application.id}
-              onClick={() => onLaunchAssessment?.(
-                application,
-                selectedTask,
-                { retake: hasValidAssessment, voidReason: retakeReason }
-              )}
+              onClick={() => {
+                if (hasValidAssessment) {
+                  onOpenRetakeDialog?.(application, selectedTask);
+                  return;
+                }
+                onLaunchAssessment?.(application, selectedTask);
+              }}
             >
               {creatingAssessmentId === application.id
                 ? (hasValidAssessment ? 'Creating retake...' : 'Sending...')
                 : (hasValidAssessment ? 'Retake assessment' : 'Send assessment')}
             </Button>
           </div>
-          {hasValidAssessment ? (
-            <div>
-              <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                Void reason (optional)
-              </p>
-              <Textarea
-                value={retakeReason}
-                onChange={(event) => setRetakeReason(event.target.value)}
-                rows={3}
-                className="mt-2"
-                placeholder="Why is this attempt being replaced?"
-              />
-            </div>
-          ) : null}
         </div>
       ) : (
         <p className="text-sm text-amber-700">Link a task to this role before sending an assessment.</p>
@@ -342,6 +157,7 @@ export function CandidateScoreSummarySheet({
       onClose={onClose}
       title={application?.candidate_name || application?.candidate_email || 'Candidate summary'}
       description={application?.role_name || application?.candidate_position || 'Role scoring summary'}
+      headerContent={<CandidateSidebarHeader application={application} />}
       footer={footer}
     >
       {loading ? (
@@ -353,83 +169,82 @@ export function CandidateScoreSummarySheet({
           Candidate summary unavailable.
         </Panel>
       ) : (
-        <div className="space-y-5">
-          <Panel className="border-2 border-[var(--taali-purple)] bg-[#151122] p-5 text-white">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/60">TAALI Score</p>
-                <p className="mt-2 text-5xl font-bold text-[var(--taali-purple)]">{formatScore(scoreSummary.taali_score)}</p>
-              </div>
-              <div className="space-y-2 text-right">
-                <Badge variant={mode.variant}>{mode.label}</Badge>
-                <p className="max-w-[260px] text-sm text-white/70">{scoreSummary.formula_label || 'Current recruiter-facing score.'}</p>
+        <div className="space-y-4">
+          <CandidateSidebarScoreHero
+            application={application}
+            score={summaryModel.taaliScore}
+            scoreDetails={{ score_scale: '0-100' }}
+            mode={mode}
+            sourceMeta={summaryModel.source}
+            caption={summaryModel.source.formulaLabel}
+          />
+
+          <CandidateStatusSnapshot application={application} />
+
+          <Panel className="overflow-hidden p-0">
+            <div className="border-b border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-4 py-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Assessment score</p>
+                  <p className="mt-2 taali-display text-3xl font-semibold text-[var(--taali-text)]">{assessmentValue}</p>
+                </div>
+                <Badge variant={hasCompletedAssessment ? 'purple' : (hasValidAssessment ? 'warning' : 'muted')}>
+                  {hasCompletedAssessment ? 'Completed' : (hasValidAssessment ? 'Active attempt' : 'Awaiting assessment')}
+                </Badge>
               </div>
             </div>
-          </Panel>
 
-          <div className="grid gap-3 md:grid-cols-3">
-            <ScoreCard label="Assessment Score" value={formatScore(scoreSummary.assessment_score)} />
-            <ScoreCard label="CV Fit" value={formatScore(scoreSummary.cv_fit_score)} />
-            <ScoreCard label="Requirements Fit" value={formatScore(scoreSummary.requirements_fit_score)} />
-          </div>
+            <div className="space-y-4 px-4 py-4">
+              {completedAssessmentLoading ? (
+                <div className="flex items-center gap-2 text-sm text-[var(--taali-muted)]">
+                  <Spinner size={16} />
+                  Refreshing completed assessment detail...
+                </div>
+              ) : null}
 
-          <Panel className="p-4">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role status</p>
-                <p className="mt-1 text-sm text-[var(--taali-text)]">
-                  {application.status || 'applied'}
-                  {application.workable_stage ? ` • ${application.workable_stage}` : ''}
-                </p>
-              </div>
-              <p className="text-xs text-[var(--taali-muted)]">Updated {formatDateTime(application.updated_at || application.created_at)}</p>
-            </div>
+              <p className="text-sm leading-6 text-[var(--taali-text)]">{summaryModel.heuristicSummary}</p>
 
-            {hasCompletedAssessment && assessmentPreview ? (
-              <div className="space-y-4">
+              {hasCompletedAssessment ? (
                 <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_240px]">
-                  <div>
-                    <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Assessment summary</p>
-                    <p className="mt-2 text-sm leading-6 text-[var(--taali-text)]">
-                      {assessmentPreview.heuristic_summary || 'Assessment completed. Review the dimension breakdown and strongest areas before moving this candidate forward.'}
-                    </p>
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <ScoreCard label="Strongest dimension" value={strongestLabel || '—'} />
-                      <ScoreCard label="Weakest dimension" value={weakestLabel || '—'} />
+                  <div className="space-y-4">
+                    <div className="grid gap-3 sm:grid-cols-2">
+                      <InfoCard label="Strongest dimension" value={summaryModel.strongestLabel} />
+                      <InfoCard label="Weakest dimension" value={summaryModel.weakestLabel} />
                     </div>
                     {scoreSummary.mode === 'assessment_only_fallback' ? (
-                      <p className="mt-3 text-sm text-amber-700">
-                        CV fit unavailable for this completed attempt; TAALI Score currently reflects assessment only.
+                      <p className="text-sm text-amber-700">
+                        CV fit was unavailable on the completed attempt, so TAALI score reflects assessment evidence only.
                       </p>
                     ) : null}
                   </div>
-                  <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] p-3">
-                    <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Assessment chart</p>
-                    <ComparisonRadar assessments={currentAssessmentPreview} highlightAssessmentId={assessmentPreview.assessment_id} className="-mx-3" />
-                  </div>
+                  {currentAssessmentPreview.length > 0 ? (
+                    <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] p-3">
+                      <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Assessment chart</p>
+                      <ComparisonRadar
+                        assessments={currentAssessmentPreview}
+                        highlightAssessmentId={scoreSummary.assessment_id}
+                        showLegend={false}
+                        height={220}
+                        className="-mx-1"
+                      />
+                    </div>
+                  ) : null}
                 </div>
-
-                <div className="grid gap-4 md:grid-cols-2">
-                  <div className="md:col-span-2">
-                    <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Why this score</p>
-                  </div>
-                  <ReasonList title="CV fit rationale" items={scoreWhy.cvFit} />
-                  <ReasonList title="Requirements fit" items={scoreWhy.additionalRequirementsFit} />
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Why this score</p>
-                <ReasonList title="CV fit" items={scoreWhy.cvFit} />
-                <ReasonList title="Additional requirements fit" items={scoreWhy.additionalRequirementsFit} />
-                {scoreWhy.cvFit.length === 0 && scoreWhy.additionalRequirementsFit.length === 0 ? (
-                  <p className="text-sm text-[var(--taali-muted)]">
-                    CV-fit rationale is not available yet. Upload a CV or generate role-fit scoring to populate this summary.
-                  </p>
-                ) : null}
-              </div>
-            )}
+              ) : (
+                <p className="text-sm text-[var(--taali-muted)]">
+                  {hasValidAssessment
+                    ? `Current assessment is ${toAssessmentStatusText(scoreSummary.assessment_status)}. Until it completes, TAALI continues to reflect application CV fit.`
+                    : 'No completed assessment exists yet for this role. TAALI currently reflects application CV fit and recruiter requirements evidence.'}
+                </p>
+              )}
+            </div>
           </Panel>
+
+          <RoleFitEvidenceSections
+            model={roleFitModel}
+            variant="compact"
+            emptyMessage="This candidate does not have role-fit evidence yet."
+          />
 
           <Panel className="p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
@@ -453,7 +268,7 @@ export function CandidateScoreSummarySheet({
                             {item.is_voided ? <Badge variant="warning">Voided</Badge> : <Badge variant="muted">Current</Badge>}
                           </div>
                           <p className="mt-1 text-sm text-[var(--taali-muted)]">
-                            Status: {String(item.status || 'pending').replace(/_/g, ' ')}
+                            Status: {toAssessmentStatusText(item.status)}
                             {item.completed_at ? ` • Completed ${formatDateTime(item.completed_at)}` : ''}
                             {!item.completed_at && item.created_at ? ` • Created ${formatDateTime(item.created_at)}` : ''}
                           </p>
@@ -462,7 +277,7 @@ export function CandidateScoreSummarySheet({
                           ) : null}
                         </div>
                         <div className="space-y-2 text-right">
-                          <p className="font-mono text-sm text-[var(--taali-text)]">TAALI {formatScore(item.taali_score)}</p>
+                          <p className="font-mono text-sm text-[var(--taali-text)]">TAALI {formatScale100Score(item.taali_score, '0-100')}</p>
                           {canViewItem ? (
                             <Button
                               type="button"

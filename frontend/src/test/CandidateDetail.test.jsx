@@ -241,7 +241,7 @@ describe('CandidateDetailPage', () => {
   it('renders score badge with recommendation', async () => {
     await renderCandidateDetail();
     // Final score is 85 => STRONG HIRE
-    expect(screen.getByText('85')).toBeInTheDocument();
+    expect(screen.getAllByText('85.0').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText('STRONG HIRE')).toBeInTheDocument();
   });
 
@@ -313,9 +313,9 @@ describe('CandidateDetailPage', () => {
     fireEvent.click(screen.getByText('CV & Fit'));
 
     await waitFor(() => {
-      expect(screen.getByText('Overall Match')).toBeInTheDocument();
-      expect(screen.getByText('Skills Match')).toBeInTheDocument();
+      expect(screen.getAllByText('CV fit').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Experience')).toBeInTheDocument();
+      expect(screen.getByText('Why this score')).toBeInTheDocument();
     });
   });
 
@@ -325,7 +325,7 @@ describe('CandidateDetailPage', () => {
     fireEvent.click(screen.getByText('CV & Fit'));
 
     await waitFor(() => {
-      expect(screen.getByText('Matching Skills')).toBeInTheDocument();
+      expect(screen.getByText('Matching skills')).toBeInTheDocument();
       expect(screen.getByText('Python')).toBeInTheDocument();
       expect(screen.getByText('AsyncIO')).toBeInTheDocument();
     });
@@ -337,7 +337,7 @@ describe('CandidateDetailPage', () => {
     fireEvent.click(screen.getByText('CV & Fit'));
 
     await waitFor(() => {
-      expect(screen.getByText('Missing Skills')).toBeInTheDocument();
+      expect(screen.getByText('Gaps')).toBeInTheDocument();
       expect(screen.getByText('Kubernetes')).toBeInTheDocument();
       expect(screen.getByText('Terraform')).toBeInTheDocument();
     });
@@ -350,7 +350,7 @@ describe('CandidateDetailPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Why this score')).toBeInTheDocument();
-      expect(screen.getByText(/Composite fit 74.2\/100/)).toBeInTheDocument();
+      expect(screen.getByText(/Composite fit 74\.2 from skills 78\.8, experience 71\.5, recruiter requirements 69\.0\./)).toBeInTheDocument();
       expect(screen.getByText(/Recruiter requirements coverage: 2\/3 met/)).toBeInTheDocument();
     });
   });
@@ -450,7 +450,7 @@ describe('CandidateDetailPage', () => {
   it('renders test results when available', async () => {
     await renderCandidateDetail();
 
-    expect(screen.getByText('Test Results')).toBeInTheDocument();
+    expect(screen.getByText('Test results')).toBeInTheDocument();
     expect(screen.getByText('Pipeline Processing')).toBeInTheDocument();
     expect(screen.getByText('Error Handling')).toBeInTheDocument();
   });
