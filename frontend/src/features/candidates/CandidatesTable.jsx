@@ -329,7 +329,7 @@ export const CandidatesTable = ({
         ) : null}
       </div>
 
-      <TableShell className="max-h-[74vh]">
+      <TableShell className="max-h-[70vh]">
         <table className="w-full table-fixed min-w-[900px]">
           <thead>
             <tr className="text-left text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">
@@ -339,11 +339,11 @@ export const CandidatesTable = ({
                   ? 'sticky left-0 top-0 z-30 bg-[var(--taali-table-header)]'
                   : 'sticky top-0 z-20 bg-[var(--taali-table-header)]';
                 const widthClass = {
-                  candidate: 'w-[228px]',
-                  cv: 'w-[124px]',
-                  taali_ai: 'w-[116px]',
-                  send: 'w-[158px]',
-                  workable_stage: 'w-[138px]',
+                  candidate: 'w-[250px]',
+                  cv: 'w-[140px]',
+                  taali_ai: 'w-[126px]',
+                  send: 'w-[170px]',
+                  workable_stage: 'w-[150px]',
                   workable_candidate_id: 'w-[200px]',
                   status: 'w-[128px]',
                   headline: 'w-[200px]',
@@ -425,7 +425,7 @@ export const CandidatesTable = ({
                               <CandidateAvatar
                                 name={application.candidate_name}
                                 imageUrl={application.candidate_image_url}
-                                size={26}
+                                size={28}
                               />
                               <div className="min-w-0 flex-1">
                                 <button
@@ -548,7 +548,7 @@ export const CandidatesTable = ({
                       if (column === 'taali_ai') {
                         const taaliScore = getTaaliScorePayload(application);
                         return (
-                          <td key={column} className="px-2.5 py-1.5">
+                          <td key={column} className="px-3 py-2">
                             <div className="flex flex-col items-center gap-2 text-center">
                               <CandidateScoreRing
                                 score={taaliScore.score}
@@ -670,7 +670,7 @@ export const CandidatesTable = ({
       </TableShell>
 
       {totalFiltered > PAGE_SIZE ? (
-        <div className="flex items-center justify-between border-t border-[var(--taali-border)] pt-2.5 font-mono text-xs text-[var(--taali-muted)]">
+        <div className="flex items-center justify-between border-t border-[var(--taali-border)] pt-3 font-mono text-xs text-[var(--taali-muted)]">
           <span>
             Showing {startIndex + 1}-{Math.min(startIndex + PAGE_SIZE, totalFiltered)} of {totalFiltered}
           </span>

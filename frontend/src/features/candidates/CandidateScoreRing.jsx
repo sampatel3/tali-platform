@@ -1,13 +1,13 @@
 import React from 'react';
 
 import { cx } from '../../shared/ui/TaaliPrimitives';
-import { formatCvScore100, toCvScore100 } from './candidatesUiUtils';
+import { formatScale100Score } from '../../lib/scoreDisplay';
+import { toCvScore100 } from './candidatesUiUtils';
 
 const formatInnerValue = (value) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return '—';
-  const rounded = Math.round(numeric * 10) / 10;
-  return Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1);
+  return numeric.toFixed(1);
 };
 
 export function CandidateScoreRing({
@@ -27,7 +27,7 @@ export function CandidateScoreRing({
   const ringColor = normalized == null ? 'var(--taali-border)' : 'var(--taali-purple)';
   const ariaLabel = normalized == null
     ? `${label}: unavailable`
-    : `${label}: ${formatCvScore100(normalized, { score_scale: '0-100' })}`;
+    : `${label}: ${formatScale100Score(normalized, '0-100')}`;
 
   return (
     <div

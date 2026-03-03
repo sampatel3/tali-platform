@@ -31,9 +31,9 @@ export function CandidateStatusSnapshot({ application, title = 'General status' 
   ];
 
   return (
-    <Panel className="p-3.5">
-      <p className="mb-2.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{title}</p>
-      <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+    <Panel className="p-4">
+      <p className="mb-3 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{title}</p>
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         {items.map((item) => (
           <InfoCard key={item.label} label={item.label} value={item.value} />
         ))}

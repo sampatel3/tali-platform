@@ -2,12 +2,12 @@ import React from 'react';
 import { BRAND } from '../../config/brand';
 
 export const BrandGlyph = ({
-  borderClass = 'border-[var(--taali-border)]',
+  borderClass = 'border-[var(--taali-border-soft)]',
   sizeClass = 'w-10 h-10',
   markSizeClass = 'w-[1.8rem] h-[1.8rem]',
 }) => (
   <div
-    className={`${sizeClass} border-2 ${borderClass} flex items-center justify-center bg-[var(--taali-purple)]`}
+    className={`${sizeClass} ${borderClass} flex items-center justify-center rounded-2xl border bg-[linear-gradient(145deg,var(--taali-purple),#6f53ff)] shadow-[var(--taali-shadow-soft)]`}
     aria-hidden="true"
   >
     <svg viewBox="0 0 24 24" className={markSizeClass} fill="none">
@@ -22,8 +22,8 @@ export const BrandGlyph = ({
 );
 
 export const Logo = ({ onClick }) => (
-  <div className="flex items-center gap-2 cursor-pointer" onClick={onClick}>
+  <div className="flex cursor-pointer items-center gap-3" onClick={onClick}>
     <BrandGlyph />
-    <span className="text-xl font-bold tracking-tight">{BRAND.name}</span>
+    <span className="taali-display text-xl font-semibold tracking-tight text-[var(--taali-text)]">{BRAND.name}</span>
   </div>
 );

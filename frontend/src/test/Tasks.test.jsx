@@ -102,7 +102,7 @@ const mockTasks = [
     is_template: false,
     starter_code: 'async function process() {}',
     test_code: 'test("works", () => {});',
-    task_key: 'data_eng_super_platform_crisis',
+    task_key: 'data_eng_aws_glue_pipeline_recovery',
     role: 'data_engineer',
     scenario: 'Compliance audit needs full history and schema keeps changing.',
     repo_structure: { files: { 'pipeline/main.py': 'print("ok")' } },

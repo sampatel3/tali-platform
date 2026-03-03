@@ -83,7 +83,7 @@ export const AssessmentInviteSheet = ({
               No CV uploaded. Role fit scoring (CV ↔ Job) will show N/A until a CV is added.
             </Card>
           ) : null}
-          <Card className="bg-[#faf8ff] px-3 py-2 text-sm text-gray-700">
+          <Card className="bg-[var(--taali-surface-subtle)] px-3 py-2 text-sm text-gray-700">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <div className="font-semibold text-gray-900">Candidate</div>

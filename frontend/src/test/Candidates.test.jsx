@@ -403,7 +403,7 @@ describe('CandidatesPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Match Candidate')).toBeInTheDocument();
-      expect(screen.getByRole('img', { name: /TAALI Score for Match Candidate: 82\/100/i })).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: /TAALI Score for Match Candidate: 82\.0/i })).toBeInTheDocument();
     });
   });
 
@@ -470,13 +470,13 @@ describe('CandidatesPage', () => {
       expect(within(dialog).getByText('Requirements fit')).toBeInTheDocument();
       expect(within(dialog).getByText('Pipeline status')).toBeInTheDocument();
       expect(within(dialog).queryByText('Workable stage')).not.toBeInTheDocument();
-      expect(within(dialog).getByText('CV evidence')).toBeInTheDocument();
-      expect(within(dialog).getByText('Requirements evidence')).toBeInTheDocument();
-      expect(within(dialog).getByText(/Strong skill alignment:/)).toBeInTheDocument();
-      expect(within(dialog).getByText(/Additional requirements fit score:/)).toBeInTheDocument();
-      expect(within(dialog).getByText(/Met: Enterprise production experience because/)).toBeInTheDocument();
-      expect(within(dialog).getByText(/Partially met: Compensation alignment to role band because/)).toBeInTheDocument();
-      expect(within(dialog).queryByText(/Matched recruiter requirements:/)).not.toBeInTheDocument();
+      expect(within(dialog).getByText('Why this score')).toBeInTheDocument();
+      expect(within(dialog).getByText('Recruiter requirements fit')).toBeInTheDocument();
+      expect(within(dialog).getAllByText(/Matched recruiter requirements:/).length).toBeGreaterThanOrEqual(1);
+      expect(within(dialog).getByText(/Recruiter requirements coverage: 2\/2 met/)).toBeInTheDocument();
+      expect(within(dialog).getByText('Matching skills')).toBeInTheDocument();
+      expect(within(dialog).getByText('Enterprise production experience')).toBeInTheDocument();
+      expect(within(dialog).getByText('Compensation alignment to role band')).toBeInTheDocument();
     });
   });
 

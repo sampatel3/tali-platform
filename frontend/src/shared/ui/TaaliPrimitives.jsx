@@ -72,7 +72,7 @@ export const PageHeader = ({
   <header className={cx('taali-page-header', density === 'compact' ? 'taali-page-header-compact' : '', className)}>
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div>
-        {title ? <h1 className="taali-page-title text-3xl font-bold tracking-tight">{title}</h1> : null}
+        {title ? <h1 className="taali-page-title taali-display text-3xl font-semibold tracking-tight">{title}</h1> : null}
         {subtitle ? <p className="taali-page-subtitle mt-1 text-sm text-[var(--taali-muted)]">{subtitle}</p> : null}
       </div>
       {actions ? <div className="flex flex-wrap items-center gap-2">{actions}</div> : null}
@@ -276,7 +276,7 @@ export const Sheet = ({
 
   return (
     <div
-      className={cx('fixed inset-0 z-50 bg-black/55', overlayClassName)}
+      className={cx('fixed inset-0 z-50 bg-[rgba(12,18,32,0.38)] backdrop-blur-sm', overlayClassName)}
       onMouseDown={(event) => {
         if (event.target === event.currentTarget) onClose();
       }}
@@ -288,19 +288,19 @@ export const Sheet = ({
         aria-label={title}
         tabIndex={-1}
         className={cx(
-          'absolute inset-x-0 bottom-0 max-h-[92vh] border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] focus:outline-none md:inset-y-0 md:h-full md:max-h-none md:w-[640px] md:border-t-0',
+          'absolute inset-x-0 bottom-0 flex max-h-[92vh] flex-col overflow-hidden border border-[var(--taali-border-soft)] bg-[var(--taali-surface-elevated)] shadow-[var(--taali-shadow-strong)] focus:outline-none motion-safe:animate-[taali-sheet-in_180ms_ease-out] md:inset-y-3 md:h-[calc(100%-1.5rem)] md:max-h-none md:w-[680px] md:rounded-[var(--taali-radius-panel)]',
           side === 'left'
-            ? 'md:left-0 md:right-auto md:border-r-2 md:border-l-0'
-            : 'md:right-0 md:left-auto md:border-l-2',
+            ? 'md:left-3 md:right-auto'
+            : 'md:right-3 md:left-auto',
           panelClassName
         )}
       >
-        <div className={cx('sticky top-0 z-10 border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-5 py-4', headerClassName)}>
+        <div className={cx('border-b border-[var(--taali-border-soft)] bg-[rgba(255,255,255,0.84)] px-5 py-4 backdrop-blur-sm', headerClassName)}>
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
               {headerContent || (
                 <>
-                  <h2 className="text-xl font-bold tracking-tight">{title}</h2>
+                  <h2 className="taali-display text-xl font-semibold tracking-tight">{title}</h2>
                   {description ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{description}</p> : null}
                 </>
               )}
@@ -318,16 +318,131 @@ export const Sheet = ({
           </div>
         </div>
         <div
-          className={cx('overflow-y-auto px-5 py-5', bodyClassName)}
-          style={{ maxHeight: footer ? 'calc(92vh - 150px)' : 'calc(92vh - 96px)' }}
+          className={cx('min-h-0 flex-1 overflow-y-auto px-5 py-5', bodyClassName)}
         >
           {children}
         </div>
         {footer ? (
-          <div className={cx('sticky bottom-0 border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-5 py-4', footerClassName)}>
+          <div className={cx('border-t border-[var(--taali-border-soft)] bg-[rgba(255,255,255,0.9)] px-5 py-4 backdrop-blur-sm', footerClassName)}>
             {footer}
           </div>
         ) : null}
+      </div>
+    </div>
+  );
+};
+
+export const Dialog = ({
+  open,
+  onClose,
+  title,
+  description,
+  children,
+  footer = null,
+  headerClassName = '',
+  bodyClassName = '',
+  footerClassName = '',
+  panelClassName = '',
+  overlayClassName = '',
+}) => {
+  const panelRef = useRef(null);
+  const previousFocusRef = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    previousFocusRef.current = document.activeElement;
+    lockBodyScrollForSheet();
+
+    const focusables = panelRef.current?.querySelectorAll(FOCUSABLE_SELECTOR);
+    if (focusables && focusables.length > 0) {
+      focusables[0].focus();
+    } else {
+      panelRef.current?.focus();
+    }
+
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+      if (event.key !== 'Tab') return;
+      const items = panelRef.current?.querySelectorAll(FOCUSABLE_SELECTOR);
+      if (!items || items.length === 0) {
+        event.preventDefault();
+        return;
+      }
+      const first = items[0];
+      const last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
+    };
+
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown);
+      unlockBodyScrollForSheet();
+      if (previousFocusRef.current && typeof previousFocusRef.current.focus === 'function') {
+        previousFocusRef.current.focus();
+      }
+    };
+  }, [onClose, open]);
+
+  if (!open) return null;
+
+  return (
+    <div
+      className={cx('fixed inset-0 z-[60] bg-[rgba(12,18,32,0.42)] px-4 py-6 backdrop-blur-sm', overlayClassName)}
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="flex min-h-full items-center justify-center">
+        <div
+          ref={panelRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={title}
+          tabIndex={-1}
+          className={cx(
+            'flex w-full max-w-[34rem] flex-col overflow-hidden rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-elevated)] shadow-[var(--taali-shadow-strong)] focus:outline-none motion-safe:animate-[taali-dialog-in_180ms_ease-out]',
+            panelClassName
+          )}
+        >
+          <div className={cx('border-b border-[var(--taali-border-soft)] px-5 py-4', headerClassName)}>
+            <div className="flex items-start justify-between gap-4">
+              <div className="min-w-0 flex-1">
+                <h2 className="taali-display text-xl font-semibold tracking-tight">{title}</h2>
+                {description ? <p className="mt-1 text-sm text-[var(--taali-muted)]">{description}</p> : null}
+              </div>
+              <Button
+                type="button"
+                onClick={onClose}
+                variant="ghost"
+                size="sm"
+                aria-label="Close"
+                className="!px-2 !py-2"
+              >
+                <X size={14} />
+              </Button>
+            </div>
+          </div>
+          <div className={cx('px-5 py-5', bodyClassName)}>
+            {children}
+          </div>
+          {footer ? (
+            <div className={cx('border-t border-[var(--taali-border-soft)] px-5 py-4', footerClassName)}>
+              {footer}
+            </div>
+          ) : null}
+        </div>
       </div>
     </div>
   );

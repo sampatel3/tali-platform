@@ -75,6 +75,10 @@ describe('AssessmentPage tracking metadata', () => {
     await act(async () => {
       fireEvent.click(screen.getByText('Submit'));
     });
+    await screen.findByRole('dialog');
+    await act(async () => {
+      fireEvent.click(screen.getAllByRole('button', { name: 'Submit' }).at(-1));
+    });
 
     await waitFor(() => expect(mockSubmit).toHaveBeenCalledTimes(1));
     expect(mockSubmit.mock.calls[0][3]).toMatchObject({ tab_switch_count: 1 });

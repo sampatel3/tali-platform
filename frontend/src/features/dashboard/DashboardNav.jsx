@@ -78,7 +78,7 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
   };
 
   return (
-    <nav className="taali-nav border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
+    <nav className="taali-nav sticky top-0 z-40 border-b border-[var(--taali-border-soft)] bg-[rgba(255,252,248,0.84)] backdrop-blur-md">
       <div className="mx-auto flex max-w-[92rem] items-center justify-between gap-3 px-4 py-3 md:px-5">
         <div className="flex items-center gap-6">
           <Logo onClick={() => onNavigate('assessments')} />
@@ -86,9 +86,9 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
             {NAV_ITEMS.map((item) => (
               <Button
                 key={item.id}
-                variant={currentPage === item.id ? 'primary' : 'ghost'}
+                variant={currentPage === item.id ? 'secondary' : 'ghost'}
                 size="xs"
-                className="font-mono min-w-[84px]"
+                className={currentPage === item.id ? 'min-w-[84px] !bg-[var(--taali-purple-soft)] !text-[var(--taali-text)]' : 'min-w-[84px]'}
                 onClick={() => onNavigate(item.id)}
               >
                 {item.label}
@@ -102,7 +102,7 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
             <span className="font-mono text-xs text-[var(--taali-text)]">{displayName}</span>
             <span className="font-mono text-xs text-[var(--taali-muted)]">{orgName}</span>
           </div>
-          <div className="flex h-8 w-8 items-center justify-center border-2 border-[var(--taali-border)] bg-[var(--taali-purple)] text-xs font-bold text-white">
+          <div className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,var(--taali-purple),#6b4dff)] text-xs font-bold text-white shadow-[var(--taali-shadow-soft)]">
             {initials}
           </div>
           <Button

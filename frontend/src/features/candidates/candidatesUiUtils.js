@@ -1,3 +1,5 @@
+import { formatScale100Score, normalizeScore, scoreTone100 } from '../../lib/scoreDisplay';
+
 export const parseCollection = (data) => (Array.isArray(data) ? data : (data?.items || []));
 export const formatDateTime = (value) => (value ? new Date(value).toLocaleString() : '—');
 
@@ -76,28 +78,13 @@ export const getErrorMessage = (err, fallback) => {
 };
 
 export const toCvScore100 = (score, details = null) => {
-  if (score == null) return null;
-  const numeric = Number(score);
-  if (!Number.isFinite(numeric) || numeric < 0) return null;
-  const scaleHint = String(details?.score_scale || '').trim().toLowerCase();
-  const normalized = scaleHint.includes('100')
-    ? numeric
-    : (numeric <= 10 ? numeric * 10 : numeric);
-  return Math.max(0, Math.min(100, normalized));
+  return normalizeScore(score, details?.score_scale || '');
 };
 
 export const formatCvScore100 = (score, details = null) => {
-  const normalized = toCvScore100(score, details);
-  if (normalized == null) return '—';
-  const rounded = Math.round(normalized * 10) / 10;
-  const text = Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1);
-  return `${text}/100`;
+  return formatScale100Score(score, details?.score_scale || '');
 };
 
 export const cvScoreColor = (score, details = null) => {
-  const normalized = toCvScore100(score, details);
-  if (normalized == null) return 'var(--taali-muted)';
-  if (normalized >= 75) return 'var(--taali-success)';
-  if (normalized >= 55) return 'var(--taali-warning)';
-  return 'var(--taali-danger)';
+  return scoreTone100(toCvScore100(score, details));
 };

@@ -1,22 +1,15 @@
 const demoTasks = [
   {
-    id: 'data_eng_super_platform_crisis',
-    title: 'Data Platform Incident Triage and Recovery',
-    description: 'Triage urgent data platform failures, prioritize fixes, and stabilize finance, compliance, and pipeline reliability.',
+    id: 'data_eng_aws_glue_pipeline_recovery',
+    title: 'AWS Glue Pipeline Recovery',
+    description: 'Recover a finance-critical AWS Glue revenue pipeline by fixing schema drift, dedupe, and bookmark trust issues.',
     durationLabel: '30 min',
     difficulty: 'Medium',
   },
   {
-    id: 'ai_eng_super_production_launch',
-    title: 'AI Feature Production Readiness Assessment',
-    description: 'Evaluate an AI feature prototype and make production-safe improvements across safety, reliability, and cost.',
-    durationLabel: '30 min',
-    difficulty: 'Medium',
-  },
-  {
-    id: 'full_stack_secure_feature_delivery',
-    title: 'Full-Stack Engineer - Secure Feature Delivery',
-    description: 'Ship a secure share-link feature under deadline pressure with aligned frontend and backend protections.',
+    id: 'ai_eng_genai_production_readiness',
+    title: 'GenAI Production Readiness Review',
+    description: 'Stabilize a risky GenAI launch by improving safety guardrails, degraded-mode behavior, and release judgment.',
     durationLabel: '30 min',
     difficulty: 'Medium',
   },

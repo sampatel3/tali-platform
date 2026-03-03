@@ -179,10 +179,9 @@ describe('Demo flow', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
     await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 });
 
-    expect(screen.getByRole('button', { name: /Data Platform Incident Triage and Recovery/i })).toBeInTheDocument();
-    const aiTrackButton = screen.getByRole('button', { name: /AI Feature Production Readiness Assessment/i });
+    expect(screen.getByRole('button', { name: /AWS Glue Pipeline Recovery/i })).toBeInTheDocument();
+    const aiTrackButton = screen.getByRole('button', { name: /GenAI Production Readiness Review/i });
     expect(aiTrackButton).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Full-Stack Engineer - Secure Feature Delivery/i })).toBeInTheDocument();
 
     fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'Jane Doe' } });
     fireEvent.change(screen.getByLabelText('Position'), { target: { value: 'Engineering Manager' } });
@@ -196,7 +195,7 @@ describe('Demo flow', () => {
 
     await waitFor(() => {
       expect(assessments.startDemo).toHaveBeenCalledWith(
-        expect.objectContaining({ assessment_track: 'ai_eng_super_production_launch' })
+        expect.objectContaining({ assessment_track: 'ai_eng_genai_production_readiness' })
       );
     });
   });

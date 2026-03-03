@@ -12,8 +12,8 @@ import {
 import { CardSkeleton } from '../../shared/ui/Skeletons';
 
 export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole, onCreateRole, onRefresh }) => (
-  <Panel className="flex max-h-[calc(100vh-170px)] flex-col p-3">
-    <div className="mb-2.5 flex shrink-0 items-center justify-between">
+  <Panel className="flex max-h-[calc(100vh-180px)] flex-col p-3.5">
+    <div className="mb-3 flex items-center justify-between shrink-0">
       <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-gray-600">
         Roles
         {roles.length > 0 ? ` (${roles.length})` : ''}
@@ -59,7 +59,7 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
     ) : null}
 
     {!loading && !error && roles.length > 0 ? (
-      <ul className="min-h-0 flex-1 space-y-1.5 overflow-y-auto -mr-1 pr-1">
+      <ul className="min-h-0 flex-1 space-y-2 overflow-y-auto -mr-1 pr-1">
         {roles.map((role) => {
           const selected = String(role.id) === String(selectedRoleId);
           const specReady = Boolean(role.job_spec_present || role.job_spec_filename);
@@ -74,7 +74,7 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
                 type="button"
                 onClick={() => onSelectRole(String(role.id))}
                 className={cx(
-                  'w-full border-2 px-2.5 py-2 text-left transition',
+                  'w-full border-2 px-3 py-2.5 text-left transition',
                   selected
                     ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)]'
                     : 'border-[var(--taali-border-muted)] bg-[var(--taali-surface)] hover:border-[var(--taali-border)]'

@@ -87,7 +87,7 @@ export const CandidateSheet = ({
       ) : null}
 
       <div className="space-y-4">
-        <Card className="bg-[#faf8ff] px-3 py-2 text-sm text-gray-700">
+        <Card className="bg-[var(--taali-surface-subtle)] px-3 py-2 text-sm text-gray-700">
           <span className="font-medium">Role:</span> {role?.name || 'No role selected'}
         </Card>
 

@@ -4,6 +4,7 @@ import { CheckCircle, ClipboardList, Eye, Link2, Timer, TriangleAlert } from 'lu
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { getDocumentTitle } from '../../config/brand';
+import { formatScale100Score } from '../../lib/scoreDisplay';
 import * as apiClient from '../../shared/api';
 import { Button, PageContainer, PageHeader, Panel, TableShell } from '../../shared/ui/TaaliPrimitives';
 import { StatCardSkeleton, TableRowSkeleton } from '../../shared/ui/Skeletons';
@@ -35,14 +36,6 @@ const daysUntil = (value) => {
   if (Number.isNaN(target.getTime())) return null;
   const now = new Date();
   return Math.ceil((target.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-};
-
-const formatScore100 = (value) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '—';
-  const rounded = Math.round(numeric * 10) / 10;
-  const display = Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1);
-  return `${display}/100`;
 };
 
 const formatDate = (value) => {
@@ -264,18 +257,18 @@ export const DashboardPage = ({
       <PageContainer density="compact" width="wide">
         <PageHeader
           density="compact"
-          className="mb-5"
+          className="mb-5 bg-[linear-gradient(145deg,rgba(255,255,255,0.96),rgba(246,242,255,0.88))]"
           title="Assessments"
-          subtitle={`Welcome back, ${userName}`}
+          subtitle={`Welcome back, ${userName}. Review active invites, candidate progress, and completed assessments in one place.`}
         />
 
         {totalAssessmentsCount === 0 && !onboardingDismissed ? (
-          <div className="mb-5 border-2 border-[var(--taali-purple)] bg-[var(--taali-surface)] p-4">
+          <div className="mb-5 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,rgba(255,255,255,0.98),rgba(240,234,255,0.86))] p-5 shadow-[var(--taali-shadow-soft)]">
             <div className="mb-3 flex items-start justify-between gap-4">
-              <h2 className="text-base font-bold text-[var(--taali-text)]">Get started with TAALI</h2>
+              <h2 className="taali-display text-xl font-semibold text-[var(--taali-text)]">Get started with TAALI</h2>
               <Button variant="ghost" size="sm" onClick={dismissOnboarding}>Dismiss</Button>
             </div>
-            <ol className="space-y-1.5 font-mono text-sm text-[var(--taali-text)]">
+            <ol className="space-y-2 text-sm text-[var(--taali-text)]">
               <li>{hasRoles ? '✓' : '○'} Create a role</li>
               <li>{hasCandidates ? '✓' : '○'} Add a candidate with their CV</li>
               <li>{hasSentAssessment ? '✓' : '○'} Send them an assessment link</li>
@@ -339,9 +332,9 @@ export const DashboardPage = ({
           </div>
         )}
 
-        <Panel className="mb-4 p-4">
+        <Panel className="mb-4 bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(248,246,255,0.86))] p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-            <span className="font-mono text-xs font-bold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Filters:</span>
+            <span className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Filters</span>
             {(roleFilter || taskFilter || statusFilter) ? (
               <Button
                 type="button"
@@ -413,8 +406,8 @@ export const DashboardPage = ({
         </Panel>
 
         <TableShell>
-          <div className="flex items-center justify-between border-b-2 border-[var(--taali-border)] bg-[var(--taali-border)] px-4 py-3 text-white">
-            <h2 className="text-base font-bold">Assessment Inbox</h2>
+          <div className="flex items-center justify-between border-b border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,#181328,#242038)] px-4 py-3 text-white">
+            <h2 className="taali-display text-xl font-semibold">Assessment Inbox</h2>
             {totalAssessmentsCount > 0 ? (
               <span className="font-mono text-xs text-white/80">
                 Showing {startRow}–{endRow} of {totalAssessmentsCount}
@@ -425,7 +418,7 @@ export const DashboardPage = ({
           {loading ? (
             <table className="w-full">
               <thead>
-                <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-purple-soft)]">
+                <tr className="border-b border-[var(--taali-border-soft)] bg-[rgba(245,241,255,0.9)]">
                   {['Candidate', 'Role', 'Task', 'Status', 'TAALI Score', 'Assessment Score', 'Sent', 'Completed', 'Actions'].map((label) => (
                     <th key={label} className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase tracking-[0.08em]">{label}</th>
                   ))}
@@ -440,7 +433,7 @@ export const DashboardPage = ({
           ) : (
             <table className="w-full">
               <thead>
-                <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-purple-soft)]">
+                <tr className="border-b border-[var(--taali-border-soft)] bg-[rgba(245,241,255,0.9)]">
                   {['Candidate', 'Role', 'Task', 'Status', 'TAALI Score', 'Assessment Score', 'Sent', 'Completed', 'Actions'].map((label) => (
                     <th key={label} className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase tracking-[0.08em]">{label}</th>
                   ))}
@@ -471,10 +464,10 @@ export const DashboardPage = ({
                           <StatusBadgeComponent status={assessment.status} />
                         </td>
                         <td className="px-4 py-3 font-mono text-sm text-[var(--taali-text)]">
-                          {formatScore100(assessment.taaliScore)}
+                          {formatScale100Score(assessment.taaliScore, '0-100')}
                         </td>
                         <td className="px-4 py-3 font-mono text-sm text-[var(--taali-text)]">
-                          {formatScore100(assessment.assessmentScore)}
+                          {formatScale100Score(assessment.assessmentScore, '0-100')}
                         </td>
                         <td className="px-4 py-3 font-mono text-xs text-[var(--taali-muted)]">
                           {formatDate(assessment.inviteSentAt)}

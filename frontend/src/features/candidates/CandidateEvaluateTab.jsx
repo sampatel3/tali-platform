@@ -129,10 +129,10 @@ export const CandidateEvaluateTab = ({
       ) : null}
 
       {manualEvalSummary ? (
-        <Card className="bg-[#faf8ff] p-3">
+        <Card className="bg-[var(--taali-surface-subtle)] p-3">
           <div className="font-mono text-xs text-gray-600">
             Manual overall score:{' '}
-            <span className="font-bold text-black">
+            <span className="font-bold text-[var(--taali-text)]">
               {manualEvalSummary.overall_score != null ? `${manualEvalSummary.overall_score}/10` : '—'}
             </span>
             {manualEvalSummary.completed_due_to_timeout ? (
@@ -142,7 +142,7 @@ export const CandidateEvaluateTab = ({
         </Card>
       ) : null}
 
-      <Panel className="bg-[#fcfbff] p-4">
+      <Panel className="bg-[var(--taali-surface-muted)] p-4">
         <div className="mb-2 font-mono text-xs font-bold text-gray-600">Manual rubric evaluation (excellent / good / poor). Add evidence per category.</div>
 
         {categories.length === 0 ? (
@@ -161,7 +161,7 @@ export const CandidateEvaluateTab = ({
                   };
               const hasCriteria = Boolean(criteria.excellent || criteria.good || criteria.poor);
               return (
-                <Card key={key} className="mb-3 bg-white p-3 last:mb-0">
+                <Card key={key} className="mb-3 bg-[var(--taali-surface)] p-3 last:mb-0">
                   <div className="mb-2 flex items-center justify-between">
                     <span className="font-mono text-sm font-bold capitalize">{String(key).replace(/_/g, ' ')}</span>
                     <Badge variant="muted" className="font-mono text-[11px]">{weight}%</Badge>
@@ -246,7 +246,7 @@ export const CandidateEvaluateTab = ({
         </Panel>
       ) : null}
 
-      <Panel className="bg-[#fcfbff] p-4">
+      <Panel className="bg-[var(--taali-surface-muted)] p-4">
         <div className="mb-2 font-mono text-xs font-bold text-gray-600">Summary notes</div>
         <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
           <div>
@@ -277,7 +277,7 @@ export const CandidateEvaluateTab = ({
         ) : (
           <div className="max-h-64 space-y-2 overflow-y-auto">
             {prompts.map((p, i) => (
-              <Card key={i} className="bg-white p-2">
+              <Card key={i} className="bg-[var(--taali-surface)] p-2">
                 <div className="mb-1 font-mono text-xs text-gray-600">Prompt {i + 1}</div>
                 <div className="font-mono text-xs text-gray-800">
                   {(typeof p.message === 'string' ? p.message : (p.message?.content ?? JSON.stringify(p.message)) || '').slice(0, 200)}...
