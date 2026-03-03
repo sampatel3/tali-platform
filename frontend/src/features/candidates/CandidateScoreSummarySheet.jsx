@@ -35,17 +35,6 @@ const toAssessmentStatusText = (status) => {
   return cleaned.replace(/_/g, ' ');
 };
 
-const toDimensionLabel = (dimensionId) => {
-  const dimension = getDimensionById(dimensionId);
-  return dimension?.label || compactText(dimensionId, 40) || '—';
-};
-
-const toAssessmentStatusText = (status) => {
-  const cleaned = String(status || '').trim();
-  if (!cleaned) return 'not started';
-  return cleaned.replace(/_/g, ' ');
-};
-
 export function CandidateScoreSummarySheet({
   open,
   loading,

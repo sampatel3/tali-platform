@@ -611,6 +611,9 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         inviteSentAt: created.invite_sent_at || null,
       });
       setInviteSheetOpen(true);
+      if (scoreSheetApplicationId === application.id) {
+        setScoreSheetApplicationId(null);
+      }
       return true;
     } catch (err) {
       if (!retake && err?.response?.status === 409 && err?.response?.data?.detail?.code === 'retake_required' && rolesApi?.retakeAssessment) {
