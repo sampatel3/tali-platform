@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import * as apiClient from '../../shared/api';
-import { pathForPage } from '../../app/routing';
 import { useToast } from '../../context/ToastContext';
 import { getMetricMeta, buildGlossaryFromMetadata } from '../../lib/scoringGlossary';
 import { normalizeScores } from '../../scoring/scoringDimensions';
@@ -18,6 +17,7 @@ import {
 } from '../../shared/ui/TaaliPrimitives';
 import { buildStandingCandidateReportModel } from './assessmentViewModels';
 import { CandidateAssessmentSummaryView } from './CandidateAssessmentSummaryView';
+import { buildClientReportFilenameStem } from './clientReportUtils';
 import {
   CandidateAiUsageTab,
   CandidateCodeGitTab,
@@ -448,11 +448,18 @@ export const AssessmentResultsPage = ({
     if (!assessmentId) return;
     setBusyAction('report');
     try {
-      const reportUrl = pathForPage('assessment-client-report', {
-        candidateDetailAssessmentId: assessmentId,
-        print: true,
+      const res = await assessmentsApi.downloadReport(assessmentId);
+      const blob = new Blob([res.data], {
+        type: res?.headers?.['content-type'] || 'application/pdf',
       });
-      window.open(reportUrl, '_blank', 'noopener,noreferrer');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${buildClientReportFilenameStem(roleName, candidate?.name)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     } catch (err) {
       showToast(err?.response?.data?.detail || 'Failed to download report', 'error');
     } finally {

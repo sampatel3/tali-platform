@@ -633,15 +633,28 @@ def _append_wrapped_pdf_lines(
 
 
 def _paginate_pdf_lines(lines: list[_PdfLine]) -> list[list[tuple[float, _PdfLine]]]:
+    return _paginate_pdf_lines_with_bounds(
+        lines,
+        top_baseline=_PDF_TOP_MARGIN,
+        bottom_margin=_PDF_BOTTOM_MARGIN,
+    )
+
+
+def _paginate_pdf_lines_with_bounds(
+    lines: list[_PdfLine],
+    *,
+    top_baseline: float,
+    bottom_margin: float,
+) -> list[list[tuple[float, _PdfLine]]]:
     pages: list[list[tuple[float, _PdfLine]]] = []
     current_page: list[tuple[float, _PdfLine]] = []
-    y = _PDF_TOP_MARGIN
+    y = top_baseline
 
     for line in lines:
-        if y - line.leading < _PDF_BOTTOM_MARGIN and current_page:
+        if y - line.leading < bottom_margin and current_page:
             pages.append(current_page)
             current_page = []
-            y = _PDF_TOP_MARGIN
+            y = top_baseline
         current_page.append((y, line))
         y -= line.leading
 
@@ -933,6 +946,168 @@ def _client_report_gap_items(payload: dict[str, Any]) -> list[str]:
     return _unique_text_items(items, 4)
 
 
+def _client_report_assessment_key_points(payload: dict[str, Any]) -> list[str]:
+    strengths = payload.get("strengths") if isinstance(payload.get("strengths"), list) else []
+    dimension_scores = payload.get("dimension_scores") if isinstance(payload.get("dimension_scores"), list) else []
+    prompt_count = payload.get("prompt_count")
+    tests_passed = payload.get("tests_passed")
+    tests_total = payload.get("tests_total")
+    benchmark_label = str(payload.get("benchmark_label") or "").strip()
+    integrity_note = str(payload.get("integrity_note") or "").strip()
+
+    items: list[str] = []
+    top_strengths = [str(item.get("dimension") or "").strip() for item in strengths[:3] if str(item.get("dimension") or "").strip()]
+    if top_strengths:
+        items.append(f"Strongest signals: {', '.join(top_strengths)}")
+
+    top_dimensions = [
+        f"{str(item.get('label') or '').strip()} {item.get('score')}/10"
+        for item in dimension_scores[:4]
+        if str(item.get("label") or "").strip() and item.get("score") is not None
+    ]
+    if top_dimensions:
+        items.append(f"Highest rubric scores: {', '.join(top_dimensions)}")
+
+    if isinstance(tests_total, (int, float)) and tests_total:
+        items.append(f"Test completion evidence: {int(tests_passed or 0)}/{int(tests_total)} tests passed")
+    if isinstance(prompt_count, (int, float)) and prompt_count:
+        items.append(f"AI interactions captured: {int(prompt_count)}")
+    if benchmark_label:
+        items.append(f"Benchmark position: {benchmark_label}")
+    if integrity_note and not integrity_note.lower().startswith("no integrity modifiers"):
+        items.append(integrity_note)
+
+    return _unique_text_items(items, 5)
+
+
+def _client_report_cv_page_streams(payload: dict[str, Any]) -> list[bytes]:
+    candidate_name = str(payload.get("candidate_name") or "Candidate")
+    role_name = str(payload.get("role_name") or "Role")
+    cv_filename = str(payload.get("cv_filename") or "").strip()
+    cv_text = str(payload.get("cv_text") or "").strip() or "Candidate CV text is not available for this assessment."
+
+    lines: list[_PdfLine] = []
+    _append_wrapped_pdf_lines(lines, cv_text, font="F1", size=10, leading=14, width=82)
+    page_layouts = _paginate_pdf_lines_with_bounds(
+        lines,
+        top_baseline=616,
+        bottom_margin=64,
+    )
+
+    page_streams: list[bytes] = []
+    total_pages = max(1, len(page_layouts))
+    for page_index, page in enumerate(page_layouts, start=1):
+        ops: list[str] = []
+        ops.append(_pdf_rect_top(0, 0, _A4_PAGE_WIDTH, _A4_PAGE_HEIGHT, fill_color="#FFFFFF"))
+        ops.append(_pdf_rect_top(0, 0, _A4_PAGE_WIDTH, 72, fill_color=_PDF_BRAND_PURPLE))
+
+        header_left, _ = _pdf_text_block_ops(
+            "TAALI",
+            x=40,
+            top=18,
+            width=120,
+            font="F2",
+            size=22,
+            leading=24,
+            color="#FFFFFF",
+            max_lines=1,
+        )
+        header_title, _ = _pdf_text_block_ops(
+            "Candidate CV" if page_index == 1 else "Candidate CV (continued)",
+            x=40,
+            top=44,
+            width=220,
+            font="F1",
+            size=11,
+            leading=13,
+            color="#FFFFFF",
+            max_lines=1,
+        )
+        header_right, _ = _pdf_text_block_ops(
+            f"Page {page_index + 1}",
+            x=470,
+            top=30,
+            width=85,
+            font="F2",
+            size=10,
+            leading=12,
+            color="#FFFFFF",
+            max_lines=1,
+        )
+        ops.extend(header_left)
+        ops.extend(header_title)
+        ops.extend(header_right)
+
+        name_ops, _ = _pdf_text_block_ops(
+            candidate_name,
+            x=40,
+            top=96,
+            width=320,
+            font="F2",
+            size=20,
+            leading=24,
+            color=_PDF_TEXT,
+            max_lines=1,
+        )
+        meta_ops, _ = _pdf_text_block_ops(
+            " | ".join(
+                item for item in [
+                    role_name and f"Role: {role_name}",
+                    cv_filename and f"CV: {cv_filename}",
+                ]
+                if item
+            ),
+            x=40,
+            top=124,
+            width=420,
+            font="F1",
+            size=10,
+            leading=12,
+            color=_PDF_MUTED,
+            max_lines=1,
+        )
+        ops.extend(name_ops)
+        ops.extend(meta_ops)
+        ops.append(_pdf_rect_top(40, 152, 515, 1, fill_color=_PDF_BORDER_SOFT))
+
+        for y, line in page:
+            if not line.text:
+                continue
+            ops.append(
+                " ".join(
+                    [
+                        "BT",
+                        f"/{line.font}",
+                        f"{line.size}",
+                        "Tf",
+                        _pdf_color_ops(_PDF_TEXT, fill=True),
+                        "1 0 0 1",
+                        "40",
+                        f"{y:.1f}",
+                        "Tm",
+                        f"({_pdf_escape(line.text)})",
+                        "Tj ET",
+                    ]
+                )
+            )
+
+        footer_ops, _ = _pdf_text_block_ops(
+            "TAALI | Candidate CV appendix",
+            x=40,
+            top=806,
+            width=240,
+            font="F2",
+            size=9,
+            leading=11,
+            color=_PDF_MUTED,
+            max_lines=1,
+        )
+        ops.extend(footer_ops)
+        page_streams.append("\n".join(ops).encode("latin-1", "ignore"))
+
+    return page_streams
+
+
 def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
     scores = payload.get("scores") if isinstance(payload.get("scores"), dict) else {}
     candidate_name = str(payload.get("candidate_name") or "Candidate")
@@ -944,7 +1119,7 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
     role_fit_summary = str(payload.get("role_fit_summary") or "Role-fit evidence is available for employer review.").strip()
     matching_skills = _unique_text_items(payload.get("matching_skills") or [], 4)
     gap_items = _client_report_gap_items(payload)
-    probe_items = _client_report_probe_items(payload)
+    assessment_key_points = _client_report_assessment_key_points(payload)
     completed_at = str(payload.get("completed_at") or "").strip()
     generated_at = str(payload.get("generated_at") or "").strip()
     duration_label = str(payload.get("duration_label") or "").strip()
@@ -1056,11 +1231,11 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
     ops.extend(meta_secondary_ops)
 
     summary_card_top = 196
-    summary_card_height = 176
+    summary_card_height = 208
     summary_card_width = 324
     score_card_x = 382
     score_card_width = 173
-    score_card_height = 176
+    score_card_height = 208
 
     ops.append(_pdf_rect_top(40, summary_card_top, summary_card_width, summary_card_height, fill_color=_PDF_CARD_BG, stroke_color=_PDF_BORDER_SOFT))
     summary_label_ops, _ = _pdf_text_block_ops(
@@ -1094,7 +1269,7 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
         size=11,
         leading=16,
         color=_PDF_TEXT,
-        max_lines=7,
+        max_lines=9,
     )
     ops.extend(summary_label_ops)
     ops.extend(summary_reco_ops)
@@ -1140,7 +1315,7 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
     ops.extend(
         _pdf_metric_card_ops(
             x=score_card_x + 16,
-            top=summary_card_top + 112,
+            top=summary_card_top + 140,
             width=68,
             height=48,
             label="Role fit",
@@ -1150,7 +1325,7 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
     ops.extend(
         _pdf_metric_card_ops(
             x=score_card_x + 89,
-            top=summary_card_top + 112,
+            top=summary_card_top + 140,
             width=68,
             height=48,
             label="Assessment",
@@ -1158,7 +1333,7 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
         )
     )
 
-    lower_top = 392
+    lower_top = 432
     lower_height = 320
     lower_width = 249
     gap = 18
@@ -1184,7 +1359,7 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
         size=11,
         leading=15,
         color=_PDF_TEXT,
-        max_lines=5,
+        max_lines=6,
     )
     role_fit_skills_label, _ = _pdf_text_block_ops(
         "Matching skills",
@@ -1237,11 +1412,11 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
     ops.extend(role_fit_gaps_label)
     ops.extend(role_fit_gaps_body)
 
-    probe_x = 40 + lower_width + gap
-    ops.append(_pdf_rect_top(probe_x, lower_top, lower_width, lower_height, fill_color=_PDF_CARD_BG, stroke_color=_PDF_BORDER_SOFT))
-    probe_label_ops, _ = _pdf_text_block_ops(
-        "What to probe",
-        x=probe_x + 16,
+    summary_points_x = 40 + lower_width + gap
+    ops.append(_pdf_rect_top(summary_points_x, lower_top, lower_width, lower_height, fill_color=_PDF_CARD_BG, stroke_color=_PDF_BORDER_SOFT))
+    summary_points_label_ops, _ = _pdf_text_block_ops(
+        "Assessment key points",
+        x=summary_points_x + 16,
         top=lower_top + 16,
         width=lower_width - 32,
         font="F2",
@@ -1250,31 +1425,21 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
         color=_PDF_MUTED,
         max_lines=1,
     )
-    probe_body_ops, probe_body_bottom = _pdf_text_block_ops(
-        "Use the next interview to validate the weakest evidence behind the TAALI recommendation.",
-        x=probe_x + 16,
+    summary_points_body_ops, _ = _pdf_text_block_ops(
+        "\n".join(f"- {item}" for item in assessment_key_points)
+        if assessment_key_points
+        else "- Summary key points were not available for this assessment export.",
+        x=summary_points_x + 16,
         top=lower_top + 40,
-        width=lower_width - 32,
-        font="F1",
-        size=11,
-        leading=15,
-        color=_PDF_TEXT,
-        max_lines=4,
-    )
-    probe_list_ops, _ = _pdf_text_block_ops(
-        "\n".join(f"- {item}" for item in probe_items) if probe_items else "- No specific probe areas were generated for this assessment.",
-        x=probe_x + 16,
-        top=probe_body_bottom + 14,
         width=lower_width - 32,
         font="F1",
         size=10,
         leading=14,
         color=_PDF_TEXT,
-        max_lines=9,
+        max_lines=12,
     )
-    ops.extend(probe_label_ops)
-    ops.extend(probe_body_ops)
-    ops.extend(probe_list_ops)
+    ops.extend(summary_points_label_ops)
+    ops.extend(summary_points_body_ops)
 
     footer_top = 776
     ops.append(_pdf_rect_top(40, footer_top, 515, 1, fill_color=_PDF_BORDER_SOFT))
@@ -1305,7 +1470,10 @@ def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
     ops.extend(footer_right_ops)
 
     return _build_pdf_with_dimensions(
-        ["\n".join(ops).encode("latin-1", "ignore")],
+        [
+            "\n".join(ops).encode("latin-1", "ignore"),
+            *_client_report_cv_page_streams(payload),
+        ],
         page_width=_A4_PAGE_WIDTH,
         page_height=_A4_PAGE_HEIGHT,
     )
@@ -1486,6 +1654,16 @@ def build_client_assessment_report_payload(
         "first_requirement_gap": first_requirement_gap,
         "integrity_note": _client_report_integrity_note(assessment, score_breakdown),
         "score_formula_version": score_breakdown.get("score_formula_version"),
+        "cv_filename": (
+            (assessment.application.cv_filename if getattr(assessment, "application", None) and assessment.application.cv_filename else None)
+            or (assessment.candidate.cv_filename if getattr(assessment, "candidate", None) and assessment.candidate.cv_filename else None)
+            or getattr(assessment, "cv_filename", None)
+        ),
+        "cv_text": (
+            (assessment.application.cv_text if getattr(assessment, "application", None) and assessment.application.cv_text else None)
+            or (assessment.candidate.cv_text if getattr(assessment, "candidate", None) and assessment.candidate.cv_text else None)
+            or ""
+        ),
     }
 
 

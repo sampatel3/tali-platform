@@ -498,8 +498,22 @@ describe('CandidateDetailPage', () => {
     expect(screen.getByText('Download client report')).toBeInTheDocument();
   });
 
-  it('Download client report opens the print-ready client report route', async () => {
-    const openMock = vi.spyOn(window, 'open').mockReturnValue(null);
+  it('Download client report calls report API and downloads the PDF', async () => {
+    assessmentsApi.downloadReport.mockResolvedValue({
+      data: new Blob(['pdf-content']),
+      headers: { 'content-type': 'application/pdf' },
+    });
+    const createObjectUrlMock = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:report');
+    const revokeObjectUrlMock = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const originalCreateElement = document.createElement.bind(document);
+    const anchor = originalCreateElement('a');
+    const clickMock = vi.spyOn(anchor, 'click').mockImplementation(() => {});
+    const createElementMock = vi.spyOn(document, 'createElement').mockImplementation((tagName, options) => {
+      if (String(tagName).toLowerCase() === 'a') {
+        return anchor;
+      }
+      return originalCreateElement(tagName, options);
+    });
 
     await renderCandidateDetail();
     fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));
@@ -507,10 +521,14 @@ describe('CandidateDetailPage', () => {
     fireEvent.click(screen.getByText('Download client report'));
 
     await waitFor(() => {
-      expect(openMock).toHaveBeenCalledWith('/assessments/1/client-report?print=1', '_blank', 'noopener,noreferrer');
+      expect(assessmentsApi.downloadReport).toHaveBeenCalledWith(1);
+      expect(createObjectUrlMock).toHaveBeenCalled();
+      expect(clickMock).toHaveBeenCalled();
     });
 
-    openMock.mockRestore();
+    createElementMock.mockRestore();
+    createObjectUrlMock.mockRestore();
+    revokeObjectUrlMock.mockRestore();
   });
 
   it('Delete button exists and calls remove API after confirm', async () => {

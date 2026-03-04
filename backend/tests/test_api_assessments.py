@@ -879,6 +879,15 @@ def test_recruiter_report_pdf_is_client_facing_and_wrapped(client):
                 },
             },
         }
+        assert assessment.candidate is not None
+        assessment.candidate.cv_filename = "jane-doe-cv.pdf"
+        assessment.candidate.cv_text = (
+            "Jane Doe\n"
+            "Senior data engineer with production ownership across Python, Airflow, and AWS.\n\n"
+            "Experience\n"
+            "- Led production migration programs with measurable delivery ownership.\n"
+            "- Shipped batch data systems and incident response workflows.\n"
+        )
         db.commit()
 
     resp = client.get(f"/api/v1/assessments/{assessment_id}/report.pdf", headers=env["headers"])
@@ -887,20 +896,26 @@ def test_recruiter_report_pdf_is_client_facing_and_wrapped(client):
     assert 'filename="Role-Jane Doe.pdf"' in resp.headers["content-disposition"]
 
     reader = PdfReader(io.BytesIO(resp.content))
-    assert len(reader.pages) == 1
-    extracted_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    assert len(reader.pages) == 2
+    first_page_text = reader.pages[0].extract_text() or ""
+    second_page_text = reader.pages[1].extract_text() or ""
+    extracted_text = "\n".join([first_page_text, second_page_text])
     assert "TAALI" in extracted_text
-    assert "Client Assessment Summary" in extracted_text
-    assert "TAALI score" in extracted_text
-    assert "Role fit" in extracted_text
-    assert "Assessment" in extracted_text
-    assert "Role fit summary" in extracted_text
-    assert "What to probe" in extracted_text
-    assert "Strong platform and data" in extracted_text
-    assert "engineering background" in extracted_text
+    assert "Client Assessment Summary" in first_page_text
+    assert "TAALI score" in first_page_text
+    assert "Role fit" in first_page_text
+    assert "Assessment" in first_page_text
+    assert "Role fit summary" in first_page_text
+    assert "Assessment key points" in first_page_text
+    assert "What to probe" not in extracted_text
+    assert "Strong platform and data" in first_page_text
+    assert "engineering background" in first_page_text
+    assert "Candidate CV" in second_page_text
+    assert "Jane Doe" in second_page_text
+    assert "Senior data engineer with production ownership" in second_page_text
     assert "Score model" not in extracted_text
-    assert "CV fit" not in extracted_text
-    assert "Requirements fit" not in extracted_text
+    assert "CV fit" not in first_page_text
+    assert "Requirements fit" not in first_page_text
 
 
 def test_report_benchmark_filter_avoids_timeout_enum_literal():

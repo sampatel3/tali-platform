@@ -90,6 +90,7 @@ def download_assessment_report_pdf(
             joinedload(Assessment.candidate),
             joinedload(Assessment.task),
             joinedload(Assessment.role),
+            joinedload(Assessment.application),
             joinedload(Assessment.organization),
         )
         .filter(

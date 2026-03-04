@@ -53,9 +53,6 @@ const CandidatesPage = lazy(() =>
 const CandidateStandingReportPage = lazy(() =>
   import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
 );
-const CandidateClientReportPage = lazy(() =>
-  import('./features/candidates/CandidateClientReportPage').then((m) => ({ default: m.CandidateClientReportPage }))
-);
 const TasksPage = lazy(() =>
   import('./features/tasks/TasksPage').then((m) => ({ default: m.TasksPage }))
 );
@@ -375,15 +372,6 @@ function AppContent() {
             </Suspense>
           )
         }
-      />
-
-      <Route
-        path="/assessments/:assessmentId/client-report"
-        element={(
-          <Suspense fallback={lazyFallback}>
-            <CandidateClientReportPage onNavigate={navigateToPage} />
-          </Suspense>
-        )}
       />
 
       <Route
