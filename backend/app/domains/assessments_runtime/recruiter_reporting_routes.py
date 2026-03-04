@@ -17,9 +17,8 @@ from ...services.ai_assisted_evaluator import generate_ai_suggestions
 from ...services.candidate_feedback_engine import (
     build_candidate_feedback_payload,
     build_client_assessment_report_payload,
-    build_client_assessment_report_text,
+    build_client_assessment_summary_pdf,
     build_interview_debrief_payload,
-    build_wrapped_text_pdf,
 )
 from ...services.evaluation_result_service import (
     build_evaluation_result,
@@ -110,13 +109,7 @@ def download_assessment_report_pdf(
         assessment,
         organization_name=organization_name,
     )
-    body_text = build_client_assessment_report_text(payload)
-    subtitle = f"{candidate_name} | {payload.get('role_name') or payload.get('task_name') or 'Assessment'}"
-    final_pdf = build_wrapped_text_pdf(
-        body_text,
-        title="TAALI Client Assessment Report",
-        subtitle=subtitle,
-    )
+    final_pdf = build_client_assessment_summary_pdf(payload)
     filename = f"taali-client-report-{_report_slug(candidate_name)}.pdf"
     return Response(
         content=final_pdf,

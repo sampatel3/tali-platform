@@ -6,6 +6,7 @@ import {
   buildStandingCandidateReportModel,
   COMPLETED_ASSESSMENT_STATUSES,
 } from './assessmentViewModels';
+import { CandidateAssessmentSummaryView } from './CandidateAssessmentSummaryView';
 import { CandidateSidebarHeader } from './CandidateSidebarHeader';
 import { formatDateTime } from './candidatesUiUtils';
 import { CandidateReportView } from './CandidateReportView';
@@ -45,12 +46,16 @@ export function CandidateScoreSummarySheet({
   const scoreSummary = application?.score_summary || {};
   const assessmentHistory = Array.isArray(application?.assessment_history) ? application.assessment_history : [];
   const hasCv = Boolean(application?.cv_filename || application?.cv_text);
+  const hasCompletedAssessment = Boolean(
+    completedAssessment
+    && COMPLETED_ASSESSMENT_STATUSES.has(String(completedAssessment.status || '').toLowerCase())
+  );
   const reportModel = buildStandingCandidateReportModel({
     application,
     completedAssessment,
     identity: {
       assessmentId: completedAssessment?.id || scoreSummary.assessment_id || application?.valid_assessment_id || null,
-      sectionLabel: 'Standing candidate report',
+      sectionLabel: hasCompletedAssessment ? 'Assessment results' : 'Standing candidate report',
       name: application?.candidate_name || application?.candidate_email || 'Candidate',
       email: application?.candidate_email || '',
       position: application?.candidate_position || '',
@@ -60,7 +65,6 @@ export function CandidateScoreSummarySheet({
       completedLabel: completedAssessment?.completed_at ? formatDateTime(completedAssessment.completed_at) : '',
     },
   });
-  const hasCompletedAssessment = reportModel.hasCompletedAssessment;
   const resolvedAssessmentId = completedAssessment?.id || scoreSummary.assessment_id || application?.valid_assessment_id || null;
   const hasValidAssessment = Boolean(application?.valid_assessment_id || resolvedAssessmentId);
 
@@ -150,7 +154,11 @@ export function CandidateScoreSummarySheet({
             </div>
           ) : null}
 
-          <CandidateReportView model={reportModel} variant="sheet" />
+          {hasCompletedAssessment ? (
+            <CandidateAssessmentSummaryView reportModel={reportModel} variant="sheet" />
+          ) : (
+            <CandidateReportView model={reportModel} variant="sheet" />
+          )}
 
           <Panel className="p-4">
             <div className="mb-3 flex items-center justify-between gap-2">

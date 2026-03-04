@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ...platform.database import get_db
@@ -63,6 +64,17 @@ def _is_completed(assessment: Assessment) -> bool:
         AssessmentStatus.COMPLETED.value,
         AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT.value,
     }
+
+
+def _completed_assessment_filter():
+    return and_(
+        Assessment.completed_at.isnot(None),
+        Assessment.is_voided.is_(False),
+        or_(
+            Assessment.status == AssessmentStatus.COMPLETED,
+            Assessment.completed_due_to_timeout.is_(True),
+        ),
+    )
 
 
 def _parse_filter_datetime(value: Optional[str], *, end_of_day: bool = False) -> Optional[datetime]:
@@ -325,13 +337,7 @@ def get_task_benchmarks(
             .filter(
                 Assessment.organization_id == org_id,
                 Assessment.task_id == task_id,
-                Assessment.is_voided.is_(False),
-                Assessment.status.in_(
-                    [
-                        AssessmentStatus.COMPLETED,
-                        AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
-                    ]
-                ),
+                _completed_assessment_filter(),
             )
             .all()
         )
@@ -382,13 +388,7 @@ def get_task_benchmarks(
                 .filter(
                     Assessment.organization_id == org_id,
                     Assessment.task_id == task_id,
-                    Assessment.is_voided.is_(False),
-                    Assessment.status.in_(
-                        [
-                            AssessmentStatus.COMPLETED,
-                            AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT,
-                        ]
-                    ),
+                    _completed_assessment_filter(),
                 )
                 .all()
             )

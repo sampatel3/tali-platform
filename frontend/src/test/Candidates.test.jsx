@@ -96,6 +96,7 @@ vi.mock('@monaco-editor/react', () => ({
 
 import {
   auth,
+  assessments as assessmentsApi,
   roles as rolesApi,
   tasks as tasksApi,
 } from '../shared/api';
@@ -542,6 +543,126 @@ describe('CandidatesPage', () => {
       expect(window.location.pathname).toBe('/candidates/12');
       expect(screen.getByRole('button', { name: 'Back to Candidates' })).toBeInTheDocument();
       expect(screen.getByText('Standing candidate report')).toBeInTheDocument();
+    });
+  });
+
+  it('shows the assessment summary view in the sidebar for completed candidates', async () => {
+    rolesApi.listApplications.mockResolvedValue({
+      data: [
+        {
+          id: 77,
+          candidate_id: 207,
+          candidate_email: 'completed@example.com',
+          candidate_name: 'Completed Candidate',
+          candidate_position: 'Senior Engineer',
+          role_name: 'Senior Engineer',
+          status: 'completed',
+          cv_filename: 'completed.pdf',
+          valid_assessment_id: 880,
+          valid_assessment_status: 'completed',
+          score_summary: {
+            assessment_id: 880,
+            assessment_status: 'completed',
+            taali_score: 68.2,
+            assessment_score: 41.0,
+            role_fit_score: 91.2,
+          },
+          assessment_history: [],
+          created_at: '2026-01-10T10:00:00Z',
+          updated_at: '2026-01-10T10:00:00Z',
+        },
+      ],
+    });
+    rolesApi.getApplication.mockResolvedValue({
+      data: {
+        id: 77,
+        candidate_id: 207,
+        candidate_email: 'completed@example.com',
+        candidate_name: 'Completed Candidate',
+        candidate_position: 'Senior Engineer',
+        role_name: 'Senior Engineer',
+        status: 'completed',
+        cv_filename: 'completed.pdf',
+        valid_assessment_id: 880,
+        valid_assessment_status: 'completed',
+        score_summary: {
+          assessment_id: 880,
+          assessment_status: 'completed',
+          taali_score: 68.2,
+          assessment_score: 41.0,
+          role_fit_score: 91.2,
+        },
+        assessment_history: [],
+        created_at: '2026-01-10T10:00:00Z',
+        updated_at: '2026-01-10T10:00:00Z',
+      },
+    });
+    assessmentsApi.get.mockResolvedValue({
+      data: {
+        id: 880,
+        candidate_email: 'completed@example.com',
+        candidate_name: 'Completed Candidate',
+        task_name: 'Async Recovery',
+        role_name: 'Senior Engineer',
+        status: 'completed',
+        taali_score: 68.2,
+        assessment_score: 41.0,
+        final_score: 41.0,
+        completed_at: '2026-01-15T09:45:00Z',
+        total_duration_seconds: 2700,
+        score_breakdown: {
+          category_scores: {
+            task_completion: 6.0,
+            prompt_clarity: 6.1,
+            context_provision: 0.3,
+            independence_efficiency: 3.5,
+            response_utilization: 1.2,
+            debugging_design: 2.3,
+            written_communication: 8.0,
+            role_fit: 9.5,
+          },
+          score_components: {
+            taali_score: 68.2,
+            assessment_score: 41.0,
+            role_fit_score: 91.2,
+            role_fit_components: {
+              cv_fit_score: 95.4,
+              requirements_fit_score: 87.0,
+            },
+          },
+        },
+        cv_job_match_score: 95.4,
+        cv_job_match_details: {
+          summary: 'Strong technical depth with one material context-sharing gap to probe.',
+          matching_skills: ['AWS', 'Python', 'Data Engineering'],
+          missing_skills: ['Legacy SQL migration'],
+          concerns: ['Context sharing was limited under time pressure.'],
+          requirements_match_score_100: 87.0,
+          requirements_assessment: [
+            {
+              requirement: 'Legacy SQL migration',
+              status: 'partially_met',
+              evidence: 'Adjacent data platform experience is strong, but direct migration depth is thinner.',
+              impact: 'Probe whether the candidate can translate prior platform work into this migration scope.',
+            },
+          ],
+        },
+      },
+    });
+
+    await renderAppOnCandidatesPage();
+
+    const candidateCell = await screen.findByText('Completed Candidate');
+    const candidateRow = candidateCell.closest('tr');
+    expect(candidateRow).not.toBeNull();
+    fireEvent.click(within(candidateRow).getByRole('button', { name: 'View assessment' }));
+
+    await waitFor(() => {
+      const dialog = screen.getByRole('dialog', { name: 'Completed Candidate' });
+      expect(within(dialog).getByText('Assessment results')).toBeInTheDocument();
+      expect(within(dialog).getByText('Role fit summary')).toBeInTheDocument();
+      expect(within(dialog).getByText('What to probe')).toBeInTheDocument();
+      expect(within(dialog).queryByText('Standing candidate report')).not.toBeInTheDocument();
     });
   });
 

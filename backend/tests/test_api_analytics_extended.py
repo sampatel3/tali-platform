@@ -2,6 +2,10 @@
 
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
+
+from app.domains.assessments_runtime.analytics_routes import _completed_assessment_filter
 from app.models.assessment import Assessment, AssessmentStatus
 from tests.conftest import auth_headers, create_assessment_via_api, create_task_via_api
 
@@ -93,3 +97,15 @@ def test_benchmarks_endpoint_returns_percentiles_and_candidate_rank(client, db):
     assert "task_completion" in payload["dimension_averages"]
     assert "candidate_percentiles" in payload
     assert payload["candidate_percentiles"]["overall"] >= 90
+
+
+def test_benchmark_completed_filter_avoids_timeout_enum_literal():
+    compiled = (
+        select(Assessment.id)
+        .where(_completed_assessment_filter())
+        .compile(dialect=postgresql.dialect())
+    )
+    params = {key: str(value) for key, value in compiled.params.items()}
+
+    assert "COMPLETED_DUE_TO_TIMEOUT" not in " ".join(params.values())
+    assert any("completed" in value.lower() for value in params.values())

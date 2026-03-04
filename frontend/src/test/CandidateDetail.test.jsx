@@ -470,6 +470,28 @@ describe('CandidateDetailPage', () => {
     });
   });
 
+  it('interview guidance tab surfaces load errors and stops loading state', async () => {
+    assessmentsApi.generateInterviewDebrief.mockRejectedValueOnce({
+      response: {
+        data: {
+          detail: 'Interview guidance is temporarily unavailable.',
+        },
+      },
+    });
+
+    await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'INTERVIEW GUIDANCE' }));
+
+    await waitFor(() => {
+      expect(assessmentsApi.generateInterviewDebrief).toHaveBeenCalledWith(1, { force_regenerate: false });
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('button', { name: 'Loading guidance...' })).not.toBeInTheDocument();
+      expect(screen.queryByText('Generating interview guide...')).not.toBeInTheDocument();
+    });
+  });
+
   it('Download client report button exists', async () => {
     await renderCandidateDetail();
     fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));

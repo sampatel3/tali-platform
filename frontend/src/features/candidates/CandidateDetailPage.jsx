@@ -16,6 +16,7 @@ import {
   TabBar,
 } from '../../shared/ui/TaaliPrimitives';
 import { buildStandingCandidateReportModel } from './assessmentViewModels';
+import { CandidateAssessmentSummaryView } from './CandidateAssessmentSummaryView';
 import {
   CandidateAiUsageTab,
   CandidateCodeGitTab,
@@ -24,164 +25,35 @@ import {
 } from './CandidateDetailSecondaryTabs';
 import { CandidateResultsTab } from './CandidateDetailPrimaryTabs';
 import { CandidateInterviewDebrief } from './CandidateInterviewDebrief';
-import { CandidateReportView } from './CandidateReportView';
 
 const RESULTS_ONBOARDING_KEY = 'taali_results_onboarding_seen_v1';
+const INTERVIEW_GUIDANCE_TIMEOUT_MS = 15000;
 
 const uniqueItems = (items, limit = 4) => Array.from(
   new Set((Array.isArray(items) ? items : []).filter(Boolean))
 ).slice(0, limit);
 
-const buildRoleFitStrengths = (roleFitModel) => uniqueItems([
-  ...(roleFitModel?.requirementsAssessment || [])
-    .filter((item) => item.status === 'met')
-    .map((item) => item.requirement),
-  ...(roleFitModel?.experienceHighlights || []),
-  ...(roleFitModel?.rationaleBullets || []),
-], 4);
+const withRequestTimeout = (promise, timeoutMs, timeoutMessage) => new Promise((resolve, reject) => {
+  const timeoutId = window.setTimeout(() => {
+    reject(new Error(timeoutMessage));
+  }, timeoutMs);
 
-const buildRoleFitGaps = (roleFitModel) => uniqueItems([
-  roleFitModel?.firstRequirementGap?.requirement
-    ? `Gap vs recruiter requirement: ${roleFitModel.firstRequirementGap.requirement}`
-    : null,
-  ...(roleFitModel?.concerns || []),
-  ...(roleFitModel?.missingSkills || []).map((skill) => `Skill gap: ${skill}`),
-], 4);
-
-const SignalList = ({ title, items, emptyLabel, tone = 'default' }) => (
-  <div>
-    <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{title}</div>
-    {items.length ? (
-      <ul className="mt-3 space-y-2">
-        {items.map((item) => (
-          <li key={`${title}-${item}`} className="flex gap-2 text-sm text-[var(--taali-text)]">
-            <span
-              className="mt-1 h-1.5 w-1.5 rounded-full"
-              style={{ backgroundColor: tone === 'warning' ? 'var(--taali-warning)' : 'var(--taali-purple)' }}
-            />
-            <span>{item}</span>
-          </li>
-        ))}
-      </ul>
-    ) : (
-      <p className="mt-3 text-sm text-[var(--taali-muted)]">{emptyLabel}</p>
-    )}
-  </div>
-);
-
-const SkillChips = ({ title, items, badgeVariant = 'success', emptyLabel }) => (
-  <div>
-    <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{title}</div>
-    {items.length ? (
-      <div className="mt-3 flex flex-wrap gap-2">
-        {items.map((item) => (
-          <Badge key={`${title}-${item}`} variant={badgeVariant}>{item}</Badge>
-        ))}
-      </div>
-    ) : (
-      <p className="mt-3 text-sm text-[var(--taali-muted)]">{emptyLabel}</p>
-    )}
-  </div>
-);
-
-const RoleFitSummaryPanel = ({ reportModel }) => {
-  const roleFitModel = reportModel?.roleFitModel || {};
-  const strengths = buildRoleFitStrengths(roleFitModel);
-  const gaps = buildRoleFitGaps(roleFitModel);
-  const matchingSkills = uniqueItems(roleFitModel.matchingSkills, 6);
-  const missingSkills = uniqueItems(roleFitModel.missingSkills, 6);
-
-  return (
-    <Panel className="p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role fit summary</div>
-          <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">
-            {roleFitModel.summaryText || 'Role-fit evidence is attached below.'}
-          </div>
-        </div>
-        {reportModel?.summaryModel?.roleFitScore != null ? (
-          <Badge variant="purple" className="font-mono text-[11px]">
-            Role fit {reportModel.summaryModel.roleFitScore.toFixed(1)}
-          </Badge>
-        ) : null}
-      </div>
-
-      <div className="mt-5 grid gap-5 lg:grid-cols-2">
-        <SignalList
-          title="Main strengths"
-          items={strengths}
-          emptyLabel="No strong role-fit positives have been surfaced yet."
-        />
-        <SignalList
-          title="Main gaps"
-          items={gaps}
-          emptyLabel="No major role-fit gaps were surfaced."
-          tone="warning"
-        />
-      </div>
-
-      <div className="mt-5 grid gap-5 lg:grid-cols-2">
-        <SkillChips
-          title="Matching skills"
-          items={matchingSkills}
-          badgeVariant="success"
-          emptyLabel="No matching skills have been extracted yet."
-        />
-        <SkillChips
-          title="Skills gaps"
-          items={missingSkills}
-          badgeVariant="warning"
-          emptyLabel="No explicit skills gaps were extracted."
-        />
-      </div>
-    </Panel>
-  );
-};
-
-const ProbeSummaryPanel = ({ reportModel, onOpenInterviewGuidance = () => {} }) => {
-  const roleFitModel = reportModel?.roleFitModel || {};
-  const summaryModel = reportModel?.summaryModel || {};
-  const probeItems = uniqueItems([
-    reportModel?.probeDescription,
-    roleFitModel?.firstRequirementGap?.impact,
-    roleFitModel?.concerns?.[0],
-    summaryModel?.weakestLabel && summaryModel.weakestLabel !== '—'
-      ? `Assessment signal to validate: ${summaryModel.weakestLabel}`
-      : null,
-  ], 4);
-
-  return (
-    <Panel className="p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">What to probe</div>
-          <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">
-            {reportModel?.probeTitle || 'Interview guidance'}
-          </div>
-        </div>
-        <Button type="button" variant="secondary" size="sm" onClick={onOpenInterviewGuidance}>
-          Open interview guidance
-        </Button>
-      </div>
-
-      <p className="mt-3 text-sm leading-6 text-[var(--taali-muted)]">
-        Use the interview to validate the weakest evidence behind the TAALI score, not to re-run the assessment.
-      </p>
-
-      <SignalList
-        title="Probe next"
-        items={probeItems}
-        emptyLabel="No priority probe areas have been generated yet."
-      />
-    </Panel>
-  );
-};
+  promise
+    .then((value) => {
+      window.clearTimeout(timeoutId);
+      resolve(value);
+    })
+    .catch((error) => {
+      window.clearTimeout(timeoutId);
+      reject(error);
+    });
+});
 
 const CandidateInterviewGuidanceTab = ({
   canGenerateInterviewGuide,
   debrief,
   loading,
+  errorMessage = '',
   cached,
   generatedAt,
   onGenerateInterviewGuide,
@@ -212,11 +84,18 @@ const CandidateInterviewGuidanceTab = ({
             onClick={() => onGenerateInterviewGuide({ forceRegenerate: Boolean(debrief) })}
             disabled={loading}
           >
-            {loading ? 'Loading guidance...' : (debrief ? 'Refresh guidance' : 'Generate guidance')}
+            {loading ? 'Loading guidance...' : (errorMessage ? 'Retry guidance' : (debrief ? 'Refresh guidance' : 'Generate guidance'))}
           </Button>
         ) : null}
       </div>
     </Panel>
+
+    {errorMessage ? (
+      <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
+        <div className="text-sm font-semibold text-[var(--taali-danger)]">Interview guidance could not be loaded.</div>
+        <p className="mt-2 text-sm text-[var(--taali-text)]">{errorMessage}</p>
+      </Panel>
+    ) : null}
 
     <CandidateInterviewDebrief
       debrief={debrief}
@@ -267,7 +146,7 @@ const CandidateClientReportTab = ({
           <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Client report</div>
           <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">Download the employer-facing assessment brief.</div>
           <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-            The client report strips out TAALI rubric internals and focuses on score summary, role-fit signal, strengths, caveats, and the recommended interview follow-up.
+            Export a single-page TAALI summary with the hiring recommendation, role-fit view, and interview focus for employer or client review.
           </p>
         </div>
         <Button type="button" size="sm" variant="secondary" onClick={handleDownloadReport} disabled={busyAction !== ''}>
@@ -415,6 +294,8 @@ export const AssessmentResultsPage = ({
   const [benchmarksData, setBenchmarksData] = useState(null);
   const [interviewDebriefLoading, setInterviewDebriefLoading] = useState(false);
   const [interviewDebriefData, setInterviewDebriefData] = useState(null);
+  const [interviewDebriefError, setInterviewDebriefError] = useState('');
+  const [interviewDebriefAutoRequested, setInterviewDebriefAutoRequested] = useState(false);
   const [interviewDebriefCached, setInterviewDebriefCached] = useState(false);
   const [interviewDebriefGeneratedAt, setInterviewDebriefGeneratedAt] = useState(null);
   const [resultsOnboardingOpen, setResultsOnboardingOpen] = useState(false);
@@ -694,17 +575,25 @@ export const AssessmentResultsPage = ({
       showToast('Interview guide endpoint is unavailable.', 'error');
       return;
     }
+    setInterviewDebriefError('');
+    setInterviewDebriefAutoRequested(true);
     setInterviewDebriefLoading(true);
     try {
-      const res = await assessmentsApi.generateInterviewDebrief(assessmentId, {
-        force_regenerate: forceRegenerate,
-      });
+      const res = await withRequestTimeout(
+        assessmentsApi.generateInterviewDebrief(assessmentId, {
+          force_regenerate: forceRegenerate,
+        }),
+        INTERVIEW_GUIDANCE_TIMEOUT_MS,
+        'Interview guidance is taking longer than expected. Please retry.'
+      );
       const data = res?.data || {};
       setInterviewDebriefData(data.interview_debrief || null);
       setInterviewDebriefCached(Boolean(data.cached));
       setInterviewDebriefGeneratedAt(data.generated_at || null);
     } catch (err) {
-      showToast(err?.response?.data?.detail || 'Failed to generate interview guide.', 'error');
+      const detail = err?.response?.data?.detail || err?.message || 'Failed to generate interview guide.';
+      showToast(detail, 'error');
+      setInterviewDebriefError(detail);
       setInterviewDebriefData(null);
     } finally {
       setInterviewDebriefLoading(false);
@@ -712,18 +601,32 @@ export const AssessmentResultsPage = ({
   };
 
   useEffect(() => {
+    setInterviewDebriefData(null);
+    setInterviewDebriefError('');
+    setInterviewDebriefCached(false);
+    setInterviewDebriefGeneratedAt(null);
+    setInterviewDebriefAutoRequested(false);
+  }, [assessmentId]);
+
+  useEffect(() => {
     if (activeTab !== 'interview-guidance') return;
     if (!canGenerateInterviewGuide || !assessmentId) return;
-    if (interviewDebriefLoading || interviewDebriefData) return;
+    if (interviewDebriefLoading || interviewDebriefData || interviewDebriefAutoRequested) return;
     if (!assessmentsApi?.generateInterviewDebrief) return;
 
     let cancelled = false;
     const loadInterviewDebrief = async () => {
+      setInterviewDebriefAutoRequested(true);
+      setInterviewDebriefError('');
       setInterviewDebriefLoading(true);
       try {
-        const res = await assessmentsApi.generateInterviewDebrief(assessmentId, {
-          force_regenerate: false,
-        });
+        const res = await withRequestTimeout(
+          assessmentsApi.generateInterviewDebrief(assessmentId, {
+            force_regenerate: false,
+          }),
+          INTERVIEW_GUIDANCE_TIMEOUT_MS,
+          'Interview guidance is taking longer than expected. Please retry.'
+        );
         if (cancelled) return;
         const data = res?.data || {};
         setInterviewDebriefData(data.interview_debrief || null);
@@ -731,7 +634,8 @@ export const AssessmentResultsPage = ({
         setInterviewDebriefGeneratedAt(data.generated_at || null);
       } catch (err) {
         if (cancelled) return;
-        showToast(err?.response?.data?.detail || 'Failed to generate interview guide.', 'error');
+        const detail = err?.response?.data?.detail || err?.message || 'Failed to generate interview guide.';
+        setInterviewDebriefError(detail);
         setInterviewDebriefData(null);
       } finally {
         if (!cancelled) setInterviewDebriefLoading(false);
@@ -747,9 +651,6 @@ export const AssessmentResultsPage = ({
     assessmentId,
     assessmentsApi,
     canGenerateInterviewGuide,
-    interviewDebriefData,
-    interviewDebriefLoading,
-    showToast,
   ]);
 
   const handleOpenComparison = async () => {
@@ -919,21 +820,12 @@ export const AssessmentResultsPage = ({
 
         {activeTab === 'summary' ? (
           <div role="tabpanel" id="candidate-tabpanel-summary" aria-labelledby="summary" className="space-y-4">
-            <CandidateReportView
-              model={reportModel}
-              showInsights={false}
-              showRoleFitSection={false}
-              showIntegritySection={false}
-              showEvidenceSections={false}
+            <CandidateAssessmentSummaryView
+              reportModel={reportModel}
+              variant="page"
+              onOpenInterviewGuidance={() => setActiveTab('interview-guidance')}
+              showInterviewGuidanceAction
             />
-
-            <div className="grid gap-4 xl:grid-cols-2">
-              <RoleFitSummaryPanel reportModel={reportModel} />
-              <ProbeSummaryPanel
-                reportModel={reportModel}
-                onOpenInterviewGuidance={() => setActiveTab('interview-guidance')}
-              />
-            </div>
           </div>
         ) : null}
 
@@ -997,6 +889,7 @@ export const AssessmentResultsPage = ({
               canGenerateInterviewGuide={canGenerateInterviewGuide}
               debrief={interviewDebriefData}
               loading={interviewDebriefLoading}
+              errorMessage={interviewDebriefError}
               cached={interviewDebriefCached}
               generatedAt={interviewDebriefGeneratedAt}
               onGenerateInterviewGuide={handleGenerateInterviewGuide}

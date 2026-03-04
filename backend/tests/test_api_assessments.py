@@ -887,12 +887,20 @@ def test_recruiter_report_pdf_is_client_facing_and_wrapped(client):
     assert "taali-client-report" in resp.headers["content-disposition"]
 
     reader = PdfReader(io.BytesIO(resp.content))
+    assert len(reader.pages) == 1
     extracted_text = "\n".join(page.extract_text() or "" for page in reader.pages)
-    assert "TAALI Client Assessment Report" in extracted_text
-    assert "Prepared for employer / client review" in extracted_text
-    assert "Score Snapshot" in extracted_text
-    assert "Suggested Interview Focus" in extracted_text
-    assert "Strong platform and data engineering background" in extracted_text
+    assert "TAALI" in extracted_text
+    assert "Client Assessment Summary" in extracted_text
+    assert "TAALI score" in extracted_text
+    assert "Role fit" in extracted_text
+    assert "Assessment" in extracted_text
+    assert "Role fit summary" in extracted_text
+    assert "What to probe" in extracted_text
+    assert "Strong platform and data" in extracted_text
+    assert "engineering background" in extracted_text
+    assert "Score model" not in extracted_text
+    assert "CV fit" not in extracted_text
+    assert "Requirements fit" not in extracted_text
 
 
 def test_report_benchmark_filter_avoids_timeout_enum_literal():

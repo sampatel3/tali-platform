@@ -121,6 +121,14 @@ _PDF_LEFT_MARGIN = 54
 _PDF_TOP_MARGIN = 750
 _PDF_BOTTOM_MARGIN = 54
 _PDF_BODY_WRAP = 92
+_A4_PAGE_WIDTH = 595
+_A4_PAGE_HEIGHT = 842
+_PDF_BRAND_PURPLE = "#9D00FF"
+_PDF_BRAND_PURPLE_SOFT = "#F3E9FF"
+_PDF_BORDER_SOFT = "#D8D5E8"
+_PDF_TEXT = "#171B2D"
+_PDF_MUTED = "#667085"
+_PDF_CARD_BG = "#FFFFFF"
 
 
 @dataclass(frozen=True)
@@ -643,6 +651,15 @@ def _paginate_pdf_lines(lines: list[_PdfLine]) -> list[list[tuple[float, _PdfLin
 
 
 def _build_pdf_from_page_streams(page_streams: list[bytes]) -> bytes:
+    return _build_pdf_with_dimensions(page_streams, page_width=_PDF_PAGE_WIDTH, page_height=_PDF_PAGE_HEIGHT)
+
+
+def _build_pdf_with_dimensions(
+    page_streams: list[bytes],
+    *,
+    page_width: int,
+    page_height: int,
+) -> bytes:
     page_count = max(1, len(page_streams))
     font_regular_obj = 3
     font_bold_obj = 4
@@ -673,7 +690,7 @@ def _build_pdf_from_page_streams(page_streams: list[bytes]) -> bytes:
         emit(
             page_obj_num,
             (
-                f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {_PDF_PAGE_WIDTH} {_PDF_PAGE_HEIGHT}] "
+                f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width} {page_height}] "
                 f"/Resources << /Font << /F1 {font_regular_obj} 0 R /F2 {font_bold_obj} 0 R >> >> "
                 f"/Contents {content_obj_num} 0 R >>"
             ).encode("ascii"),
@@ -726,6 +743,572 @@ def build_wrapped_text_pdf(
 
 def build_plain_text_pdf(body_text: str) -> bytes:
     return build_wrapped_text_pdf(body_text)
+
+
+def _rgb_components(hex_color: str, fallback: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> tuple[float, float, float]:
+    raw = str(hex_color or "").strip().lstrip("#")
+    if len(raw) != 6:
+        return fallback
+    try:
+        return tuple(round(int(raw[index : index + 2], 16) / 255.0, 4) for index in (0, 2, 4))
+    except ValueError:
+        return fallback
+
+
+def _pdf_color_ops(hex_color: str, *, fill: bool = True) -> str:
+    r, g, b = _rgb_components(hex_color)
+    operator = "rg" if fill else "RG"
+    return f"{r} {g} {b} {operator}"
+
+
+def _pdf_rect_top(
+    x: float,
+    top: float,
+    width: float,
+    height: float,
+    *,
+    fill_color: str | None = None,
+    stroke_color: str | None = None,
+    line_width: float = 1.0,
+) -> str:
+    y = _A4_PAGE_HEIGHT - top - height
+    ops: list[str] = []
+    if fill_color:
+        ops.append(_pdf_color_ops(fill_color, fill=True))
+    if stroke_color:
+        ops.append(_pdf_color_ops(stroke_color, fill=False))
+        ops.append(f"{line_width} w")
+    paint = "B" if fill_color and stroke_color else "f" if fill_color else "S"
+    ops.append(f"{x:.1f} {y:.1f} {width:.1f} {height:.1f} re {paint}")
+    return "\n".join(ops)
+
+
+def _estimate_wrap_width(width: float, font_size: int) -> int:
+    return max(12, int(width / max(font_size * 0.54, 1.0)))
+
+
+def _truncate_pdf_line(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    trimmed = text[: max_chars - 1].rstrip(" ,.;:-")
+    return f"{trimmed}…"
+
+
+def _wrapped_pdf_lines_for_width(
+    text: str,
+    *,
+    width: float,
+    font_size: int,
+    max_lines: int | None = None,
+) -> list[str]:
+    lines: list[str] = []
+    wrap_width = _estimate_wrap_width(width, font_size)
+    for raw_line in str(text or "").splitlines() or [""]:
+        lines.extend(_wrap_pdf_text(raw_line, wrap_width))
+    if max_lines is not None and len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = _truncate_pdf_line(lines[-1], max(8, wrap_width - 2))
+    return lines or [""]
+
+
+def _pdf_text_block_ops(
+    text: str,
+    *,
+    x: float,
+    top: float,
+    width: float,
+    font: str = "F1",
+    size: int = 11,
+    leading: int = 14,
+    color: str = _PDF_TEXT,
+    max_lines: int | None = None,
+) -> tuple[list[str], float]:
+    ops: list[str] = []
+    lines = _wrapped_pdf_lines_for_width(text, width=width, font_size=size, max_lines=max_lines)
+    for index, line in enumerate(lines):
+        baseline_y = _A4_PAGE_HEIGHT - top - (index * leading) - size
+        ops.append(
+            " ".join(
+                [
+                    "BT",
+                    f"/{font}",
+                    f"{size}",
+                    "Tf",
+                    _pdf_color_ops(color, fill=True),
+                    "1 0 0 1",
+                    f"{x:.1f}",
+                    f"{baseline_y:.1f}",
+                    "Tm",
+                    f"({_pdf_escape(line)})",
+                    "Tj ET",
+                ]
+            )
+        )
+    return ops, top + (len(lines) * leading)
+
+
+def _pdf_metric_card_ops(
+    *,
+    x: float,
+    top: float,
+    width: float,
+    height: float,
+    label: str,
+    value: float | None,
+) -> list[str]:
+    ops = [
+        _pdf_rect_top(x, top, width, height, fill_color=_PDF_CARD_BG, stroke_color=_PDF_BORDER_SOFT),
+    ]
+    label_ops, _ = _pdf_text_block_ops(
+        label.upper(),
+        x=x + 14,
+        top=top + 14,
+        width=width - 28,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    value_ops, _ = _pdf_text_block_ops(
+        "—" if value is None else f"{value:.1f}",
+        x=x + 14,
+        top=top + 34,
+        width=width - 28,
+        font="F2",
+        size=22,
+        leading=24,
+        color=_PDF_TEXT,
+        max_lines=1,
+    )
+    ops.extend(label_ops)
+    ops.extend(value_ops)
+    return ops
+
+
+def _unique_text_items(items: list[str], max_items: int = 4) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in items:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _client_report_probe_items(payload: dict[str, Any]) -> list[str]:
+    interview_focus = payload.get("interview_focus") if isinstance(payload.get("interview_focus"), list) else []
+    requirement_gap = payload.get("first_requirement_gap") if isinstance(payload.get("first_requirement_gap"), dict) else {}
+    items = []
+    if requirement_gap.get("requirement"):
+        evidence = str(requirement_gap.get("evidence") or requirement_gap.get("impact") or "").strip()
+        items.append(
+            f"{requirement_gap.get('requirement')}: {evidence or 'Validate whether the candidate can close this gap quickly.'}"
+        )
+    for item in interview_focus[:3]:
+        dimension = str(item.get("dimension") or item.get("focus") or "Interview focus").strip()
+        summary = str(item.get("evidence") or item.get("practice_advice") or item.get("focus") or "").strip()
+        if dimension and summary:
+            items.append(f"{dimension}: {summary}")
+    return _unique_text_items(items, 3)
+
+
+def _client_report_gap_items(payload: dict[str, Any]) -> list[str]:
+    concerns = payload.get("concerns") if isinstance(payload.get("concerns"), list) else []
+    missing_skills = payload.get("missing_skills") if isinstance(payload.get("missing_skills"), list) else []
+    requirements = payload.get("requirements_assessment") if isinstance(payload.get("requirements_assessment"), list) else []
+    requirement_gaps = [
+        str(item.get("requirement") or "").strip()
+        for item in requirements
+        if str(item.get("status") or "").lower() not in {"", "met"}
+    ]
+    items = [*(f"Skill gap: {item}" for item in missing_skills), *concerns, *requirement_gaps]
+    return _unique_text_items(items, 4)
+
+
+def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
+    scores = payload.get("scores") if isinstance(payload.get("scores"), dict) else {}
+    candidate_name = str(payload.get("candidate_name") or "Candidate")
+    role_name = str(payload.get("role_name") or "Role")
+    task_name = str(payload.get("task_name") or "Assessment")
+    organization_name = str(payload.get("organization_name") or "Employer")
+    recommendation = str(payload.get("recommendation") or "Pending")
+    summary_text = str(payload.get("executive_summary") or "Assessment summary unavailable.").strip()
+    role_fit_summary = str(payload.get("role_fit_summary") or "Role-fit evidence is available for employer review.").strip()
+    matching_skills = _unique_text_items(payload.get("matching_skills") or [], 4)
+    gap_items = _client_report_gap_items(payload)
+    probe_items = _client_report_probe_items(payload)
+    completed_at = str(payload.get("completed_at") or "").strip()
+    generated_at = str(payload.get("generated_at") or "").strip()
+    duration_label = str(payload.get("duration_label") or "").strip()
+    benchmark_label = str(payload.get("benchmark_label") or "").strip()
+
+    ops: list[str] = []
+    ops.append(_pdf_rect_top(0, 0, _A4_PAGE_WIDTH, _A4_PAGE_HEIGHT, fill_color="#FFFFFF"))
+    ops.append(_pdf_rect_top(0, 0, _A4_PAGE_WIDTH, 88, fill_color=_PDF_BRAND_PURPLE))
+
+    header_left, _ = _pdf_text_block_ops(
+        "TAALI",
+        x=40,
+        top=22,
+        width=120,
+        font="F2",
+        size=24,
+        leading=26,
+        color="#FFFFFF",
+        max_lines=1,
+    )
+    header_title, _ = _pdf_text_block_ops(
+        "Client Assessment Summary",
+        x=40,
+        top=50,
+        width=260,
+        font="F1",
+        size=11,
+        leading=13,
+        color="#FFFFFF",
+        max_lines=1,
+    )
+    header_right, _ = _pdf_text_block_ops(
+        f"Prepared for {organization_name}",
+        x=330,
+        top=28,
+        width=225,
+        font="F2",
+        size=11,
+        leading=13,
+        color="#FFFFFF",
+        max_lines=1,
+    )
+    header_meta, _ = _pdf_text_block_ops(
+        "Employer-facing summary for shortlist review",
+        x=330,
+        top=47,
+        width=225,
+        font="F1",
+        size=10,
+        leading=12,
+        color="#FFFFFF",
+        max_lines=1,
+    )
+    ops.extend(header_left)
+    ops.extend(header_title)
+    ops.extend(header_right)
+    ops.extend(header_meta)
+
+    name_ops, _ = _pdf_text_block_ops(
+        candidate_name,
+        x=40,
+        top=116,
+        width=340,
+        font="F2",
+        size=24,
+        leading=28,
+        color=_PDF_TEXT,
+        max_lines=1,
+    )
+    meta_text = " | ".join(
+        item for item in [
+            role_name and f"Role: {role_name}",
+            task_name and f"Assessment: {task_name}",
+            duration_label and f"Duration: {duration_label}",
+        ]
+        if item
+    )
+    secondary_meta = " | ".join(
+        item for item in [
+            completed_at and f"Completed: {completed_at[:10]}",
+            benchmark_label and f"Benchmark: {benchmark_label}",
+        ]
+        if item
+    )
+    meta_ops, _ = _pdf_text_block_ops(
+        meta_text,
+        x=40,
+        top=148,
+        width=360,
+        font="F1",
+        size=10,
+        leading=12,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    meta_secondary_ops, _ = _pdf_text_block_ops(
+        secondary_meta,
+        x=40,
+        top=164,
+        width=360,
+        font="F1",
+        size=10,
+        leading=12,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    ops.extend(name_ops)
+    ops.extend(meta_ops)
+    ops.extend(meta_secondary_ops)
+
+    summary_card_top = 196
+    summary_card_height = 176
+    summary_card_width = 324
+    score_card_x = 382
+    score_card_width = 173
+    score_card_height = 176
+
+    ops.append(_pdf_rect_top(40, summary_card_top, summary_card_width, summary_card_height, fill_color=_PDF_CARD_BG, stroke_color=_PDF_BORDER_SOFT))
+    summary_label_ops, _ = _pdf_text_block_ops(
+        "Assessment summary",
+        x=56,
+        top=summary_card_top + 16,
+        width=180,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    summary_reco_ops, _ = _pdf_text_block_ops(
+        recommendation.upper(),
+        x=250,
+        top=summary_card_top + 16,
+        width=94,
+        font="F2",
+        size=10,
+        leading=12,
+        color=_PDF_BRAND_PURPLE,
+        max_lines=1,
+    )
+    summary_body_ops, _ = _pdf_text_block_ops(
+        summary_text,
+        x=56,
+        top=summary_card_top + 40,
+        width=summary_card_width - 32,
+        font="F1",
+        size=11,
+        leading=16,
+        color=_PDF_TEXT,
+        max_lines=7,
+    )
+    ops.extend(summary_label_ops)
+    ops.extend(summary_reco_ops)
+    ops.extend(summary_body_ops)
+
+    ops.append(_pdf_rect_top(score_card_x, summary_card_top, score_card_width, score_card_height, fill_color=_PDF_BRAND_PURPLE_SOFT, stroke_color=_PDF_BORDER_SOFT))
+    score_label_ops, _ = _pdf_text_block_ops(
+        "TAALI score",
+        x=score_card_x + 16,
+        top=summary_card_top + 16,
+        width=score_card_width - 32,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    score_value_ops, _ = _pdf_text_block_ops(
+        "—" if scores.get("taali_score") is None else f"{float(scores['taali_score']):.1f}",
+        x=score_card_x + 16,
+        top=summary_card_top + 40,
+        width=score_card_width - 32,
+        font="F2",
+        size=34,
+        leading=36,
+        color=_PDF_TEXT,
+        max_lines=1,
+    )
+    score_rec_ops, _ = _pdf_text_block_ops(
+        recommendation,
+        x=score_card_x + 16,
+        top=summary_card_top + 88,
+        width=score_card_width - 32,
+        font="F1",
+        size=11,
+        leading=13,
+        color=_PDF_TEXT,
+        max_lines=1,
+    )
+    ops.extend(score_label_ops)
+    ops.extend(score_value_ops)
+    ops.extend(score_rec_ops)
+    ops.extend(
+        _pdf_metric_card_ops(
+            x=score_card_x + 16,
+            top=summary_card_top + 112,
+            width=68,
+            height=48,
+            label="Role fit",
+            value=scores.get("role_fit_score"),
+        )
+    )
+    ops.extend(
+        _pdf_metric_card_ops(
+            x=score_card_x + 89,
+            top=summary_card_top + 112,
+            width=68,
+            height=48,
+            label="Assessment",
+            value=scores.get("assessment_score"),
+        )
+    )
+
+    lower_top = 392
+    lower_height = 320
+    lower_width = 249
+    gap = 18
+
+    ops.append(_pdf_rect_top(40, lower_top, lower_width, lower_height, fill_color=_PDF_CARD_BG, stroke_color=_PDF_BORDER_SOFT))
+    role_fit_label_ops, _ = _pdf_text_block_ops(
+        "Role fit summary",
+        x=56,
+        top=lower_top + 16,
+        width=lower_width - 32,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    role_fit_body_ops, role_fit_body_bottom = _pdf_text_block_ops(
+        role_fit_summary,
+        x=56,
+        top=lower_top + 40,
+        width=lower_width - 32,
+        font="F1",
+        size=11,
+        leading=15,
+        color=_PDF_TEXT,
+        max_lines=5,
+    )
+    role_fit_skills_label, _ = _pdf_text_block_ops(
+        "Matching skills",
+        x=56,
+        top=role_fit_body_bottom + 12,
+        width=lower_width - 32,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    role_fit_skills_body, role_fit_skills_bottom = _pdf_text_block_ops(
+        ", ".join(matching_skills) if matching_skills else "No matching skills were extracted for the client-facing summary.",
+        x=56,
+        top=role_fit_body_bottom + 30,
+        width=lower_width - 32,
+        font="F1",
+        size=11,
+        leading=15,
+        color=_PDF_TEXT,
+        max_lines=4,
+    )
+    role_fit_gaps_label, _ = _pdf_text_block_ops(
+        "Main gaps",
+        x=56,
+        top=role_fit_skills_bottom + 14,
+        width=lower_width - 32,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    role_fit_gaps_body, _ = _pdf_text_block_ops(
+        "\n".join(f"- {item}" for item in gap_items) if gap_items else "No material role-fit gaps were surfaced in the exported summary.",
+        x=56,
+        top=role_fit_skills_bottom + 32,
+        width=lower_width - 32,
+        font="F1",
+        size=10,
+        leading=14,
+        color=_PDF_TEXT,
+        max_lines=6,
+    )
+    ops.extend(role_fit_label_ops)
+    ops.extend(role_fit_body_ops)
+    ops.extend(role_fit_skills_label)
+    ops.extend(role_fit_skills_body)
+    ops.extend(role_fit_gaps_label)
+    ops.extend(role_fit_gaps_body)
+
+    probe_x = 40 + lower_width + gap
+    ops.append(_pdf_rect_top(probe_x, lower_top, lower_width, lower_height, fill_color=_PDF_CARD_BG, stroke_color=_PDF_BORDER_SOFT))
+    probe_label_ops, _ = _pdf_text_block_ops(
+        "What to probe",
+        x=probe_x + 16,
+        top=lower_top + 16,
+        width=lower_width - 32,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    probe_body_ops, probe_body_bottom = _pdf_text_block_ops(
+        "Use the next interview to validate the weakest evidence behind the TAALI recommendation.",
+        x=probe_x + 16,
+        top=lower_top + 40,
+        width=lower_width - 32,
+        font="F1",
+        size=11,
+        leading=15,
+        color=_PDF_TEXT,
+        max_lines=4,
+    )
+    probe_list_ops, _ = _pdf_text_block_ops(
+        "\n".join(f"- {item}" for item in probe_items) if probe_items else "- No specific probe areas were generated for this assessment.",
+        x=probe_x + 16,
+        top=probe_body_bottom + 14,
+        width=lower_width - 32,
+        font="F1",
+        size=10,
+        leading=14,
+        color=_PDF_TEXT,
+        max_lines=9,
+    )
+    ops.extend(probe_label_ops)
+    ops.extend(probe_body_ops)
+    ops.extend(probe_list_ops)
+
+    footer_top = 776
+    ops.append(_pdf_rect_top(40, footer_top, 515, 1, fill_color=_PDF_BORDER_SOFT))
+    footer_text = f"Generated {generated_at[:19].replace('T', ' ')}" if generated_at else "Generated by TAALI"
+    footer_left_ops, _ = _pdf_text_block_ops(
+        footer_text,
+        x=40,
+        top=footer_top + 8,
+        width=260,
+        font="F1",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    footer_right_ops, _ = _pdf_text_block_ops(
+        "TAALI | AI-native engineering assessment",
+        x=320,
+        top=footer_top + 8,
+        width=235,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    ops.extend(footer_left_ops)
+    ops.extend(footer_right_ops)
+
+    return _build_pdf_with_dimensions(
+        ["\n".join(ops).encode("latin-1", "ignore")],
+        page_width=_A4_PAGE_WIDTH,
+        page_height=_A4_PAGE_HEIGHT,
+    )
 
 
 def _assessment_score_components_100(assessment: Assessment) -> dict[str, float | None]:
@@ -895,10 +1478,12 @@ def build_client_assessment_report_payload(
         "interview_focus": improvements,
         "role_fit_summary": str(details.get("summary") or "").strip() or None,
         "matching_skills": [str(item).strip() for item in details.get("matching_skills", []) if str(item).strip()],
+        "missing_skills": [str(item).strip() for item in details.get("missing_skills", []) if str(item).strip()],
         "experience_highlights": [str(item).strip() for item in details.get("experience_highlights", []) if str(item).strip()],
         "concerns": [str(item).strip() for item in details.get("concerns", []) if str(item).strip()],
         "requirements_coverage": details.get("requirements_coverage") if isinstance(details.get("requirements_coverage"), dict) else {},
         "requirements_assessment": requirements,
+        "first_requirement_gap": first_requirement_gap,
         "integrity_note": _client_report_integrity_note(assessment, score_breakdown),
         "score_formula_version": score_breakdown.get("score_formula_version"),
     }
