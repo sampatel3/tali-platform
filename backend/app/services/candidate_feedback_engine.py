@@ -8,6 +8,7 @@ import textwrap
 from typing import Any
 import unicodedata
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ..models.assessment import Assessment, AssessmentStatus
@@ -146,6 +147,17 @@ def _is_completed(assessment: Assessment) -> bool:
     }
 
 
+def _completed_assessment_query_filter():
+    return and_(
+        Assessment.completed_at.isnot(None),
+        Assessment.is_voided.is_(False),
+        or_(
+            Assessment.status == AssessmentStatus.COMPLETED,
+            Assessment.completed_due_to_timeout.is_(True),
+        ),
+    )
+
+
 def _score_100(assessment: Assessment) -> float | None:
     final_score = getattr(assessment, "final_score", None)
     if isinstance(final_score, (int, float)):
@@ -211,9 +223,7 @@ def _benchmark_payload(db: Session, assessment: Assessment, scores: dict[str, fl
         .filter(
             Assessment.organization_id == assessment.organization_id,
             Assessment.task_id == assessment.task_id,
-            Assessment.status.in_(
-                [AssessmentStatus.COMPLETED, AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT]
-            ),
+            _completed_assessment_query_filter(),
         )
         .all()
     )

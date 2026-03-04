@@ -5,6 +5,8 @@ import io
 from types import SimpleNamespace
 
 from PyPDF2 import PdfReader
+from sqlalchemy import select
+from sqlalchemy.dialects import postgresql
 
 from app.domains.assessments_runtime import candidate_runtime_routes as candidate_runtime_module
 from app.models.assessment import Assessment, AssessmentStatus
@@ -12,6 +14,7 @@ from app.models.candidate import Candidate
 from app.models.organization import Organization
 from app.models.task import Task
 from app.models.user import User
+from app.services.candidate_feedback_engine import _completed_assessment_query_filter
 from tests.conftest import (
     TestingSessionLocal,
     auth_headers,
@@ -890,6 +893,18 @@ def test_recruiter_report_pdf_is_client_facing_and_wrapped(client):
     assert "Score Snapshot" in extracted_text
     assert "Suggested Interview Focus" in extracted_text
     assert "Strong platform and data engineering background" in extracted_text
+
+
+def test_report_benchmark_filter_avoids_timeout_enum_literal():
+    compiled = (
+        select(Assessment.id)
+        .where(_completed_assessment_query_filter())
+        .compile(dialect=postgresql.dialect())
+    )
+    params = {key: str(value) for key, value in compiled.params.items()}
+
+    assert "COMPLETED_DUE_TO_TIMEOUT" not in " ".join(params.values())
+    assert any("completed" in value.lower() for value in params.values())
 
 
 def test_public_feedback_rejected_before_finalize(client):
