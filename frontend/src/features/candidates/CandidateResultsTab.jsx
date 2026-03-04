@@ -1,5 +1,5 @@
 import React from 'react';
-import { AlertTriangle, CheckCircle } from 'lucide-react';
+import { CheckCircle } from 'lucide-react';
 import {
   PolarAngleAxis,
   PolarGrid,
@@ -196,12 +196,43 @@ export const CandidateResultsTab = ({
     return null;
   };
 
+  const sectionLinks = [
+    { id: 'candidate-results-overview', label: 'Overview' },
+    { id: 'candidate-results-evidence', label: 'Evidence' },
+    integrityNotice ? { id: 'candidate-results-integrity', label: 'Integrity' } : null,
+    { id: 'candidate-results-benchmarks', label: 'Benchmarks' },
+    { id: 'candidate-results-metadata', label: 'Metadata' },
+    { id: 'candidate-results-glossary', label: 'Glossary' },
+  ].filter(Boolean);
+
+  const scrollToSection = (sectionId) => {
+    if (typeof document === 'undefined') return;
+    document.getElementById(sectionId)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  };
+
   return (
     <div className="space-y-6">
-      <Card className="bg-[var(--taali-purple-soft)] px-3 py-2">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <p className="text-xs text-[var(--taali-muted)]">Compare this candidate with others in the same role.</p>
-          <div className="flex items-center gap-2">
+      <Card className="bg-[var(--taali-purple-soft)] px-3 py-3">
+        <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+          <div>
+            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Results navigation</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {sectionLinks.map((section) => (
+                <Button
+                  key={section.id}
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  className="!rounded-full !border !border-[var(--taali-border-soft)] !bg-[var(--taali-surface)]"
+                  onClick={() => scrollToSection(section.id)}
+                >
+                  {section.label}
+                </Button>
+              ))}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs text-[var(--taali-muted)]">Compare this candidate with others in the same role.</p>
             {overallTopPercent != null ? (
               <Badge variant="purple" className="font-mono text-[11px]">Top {overallTopPercent}%</Badge>
             ) : null}
@@ -217,44 +248,46 @@ export const CandidateResultsTab = ({
         </div>
       </Card>
 
-      {calibrationScore != null ? (
-        <Panel className="p-3.5">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div>
-              <div className="font-mono text-xs text-[var(--taali-muted)]">Baseline AI collaboration (calibration)</div>
-              <div className="font-mono text-xl font-bold" style={{ color: scoreColor(calibrationScore) }}>
-                {calibrationScore.toFixed(1)}/10 · {scoreLabel(calibrationScore)}
+      <div id="candidate-results-overview" className="scroll-mt-36 space-y-6">
+        {calibrationScore != null ? (
+          <Panel className="p-3.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <div className="font-mono text-xs text-[var(--taali-muted)]">Baseline AI collaboration (calibration)</div>
+                <div className="font-mono text-xl font-bold" style={{ color: scoreColor(calibrationScore) }}>
+                  {calibrationScore.toFixed(1)}/10 · {scoreLabel(calibrationScore)}
+                </div>
               </div>
+              <Button type="button" variant="secondary" size="sm" onClick={onOpenOnboarding}>
+                What does this score mean?
+              </Button>
             </div>
-            <Button type="button" variant="secondary" size="sm" onClick={onOpenOnboarding}>
-              What does this score mean?
-            </Button>
-          </div>
-        </Panel>
-      ) : null}
+          </Panel>
+        ) : null}
 
-      {hasAnyCategoryScore ? (
-        <Panel className="p-3.5">
-          <div className="mb-3 text-base font-bold">Category Breakdown</div>
-          <div style={{ width: '100%', height: 320 }}>
-            <ResponsiveContainer>
-              <RadarChart data={radarData}>
-                <PolarGrid stroke="var(--taali-purple-soft)" />
-                <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'var(--taali-font)', fill: 'var(--taali-muted)' }} />
-                <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10, fill: 'var(--taali-muted)' }} />
-                <Radar name={candidate.name} dataKey="score" stroke="var(--taali-purple)" fill="var(--taali-purple)" fillOpacity={0.2} />
-              </RadarChart>
-            </ResponsiveContainer>
-          </div>
-        </Panel>
-      ) : (
-        <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
-          <div className="font-bold text-[var(--taali-text)]">Score data unavailable</div>
-          <div className="text-xs text-[var(--taali-muted)] mt-1">{getStatusAwareEmptyMessage(assessmentStatus)}</div>
-        </Panel>
-      )}
+        {hasAnyCategoryScore ? (
+          <Panel className="p-3.5">
+            <div className="mb-3 text-base font-bold">Category Breakdown</div>
+            <div style={{ width: '100%', height: 320 }}>
+              <ResponsiveContainer>
+                <RadarChart data={radarData}>
+                  <PolarGrid stroke="var(--taali-purple-soft)" />
+                  <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'var(--taali-font)', fill: 'var(--taali-muted)' }} />
+                  <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10, fill: 'var(--taali-muted)' }} />
+                  <Radar name={candidate.name} dataKey="score" stroke="var(--taali-purple)" fill="var(--taali-purple)" fillOpacity={0.2} />
+                </RadarChart>
+              </ResponsiveContainer>
+            </div>
+          </Panel>
+        ) : (
+          <Panel className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
+            <div className="font-bold text-[var(--taali-text)]">Score data unavailable</div>
+            <div className="mt-1 text-xs text-[var(--taali-muted)]">{getStatusAwareEmptyMessage(assessmentStatus)}</div>
+          </Panel>
+        )}
+      </div>
 
-      <div className="space-y-3">
+      <div id="candidate-results-evidence" className="scroll-mt-36 space-y-3">
         <div className="text-base font-bold text-[var(--taali-text)]">Evidence and interpretation</div>
         {CATEGORY_CONFIG.map((cat) => {
           const catScore = catScores[cat.key];
@@ -274,7 +307,7 @@ export const CandidateResultsTab = ({
               >
                 <div className="flex min-w-0 items-center gap-3">
                   <span>{cat.icon}</span>
-                  <span className="truncate font-bold" title={cat.description}>{cat.label}</span>
+                  <span className="min-w-0 font-bold leading-snug text-[var(--taali-text)]" title={cat.description}>{cat.label}</span>
                   <Badge variant="muted" className="font-mono text-[11px]">Weight: {cat.weight}</Badge>
                   {benchmarkBadge ? (
                     <Badge variant={benchmarkBadge.variant} className="font-mono text-[11px]">{benchmarkBadge.label}</Badge>
@@ -299,11 +332,11 @@ export const CandidateResultsTab = ({
                 <div className="border-t border-[var(--taali-border-muted)] bg-[var(--taali-purple-soft)] px-4 py-3">
                   {Object.entries(metrics).map(([metricKey, metricVal]) => (
                     <div key={metricKey} className="mb-3 last:mb-0">
-                      <div className="mb-1 flex items-center gap-3">
-                        <div className="w-44 font-mono text-sm text-[var(--taali-text)]" title={getMetricMetaResolved(metricKey).description}>
+                      <div className="mb-1 grid gap-2 md:grid-cols-[minmax(0,13rem)_minmax(0,1fr)_5.5rem] md:items-center md:gap-3">
+                        <div className="min-w-0 font-mono text-sm leading-snug text-[var(--taali-text)]" title={getMetricMetaResolved(metricKey).description}>
                           {getMetricMetaResolved(metricKey).label}
                         </div>
-                        <div className="h-2.5 flex-1 overflow-hidden bg-[var(--taali-border-muted)]">
+                        <div className="h-2.5 overflow-hidden bg-[var(--taali-border-muted)]">
                           <div
                             className="h-full"
                             style={{
@@ -312,12 +345,12 @@ export const CandidateResultsTab = ({
                             }}
                           />
                         </div>
-                        <div className="w-24 text-right font-mono text-sm font-bold">
+                        <div className="text-right font-mono text-sm font-bold">
                           {metricVal != null ? `${Number(metricVal).toFixed(1)}/10` : '—'}
                         </div>
                       </div>
                       {catExplanations[metricKey] ? (
-                        <div className="pl-44 text-xs text-[var(--taali-muted)]">{catExplanations[metricKey]}</div>
+                        <div className="text-xs leading-5 text-[var(--taali-muted)] md:pl-[13.75rem]">{catExplanations[metricKey]}</div>
                       ) : null}
                     </div>
                   ))}
@@ -355,13 +388,13 @@ export const CandidateResultsTab = ({
       </div>
 
       {integrityNotice ? (
-        <div className="space-y-3">
+        <div id="candidate-results-integrity" className="scroll-mt-36 space-y-3">
           <div className="text-base font-bold text-[var(--taali-text)]">Integrity and score modifiers</div>
           {integrityNotice}
         </div>
       ) : null}
 
-      <Panel className="p-4">
+      <Panel id="candidate-results-benchmarks" className="scroll-mt-36 p-4">
         <div className="mb-2 font-bold">Task Benchmarks</div>
         {benchmarksLoading ? (
           <div className="font-mono text-xs text-[var(--taali-muted)]">Loading benchmark data...</div>
@@ -395,7 +428,7 @@ export const CandidateResultsTab = ({
         )}
       </Panel>
 
-      <Panel className="p-4">
+      <Panel id="candidate-results-metadata" className="scroll-mt-36 p-4">
         <div className="mb-3 font-bold">Assessment Metadata</div>
         <div className="grid grid-cols-2 gap-3 font-mono text-sm md:grid-cols-3">
           <div><span className="text-[var(--taali-muted)]">Duration:</span> {assessment.total_duration_seconds ? `${Math.floor(assessment.total_duration_seconds / 60)}m ${assessment.total_duration_seconds % 60}s` : '—'}</div>
@@ -407,7 +440,7 @@ export const CandidateResultsTab = ({
         </div>
       </Panel>
 
-      <Panel className="p-4">
+      <Panel id="candidate-results-glossary" className="scroll-mt-36 p-4">
         <div className="mb-3 font-bold">Scoring Glossary</div>
         <ScoringCardGrid
           items={CATEGORY_CONFIG.map((cat) => ({

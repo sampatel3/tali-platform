@@ -13,7 +13,7 @@ import {
   Panel,
   Sheet,
   Spinner,
-  cx,
+  TabBar,
 } from '../../shared/ui/TaaliPrimitives';
 import { buildStandingCandidateReportModel } from './assessmentViewModels';
 import {
@@ -42,7 +42,7 @@ export const AssessmentResultsPage = ({
   const candidatesApi = apiClient.candidates;
   const tasksApi = apiClient.tasks;
   const scoringApi = 'scoring' in apiClient ? apiClient.scoring : null;
-  const [activeTab, setActiveTab] = useState('results');
+  const [activeTab, setActiveTab] = useState('summary');
   const [busyAction, setBusyAction] = useState('');
   const [noteText, setNoteText] = useState('');
   const [avgCalibrationScore, setAvgCalibrationScore] = useState(null);
@@ -592,12 +592,13 @@ export const AssessmentResultsPage = ({
   };
 
   const topTabs = [
-    { id: 'results', label: 'Results' },
-    { id: 'ai-usage', label: 'AI Usage' },
-    { id: 'cv-fit', label: 'CV & Fit' },
-    { id: 'code-git', label: 'Code / Git' },
-    { id: 'evaluate', label: 'Evaluate' },
-    { id: 'timeline', label: 'Timeline' },
+    { id: 'summary', label: 'Summary', panelId: 'candidate-tabpanel-summary' },
+    { id: 'results', label: 'Results', panelId: 'candidate-tabpanel-results' },
+    { id: 'ai-usage', label: 'AI Usage', panelId: 'candidate-tabpanel-ai-usage' },
+    { id: 'cv-fit', label: 'CV & Fit', panelId: 'candidate-tabpanel-cv-fit' },
+    { id: 'code-git', label: 'Code / Git', panelId: 'candidate-tabpanel-code-git' },
+    { id: 'evaluate', label: 'Evaluate', panelId: 'candidate-tabpanel-evaluate' },
+    { id: 'timeline', label: 'Timeline', panelId: 'candidate-tabpanel-timeline' },
   ];
 
   const selectedComparisonCandidates = compareOptions.filter((item) =>
@@ -638,146 +639,164 @@ export const AssessmentResultsPage = ({
           </Panel>
         ) : null}
 
-        <CandidateReportView model={reportModel} className="mb-4" />
+        <Panel className="sticky top-20 z-20 mb-4 p-3 backdrop-blur-md">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <TabBar tabs={topTabs} activeTab={activeTab} onChange={setActiveTab} density="compact" />
+            <div className="flex flex-wrap items-center gap-2">
+              {reportModel.source ? (
+                <Badge variant={reportModel.source.badgeVariant} className="font-mono text-[11px]">
+                  {reportModel.source.label}
+                </Badge>
+              ) : null}
+              <Badge variant={reportModel.recommendation?.variant || 'muted'} className="font-mono text-[11px]">
+                {reportModel.recommendation?.label || 'Pending review'}
+              </Badge>
+            </div>
+          </div>
+        </Panel>
 
-        <Panel className="mb-4 p-4">
-          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-            <div>
-              <div className="mb-3 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Recruiter actions</div>
-              <div className="flex flex-wrap gap-2">
-                <Button type="button" size="sm" variant="secondary" onClick={handleDownloadReport} disabled={busyAction !== ''}>
-                  {busyAction === 'report' ? 'Downloading...' : 'Download PDF'}
-                </Button>
-                <Button type="button" size="sm" variant="secondary" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
-                  {busyAction === 'workable' ? 'Posting...' : 'Post to Workable'}
-                </Button>
-                {canResendInvite ? (
-                  <Button type="button" size="sm" variant="secondary" onClick={handleResendInvite} disabled={busyAction !== ''}>
-                    {busyAction === 'resend' ? 'Resending...' : 'Resend Invite'}
-                  </Button>
-                ) : null}
-                {canRequestCvUpload ? (
-                  <Button type="button" size="sm" variant="secondary" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
-                    {busyAction === 'request-cv' ? 'Sending CV request...' : 'Request CV Upload'}
-                  </Button>
-                ) : null}
-                <Button type="button" size="sm" variant="danger" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
-                  {busyAction === 'delete' ? 'Deleting...' : 'Delete'}
-                </Button>
-              </div>
+        {activeTab === 'summary' ? (
+          <div role="tabpanel" id="candidate-tabpanel-summary" aria-labelledby="summary" className="space-y-4">
+            <CandidateReportView model={reportModel} />
 
-              <div className="mt-4">
-                <div className="mb-2 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Recruiter notes</div>
-                <div className="flex gap-2">
-                  <Input
-                    type="text"
-                    className="flex-1"
-                    placeholder="Add note about this candidate"
-                    value={noteText}
-                    onChange={(e) => setNoteText(e.target.value)}
-                  />
-                  <Button type="button" size="sm" variant="secondary" onClick={handleAddNote} disabled={busyAction !== ''}>
-                    {busyAction === 'note' ? 'Saving...' : 'Save Note'}
-                  </Button>
+            <Panel className="p-4">
+              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                <div>
+                  <div className="mb-1 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Client report and recruiter actions</div>
+                  <p className="text-sm text-[var(--taali-muted)]">
+                    Export a client-facing assessment brief, add recruiter notes, or move the candidate into the next system.
+                  </p>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Button type="button" size="sm" variant="secondary" onClick={handleDownloadReport} disabled={busyAction !== ''}>
+                      {busyAction === 'report' ? 'Downloading...' : 'Download client report'}
+                    </Button>
+                    <Button type="button" size="sm" variant="secondary" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
+                      {busyAction === 'workable' ? 'Posting...' : 'Post to Workable'}
+                    </Button>
+                    {canResendInvite ? (
+                      <Button type="button" size="sm" variant="secondary" onClick={handleResendInvite} disabled={busyAction !== ''}>
+                        {busyAction === 'resend' ? 'Resending...' : 'Resend Invite'}
+                      </Button>
+                    ) : null}
+                    {canRequestCvUpload ? (
+                      <Button type="button" size="sm" variant="secondary" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
+                        {busyAction === 'request-cv' ? 'Sending CV request...' : 'Request CV Upload'}
+                      </Button>
+                    ) : null}
+                    <Button type="button" size="sm" variant="danger" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
+                      {busyAction === 'delete' ? 'Deleting...' : 'Delete'}
+                    </Button>
+                  </div>
+
+                  <div className="mt-4">
+                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Recruiter notes</div>
+                    <div className="flex gap-2">
+                      <Input
+                        type="text"
+                        className="flex-1"
+                        placeholder="Add note about this candidate"
+                        value={noteText}
+                        onChange={(e) => setNoteText(e.target.value)}
+                      />
+                      <Button type="button" size="sm" variant="secondary" onClick={handleAddNote} disabled={busyAction !== ''}>
+                        {busyAction === 'note' ? 'Saving...' : 'Save Note'}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-4 py-4">
+                  <div className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Workable status</div>
+                  <div className="mt-3 text-sm text-[var(--taali-text)]">
+                    <span className={workableStatus.posted ? 'font-semibold text-[var(--taali-success)]' : 'font-semibold text-[var(--taali-text)]'}>
+                      {workableStatus.posted ? 'Posted' : 'Not posted'}
+                    </span>
+                    {workableStatus.postedAt ? ` on ${new Date(workableStatus.postedAt).toLocaleString()}` : ''}
+                  </div>
                 </div>
               </div>
-            </div>
-
-            <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-4 py-4">
-              <div className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Workable status</div>
-              <div className="mt-3 text-sm text-[var(--taali-text)]">
-                <span className={workableStatus.posted ? 'font-semibold text-[var(--taali-success)]' : 'font-semibold text-[var(--taali-text)]'}>
-                  {workableStatus.posted ? 'Posted' : 'Not posted'}
-                </span>
-                {workableStatus.postedAt ? ` on ${new Date(workableStatus.postedAt).toLocaleString()}` : ''}
-              </div>
-            </div>
+            </Panel>
           </div>
-        </Panel>
-
-        <Panel className="mb-4 overflow-hidden p-0">
-          <div className="flex flex-wrap">
-            {topTabs.map((tab, index) => (
-              <button
-                key={tab.id}
-                type="button"
-                className={cx(
-                  'min-w-[96px] flex-1 px-3 py-2 font-mono text-xs font-bold transition-colors',
-                  index < topTabs.length - 1 ? 'border-r border-[var(--taali-border-muted)]' : '',
-                  activeTab === tab.id
-                    ? 'bg-[var(--taali-purple)] text-white'
-                    : 'bg-[var(--taali-surface)] hover:bg-[var(--taali-surface-subtle)]'
-                )}
-                onClick={() => setActiveTab(tab.id)}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        </Panel>
+        ) : null}
 
         {activeTab === 'results' ? (
-          <CandidateResultsTab
-            candidate={candidate}
-            expandedCategory={expandedCategory}
-            setExpandedCategory={setExpandedCategory}
-            getCategoryScores={getCategoryScores}
-            getMetricMetaResolved={getMetricMetaResolved}
-            onOpenComparison={handleOpenComparison}
-            onOpenOnboarding={() => setResultsOnboardingOpen(true)}
-            onGenerateInterviewGuide={handleGenerateInterviewGuide}
-            interviewGuideLoading={interviewDebriefLoading}
-            canGenerateInterviewGuide={canGenerateInterviewGuide}
-            benchmarksLoading={benchmarksLoading}
-            benchmarksData={benchmarksData}
-          />
+          <div role="tabpanel" id="candidate-tabpanel-results" aria-labelledby="results">
+            <CandidateResultsTab
+              candidate={candidate}
+              expandedCategory={expandedCategory}
+              setExpandedCategory={setExpandedCategory}
+              getCategoryScores={getCategoryScores}
+              getMetricMetaResolved={getMetricMetaResolved}
+              onOpenComparison={handleOpenComparison}
+              onOpenOnboarding={() => setResultsOnboardingOpen(true)}
+              onGenerateInterviewGuide={handleGenerateInterviewGuide}
+              interviewGuideLoading={interviewDebriefLoading}
+              canGenerateInterviewGuide={canGenerateInterviewGuide}
+              benchmarksLoading={benchmarksLoading}
+              benchmarksData={benchmarksData}
+            />
+          </div>
         ) : null}
 
         {activeTab === 'ai-usage' ? (
-          <CandidateAiUsageTab candidate={candidate} avgCalibrationScore={avgCalibrationScore} />
+          <div role="tabpanel" id="candidate-tabpanel-ai-usage" aria-labelledby="ai-usage">
+            <CandidateAiUsageTab candidate={candidate} avgCalibrationScore={avgCalibrationScore} />
+          </div>
         ) : null}
 
         {activeTab === 'cv-fit' ? (
-          <CandidateCvFitTab
-            candidate={candidate}
-            onDownloadCandidateDoc={handleDownloadCandidateDoc}
-            onRequestCvUpload={canRequestCvUpload ? handleRequestCvUpload : null}
-            requestingCvUpload={busyAction === 'request-cv'}
-          />
+          <div role="tabpanel" id="candidate-tabpanel-cv-fit" aria-labelledby="cv-fit">
+            <CandidateCvFitTab
+              candidate={candidate}
+              onDownloadCandidateDoc={handleDownloadCandidateDoc}
+              onRequestCvUpload={canRequestCvUpload ? handleRequestCvUpload : null}
+              requestingCvUpload={busyAction === 'request-cv'}
+            />
+          </div>
         ) : null}
 
         {activeTab === 'evaluate' ? (
-          <CandidateEvaluateTab
-            candidate={candidate}
-            evaluationRubric={taskRubric || candidate?._raw?.evaluation_rubric || null}
-            assessmentId={assessmentId}
-            aiEvalSuggestion={aiEvalSuggestion}
-            onGenerateAiSuggestions={handleGenerateAiSuggestions}
-            aiEvalLoading={busyAction === 'ai-eval'}
-            manualEvalScores={manualEvalScores}
-            setManualEvalScores={setManualEvalScores}
-            manualEvalStrengths={manualEvalStrengths}
-            setManualEvalStrengths={setManualEvalStrengths}
-            manualEvalImprovements={manualEvalImprovements}
-            setManualEvalImprovements={setManualEvalImprovements}
-            manualEvalSummary={manualEvalSummary}
-            setManualEvalSummary={setManualEvalSummary}
-            manualEvalSaving={manualEvalSaving}
-            setManualEvalSaving={setManualEvalSaving}
-            toLineList={toLineList}
-            toEvidenceTextareaValue={toEvidenceTextareaValue}
-            assessmentsApi={assessmentsApi}
-            onFinalizeCandidateFeedback={handleFinalizeCandidateFeedback}
-            finalizeFeedbackLoading={busyAction === 'feedback-finalize'}
-            candidateFeedbackReady={candidateFeedbackMeta.ready}
-            candidateFeedbackSentAt={candidateFeedbackMeta.sentAt}
-            canFinalizeCandidateFeedback={canGenerateInterviewGuide}
-          />
+          <div role="tabpanel" id="candidate-tabpanel-evaluate" aria-labelledby="evaluate">
+            <CandidateEvaluateTab
+              candidate={candidate}
+              evaluationRubric={taskRubric || candidate?._raw?.evaluation_rubric || null}
+              assessmentId={assessmentId}
+              aiEvalSuggestion={aiEvalSuggestion}
+              onGenerateAiSuggestions={handleGenerateAiSuggestions}
+              aiEvalLoading={busyAction === 'ai-eval'}
+              manualEvalScores={manualEvalScores}
+              setManualEvalScores={setManualEvalScores}
+              manualEvalStrengths={manualEvalStrengths}
+              setManualEvalStrengths={setManualEvalStrengths}
+              manualEvalImprovements={manualEvalImprovements}
+              setManualEvalImprovements={setManualEvalImprovements}
+              manualEvalSummary={manualEvalSummary}
+              setManualEvalSummary={setManualEvalSummary}
+              manualEvalSaving={manualEvalSaving}
+              setManualEvalSaving={setManualEvalSaving}
+              toLineList={toLineList}
+              toEvidenceTextareaValue={toEvidenceTextareaValue}
+              assessmentsApi={assessmentsApi}
+              onFinalizeCandidateFeedback={handleFinalizeCandidateFeedback}
+              finalizeFeedbackLoading={busyAction === 'feedback-finalize'}
+              candidateFeedbackReady={candidateFeedbackMeta.ready}
+              candidateFeedbackSentAt={candidateFeedbackMeta.sentAt}
+              canFinalizeCandidateFeedback={canGenerateInterviewGuide}
+            />
+          </div>
         ) : null}
 
-        {activeTab === 'code-git' ? <CandidateCodeGitTab candidate={candidate} /> : null}
+        {activeTab === 'code-git' ? (
+          <div role="tabpanel" id="candidate-tabpanel-code-git" aria-labelledby="code-git">
+            <CandidateCodeGitTab candidate={candidate} />
+          </div>
+        ) : null}
 
-        {activeTab === 'timeline' ? <CandidateTimelineTab candidate={candidate} /> : null}
+        {activeTab === 'timeline' ? (
+          <div role="tabpanel" id="candidate-tabpanel-timeline" aria-labelledby="timeline">
+            <CandidateTimelineTab candidate={candidate} />
+          </div>
+        ) : null}
 
         <Sheet
           open={compareSheetOpen}

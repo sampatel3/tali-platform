@@ -109,13 +109,13 @@ export const DemoExperiencePage = ({ onNavigate }) => {
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-4">
           <Logo onClick={() => onNavigate('landing')} />
           <div className="flex flex-wrap items-center justify-end gap-2">
-            <GlobalThemeToggle className="shrink-0" />
             <Button type="button" variant="secondary" size="sm" className="font-mono" onClick={() => onNavigate('landing')}>
               Back to landing
             </Button>
             <Button type="button" variant="primary" size="sm" className="font-mono" onClick={() => onNavigate('register')}>
               Join TAALI
             </Button>
+            <GlobalThemeToggle className="shrink-0" />
           </div>
         </div>
       </nav>

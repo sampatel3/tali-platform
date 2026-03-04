@@ -461,7 +461,7 @@ describe('CandidatesPage', () => {
     const candidateCell = await screen.findByText('Rationale Candidate');
     const candidateRow = candidateCell.closest('tr');
     expect(candidateRow).not.toBeNull();
-    fireEvent.click(within(candidateRow).getByRole('button', { name: 'Details' }));
+    fireEvent.click(within(candidateRow).getByRole('button', { name: 'View assessment' }));
 
     await waitFor(() => {
       const dialog = screen.getByRole('dialog', { name: 'Rationale Candidate' });
@@ -533,7 +533,7 @@ describe('CandidatesPage', () => {
     const candidateCell = await screen.findByText('Standing Candidate');
     const candidateRow = candidateCell.closest('tr');
     expect(candidateRow).not.toBeNull();
-    fireEvent.click(within(candidateRow).getByRole('button', { name: 'Details' }));
+    fireEvent.click(within(candidateRow).getByRole('button', { name: 'View assessment' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Standing Candidate' });
     fireEvent.click(within(dialog).getByRole('button', { name: 'View full page' }));

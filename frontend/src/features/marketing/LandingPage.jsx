@@ -39,24 +39,43 @@ const CandidateResultsPreviewView = lazy(() =>
 );
 
 const TRUST_ITEMS = [
-  'Built for Cursor, Codex, and Claude Code workflows',
-  'Structured rubric across execution, judgment, and communication',
-  'ATS-ready candidate summaries with recruiter-facing evidence',
-  'Real repository context instead of toy algorithm prompts',
+  'Hire AI-native engineers based on real working behavior, not resume keywords alone',
+  'Assess prompt judgment, context framing, execution quality, and communication in one rubric',
+  'Built for recruiters, agencies, hiring managers, and technical leaders running modern hiring loops',
+  'Share evidence-backed reports with clients or employers without replaying the full session',
 ];
 
 const PROOF_POINTS = [
   {
-    title: 'Clear hiring signal',
-    description: 'Separate strong execution from candidates who mainly paste or over-rely on agents without direction.',
+    title: 'Assess AI-native skillsets',
+    description: 'Measure how candidates prompt, structure context, verify output, and recover when the first attempt fails.',
   },
   {
-    title: 'Consistent review surfaces',
-    description: 'The same evidence model powers the recruiter sidebar, candidate detail page, and assessment summary.',
+    title: 'Shortlist with confidence',
+    description: 'See score, role fit, interview probes, and recruiter evidence in one calm review surface instead of piecing together notes.',
   },
   {
-    title: 'Modern hiring workflow',
-    description: 'More ambient, calmer surfaces and stronger visual hierarchy keep the product technical without feeling dated.',
+    title: 'Client-ready output',
+    description: 'Give employers and hiring managers a clear report they can use in decision meetings, not a messy transcript dump.',
+  },
+];
+
+const AUDIENCE_ITEMS = [
+  {
+    title: 'Recruiting agencies',
+    description: 'Send stronger shortlists with proof. TAALI helps agencies show why a candidate is worth moving forward, not just that they passed a task.',
+  },
+  {
+    title: 'In-house talent teams',
+    description: 'Hire engineers for modern product, platform, data, and AI roles where success depends on using AI tools well under real delivery pressure.',
+  },
+  {
+    title: 'Hiring managers and technical leaders',
+    description: 'See how candidates scope the work, guide agents, validate outputs, and make tradeoffs before you invest in deeper interview loops.',
+  },
+  {
+    title: 'Teams building AI-native products',
+    description: 'Benchmark the operating style you actually need: prompt clarity, context quality, execution judgment, communication, and role fit.',
   },
 ];
 
@@ -208,14 +227,14 @@ const HeroSection = ({ onNavigate }) => (
     <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(157,0,255,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(255,196,89,0.12),transparent_24%)]" />
     <PageContainer className="relative pb-8 pt-5 lg:pb-10 lg:pt-6" width="wide">
       <div className="max-w-[58rem]">
-        <Badge variant="purple" className="mb-4">AI-native technical assessments for recruiters and agencies</Badge>
+        <Badge variant="purple" className="mb-4">Hire AI-native engineers with evidence</Badge>
         <h1 className="taali-display max-w-[52rem] text-[3rem] font-semibold leading-[0.97] text-[var(--taali-text)] md:text-[4.55rem]">
-          Stop hiring for yesterday&apos;s skills.
+          Assess the skills modern engineering teams actually need.
           <br />
-          Start hiring with TAALI.
+          Hire AI-native talent with TAALI.
         </h1>
         <p className="mt-4 max-w-[46rem] text-[1rem] leading-7 text-[var(--taali-muted)] md:text-[1.08rem]">
-          TAALI turns AI-assisted technical work into hiring signal. Tasks are built around real delivery pressure, the runtime captures how candidates use AI in context, and every finished session becomes evidence you can rank, defend, and share.
+          TAALI is built for recruiters, agencies, hiring managers, and technical leaders evaluating engineers who work with Cursor, Codex, Claude Code, and modern AI workflows. It turns AI-assisted technical work into hiring signal you can rank, defend, and share.
         </p>
 
         <div className="mt-6 flex flex-wrap items-center gap-2.5">
@@ -233,11 +252,36 @@ const HeroSection = ({ onNavigate }) => (
         </div>
 
         <div className="mt-5 grid max-w-[44rem] gap-2 sm:grid-cols-4">
-          <HeroMetric label="Task design" value="Role-traceable" />
-          <HeroMetric label="Signal capture" value="Prompt + diff trace" />
-          <HeroMetric label="Post-task output" value="Buyer-ready packet" />
-          <HeroMetric label="Recruiter use" value="Defensible review" />
+          <HeroMetric label="Hiring target" value="AI-native talent" />
+          <HeroMetric label="Skills assessed" value="Prompt + execution" />
+          <HeroMetric label="Output" value="Client-ready report" />
+          <HeroMetric label="Decision use" value="Shortlist confidence" />
         </div>
+      </div>
+    </PageContainer>
+  </section>
+);
+
+const AudienceSection = () => (
+  <section className="pb-8 lg:pb-10">
+    <PageContainer className="space-y-5" width="wide">
+      <div className="max-w-[62rem]">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--taali-purple)]">WHO IT&apos;S FOR</div>
+        <h2 className="taali-display mt-3 text-4xl font-semibold text-[var(--taali-text)] md:text-5xl">
+          Made for teams hiring engineers who already work with AI.
+        </h2>
+        <p className="mt-4 text-base leading-8 text-[var(--taali-muted)] md:text-lg">
+          If the role depends on agent-assisted coding, prompt judgment, and shipping with modern AI tools, TAALI gives you a much clearer signal than resume screens or generic coding tests.
+        </p>
+      </div>
+
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {AUDIENCE_ITEMS.map((item) => (
+          <Card key={item.title} className="p-5">
+            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-purple)]">{item.title}</div>
+            <p className="mt-3 text-sm leading-7 text-[var(--taali-text)]">{item.description}</p>
+          </Card>
+        ))}
       </div>
     </PageContainer>
   </section>
@@ -252,7 +296,7 @@ const AssessmentExperienceSection = ({ darkMode }) => (
           Real Tasks. Real Signal.
         </h2>
         <p className="mt-4 text-base leading-8 text-[var(--taali-muted)] md:text-lg">
-          TAALI drops candidates into role-traceable engineering work with real repo context, meaningful failure shape, and full telemetry. You see how they frame prompts, use AI, validate decisions, and recover under delivery pressure instead of guessing from a take-home score.
+          TAALI drops candidates into role-traceable engineering work with real repo context, meaningful failure shape, and full telemetry. You see how they frame prompts, use AI, validate decisions, and recover under delivery pressure, so you can assess AI-native execution instead of guessing from a take-home score.
         </p>
       </div>
 
@@ -285,15 +329,15 @@ const CandidateSummarySection = () => (
           Faster Recruitment Decisions.
         </h2>
         <p className="mt-4 text-base leading-8 text-[var(--taali-muted)] md:text-lg">
-          TAALI turns raw assessment activity into a benchmarked recruiter readout with recommendation, risk, and evidence in one place. Hiring managers get clear probe points, agencies get stronger shortlist confidence, and buyers get proof they can trust without replaying the session.
+          TAALI turns raw assessment activity into a benchmarked recruiter readout with recommendation, risk, and evidence in one place. Hiring managers get clear probe points, agencies get stronger shortlist confidence, and employers get proof they can trust without replaying the session.
         </p>
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Badge variant="muted">Stronger shortlist decisions</Badge>
+        <Badge variant="muted">Hire AI-native engineers faster</Badge>
         <Badge variant="muted">Benchmark + percentile context</Badge>
-        <Badge variant="muted">Client-ready proof</Badge>
-        <Badge variant="muted">Probe points for interviews</Badge>
+        <Badge variant="muted">Employer-ready proof</Badge>
+        <Badge variant="muted">Interview probes that matter</Badge>
       </div>
 
       <AmbientProductShowcase heightClass="h-[min(56vh,31rem)]">
@@ -341,7 +385,7 @@ const FrameworkSection = () => {
           A rubric built to measure AI-native engineering judgment.
         </h2>
           <p className="mt-4 text-base leading-8 text-[var(--taali-muted)] md:text-lg">
-            TAALI scores task completion, prompt strategy, context, debugging, communication, and role fit, then turns those signals into a single recruiter-facing review.
+            TAALI scores task completion, prompt strategy, context, debugging, communication, and role fit, then turns those signals into a single recruiter-facing review of AI-native engineering skill.
           </p>
         </div>
 
@@ -396,10 +440,10 @@ const ProofSection = () => (
   <section className="py-8 lg:py-12">
     <PageContainer className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
       <Panel className="bg-[linear-gradient(145deg,var(--taali-surface-subtle),var(--taali-surface-warm))] p-6">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--taali-muted)]">RECRUITER EXPERIENCE</div>
-        <h2 className="taali-display mt-3 text-4xl font-semibold text-[var(--taali-text)]">One calm review surface instead of five disconnected ones.</h2>
+        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--taali-muted)]">WHY TEAMS USE TAALI</div>
+        <h2 className="taali-display mt-3 text-4xl font-semibold text-[var(--taali-text)]">Built for modern technical hiring, not outdated coding tests.</h2>
         <p className="mt-4 text-base leading-8 text-[var(--taali-muted)]">
-          TAALI is designed so the dashboard, candidate detail page, sidebar, and landing experience all feel like the same product: technical, clear, and decisive.
+          Resumes and generic coding exercises miss how engineers actually work with AI. TAALI shows whether a candidate can guide tools well, validate output, and turn AI assistance into reliable delivery.
         </p>
       </Panel>
 
@@ -515,6 +559,7 @@ export const LandingPage = ({ onNavigate }) => {
     <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
       <LandingNav onNavigate={onNavigate} />
       <HeroSection onNavigate={onNavigate} />
+      <AudienceSection />
       <AssessmentExperienceSection darkMode={darkMode} />
       <TrustStrip />
       <CandidateSummarySection />

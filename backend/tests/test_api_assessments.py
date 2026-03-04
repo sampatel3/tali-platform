@@ -1,7 +1,10 @@
 """API tests for assessment endpoints (/api/v1/assessments/)."""
 
 from datetime import datetime, timezone
+import io
 from types import SimpleNamespace
+
+from PyPDF2 import PdfReader
 
 from app.domains.assessments_runtime import candidate_runtime_routes as candidate_runtime_module
 from app.models.assessment import Assessment, AssessmentStatus
@@ -794,6 +797,99 @@ def test_finalize_candidate_feedback_and_fetch_public_report(client):
     assert pdf_resp.status_code == 200
     assert pdf_resp.headers["content-type"].startswith("application/pdf")
     assert pdf_resp.content.startswith(b"%PDF")
+
+
+def test_recruiter_report_pdf_is_client_facing_and_wrapped(client):
+    env = setup_full_environment(client)
+    assessment_id = env["assessment"]["id"]
+
+    with TestingSessionLocal() as db:
+        assessment = db.query(Assessment).filter(Assessment.id == assessment_id).first()
+        assert assessment is not None
+        assessment.status = AssessmentStatus.COMPLETED
+        assessment.score = 7.4
+        assessment.assessment_score = 74.0
+        assessment.final_score = 74.0
+        assessment.taali_score = 78.0
+        assessment.started_at = datetime.now(timezone.utc)
+        assessment.completed_at = datetime.now(timezone.utc)
+        assessment.total_duration_seconds = 2640
+        assessment.total_prompts = 5
+        assessment.tests_passed = 8
+        assessment.tests_total = 10
+        assessment.ai_prompts = [
+            {
+                "message": (
+                    "Please review the failing ingestion worker. Context: the batch jobs run behind a scheduler, "
+                    "must preserve the external interface, and should return structured JSON after the fix."
+                ),
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+            }
+        ]
+        assessment.cv_job_match_score = 84.0
+        assessment.cv_job_match_details = {
+            "summary": "Strong platform and data engineering background with clear production ownership.",
+            "requirements_match_score_100": 80.0,
+            "requirements_coverage": {
+                "total": 3,
+                "met": 2,
+                "partially_met": 1,
+                "missing": 0,
+            },
+            "matching_skills": ["Python", "Airflow", "AWS"],
+            "experience_highlights": [
+                "Led production migration programs with measurable delivery ownership.",
+            ],
+            "concerns": ["Needs deeper AWS Glue migration detail."],
+            "requirements_assessment": [
+                {
+                    "requirement": "Production-grade data pipelines",
+                    "status": "met",
+                    "evidence": "Candidate has led production batch systems and incident response.",
+                },
+                {
+                    "requirement": "AWS Glue migration depth",
+                    "status": "partially_met",
+                    "evidence": "Adjacent AWS delivery is clear, but direct Glue migration examples are thinner.",
+                },
+            ],
+        }
+        assessment.score_breakdown = {
+            "score_formula_version": "taali_v3_role_fit_blended",
+            "category_scores": {
+                "task_completion": 7.8,
+                "prompt_clarity": 8.1,
+                "context_provision": 6.4,
+                "independence_efficiency": 7.6,
+                "response_utilization": 7.0,
+                "debugging_design": 7.3,
+                "written_communication": 8.2,
+                "role_fit": 8.0,
+            },
+            "score_components": {
+                "assessment_score": 74.0,
+                "taali_score": 78.0,
+                "role_fit_score": 82.0,
+                "role_fit_components": {
+                    "cv_fit_score": 84.0,
+                    "requirements_fit_score": 80.0,
+                },
+            },
+        }
+        db.commit()
+
+    resp = client.get(f"/api/v1/assessments/{assessment_id}/report.pdf", headers=env["headers"])
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"].startswith("application/pdf")
+    assert "taali-client-report" in resp.headers["content-disposition"]
+
+    reader = PdfReader(io.BytesIO(resp.content))
+    extracted_text = "\n".join(page.extract_text() or "" for page in reader.pages)
+    assert "TAALI Client Assessment Report" in extracted_text
+    assert "Prepared for employer / client review" in extracted_text
+    assert "Score Snapshot" in extracted_text
+    assert "Suggested Interview Focus" in extracted_text
+    assert "Strong platform and data engineering background" in extracted_text
 
 
 def test_public_feedback_rejected_before_finalize(client):

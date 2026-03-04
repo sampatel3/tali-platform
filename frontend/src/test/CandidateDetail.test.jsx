@@ -314,14 +314,15 @@ describe('CandidateDetailPage', () => {
     expect(screen.getByText('Duration: 45m')).toBeInTheDocument();
   });
 
-  it('renders results tab by default', async () => {
+  it('renders summary tab by default', async () => {
     await renderCandidateDetail();
-    // Results tab should be active
-    expect(screen.getByText('Category Breakdown')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'Summary' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Assessment results')).toBeInTheDocument();
   });
 
   it('renders category scores in results tab', async () => {
     await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
     // Category names appear in the expandable sections
     const taskCompletionElements = screen.getAllByText('Task completion');
     expect(taskCompletionElements.length).toBeGreaterThanOrEqual(1);
@@ -332,13 +333,14 @@ describe('CandidateDetailPage', () => {
 
   it('renders radar chart in results tab', async () => {
     await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
     expect(screen.getByTestId('radar-chart')).toBeInTheDocument();
   });
 
   it('tab switching works - AI Usage tab', async () => {
     await renderCandidateDetail();
 
-    const aiUsageTab = screen.getByText('AI Usage');
+    const aiUsageTab = screen.getByRole('tab', { name: 'AI Usage' });
     fireEvent.click(aiUsageTab);
 
     await waitFor(() => {
@@ -351,7 +353,7 @@ describe('CandidateDetailPage', () => {
   it('shows prompt log in AI Usage tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByText('AI Usage'));
+    fireEvent.click(screen.getByRole('tab', { name: 'AI Usage' }));
 
     await waitFor(() => {
       expect(screen.getByText(/Prompt Log/)).toBeInTheDocument();
@@ -362,10 +364,10 @@ describe('CandidateDetailPage', () => {
   it('tab switching works - CV & Fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('button', { name: 'CV & Fit' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'CV & Fit' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Summary')).toBeInTheDocument();
+      expect(screen.getAllByText('Summary').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByText('Documents')).toBeInTheDocument();
       expect(screen.getAllByText('CV fit').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Requirements fit').length).toBeGreaterThanOrEqual(1);
@@ -376,7 +378,7 @@ describe('CandidateDetailPage', () => {
   it('shows matching skills in CV & Fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('button', { name: 'CV & Fit' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'CV & Fit' }));
 
     await waitFor(() => {
       expect(screen.getByText('Documents')).toBeInTheDocument();
@@ -389,7 +391,7 @@ describe('CandidateDetailPage', () => {
   it('shows missing skills in CV & Fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('button', { name: 'CV & Fit' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'CV & Fit' }));
 
     await waitFor(() => {
       expect(screen.getByText('Documents')).toBeInTheDocument();
@@ -402,10 +404,10 @@ describe('CandidateDetailPage', () => {
   it('shows score rationale bullets in CV & Fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('button', { name: 'CV & Fit' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'CV & Fit' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Summary')).toBeInTheDocument();
+      expect(screen.getAllByText('Summary').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Why this score').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText(/Composite fit 74\.2/).length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText(/Recruiter requirements coverage: 2\/3 met/).length).toBeGreaterThanOrEqual(1);
@@ -415,7 +417,7 @@ describe('CandidateDetailPage', () => {
   it('tab switching works - Timeline tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Timeline' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'Timeline' }));
 
     await waitFor(() => {
       expect(screen.getByText('Assessment started')).toBeInTheDocument();
@@ -449,17 +451,17 @@ describe('CandidateDetailPage', () => {
     alertMock.mockRestore();
   });
 
-  it('Download PDF button exists', async () => {
+  it('Download client report button exists', async () => {
     await renderCandidateDetail();
-    expect(screen.getByText('Download PDF')).toBeInTheDocument();
+    expect(screen.getByText('Download client report')).toBeInTheDocument();
   });
 
-  it('Download PDF calls downloadReport API', async () => {
+  it('Download client report calls downloadReport API', async () => {
     assessmentsApi.downloadReport.mockResolvedValue({ data: new Blob(['pdf-content']) });
 
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByText('Download PDF'));
+    fireEvent.click(screen.getByText('Download client report'));
 
     await waitFor(() => {
       expect(assessmentsApi.downloadReport).toHaveBeenCalledWith(1);
@@ -495,6 +497,7 @@ describe('CandidateDetailPage', () => {
 
   it('renders assessment metadata in results tab', async () => {
     await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
 
     expect(screen.getByText('Assessment Metadata')).toBeInTheDocument();
     // Duration appears in both header and metadata, check metadata section specifically
@@ -506,6 +509,7 @@ describe('CandidateDetailPage', () => {
 
   it('renders test results when available', async () => {
     await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
 
     expect(screen.getByText('Test results')).toBeInTheDocument();
     expect(screen.getByText('Pipeline Processing')).toBeInTheDocument();
@@ -515,6 +519,7 @@ describe('CandidateDetailPage', () => {
 
   it('renders scoring glossary with plain-English dimension descriptions', async () => {
     await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
 
     expect(screen.getByText('Scoring Glossary')).toBeInTheDocument();
     expect(screen.getAllByText('Task completion').length).toBeGreaterThanOrEqual(1);
@@ -529,6 +534,7 @@ describe('CandidateDetailPage', () => {
 
   it('shows inline comparison hint and action', async () => {
     await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
 
     expect(screen.getByText(/Compare this candidate with others in the same role/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Compare with...' })).toBeInTheDocument();
@@ -551,7 +557,7 @@ describe('CandidateDetailPage', () => {
     const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
 
     await renderCandidateDetail();
-    fireEvent.click(screen.getByText('Evaluate'));
+    fireEvent.click(screen.getByRole('tab', { name: 'Evaluate' }));
 
     const gradeSelect = screen.getAllByRole('combobox')[0];
     fireEvent.change(gradeSelect, { target: { value: 'excellent' } });

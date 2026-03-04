@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,7 +16,10 @@ from ...platform.request_context import get_request_id
 from ...services.ai_assisted_evaluator import generate_ai_suggestions
 from ...services.candidate_feedback_engine import (
     build_candidate_feedback_payload,
+    build_client_assessment_report_payload,
+    build_client_assessment_report_text,
     build_interview_debrief_payload,
+    build_wrapped_text_pdf,
 )
 from ...services.evaluation_result_service import (
     build_evaluation_result,
@@ -37,6 +41,11 @@ def _is_completed(assessment: Assessment) -> bool:
 
 def _candidate_feedback_link(token: str) -> str:
     return f"{settings.FRONTEND_URL}/assessment/{token}/feedback"
+
+
+def _report_slug(value: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return slug or "candidate"
 
 
 def _dispatch_candidate_feedback_email(
@@ -74,10 +83,15 @@ def download_assessment_report_pdf(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Return a branded PDF report without external dependencies."""
+    """Return a client-facing PDF report without external dependencies."""
     assessment = (
         db.query(Assessment)
-        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
+        .options(
+            joinedload(Assessment.candidate),
+            joinedload(Assessment.task),
+            joinedload(Assessment.role),
+            joinedload(Assessment.organization),
+        )
         .filter(
             Assessment.id == assessment_id,
             Assessment.organization_id == current_user.organization_id,
@@ -88,101 +102,26 @@ def download_assessment_report_pdf(
         raise HTTPException(status_code=404, detail="Assessment not found")
 
     candidate_name = (assessment.candidate.full_name if assessment.candidate else None) or (
-        assessment.candidate.email if assessment.candidate else "Candidate"
+        assessment.candidate.email if assessment.candidate else "candidate"
     )
-    task_name = assessment.task.name if assessment.task else "Assessment"
-    status_value = assessment.status.value if hasattr(assessment.status, "value") else str(assessment.status)
-    analytics = assessment.prompt_analytics or {}
-    components = analytics.get("component_scores", {}) if isinstance(analytics, dict) else {}
-    heuristics = analytics.get("heuristics", {}) if isinstance(analytics, dict) else {}
-    fraud_flags = assessment.prompt_fraud_flags or []
-
-    component_lines = []
-    for key in (
-        "tests",
-        "code_quality",
-        "prompt_quality",
-        "prompt_efficiency",
-        "independence",
-        "context_utilization",
-        "design_thinking",
-        "debugging_strategy",
-        "written_communication",
-    ):
-        if key in components:
-            component_lines.append(f"  - {key}: {components[key]}")
-    if not component_lines:
-        component_lines.append("  - No component scores available")
-
-    h_focus = (heuristics.get("browser_focus_ratio") or {}).get("ratio")
-    h_tab = (heuristics.get("tab_switch_count") or {}).get("count")
-    h_first = (heuristics.get("time_to_first_prompt") or {}).get("value")
-    analytics_lines = [
-        f"  - Browser focus ratio: {h_focus if h_focus is not None else 'N/A'}",
-        f"  - Tab switches: {h_tab if h_tab is not None else (assessment.tab_switch_count or 0)}",
-        f"  - Time to first prompt (s): {h_first if h_first is not None else 'N/A'}",
-    ]
-
-    fraud_lines = [
-        f"  - {f.get('type')}: {f.get('evidence', '')} (confidence={f.get('confidence')})"
-        for f in fraud_flags
-    ]
-    if not fraud_lines:
-        fraud_lines = ["  - None detected"]
-
-    body_text = (
-        "TAALI - AI-Augmented Technical Assessment Report\\n"
-        "============================================\\n"
-        f"Assessment ID: {assessment.id}\\n"
-        f"Candidate: {candidate_name}\\n"
-        f"Task: {task_name}\\n"
-        f"Status: {status_value}\\n"
-        f"Overall Score: {assessment.score if assessment.score is not None else 'N/A'}/10\\n"
-        f"Calibration Score: {assessment.calibration_score if assessment.calibration_score is not None else 'N/A'}/10\\n"
-        f"Tests Passed: {assessment.tests_passed or 0}/{assessment.tests_total or 0}\\n"
-        f"Code Quality: {assessment.code_quality_score if assessment.code_quality_score is not None else 'N/A'}\\n"
-        "\\n"
-        "Component Score Breakdown\\n"
-        "-------------------------\\n"
-        f"{chr(10).join(component_lines)}\\n"
-        "\\n"
-        "Prompt Analytics Summary\\n"
-        "------------------------\\n"
-        f"{chr(10).join(analytics_lines)}\\n"
-        "\\n"
-        "Fraud / Proctoring Flags\\n"
-        "------------------------\\n"
-        f"{chr(10).join(fraud_lines)}\\n"
+    organization_name = assessment.organization.name if getattr(assessment, "organization", None) else ""
+    payload = build_client_assessment_report_payload(
+        db,
+        assessment,
+        organization_name=organization_name,
     )
-    escaped = body_text.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
-    stream = f"BT /F1 12 Tf 50 780 Td ({escaped.replace(chr(10), ') Tj T* (')}) Tj ET"
-    pdf = (
-        b"%PDF-1.4\n"
-        b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
-        b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
-        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n"
-        b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+    body_text = build_client_assessment_report_text(payload)
+    subtitle = f"{candidate_name} | {payload.get('role_name') or payload.get('task_name') or 'Assessment'}"
+    final_pdf = build_wrapped_text_pdf(
+        body_text,
+        title="TAALI Client Assessment Report",
+        subtitle=subtitle,
     )
-    content = stream.encode("latin-1", errors="ignore")
-    pdf += (
-        f"5 0 obj << /Length {len(content)} >> stream\n".encode("ascii") + content + b"\nendstream endobj\n"
-    )
-    xref_pos = len(pdf)
-    xref = (
-        b"xref\n0 6\n"
-        b"0000000000 65535 f \n"
-        b"0000000009 00000 n \n"
-        b"0000000058 00000 n \n"
-        b"0000000115 00000 n \n"
-        b"0000000241 00000 n \n"
-        b"0000000311 00000 n \n"
-    )
-    trailer = f"trailer << /Size 6 /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF".encode("ascii")
-    final_pdf = pdf + xref + trailer
+    filename = f"taali-client-report-{_report_slug(candidate_name)}.pdf"
     return Response(
         content=final_pdf,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="assessment-{assessment.id}.pdf"'},
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 

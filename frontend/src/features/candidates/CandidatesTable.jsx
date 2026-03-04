@@ -451,7 +451,7 @@ export const CandidatesTable = ({
                                     className="text-xs text-[var(--taali-muted)] underline decoration-[var(--taali-border-muted)] underline-offset-2 hover:text-[var(--taali-text)]"
                                     onClick={() => onOpenDetails?.(application)}
                                   >
-                                    Details
+                                    View assessment
                                   </button>
                                   {onOpenCvSidebar ? (
                                     <button

@@ -187,8 +187,8 @@ export function CandidateReportView({
                 {hasDimensionSignal ? (
                   <div className="space-y-2 font-mono text-xs">
                     {dimensionEntries.map((item) => (
-                      <div key={item.key} className="flex items-center gap-3">
-                        <span className="w-36 truncate text-[var(--taali-muted)]">{item.label}</span>
+                      <div key={item.key} className="grid grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)_auto] items-center gap-3">
+                        <span className="min-w-0 leading-snug text-[var(--taali-muted)]">{item.label}</span>
                         <div className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--taali-border-subtle)]">
                           <div
                             className="h-full rounded-full"
@@ -230,7 +230,7 @@ export function CandidateReportView({
                 <ScoreMetricCard label="Assessment" value={summaryModel.assessmentScore} />
               </div>
               {source ? (
-                <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-3 py-2 text-xs text-[var(--taali-muted)]">
+                <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-3 py-2 text-sm leading-5 text-[var(--taali-muted)]">
                   {source.formulaLabel}
                 </div>
               ) : null}

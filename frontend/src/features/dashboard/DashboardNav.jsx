@@ -99,8 +99,7 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <div className="hidden sm:flex items-center gap-2 rounded-full border border-[var(--taali-border-soft)] bg-[var(--taali-nav-pill-bg)] px-2 py-1.5 shadow-[var(--taali-shadow-soft)] backdrop-blur-md">
-            <GlobalThemeToggle className="shrink-0" />
+          <div className="hidden md:flex items-center gap-2 rounded-full border border-[var(--taali-border-soft)] bg-[var(--taali-nav-pill-bg)] px-2 py-1.5 shadow-[var(--taali-shadow-soft)] backdrop-blur-md">
             <div className="flex flex-col text-right leading-tight">
               <span className="font-mono text-xs text-[var(--taali-text)]">{displayName}</span>
               <span className="font-mono text-xs text-[var(--taali-muted)]">{orgName}</span>
@@ -109,7 +108,6 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
               {initials}
             </div>
           </div>
-          <GlobalThemeToggle className="sm:hidden shrink-0" />
           <Button
             variant="ghost"
             size="sm"
@@ -128,6 +126,7 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
           >
             <LogOut size={16} />
           </Button>
+          <GlobalThemeToggle className="shrink-0" />
         </div>
       </div>
       {mobileOpen && (
