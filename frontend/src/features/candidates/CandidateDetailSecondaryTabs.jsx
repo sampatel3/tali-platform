@@ -189,6 +189,7 @@ export const CandidateCvFitTab = ({
   onDownloadCandidateDoc,
   onRequestCvUpload = null,
   requestingCvUpload = false,
+  showDocuments = true,
 }) => {
   const assessment = candidate._raw || {};
   const roleFitModel = buildRoleFitEvidenceModel({ application: null, completedAssessment: assessment });
@@ -235,43 +236,45 @@ export const CandidateCvFitTab = ({
         </Card>
       )}
 
-      <Panel className="p-4">
-        <div className="mb-3 font-bold">Documents</div>
-        <div className="space-y-3 font-mono text-sm">
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <span>{assessment.cv_uploaded ? '✅' : '❌'}</span>
-              <span>CV: {assessment.candidate_cv_filename || assessment.cv_filename || 'Not uploaded'}</span>
+      {showDocuments ? (
+        <Panel className="p-4">
+          <div className="mb-3 font-bold">Documents</div>
+          <div className="space-y-3 font-mono text-sm">
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span>{assessment.cv_uploaded ? '✅' : '❌'}</span>
+                <span>CV: {assessment.candidate_cv_filename || assessment.cv_filename || 'Not uploaded'}</span>
+              </div>
+              {(assessment.candidate_cv_filename || assessment.cv_filename) ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => onDownloadCandidateDoc('cv')}
+                >
+                  Download
+                </Button>
+              ) : null}
             </div>
-            {(assessment.candidate_cv_filename || assessment.cv_filename) ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => onDownloadCandidateDoc('cv')}
-              >
-                Download
-              </Button>
-            ) : null}
-          </div>
-          <div className="flex items-center justify-between gap-3">
-            <div className="flex items-center gap-3">
-              <span>{assessment.candidate_job_spec_filename ? '✅' : '❌'}</span>
-              <span>Job Specification: {assessment.candidate_job_spec_filename || 'Not uploaded'}</span>
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <span>{assessment.candidate_job_spec_filename ? '✅' : '❌'}</span>
+                <span>Job Specification: {assessment.candidate_job_spec_filename || 'Not uploaded'}</span>
+              </div>
+              {assessment.candidate_job_spec_filename ? (
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  onClick={() => onDownloadCandidateDoc('job-spec')}
+                >
+                  Download
+                </Button>
+              ) : null}
             </div>
-            {assessment.candidate_job_spec_filename ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={() => onDownloadCandidateDoc('job-spec')}
-              >
-                Download
-              </Button>
-            ) : null}
           </div>
-        </div>
-      </Panel>
+        </Panel>
+      ) : null}
     </div>
   );
 };

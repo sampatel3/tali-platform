@@ -214,7 +214,6 @@ export const resolveScoreSource = ({ application, completedAssessment }) => {
       label: 'Completed assessment',
       badgeVariant: 'purple',
       updatedAt: completedAssessment.completed_at || completedAssessment.updated_at || completedAssessment.created_at || null,
-      formulaLabel: application?.score_summary?.formula_label || 'TAALI score = 50% assessment + 50% role fit once a completed assessment exists.',
     };
   }
 
@@ -223,7 +222,6 @@ export const resolveScoreSource = ({ application, completedAssessment }) => {
     label: 'Application CV fit',
     badgeVariant: 'muted',
     updatedAt: application?.cv_match_scored_at || application?.updated_at || application?.created_at || null,
-    formulaLabel: application?.score_summary?.formula_label || 'TAALI score currently reflects role fit until assessment evidence is available.',
   };
 };
 

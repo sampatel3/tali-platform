@@ -174,13 +174,6 @@ const LandingNav = ({ onNavigate }) => {
   );
 };
 
-const HeroMetric = ({ label, value }) => (
-  <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-3 py-2.5 shadow-[var(--taali-shadow-soft)]">
-    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">{label}</div>
-    <div className="mt-1 taali-display text-[1.22rem] font-semibold text-[var(--taali-text)]">{value}</div>
-  </div>
-);
-
 const SurfacePreviewFallback = ({ heightClass = 'h-[32rem]' }) => (
   <Panel className={`overflow-hidden bg-[linear-gradient(145deg,var(--taali-surface),var(--taali-surface-subtle))] p-0 ${heightClass}`}>
     <div className="flex h-full flex-col justify-between p-5">
@@ -249,13 +242,6 @@ const HeroSection = ({ onNavigate }) => (
             <Play size={16} />
             View scoring framework
           </Button>
-        </div>
-
-        <div className="mt-5 grid max-w-[44rem] gap-2 sm:grid-cols-4">
-          <HeroMetric label="Hiring target" value="AI-native talent" />
-          <HeroMetric label="Skills assessed" value="Prompt + execution" />
-          <HeroMetric label="Output" value="Client-ready report" />
-          <HeroMetric label="Decision use" value="Shortlist confidence" />
         </div>
       </div>
     </PageContainer>

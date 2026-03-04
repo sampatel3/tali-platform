@@ -22,11 +22,366 @@ import {
   CandidateCvFitTab,
   CandidateTimelineTab,
 } from './CandidateDetailSecondaryTabs';
-import { CandidateEvaluateTab, CandidateResultsTab } from './CandidateDetailPrimaryTabs';
+import { CandidateResultsTab } from './CandidateDetailPrimaryTabs';
 import { CandidateInterviewDebrief } from './CandidateInterviewDebrief';
 import { CandidateReportView } from './CandidateReportView';
 
 const RESULTS_ONBOARDING_KEY = 'taali_results_onboarding_seen_v1';
+
+const uniqueItems = (items, limit = 4) => Array.from(
+  new Set((Array.isArray(items) ? items : []).filter(Boolean))
+).slice(0, limit);
+
+const buildRoleFitStrengths = (roleFitModel) => uniqueItems([
+  ...(roleFitModel?.requirementsAssessment || [])
+    .filter((item) => item.status === 'met')
+    .map((item) => item.requirement),
+  ...(roleFitModel?.experienceHighlights || []),
+  ...(roleFitModel?.rationaleBullets || []),
+], 4);
+
+const buildRoleFitGaps = (roleFitModel) => uniqueItems([
+  roleFitModel?.firstRequirementGap?.requirement
+    ? `Gap vs recruiter requirement: ${roleFitModel.firstRequirementGap.requirement}`
+    : null,
+  ...(roleFitModel?.concerns || []),
+  ...(roleFitModel?.missingSkills || []).map((skill) => `Skill gap: ${skill}`),
+], 4);
+
+const SignalList = ({ title, items, emptyLabel, tone = 'default' }) => (
+  <div>
+    <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{title}</div>
+    {items.length ? (
+      <ul className="mt-3 space-y-2">
+        {items.map((item) => (
+          <li key={`${title}-${item}`} className="flex gap-2 text-sm text-[var(--taali-text)]">
+            <span
+              className="mt-1 h-1.5 w-1.5 rounded-full"
+              style={{ backgroundColor: tone === 'warning' ? 'var(--taali-warning)' : 'var(--taali-purple)' }}
+            />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
+    ) : (
+      <p className="mt-3 text-sm text-[var(--taali-muted)]">{emptyLabel}</p>
+    )}
+  </div>
+);
+
+const SkillChips = ({ title, items, badgeVariant = 'success', emptyLabel }) => (
+  <div>
+    <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{title}</div>
+    {items.length ? (
+      <div className="mt-3 flex flex-wrap gap-2">
+        {items.map((item) => (
+          <Badge key={`${title}-${item}`} variant={badgeVariant}>{item}</Badge>
+        ))}
+      </div>
+    ) : (
+      <p className="mt-3 text-sm text-[var(--taali-muted)]">{emptyLabel}</p>
+    )}
+  </div>
+);
+
+const RoleFitSummaryPanel = ({ reportModel }) => {
+  const roleFitModel = reportModel?.roleFitModel || {};
+  const strengths = buildRoleFitStrengths(roleFitModel);
+  const gaps = buildRoleFitGaps(roleFitModel);
+  const matchingSkills = uniqueItems(roleFitModel.matchingSkills, 6);
+  const missingSkills = uniqueItems(roleFitModel.missingSkills, 6);
+
+  return (
+    <Panel className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role fit summary</div>
+          <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">
+            {roleFitModel.summaryText || 'Role-fit evidence is attached below.'}
+          </div>
+        </div>
+        {reportModel?.summaryModel?.roleFitScore != null ? (
+          <Badge variant="purple" className="font-mono text-[11px]">
+            Role fit {reportModel.summaryModel.roleFitScore.toFixed(1)}
+          </Badge>
+        ) : null}
+      </div>
+
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        <SignalList
+          title="Main strengths"
+          items={strengths}
+          emptyLabel="No strong role-fit positives have been surfaced yet."
+        />
+        <SignalList
+          title="Main gaps"
+          items={gaps}
+          emptyLabel="No major role-fit gaps were surfaced."
+          tone="warning"
+        />
+      </div>
+
+      <div className="mt-5 grid gap-5 lg:grid-cols-2">
+        <SkillChips
+          title="Matching skills"
+          items={matchingSkills}
+          badgeVariant="success"
+          emptyLabel="No matching skills have been extracted yet."
+        />
+        <SkillChips
+          title="Skills gaps"
+          items={missingSkills}
+          badgeVariant="warning"
+          emptyLabel="No explicit skills gaps were extracted."
+        />
+      </div>
+    </Panel>
+  );
+};
+
+const ProbeSummaryPanel = ({ reportModel, onOpenInterviewGuidance = () => {} }) => {
+  const roleFitModel = reportModel?.roleFitModel || {};
+  const summaryModel = reportModel?.summaryModel || {};
+  const probeItems = uniqueItems([
+    reportModel?.probeDescription,
+    roleFitModel?.firstRequirementGap?.impact,
+    roleFitModel?.concerns?.[0],
+    summaryModel?.weakestLabel && summaryModel.weakestLabel !== '—'
+      ? `Assessment signal to validate: ${summaryModel.weakestLabel}`
+      : null,
+  ], 4);
+
+  return (
+    <Panel className="p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">What to probe</div>
+          <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">
+            {reportModel?.probeTitle || 'Interview guidance'}
+          </div>
+        </div>
+        <Button type="button" variant="secondary" size="sm" onClick={onOpenInterviewGuidance}>
+          Open interview guidance
+        </Button>
+      </div>
+
+      <p className="mt-3 text-sm leading-6 text-[var(--taali-muted)]">
+        Use the interview to validate the weakest evidence behind the TAALI score, not to re-run the assessment.
+      </p>
+
+      <SignalList
+        title="Probe next"
+        items={probeItems}
+        emptyLabel="No priority probe areas have been generated yet."
+      />
+    </Panel>
+  );
+};
+
+const CandidateInterviewGuidanceTab = ({
+  canGenerateInterviewGuide,
+  debrief,
+  loading,
+  cached,
+  generatedAt,
+  onGenerateInterviewGuide,
+  onCopyMarkdown,
+  onPrint,
+  noteText,
+  onNoteTextChange,
+  onSaveNote,
+  busyAction,
+}) => (
+  <div className="space-y-4">
+    <Panel className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Interview guidance</div>
+          <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">
+            Probe role-fit claims and assessment gaps together.
+          </div>
+          <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
+            This pack is built from the job spec, role-fit evidence, assessment results, and TAALI signals so the interview can focus on validation instead of re-screening.
+          </p>
+        </div>
+        {canGenerateInterviewGuide ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => onGenerateInterviewGuide({ forceRegenerate: Boolean(debrief) })}
+            disabled={loading}
+          >
+            {loading ? 'Loading guidance...' : (debrief ? 'Refresh guidance' : 'Generate guidance')}
+          </Button>
+        ) : null}
+      </div>
+    </Panel>
+
+    <CandidateInterviewDebrief
+      debrief={debrief}
+      loading={loading}
+      cached={cached}
+      generatedAt={generatedAt}
+      onCopyMarkdown={onCopyMarkdown}
+      onPrint={onPrint}
+      onRegenerate={() => onGenerateInterviewGuide({ forceRegenerate: true })}
+    />
+
+    <Panel className="p-4">
+      <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Recruiter feedback</div>
+      <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
+        Add interview follow-up notes here. Saved notes are appended to the candidate timeline for the team.
+      </p>
+      <div className="mt-4 flex flex-col gap-3 md:flex-row">
+        <Input
+          type="text"
+          className="flex-1"
+          placeholder="Add recruiter feedback from the interview"
+          value={noteText}
+          onChange={(event) => onNoteTextChange(event.target.value)}
+        />
+        <Button type="button" size="sm" variant="secondary" onClick={onSaveNote} disabled={busyAction !== ''}>
+          {busyAction === 'note' ? 'Saving...' : 'Save feedback'}
+        </Button>
+      </div>
+    </Panel>
+  </div>
+);
+
+const CandidateClientReportTab = ({
+  busyAction,
+  handleDownloadReport,
+  handlePostToWorkable,
+  handleResendInvite,
+  handleRequestCvUpload,
+  handleDeleteAssessment,
+  canResendInvite,
+  canRequestCvUpload,
+  workableStatus,
+}) => (
+  <div className="space-y-4">
+    <Panel className="p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Client report</div>
+          <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">Download the employer-facing assessment brief.</div>
+          <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
+            The client report strips out TAALI rubric internals and focuses on score summary, role-fit signal, strengths, caveats, and the recommended interview follow-up.
+          </p>
+        </div>
+        <Button type="button" size="sm" variant="secondary" onClick={handleDownloadReport} disabled={busyAction !== ''}>
+          {busyAction === 'report' ? 'Downloading...' : 'Download client report'}
+        </Button>
+      </div>
+    </Panel>
+
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+      <Panel className="p-4">
+        <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Recruiter actions</div>
+        <div className="mt-4 flex flex-wrap gap-2">
+          <Button type="button" size="sm" variant="secondary" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
+            {busyAction === 'workable' ? 'Posting...' : 'Post to Workable'}
+          </Button>
+          {canResendInvite ? (
+            <Button type="button" size="sm" variant="secondary" onClick={handleResendInvite} disabled={busyAction !== ''}>
+              {busyAction === 'resend' ? 'Resending...' : 'Resend invite'}
+            </Button>
+          ) : null}
+          {canRequestCvUpload ? (
+            <Button type="button" size="sm" variant="secondary" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
+              {busyAction === 'request-cv' ? 'Sending CV request...' : 'Request CV upload'}
+            </Button>
+          ) : null}
+          <Button type="button" size="sm" variant="danger" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
+            {busyAction === 'delete' ? 'Deleting...' : 'Delete assessment'}
+          </Button>
+        </div>
+      </Panel>
+
+      <Panel className="p-4">
+        <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Workable status</div>
+        <div className="mt-3 text-sm text-[var(--taali-text)]">
+          <span className={workableStatus.posted ? 'font-semibold text-[var(--taali-success)]' : 'font-semibold text-[var(--taali-text)]'}>
+            {workableStatus.posted ? 'Posted' : 'Not posted'}
+          </span>
+          {workableStatus.postedAt ? ` on ${new Date(workableStatus.postedAt).toLocaleString()}` : ''}
+        </div>
+      </Panel>
+    </div>
+  </div>
+);
+
+const SourceDocumentRow = ({ label, filename, onDownload = null }) => (
+  <Panel className="p-4">
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <div>
+        <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">{label}</div>
+        <div className="mt-2 text-sm text-[var(--taali-text)]">{filename || 'Not available'}</div>
+      </div>
+      {filename && typeof onDownload === 'function' ? (
+        <Button type="button" variant="secondary" size="sm" onClick={onDownload}>
+          Download
+        </Button>
+      ) : null}
+    </div>
+  </Panel>
+);
+
+const CandidateSourceDocumentsTab = ({
+  candidate,
+  reportModel,
+  onDownloadCandidateDoc,
+}) => {
+  const assessment = candidate?._raw || {};
+  const documentEvidence = reportModel?.evidenceSections?.documents || null;
+  const cvFilename = assessment.candidate_cv_filename || assessment.cv_filename || null;
+  const jobSpecFilename = assessment.candidate_job_spec_filename || null;
+  const sourceItems = uniqueItems(documentEvidence?.items || [], 6);
+
+  return (
+    <div className="space-y-4">
+      <Panel className="p-4">
+        <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Source documents</div>
+        <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">Source material behind this review.</div>
+        {documentEvidence?.description ? (
+          <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">{documentEvidence.description}</p>
+        ) : null}
+      </Panel>
+
+      <div className="grid gap-4 lg:grid-cols-2">
+        <SourceDocumentRow
+          label="Candidate CV"
+          filename={cvFilename}
+          onDownload={cvFilename ? () => onDownloadCandidateDoc('cv') : null}
+        />
+        <SourceDocumentRow
+          label="Job specification"
+          filename={jobSpecFilename}
+          onDownload={jobSpecFilename ? () => onDownloadCandidateDoc('job-spec') : null}
+        />
+      </div>
+
+      <Panel className="p-4">
+        <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Source information list</div>
+        {sourceItems.length ? (
+          <ul className="mt-3 space-y-2">
+            {sourceItems.map((item) => (
+              <li key={item} className="flex gap-2 text-sm text-[var(--taali-text)]">
+                <span className="mt-1 h-1.5 w-1.5 rounded-full bg-[var(--taali-purple)]" />
+                <span>{item}</span>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-sm text-[var(--taali-muted)]">
+            {documentEvidence?.emptyMessage || 'No source documents are available for this candidate yet.'}
+          </p>
+        )}
+      </Panel>
+    </div>
+  );
+};
 
 export const AssessmentResultsPage = ({
   candidate,
@@ -40,7 +395,6 @@ export const AssessmentResultsPage = ({
   const assessmentsApi = apiClient.assessments;
   const analyticsApi = apiClient.analytics;
   const candidatesApi = apiClient.candidates;
-  const tasksApi = apiClient.tasks;
   const scoringApi = 'scoring' in apiClient ? apiClient.scoring : null;
   const [activeTab, setActiveTab] = useState('summary');
   const [busyAction, setBusyAction] = useState('');
@@ -52,43 +406,18 @@ export const AssessmentResultsPage = ({
   });
 
   const [expandedCategory, setExpandedCategory] = useState(null);
-  const [aiEvalSuggestion, setAiEvalSuggestion] = useState(null);
-  const [manualEvalScores, setManualEvalScores] = useState({});
-  const [manualEvalStrengths, setManualEvalStrengths] = useState('');
-  const [manualEvalImprovements, setManualEvalImprovements] = useState('');
-  const [manualEvalSummary, setManualEvalSummary] = useState(null);
-  const [manualEvalSaving, setManualEvalSaving] = useState(false);
   const [metricGlossary, setMetricGlossary] = useState({});
-  const [taskRubric, setTaskRubric] = useState(null);
   const [compareSheetOpen, setCompareSheetOpen] = useState(false);
   const [compareLoading, setCompareLoading] = useState(false);
   const [compareOptions, setCompareOptions] = useState([]);
   const [compareSelectedIds, setCompareSelectedIds] = useState([]);
   const [benchmarksLoading, setBenchmarksLoading] = useState(false);
   const [benchmarksData, setBenchmarksData] = useState(null);
-  const [candidateFeedbackMeta, setCandidateFeedbackMeta] = useState({
-    ready: Boolean(candidate?._raw?.candidate_feedback_ready),
-    generatedAt: candidate?._raw?.candidate_feedback_generated_at || null,
-    sentAt: candidate?._raw?.candidate_feedback_sent_at || null,
-    url: candidate?._raw?.token ? `/assessment/${candidate._raw.token}/feedback` : null,
-  });
-  const [interviewDebriefSheetOpen, setInterviewDebriefSheetOpen] = useState(false);
   const [interviewDebriefLoading, setInterviewDebriefLoading] = useState(false);
   const [interviewDebriefData, setInterviewDebriefData] = useState(null);
   const [interviewDebriefCached, setInterviewDebriefCached] = useState(false);
   const [interviewDebriefGeneratedAt, setInterviewDebriefGeneratedAt] = useState(null);
   const [resultsOnboardingOpen, setResultsOnboardingOpen] = useState(false);
-
-  const toEvidenceTextareaValue = (value) => {
-    if (Array.isArray(value)) return value.filter(Boolean).join('\n');
-    if (typeof value === 'string') return value;
-    return '';
-  };
-
-  const toLineList = (value) => String(value || '')
-    .split('\n')
-    .map((line) => line.trim())
-    .filter(Boolean);
 
   const assessmentId = candidate?._raw?.id;
   const taskId = candidate?._raw?.task_id || candidate?._raw?.task?.id || null;
@@ -195,66 +524,6 @@ export const AssessmentResultsPage = ({
     };
   }, [analyticsApi, assessmentId, taskId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadTaskRubric = async () => {
-      if (!taskId || !tasksApi?.rubric) {
-        setTaskRubric(null);
-        return;
-      }
-      try {
-        const res = await tasksApi.rubric(taskId);
-        if (cancelled) return;
-        const rubric = res?.data?.evaluation_rubric;
-        setTaskRubric(rubric && typeof rubric === 'object' ? rubric : null);
-      } catch {
-        if (cancelled) return;
-        setTaskRubric(null);
-      }
-    };
-    loadTaskRubric();
-    return () => {
-      cancelled = true;
-    };
-  }, [taskId, tasksApi]);
-
-  useEffect(() => {
-    const raw = candidate?._raw;
-    const evaluationResult = raw?.evaluation_result || raw?.manual_evaluation || {};
-    const categoryScores = evaluationResult?.category_scores;
-    if (categoryScores && typeof categoryScores === 'object') {
-      const normalized = {};
-      Object.entries(categoryScores).forEach(([key, value]) => {
-        const item = value && typeof value === 'object' ? value : {};
-        normalized[key] = {
-          score: item.score || '',
-          evidence: toEvidenceTextareaValue(item.evidence),
-        };
-      });
-      setManualEvalScores(normalized);
-    } else {
-      setManualEvalScores({});
-    }
-    setManualEvalStrengths(Array.isArray(evaluationResult?.strengths) ? evaluationResult.strengths.join('\n') : '');
-    setManualEvalImprovements(Array.isArray(evaluationResult?.improvements) ? evaluationResult.improvements.join('\n') : '');
-    const hasSavedResult = evaluationResult && typeof evaluationResult === 'object' && Object.keys(evaluationResult).length > 0;
-    setManualEvalSummary(hasSavedResult ? evaluationResult : null);
-  }, [candidate?._raw?.manual_evaluation, candidate?._raw?.evaluation_result]);
-
-  useEffect(() => {
-    setCandidateFeedbackMeta({
-      ready: Boolean(candidate?._raw?.candidate_feedback_ready),
-      generatedAt: candidate?._raw?.candidate_feedback_generated_at || null,
-      sentAt: candidate?._raw?.candidate_feedback_sent_at || null,
-      url: candidate?._raw?.token ? `/assessment/${candidate._raw.token}/feedback` : null,
-    });
-  }, [
-    candidate?._raw?.candidate_feedback_generated_at,
-    candidate?._raw?.candidate_feedback_ready,
-    candidate?._raw?.candidate_feedback_sent_at,
-    candidate?._raw?.token,
-  ]);
-
   const getCategoryScores = (candidateData) => {
     const breakdownScores = candidateData?.breakdown?.categoryScores || candidateData?.breakdown?.detailedScores?.category_scores;
     const scoreBreakdownScores = candidateData?._raw?.score_breakdown?.category_scores;
@@ -355,52 +624,6 @@ export const AssessmentResultsPage = ({
     }
   };
 
-  const handleGenerateAiSuggestions = async () => {
-    if (!assessmentId) return;
-    setBusyAction('ai-eval');
-    try {
-      const res = await assessmentsApi.aiEvalSuggestions(assessmentId);
-      setAiEvalSuggestion(res.data);
-      showToast('AI suggestions generated. Human reviewer must confirm final scores.', 'success');
-    } catch (err) {
-      showToast(err?.response?.data?.detail || 'Failed to generate AI suggestions', 'error');
-    } finally {
-      setBusyAction('');
-    }
-  };
-
-  const handleFinalizeCandidateFeedback = async ({ resendEmail = false, forceRegenerate = false } = {}) => {
-    if (!assessmentId) return;
-    if (!assessmentsApi?.finalizeCandidateFeedback) {
-      showToast('Candidate feedback endpoint is unavailable.', 'error');
-      return;
-    }
-    setBusyAction('feedback-finalize');
-    try {
-      const res = await assessmentsApi.finalizeCandidateFeedback(assessmentId, {
-        resend_email: resendEmail,
-        force_regenerate: forceRegenerate,
-        include_feedback: false,
-      });
-      const data = res?.data || {};
-      setCandidateFeedbackMeta((prev) => ({
-        ...prev,
-        ready: Boolean(data.feedback_ready),
-        generatedAt: data.feedback_generated_at || prev.generatedAt || null,
-        sentAt: data.feedback_sent_at || prev.sentAt || null,
-      }));
-      if (data.email_dispatched) {
-        showToast('Candidate feedback finalized and email sent.', 'success');
-      } else {
-        showToast('Candidate feedback finalized.', 'success');
-      }
-    } catch (err) {
-      showToast(err?.response?.data?.detail || 'Failed to finalize candidate feedback.', 'error');
-    } finally {
-      setBusyAction('');
-    }
-  };
-
   const buildInterviewDebriefMarkdown = (debrief) => {
     if (!debrief || typeof debrief !== 'object') return '';
     if (typeof debrief.markdown === 'string' && debrief.markdown.trim()) return debrief.markdown;
@@ -471,7 +694,6 @@ export const AssessmentResultsPage = ({
       showToast('Interview guide endpoint is unavailable.', 'error');
       return;
     }
-    setInterviewDebriefSheetOpen(true);
     setInterviewDebriefLoading(true);
     try {
       const res = await assessmentsApi.generateInterviewDebrief(assessmentId, {
@@ -488,6 +710,47 @@ export const AssessmentResultsPage = ({
       setInterviewDebriefLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (activeTab !== 'interview-guidance') return;
+    if (!canGenerateInterviewGuide || !assessmentId) return;
+    if (interviewDebriefLoading || interviewDebriefData) return;
+    if (!assessmentsApi?.generateInterviewDebrief) return;
+
+    let cancelled = false;
+    const loadInterviewDebrief = async () => {
+      setInterviewDebriefLoading(true);
+      try {
+        const res = await assessmentsApi.generateInterviewDebrief(assessmentId, {
+          force_regenerate: false,
+        });
+        if (cancelled) return;
+        const data = res?.data || {};
+        setInterviewDebriefData(data.interview_debrief || null);
+        setInterviewDebriefCached(Boolean(data.cached));
+        setInterviewDebriefGeneratedAt(data.generated_at || null);
+      } catch (err) {
+        if (cancelled) return;
+        showToast(err?.response?.data?.detail || 'Failed to generate interview guide.', 'error');
+        setInterviewDebriefData(null);
+      } finally {
+        if (!cancelled) setInterviewDebriefLoading(false);
+      }
+    };
+
+    loadInterviewDebrief();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeTab,
+    assessmentId,
+    assessmentsApi,
+    canGenerateInterviewGuide,
+    interviewDebriefData,
+    interviewDebriefLoading,
+    showToast,
+  ]);
 
   const handleOpenComparison = async () => {
     setCompareSheetOpen(true);
@@ -592,13 +855,12 @@ export const AssessmentResultsPage = ({
   };
 
   const topTabs = [
-    { id: 'summary', label: 'Summary', panelId: 'candidate-tabpanel-summary' },
-    { id: 'results', label: 'Results', panelId: 'candidate-tabpanel-results' },
-    { id: 'ai-usage', label: 'AI Usage', panelId: 'candidate-tabpanel-ai-usage' },
-    { id: 'cv-fit', label: 'CV & Fit', panelId: 'candidate-tabpanel-cv-fit' },
-    { id: 'code-git', label: 'Code / Git', panelId: 'candidate-tabpanel-code-git' },
-    { id: 'evaluate', label: 'Evaluate', panelId: 'candidate-tabpanel-evaluate' },
-    { id: 'timeline', label: 'Timeline', panelId: 'candidate-tabpanel-timeline' },
+    { id: 'summary', label: 'SUMMARY', panelId: 'candidate-tabpanel-summary' },
+    { id: 'assessment-results', label: 'ASSESSMENT RESULTS', panelId: 'candidate-tabpanel-assessment-results' },
+    { id: 'role-fit', label: 'ROLE FIT', panelId: 'candidate-tabpanel-role-fit' },
+    { id: 'interview-guidance', label: 'INTERVIEW GUIDANCE', panelId: 'candidate-tabpanel-interview-guidance' },
+    { id: 'client-report', label: 'CLIENT REPORT', panelId: 'candidate-tabpanel-client-report' },
+    { id: 'source-documents', label: 'SOURCE DOCUMENTS', panelId: 'candidate-tabpanel-source-documents' },
   ];
 
   const selectedComparisonCandidates = compareOptions.filter((item) =>
@@ -657,70 +919,26 @@ export const AssessmentResultsPage = ({
 
         {activeTab === 'summary' ? (
           <div role="tabpanel" id="candidate-tabpanel-summary" aria-labelledby="summary" className="space-y-4">
-            <CandidateReportView model={reportModel} />
+            <CandidateReportView
+              model={reportModel}
+              showInsights={false}
+              showRoleFitSection={false}
+              showIntegritySection={false}
+              showEvidenceSections={false}
+            />
 
-            <Panel className="p-4">
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-                <div>
-                  <div className="mb-1 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Client report and recruiter actions</div>
-                  <p className="text-sm text-[var(--taali-muted)]">
-                    Export a client-facing assessment brief, add recruiter notes, or move the candidate into the next system.
-                  </p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <Button type="button" size="sm" variant="secondary" onClick={handleDownloadReport} disabled={busyAction !== ''}>
-                      {busyAction === 'report' ? 'Downloading...' : 'Download client report'}
-                    </Button>
-                    <Button type="button" size="sm" variant="secondary" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
-                      {busyAction === 'workable' ? 'Posting...' : 'Post to Workable'}
-                    </Button>
-                    {canResendInvite ? (
-                      <Button type="button" size="sm" variant="secondary" onClick={handleResendInvite} disabled={busyAction !== ''}>
-                        {busyAction === 'resend' ? 'Resending...' : 'Resend Invite'}
-                      </Button>
-                    ) : null}
-                    {canRequestCvUpload ? (
-                      <Button type="button" size="sm" variant="secondary" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
-                        {busyAction === 'request-cv' ? 'Sending CV request...' : 'Request CV Upload'}
-                      </Button>
-                    ) : null}
-                    <Button type="button" size="sm" variant="danger" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
-                      {busyAction === 'delete' ? 'Deleting...' : 'Delete'}
-                    </Button>
-                  </div>
-
-                  <div className="mt-4">
-                    <div className="mb-2 text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Recruiter notes</div>
-                    <div className="flex gap-2">
-                      <Input
-                        type="text"
-                        className="flex-1"
-                        placeholder="Add note about this candidate"
-                        value={noteText}
-                        onChange={(e) => setNoteText(e.target.value)}
-                      />
-                      <Button type="button" size="sm" variant="secondary" onClick={handleAddNote} disabled={busyAction !== ''}>
-                        {busyAction === 'note' ? 'Saving...' : 'Save Note'}
-                      </Button>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-4 py-4">
-                  <div className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Workable status</div>
-                  <div className="mt-3 text-sm text-[var(--taali-text)]">
-                    <span className={workableStatus.posted ? 'font-semibold text-[var(--taali-success)]' : 'font-semibold text-[var(--taali-text)]'}>
-                      {workableStatus.posted ? 'Posted' : 'Not posted'}
-                    </span>
-                    {workableStatus.postedAt ? ` on ${new Date(workableStatus.postedAt).toLocaleString()}` : ''}
-                  </div>
-                </div>
-              </div>
-            </Panel>
+            <div className="grid gap-4 xl:grid-cols-2">
+              <RoleFitSummaryPanel reportModel={reportModel} />
+              <ProbeSummaryPanel
+                reportModel={reportModel}
+                onOpenInterviewGuidance={() => setActiveTab('interview-guidance')}
+              />
+            </div>
           </div>
         ) : null}
 
-        {activeTab === 'results' ? (
-          <div role="tabpanel" id="candidate-tabpanel-results" aria-labelledby="results">
+        {activeTab === 'assessment-results' ? (
+          <div role="tabpanel" id="candidate-tabpanel-assessment-results" aria-labelledby="assessment-results">
             <CandidateResultsTab
               candidate={candidate}
               expandedCategory={expandedCategory}
@@ -729,72 +947,92 @@ export const AssessmentResultsPage = ({
               getMetricMetaResolved={getMetricMetaResolved}
               onOpenComparison={handleOpenComparison}
               onOpenOnboarding={() => setResultsOnboardingOpen(true)}
-              onGenerateInterviewGuide={handleGenerateInterviewGuide}
+              onOpenInterviewGuidance={() => setActiveTab('interview-guidance')}
               interviewGuideLoading={interviewDebriefLoading}
               canGenerateInterviewGuide={canGenerateInterviewGuide}
               benchmarksLoading={benchmarksLoading}
               benchmarksData={benchmarksData}
+              extraSections={[
+                {
+                  id: 'candidate-results-ai-usage',
+                  label: 'AI usage',
+                  title: 'AI usage and prompt quality',
+                  description: 'Prompt clarity, calibration, browser focus, and prompt logs stay attached to the assessment review.',
+                  content: <CandidateAiUsageTab candidate={candidate} avgCalibrationScore={avgCalibrationScore} />,
+                },
+                {
+                  id: 'candidate-results-code-git',
+                  label: 'GitHub',
+                  title: 'GitHub and code evidence',
+                  description: 'Repository traces, diffs, and commit state provide the audit trail for the delivered work.',
+                  content: <CandidateCodeGitTab candidate={candidate} />,
+                },
+                {
+                  id: 'candidate-results-timeline',
+                  label: 'Timeline',
+                  title: 'Assessment timeline',
+                  description: 'Use the event stream to understand pacing, prompt cadence, and recruiter notes.',
+                  content: <CandidateTimelineTab candidate={candidate} />,
+                },
+              ]}
             />
           </div>
         ) : null}
 
-        {activeTab === 'ai-usage' ? (
-          <div role="tabpanel" id="candidate-tabpanel-ai-usage" aria-labelledby="ai-usage">
-            <CandidateAiUsageTab candidate={candidate} avgCalibrationScore={avgCalibrationScore} />
-          </div>
-        ) : null}
-
-        {activeTab === 'cv-fit' ? (
-          <div role="tabpanel" id="candidate-tabpanel-cv-fit" aria-labelledby="cv-fit">
+        {activeTab === 'role-fit' ? (
+          <div role="tabpanel" id="candidate-tabpanel-role-fit" aria-labelledby="role-fit">
             <CandidateCvFitTab
               candidate={candidate}
               onDownloadCandidateDoc={handleDownloadCandidateDoc}
               onRequestCvUpload={canRequestCvUpload ? handleRequestCvUpload : null}
               requestingCvUpload={busyAction === 'request-cv'}
+              showDocuments={false}
             />
           </div>
         ) : null}
 
-        {activeTab === 'evaluate' ? (
-          <div role="tabpanel" id="candidate-tabpanel-evaluate" aria-labelledby="evaluate">
-            <CandidateEvaluateTab
+        {activeTab === 'interview-guidance' ? (
+          <div role="tabpanel" id="candidate-tabpanel-interview-guidance" aria-labelledby="interview-guidance">
+            <CandidateInterviewGuidanceTab
+              canGenerateInterviewGuide={canGenerateInterviewGuide}
+              debrief={interviewDebriefData}
+              loading={interviewDebriefLoading}
+              cached={interviewDebriefCached}
+              generatedAt={interviewDebriefGeneratedAt}
+              onGenerateInterviewGuide={handleGenerateInterviewGuide}
+              onCopyMarkdown={handleCopyInterviewDebriefMarkdown}
+              onPrint={handlePrintInterviewDebrief}
+              noteText={noteText}
+              onNoteTextChange={setNoteText}
+              onSaveNote={handleAddNote}
+              busyAction={busyAction}
+            />
+          </div>
+        ) : null}
+
+        {activeTab === 'client-report' ? (
+          <div role="tabpanel" id="candidate-tabpanel-client-report" aria-labelledby="client-report">
+            <CandidateClientReportTab
+              busyAction={busyAction}
+              handleDownloadReport={handleDownloadReport}
+              handlePostToWorkable={handlePostToWorkable}
+              handleResendInvite={handleResendInvite}
+              handleRequestCvUpload={handleRequestCvUpload}
+              handleDeleteAssessment={handleDeleteAssessment}
+              canResendInvite={canResendInvite}
+              canRequestCvUpload={canRequestCvUpload}
+              workableStatus={workableStatus}
+            />
+          </div>
+        ) : null}
+
+        {activeTab === 'source-documents' ? (
+          <div role="tabpanel" id="candidate-tabpanel-source-documents" aria-labelledby="source-documents">
+            <CandidateSourceDocumentsTab
               candidate={candidate}
-              evaluationRubric={taskRubric || candidate?._raw?.evaluation_rubric || null}
-              assessmentId={assessmentId}
-              aiEvalSuggestion={aiEvalSuggestion}
-              onGenerateAiSuggestions={handleGenerateAiSuggestions}
-              aiEvalLoading={busyAction === 'ai-eval'}
-              manualEvalScores={manualEvalScores}
-              setManualEvalScores={setManualEvalScores}
-              manualEvalStrengths={manualEvalStrengths}
-              setManualEvalStrengths={setManualEvalStrengths}
-              manualEvalImprovements={manualEvalImprovements}
-              setManualEvalImprovements={setManualEvalImprovements}
-              manualEvalSummary={manualEvalSummary}
-              setManualEvalSummary={setManualEvalSummary}
-              manualEvalSaving={manualEvalSaving}
-              setManualEvalSaving={setManualEvalSaving}
-              toLineList={toLineList}
-              toEvidenceTextareaValue={toEvidenceTextareaValue}
-              assessmentsApi={assessmentsApi}
-              onFinalizeCandidateFeedback={handleFinalizeCandidateFeedback}
-              finalizeFeedbackLoading={busyAction === 'feedback-finalize'}
-              candidateFeedbackReady={candidateFeedbackMeta.ready}
-              candidateFeedbackSentAt={candidateFeedbackMeta.sentAt}
-              canFinalizeCandidateFeedback={canGenerateInterviewGuide}
+              reportModel={reportModel}
+              onDownloadCandidateDoc={handleDownloadCandidateDoc}
             />
-          </div>
-        ) : null}
-
-        {activeTab === 'code-git' ? (
-          <div role="tabpanel" id="candidate-tabpanel-code-git" aria-labelledby="code-git">
-            <CandidateCodeGitTab candidate={candidate} />
-          </div>
-        ) : null}
-
-        {activeTab === 'timeline' ? (
-          <div role="tabpanel" id="candidate-tabpanel-timeline" aria-labelledby="timeline">
-            <CandidateTimelineTab candidate={candidate} />
           </div>
         ) : null}
 
@@ -860,30 +1098,6 @@ export const AssessmentResultsPage = ({
               ) : null}
             </div>
           )}
-        </Sheet>
-
-        <Sheet
-          open={interviewDebriefSheetOpen}
-          onClose={() => setInterviewDebriefSheetOpen(false)}
-          title={`Interview Guide - ${candidate.name}`}
-          description="Generated from TAALI assessment evidence."
-          footer={(
-            <div className="flex items-center justify-end gap-2">
-              <Button type="button" size="sm" variant="secondary" onClick={() => setInterviewDebriefSheetOpen(false)}>
-                Close
-              </Button>
-            </div>
-          )}
-        >
-          <CandidateInterviewDebrief
-            debrief={interviewDebriefData}
-            loading={interviewDebriefLoading}
-            cached={interviewDebriefCached}
-            generatedAt={interviewDebriefGeneratedAt}
-            onCopyMarkdown={handleCopyInterviewDebriefMarkdown}
-            onPrint={handlePrintInterviewDebrief}
-            onRegenerate={() => handleGenerateInterviewGuide({ forceRegenerate: true })}
-          />
         </Sheet>
 
         <Sheet

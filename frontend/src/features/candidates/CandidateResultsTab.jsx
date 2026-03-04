@@ -102,11 +102,13 @@ export const CandidateResultsTab = ({
   getMetricMetaResolved,
   onOpenComparison = () => {},
   onGenerateInterviewGuide = () => {},
+  onOpenInterviewGuidance = null,
   interviewGuideLoading = false,
   canGenerateInterviewGuide = false,
   onOpenOnboarding = () => {},
   benchmarksLoading = false,
   benchmarksData = null,
+  extraSections = [],
 }) => {
   const assessment = candidate._raw || {};
   const assessmentStatus = normalizeAssessmentStatus(assessment.status || candidate.status);
@@ -199,6 +201,7 @@ export const CandidateResultsTab = ({
   const sectionLinks = [
     { id: 'candidate-results-overview', label: 'Overview' },
     { id: 'candidate-results-evidence', label: 'Evidence' },
+    ...extraSections.map((section) => ({ id: section.id, label: section.label })),
     integrityNotice ? { id: 'candidate-results-integrity', label: 'Integrity' } : null,
     { id: 'candidate-results-benchmarks', label: 'Benchmarks' },
     { id: 'candidate-results-metadata', label: 'Metadata' },
@@ -237,8 +240,16 @@ export const CandidateResultsTab = ({
               <Badge variant="purple" className="font-mono text-[11px]">Top {overallTopPercent}%</Badge>
             ) : null}
             {canGenerateInterviewGuide ? (
-              <Button type="button" variant="secondary" size="sm" onClick={onGenerateInterviewGuide} disabled={interviewGuideLoading}>
-                {interviewGuideLoading ? 'Generating guide...' : 'Generate Interview Guide'}
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={onOpenInterviewGuidance || onGenerateInterviewGuide}
+                disabled={interviewGuideLoading}
+              >
+                {interviewGuideLoading
+                  ? 'Loading guidance...'
+                  : (onOpenInterviewGuidance ? 'Open interview guidance' : 'Generate Interview Guide')}
               </Button>
             ) : null}
             <Button type="button" variant="secondary" size="sm" onClick={onOpenComparison}>
@@ -386,6 +397,16 @@ export const CandidateResultsTab = ({
           </Panel>
         ) : null}
       </div>
+
+      {extraSections.map((section) => (
+        <div key={section.id} id={section.id} className="scroll-mt-36 space-y-3">
+          <div className="text-base font-bold text-[var(--taali-text)]">{section.title || section.label}</div>
+          {section.description ? (
+            <p className="text-sm text-[var(--taali-muted)]">{section.description}</p>
+          ) : null}
+          {section.content}
+        </div>
+      ))}
 
       {integrityNotice ? (
         <div id="candidate-results-integrity" className="scroll-mt-36 space-y-3">

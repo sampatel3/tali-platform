@@ -20,6 +20,7 @@ vi.mock('../shared/api', () => ({
     resend: vi.fn(),
     downloadReport: vi.fn(),
     addNote: vi.fn(),
+    generateInterviewDebrief: vi.fn(),
     uploadCv: vi.fn(),
     postToWorkable: vi.fn(),
     updateManualEvaluation: vi.fn(),
@@ -44,6 +45,7 @@ vi.mock('../shared/api', () => ({
     remove: vi.fn(),
     uploadCv: vi.fn(),
     uploadJobSpec: vi.fn(),
+    downloadDocument: vi.fn(),
   },
   team: { list: vi.fn(), invite: vi.fn() },
   default: {
@@ -277,6 +279,25 @@ describe('CandidateDetailPage', () => {
     window.location.hash = '';
     setupAuthenticatedUser();
     analyticsApi.get.mockResolvedValue({ data: { avg_calibration_score: 6.5 } });
+    assessmentsApi.generateInterviewDebrief.mockResolvedValue({
+      data: {
+        cached: true,
+        generated_at: '2026-01-15T10:00:00Z',
+        interview_debrief: {
+          summary: 'Probe async debugging depth and cloud infrastructure gaps.',
+          probing_questions: [
+            {
+              dimension: 'Context provision',
+              score: 7.0,
+              question: 'How would you triage an intermittent batch timeout in production?',
+              what_to_listen_for: 'Concrete debugging steps, file references, and dependency awareness.',
+            },
+          ],
+          strengths_to_validate: [{ text: 'Async backend ownership' }],
+          red_flags: [{ text: 'Limited cloud automation depth', follow_up_question: 'Where have you used Terraform or Kubernetes directly?' }],
+        },
+      },
+    });
   });
 
   afterEach(() => {
@@ -316,13 +337,13 @@ describe('CandidateDetailPage', () => {
 
   it('renders summary tab by default', async () => {
     await renderCandidateDetail();
-    expect(screen.getByRole('tab', { name: 'Summary' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tab', { name: 'SUMMARY' })).toHaveAttribute('aria-selected', 'true');
     expect(screen.getByText('Assessment results')).toBeInTheDocument();
   });
 
   it('renders category scores in results tab', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
     // Category names appear in the expandable sections
     const taskCompletionElements = screen.getAllByText('Task completion');
     expect(taskCompletionElements.length).toBeGreaterThanOrEqual(1);
@@ -333,15 +354,14 @@ describe('CandidateDetailPage', () => {
 
   it('renders radar chart in results tab', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
     expect(screen.getByTestId('radar-chart')).toBeInTheDocument();
   });
 
-  it('tab switching works - AI Usage tab', async () => {
+  it('assessment results tab includes AI usage and prompt quality', async () => {
     await renderCandidateDetail();
 
-    const aiUsageTab = screen.getByRole('tab', { name: 'AI Usage' });
-    fireEvent.click(aiUsageTab);
+    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
 
     await waitFor(() => {
       expect(screen.getByText('Avg Prompt clarity')).toBeInTheDocument();
@@ -350,10 +370,10 @@ describe('CandidateDetailPage', () => {
     });
   });
 
-  it('shows prompt log in AI Usage tab', async () => {
+  it('shows prompt log in assessment results tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'AI Usage' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
 
     await waitFor(() => {
       expect(screen.getByText(/Prompt Log/)).toBeInTheDocument();
@@ -361,50 +381,47 @@ describe('CandidateDetailPage', () => {
     });
   });
 
-  it('tab switching works - CV & Fit tab', async () => {
+  it('tab switching works - role fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'CV & Fit' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ROLE FIT' }));
 
     await waitFor(() => {
       expect(screen.getAllByText('Summary').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('Documents')).toBeInTheDocument();
       expect(screen.getAllByText('CV fit').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Requirements fit').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Why this score').length).toBeGreaterThanOrEqual(1);
     });
   });
 
-  it('shows matching skills in CV & Fit tab', async () => {
+  it('shows matching skills in role fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'CV & Fit' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ROLE FIT' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Documents')).toBeInTheDocument();
       expect(screen.getAllByText('Matching skills').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Python').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('AsyncIO').length).toBeGreaterThanOrEqual(1);
     });
   });
 
-  it('shows missing skills in CV & Fit tab', async () => {
+  it('shows missing skills in role fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'CV & Fit' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ROLE FIT' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Documents')).toBeInTheDocument();
       expect(screen.getAllByText('Gaps').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Kubernetes').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Terraform').length).toBeGreaterThanOrEqual(1);
     });
   });
 
-  it('shows score rationale bullets in CV & Fit tab', async () => {
+  it('shows score rationale bullets in role fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'CV & Fit' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ROLE FIT' }));
 
     await waitFor(() => {
       expect(screen.getAllByText('Summary').length).toBeGreaterThanOrEqual(1);
@@ -414,10 +431,10 @@ describe('CandidateDetailPage', () => {
     });
   });
 
-  it('tab switching works - Timeline tab', async () => {
+  it('assessment results tab includes timeline evidence', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'Timeline' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
 
     await waitFor(() => {
       expect(screen.getByText('Assessment started')).toBeInTheDocument();
@@ -426,33 +443,36 @@ describe('CandidateDetailPage', () => {
     });
   });
 
-  it('add note form renders with input and save button', async () => {
+  it('interview guidance tab renders recruiter feedback input and save button', async () => {
     await renderCandidateDetail();
 
-    expect(screen.getByPlaceholderText('Add note about this candidate')).toBeInTheDocument();
-    expect(screen.getByText('Save Note')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'INTERVIEW GUIDANCE' }));
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText('Add recruiter feedback from the interview')).toBeInTheDocument();
+      expect(screen.getByText('Save feedback')).toBeInTheDocument();
+    });
   });
 
-  it('add note form calls API on save', async () => {
+  it('interview guidance tab saves recruiter feedback notes', async () => {
     assessmentsApi.addNote.mockResolvedValue({ data: { timeline: [] } });
-    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
 
     await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'INTERVIEW GUIDANCE' }));
 
-    const noteInput = screen.getByPlaceholderText('Add note about this candidate');
+    const noteInput = await screen.findByPlaceholderText('Add recruiter feedback from the interview');
     fireEvent.change(noteInput, { target: { value: 'Great candidate, recommend for next round' } });
 
-    fireEvent.click(screen.getByText('Save Note'));
+    fireEvent.click(screen.getByText('Save feedback'));
 
     await waitFor(() => {
       expect(assessmentsApi.addNote).toHaveBeenCalledWith(1, 'Great candidate, recommend for next round');
     });
-
-    alertMock.mockRestore();
   });
 
   it('Download client report button exists', async () => {
     await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));
     expect(screen.getByText('Download client report')).toBeInTheDocument();
   });
 
@@ -460,6 +480,7 @@ describe('CandidateDetailPage', () => {
     assessmentsApi.downloadReport.mockResolvedValue({ data: new Blob(['pdf-content']) });
 
     await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));
 
     fireEvent.click(screen.getByText('Download client report'));
 
@@ -473,9 +494,9 @@ describe('CandidateDetailPage', () => {
     assessmentsApi.remove.mockResolvedValue({ data: {} });
 
     await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));
 
-    // Find the Delete button (red text)
-    const deleteButton = screen.getByRole('button', { name: 'Delete' });
+    const deleteButton = screen.getByRole('button', { name: 'Delete assessment' });
     fireEvent.click(deleteButton);
 
     await waitFor(() => {
@@ -497,7 +518,7 @@ describe('CandidateDetailPage', () => {
 
   it('renders assessment metadata in results tab', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
 
     expect(screen.getByText('Assessment Metadata')).toBeInTheDocument();
     // Duration appears in both header and metadata, check metadata section specifically
@@ -509,7 +530,7 @@ describe('CandidateDetailPage', () => {
 
   it('renders test results when available', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
 
     expect(screen.getByText('Test results')).toBeInTheDocument();
     expect(screen.getByText('Pipeline Processing')).toBeInTheDocument();
@@ -519,7 +540,7 @@ describe('CandidateDetailPage', () => {
 
   it('renders scoring glossary with plain-English dimension descriptions', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
 
     expect(screen.getByText('Scoring Glossary')).toBeInTheDocument();
     expect(screen.getAllByText('Task completion').length).toBeGreaterThanOrEqual(1);
@@ -528,61 +549,16 @@ describe('CandidateDetailPage', () => {
 
   it('renders Post to Workable button', async () => {
     await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));
 
     expect(screen.getByText('Post to Workable')).toBeInTheDocument();
   });
 
   it('shows inline comparison hint and action', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'Results' }));
+    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
 
     expect(screen.getByText(/Compare this candidate with others in the same role/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Compare with...' })).toBeInTheDocument();
-  });
-
-  it('saves structured manual evaluation from Evaluate tab', async () => {
-    assessmentsApi.updateManualEvaluation.mockResolvedValue({
-      data: {
-        manual_evaluation: {
-          category_scores: {
-            correctness: { score: 'excellent', evidence: ['All tests pass'], weight: 0.6 },
-          },
-          strengths: ['Strong debugging'],
-          improvements: ['Add more edge-case tests'],
-          overall_score: 9.2,
-          completed_due_to_timeout: false,
-        },
-      },
-    });
-    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
-
-    await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'Evaluate' }));
-
-    const gradeSelect = screen.getAllByRole('combobox')[0];
-    fireEvent.change(gradeSelect, { target: { value: 'excellent' } });
-    fireEvent.change(screen.getAllByPlaceholderText('Evidence (required for this category)')[0], {
-      target: { value: 'All tests pass' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('Strong debugging discipline'), {
-      target: { value: 'Strong debugging' },
-    });
-    fireEvent.change(screen.getByPlaceholderText('Add stronger edge-case tests'), {
-      target: { value: 'Add more edge-case tests' },
-    });
-
-    fireEvent.click(screen.getByText('Save manual evaluation'));
-
-    await waitFor(() => {
-      expect(assessmentsApi.updateManualEvaluation).toHaveBeenCalledWith(1, {
-        category_scores: {
-          correctness: { score: 'excellent', evidence: ['All tests pass'] },
-        },
-        strengths: ['Strong debugging'],
-        improvements: ['Add more edge-case tests'],
-      });
-    });
-
-    alertMock.mockRestore();
   });
 });

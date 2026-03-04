@@ -82,15 +82,15 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
       <div className="mx-auto flex max-w-[88rem] items-center justify-between gap-3 px-4 py-3 md:px-5">
         <div className="flex items-center gap-6">
           <Logo onClick={() => onNavigate('assessments')} />
-          <div className="hidden md:flex items-center gap-1 rounded-full border border-[var(--taali-border-soft)] bg-[var(--taali-nav-pill-bg)] px-1.5 py-1 shadow-[var(--taali-shadow-soft)] backdrop-blur-md">
+          <div className="hidden md:flex items-center gap-2">
             {NAV_ITEMS.map((item) => (
               <Button
                 key={item.id}
-                variant="ghost"
+                variant={currentPage === item.id ? 'secondary' : 'ghost'}
                 size="xs"
                 className={currentPage === item.id
-                  ? 'min-w-[84px] !rounded-full !border !border-[var(--taali-border-soft)] !bg-[var(--taali-surface)] !text-[var(--taali-text)] shadow-[var(--taali-shadow-soft)]'
-                  : 'min-w-[84px] !rounded-full !text-[var(--taali-muted)] hover:!text-[var(--taali-text)]'}
+                  ? 'min-w-[84px] !rounded-full !bg-[var(--taali-surface)] !text-[var(--taali-text)] shadow-[var(--taali-shadow-soft)]'
+                  : 'min-w-[84px] !rounded-full !text-[var(--taali-muted)] hover:!bg-[var(--taali-surface-hover)] hover:!text-[var(--taali-text)]'}
                 onClick={() => onNavigate(item.id)}
               >
                 {item.label}

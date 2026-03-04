@@ -91,6 +91,10 @@ export function CandidateReportView({
   model,
   variant = 'page',
   className = '',
+  showInsights = true,
+  showRoleFitSection = true,
+  showIntegritySection = true,
+  showEvidenceSections = true,
 }) {
   const config = variantConfig[variant] || variantConfig.page;
   const {
@@ -229,52 +233,55 @@ export function CandidateReportView({
                 <ScoreMetricCard label="Role fit" value={summaryModel.roleFitScore} />
                 <ScoreMetricCard label="Assessment" value={summaryModel.assessmentScore} />
               </div>
-              {source ? (
-                <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-3 py-2 text-sm leading-5 text-[var(--taali-muted)]">
-                  {source.formulaLabel}
-                </div>
-              ) : null}
             </div>
           </div>
         </div>
 
-        <div className={cx('grid gap-3 border-t border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] p-4', config.insightGrid)}>
-          <InsightCard
-            label="Strongest signal"
-            title={strongestSignalTitle}
-            description={strongestSignalDescription}
-          />
-          <InsightCard
-            label="What to probe"
-            title={probeTitle}
-            description={probeDescription}
-          />
-          <InsightCard
-            label="Recruiter summary"
-            title={recommendation?.label || 'Pending review'}
-            description={recruiterSummaryText}
-          />
+        {showInsights ? (
+          <div className={cx('grid gap-3 border-t border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] p-4', config.insightGrid)}>
+            <InsightCard
+              label="Strongest signal"
+              title={strongestSignalTitle}
+              description={strongestSignalDescription}
+            />
+            <InsightCard
+              label="What to probe"
+              title={probeTitle}
+              description={probeDescription}
+            />
+            <InsightCard
+              label="Recruiter summary"
+              title={recommendation?.label || 'Pending review'}
+              description={recruiterSummaryText}
+            />
+          </div>
+        ) : null}
+      </Panel>
+
+      {showRoleFitSection ? (
+        <RoleFitEvidenceSections
+          model={roleFitModel}
+          variant={config.roleFitVariant}
+          showScoreCards={false}
+          emptyMessage="Role-fit evidence will populate here as TAALI gathers more candidate data."
+        />
+      ) : null}
+
+      {showIntegritySection ? (
+        <Panel className="p-4">
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Integrity and history</div>
+          <p className="mt-2 text-sm text-[var(--taali-text)]">{integritySummaryText}</p>
+        </Panel>
+      ) : null}
+
+      {showEvidenceSections ? (
+        <div className={cx('grid gap-4', config.evidenceGrid)}>
+          <EvidenceSectionCard section={evidenceSections?.aiUsage} />
+          <EvidenceSectionCard section={evidenceSections?.codeAndGit} />
+          <EvidenceSectionCard section={evidenceSections?.timeline} />
+          <EvidenceSectionCard section={evidenceSections?.documents} />
         </div>
-      </Panel>
-
-      <RoleFitEvidenceSections
-        model={roleFitModel}
-        variant={config.roleFitVariant}
-        showScoreCards={false}
-        emptyMessage="Role-fit evidence will populate here as TAALI gathers more candidate data."
-      />
-
-      <Panel className="p-4">
-        <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Integrity and history</div>
-        <p className="mt-2 text-sm text-[var(--taali-text)]">{integritySummaryText}</p>
-      </Panel>
-
-      <div className={cx('grid gap-4', config.evidenceGrid)}>
-        <EvidenceSectionCard section={evidenceSections?.aiUsage} />
-        <EvidenceSectionCard section={evidenceSections?.codeAndGit} />
-        <EvidenceSectionCard section={evidenceSections?.timeline} />
-        <EvidenceSectionCard section={evidenceSections?.documents} />
-      </div>
+      ) : null}
     </div>
   );
 }
