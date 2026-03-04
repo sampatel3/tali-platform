@@ -3,13 +3,17 @@ import { AlertTriangle, CheckCircle, CreditCard } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
 import {
+  Badge,
   Button,
+  Card,
   Input,
   PageContainer,
   PageHeader,
   Select,
   Spinner,
   TabBar,
+  TableShell,
+  Textarea,
   Panel,
   Sheet,
 } from '../../shared/ui/TaaliPrimitives';
@@ -46,6 +50,127 @@ const normalizeWorkableError = (input) => {
   }
   return raw || 'Workable connection failed.';
 };
+
+const PreferencesSettingsTab = ({
+  defaultAssessmentMinutes,
+  setDefaultAssessmentMinutes,
+  customClaudeApiKey,
+  setCustomClaudeApiKey,
+  customClaudeApiKeyTouched,
+  setCustomClaudeApiKeyTouched,
+  hasCustomClaudeApiKey,
+  emailTemplatePreview,
+  setEmailTemplatePreview,
+  preferencesSavedAt,
+  preferencesSaving,
+  handleSavePreferences,
+}) => (
+  <div className="space-y-6">
+    <Panel className="p-5">
+      <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Display Preferences</h3>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-medium text-[var(--taali-text)]">Theme</p>
+          <p className="mt-1 text-xs text-[var(--taali-muted)]">
+            Uses the same light and dark switch as the landing page and recruiter app header.
+          </p>
+        </div>
+        <GlobalThemeToggle className="shrink-0" />
+      </div>
+    </Panel>
+
+    <Panel className="p-5">
+      <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Assessment Defaults</h3>
+      <label className="block">
+        <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Default assessment duration (minutes)</span>
+        <Input
+          type="number"
+          min={15}
+          max={180}
+          value={defaultAssessmentMinutes}
+          onChange={(event) => {
+            const raw = Number(event.target.value || 30);
+            const clamped = Math.max(15, Math.min(180, raw));
+            setDefaultAssessmentMinutes(Number.isFinite(clamped) ? clamped : 30);
+          }}
+        />
+      </label>
+      <p className="mt-2 text-xs text-[var(--taali-muted)]">
+        Applied to newly created assessments.
+      </p>
+    </Panel>
+
+    <Panel className="p-5">
+      <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Custom Claude API Key (Optional)</h3>
+      <label className="block">
+        <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Rotate API key</span>
+        <Input
+          type="password"
+          placeholder="Leave blank to keep current key"
+          value={customClaudeApiKey}
+          onChange={(event) => {
+            setCustomClaudeApiKey(event.target.value);
+            if (!customClaudeApiKeyTouched) setCustomClaudeApiKeyTouched(true);
+          }}
+        />
+      </label>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Badge variant={hasCustomClaudeApiKey ? 'success' : 'muted'} className="font-mono text-[11px]">
+          {hasCustomClaudeApiKey ? 'Configured' : 'Not configured'}
+        </Badge>
+        {hasCustomClaudeApiKey ? (
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={() => {
+              setCustomClaudeApiKey('');
+              setCustomClaudeApiKeyTouched(true);
+            }}
+          >
+            Clear stored key
+          </Button>
+        ) : null}
+      </div>
+      <p className="mt-2 text-xs text-[var(--taali-muted)]">
+        Key is stored encrypted server-side for this workspace.
+      </p>
+    </Panel>
+
+    <Panel className="p-5">
+      <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Invite Email Template Preview</h3>
+      <label className="block">
+        <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Template body</span>
+        <Textarea
+          value={emailTemplatePreview}
+          rows={5}
+          onChange={(event) => setEmailTemplatePreview(event.target.value)}
+        />
+      </label>
+      <p className="mt-2 text-xs text-[var(--taali-muted)]">
+        Supports placeholders like {'{{candidate_name}}'} and {'{{assessment_link}}'}.
+      </p>
+    </Panel>
+
+    <Panel className="p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="font-mono text-xs text-[var(--taali-muted)]">
+          {preferencesSavedAt
+            ? `Last saved ${new Date(preferencesSavedAt).toLocaleTimeString()}`
+            : 'Save to apply workspace preferences'}
+        </div>
+        <Button
+          type="button"
+          variant="primary"
+          disabled={preferencesSaving}
+          onClick={handleSavePreferences}
+        >
+          {preferencesSaving ? 'Saving…' : 'Save preferences'}
+        </Button>
+      </div>
+    </Panel>
+  </div>
+);
 
 export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableButton }) => {
   const { user } = useAuth();
@@ -757,7 +882,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       </div>
                     )}
                   </div>
-                  <div className="border-2 border-[var(--taali-border-muted)] bg-[var(--taali-bg)] p-3 text-sm text-[var(--taali-text)]">
+                  <Card className="bg-[var(--taali-surface-subtle)] p-4 text-sm text-[var(--taali-text)]">
                     <div className="font-semibold mb-1">What happens when you sync</div>
                     <ul className="list-disc list-inside space-y-0.5">
                       <li>Open jobs from Workable are imported as roles; job specs are saved as attachments.</li>
@@ -768,9 +893,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <p className="mt-2 text-xs text-[var(--taali-muted)]">
                       For a completely fresh import, use <strong>Remove all candidates and roles</strong> below, then run <strong>Metadata sync</strong>.
                     </p>
-                  </div>
+                  </Card>
                   {workableSyncInProgress && (
-                    <div className="border-2 border-[var(--taali-border)] bg-[var(--taali-warning-soft)] p-4 flex items-center gap-3 mt-3">
+                    <Panel className="mt-3 flex items-center gap-3 border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
                       <Spinner size={24} className="flex-shrink-0" />
                       <div className="min-w-0 flex-1">
                         <div className="font-semibold text-[var(--taali-text)]">
@@ -816,7 +941,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                           </Button>
                         </div>
                       </div>
-                    </div>
+                    </Panel>
                   )}
                   <hr className="border-[var(--taali-border)]" />
                   <div>
@@ -873,7 +998,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
                       Metadata sync is the default baseline. Use candidate-level enrichment, CV fetch, and TAALI scoring actions from the Candidates page when needed.
                     </p>
-                    <div className="mt-3 border border-[var(--taali-border)] bg-[var(--taali-bg)] p-3 space-y-2">
+                    <Card className="mt-3 bg-[var(--taali-surface-subtle)] p-4">
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <div>
                           <p className="text-sm font-semibold text-[var(--taali-text)]">Roles to import</p>
@@ -921,7 +1046,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       {workableJobsError ? (
                         <p className="text-xs text-[var(--taali-danger)]">{workableJobsError}</p>
                       ) : null}
-                      <div className="max-h-56 overflow-y-auto border border-[var(--taali-border)] bg-[var(--taali-surface)] p-2">
+                      <div className="max-h-56 overflow-y-auto rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3">
                         {workableJobsLoading ? (
                           <p className="text-xs text-[var(--taali-muted)]">Loading Workable roles…</p>
                         ) : filteredWorkableSyncJobs.length === 0 ? (
@@ -950,7 +1075,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                           </div>
                         )}
                       </div>
-                    </div>
+                    </Card>
                     <div className="mt-4 flex flex-wrap gap-3">
                       <Button
                         type="button"
@@ -963,7 +1088,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       <Button
                         type="button"
                         variant="secondary"
-                        className="border-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
+                        className="bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
                         disabled={workableSyncLoading || workableSyncInProgress || !workableConnected || (totalRoleCountForSync > 0 && selectedRoleCountForSync === 0)}
                         onClick={handleSyncWorkable}
                       >
@@ -972,7 +1097,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     </div>
                   </div>
 
-                  <Panel className="mt-5 border-2 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
+                  <Panel className="mt-5 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
                     <div className="font-bold text-[var(--taali-danger)] mb-1">Remove all Workable data</div>
                     <p className="text-sm text-[var(--taali-text)] mb-3">
                       This will delete all roles, candidates, and applications that were imported from Workable.
@@ -994,7 +1119,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       aria-modal="true"
                       aria-labelledby="clear-workable-title"
                     >
-                      <Panel className="max-w-md w-full border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] p-5 shadow-xl">
+                      <Panel className="max-w-md w-full bg-[var(--taali-surface)] p-5 shadow-xl">
                         <h2 id="clear-workable-title" className="text-lg font-bold mb-2 text-[var(--taali-text)]">Remove all Workable data?</h2>
                         <p className="text-sm text-[var(--taali-muted)] mb-4">
                           All roles, candidates, and applications imported from Workable will be deleted from this account.
@@ -1048,7 +1173,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         key={packId}
                         type="button"
                         variant="secondary"
-                        className="flex items-center justify-between gap-2 !px-4 !py-3 border-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
+                        className="flex items-center justify-between gap-2 !px-4 !py-3 bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
                         onClick={() => handleAddCredits(packId)}
                         disabled={checkoutLoading}
                       >
@@ -1079,13 +1204,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   </Panel>
                 </div>
 
-                <div className="border-2 border-[var(--taali-border)]">
-                  <div className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] px-4 py-3 text-[var(--taali-inverse-text)]">
-                    <h3 className="font-bold">Usage History</h3>
+                <TableShell>
+                  <div className="flex items-center justify-between gap-3 border-b border-[var(--taali-border-soft)] px-4 py-3">
+                    <h3 className="font-bold text-[var(--taali-text)]">Usage History</h3>
                   </div>
                   <table className="w-full">
                     <thead>
-                      <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-bg)]">
+                      <tr>
                         <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Date</th>
                         <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Candidate</th>
                         <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Task</th>
@@ -1111,7 +1236,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       )}
                     </tbody>
                   </table>
-                </div>
+                </TableShell>
               </div>
             )}
 
@@ -1141,13 +1266,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                     </Button>
                   </form>
                 </Panel>
-                <div className="border-2 border-[var(--taali-border)]">
-                  <div className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] px-4 py-3 text-[var(--taali-inverse-text)]">
-                    <h3 className="font-bold">Team Members</h3>
+                <TableShell>
+                  <div className="flex items-center justify-between gap-3 border-b border-[var(--taali-border-soft)] px-4 py-3">
+                    <h3 className="font-bold text-[var(--taali-text)]">Team Members</h3>
                   </div>
                   <table className="w-full">
                     <thead>
-                      <tr className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-bg)]">
+                      <tr>
                         <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Name</th>
                         <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Email</th>
                       </tr>
@@ -1163,7 +1288,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       ))}
                     </tbody>
                   </table>
-                </div>
+                </TableShell>
               </div>
             )}
 
@@ -1236,110 +1361,20 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
             )}
 
             {activeSettingsTab === 'preferences' && (
-              <div className="space-y-6">
-                <Panel className="p-4">
-                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Display Preferences</h3>
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="text-sm font-medium text-[var(--taali-text)]">Theme</p>
-                      <p className="mt-1 text-xs text-[var(--taali-muted)]">
-                        Uses the same light and dark switch as the landing page and recruiter app header.
-                      </p>
-                    </div>
-                    <GlobalThemeToggle className="shrink-0" />
-                  </div>
-                </Panel>
-
-                <Panel className="p-4">
-                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Assessment Defaults</h3>
-                  <label className="block">
-                    <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Default assessment duration (minutes)</span>
-                    <Input
-                      type="number"
-                      min={15}
-                      max={180}
-                      value={defaultAssessmentMinutes}
-                      onChange={(event) => {
-                        const raw = Number(event.target.value || 30);
-                        const clamped = Math.max(15, Math.min(180, raw));
-                        setDefaultAssessmentMinutes(Number.isFinite(clamped) ? clamped : 30);
-                      }}
-                    />
-                  </label>
-                  <p className="mt-2 text-xs text-[var(--taali-muted)]">
-                    Applied to newly created assessments.
-                  </p>
-                </Panel>
-
-                <Panel className="p-4">
-                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Custom Claude API Key (Optional)</h3>
-                  <label className="block">
-                    <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Rotate API key</span>
-                    <Input
-                      type="password"
-                      placeholder="Leave blank to keep current key"
-                      value={customClaudeApiKey}
-                      onChange={(event) => {
-                        setCustomClaudeApiKey(event.target.value);
-                        setCustomClaudeApiKeyTouched(true);
-                      }}
-                    />
-                  </label>
-                  <div className="mt-2 flex flex-wrap items-center gap-2">
-                    <Badge variant={hasCustomClaudeApiKey ? 'success' : 'muted'} className="font-mono text-[11px]">
-                      {hasCustomClaudeApiKey ? 'Configured' : 'Not configured'}
-                    </Badge>
-                    {hasCustomClaudeApiKey ? (
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        size="sm"
-                        onClick={() => {
-                          setCustomClaudeApiKey('');
-                          setCustomClaudeApiKeyTouched(true);
-                        }}
-                      >
-                        Clear stored key
-                      </Button>
-                    ) : null}
-                  </div>
-                  <p className="mt-2 text-xs text-[var(--taali-muted)]">
-                    Key is stored encrypted server-side for this workspace.
-                  </p>
-                </Panel>
-
-                <Panel className="p-4">
-                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Invite Email Template Preview</h3>
-                  <label className="block">
-                    <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Template body</span>
-                    <Input
-                      value={emailTemplatePreview}
-                      onChange={(event) => setEmailTemplatePreview(event.target.value)}
-                    />
-                  </label>
-                  <p className="mt-2 text-xs text-[var(--taali-muted)]">
-                    Supports placeholders like {'{{candidate_name}}'} and {'{{assessment_link}}'}.
-                  </p>
-                </Panel>
-
-                <Panel className="p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div className="font-mono text-xs text-[var(--taali-muted)]">
-                      {preferencesSavedAt
-                        ? `Last saved ${new Date(preferencesSavedAt).toLocaleTimeString()}`
-                        : 'Save to apply workspace preferences'}
-                    </div>
-                    <Button
-                      type="button"
-                      variant="primary"
-                      disabled={preferencesSaving}
-                      onClick={handleSavePreferences}
-                    >
-                      {preferencesSaving ? 'Saving…' : 'Save preferences'}
-                    </Button>
-                  </div>
-                </Panel>
-              </div>
+              <PreferencesSettingsTab
+                defaultAssessmentMinutes={defaultAssessmentMinutes}
+                setDefaultAssessmentMinutes={setDefaultAssessmentMinutes}
+                customClaudeApiKey={customClaudeApiKey}
+                setCustomClaudeApiKey={setCustomClaudeApiKey}
+                customClaudeApiKeyTouched={customClaudeApiKeyTouched}
+                setCustomClaudeApiKeyTouched={setCustomClaudeApiKeyTouched}
+                hasCustomClaudeApiKey={hasCustomClaudeApiKey}
+                emailTemplatePreview={emailTemplatePreview}
+                setEmailTemplatePreview={setEmailTemplatePreview}
+                preferencesSavedAt={preferencesSavedAt}
+                preferencesSaving={preferencesSaving}
+                handleSavePreferences={handleSavePreferences}
+              />
             )}
           </>
         )}
@@ -1352,10 +1387,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         footer={null}
       >
         <div className="space-y-5">
-          <div className="grid grid-cols-2 border-2 border-[var(--taali-border)]">
+          <div className="grid grid-cols-2 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] p-1">
             <button
               type="button"
-              className={`px-4 py-2 font-mono text-sm font-bold border-r-2 border-[var(--taali-border)] ${workableConnectMode === 'oauth' ? 'bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)]' : 'bg-[var(--taali-surface)] text-[var(--taali-text)] hover:bg-[var(--taali-bg)]'}`}
+              className={`rounded-[var(--taali-radius-control)] px-4 py-2 font-mono text-sm font-bold ${workableConnectMode === 'oauth' ? 'bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)]' : 'bg-transparent text-[var(--taali-text)] hover:bg-[var(--taali-surface)]'}`}
               onClick={() => {
                 setWorkableConnectMode('oauth');
                 setWorkableConnectError('');
@@ -1365,7 +1400,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
             </button>
             <button
               type="button"
-              className={`px-4 py-2 font-mono text-sm font-bold ${workableConnectMode === 'token' ? 'bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)]' : 'bg-[var(--taali-surface)] text-[var(--taali-text)] hover:bg-[var(--taali-bg)]'}`}
+              className={`rounded-[var(--taali-radius-control)] px-4 py-2 font-mono text-sm font-bold ${workableConnectMode === 'token' ? 'bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)]' : 'bg-transparent text-[var(--taali-text)] hover:bg-[var(--taali-surface)]'}`}
               onClick={() => {
                 setWorkableConnectMode('token');
                 setWorkableConnectError('');
@@ -1406,7 +1441,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               <Button
                 type="button"
                 variant="secondary"
-                className="border-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
+                className="bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
                 disabled={workableOAuthLoading}
                 onClick={handleConnectWorkableOAuth}
               >
@@ -1414,7 +1449,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               </Button>
             </Panel>
           ) : (
-            <form className="border-2 border-[var(--taali-border)] p-4 space-y-3 taali-panel" onSubmit={handleConnectWorkableToken}>
+            <form className="space-y-3 p-4 taali-panel" onSubmit={handleConnectWorkableToken}>
               <div className="font-bold text-[var(--taali-text)]">API Token Setup</div>
               <Input
                 type="text"
@@ -1433,7 +1468,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               <Button
                 type="submit"
                 variant="secondary"
-                className="border-2 border-[var(--taali-border)] bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
+                className="bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
                 disabled={workableTokenSaving}
               >
                 {workableTokenSaving ? 'Connecting…' : 'Connect via API Token'}
