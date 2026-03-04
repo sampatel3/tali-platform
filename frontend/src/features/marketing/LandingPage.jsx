@@ -39,25 +39,10 @@ const CandidateResultsPreviewView = lazy(() =>
 );
 
 const TRUST_ITEMS = [
-  'Use role-traceable engineering tasks instead of generic coding prompts',
-  'Capture prompt, diff, and execution evidence in one review trail',
-  'Score execution, judgment, communication, and role fit in one rubric',
-  'Share a clean employer-facing summary instead of replaying the full session',
-];
-
-const PROOF_POINTS = [
-  {
-    title: 'Assess AI-native skillsets',
-    description: 'See how candidates frame prompts, structure context, validate AI output, and recover when the first attempt fails.',
-  },
-  {
-    title: 'Defensible shortlists',
-    description: 'Move candidates forward with role fit, TAALI score, and interview probes in one calm review surface instead of piecing together notes.',
-  },
-  {
-    title: 'Client-ready report',
-    description: 'Give employers and hiring managers a clear summary they can use in decision meetings, not a messy transcript dump.',
-  },
+  'Built for modern technical hiring, not outdated coding tests',
+  'Assess AI-native skillsets through prompt framing, context, validation, and recovery',
+  'Make defensible shortlist decisions with role fit, TAALI score, and interview probes',
+  'Share a client-ready report employers can use in real decision meetings',
 ];
 
 const AUDIENCE_ITEMS = [
@@ -422,29 +407,6 @@ const FrameworkSection = () => {
   );
 };
 
-const ProofSection = () => (
-  <section className="py-8 lg:py-12">
-    <PageContainer className="grid gap-6 xl:grid-cols-[0.9fr_1.1fr]">
-      <Panel className="bg-[linear-gradient(145deg,var(--taali-surface-subtle),var(--taali-surface-warm))] p-6">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--taali-muted)]">WHY TEAMS USE TAALI</div>
-        <h2 className="taali-display mt-3 text-4xl font-semibold text-[var(--taali-text)]">Built for modern technical hiring, not outdated coding tests.</h2>
-        <p className="mt-4 text-base leading-8 text-[var(--taali-muted)]">
-          Resumes and generic coding exercises miss how engineers actually work with AI. TAALI helps teams assess AI-native skillsets, make defensible shortlist decisions, and hand over a clean report clients or employers can actually use.
-        </p>
-      </Panel>
-
-      <div className="grid gap-4 md:grid-cols-3">
-        {PROOF_POINTS.map((item) => (
-          <Card key={item.title} className="p-5">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-purple)]">{item.title}</div>
-            <p className="mt-3 text-sm leading-7 text-[var(--taali-text)]">{item.description}</p>
-          </Card>
-        ))}
-      </div>
-    </PageContainer>
-  </section>
-);
-
 const PricingSection = ({ onNavigate }) => (
   <section id="pricing" className="py-8 lg:py-12">
     <PageContainer className="space-y-6">
@@ -550,7 +512,6 @@ export const LandingPage = ({ onNavigate }) => {
       <CandidateSummarySection />
       <FrameworkSection />
       <AudienceSection />
-      <ProofSection />
       <PricingSection onNavigate={onNavigate} />
       <Footer />
     </div>
