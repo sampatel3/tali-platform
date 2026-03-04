@@ -1,21 +1,10 @@
 import React, { useEffect, useState } from 'react';
 
-import { Badge, Button, Panel, Select, Sheet, Spinner } from '../../shared/ui/TaaliPrimitives';
-import { formatScale100Score } from '../../lib/scoreDisplay';
-import {
-  buildStandingCandidateReportModel,
-  COMPLETED_ASSESSMENT_STATUSES,
-} from './assessmentViewModels';
+import { Button, Panel, Select, Sheet, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { buildStandingCandidateReportModel } from './assessmentViewModels';
 import { CandidateAssessmentSummaryView } from './CandidateAssessmentSummaryView';
 import { CandidateSidebarHeader } from './CandidateSidebarHeader';
 import { formatDateTime } from './candidatesUiUtils';
-import { CandidateReportView } from './CandidateReportView';
-
-const toAssessmentStatusText = (status) => {
-  const cleaned = String(status || '').trim();
-  if (!cleaned) return 'not started';
-  return cleaned.replace(/_/g, ' ');
-};
 
 export function CandidateScoreSummarySheet({
   open,
@@ -30,7 +19,6 @@ export function CandidateScoreSummarySheet({
   onOpenRetakeDialog,
   onOpenCvSidebar,
   onViewFullPage,
-  onViewResults,
 }) {
   const [selectedTask, setSelectedTask] = useState('');
 
@@ -44,18 +32,13 @@ export function CandidateScoreSummarySheet({
   }, [open, roleTasks]);
 
   const scoreSummary = application?.score_summary || {};
-  const assessmentHistory = Array.isArray(application?.assessment_history) ? application.assessment_history : [];
   const hasCv = Boolean(application?.cv_filename || application?.cv_text);
-  const hasCompletedAssessment = Boolean(
-    completedAssessment
-    && COMPLETED_ASSESSMENT_STATUSES.has(String(completedAssessment.status || '').toLowerCase())
-  );
   const reportModel = buildStandingCandidateReportModel({
     application,
     completedAssessment,
     identity: {
       assessmentId: completedAssessment?.id || scoreSummary.assessment_id || application?.valid_assessment_id || null,
-      sectionLabel: hasCompletedAssessment ? 'Assessment results' : 'Standing candidate report',
+      sectionLabel: 'Assessment results',
       name: application?.candidate_name || application?.candidate_email || 'Candidate',
       email: application?.candidate_email || '',
       position: application?.candidate_position || '',
@@ -154,62 +137,7 @@ export function CandidateScoreSummarySheet({
             </div>
           ) : null}
 
-          {hasCompletedAssessment ? (
-            <CandidateAssessmentSummaryView reportModel={reportModel} variant="sheet" />
-          ) : (
-            <CandidateReportView model={reportModel} variant="sheet" />
-          )}
-
-          <Panel className="p-4">
-            <div className="mb-3 flex items-center justify-between gap-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Assessment history</p>
-              {scoreSummary.has_voided_attempts ? <Badge variant="warning">Includes voided attempts</Badge> : null}
-            </div>
-            {assessmentHistory.length === 0 ? (
-              <p className="text-sm text-[var(--taali-muted)]">No assessment attempts yet for this role.</p>
-            ) : (
-              <div className="space-y-3">
-                {assessmentHistory.map((item) => {
-                  const canViewItem = Boolean(item.assessment_id) && (
-                    COMPLETED_ASSESSMENT_STATUSES.has(String(item.status || '').toLowerCase()) || Boolean(item.is_voided)
-                  );
-                  return (
-                    <div key={item.assessment_id} className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-subtle)] px-3 py-3">
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <div className="flex flex-wrap items-center gap-2">
-                            <p className="font-semibold text-[var(--taali-text)]">{item.task_name || `Assessment #${item.assessment_id}`}</p>
-                            {item.is_voided ? <Badge variant="warning">Voided</Badge> : <Badge variant="muted">Current</Badge>}
-                          </div>
-                          <p className="mt-1 text-sm text-[var(--taali-muted)]">
-                            Status: {toAssessmentStatusText(item.status)}
-                            {item.completed_at ? ` • Completed ${formatDateTime(item.completed_at)}` : ''}
-                            {!item.completed_at && item.created_at ? ` • Created ${formatDateTime(item.created_at)}` : ''}
-                          </p>
-                          {item.void_reason ? (
-                            <p className="mt-1 text-sm text-amber-700">Void reason: {item.void_reason}</p>
-                          ) : null}
-                        </div>
-                        <div className="space-y-2 text-right">
-                          <p className="font-mono text-sm text-[var(--taali-text)]">TAALI {formatScale100Score(item.taali_score, '0-100')}</p>
-                          {canViewItem ? (
-                            <Button
-                              type="button"
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => onViewResults?.(item.assessment_id, application)}
-                            >
-                              View
-                            </Button>
-                          ) : null}
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-          </Panel>
+          <CandidateAssessmentSummaryView reportModel={reportModel} variant="sheet" />
         </div>
       )}
     </Sheet>

@@ -252,6 +252,35 @@ const mockCandidate = {
   },
 };
 
+const mockApplication = {
+  id: 12,
+  candidate_id: 212,
+  candidate_name: 'Pending Candidate',
+  candidate_email: 'pending@example.com',
+  candidate_position: 'Platform Engineer',
+  role_name: 'Platform Engineer',
+  status: 'applied',
+  cv_filename: 'pending.pdf',
+  cv_match_score: 81,
+  cv_match_details: {
+    score_scale: '0-100',
+    summary: 'Strong enough CV evidence to review before sending an assessment.',
+    matching_skills: ['Python', 'FastAPI'],
+    missing_skills: ['Kubernetes'],
+    requirements_match_score_100: 74,
+    requirements_assessment: [
+      {
+        requirement: 'Distributed systems',
+        status: 'met',
+        evidence: 'Relevant backend platform history is present in the CV.',
+      },
+    ],
+  },
+  assessment_history: [],
+  created_at: '2026-01-10T10:00:00Z',
+  updated_at: '2026-01-10T10:00:00Z',
+};
+
 const mockOnNavigate = vi.fn();
 const mockOnDeleted = vi.fn();
 const mockOnNoteAdded = vi.fn();
@@ -262,6 +291,23 @@ const renderCandidateDetail = async (candidateOverrides = {}) => {
     <AuthProvider>
       <CandidateDetailPage
         candidate={candidate}
+        onNavigate={mockOnNavigate}
+        onDeleted={mockOnDeleted}
+        onNoteAdded={mockOnNoteAdded}
+      />
+    </AuthProvider>
+  );
+  await waitFor(() => expect(analyticsApi.get).toHaveBeenCalled());
+  return view;
+};
+
+const renderPendingCandidateDetail = async (applicationOverrides = {}) => {
+  const application = { ...mockApplication, ...applicationOverrides };
+  const view = render(
+    <AuthProvider>
+      <CandidateDetailPage
+        candidate={null}
+        application={application}
         onNavigate={mockOnNavigate}
         onDeleted={mockOnDeleted}
         onNoteAdded={mockOnNoteAdded}
@@ -556,6 +602,23 @@ describe('CandidateDetailPage', () => {
     fireEvent.click(backButton);
 
     expect(mockOnNavigate).toHaveBeenCalledWith('assessments');
+  });
+
+  it('renders the same tab shell for pre-assessment candidates with pending tab states', async () => {
+    await renderPendingCandidateDetail();
+
+    expect(screen.getByRole('tab', { name: 'SUMMARY' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: 'ROLE FIT' })).toBeInTheDocument();
+    expect(screen.getByText('Assessment results')).toBeInTheDocument();
+    expect(screen.queryByText('Standing candidate report')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Pending assessment')).toBeInTheDocument();
+      expect(screen.getByText('Assessment results will populate after the assessment is completed.')).toBeInTheDocument();
+    });
   });
 
   it('renders assessment metadata in results tab', async () => {

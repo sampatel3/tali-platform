@@ -466,17 +466,14 @@ describe('CandidatesPage', () => {
 
     await waitFor(() => {
       const dialog = screen.getByRole('dialog', { name: 'Rationale Candidate' });
+      expect(within(dialog).getByText('Assessment results')).toBeInTheDocument();
       expect(within(dialog).getByText('TAALI score')).toBeInTheDocument();
       expect(within(dialog).getByText('Assessment')).toBeInTheDocument();
       expect(within(dialog).getAllByText('Role fit').length).toBeGreaterThan(0);
+      expect(within(dialog).getByText('Role fit summary')).toBeInTheDocument();
+      expect(within(dialog).getByText('What to probe')).toBeInTheDocument();
       expect(within(dialog).queryByText('Workable stage')).not.toBeInTheDocument();
-      expect(within(dialog).getByText('Why this score')).toBeInTheDocument();
-      expect(within(dialog).getByText('Recruiter requirements fit')).toBeInTheDocument();
       expect(within(dialog).getByRole('button', { name: 'View full page' })).toBeInTheDocument();
-      expect(within(dialog).getAllByText(/Matched recruiter requirements:/).length).toBeGreaterThanOrEqual(1);
-      expect(within(dialog).getByText('Total: 2')).toBeInTheDocument();
-      expect(within(dialog).getByText('Met: 1')).toBeInTheDocument();
-      expect(within(dialog).getByText('Partial: 1')).toBeInTheDocument();
       expect(within(dialog).getByText('Matching skills')).toBeInTheDocument();
       expect(within(dialog).getByText('Enterprise production experience')).toBeInTheDocument();
       expect(within(dialog).getAllByText('Compensation alignment to role band').length).toBeGreaterThan(0);
@@ -537,12 +534,17 @@ describe('CandidatesPage', () => {
     fireEvent.click(within(candidateRow).getByRole('button', { name: 'View assessment' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Standing Candidate' });
+    expect(within(dialog).getByText('Assessment results')).toBeInTheDocument();
+    expect(within(dialog).getByText('Role fit summary')).toBeInTheDocument();
+    expect(within(dialog).queryByText('Standing candidate report')).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'View full page' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/candidates/12');
       expect(screen.getByRole('button', { name: 'Back to Candidates' })).toBeInTheDocument();
-      expect(screen.getByText('Standing candidate report')).toBeInTheDocument();
+      expect(screen.getByText('Assessment results')).toBeInTheDocument();
+      expect(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' })).toBeInTheDocument();
+      expect(screen.queryByText('Standing candidate report')).not.toBeInTheDocument();
     });
   });
 

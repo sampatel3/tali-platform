@@ -185,15 +185,20 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
 };
 
 export const CandidateCvFitTab = ({
-  candidate,
+  candidate = null,
+  application = null,
   onDownloadCandidateDoc,
   onRequestCvUpload = null,
   requestingCvUpload = false,
   showDocuments = true,
 }) => {
-  const assessment = candidate._raw || {};
-  const roleFitModel = buildRoleFitEvidenceModel({ application: null, completedAssessment: assessment });
-  const hasCv = Boolean(assessment.candidate_cv_filename || assessment.cv_filename);
+  const assessment = candidate?._raw || null;
+  const sourceRecord = assessment || application || {};
+  const roleFitModel = buildRoleFitEvidenceModel({
+    application: assessment ? null : application,
+    completedAssessment: assessment,
+  });
+  const hasCv = Boolean(sourceRecord.candidate_cv_filename || sourceRecord.cv_filename);
 
   return (
     <div className="space-y-4">
@@ -242,10 +247,10 @@ export const CandidateCvFitTab = ({
           <div className="space-y-3 font-mono text-sm">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <span>{assessment.cv_uploaded ? '✅' : '❌'}</span>
-                <span>CV: {assessment.candidate_cv_filename || assessment.cv_filename || 'Not uploaded'}</span>
+                <span>{sourceRecord.cv_uploaded || sourceRecord.cv_filename ? '✅' : '❌'}</span>
+                <span>CV: {sourceRecord.candidate_cv_filename || sourceRecord.cv_filename || 'Not uploaded'}</span>
               </div>
-              {(assessment.candidate_cv_filename || assessment.cv_filename) ? (
+              {(sourceRecord.candidate_cv_filename || sourceRecord.cv_filename) ? (
                 <Button
                   type="button"
                   variant="secondary"
@@ -258,10 +263,10 @@ export const CandidateCvFitTab = ({
             </div>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <span>{assessment.candidate_job_spec_filename ? '✅' : '❌'}</span>
-                <span>Job Specification: {assessment.candidate_job_spec_filename || 'Not uploaded'}</span>
+                <span>{sourceRecord.candidate_job_spec_filename || sourceRecord.role_job_spec_filename ? '✅' : '❌'}</span>
+                <span>Job Specification: {sourceRecord.candidate_job_spec_filename || sourceRecord.role_job_spec_filename || 'Not uploaded'}</span>
               </div>
-              {assessment.candidate_job_spec_filename ? (
+              {(sourceRecord.candidate_job_spec_filename || sourceRecord.role_job_spec_filename) ? (
                 <Button
                   type="button"
                   variant="secondary"

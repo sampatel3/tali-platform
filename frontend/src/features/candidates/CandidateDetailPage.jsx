@@ -147,7 +147,7 @@ const CandidateClientReportTab = ({
           <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Client report</div>
           <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">Download the employer-facing assessment brief.</div>
           <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-            Open the print-ready summary view used on this page, with a TAALI report header added for employer or client review.
+            Export the TAALI client report PDF for employer or client review.
           </p>
         </div>
         <Button type="button" size="sm" variant="secondary" onClick={handleDownloadReport} disabled={busyAction !== ''}>
@@ -209,14 +209,16 @@ const SourceDocumentRow = ({ label, filename, onDownload = null }) => (
 );
 
 const CandidateSourceDocumentsTab = ({
-  candidate,
+  candidate = null,
+  application = null,
   reportModel,
   onDownloadCandidateDoc,
 }) => {
-  const assessment = candidate?._raw || {};
+  const assessment = candidate?._raw || null;
+  const sourceRecord = assessment || application || {};
   const documentEvidence = reportModel?.evidenceSections?.documents || null;
-  const cvFilename = assessment.candidate_cv_filename || assessment.cv_filename || null;
-  const jobSpecFilename = assessment.candidate_job_spec_filename || null;
+  const cvFilename = sourceRecord.candidate_cv_filename || sourceRecord.cv_filename || null;
+  const jobSpecFilename = sourceRecord.candidate_job_spec_filename || sourceRecord.role_job_spec_filename || null;
   const sourceItems = uniqueItems(documentEvidence?.items || [], 6);
 
   return (
@@ -263,8 +265,37 @@ const CandidateSourceDocumentsTab = ({
   );
 };
 
+const buildAssessmentPendingMessage = ({ application, reportModel, label }) => {
+  const assessmentHistory = Array.isArray(application?.assessment_history) ? application.assessment_history : [];
+  const latestAttempt = assessmentHistory[0] || null;
+  const latestStatus = String(
+    latestAttempt?.status
+    || application?.score_summary?.assessment_status
+    || application?.valid_assessment_status
+    || ''
+  ).trim();
+  const latestStatusLabel = latestStatus ? latestStatus.replace(/_/g, ' ') : 'pending assessment';
+  const roleName = reportModel?.identity?.roleName || application?.role_name || 'this role';
+
+  return {
+    title: `${label} will populate after the assessment is completed.`,
+    description: latestAttempt
+      ? `Latest attempt is currently ${latestStatusLabel}. TAALI will attach this tab once a completed assessment is available for ${roleName}.`
+      : `No completed assessment is available for ${roleName} yet. Send or complete an assessment to unlock this tab.`,
+  };
+};
+
+const PendingAssessmentTab = ({ title, description }) => (
+  <Panel className="p-5">
+    <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Pending assessment</div>
+    <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">{title}</div>
+    <p className="mt-3 text-sm leading-6 text-[var(--taali-muted)]">{description}</p>
+  </Panel>
+);
+
 export const AssessmentResultsPage = ({
   candidate,
+  application = null,
   onNavigate,
   onDeleted,
   onNoteAdded,
@@ -301,33 +332,47 @@ export const AssessmentResultsPage = ({
   const [interviewDebriefGeneratedAt, setInterviewDebriefGeneratedAt] = useState(null);
   const [resultsOnboardingOpen, setResultsOnboardingOpen] = useState(false);
 
-  const assessmentId = candidate?._raw?.id;
-  const taskId = candidate?._raw?.task_id || candidate?._raw?.task?.id || null;
-  const roleId = candidate?._raw?.role_id || null;
-  const roleName = candidate?._raw?.role_name || null;
-  const applicationStatus = candidate?._raw?.application_status || null;
-  const normalizedStatus = String(candidate?._raw?.status || candidate?.status || '').toLowerCase();
+  const completedAssessment = candidate?._raw || null;
+  const applicationRecord = application && typeof application === 'object' ? application : null;
+  const assessmentId = completedAssessment?.id || applicationRecord?.score_summary?.assessment_id || applicationRecord?.valid_assessment_id || null;
+  const taskId = completedAssessment?.task_id || completedAssessment?.task?.id || null;
+  const roleId = completedAssessment?.role_id || applicationRecord?.role_id || null;
+  const roleName = completedAssessment?.role_name || applicationRecord?.role_name || null;
+  const applicationStatus = completedAssessment?.application_status || applicationRecord?.status || null;
+  const normalizedStatus = String(
+    completedAssessment?.status
+    || candidate?.status
+    || applicationRecord?.score_summary?.assessment_status
+    || applicationRecord?.valid_assessment_status
+    || applicationRecord?.status
+    || ''
+  ).toLowerCase();
   const canResendInvite = normalizedStatus === 'pending' || normalizedStatus === 'expired';
-  const canGenerateInterviewGuide = normalizedStatus === 'completed' || normalizedStatus === 'completed_due_to_timeout';
-  const isVoided = Boolean(candidate?._raw?.is_voided);
-  const voidedAt = candidate?._raw?.voided_at || null;
-  const voidReason = candidate?._raw?.void_reason || null;
-  const supersededByAssessmentId = candidate?._raw?.superseded_by_assessment_id || null;
-  const hasCvOnFile = Boolean(
-    candidate?._raw?.candidate_cv_filename
-    || candidate?._raw?.cv_filename
-    || candidate?._raw?.cv_uploaded
+  const canGenerateInterviewGuide = Boolean(completedAssessment) && (
+    normalizedStatus === 'completed' || normalizedStatus === 'completed_due_to_timeout'
   );
-  const canRequestCvUpload = Boolean(!hasCvOnFile && assessmentId && candidate?.email);
+  const isVoided = Boolean(completedAssessment?.is_voided);
+  const voidedAt = completedAssessment?.voided_at || null;
+  const voidReason = completedAssessment?.void_reason || null;
+  const supersededByAssessmentId = completedAssessment?.superseded_by_assessment_id || null;
+  const hasCvOnFile = Boolean(
+    completedAssessment?.candidate_cv_filename
+    || completedAssessment?.cv_filename
+    || completedAssessment?.cv_uploaded
+    || applicationRecord?.candidate_cv_filename
+    || applicationRecord?.cv_filename
+    || applicationRecord?.cv_uploaded
+  );
+  const canRequestCvUpload = Boolean(!hasCvOnFile && assessmentId && (candidate?.email || applicationRecord?.candidate_email));
   const reportModel = buildStandingCandidateReportModel({
-    application: null,
-    completedAssessment: candidate?._raw,
+    application: applicationRecord,
+    completedAssessment,
     identity: {
       assessmentId,
       sectionLabel: 'Assessment results',
-      name: candidate?.name || 'Candidate',
-      email: candidate?.email || '',
-      position: candidate?.position || '',
+      name: candidate?.name || applicationRecord?.candidate_name || applicationRecord?.candidate_email || 'Candidate',
+      email: candidate?.email || applicationRecord?.candidate_email || '',
+      position: candidate?.position || applicationRecord?.candidate_position || '',
       taskName: candidate?.task || '',
       roleName: roleName || '',
       applicationStatus: applicationStatus || '',
@@ -335,12 +380,29 @@ export const AssessmentResultsPage = ({
       completedLabel: candidate?.completedDate || '',
     },
   });
+  const hasCompletedAssessment = Boolean(reportModel?.hasCompletedAssessment);
+  const pendingAssessmentResults = buildAssessmentPendingMessage({
+    application: applicationRecord,
+    reportModel,
+    label: 'Assessment results',
+  });
+  const pendingInterviewGuidance = buildAssessmentPendingMessage({
+    application: applicationRecord,
+    reportModel,
+    label: 'Interview guidance',
+  });
+  const pendingClientReport = buildAssessmentPendingMessage({
+    application: applicationRecord,
+    reportModel,
+    label: 'Client report',
+  });
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
+    if (!hasCompletedAssessment) return;
     if (window.localStorage.getItem(RESULTS_ONBOARDING_KEY) === 'true') return;
     setResultsOnboardingOpen(true);
-  }, []);
+  }, [hasCompletedAssessment]);
 
   useEffect(() => {
     let cancelled = false;
@@ -434,7 +496,7 @@ export const AssessmentResultsPage = ({
 
   const getMetricMetaResolved = (metricKey) => metricGlossary[metricKey] || getMetricMeta(metricKey);
 
-  if (!candidate) {
+  if (!candidate && !applicationRecord) {
     return (
       <PageContainer className="max-w-5xl" density="compact">
         <Panel className="p-4 font-mono text-sm text-[var(--taali-muted)]">
@@ -722,16 +784,17 @@ export const AssessmentResultsPage = ({
   };
 
   const handleDownloadCandidateDoc = async (docType) => {
-    if (!candidate?._raw?.candidate_id) return;
+    const candidateId = completedAssessment?.candidate_id || applicationRecord?.candidate_id || null;
+    if (!candidateId) return;
     try {
-      const res = await candidatesApi.downloadDocument(candidate._raw.candidate_id, docType);
+      const res = await candidatesApi.downloadDocument(candidateId, docType);
       const blob = new Blob([res.data]);
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
       a.download = docType === 'cv'
-        ? (candidate._raw?.candidate_cv_filename || 'candidate-cv')
-        : (candidate._raw?.candidate_job_spec_filename || 'job-spec');
+        ? (completedAssessment?.candidate_cv_filename || completedAssessment?.cv_filename || applicationRecord?.cv_filename || 'candidate-cv')
+        : (completedAssessment?.candidate_job_spec_filename || applicationRecord?.role_job_spec_filename || 'job-spec');
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -773,9 +836,9 @@ export const AssessmentResultsPage = ({
   const comparisonSeries = [
     {
       id: assessmentId,
-      name: candidate.name,
-      score: candidate.score,
-      _raw: candidate?._raw || {},
+      name: candidate?.name || reportModel?.identity?.name || 'Candidate',
+      score: candidate?.score ?? reportModel?.summaryModel?.assessmentScore ?? reportModel?.summaryModel?.taaliScore ?? null,
+      _raw: completedAssessment || {},
       breakdown: candidate?.breakdown || null,
     },
     ...selectedComparisonCandidates,
@@ -783,7 +846,7 @@ export const AssessmentResultsPage = ({
 
   return (
     <div>
-      {NavComponent ? <NavComponent currentPage="assessments" onNavigate={onNavigate} /> : null}
+      {NavComponent ? <NavComponent currentPage={backTo.page === 'candidates' ? 'candidates' : 'assessments'} onNavigate={onNavigate} /> : null}
       <PageContainer density="compact" width="wide">
         <Button
           variant="ghost"
@@ -827,50 +890,57 @@ export const AssessmentResultsPage = ({
               reportModel={reportModel}
               variant="page"
               onOpenInterviewGuidance={() => setActiveTab('interview-guidance')}
-              showInterviewGuidanceAction
+              showInterviewGuidanceAction={hasCompletedAssessment}
             />
           </div>
         ) : null}
 
         {activeTab === 'assessment-results' ? (
           <div role="tabpanel" id="candidate-tabpanel-assessment-results" aria-labelledby="assessment-results">
-            <CandidateResultsTab
-              candidate={candidate}
-              expandedCategory={expandedCategory}
-              setExpandedCategory={setExpandedCategory}
-              getCategoryScores={getCategoryScores}
-              getMetricMetaResolved={getMetricMetaResolved}
-              onOpenComparison={handleOpenComparison}
-              onOpenOnboarding={() => setResultsOnboardingOpen(true)}
-              onOpenInterviewGuidance={() => setActiveTab('interview-guidance')}
-              interviewGuideLoading={interviewDebriefLoading}
-              canGenerateInterviewGuide={canGenerateInterviewGuide}
-              benchmarksLoading={benchmarksLoading}
-              benchmarksData={benchmarksData}
-              extraSections={[
-                {
-                  id: 'candidate-results-ai-usage',
-                  label: 'AI usage',
-                  title: 'AI usage and prompt quality',
-                  description: 'Prompt clarity, calibration, browser focus, and prompt logs stay attached to the assessment review.',
-                  content: <CandidateAiUsageTab candidate={candidate} avgCalibrationScore={avgCalibrationScore} />,
-                },
-                {
-                  id: 'candidate-results-code-git',
-                  label: 'GitHub',
-                  title: 'GitHub and code evidence',
-                  description: 'Repository traces, diffs, and commit state provide the audit trail for the delivered work.',
-                  content: <CandidateCodeGitTab candidate={candidate} />,
-                },
-                {
-                  id: 'candidate-results-timeline',
-                  label: 'Timeline',
-                  title: 'Assessment timeline',
-                  description: 'Use the event stream to understand pacing, prompt cadence, and recruiter notes.',
-                  content: <CandidateTimelineTab candidate={candidate} />,
-                },
-              ]}
-            />
+            {hasCompletedAssessment ? (
+              <CandidateResultsTab
+                candidate={candidate}
+                expandedCategory={expandedCategory}
+                setExpandedCategory={setExpandedCategory}
+                getCategoryScores={getCategoryScores}
+                getMetricMetaResolved={getMetricMetaResolved}
+                onOpenComparison={handleOpenComparison}
+                onOpenOnboarding={() => setResultsOnboardingOpen(true)}
+                onOpenInterviewGuidance={() => setActiveTab('interview-guidance')}
+                interviewGuideLoading={interviewDebriefLoading}
+                canGenerateInterviewGuide={canGenerateInterviewGuide}
+                benchmarksLoading={benchmarksLoading}
+                benchmarksData={benchmarksData}
+                extraSections={[
+                  {
+                    id: 'candidate-results-ai-usage',
+                    label: 'AI usage',
+                    title: 'AI usage and prompt quality',
+                    description: 'Prompt clarity, calibration, browser focus, and prompt logs stay attached to the assessment review.',
+                    content: <CandidateAiUsageTab candidate={candidate} avgCalibrationScore={avgCalibrationScore} />,
+                  },
+                  {
+                    id: 'candidate-results-code-git',
+                    label: 'GitHub',
+                    title: 'GitHub and code evidence',
+                    description: 'Repository traces, diffs, and commit state provide the audit trail for the delivered work.',
+                    content: <CandidateCodeGitTab candidate={candidate} />,
+                  },
+                  {
+                    id: 'candidate-results-timeline',
+                    label: 'Timeline',
+                    title: 'Assessment timeline',
+                    description: 'Use the event stream to understand pacing, prompt cadence, and recruiter notes.',
+                    content: <CandidateTimelineTab candidate={candidate} />,
+                  },
+                ]}
+              />
+            ) : (
+              <PendingAssessmentTab
+                title={pendingAssessmentResults.title}
+                description={pendingAssessmentResults.description}
+              />
+            )}
           </div>
         ) : null}
 
@@ -878,6 +948,7 @@ export const AssessmentResultsPage = ({
           <div role="tabpanel" id="candidate-tabpanel-role-fit" aria-labelledby="role-fit">
             <CandidateCvFitTab
               candidate={candidate}
+              application={applicationRecord}
               onDownloadCandidateDoc={handleDownloadCandidateDoc}
               onRequestCvUpload={canRequestCvUpload ? handleRequestCvUpload : null}
               requestingCvUpload={busyAction === 'request-cv'}
@@ -888,37 +959,51 @@ export const AssessmentResultsPage = ({
 
         {activeTab === 'interview-guidance' ? (
           <div role="tabpanel" id="candidate-tabpanel-interview-guidance" aria-labelledby="interview-guidance">
-            <CandidateInterviewGuidanceTab
-              canGenerateInterviewGuide={canGenerateInterviewGuide}
-              debrief={interviewDebriefData}
-              loading={interviewDebriefLoading}
-              errorMessage={interviewDebriefError}
-              cached={interviewDebriefCached}
-              generatedAt={interviewDebriefGeneratedAt}
-              onGenerateInterviewGuide={handleGenerateInterviewGuide}
-              onCopyMarkdown={handleCopyInterviewDebriefMarkdown}
-              onPrint={handlePrintInterviewDebrief}
-              noteText={noteText}
-              onNoteTextChange={setNoteText}
-              onSaveNote={handleAddNote}
-              busyAction={busyAction}
-            />
+            {hasCompletedAssessment ? (
+              <CandidateInterviewGuidanceTab
+                canGenerateInterviewGuide={canGenerateInterviewGuide}
+                debrief={interviewDebriefData}
+                loading={interviewDebriefLoading}
+                errorMessage={interviewDebriefError}
+                cached={interviewDebriefCached}
+                generatedAt={interviewDebriefGeneratedAt}
+                onGenerateInterviewGuide={handleGenerateInterviewGuide}
+                onCopyMarkdown={handleCopyInterviewDebriefMarkdown}
+                onPrint={handlePrintInterviewDebrief}
+                noteText={noteText}
+                onNoteTextChange={setNoteText}
+                onSaveNote={handleAddNote}
+                busyAction={busyAction}
+              />
+            ) : (
+              <PendingAssessmentTab
+                title={pendingInterviewGuidance.title}
+                description={pendingInterviewGuidance.description}
+              />
+            )}
           </div>
         ) : null}
 
         {activeTab === 'client-report' ? (
           <div role="tabpanel" id="candidate-tabpanel-client-report" aria-labelledby="client-report">
-            <CandidateClientReportTab
-              busyAction={busyAction}
-              handleDownloadReport={handleDownloadReport}
-              handlePostToWorkable={handlePostToWorkable}
-              handleResendInvite={handleResendInvite}
-              handleRequestCvUpload={handleRequestCvUpload}
-              handleDeleteAssessment={handleDeleteAssessment}
-              canResendInvite={canResendInvite}
-              canRequestCvUpload={canRequestCvUpload}
-              workableStatus={workableStatus}
-            />
+            {hasCompletedAssessment ? (
+              <CandidateClientReportTab
+                busyAction={busyAction}
+                handleDownloadReport={handleDownloadReport}
+                handlePostToWorkable={handlePostToWorkable}
+                handleResendInvite={handleResendInvite}
+                handleRequestCvUpload={handleRequestCvUpload}
+                handleDeleteAssessment={handleDeleteAssessment}
+                canResendInvite={canResendInvite}
+                canRequestCvUpload={canRequestCvUpload}
+                workableStatus={workableStatus}
+              />
+            ) : (
+              <PendingAssessmentTab
+                title={pendingClientReport.title}
+                description={pendingClientReport.description}
+              />
+            )}
           </div>
         ) : null}
 
@@ -926,6 +1011,7 @@ export const AssessmentResultsPage = ({
           <div role="tabpanel" id="candidate-tabpanel-source-documents" aria-labelledby="source-documents">
             <CandidateSourceDocumentsTab
               candidate={candidate}
+              application={applicationRecord}
               reportModel={reportModel}
               onDownloadCandidateDoc={handleDownloadCandidateDoc}
             />
