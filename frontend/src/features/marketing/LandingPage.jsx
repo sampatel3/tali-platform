@@ -545,9 +545,9 @@ export const LandingPage = ({ onNavigate }) => {
     <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
       <LandingNav onNavigate={onNavigate} />
       <HeroSection onNavigate={onNavigate} />
+      <TrustStrip />
       <AudienceSection />
       <AssessmentExperienceSection darkMode={darkMode} />
-      <TrustStrip />
       <CandidateSummarySection />
       <FrameworkSection />
       <ProofSection />
