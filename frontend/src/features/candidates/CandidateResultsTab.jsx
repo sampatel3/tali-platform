@@ -19,8 +19,6 @@ import {
 import { formatScale100Score } from '../../lib/scoreDisplay';
 import { ScoringCardGrid } from '../../shared/ui/ScoringCardGrid';
 import { ScoringGlossaryPanel, SCORING_GLOSSARY_METRIC_COUNT } from '../../shared/ui/ScoringGlossaryPanel';
-import { buildRoleFitEvidenceModel } from './assessmentViewModels';
-import { RoleFitEvidenceSections } from './RoleFitEvidenceSections';
 
 const DIMENSION_VISUAL_CONFIG = {
   task_completion: { icon: '✅', weight: '20%' },
@@ -96,34 +94,6 @@ const getStatusAwareEmptyMessage = (status) => {
   return 'Some scoring categories or detailed metrics are unavailable for this assessment.';
 };
 
-const fallbackOverallSummary = (catScores, assessment, roleFitModel) => {
-  const scored = Object.entries(catScores || {})
-    .filter(([, value]) => Number.isFinite(Number(value)))
-    .map(([key, value]) => ({ key, value: Number(value), label: getDimensionById(key)?.label || key }))
-    .sort((a, b) => b.value - a.value);
-
-  const testsSummary = Number.isFinite(Number(assessment?.tests_total)) && Number(assessment.tests_total) > 0
-    ? `Passed ${assessment.tests_passed ?? 0} of ${assessment.tests_total} tests.`
-    : '';
-
-  const requirementGap = roleFitModel?.requirementsAssessment?.find((item) => item.status !== 'met');
-
-  if (!scored.length) {
-    return [
-      testsSummary,
-      requirementGap ? `Role-fit gap to probe: ${requirementGap.requirement}.` : '',
-      'No scored dimensions were returned for this assessment yet.',
-    ].filter(Boolean).join(' ');
-  }
-  const strongest = scored[0];
-  const weakest = [...scored].sort((a, b) => a.value - b.value)[0];
-  return [
-    `This candidate is strongest in ${strongest.label}.`,
-    `Interview deeper on ${weakest.label.toLowerCase()}.`,
-    requirementGap ? `Role-fit risk to probe: ${requirementGap.requirement}.` : testsSummary,
-  ].filter(Boolean).join(' ');
-};
-
 export const CandidateResultsTab = ({
   candidate,
   expandedCategory,
@@ -187,22 +157,9 @@ export const CandidateResultsTab = ({
   const fraudCapApplied = appliedCaps.includes('fraud');
   const rawFraudFlags = Array.isArray(assessment.prompt_fraud_flags) ? assessment.prompt_fraud_flags : [];
   const hasFraudFlags = rawFraudFlags.length > 0;
-  const heuristicSummary = String(
-    bd.heuristicSummary
-    || scoreBreakdown.heuristic_summary
-    || assessment.prompt_analytics?.heuristic_summary
-    || ''
-  ).trim();
-
-  const overallScore10 = Number.isFinite(Number(assessment.score))
-    ? Number(assessment.score)
-    : (Number.isFinite(Number(candidate.score)) ? Number(candidate.score) : null);
   const calibrationScore = Number.isFinite(Number(assessment.calibration_score))
     ? Number(assessment.calibration_score)
     : null;
-  const roleFitModel = buildRoleFitEvidenceModel({ application: null, completedAssessment: assessment });
-
-  const overallSummaryText = heuristicSummary || fallbackOverallSummary(catScores, assessment, roleFitModel);
   const integrityNotice = severeLanguageCap ? (
     <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
       <div className="font-bold text-[var(--taali-danger)]">Score capped due to severe unprofessional language.</div>
@@ -259,38 +216,6 @@ export const CandidateResultsTab = ({
           </div>
         </div>
       </Card>
-
-      <Panel className="p-3.5">
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_220px_220px]">
-          <div>
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <div className="font-bold">Overview</div>
-              <Badge variant="muted" className="font-mono text-[11px]">Evidence-backed summary</Badge>
-            </div>
-            <p className="text-sm text-[var(--taali-text)]">{overallSummaryText}</p>
-          </div>
-
-          {overallScore10 != null ? (
-            <Card className="bg-[var(--taali-surface-subtle)] p-4">
-              <div className="font-mono text-xs text-[var(--taali-muted)]">Overall score</div>
-              <div className="mt-2 font-mono text-2xl font-bold" style={{ color: scoreColor(overallScore10) }}>
-                {overallScore10.toFixed(1)}/10
-              </div>
-              <div className="mt-1 text-sm text-[var(--taali-muted)]">{scoreLabel(overallScore10)}</div>
-            </Card>
-          ) : null}
-
-          <Card className="bg-[var(--taali-surface-subtle)] p-4">
-            <div className="font-mono text-xs text-[var(--taali-muted)]">Role-fit evidence</div>
-            <div className="mt-2 taali-display text-2xl font-semibold text-[var(--taali-text)]">
-              {roleFitModel.overallScore != null ? formatScale100Score(roleFitModel.overallScore, '0-100') : '—'}
-            </div>
-            <div className="mt-1 text-sm text-[var(--taali-muted)]">
-              {roleFitModel.sourceLabel || 'Assessment evidence'}
-            </div>
-          </Card>
-        </div>
-      </Panel>
 
       {calibrationScore != null ? (
         <Panel className="p-3.5">
@@ -405,14 +330,6 @@ export const CandidateResultsTab = ({
             </Panel>
           );
         })}
-
-        {roleFitModel.hasAnyEvidence ? (
-          <RoleFitEvidenceSections
-            model={roleFitModel}
-            variant="full"
-            emptyMessage="No role-fit evidence was returned for this assessment."
-          />
-        ) : null}
 
         {candidate.results.length > 0 ? (
           <div className="space-y-3">

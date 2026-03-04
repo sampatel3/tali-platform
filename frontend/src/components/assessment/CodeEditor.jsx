@@ -50,23 +50,25 @@ export default function CodeEditor({
 
   return (
     <div className="h-full flex flex-col">
-      <div className={`${lightMode ? 'border-b border-gray-200 bg-white' : 'border-b border-white/10 bg-[#0f141d]'} px-3 py-2 flex items-center justify-between`}>
+      <div className="flex items-center justify-between border-b border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] px-3 py-2">
         <div className="flex items-center gap-2">
-          <span className={`font-mono text-sm truncate max-w-[36ch] ${lightMode ? 'text-gray-900' : 'text-gray-100'}`}>{filename}</span>
-          <span className={`font-mono text-[11px] uppercase tracking-wide ${lightMode ? 'text-gray-500' : 'text-gray-500'}`}>{language}</span>
+          <span className="max-w-[36ch] truncate font-mono text-sm text-[var(--taali-runtime-text)]">{filename}</span>
+          <span className="font-mono text-[11px] uppercase tracking-wide text-[var(--taali-runtime-muted)]">{language}</span>
         </div>
         <div className="flex items-center gap-2">
           <button
+            type="button"
             onClick={handleRun}
             disabled={disabled}
-            className="border border-[var(--taali-purple)] px-3 py-1.5 font-mono text-xs font-bold flex items-center gap-1.5 text-white bg-[var(--taali-purple)] hover:bg-[#aa4dff] transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 rounded-[var(--taali-radius-control)] border border-[var(--taali-purple)] bg-[var(--taali-purple)] px-3 py-1.5 font-mono text-xs font-bold text-white transition-colors hover:bg-[var(--taali-purple-hover)] disabled:opacity-50"
           >
             <Play size={12} /> Run
           </button>
           <button
+            type="button"
             onClick={handleSave}
             disabled={disabled}
-            className={`border px-3 py-1.5 font-mono text-xs font-bold flex items-center gap-1.5 transition-colors disabled:opacity-50 ${lightMode ? 'border-gray-300 bg-gray-100 text-gray-700 hover:bg-gray-200' : 'border-white/20 bg-[#131a25] text-gray-200 hover:bg-[#1a2432]'}`}
+            className="flex items-center gap-1.5 rounded-[var(--taali-radius-control)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-3 py-1.5 font-mono text-xs font-bold text-[var(--taali-runtime-text)] transition-colors hover:border-[var(--taali-purple)] hover:text-[var(--taali-purple)] disabled:opacity-50"
           >
             <Save size={12} /> Save
           </button>

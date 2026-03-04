@@ -128,7 +128,7 @@ export const RoleSheet = ({
       </div>
 
       {error ? (
-        <Card className="mb-4 border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+        <Card className="mb-4 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] px-3 py-2 text-sm text-[var(--taali-danger)]">
           {error}
         </Card>
       ) : null}
@@ -136,21 +136,21 @@ export const RoleSheet = ({
       {step === 1 ? (
         <div className="space-y-4">
           <label className="block">
-            <span className="mb-1 block text-sm font-semibold text-gray-800">Role name *</span>
+            <span className="mb-1 block text-sm font-semibold text-[var(--taali-text)]">Role name *</span>
             <Input
               type="text"
               value={name}
               onBlur={() => setNameTouched(true)}
               onChange={(event) => setName(event.target.value)}
               placeholder="e.g. Senior Backend Engineer"
-              className={!hasValidName && nameTouched ? '!border-red-400 !bg-red-50' : ''}
+              className={!hasValidName && nameTouched ? '!border-[var(--taali-danger)] !bg-[var(--taali-danger-soft)]' : ''}
             />
             {!hasValidName && nameTouched ? (
-              <span className="mt-1 block text-xs text-red-700">Role name is required.</span>
+              <span className="mt-1 block text-xs text-[var(--taali-danger)]">Role name is required.</span>
             ) : null}
           </label>
           <label className="block">
-            <span className="mb-1 block text-sm font-semibold text-gray-800">Description</span>
+            <span className="mb-1 block text-sm font-semibold text-[var(--taali-text)]">Description</span>
             <Textarea
               value={description}
               onChange={(event) => setDescription(event.target.value)}
@@ -158,12 +158,12 @@ export const RoleSheet = ({
               className="min-h-[110px]"
               maxLength={ROLE_DESCRIPTION_MAX_LENGTH}
             />
-            <span className="mt-1 block text-xs text-gray-500">
+            <span className="mt-1 block text-xs text-[var(--taali-muted)]">
               {descriptionChars.toLocaleString()}/{ROLE_DESCRIPTION_MAX_LENGTH.toLocaleString()} characters
             </span>
           </label>
           <label className="block">
-            <span className="mb-1 block text-sm font-semibold text-gray-800">Additional requirements (for CV scoring)</span>
+            <span className="mb-1 block text-sm font-semibold text-[var(--taali-text)]">Additional requirements (for CV scoring)</span>
             <Textarea
               value={additionalRequirements}
               onChange={(event) => setAdditionalRequirements(event.target.value)}
@@ -171,10 +171,10 @@ export const RoleSheet = ({
               className="min-h-[100px]"
               maxLength={ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH}
             />
-            <span className="mt-1 block text-xs text-gray-500">
+            <span className="mt-1 block text-xs text-[var(--taali-muted)]">
               These are used alongside the job spec when we score how well a candidate&apos;s CV matches. Leave blank to score only on the job spec.
             </span>
-            <span className="mt-1 block text-xs text-gray-500">
+            <span className="mt-1 block text-xs text-[var(--taali-muted)]">
               {additionalRequirementsChars.toLocaleString()}/{ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH.toLocaleString()} characters
             </span>
           </label>
@@ -183,23 +183,23 @@ export const RoleSheet = ({
 
       {step === 2 ? (
         <div className="space-y-4">
-          <Card className="bg-[var(--taali-surface-subtle)] p-4">
-            <p className="text-sm font-medium text-gray-900">Upload job spec (optional but recommended)</p>
-            <p className="mt-1 text-xs text-gray-600">
+          <Card className="p-4">
+            <p className="text-sm font-medium text-[var(--taali-text)]">Upload job spec (optional but recommended)</p>
+            <p className="mt-1 text-xs text-[var(--taali-muted)]">
               Adding a spec now lets recruiters add candidates without friction and auto-generates interview focus pointers.
             </p>
           </Card>
           {role?.job_spec_filename ? (
-            <Card className="px-3 py-2 text-sm text-gray-700">
+            <Card className="px-3 py-2 text-sm text-[var(--taali-text)]">
               Current file: <span className="font-medium">{role.job_spec_filename}</span>
             </Card>
           ) : null}
-          <label className="block border-2 border-dashed border-[var(--taali-border-muted)] p-5 text-center transition hover:border-[var(--taali-border)]">
-            <UploadCloud size={20} className="mx-auto text-gray-500" />
-            <span className="mt-2 block text-sm font-medium text-gray-700">
+          <label className="block rounded-[var(--taali-radius-card)] border border-dashed border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-5 text-center transition hover:border-[var(--taali-border)]">
+            <UploadCloud size={20} className="mx-auto text-[var(--taali-muted)]" />
+            <span className="mt-2 block text-sm font-medium text-[var(--taali-text)]">
               {jobSpecFile ? jobSpecFile.name : 'Choose a job specification file'}
             </span>
-            <span className="mt-1 block text-xs text-gray-500">PDF, DOCX, or TXT</span>
+            <span className="mt-1 block text-xs text-[var(--taali-muted)]">PDF, DOCX, or TXT</span>
             <input
               type="file"
               accept=".pdf,.docx,.txt"
@@ -213,8 +213,8 @@ export const RoleSheet = ({
       {step === 3 ? (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
-            <p className="text-sm font-semibold text-gray-900">Link tasks</p>
-            <p className="text-xs text-gray-500">{selectedTaskIds.length} selected</p>
+            <p className="text-sm font-semibold text-[var(--taali-text)]">Link tasks</p>
+            <p className="text-xs text-[var(--taali-muted)]">{selectedTaskIds.length} selected</p>
           </div>
           {allTasks.length === 0 ? (
             <EmptyState
@@ -230,7 +230,7 @@ export const RoleSheet = ({
                   <label
                     key={task.id}
                     className={cx(
-                      'flex cursor-pointer items-start gap-3 border-2 px-3 py-2',
+                      'flex cursor-pointer items-start gap-3 rounded-[var(--taali-radius-card)] border px-3 py-2',
                       checked
                         ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)]'
                         : 'border-[var(--taali-border-muted)] bg-[var(--taali-surface)]'
@@ -243,9 +243,9 @@ export const RoleSheet = ({
                       className="mt-0.5 h-4 w-4"
                     />
                     <span className="min-w-0">
-                      <span className="block truncate text-sm font-medium text-gray-900">{task.name}</span>
+                      <span className="block truncate text-sm font-medium text-[var(--taali-text)]">{task.name}</span>
                       {task.description ? (
-                        <span className="mt-0.5 block text-xs text-gray-600">{task.description}</span>
+                        <span className="mt-0.5 block text-xs text-[var(--taali-muted)]">{task.description}</span>
                       ) : null}
                     </span>
                   </label>

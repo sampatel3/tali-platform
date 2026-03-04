@@ -64,6 +64,7 @@ def test_file_size_guard_for_api_and_service_paths() -> None:
         "app/domains/assessments_runtime/applications_routes.py": "applications API",
         "app/domains/assessments_runtime/candidate_terminal_routes.py": "candidate terminal API",
         "app/domains/workable_sync/routes.py": "legacy Workable sync API",
+        "app/services/fit_matching_service.py": "CV-to-role fit scoring pipeline",
     }
 
     target_files = set(_python_files(PROJECT_ROOT / "app" / "api" / "v1"))

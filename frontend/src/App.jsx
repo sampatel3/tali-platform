@@ -50,6 +50,9 @@ const AssessmentsPage = lazy(() =>
 const CandidatesPage = lazy(() =>
   import('./features/candidates/CandidatesPage').then((m) => ({ default: m.CandidatesPage }))
 );
+const CandidateStandingReportPage = lazy(() =>
+  import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
+);
 const TasksPage = lazy(() =>
   import('./features/tasks/TasksPage').then((m) => ({ default: m.TasksPage }))
 );
@@ -139,6 +142,7 @@ function AppContent() {
       (
         ['/dashboard', '/assessments', '/candidates', '/analytics', '/reporting', '/tasks', '/candidate-detail'].includes(location.pathname)
         || location.pathname.startsWith('/assessments/')
+        || location.pathname.startsWith('/candidates/')
         || location.pathname.startsWith('/settings')
       )
     ) {
@@ -154,6 +158,9 @@ function AppContent() {
       assessmentIdFromLink: Object.prototype.hasOwnProperty.call(options, 'assessmentIdFromLink')
         ? options.assessmentIdFromLink
         : assessmentIdFromLink,
+      candidateApplicationId: Object.prototype.hasOwnProperty.call(options, 'candidateApplicationId')
+        ? options.candidateApplicationId
+        : null,
       candidateDetailAssessmentId: Object.prototype.hasOwnProperty.call(options, 'candidateDetailAssessmentId')
         ? options.candidateDetailAssessmentId
         : candidateDetailAssessmentId,
@@ -319,6 +326,18 @@ function AppContent() {
             <CandidatesPage
               onNavigate={navigateToPage}
               onViewCandidate={(candidate) => navigateToCandidate(candidate, 'candidates')}
+              NavComponent={DashboardNav}
+            />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/candidates/:applicationId"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <CandidateStandingReportPage
+              onNavigate={navigateToPage}
               NavComponent={DashboardNav}
             />
           </Suspense>

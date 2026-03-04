@@ -1,5 +1,6 @@
 import logging as _logging
 from contextlib import asynccontextmanager
+from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 # Friendly messages for API error codes (returned to frontend)
@@ -140,14 +141,54 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(SecurityHeadersMiddleware)
 
+def _normalize_origin(origin: str | None) -> str | None:
+    cleaned = (origin or "").strip().rstrip("/")
+    if not cleaned:
+        return None
+    parsed = urlparse(cleaned)
+    if parsed.scheme and parsed.netloc:
+        return f"{parsed.scheme}://{parsed.netloc}"
+    return cleaned
+
+
+def _frontend_origins(frontend_url: str | None) -> list[str]:
+    primary = _normalize_origin(frontend_url)
+    if not primary:
+        return []
+
+    origins = [primary]
+    parsed = urlparse(primary)
+    host = parsed.hostname or ""
+    if host.startswith("www."):
+        port = f":{parsed.port}" if parsed.port else ""
+        origins.append(f"{parsed.scheme}://{host[4:]}{port}")
+    return origins
+
+
+def _build_cors_origins(frontend_url: str | None, extra_origins: str | None) -> list[str]:
+    origins = [
+        *_frontend_origins(frontend_url),
+        "http://localhost:5173",
+        "http://localhost:3000",
+    ]
+    if extra_origins:
+        origins.extend(_normalize_origin(origin) for origin in extra_origins.split(","))
+
+    deduped = []
+    seen = set()
+    for origin in origins:
+        if not origin or origin in seen:
+            continue
+        seen.add(origin)
+        deduped.append(origin)
+    return deduped
+
+
 # CORS: frontend URL + localhost + any extra origins (e.g. Vercel production URL)
-_cors_origins = [
+_cors_origins = _build_cors_origins(
     settings.FRONTEND_URL,
-    "http://localhost:5173",
-    "http://localhost:3000",
-]
-if getattr(settings, "CORS_EXTRA_ORIGINS", None):
-    _cors_origins.extend(o.strip() for o in settings.CORS_EXTRA_ORIGINS.split(",") if o.strip())
+    getattr(settings, "CORS_EXTRA_ORIGINS", None),
+)
 _cors_origin_regex = settings.CORS_ALLOW_ORIGIN_REGEX
 # If frontend is on Vercel, allow preview/production subdomains by default.
 if not _cors_origin_regex and "vercel.app" in (settings.FRONTEND_URL or ""):

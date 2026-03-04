@@ -1,0 +1,179 @@
+{
+  "task_id": "data_eng_aws_glue_pipeline_recovery",
+  "name": "AWS Glue Pipeline Recovery",
+  "role": "data_engineer",
+  "duration_minutes": 30,
+  "calibration_prompt": "You have 2 minutes. Ask Claude to help draft a query or validation step for detecting duplicate transaction IDs in a daily batch. Show the table context, assumptions, and how you would verify the result.",
+  "scenario": "You joined Deeplight as an AWS Glue Data Engineer and were dropped into a failing revenue pipeline on your first week.\n\n**Message from the VP of Engineering:**\n\n> Finance close is tomorrow morning and our Glue revenue-recovery job has been unstable for days.\n>\n> The current failures are painful because they combine three problems:\n> - the source schema changed and downstream code is behind,\n> - duplicate records are inflating totals on retries,\n> - the audit team cannot explain which runs are trustworthy.\n>\n> This is a Bronze-layer ingestion flow, so the team also needs discipline around the load method, data contract expectations, and what gets handed over to operations after the immediate fix.\n>\n> I do not need a hero rewrite. I need a senior data engineer to triage the situation, make the highest-value fixes, and tell me what still blocks us.\n>\n> The repo includes a simplified local reproduction of the Glue job, diagnostics from the incident, and tests that encode the most important expectations.\n>\n> In 30 minutes, tell me what to fix first, what you fixed now, and what remains risky.\n\n**Your mission:**\nUse the local reproduction to improve the Glue pipeline's correctness and operational safety. You are being assessed on prioritization, data reliability judgment, and whether your changes are credible under finance-close pressure.",
+  "repo_structure": {
+    "name": "aws-glue-revenue-recovery",
+    "files": {
+      ".gitignore": ".venv/\\n.pytest_cache/\\n__pycache__/\\n",
+      "README.md": "# AWS Glue Revenue Recovery\\n\\nLocal reproduction of a failing Glue-based revenue pipeline. The job ingests transactions into the Bronze layer, evolves the warehouse schema, deduplicates retries, and advances a bookmark for the next run.\\n\\n## Why this exists\\n- Finance close is blocked\\n- Audit wants trustworthy lineage\\n- Retry behavior is duplicating records\\n- The team needs the correct loading behavior for the next incremental run, not a broad rewrite\\n\\nThe local tests do not require AWS credentials or cloud access.\\n\\nTreat this as a time-boxed incident recovery exercise, not a rewrite.\\n",
+      "ARCHITECTURE.md": "# Pipeline Shape\\n\\n1. Pull daily payment records into the Bronze ingestion layer.\\n2. Apply the correct loading strategy for the run window (delta replay in this incident, but the team also supports CDC, full load, and snapshot patterns).\\n3. Compare the source schema with the warehouse schema and planned data contract.\\n4. Normalize records for the Glue sink.\\n5. Deduplicate by transaction id.\\n6. Run quality checks before the bookmark advances and the run is handed over as trustworthy.\\n\\nThe local code strips away actual AWS infrastructure, but the logic mirrors the decisions the Glue job has to make.\\n",
+      "RUNBOOK.md": "# Incident Runbook\\n\\n## Immediate expectations\\n- Restore trustworthy Bronze-layer writes for the next scheduled run\\n- Use the correct load behavior for the recovery window\\n- Do not advance the bookmark if the batch is unsafe\\n- Explain remaining follow-up work and operational handover separately from the immediate fix\\n\\n## Useful mental model\\nA strong response prioritizes correctness, idempotency, data-contract trust, and operator confidence before performance tuning.\\n",
+      "diagnostics/job_run.log": "2026-02-27T02:15:14Z ERROR revenue_recovery schema drift detected: missing column payment_method\\n2026-02-27T02:15:15Z WARNING retry triggered for same source window\\n2026-02-27T02:16:02Z ERROR duplicate rows found for transaction_id TXN-9001\\n2026-02-27T02:16:03Z ERROR bookmark advanced despite failed quality gate\\n",
+      "diagnostics/audit_findings.md": "# Audit Findings\\n\\n- Duplicate transaction ids inflated totals in the January close sample.\\n- Operators cannot explain whether a rerun is safe because bookmark handling is inconsistent.\\n- Schema changes are not reflected in the normalized records without a manual patch.\\n",
+      "diagnostics/performance_baseline.md": "# Performance Notes\\n\\nVolumes are climbing, but the current business pain is correctness. The VP has explicitly asked the team not to start with compaction or cluster tuning during this incident window.\\n",
+      "glue_jobs/__init__.py": "",
+      "glue_jobs/bookmarks.py": "from __future__ import annotations\\n\\nfrom dataclasses import dataclass\\n\\n\\n@dataclass\\nclass BookmarkState:\\n    last_successful_window: str\\n    last_run_status: str = 'success'\\n\\n\\ndef should_advance_bookmark(*, quality_passed: bool, records_loaded: int) -> bool:\\n    return records_loaded > 0\\n",
+      "glue_jobs/schema_registry.py": "TYPE_MAPPING = {\\n    'string': 'STRING',\\n    'decimal': 'DECIMAL(18,2)',\\n    'timestamp': 'TIMESTAMP',\\n    'json': 'STRING',\\n}\\n\\n\\ndef map_type(source_type: str) -> str:\\n    return TYPE_MAPPING.get(source_type, 'STRING')\\n\\n\\ndef detect_missing_columns(source_schema, warehouse_schema):\\n    return [column for column in source_schema if column not in warehouse_schema]\\n",
+      "glue_jobs/quality.py": "from __future__ import annotations\\n\\nfrom typing import Dict, List\\n\\n\\ndef duplicate_transaction_ids(records: List[Dict[str, object]]) -> List[str]:\\n    return []\\n\\n\\ndef quality_gate(records: List[Dict[str, object]]) -> Dict[str, object]:\\n    duplicates = duplicate_transaction_ids(records)\\n    return {\\n        'passed': True,\\n        'duplicate_ids': duplicates,\\n        'record_count': len(records),\\n    }\\n",
+      "glue_jobs/reconciliation.py": "from __future__ import annotations\\n\\nfrom typing import Dict, List\\n\\n\\ndef revenue_delta(source_records: List[Dict[str, object]], loaded_records: List[Dict[str, object]]) -> float:\\n    source_total = sum(float(item.get('amount', 0) or 0) for item in source_records)\\n    loaded_total = sum(float(item.get('amount', 0) or 0) for item in loaded_records)\\n    return round(source_total - loaded_total, 2)\\n",
+      "glue_jobs/revenue_pipeline.py": "from __future__ import annotations\\n\\nfrom dataclasses import dataclass\\nfrom typing import Dict, List\\n\\nfrom glue_jobs.bookmarks import should_advance_bookmark\\nfrom glue_jobs.quality import quality_gate\\nfrom glue_jobs.schema_registry import detect_missing_columns, map_type\\n\\n\\n@dataclass\\nclass PipelineResult:\\n    schema_changes: List[Dict[str, str]]\\n    normalized_records: List[Dict[str, object]]\\n    duplicates_removed: int\\n    bookmark_advanced: bool\\n    quality_passed: bool\\n\\n\\nclass RevenueRecoveryPipeline:\\n    def plan_schema_changes(self, source_schema: Dict[str, str], warehouse_schema: Dict[str, str]) -> List[Dict[str, str]]:\\n        missing = detect_missing_columns(source_schema, warehouse_schema)\\n        return []\\n\\n    def normalize_records(self, records: List[Dict[str, object]], source_schema: Dict[str, str], warehouse_schema: Dict[str, str]) -> List[Dict[str, object]]:\\n        normalized = []\\n        for record in records:\\n            normalized.append(dict(record))\\n        return normalized\\n\\n    def deduplicate_records(self, records: List[Dict[str, object]]) -> List[Dict[str, object]]:\\n        return list(records)\\n\\n    def run_incremental(self, *, source_records: List[Dict[str, object]], source_schema: Dict[str, str], warehouse_schema: Dict[str, str]) -> PipelineResult:\\n        schema_changes = self.plan_schema_changes(source_schema, warehouse_schema)\\n        normalized = self.normalize_records(source_records, source_schema, warehouse_schema)\\n        deduped = self.deduplicate_records(normalized)\\n        quality = quality_gate(deduped)\\n        bookmark_advanced = should_advance_bookmark(\\n            quality_passed=bool(quality.get('passed')),\\n            records_loaded=len(deduped),\\n        )\\n        return PipelineResult(\\n            schema_changes=schema_changes,\\n            normalized_records=deduped,\\n            duplicates_removed=max(0, len(normalized) - len(deduped)),\\n            bookmark_advanced=bookmark_advanced,\\n            quality_passed=bool(quality.get('passed')),\\n        )\\n",
+      "tests/__init__.py": "",
+      "tests/test_revenue_pipeline.py": "from glue_jobs.revenue_pipeline import RevenueRecoveryPipeline\\n\\n\\ndef test_plans_schema_changes_for_new_columns():\\n    pipeline = RevenueRecoveryPipeline()\\n    source_schema = {'transaction_id': 'string', 'amount': 'decimal', 'payment_method': 'string'}\\n    warehouse_schema = {'transaction_id': 'STRING', 'amount': 'DECIMAL(18,2)'}\\n\\n    changes = pipeline.plan_schema_changes(source_schema, warehouse_schema)\\n    assert changes == [{'column': 'payment_method', 'glue_type': 'STRING'}]\\n\\n\\ndef test_deduplicates_retries_by_latest_record():\\n    pipeline = RevenueRecoveryPipeline()\\n    records = [\\n        {'transaction_id': 'TXN-1', 'amount': 100, 'updated_at': '2026-02-27T02:00:00Z'},\\n        {'transaction_id': 'TXN-1', 'amount': 125, 'updated_at': '2026-02-27T02:05:00Z'},\\n        {'transaction_id': 'TXN-2', 'amount': 90, 'updated_at': '2026-02-27T02:01:00Z'},\\n    ]\\n\\n    deduped = pipeline.deduplicate_records(records)\\n    assert deduped == [\\n        {'transaction_id': 'TXN-1', 'amount': 125, 'updated_at': '2026-02-27T02:05:00Z'},\\n        {'transaction_id': 'TXN-2', 'amount': 90, 'updated_at': '2026-02-27T02:01:00Z'},\\n    ]\\n\\n\\ndef test_does_not_advance_bookmark_when_quality_gate_fails():\\n    pipeline = RevenueRecoveryPipeline()\\n    result = pipeline.run_incremental(\\n        source_records=[\\n            {'transaction_id': 'TXN-1', 'amount': 100},\\n            {'transaction_id': 'TXN-1', 'amount': 100},\\n        ],\\n        source_schema={'transaction_id': 'string', 'amount': 'decimal'},\\n        warehouse_schema={'transaction_id': 'STRING', 'amount': 'DECIMAL(18,2)'},\\n    )\\n\\n    assert result.quality_passed is False\\n    assert result.bookmark_advanced is False\\n",
+      "tests/test_schema_registry.py": "from glue_jobs.schema_registry import map_type\\n\\n\\ndef test_maps_double_types_without_falling_back_to_string():\\n    assert map_type('double') == 'DOUBLE'\\n\\n\\ndef test_maps_integer_types_without_falling_back_to_string():\\n    assert map_type('integer') == 'INT'\\n",
+      "tests/test_quality.py": "from glue_jobs.quality import duplicate_transaction_ids, quality_gate\\n\\n\\ndef test_duplicate_transaction_ids_returns_repeat_ids():\\n    records = [\\n        {'transaction_id': 'TXN-1'},\\n        {'transaction_id': 'TXN-2'},\\n        {'transaction_id': 'TXN-1'},\\n    ]\\n\\n    assert duplicate_transaction_ids(records) == ['TXN-1']\\n\\n\\ndef test_quality_gate_fails_when_duplicates_exist():\\n    records = [\\n        {'transaction_id': 'TXN-9'},\\n        {'transaction_id': 'TXN-9'},\\n    ]\\n\\n    result = quality_gate(records)\\n    assert result['passed'] is False\\n    assert result['duplicate_ids'] == ['TXN-9']\\n",
+      "requirements.txt": "pytest>=8.0.0\\n"
+    }
+  },
+  "evaluation_rubric": {
+    "situational_assessment": {
+      "weight": 0.22,
+      "criteria": {
+        "excellent": "Reads the diagnostics first, identifies schema drift, duplicate retries, and bookmark trust as the immediate incident drivers, and keeps performance tuning secondary.",
+        "good": "Finds the main incident themes with minor prioritization gaps.",
+        "poor": "Jumps into code without a coherent explanation of the failure pattern."
+      }
+    },
+    "prioritization_judgment": {
+      "weight": 0.20,
+      "criteria": {
+        "excellent": "Fixes what restores trust in the next finance-close run first and clearly separates near-term remediation from backlog work.",
+        "good": "Picks a mostly sensible order of work with limited tradeoff explanation.",
+        "poor": "Focuses on lower-impact work while correctness remains broken."
+      }
+    },
+    "technical_design": {
+      "weight": 0.20,
+      "criteria": {
+        "excellent": "Introduces credible schema handling, dedupe logic, and bookmark protections without over-engineering the reproduction.",
+        "good": "Improves the design meaningfully but leaves one major edge case unaddressed.",
+        "poor": "Makes ad-hoc fixes that do not restore operator trust."
+      }
+    },
+    "implementation_quality": {
+      "weight": 0.20,
+      "criteria": {
+        "excellent": "Ships focused code changes that make the tests and the incident story materially better.",
+        "good": "Fixes the main failing behaviors with some rough edges.",
+        "poor": "Leaves failing behaviors or introduces new confusion."
+      }
+    },
+    "communication_clarity": {
+      "weight": 0.18,
+      "criteria": {
+        "excellent": "Could hand the written summary to the VP and Finance lead with clear next steps and residual risks.",
+        "good": "Provides a clear engineering summary with limited stakeholder framing.",
+        "poor": "Cannot clearly explain what was fixed or what still blocks trust."
+      }
+    }
+  },
+  "expected_candidate_journey": {
+    "first_8_minutes": [
+      "Read the runbook and incident diagnostics before editing code.",
+      "Identify that correctness, not performance, is the immediate business problem.",
+      "Map failing tests to the production incident symptoms."
+    ],
+    "minutes_8_to_20": [
+      "Fix schema-planning, duplicate handling, or quality-gate behavior in the local reproduction.",
+      "Protect bookmark advancement so unsafe runs do not look successful.",
+      "Keep the changes small enough to explain under incident pressure."
+    ],
+    "minutes_20_to_28": [
+      "Re-run the tests and assess what trust gaps still remain for the next finance-close run.",
+      "Separate immediate incident recovery from longer-term Glue platform improvements."
+    ],
+    "final_2_minutes": [
+      "Summarize what you fixed now, what still blocks confidence, and what should happen next."
+    ]
+  },
+  "interviewer_signals": {
+    "strong_positive": [
+      "Reads the diagnostics before changing code.",
+      "Prioritizes correctness and operator trust ahead of performance tuning.",
+      "Treats bookmark movement as a business-risk decision, not just a technical detail.",
+      "Uses tests to validate the incident fix path incrementally.",
+      "Explains what remains for follow-up instead of pretending the incident is fully solved."
+    ],
+    "red_flags": [
+      "Starts with cluster or partition tuning before fixing correctness.",
+      "Leaves duplicate retry behavior untouched.",
+      "Advances the bookmark even when the run is still unsafe.",
+      "Cannot explain the business impact of schema drift or duplicates.",
+      "Performs a broad rewrite instead of focused incident recovery."
+    ]
+  },
+  "scoring_hints": {
+    "min_reading_time_seconds": 300
+  },
+  "test_runner": {
+    "command": "./.venv/bin/python -m pytest -q --tb=no",
+    "working_dir": "/workspace/aws-glue-revenue-recovery",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
+    "timeout_seconds": 120
+  },
+  "workspace_bootstrap": {
+    "commands": [
+      "python3 -m venv .venv",
+      "./.venv/bin/python -m pip install --upgrade pip",
+      "./.venv/bin/python -m pip install -r requirements.txt"
+    ],
+    "working_dir": "/workspace/aws-glue-revenue-recovery",
+    "timeout_seconds": 240,
+    "must_succeed": true
+  },
+  "role_alignment": {
+    "source_user_email": "sampatel@deeplight.ae",
+    "source_role_name": "AWS Glue Data Engineer",
+    "source_role_identifier": "workable:CE038C5C15",
+    "captured_at": "2026-03-03T06:35:44Z",
+    "must_cover": [
+      "Build and recover AWS Glue Bronze-layer ingestion jobs under operational pressure.",
+      "Handle schema drift, reruns, and loading-method correctness safely.",
+      "Protect data quality, auditability, and data-contract trust for business-critical reporting.",
+      "Document recovery status and handover clearly for operations and stakeholders."
+    ],
+    "must_not_cover": [
+      "Building full Terraform deployment automation",
+      "Cluster-level DPU tuning or broad platform optimization work",
+      "Lakehouse rearchitecture beyond the immediate incident scope"
+    ],
+    "jd_to_signal_map": [
+      {
+        "job_requirement": "Work in a fast-paced environment and deliver aggressive migration targets while coordinating with data assurance and platform stakeholders.",
+        "task_artifact": "Diagnostics plus runbook framing",
+        "rubric_dimension": "situational_assessment"
+      },
+      {
+        "job_requirement": "Implement correct loading methods based on source requirements such as CDC, full load, delta, and snapshot.",
+        "task_artifact": "Finance-close scenario, Bronze-layer framing, and bookmark/load-behavior expectations",
+        "rubric_dimension": "prioritization_judgment"
+      },
+      {
+        "job_requirement": "Build AWS Glue and ETL ingestion jobs with strong knowledge of Lakehouse architecture, Medallion patterns, and historical ingestion strategies.",
+        "task_artifact": "schema_registry.py and revenue_pipeline.py failure modes",
+        "rubric_dimension": "technical_design"
+      },
+      {
+        "job_requirement": "Ensure jobs comply with data contracts, quality checks, and monitoring expectations.",
+        "task_artifact": "failing tests for schema mapping, dedupe, and quality gates",
+        "rubric_dimension": "implementation_quality"
+      },
+      {
+        "job_requirement": "Prepare documentation and handover to operational support teams while collaborating across stakeholder levels.",
+        "task_artifact": "runbook framing and required written incident recommendation",
+        "rubric_dimension": "communication_clarity"
+      }
+    ]
+  },
+  "human_testing_checklist": {
+    "candidate_clarity": true,
+    "repo_boot_ok": true,
+    "tests_collect_ok": true,
+    "baseline_failures_meaningful": true,
+    "rubric_matches_role": true,
+    "timebox_realistic": true
+  }
+}

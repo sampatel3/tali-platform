@@ -21,7 +21,24 @@ def _repo_root() -> Path:
     return p
 
 
-def _normalize_repo_files(repo_structure: Dict[str, Any] | None) -> Dict[str, str]:
+def normalize_repo_file_content(content: Any) -> str:
+    if not isinstance(content, str):
+        return str(content)
+
+    if "\n" in content or "\r" in content:
+        return content
+
+    if not any(token in content for token in ("\\n", "\\r", "\\t", "\\'", '\\"', "\\\\")):
+        return content
+
+    try:
+        decoded = bytes(content, "utf-8").decode("unicode_escape")
+    except UnicodeDecodeError:
+        return content
+    return decoded if decoded else content
+
+
+def normalize_repo_files(repo_structure: Dict[str, Any] | None) -> Dict[str, str]:
     files = (repo_structure or {}).get("files") or {}
     if isinstance(files, list):
         normalized = {}
@@ -31,7 +48,7 @@ def _normalize_repo_files(repo_structure: Dict[str, Any] | None) -> Dict[str, st
             path = entry.get("path") or entry.get("name")
             if not path:
                 continue
-            normalized[path] = entry.get("content", "")
+            normalized[path] = normalize_repo_file_content(entry.get("content", ""))
         files = normalized
 
     if not isinstance(files, dict):
@@ -41,12 +58,12 @@ def _normalize_repo_files(repo_structure: Dict[str, Any] | None) -> Dict[str, st
     for rel_path, content in files.items():
         if not isinstance(rel_path, str) or not rel_path.strip():
             continue
-        normalized_files[rel_path] = content if isinstance(content, str) else str(content)
+        normalized_files[rel_path] = normalize_repo_file_content(content)
     return normalized_files
 
 
 def repo_file_count(repo_structure: Dict[str, Any] | None) -> int:
-    return len(_normalize_repo_files(repo_structure))
+    return len(normalize_repo_files(repo_structure))
 
 
 def build_default_repo_structure(
@@ -83,7 +100,7 @@ def build_default_repo_structure(
 
 
 def _write_repo_files(repo_dir: Path, repo_structure: Dict[str, Any] | None) -> None:
-    files = _normalize_repo_files(repo_structure)
+    files = normalize_repo_files(repo_structure)
     if not files:
         return
 

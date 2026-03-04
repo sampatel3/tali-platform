@@ -1,15 +1,21 @@
 import React from 'react';
 import { Code, Eye, Pencil, Plus, Trash2 } from 'lucide-react';
 
-import { Button, Badge, Panel } from '../../shared/ui/TaaliPrimitives';
+import {
+  Badge,
+  Button,
+  PageContainer,
+  PageHeader,
+  Panel,
+} from '../../shared/ui/TaaliPrimitives';
 import { CardSkeleton } from '../../shared/ui/Skeletons';
 import { ScoringGlossaryPanel, SCORING_GLOSSARY_METRIC_COUNT } from '../../shared/ui/ScoringGlossaryPanel';
 
 const DIFFICULTY_LEVEL_CLASS = {
-  junior: 'bg-[var(--taali-level-junior)] text-white border-[var(--taali-border)]',
-  mid: 'bg-[var(--taali-level-mid)] text-white border-[var(--taali-border)]',
-  senior: 'bg-[var(--taali-level-senior)] text-white border-[var(--taali-border)]',
-  staff: 'bg-[var(--taali-level-staff)] text-white border-[var(--taali-border)]',
+  junior: 'bg-[var(--taali-level-junior)] text-white border-transparent',
+  mid: 'bg-[var(--taali-level-mid)] text-white border-transparent',
+  senior: 'bg-[var(--taali-level-senior)] text-white border-transparent',
+  staff: 'bg-[var(--taali-level-staff)] text-white border-transparent',
 };
 
 const TaskCard = ({ task, onViewTask, onEditTask, onDeleteTask, taskAuthoringEnabled }) => (
@@ -17,8 +23,8 @@ const TaskCard = ({ task, onViewTask, onEditTask, onDeleteTask, taskAuthoringEna
     <div className="flex items-center justify-between mb-3">
       <span
         className={[
-          'px-3 py-1 text-xs font-mono font-bold border-2',
-          DIFFICULTY_LEVEL_CLASS[task.difficulty] || 'bg-[var(--taali-purple)] text-white border-[var(--taali-border)]',
+          'rounded-full border px-3 py-1 text-xs font-mono font-bold',
+          DIFFICULTY_LEVEL_CLASS[task.difficulty] || 'bg-[var(--taali-purple)] text-white border-transparent',
         ].join(' ')}
       >
         {task.difficulty?.toUpperCase() || 'MID'}
@@ -86,21 +92,21 @@ export const TasksListView = ({
   onCreateTask,
   taskAuthoringEnabled,
 }) => (
-  <div className="max-w-7xl mx-auto px-6 py-8">
-    <div className="flex items-center justify-between mb-8">
-      <div>
-        <h1 className="text-3xl font-bold text-[var(--taali-text)]">Tasks</h1>
-        <p className="text-sm text-[var(--taali-muted)] mt-1">Assessment task catalog</p>
-      </div>
-      {taskAuthoringEnabled ? (
-        <Button type="button" variant="primary" onClick={onCreateTask}>
+  <PageContainer density="compact" width="wide">
+    <PageHeader
+      density="compact"
+      className="mb-6"
+      title="Tasks"
+      subtitle="Assessment task catalog"
+      actions={taskAuthoringEnabled ? (
+        <Button type="button" variant="primary" size="sm" onClick={onCreateTask}>
           <Plus size={14} />
           Create Task
         </Button>
       ) : (
         <span className="font-mono text-xs text-[var(--taali-muted)]">Task authoring is disabled.</span>
       )}
-    </div>
+    />
 
     {loading ? (
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -109,15 +115,15 @@ export const TasksListView = ({
         ))}
       </div>
     ) : tasksList.length === 0 ? (
-      <div className="taali-empty-state p-16 text-center border-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
+      <Panel className="px-6 py-16 text-center">
         <Code size={48} className="mx-auto mb-4 text-[var(--taali-border-muted)]" />
-        <h3 className="text-xl font-bold mb-2 text-[var(--taali-text)]">No tasks available</h3>
+        <h3 className="mb-2 text-xl font-bold text-[var(--taali-text)]">No tasks available</h3>
         <p className="text-sm text-[var(--taali-muted)]">
           {taskAuthoringEnabled
             ? 'Create your first task to start evaluating candidates.'
             : 'Task authoring is disabled in this environment.'}
         </p>
-      </div>
+      </Panel>
     ) : (
       <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
         {tasksList.map((task) => (
@@ -143,5 +149,5 @@ export const TasksListView = ({
         </details>
       </Panel>
     ) : null}
-  </div>
+  </PageContainer>
 );

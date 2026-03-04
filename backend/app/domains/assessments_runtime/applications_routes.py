@@ -11,6 +11,7 @@ from sqlalchemy import asc, desc
 from sqlalchemy.orm import Session, joinedload
 
 from ...components.assessments.repository import assessment_to_response, utcnow
+from ...components.assessments.service import get_assessment_creation_gate
 from ...components.integrations.workable.sync_service import _extract_candidate_fields
 from ...deps import get_current_user
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
@@ -1025,6 +1026,13 @@ def create_assessment_for_application(
     ).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    creation_gate = get_assessment_creation_gate(
+        current_user.organization_id,
+        db,
+        lock_organization=True,
+    )
+    if not creation_gate.get("can_create"):
+        raise HTTPException(status_code=402, detail=creation_gate.get("message"))
     existing = _latest_active_assessment_for_application(app, db)
     if existing is not None:
         raise _assessment_create_conflict_response(existing)
@@ -1084,6 +1092,14 @@ def retake_assessment_for_application(
     existing = _latest_active_assessment_for_application(app, db)
     if existing is None:
         raise HTTPException(status_code=400, detail="No valid assessment exists for this candidate and role")
+    creation_gate = get_assessment_creation_gate(
+        current_user.organization_id,
+        db,
+        exclude_assessment_id=existing.id,
+        lock_organization=True,
+    )
+    if not creation_gate.get("can_create"):
+        raise HTTPException(status_code=402, detail=creation_gate.get("message"))
 
     try:
         assessment = _create_application_assessment(

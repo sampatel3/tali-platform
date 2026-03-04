@@ -1,6 +1,7 @@
 import React from 'react';
 
 import { formatScale100Score } from '../../lib/scoreDisplay';
+import { BrandLabel } from '../../shared/ui/Branding';
 import { Badge, Panel } from '../../shared/ui/TaaliPrimitives';
 import { formatDateTime } from './candidatesUiUtils';
 import { CandidateScoreRing } from './CandidateScoreRing';
@@ -21,7 +22,7 @@ export function CandidateSidebarScoreHero({
     || 'Candidate summary';
 
   return (
-    <Panel className="overflow-hidden border border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,rgba(255,255,255,0.98),rgba(239,233,255,0.88))] p-5 shadow-[var(--taali-shadow-soft)]">
+    <Panel className="overflow-hidden border border-[var(--taali-border-soft)] p-5 shadow-[var(--taali-shadow-soft)]">
       <div className="flex flex-col gap-4">
         <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
           <div className="flex items-center gap-4">
@@ -35,7 +36,14 @@ export function CandidateSidebarScoreHero({
             />
             <div>
               <div className="flex flex-wrap items-center gap-2">
-                <p className="text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">TAALI Score</p>
+                <BrandLabel
+                  toneClassName="text-[var(--taali-muted)]"
+                  lineClassName="text-[var(--taali-purple)]"
+                  markClassName="h-3.5 w-3.5"
+                  strokeWidth={3}
+                >
+                  TAALI Score
+                </BrandLabel>
                 {sourceMeta ? <Badge variant={sourceMeta.badgeVariant}>{sourceMeta.label}</Badge> : null}
               </div>
               <p className="mt-2 taali-display text-4xl font-semibold text-[var(--taali-text)]">
@@ -56,7 +64,7 @@ export function CandidateSidebarScoreHero({
         </div>
 
         {caption ? (
-          <p className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[rgba(255,255,255,0.72)] px-3 py-2 text-sm text-[var(--taali-muted)]">
+          <p className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-3 py-2 text-sm text-[var(--taali-muted)]">
             {caption}
           </p>
         ) : null}

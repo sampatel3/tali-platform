@@ -11,6 +11,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from ...components.assessments.repository import assessment_to_response, utcnow
+from ...components.assessments.service import get_assessment_creation_gate
 from ...deps import get_current_user
 from ...domains.integrations_notifications.adapters import build_workable_adapter
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
@@ -83,11 +84,14 @@ def create_assessment(
         ).first()
         if not task:
             raise HTTPException(status_code=404, detail="Task not found")
-        org_record = (
-            db.query(Organization)
-            .filter(Organization.id == current_user.organization_id)
-            .first()
+        creation_gate = get_assessment_creation_gate(
+            current_user.organization_id,
+            db,
+            lock_organization=True,
         )
+        if not creation_gate.get("can_create"):
+            raise HTTPException(status_code=402, detail=creation_gate.get("message"))
+        org_record = creation_gate.get("organization")
         if org_record is not None:
             org_feedback_enabled = bool(getattr(org_record, "candidate_feedback_enabled", True))
 

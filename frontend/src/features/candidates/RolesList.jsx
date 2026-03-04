@@ -14,7 +14,7 @@ import { CardSkeleton } from '../../shared/ui/Skeletons';
 export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole, onCreateRole, onRefresh }) => (
   <Panel className="flex max-h-[calc(100vh-180px)] flex-col p-3.5">
     <div className="mb-3 flex items-center justify-between shrink-0">
-      <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-gray-600">
+      <h2 className="text-sm font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
         Roles
         {roles.length > 0 ? ` (${roles.length})` : ''}
       </h2>
@@ -40,7 +40,7 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
     ) : null}
 
     {!loading && error ? (
-      <Card className="border-red-200 bg-red-50 px-3 py-3 text-sm text-red-700">
+      <Card className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] px-3 py-3 text-sm text-[var(--taali-danger)]">
         {error}
       </Card>
     ) : null}
@@ -74,10 +74,10 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
                 type="button"
                 onClick={() => onSelectRole(String(role.id))}
                 className={cx(
-                  'w-full border-2 px-3 py-2.5 text-left transition',
+                  'w-full rounded-[var(--taali-radius-card)] border px-3 py-2.5 text-left shadow-[var(--taali-shadow-soft)] transition',
                   selected
-                    ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)]'
-                    : 'border-[var(--taali-border-muted)] bg-[var(--taali-surface)] hover:border-[var(--taali-border)]'
+                    ? 'border-[rgba(162,67,255,0.35)] bg-[var(--taali-purple-soft)]'
+                    : 'border-[var(--taali-border-soft)] bg-[var(--taali-surface)] hover:border-[var(--taali-border)]'
                 )}
               >
                 <div className="flex items-start justify-between gap-3">
@@ -87,7 +87,7 @@ export const RolesList = ({ roles, selectedRoleId, loading, error, onSelectRole,
                       {role.applications_count || 0} candidate{(role.applications_count || 0) === 1 ? '' : 's'}
                     </p>
                   </div>
-                  <ChevronsUpDown size={14} className="mt-0.5 shrink-0 text-gray-400" />
+                  <ChevronsUpDown size={14} className="mt-0.5 shrink-0 text-[var(--taali-muted)]" />
                 </div>
                 <div className="mt-1.5 flex flex-wrap gap-1.5">
                   <Badge variant={specReady ? 'success' : 'warning'}>

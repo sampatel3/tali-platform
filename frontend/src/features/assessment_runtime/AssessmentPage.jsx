@@ -704,7 +704,7 @@ export default function AssessmentPage({
   const isClaudeBudgetExhausted = Boolean(claudeBudget?.enabled && claudeBudget?.is_exhausted);
 
   if (loading) {
-    return <AssessmentStatusScreen mode="loading" />;
+    return <AssessmentStatusScreen mode="loading" lightMode={assessmentLightMode} />;
   }
 
   if (submitted) {
@@ -719,11 +719,11 @@ export default function AssessmentPage({
         />
       );
     }
-    return <AssessmentStatusScreen mode="submitted" submittedAt={submittedAtIso} />;
+    return <AssessmentStatusScreen mode="submitted" submittedAt={submittedAtIso} lightMode={assessmentLightMode} />;
   }
 
   return (
-    <div className={`h-screen flex flex-col ${assessmentLightMode ? 'bg-[#f3f4f6] text-gray-900' : 'bg-[#0b0f16] text-gray-100'}`}>
+    <div className={`taali-runtime ${assessmentLightMode ? 'taali-runtime-light' : 'taali-runtime-dark'} flex h-screen flex-col bg-[var(--taali-runtime-bg)] text-[var(--taali-runtime-text)]`}>
       <AssessmentRuntimeAlerts
         showTabWarning={showTabWarning}
         proctoringEnabled={proctoringEnabled}
@@ -804,29 +804,29 @@ export default function AssessmentPage({
 
       {submitConfirmOpen ? (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-50 flex items-center justify-center bg-[var(--taali-runtime-overlay)] p-4"
           role="dialog"
           aria-modal="true"
           aria-labelledby="assessment-submit-confirm-title"
         >
-          <div className={`w-full max-w-xl border p-6 shadow-xl ${assessmentLightMode ? 'border-gray-300 bg-white text-gray-900' : 'border-white/15 bg-[#101722] text-gray-100'}`}>
+          <div className="w-full max-w-xl rounded-[var(--taali-radius-panel)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] p-6 text-[var(--taali-runtime-text)] shadow-[var(--taali-shadow-strong)] backdrop-blur-sm">
             <h2 id="assessment-submit-confirm-title" className="font-mono text-sm font-bold uppercase tracking-wide text-[var(--taali-purple)]">
               Confirm Submission
             </h2>
-            <p className={`mt-3 font-mono text-sm ${assessmentLightMode ? 'text-gray-700' : 'text-gray-300'}`}>
+            <p className="mt-3 font-mono text-sm text-[var(--taali-runtime-muted)]">
               Are you sure you want to submit? You cannot make changes after submitting.
             </p>
             <div className="mt-5 flex items-center justify-end gap-3">
               <button
                 type="button"
-                className={`border px-4 py-2 font-mono text-xs font-bold uppercase tracking-wide ${assessmentLightMode ? 'border-gray-300 bg-gray-100 text-gray-700 hover:bg-gray-200' : 'border-white/25 bg-[#0c1119] text-gray-200 hover:bg-[#111b2a]'}`}
+                className="rounded-[var(--taali-radius-control)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-4 py-2 font-mono text-xs font-bold uppercase tracking-wide text-[var(--taali-runtime-text)] transition-colors hover:border-[var(--taali-purple)] hover:text-[var(--taali-purple)]"
                 onClick={() => setSubmitConfirmOpen(false)}
               >
                 Cancel
               </button>
               <button
                 type="button"
-                className="border border-[var(--taali-purple)] bg-[var(--taali-purple)] px-4 py-2 font-mono text-xs font-bold uppercase tracking-wide text-white transition-colors hover:bg-[#aa4dff]"
+                className="rounded-[var(--taali-radius-control)] border border-[var(--taali-purple)] bg-[var(--taali-purple)] px-4 py-2 font-mono text-xs font-bold uppercase tracking-wide text-white transition-colors hover:bg-[var(--taali-purple-hover)]"
                 onClick={() => handleSubmit(true)}
               >
                 Submit

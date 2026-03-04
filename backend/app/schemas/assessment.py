@@ -80,6 +80,8 @@ class AssessmentResponse(BaseModel):
     final_score: Optional[float] = None
     assessment_score: Optional[float] = None
     taali_score: Optional[float] = None
+    role_fit_score: Optional[float] = None
+    score_rubric_version: Optional[str] = None
     score_mode: Optional[str] = None
     score_breakdown: Optional[Dict[str, Any]] = None
     score_weights_used: Optional[Dict[str, float]] = None

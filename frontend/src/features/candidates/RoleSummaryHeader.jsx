@@ -158,10 +158,10 @@ export const RoleSummaryHeader = ({
       >
         <div className="flex flex-col">
           <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-2.5">
-            <div className="inline-flex items-center gap-2 text-sm text-gray-700">
-              <FileText size={15} className="text-gray-500" />
+            <div className="inline-flex items-center gap-2 text-sm text-[var(--taali-text)]">
+              <FileText size={15} className="text-[var(--taali-muted)]" />
               <span className="font-medium">Job spec:</span>
-              <span className="text-gray-600">{jobSpecLabel}</span>
+              <span className="text-[var(--taali-muted)]">{jobSpecLabel}</span>
             </div>
             {jobSpecReady || hasAdditionalRequirements ? (
               <Button
@@ -179,21 +179,21 @@ export const RoleSummaryHeader = ({
 
           {specExpanded ? (
             <div id={specPanelId} className="space-y-3 border-y border-[var(--taali-border-muted)] p-3.5">
-              <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-4">
-                <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">Job role spec</p>
+              <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-4">
+                <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Job role spec</p>
                 {roleDescription ? (
                   <div className="max-h-[360px] overflow-auto pr-1">
-                    <div className="job-spec-content text-sm text-gray-800 leading-relaxed">
+                    <div className="job-spec-content text-sm leading-relaxed text-[var(--taali-text)]">
                       <ReactMarkdown
                         components={{
-                          h1: ({ node, ...p }) => <h1 className="text-lg font-bold mt-4 mb-2 first:mt-0 border-b border-gray-200 pb-1" {...p} />,
+                          h1: ({ node, ...p }) => <h1 className="mt-4 mb-2 border-b border-[var(--taali-border-soft)] pb-1 text-lg font-bold first:mt-0" {...p} />,
                           h2: ({ node, ...p }) => <h2 className="text-base font-bold mt-4 mb-2" {...p} />,
                           h3: ({ node, ...p }) => <h3 className="text-sm font-semibold mt-3 mb-1" {...p} />,
                           p: ({ node, ...p }) => <p className="my-2 leading-relaxed" {...p} />,
                           ul: ({ node, ...p }) => <ul className="list-disc pl-5 my-2 space-y-1" {...p} />,
                           ol: ({ node, ...p }) => <ol className="list-decimal pl-5 my-2 space-y-1" {...p} />,
                           li: ({ node, ...p }) => <li className="leading-relaxed" {...p} />,
-                          strong: ({ node, ...p }) => <strong className="font-semibold text-gray-900" {...p} />,
+                          strong: ({ node, ...p }) => <strong className="font-semibold text-[var(--taali-text)]" {...p} />,
                           br: () => <br />,
                         }}
                       >
@@ -202,23 +202,23 @@ export const RoleSummaryHeader = ({
                     </div>
                   </div>
                 ) : (
-                  <span className="text-sm text-gray-500">No job spec text available.</span>
+                  <span className="text-sm text-[var(--taali-muted)]">No job spec text available.</span>
                 )}
               </div>
 
               {hasAdditionalRequirements ? (
-                <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface-warm)] p-4">
-                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-gray-500">Additional requirements</p>
-                  <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{additionalRequirements}</p>
+                <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-warm)] p-4">
+                  <p className="mb-2 text-[11px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Additional requirements</p>
+                  <p className="whitespace-pre-wrap text-sm leading-relaxed text-[var(--taali-text)]">{additionalRequirements}</p>
                 </div>
               ) : null}
             </div>
           ) : null}
 
           <div className="p-3.5">
-            <div className="border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] px-3 py-2">
-              <div className="inline-flex items-center gap-2 text-sm text-gray-700">
-                <BriefcaseBusiness size={15} className="text-gray-500" />
+            <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-3 py-2">
+              <div className="inline-flex items-center gap-2 text-sm text-[var(--taali-text)]">
+                <BriefcaseBusiness size={15} className="text-[var(--taali-muted)]" />
                 <span className="font-medium">Tasks ({roleTasks.length}):</span>
                 {roleTasks.length > 0 ? (
                   <div className="flex flex-wrap gap-1.5">
@@ -227,7 +227,7 @@ export const RoleSummaryHeader = ({
                     ))}
                   </div>
                 ) : (
-                  <span className="text-gray-500">No linked tasks</span>
+                  <span className="text-[var(--taali-muted)]">No linked tasks</span>
                 )}
               </div>
             </div>
@@ -245,16 +245,16 @@ export const RoleSummaryHeader = ({
             onClick={() => setFocusExpanded((prev) => !prev)}
           >
             <div>
-              <p className="text-sm font-semibold text-gray-900">Interview focus</p>
-              <p className="text-[11px] text-gray-500">Manual screening pointers from the job spec.</p>
+              <p className="text-sm font-semibold text-[var(--taali-text)]">Interview focus</p>
+              <p className="text-[11px] text-[var(--taali-muted)]">Manual screening pointers from the job spec.</p>
             </div>
-            <div className="flex items-center gap-2 text-[11px] text-gray-500">
+            <div className="flex items-center gap-2 text-[11px] text-[var(--taali-muted)]">
               {role.interview_focus_generated_at ? (
-                <span className="text-[11px] text-gray-400">
+                <span className="text-[11px] text-[var(--taali-muted)]">
                   Updated {new Date(role.interview_focus_generated_at).toLocaleDateString()}
                 </span>
               ) : null}
-              <span className="inline-flex items-center gap-1.5 font-semibold text-gray-700">
+              <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--taali-text)]">
                 {focusExpanded ? 'Collapse' : 'Expand'}
                 {focusExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
               </span>
@@ -264,7 +264,7 @@ export const RoleSummaryHeader = ({
           {focusExpanded ? (
             <div id={focusPanelId}>
               {focus?.role_summary ? (
-                <p className="mt-2 text-sm text-gray-700">{focus.role_summary}</p>
+                <p className="mt-2 text-sm text-[var(--taali-text)]">{focus.role_summary}</p>
               ) : null}
 
               {focusTriggers.length > 0 ? (
@@ -277,21 +277,21 @@ export const RoleSummaryHeader = ({
 
               <div className="mt-2.5 space-y-2">
                 {focusQuestions.map((item, index) => (
-                  <Card key={`${item.question}-${index}`} className="border-[var(--taali-border-muted)] bg-[var(--taali-surface-warm)] px-3 py-2">
-                    <p className="text-sm font-semibold text-gray-900">
+                  <Card key={`${item.question}-${index}`} className="border-[var(--taali-border-soft)] bg-[var(--taali-surface-warm)] px-3 py-2">
+                    <p className="text-sm font-semibold text-[var(--taali-text)]">
                       {`Q${index + 1}. `}
                       {item.question}
                     </p>
                     {Array.isArray(item.what_to_listen_for) && item.what_to_listen_for.length > 0 ? (
-                      <p className="mt-1 text-xs text-gray-700">
-                        <span className="font-semibold text-gray-800">Look for:</span>
+                      <p className="mt-1 text-xs text-[var(--taali-text)]">
+                        <span className="font-semibold text-[var(--taali-text)]">Look for:</span>
                         {' '}
                         {item.what_to_listen_for.join(' • ')}
                       </p>
                     ) : null}
                     {Array.isArray(item.concerning_signals) && item.concerning_signals.length > 0 ? (
-                      <p className="mt-1 text-xs text-gray-600">
-                        <span className="font-semibold text-gray-700">Watch out for:</span>
+                      <p className="mt-1 text-xs text-[var(--taali-muted)]">
+                        <span className="font-semibold text-[var(--taali-text)]">Watch out for:</span>
                         {' '}
                         {item.concerning_signals.join(' • ')}
                       </p>
@@ -310,7 +310,7 @@ export const RoleSummaryHeader = ({
           </div>
         </Card>
       ) : jobSpecReady ? (
-        <Card className="mt-3 border-gray-200 bg-gray-50 p-3 text-sm text-gray-600">
+        <Card className="mt-3 border-[var(--taali-border-soft)] p-3 text-sm text-[var(--taali-muted)]">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <span>Interview focus pointers are generated automatically after job spec upload.</span>
             {onRegenerateInterviewFocus ? (

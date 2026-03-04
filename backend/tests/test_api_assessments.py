@@ -8,6 +8,7 @@ from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate import Candidate
 from app.models.organization import Organization
 from app.models.task import Task
+from app.models.user import User
 from tests.conftest import (
     TestingSessionLocal,
     auth_headers,
@@ -107,6 +108,63 @@ def test_create_assessment_no_auth_401(client):
         },
     )
     assert resp.status_code == 401
+
+
+def test_create_assessment_requires_available_credits_when_lemon_enabled(client, monkeypatch):
+    headers, email = auth_headers(client)
+    task = create_task_via_api(client, headers).json()
+
+    with TestingSessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+        assert org is not None
+        org.credits_balance = 0
+        db.commit()
+
+    import app.components.assessments.service as assessments_svc
+
+    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+
+    resp = create_assessment_via_api(client, headers, task["id"])
+    assert resp.status_code == 402
+    assert "purchase credits" in resp.json()["detail"].lower()
+
+
+def test_create_assessment_blocks_when_pending_invites_already_reserve_remaining_credits(client, monkeypatch):
+    headers, email = auth_headers(client)
+    task = create_task_via_api(client, headers).json()
+
+    with TestingSessionLocal() as db:
+        user = db.query(User).filter(User.email == email).first()
+        assert user is not None
+        org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+        assert org is not None
+        org.credits_balance = 1
+        db.commit()
+
+    import app.components.assessments.service as assessments_svc
+
+    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+
+    first = create_assessment_via_api(
+        client,
+        headers,
+        task["id"],
+        candidate_email="reserved-1@example.com",
+        candidate_name="Reserved One",
+    )
+    assert first.status_code == 201, first.text
+
+    second = create_assessment_via_api(
+        client,
+        headers,
+        task["id"],
+        candidate_email="reserved-2@example.com",
+        candidate_name="Reserved Two",
+    )
+    assert second.status_code == 402
+    assert "reserved for pending assessments" in second.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------
@@ -217,14 +275,14 @@ def test_start_assessment_invalid_token(client):
 def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     canonical_task = Task(
         organization_id=None,
-        name="Orders Pipeline Reliability Sprint",
+        name="AWS Glue Pipeline Recovery",
         description="Canonical demo task",
         task_type="python",
         difficulty="medium",
         duration_minutes=15,
         starter_code="print('demo')",
         test_code="def test_placeholder():\n    assert True\n",
-        task_key="data_eng_super_platform_crisis",
+        task_key="data_eng_aws_glue_pipeline_recovery",
     )
     db.add(canonical_task)
     db.commit()
@@ -268,7 +326,7 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
         "work_email": "demo-user@company.com",
         "company_name": "Acme Corp",
         "company_size": "51-200",
-        "assessment_track": "data_eng_super_platform_crisis",
+        "assessment_track": "data_eng_aws_glue_pipeline_recovery",
         "marketing_consent": True,
     }
     resp = client.post("/api/v1/assessments/demo/start", json=payload)
@@ -294,35 +352,35 @@ def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
     assessment = _fetch_one(Assessment, Assessment.id == body["assessment_id"])
     assert assessment is not None
     assert assessment.is_demo is True
-    assert assessment.demo_track == "data_eng_super_platform_crisis"
+    assert assessment.demo_track == "data_eng_aws_glue_pipeline_recovery"
     assert assessment.task_id == canonical_task.id
     assert assessment.demo_profile["work_email"] == "demo-user@company.com"
     assert assessment.demo_profile["marketing_consent"] is True
-    assert body["task"]["task_key"] == "data_eng_super_platform_crisis"
+    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
 
 
 def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
     platform_task = Task(
         organization_id=None,
-        name="Data Platform Incident Triage and Recovery",
+        name="AWS Glue Pipeline Recovery",
         description="Data platform demo task",
         task_type="python",
         difficulty="medium",
         duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="data_eng_super_platform_crisis",
+        task_key="data_eng_aws_glue_pipeline_recovery",
     )
     ai_task = Task(
         organization_id=None,
-        name="AI Feature Production Readiness Assessment",
+        name="GenAI Production Readiness Review",
         description="AI engineer demo task",
         task_type="python",
         difficulty="medium",
         duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="ai_eng_super_production_launch",
+        task_key="ai_eng_genai_production_readiness",
     )
     db.add(platform_task)
     db.add(ai_task)
@@ -361,7 +419,7 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
 
     monkeypatch.setattr(candidate_runtime_module, "start_or_resume_assessment", fake_start_or_resume)
 
-    # Legacy track "data_eng_c_backfill_schema" aliases to "data_eng_super_platform_crisis"
+    # Legacy track "data_eng_c_backfill_schema" aliases to the canonical Glue task.
     payload = {
         "full_name": "Frontend Demo User",
         "position": "Engineering Director",
@@ -380,20 +438,126 @@ def test_demo_start_uses_selected_track_task(client, db, monkeypatch):
     assert assessment is not None
     assert assessment.demo_track == "data_eng_c_backfill_schema"
     assert assessment.task_id == platform_task.id
-    assert body["task"]["task_key"] == "data_eng_super_platform_crisis"
+    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
+
+
+def test_demo_start_falls_back_to_local_repo_when_branch_init_fails(client, db, monkeypatch):
+    demo_task = Task(
+        organization_id=None,
+        name="AWS Glue Pipeline Recovery",
+        description="Data platform demo task",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=30,
+        starter_code="print('demo')",
+        test_code="",
+        task_key="data_eng_aws_glue_pipeline_recovery",
+        repo_structure={"files": {"src/main.py": "def run():\n    return 1\n"}},
+    )
+    db.add(demo_task)
+    db.commit()
+    db.refresh(demo_task)
+
+    import app.components.assessments.service as assessments_svc
+
+    holder = {}
+
+    class FakeFiles:
+        def __init__(self):
+            self.writes = []
+
+        def write(self, path, content):
+            self.writes.append((path, content))
+
+    class FakeSandbox:
+        def __init__(self, sid):
+            self.sandbox_id = sid
+            self.files = FakeFiles()
+            self.run_code_calls = []
+
+        def run_code(self, code):
+            self.run_code_calls.append(code)
+            if "'success': proc.returncode == 0" in code:
+                return {"stdout": '{"success": true, "stderr": ""}\n', "stderr": "", "error": None}
+            return {"stdout": "", "stderr": "", "error": None}
+
+    class FakeE2BService:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def create_sandbox(self):
+            sandbox = FakeSandbox("demo-fallback-sandbox")
+            holder["sandbox"] = sandbox
+            return sandbox
+
+        def connect_sandbox(self, sandbox_id):
+            return holder.get("sandbox") or FakeSandbox(sandbox_id)
+
+        def get_sandbox_id(self, sandbox):
+            return sandbox.sandbox_id
+
+        def close_sandbox(self, sandbox):
+            return None
+
+    class FailingRepoService:
+        def __init__(self, github_org=None, github_token=None):
+            self.github_org = github_org
+            self.github_token = github_token
+
+        def create_template_repo(self, task_obj):
+            return None
+
+        def create_assessment_branch(self, task_obj, assessment_id):
+            raise RuntimeError("repo provisioning unavailable")
+
+    monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc, "AssessmentRepositoryService", FailingRepoService)
+    monkeypatch.setattr(assessments_svc, "resolve_ai_mode", lambda: "claude_cli_terminal")
+    monkeypatch.setattr(
+        assessments_svc,
+        "terminal_capabilities",
+        lambda: {"enabled": True, "ws_protocol": "v1", "permission_mode": "default", "command": "claude", "active_mode": "claude_cli_terminal"},
+    )
+
+    payload = {
+        "full_name": "Demo User",
+        "position": "Engineering Manager",
+        "email": "demo-fallback@example.com",
+        "work_email": "demo-fallback@company.com",
+        "company_name": "Acme Corp",
+        "company_size": "51-200",
+        "assessment_track": "data_eng_aws_glue_pipeline_recovery",
+        "marketing_consent": True,
+    }
+    resp = client.post("/api/v1/assessments/demo/start", json=payload)
+    assert resp.status_code == 200, resp.text
+
+    body = resp.json()
+    assert body["sandbox_id"] == "demo-fallback-sandbox"
+    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
+
+    sandbox = holder["sandbox"]
+    assert any(path.endswith("/src/main.py") for path, _ in sandbox.files.writes)
+    assert any("'git', 'init', '-b', 'candidate'" in code for code in sandbox.run_code_calls)
+
+    assessment = _fetch_one(Assessment, Assessment.id == body["assessment_id"])
+    assert assessment is not None
+    assert assessment.is_demo is True
+    assert assessment.assessment_branch is None
 
 
 def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
     platform_task = Task(
         organization_id=None,
-        name="Data Platform Incident Triage and Recovery",
+        name="AWS Glue Pipeline Recovery",
         description="Demo task (legacy alias backend-reliability)",
         task_type="python",
         difficulty="medium",
         duration_minutes=30,
         starter_code="print('demo')",
         test_code="",
-        task_key="data_eng_super_platform_crisis",
+        task_key="data_eng_aws_glue_pipeline_recovery",
     )
     db.add(platform_task)
     db.commit()
@@ -448,7 +612,7 @@ def test_demo_start_accepts_legacy_track_keys(client, db, monkeypatch):
     assert assessment is not None
     assert assessment.demo_track == "backend-reliability"
     assert assessment.task_id == platform_task.id
-    assert body["task"]["task_key"] == "data_eng_super_platform_crisis"
+    assert body["task"]["task_key"] == "data_eng_aws_glue_pipeline_recovery"
 
 
 def test_demo_start_rejects_invalid_track(client):

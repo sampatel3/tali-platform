@@ -5,9 +5,10 @@ import { Badge } from './TaaliPrimitives';
 export const StatsCard = ({ icon: Icon, label, value, subValue, change, onClick }) => (
   <div
     className={[
-      'rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,rgba(255,255,255,0.98),rgba(247,243,255,0.82))] p-4 shadow-[var(--taali-shadow-soft)] transition-transform duration-200 hover:-translate-y-0.5 hover:shadow-[var(--taali-shadow-strong)]',
+      'rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] p-4 shadow-[var(--taali-shadow-soft)] transition-transform duration-200 hover:-translate-y-0.5 hover:shadow-[var(--taali-shadow-strong)]',
       onClick ? 'cursor-pointer' : 'cursor-default',
     ].join(' ')}
+    style={{ background: 'var(--taali-card-bg)' }}
     onClick={onClick}
   >
     <Icon size={24} className="mb-3 text-[var(--taali-purple)]" />

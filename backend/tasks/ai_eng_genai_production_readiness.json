@@ -1,0 +1,182 @@
+{
+  "task_id": "ai_eng_genai_production_readiness",
+  "name": "GenAI Production Readiness Review",
+  "role": "ai_engineer",
+  "duration_minutes": 30,
+  "calibration_prompt": "You have 2 minutes. Ask Claude for help tightening a small prompt for a policy-sensitive support workflow. Show the context, constraints, and success criteria you would provide before requesting code.",
+  "scenario": "You joined Deeplight as a GenAI Engineer and inherited a Customer Intelligence launch that is blocked one week before an executive customer preview.\n\n**Message from the product director:**\n\n> We have a working prototype that summarizes support tickets and suggests churn-risk actions for account teams.\n>\n> It demos well, but nobody believes it is safe enough to ship.\n>\n> Legal is worried about unsupported advice, Security found customer PII flowing into prompts, and Finance is alarmed by spend spikes whenever the team retries a batch.\n>\n> We also are not confident the prompts are grounded strongly enough in current customer context, so the team does not trust the reasoning behind the recommendations.\n>\n> The previous engineer left behind a partially wired review flow, some tests, and a lot of TODOs. We need your judgment more than heroics.\n>\n> In 30 minutes, I need to know three things:\n> 1. What should block launch today?\n> 2. What is the smallest credible slice we can ship next?\n> 3. What production fixes can you land right now to improve the system?\n\n**Your mission:**\nRead the repo carefully, identify the highest-risk failure modes, and implement the most important production-readiness improvements you can in the time available. You are being assessed on how you balance safety, delivery pressure, grounded AI behavior, and engineering quality.",
+  "repo_structure": {
+    "name": "customer-intelligence-genai",
+    "files": {
+      ".gitignore": ".venv/\\n.pytest_cache/\\n__pycache__/\\n",
+      "README.md": "# Customer Intelligence GenAI\\n\\nPrototype service that summarizes support tickets and recommends next actions for account teams.\\n\\n## Current launch pressure\\n- Executive preview in 7 days\\n- Legal review blocked\\n- Spend spikes during retries\\n- Support leaders want a limited release, not a demo-only prototype\\n- The current prompts are not grounded strongly enough in customer context for a production rollout\\n\\n## Local workflow\\n1. Create a virtualenv\\n2. Install `requirements.txt`\\n3. Run the tests\\n\\nThe local tests do not require OpenAI credentials or outbound network access.\\n\\nThe codebase is intentionally incomplete. Focus on production-safe improvements, not cosmetic refactors.\\n",
+      "RISKS.md": "# Known Risks\\n\\n## Safety\\n- Ticket bodies still contain names, emails, and phone numbers when prompts are built\\n- High-stakes churn recommendations are shown immediately, even when the model is uncertain\\n- There is no degraded-mode path when the model call fails\\n\\n## Grounding\\n- Recommendations are built from raw ticket text without enough discipline around grounded evidence\\n- The support team wants confidence that each recommendation is traceable to current customer context\\n\\n## Reliability\\n- Cache plumbing exists but is not used consistently\\n- Prompt parsing assumes well-formed JSON every time\\n- Review state is not attached to the generated insight payload\\n\\n## Cost\\n- Every refresh calls the model again\\n- Retry storms can double the cost of a single customer analysis\\n\\n## Stakeholder expectations\\n- Legal wants human review on high-risk actions\\n- Customer Success wants traceable reasoning\\n- Finance wants obvious protection against duplicate runs\\n",
+      "docs/launch_checklist.md": "# Launch Checklist\\n\\nA credible launch for this feature needs:\\n- PII redaction before prompt construction\\n- Grounded, traceable customer context in every risky recommendation\\n- Human review for risky recommendations\\n- A degraded-mode response when the model is unavailable\\n- Reuse of recent successful results to avoid duplicate spend\\n- Clear communication about what remains blocked\\n",
+      "docs/evaluation_notes.md": "# Evaluator Notes\\n\\nA strong candidate will usually:\\n- Read the risk docs before editing code\\n- Protect sensitive inputs before optimizing performance\\n- Keep the launch recommendation narrow and phased\\n- Explain what they are *not* fixing in this timebox\\n",
+      "intelligence/__init__.py": "",
+      "intelligence/config.py": "from dataclasses import dataclass\\n\\n\\n@dataclass\\nclass Config:\\n    default_model: str = 'gpt-4o-mini'\\n    require_human_review: bool = False\\n    pii_redaction_enabled: bool = False\\n    cache_ttl_seconds: int = 900\\n    degraded_mode_summary: str = 'Model unavailable - manual review required.'\\n",
+      "intelligence/cache.py": "from __future__ import annotations\\n\\nfrom dataclasses import dataclass\\nfrom time import time\\nfrom typing import Any, Dict, Optional\\n\\n\\n@dataclass\\nclass CacheEntry:\\n    value: Dict[str, Any]\\n    cached_at: float\\n\\n\\nclass InsightCache:\\n    def __init__(self, ttl_seconds: int = 900):\\n        self.ttl_seconds = ttl_seconds\\n        self._items: Dict[str, CacheEntry] = {}\\n\\n    def get(self, key: str) -> Optional[Dict[str, Any]]:\\n        entry = self._items.get(key)\\n        if entry is None:\\n            return None\\n        if (time() - entry.cached_at) > self.ttl_seconds:\\n            self._items.pop(key, None)\\n            return None\\n        return entry.value\\n\\n    def set(self, key: str, value: Dict[str, Any]) -> None:\\n        self._items[key] = CacheEntry(value=value, cached_at=time())\\n",
+      "intelligence/llm.py": "from __future__ import annotations\\n\\nfrom dataclasses import dataclass\\nfrom typing import Protocol\\n\\n\\n@dataclass\\nclass LLMResponse:\\n    content: str\\n    tokens_used: int\\n    model: str\\n\\n\\nclass CompletionTransport(Protocol):\\n    def complete(self, prompt: str) -> LLMResponse: ...\\n\\n\\nclass OpenAITransport:\\n    \\\"\\\"\\\"Lazy provider import so test collection does not depend on optional SDKs.\\\"\\\"\\\"\\n\\n    def __init__(self, api_key: str, model: str):\\n        self.api_key = api_key\\n        self.model = model\\n\\n    def complete(self, prompt: str) -> LLMResponse:\\n        try:\\n            from openai import OpenAI\\n        except ModuleNotFoundError as exc:\\n            raise RuntimeError('openai package is not installed') from exc\\n\\n        client = OpenAI(api_key=self.api_key)\\n        response = client.responses.create(model=self.model, input=prompt)\\n        text = getattr(response, 'output_text', '') or ''\\n        usage = getattr(response, 'usage', None)\\n        total_tokens = int(getattr(usage, 'total_tokens', 0) or 0)\\n        return LLMResponse(content=text, tokens_used=total_tokens, model=self.model)\\n",
+      "intelligence/prompts.py": "CHURN_PROMPT = \\\"\\\"\\\"You are reviewing customer-support data for a high-stakes account.\\\\n\\\\nCustomer: {customer_name}\\\\nContract value: {arr}\\\\n\\\\nTicket context:\\\\n{ticket_summary}\\\\n\\\\nReturn JSON with keys: summary, confidence, evidence, action.\\\\n\\\"\\\"\\\"\\n\\nSENTIMENT_PROMPT = \\\"\\\"\\\"Summarize the recent support sentiment.\\\\n\\\\nCustomer: {customer_name}\\\\n\\\\nTicket context:\\\\n{ticket_summary}\\\\n\\\\nReturn JSON with keys: summary, confidence, evidence.\\\\n\\\"\\\"\\\"\\n",
+      "intelligence/review.py": "from __future__ import annotations\\n\\nfrom typing import Dict\\n\\n\\nHIGH_RISK_TYPES = {'churn_risk'}\\n\\n\\ndef should_require_human_review(*, insight_type: str, confidence: float, has_action: bool) -> bool:\\n    if insight_type not in HIGH_RISK_TYPES:\\n        return False\\n    if confidence >= 0.85:\\n        return False\\n    return has_action\\n\\n\\ndef degraded_payload(summary: str) -> Dict[str, object]:\\n    return {\\n        'summary': summary,\\n        'confidence': 0.0,\\n        'evidence': ['model unavailable'],\\n        'action': None,\\n    }\\n",
+      "intelligence/safety.py": "from __future__ import annotations\\n\\nimport re\\nfrom typing import List, Tuple\\n\\nEMAIL_PATTERN = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\\\.[a-zA-Z]{2,}'\\nPHONE_PATTERN = r'\\\\b\\\\d{3}[-.]?\\\\d{3}[-.]?\\\\d{4}\\\\b'\\n\\n\\ndef redact_pii(text: str) -> Tuple[str, List[str]]:\\n    redactions: List[str] = []\\n    redacted = text\\n    if re.search(EMAIL_PATTERN, redacted):\\n        redacted = re.sub(EMAIL_PATTERN, '[EMAIL_REDACTED]', redacted)\\n        redactions.append('email')\\n    if re.search(PHONE_PATTERN, redacted):\\n        redacted = re.sub(PHONE_PATTERN, '[PHONE_REDACTED]', redacted)\\n        redactions.append('phone')\\n    return redacted, redactions\\n",
+      "intelligence/analyzer.py": "from __future__ import annotations\\n\\nimport json\\nfrom dataclasses import dataclass\\nfrom typing import Any, Dict, List, Optional\\n\\nfrom intelligence.cache import InsightCache\\nfrom intelligence.config import Config\\nfrom intelligence.prompts import CHURN_PROMPT, SENTIMENT_PROMPT\\nfrom intelligence.review import degraded_payload, should_require_human_review\\nfrom intelligence.safety import redact_pii\\n\\n\\n@dataclass\\nclass Insight:\\n    insight_type: str\\n    customer_id: str\\n    summary: str\\n    confidence: float\\n    supporting_evidence: List[str]\\n    recommended_action: Optional[str]\\n    requires_review: bool = False\\n    degraded_mode: bool = False\\n\\n\\nclass CustomerAnalyzer:\\n    def __init__(self, config: Config, llm_client: Any, db_client: Any, cache: Optional[InsightCache] = None):\\n        self.config = config\\n        self.llm = llm_client\\n        self.db = db_client\\n        self.cache = cache or InsightCache(ttl_seconds=config.cache_ttl_seconds)\\n\\n    def analyze_customer(self, customer_id: str) -> List[Insight]:\\n        customer = self._get_customer_data(customer_id)\\n        tickets = self._get_recent_tickets(customer_id)\\n        insights = [\\n            self._analyze_churn_risk(customer, tickets),\\n            self._analyze_sentiment(customer, tickets),\\n        ]\\n        return insights\\n\\n    def _analyze_churn_risk(self, customer: Dict[str, Any], tickets: List[Dict[str, Any]]) -> Insight:\\n        cache_key = f\\\"churn:{customer['id']}\\\"\\n        cached = self.cache.get(cache_key)\\n        if cached is not None:\\n            return Insight(**cached)\\n\\n        prompt = CHURN_PROMPT.format(\\n            customer_name=customer['name'],\\n            arr=customer['arr'],\\n            ticket_summary=self._prepare_ticket_context(tickets),\\n        )\\n        response = self.llm.complete(prompt)\\n        parsed = json.loads(response.content)\\n        insight = Insight(\\n            insight_type='churn_risk',\\n            customer_id=customer['id'],\\n            summary=parsed.get('summary', ''),\\n            confidence=float(parsed.get('confidence', 0.0)),\\n            supporting_evidence=list(parsed.get('evidence', [])),\\n            recommended_action=parsed.get('action'),\\n            requires_review=should_require_human_review(\\n                insight_type='churn_risk',\\n                confidence=float(parsed.get('confidence', 0.0)),\\n                has_action=bool(parsed.get('action'))\\n            ),\\n        )\\n        self.cache.set(cache_key, insight.__dict__)\\n        return insight\\n\\n    def _analyze_sentiment(self, customer: Dict[str, Any], tickets: List[Dict[str, Any]]) -> Insight:\\n        prompt = SENTIMENT_PROMPT.format(\\n            customer_name=customer['name'],\\n            ticket_summary=self._prepare_ticket_context(tickets),\\n        )\\n        response = self.llm.complete(prompt)\\n        parsed = json.loads(response.content)\\n        return Insight(\\n            insight_type='sentiment',\\n            customer_id=customer['id'],\\n            summary=parsed.get('summary', ''),\\n            confidence=float(parsed.get('confidence', 0.0)),\\n            supporting_evidence=list(parsed.get('evidence', [])),\\n            recommended_action=None,\\n        )\\n\\n    def _prepare_ticket_context(self, tickets: List[Dict[str, Any]]) -> str:\\n        lines = []\\n        for ticket in tickets[:8]:\\n            content = str(ticket.get('content', ''))\\n            if self.config.pii_redaction_enabled:\\n                content, _ = redact_pii(content)\\n            lines.append(f\\\"[{ticket.get('created_at', 'unknown')}] {ticket.get('subject', '')}: {content}\\\")\\n        return '\\\\n'.join(lines)\\n\\n    def _fallback_insight(self, customer_id: str) -> Insight:\\n        payload = degraded_payload(self.config.degraded_mode_summary)\\n        return Insight(\\n            insight_type='churn_risk',\\n            customer_id=customer_id,\\n            summary=str(payload['summary']),\\n            confidence=float(payload['confidence']),\\n            supporting_evidence=list(payload['evidence']),\\n            recommended_action=None,\\n            requires_review=True,\\n            degraded_mode=True,\\n        )\\n\\n    def _get_customer_data(self, customer_id: str) -> Dict[str, Any]:\\n        return self.db.query_customer(customer_id)\\n\\n    def _get_recent_tickets(self, customer_id: str) -> List[Dict[str, Any]]:\\n        return self.db.query_tickets(customer_id)\\n",
+      "tests/__init__.py": "",
+      "tests/test_analyzer.py": "import json\\nfrom unittest.mock import Mock\\n\\nimport pytest\\n\\nfrom intelligence.analyzer import CustomerAnalyzer\\nfrom intelligence.cache import InsightCache\\nfrom intelligence.config import Config\\n\\n\\n@pytest.fixture\\ndef mock_db():\\n    db = Mock()\\n    db.query_customer.return_value = {'id': 'cust-1', 'name': 'Acme', 'arr': 120000}\\n    db.query_tickets.return_value = [\\n        {\\n            'created_at': '2026-02-10',\\n            'subject': 'Escalation',\\n            'content': 'Please contact jane@acme.com or 555-123-4567 before renewal.'\\n        }\\n    ]\\n    return db\\n\\n\\ndef test_redacts_ticket_pii_before_prompt(mock_db):\\n    llm = Mock()\\n    llm.complete.return_value = Mock(content=json.dumps({'summary': 'risk', 'confidence': 0.7, 'evidence': [], 'action': 'call'}))\\n\\n    analyzer = CustomerAnalyzer(Config(), llm, mock_db, cache=InsightCache())\\n    analyzer._analyze_churn_risk(mock_db.query_customer.return_value, mock_db.query_tickets.return_value)\\n\\n    prompt = llm.complete.call_args[0][0]\\n    assert 'jane@acme.com' not in prompt\\n    assert '555-123-4567' not in prompt\\n\\n\\ndef test_handles_llm_failure_gracefully(mock_db):\\n    llm = Mock()\\n    llm.complete.side_effect = RuntimeError('provider timeout')\\n\\n    analyzer = CustomerAnalyzer(Config(), llm, mock_db, cache=InsightCache())\\n    insights = analyzer.analyze_customer('cust-1')\\n\\n    churn = next(item for item in insights if item.insight_type == 'churn_risk')\\n    assert churn.degraded_mode is True\\n    assert churn.requires_review is True\\n\\n\\ndef test_high_risk_actions_require_review(mock_db):\\n    llm = Mock()\\n    llm.complete.return_value = Mock(content=json.dumps({\\n        'summary': 'Likely churn',\\n        'confidence': 0.91,\\n        'evidence': ['multiple escalations'],\\n        'action': 'escalate immediately'\\n    }))\\n\\n    analyzer = CustomerAnalyzer(Config(require_human_review=True), llm, mock_db, cache=InsightCache())\\n    insight = analyzer._analyze_churn_risk(mock_db.query_customer.return_value, mock_db.query_tickets.return_value)\\n    assert insight.requires_review is True\\n\\n\\ndef test_reuses_cached_results_to_reduce_cost(mock_db):\\n    llm = Mock()\\n    llm.complete.return_value = Mock(content=json.dumps({'summary': 'risk', 'confidence': 0.7, 'evidence': [], 'action': 'call'}))\\n\\n    analyzer = CustomerAnalyzer(Config(), llm, mock_db, cache=InsightCache())\\n    analyzer._analyze_churn_risk(mock_db.query_customer.return_value, mock_db.query_tickets.return_value)\\n    analyzer._analyze_churn_risk(mock_db.query_customer.return_value, mock_db.query_tickets.return_value)\\n\\n    assert llm.complete.call_count == 1\\n",
+      "tests/test_safety.py": "from intelligence.safety import redact_pii\\n\\n\\ndef test_redacts_email_and_phone():\\n    redacted, types = redact_pii('Reach jane@acme.com or 555-123-4567 today')\\n    assert '[EMAIL_REDACTED]' in redacted\\n    assert '[PHONE_REDACTED]' in redacted\\n    assert types == ['email', 'phone']\\n\\n\\ndef test_preserves_non_pii_identifiers():\\n    redacted, types = redact_pii('Customer CUST-12 triggered alert RUN-9')\\n    assert redacted == 'Customer CUST-12 triggered alert RUN-9'\\n    assert types == []\\n",
+      "tests/test_review.py": "from intelligence.review import should_require_human_review\\n\\n\\ndef test_medium_confidence_high_risk_action_requires_review():\\n    assert should_require_human_review(insight_type='churn_risk', confidence=0.62, has_action=True) is True\\n\\n\\ndef test_low_stakes_items_do_not_require_review():\\n    assert should_require_human_review(insight_type='sentiment', confidence=0.40, has_action=False) is False\\n",
+      "requirements.txt": "pytest>=8.0.0\\n"
+    }
+  },
+  "evaluation_rubric": {
+    "system_risk_assessment": {
+      "weight": 0.24,
+      "criteria": {
+        "excellent": "Rapidly identifies launch blockers across safety, reliability, cost, and stakeholder trust. Distinguishes hard blockers from issues that can wait for a phased rollout.",
+        "good": "Finds the major launch risks and prioritizes most of them correctly.",
+        "poor": "Focuses on implementation details while missing the production blockers."
+      }
+    },
+    "safety_guardrails": {
+      "weight": 0.22,
+      "criteria": {
+        "excellent": "Protects PII before prompt construction, adds or strengthens human review logic, and treats unsupported high-stakes actions as a product risk rather than a test-only problem.",
+        "good": "Addresses the main safety gaps but leaves edge cases or reviewer workflow unclear.",
+        "poor": "Ships the system with unsafe defaults or treats review as optional."
+      }
+    },
+    "production_readiness": {
+      "weight": 0.20,
+      "criteria": {
+        "excellent": "Improves degraded-mode behavior, parsing resilience, or repeat-cost controls with changes that are realistic for a pressured launch.",
+        "good": "Improves one major production concern but leaves another unaddressed.",
+        "poor": "Leaves the system in demo-only shape."
+      }
+    },
+    "pragmatic_delivery_judgment": {
+      "weight": 0.18,
+      "criteria": {
+        "excellent": "Chooses a narrow, defensible release plan and explains what remains out of scope for this timebox.",
+        "good": "Shows reasonable prioritization with limited tradeoff articulation.",
+        "poor": "Either overreaches or avoids making any launch recommendation."
+      }
+    },
+    "grounding_and_retrieval_judgment": {
+      "weight": 0.16,
+      "criteria": {
+        "excellent": "Keeps recommendations grounded in current customer evidence, strengthens traceability in the prompt path, and avoids treating unsupported model output as trustworthy.",
+        "good": "Improves grounding or evidence handling but leaves some traceability gaps.",
+        "poor": "Treats the model output as acceptable without enough grounded context."
+      }
+    }
+  },
+  "expected_candidate_journey": {
+    "first_8_minutes": [
+      "Read README.md, RISKS.md, and the launch checklist before editing code.",
+      "Identify the gap between a working demo and a launchable GenAI feature.",
+      "Inspect how customer context becomes model input and whether the recommendations are grounded enough for release.",
+      "Prioritize safety and launch blockers before polishing implementation details."
+    ],
+    "minutes_8_to_20": [
+      "Run the tests, inspect the failing expectations, and map them to production concerns.",
+      "Land focused fixes around PII handling, review gating, degraded mode, or duplicate spend controls.",
+      "Keep the code changes narrow enough to explain and defend."
+    ],
+    "minutes_20_to_28": [
+      "Re-run the tests and assess what still blocks launch.",
+      "Decide what can ship now versus what needs a human-review or rollout constraint."
+    ],
+    "final_2_minutes": [
+      "Summarize launch blockers, fixes made, and the next safe release slice."
+    ]
+  },
+  "interviewer_signals": {
+    "strong_positive": [
+      "Reads the risk docs before writing code.",
+      "Treats unsupported high-stakes actions as a product launch blocker.",
+      "Keeps risky recommendations grounded in customer evidence instead of trusting the model output blindly.",
+      "Uses tests to validate behavior but does not confuse passing tests with product safety.",
+      "Explains a phased launch rather than insisting on all-or-nothing delivery.",
+      "Makes a clear tradeoff between safety, speed, and cost."
+    ],
+    "red_flags": [
+      "Optimizes token cost before fixing obvious safety issues.",
+      "Treats human review as unnecessary overhead.",
+      "Treats unsupported output as acceptable even when the evidence path is weak.",
+      "Leaves duplicate model calls or degraded-mode behavior untouched.",
+      "Cannot explain what should still block launch after the code changes.",
+      "Adds broad refactors that do not improve launch readiness."
+    ]
+  },
+  "scoring_hints": {
+    "min_reading_time_seconds": 300
+  },
+  "test_runner": {
+    "command": "./.venv/bin/python -m pytest -q --tb=no",
+    "working_dir": "/workspace/customer-intelligence-genai",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
+    "timeout_seconds": 120
+  },
+  "workspace_bootstrap": {
+    "commands": [
+      "python3 -m venv .venv",
+      "./.venv/bin/python -m pip install --upgrade pip",
+      "./.venv/bin/python -m pip install -r requirements.txt"
+    ],
+    "working_dir": "/workspace/customer-intelligence-genai",
+    "timeout_seconds": 240,
+    "must_succeed": true
+  },
+  "role_alignment": {
+    "source_user_email": "sampatel@deeplight.ae",
+    "source_role_name": "GenAI Engineer",
+    "source_role_identifier": "workable:120884740D",
+    "captured_at": "2026-03-03T06:35:44Z",
+    "must_cover": [
+      "Design and deliver production-ready LLM applications under delivery pressure.",
+      "Embed governance, privacy, hallucination control, and auditability into shipped behavior.",
+      "Use grounded customer context and RAG-style reasoning judgment rather than unsupported generation.",
+      "Write robust Python production code and make pragmatic release tradeoffs."
+    ],
+    "must_not_cover": [
+      "Implementing full fine-tuning, LoRA, or RLHF training workflows",
+      "Provisioning Kubernetes, Terraform, or multi-cloud infrastructure",
+      "Building TypeScript clients or multimodal product surfaces"
+    ],
+    "jd_to_signal_map": [
+      {
+        "job_requirement": "Governance & Safety: embed responsible AI practices including hallucination control, bias mitigation, and auditability.",
+        "task_artifact": "RISKS.md plus failing analyzer tests",
+        "rubric_dimension": "system_risk_assessment"
+      },
+      {
+        "job_requirement": "Experience with model evaluation, data privacy, and bias mitigation in production GenAI applications.",
+        "task_artifact": "PII handling, review gating, and degraded-mode logic in intelligence/",
+        "rubric_dimension": "safety_guardrails"
+      },
+      {
+        "job_requirement": "Production Code: write robust, deployment-ready software for LLM-based applications.",
+        "task_artifact": "Caching and reliability gaps exercised by tests",
+        "rubric_dimension": "production_readiness"
+      },
+      {
+        "job_requirement": "Proven delivery of production-grade GenAI tools in agile, rapid-iteration environments.",
+        "task_artifact": "30-minute timebox plus launch-checklist framing",
+        "rubric_dimension": "pragmatic_delivery_judgment"
+      },
+      {
+        "job_requirement": "RAG System Architecture and Data Grounding: manage context-aware retrieval and keep model behavior tied to reliable source context.",
+        "task_artifact": "Prompt construction from support-ticket context in intelligence/analyzer.py and intelligence/prompts.py",
+        "rubric_dimension": "grounding_and_retrieval_judgment"
+      }
+    ]
+  },
+  "human_testing_checklist": {
+    "candidate_clarity": true,
+    "repo_boot_ok": true,
+    "tests_collect_ok": true,
+    "baseline_failures_meaningful": true,
+    "rubric_matches_role": true,
+    "timebox_realistic": true
+  }
+}

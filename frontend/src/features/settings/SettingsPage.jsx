@@ -802,6 +802,535 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     return `${formatAed(safe, options)} (~$${usd} USD)`;
   };
 
+  const WorkableSettingsTab = () => (
+    <div>
+      <Panel className={`mb-5 flex flex-wrap items-center justify-between gap-4 p-4 ${workableConnected ? 'bg-[var(--taali-success-soft)]' : 'bg-[var(--taali-warning-soft)]'}`}>
+        <div className="flex items-center gap-4">
+          {workableConnected ? <CheckCircle size={24} className="text-[var(--taali-success)]" /> : <AlertTriangle size={24} className="text-[var(--taali-warning)]" />}
+          <div>
+            <div className="font-bold text-base text-[var(--taali-text)]">Status: {workableConnected ? 'Connected' : 'Not Connected'}</div>
+            <div className="text-sm text-[var(--taali-muted)]">
+              {workableConnected ? 'Workable integration is active' : 'Connect your Workable account to sync candidates'}
+            </div>
+          </div>
+        </div>
+        {!workableConnected ? (
+          ConnectWorkableButton ? (
+            <ConnectWorkableButton onClick={openWorkableDrawer} />
+          ) : (
+            <Button variant="primary" onClick={openWorkableDrawer}>
+              Connect Workable
+            </Button>
+          )
+        ) : null}
+      </Panel>
+
+      <Panel className="space-y-4 p-4">
+        <div>
+          <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Organization</div>
+          <div className="font-bold text-[var(--taali-text)]">{orgName}</div>
+        </div>
+        <div>
+          <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Admin Email</div>
+          <div className="font-mono text-[var(--taali-text)]">{adminEmail}</div>
+        </div>
+        <div>
+          <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Connected Since</div>
+          <div className="font-mono text-[var(--taali-text)]">{workableConnected ? connectedSince : '—'}</div>
+        </div>
+        <div>
+          <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Active Claude model</div>
+          <div className="font-mono text-[var(--taali-text)]">
+            {`Assessment model: ${orgData?.active_claude_model || '—'} · Scoring model: ${orgData?.active_claude_scoring_model || orgData?.active_claude_model || '—'}`}
+          </div>
+        </div>
+        <div>
+          <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Last Sync</div>
+          <div className="font-mono text-[var(--taali-text)]">{lastSyncAt} ({lastSyncStatus})</div>
+          {Array.isArray(orgData?.workable_last_sync_summary?.errors) && orgData.workable_last_sync_summary.errors.length > 0 && (
+            <div className="mt-1 text-sm text-[var(--taali-warning)] font-mono">
+              {orgData.workable_last_sync_summary.errors[0]}
+            </div>
+          )}
+        </div>
+        <Card className="bg-[var(--taali-surface-subtle)] p-4 text-sm text-[var(--taali-text)]">
+          <div className="font-semibold mb-1">What happens when you sync</div>
+          <ul className="list-disc list-inside space-y-0.5">
+            <li>Open jobs from Workable are imported as roles; job specs are saved as attachments.</li>
+            <li>All candidates for each job are fetched (no 50-candidate limit).</li>
+            <li>Only metadata is synced in this baseline run (roles, candidate/application records, stages).</li>
+            <li>CV fetch and TAALI scoring are run separately from the Candidates page when needed.</li>
+          </ul>
+          <p className="mt-2 text-xs text-[var(--taali-muted)]">
+            For a completely fresh import, use <strong>Remove all candidates and roles</strong> below, then run <strong>Metadata sync</strong>.
+          </p>
+        </Card>
+        {workableSyncInProgress && (
+          <Panel className="mt-3 flex items-center gap-3 border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
+            <Spinner size={24} className="flex-shrink-0" />
+            <div className="min-w-0 flex-1">
+              <div className="font-semibold text-[var(--taali-text)]">
+                {workableSyncLoading ? 'Starting…' : 'Running in background'}
+              </div>
+              <div className="text-sm text-[var(--taali-text)]">
+                Sync is running in the background. We’ll notify you when it’s done. You can leave this page.
+              </div>
+              {orgData?.workable_sync_progress && (orgData.workable_sync_progress.current_step || orgData.workable_sync_progress.jobs_total != null || orgData.workable_sync_progress.candidates_seen != null) ? (
+                <>
+                  {(orgData.workable_sync_progress.current_step || orgData.workable_sync_progress.last_request) && (
+                    <div className="mt-2 font-mono text-xs text-[var(--taali-text)]">
+                      {orgData.workable_sync_progress.current_step && (
+                        <span>Step: {orgData.workable_sync_progress.current_step.replace(/_/g, ' ')}</span>
+                      )}
+                      {orgData.workable_sync_progress.current_job_shortcode && (
+                        <span> · Job {orgData.workable_sync_progress.current_job_shortcode}</span>
+                      )}
+                      {orgData.workable_sync_progress.current_candidate_index && (
+                        <span> · Candidate {orgData.workable_sync_progress.current_candidate_index}</span>
+                      )}
+                      {orgData.workable_sync_progress.last_request && (
+                        <span className="block mt-0.5 text-[var(--taali-muted)]">Request: {orgData.workable_sync_progress.last_request}</span>
+                      )}
+                    </div>
+                  )}
+                  <div className="mt-2 font-mono text-xs text-[var(--taali-text)]">
+                    {orgData.workable_sync_progress.jobs_processed ?? 0}/{orgData.workable_sync_progress.jobs_total ?? 0} roles processed ({orgData.workable_sync_progress.jobs_upserted ?? 0} new) · {orgData.workable_sync_progress.candidates_seen ?? 0} candidates seen ({orgData.workable_sync_progress.candidates_upserted ?? 0} upserted)
+                  </div>
+                </>
+              ) : (
+                <div className="mt-2 font-mono text-xs text-[var(--taali-muted)]">Starting sync…</div>
+              )}
+              <div className="mt-3">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  disabled={workableSyncCancelLoading}
+                  onClick={handleCancelWorkableSync}
+                >
+                  {workableSyncCancelLoading ? 'Stopping…' : 'Stop sync'}
+                </Button>
+              </div>
+            </div>
+          </Panel>
+        )}
+        <hr className="border-[var(--taali-border)]" />
+        <div>
+          <div className="font-bold mb-3 text-[var(--taali-text)]">Sync + Invite Settings</div>
+          <div className="grid md:grid-cols-2 gap-3">
+            <label className="block">
+              <span className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Email mode</span>
+              <Select
+                className="w-full"
+                value={workableForm.emailMode}
+                onChange={(e) => {
+                  const nextMode = e.target.value;
+                  setWorkableForm((prev) => ({
+                    ...prev,
+                    emailMode: nextMode,
+                    inviteStageName: nextMode === 'workable_preferred_fallback_manual' ? prev.inviteStageName : '',
+                  }));
+                }}
+              >
+                <option value="manual_taali">Manual</option>
+                <option value="workable_preferred_fallback_manual">Automated via Workable</option>
+              </Select>
+              <span className="font-mono text-xs text-[var(--taali-muted)] mt-1 block">
+                Automated mode requires `w_candidates` scope and a Workable stage name.
+              </span>
+            </label>
+            <label className="block">
+              <span className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Sync interval (minutes)</span>
+              <Input
+                type="number"
+                min={5}
+                max={1440}
+                className="w-full"
+                value={workableForm.syncIntervalMinutes}
+                onChange={(e) => setWorkableForm((prev) => ({ ...prev, syncIntervalMinutes: e.target.value }))}
+              />
+            </label>
+            {workableForm.emailMode === 'workable_preferred_fallback_manual' ? (
+              <label className="block md:col-span-2">
+                <span className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Invite stage name</span>
+                <Input
+                  type="text"
+                  className="w-full"
+                  placeholder="Enter exact Workable stage name"
+                  value={workableForm.inviteStageName}
+                  onChange={(e) => setWorkableForm((prev) => ({ ...prev, inviteStageName: e.target.value }))}
+                />
+                <span className="font-mono text-xs text-[var(--taali-muted)] mt-1 block">
+                  Keep this blank in manual mode. For automated mode, enter the exact stage already configured in Workable.
+                </span>
+              </label>
+            ) : null}
+          </div>
+          <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
+            Metadata sync is the default baseline. Use candidate-level enrichment, CV fetch, and TAALI scoring actions from the Candidates page when needed.
+          </p>
+          <Card className="mt-3 bg-[var(--taali-surface-subtle)] p-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div>
+                <p className="text-sm font-semibold text-[var(--taali-text)]">Roles to import</p>
+                <p className="text-xs text-[var(--taali-muted)]">
+                  {selectedRoleCountForSync}/{totalRoleCountForSync} selected
+                </p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={loadWorkableSyncJobs}
+                  disabled={workableJobsLoading || !workableConnected}
+                >
+                  {workableJobsLoading ? 'Refreshing…' : 'Refresh roles'}
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setWorkableSelectedJobShortcodes(workableSyncJobs.map((job) => String(job?.shortcode || job?.id || '').trim()).filter(Boolean))}
+                  disabled={workableJobsLoading || totalRoleCountForSync === 0}
+                >
+                  Select all
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setWorkableSelectedJobShortcodes([])}
+                  disabled={workableJobsLoading || selectedRoleCountForSync === 0}
+                >
+                  Clear
+                </Button>
+              </div>
+            </div>
+            <Input
+              type="text"
+              value={workableJobSearch}
+              onChange={(e) => setWorkableJobSearch(e.target.value)}
+              placeholder="Search role name or shortcode"
+              disabled={workableJobsLoading || totalRoleCountForSync === 0}
+            />
+            {workableJobsError ? (
+              <p className="text-xs text-[var(--taali-danger)]">{workableJobsError}</p>
+            ) : null}
+            <div className="max-h-56 overflow-y-auto rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3">
+              {workableJobsLoading ? (
+                <p className="text-xs text-[var(--taali-muted)]">Loading Workable roles…</p>
+              ) : filteredWorkableSyncJobs.length === 0 ? (
+                <p className="text-xs text-[var(--taali-muted)]">
+                  {totalRoleCountForSync === 0 ? 'No Workable roles available.' : 'No roles match your search.'}
+                </p>
+              ) : (
+                <div className="space-y-1">
+                  {filteredWorkableSyncJobs.map((job) => {
+                    const identifier = String(job?.shortcode || job?.id || '').trim();
+                    if (!identifier) return null;
+                    return (
+                      <label key={identifier} className="flex items-start gap-2 text-sm text-[var(--taali-text)]">
+                        <input
+                          type="checkbox"
+                          checked={selectedRoleSetForSync.has(identifier)}
+                          onChange={() => toggleWorkableSyncRole(identifier)}
+                        />
+                        <span>
+                          <span className="font-medium">{job?.title || identifier}</span>
+                          <span className="ml-1 text-xs text-[var(--taali-muted)]">({identifier})</span>
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </Card>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <Button
+              type="button"
+              variant="primary"
+              disabled={workableSaving}
+              onClick={handleSaveWorkable}
+            >
+              {workableSaving ? 'Saving…' : 'Save Workable Settings'}
+            </Button>
+            <Button
+              type="button"
+              variant="secondary"
+              className="bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
+              disabled={workableSyncLoading || workableSyncInProgress || !workableConnected || (totalRoleCountForSync > 0 && selectedRoleCountForSync === 0)}
+              onClick={handleSyncWorkable}
+            >
+              {workableSyncInProgress ? 'Running in background' : 'Run metadata sync'}
+            </Button>
+          </div>
+        </div>
+
+        <Panel className="mt-5 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
+          <div className="font-bold text-[var(--taali-danger)] mb-1">Remove all Workable data</div>
+          <p className="text-sm text-[var(--taali-text)] mb-3">
+            This will delete all roles, candidates, and applications that were imported from Workable.
+          </p>
+          <Button
+            type="button"
+            variant="danger"
+            disabled={clearWorkableLoading}
+            onClick={() => setClearWorkableModalOpen(true)}
+          >
+            {clearWorkableLoading ? 'Removing…' : 'Remove all candidates and roles'}
+          </Button>
+        </Panel>
+
+        {clearWorkableModalOpen ? (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="clear-workable-title"
+          >
+            <Panel className="max-w-md w-full bg-[var(--taali-surface)] p-5 shadow-xl">
+              <h2 id="clear-workable-title" className="text-lg font-bold mb-2 text-[var(--taali-text)]">Remove all Workable data?</h2>
+              <p className="text-sm text-[var(--taali-muted)] mb-4">
+                All roles, candidates, and applications imported from Workable will be deleted from this account.
+              </p>
+              <div className="flex gap-3 justify-end">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={clearWorkableLoading}
+                  onClick={() => setClearWorkableModalOpen(false)}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="danger"
+                  disabled={clearWorkableLoading}
+                  onClick={handleClearWorkableData}
+                >
+                  {clearWorkableLoading ? 'Removing…' : 'Remove all data'}
+                </Button>
+              </div>
+            </Panel>
+          </div>
+        ) : null}
+      </Panel>
+    </div>
+  );
+
+  const BillingSettingsTab = () => (
+    <div>
+      <Panel className="mb-5 p-4">
+        <div className="flex items-start justify-between flex-wrap gap-4">
+          <div>
+            <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Current Plan</div>
+            <div className="text-xl font-bold text-[var(--taali-text)]">{billingPlan}</div>
+          </div>
+          <div className="text-right">
+            <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Total usage</div>
+            <div className="text-2xl font-bold text-[var(--taali-purple)]">{toAedWithUsdLabel(monthlyCost)}</div>
+            <div className="font-mono text-xs text-[var(--taali-muted)]">{monthlyAssessments} assessments</div>
+          </div>
+          <div className="text-right">
+            <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Credits balance</div>
+            <div className="text-2xl font-bold text-[var(--taali-purple)]">{creditsBalance}</div>
+          </div>
+        </div>
+        <div className="mt-4 grid gap-3 md:grid-cols-3">
+          {Object.entries(packCatalog).map(([packId, pack]) => (
+            <Button
+              key={packId}
+              type="button"
+              variant="secondary"
+              className="flex items-center justify-between gap-2 !px-4 !py-3 bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
+              onClick={() => handleAddCredits(packId)}
+              disabled={checkoutLoading}
+            >
+              <span>{pack.label || packId}</span>
+              <span className="inline-flex items-center gap-1">
+                {checkoutLoading ? <Spinner size={14} /> : <CreditCard size={14} />}
+                +{pack.credits || 0}
+              </span>
+            </Button>
+          ))}
+        </div>
+      </Panel>
+
+      <div className="mb-5 grid gap-4 md:grid-cols-2">
+        <Panel className="p-4">
+          <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Daily spend threshold</div>
+          <div className="text-xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.daily_spend_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
+          <div className={`font-mono text-xs mt-2 ${thresholdStatus.daily_spend_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
+            Today: {toAedWithUsdLabel(Number(spendSummary.daily_spend_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.daily_spend_exceeded ? 'Exceeded' : 'Within threshold'}
+          </div>
+        </Panel>
+        <Panel className="p-4">
+          <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Cost / completed assessment threshold</div>
+          <div className="text-xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.cost_per_completed_assessment_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
+          <div className={`font-mono text-xs mt-2 ${thresholdStatus.cost_per_completed_assessment_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
+            Current: {toAedWithUsdLabel(Number(spendSummary.cost_per_completed_assessment_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.cost_per_completed_assessment_exceeded ? 'Exceeded' : 'Within threshold'}
+          </div>
+        </Panel>
+      </div>
+
+      <TableShell>
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--taali-border-soft)] px-4 py-3">
+          <h3 className="font-bold text-[var(--taali-text)]">Usage History</h3>
+        </div>
+        <table className="w-full">
+          <thead>
+            <tr>
+              <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Date</th>
+              <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Candidate</th>
+              <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Task</th>
+              <th className="px-4 py-2.5 text-right font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            {usageHistory.length === 0 ? (
+              <tr>
+                <td colSpan={4} className="px-6 py-8 font-mono text-sm text-[var(--taali-muted)] text-center">
+                  No usage yet. Completed assessments will appear here.
+                </td>
+              </tr>
+            ) : (
+              usageHistory.map((row, i) => (
+                <tr key={row.assessment_id ?? i} className="border-b border-[var(--taali-border-muted)] hover:bg-[var(--taali-bg)]">
+                  <td className="px-4 py-2.5 font-mono text-sm text-[var(--taali-text)]">{row.date}</td>
+                  <td className="px-4 py-2.5 text-sm text-[var(--taali-text)]">{row.candidate}</td>
+                  <td className="px-4 py-2.5 font-mono text-sm text-[var(--taali-text)]">{row.task}</td>
+                  <td className="px-4 py-2.5 text-right font-mono text-sm font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(row.cost)}</td>
+                </tr>
+              ))
+            )}
+          </tbody>
+        </table>
+      </TableShell>
+    </div>
+  );
+
+  const TeamSettingsTab = () => (
+    <div className="space-y-6">
+      <Panel className="p-4">
+        <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Invite Team Member</h3>
+        <form className="grid md:grid-cols-3 gap-3" onSubmit={handleInvite}>
+          <Input
+            type="text"
+            placeholder="Full name"
+            value={inviteName}
+            onChange={(e) => setInviteName(e.target.value)}
+          />
+          <Input
+            type="email"
+            placeholder="Email"
+            value={inviteEmail}
+            onChange={(e) => setInviteEmail(e.target.value)}
+          />
+          <Button
+            type="submit"
+            variant="primary"
+            disabled={inviteLoading}
+          >
+            {inviteLoading ? 'Inviting…' : 'Invite'}
+          </Button>
+        </form>
+      </Panel>
+      <TableShell>
+        <div className="flex items-center justify-between gap-3 border-b border-[var(--taali-border-soft)] px-4 py-3">
+          <h3 className="font-bold text-[var(--taali-text)]">Team Members</h3>
+        </div>
+        <table className="w-full">
+          <thead>
+            <tr>
+              <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Name</th>
+              <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Email</th>
+            </tr>
+          </thead>
+          <tbody>
+            {teamMembers.length === 0 ? (
+              <tr><td colSpan={2} className="px-6 py-8 font-mono text-sm text-[var(--taali-muted)] text-center">No members yet.</td></tr>
+            ) : teamMembers.map((m) => (
+              <tr key={m.id} className="border-b border-[var(--taali-border-muted)]">
+                <td className="px-4 py-2.5 text-[var(--taali-text)]">{m.full_name || '—'}</td>
+                <td className="px-4 py-2.5 font-mono text-sm text-[var(--taali-text)]">{m.email}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </TableShell>
+    </div>
+  );
+
+  const EnterpriseSettingsTab = () => (
+    <div className="space-y-6">
+      <Panel className="p-4">
+        <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Enterprise Access Controls</h3>
+        <div className="space-y-4">
+          <div>
+            <label className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Allowed email domains (comma separated)</label>
+            <Input
+              type="text"
+              className="w-full"
+              placeholder="acme.com, subsidiary.org"
+              value={enterpriseForm.allowedEmailDomains}
+              onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, allowedEmailDomains: e.target.value }))}
+            />
+            <div className="font-mono text-xs text-[var(--taali-muted)] mt-1">
+              Leave empty to allow any domain.
+            </div>
+          </div>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              className="w-4 h-4 accent-[var(--taali-purple)]"
+              checked={enterpriseForm.ssoEnforced}
+              onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, ssoEnforced: e.target.checked }))}
+            />
+            <span className="text-sm text-[var(--taali-text)]">Enforce SSO (blocks password login and invites)</span>
+          </label>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              className="w-4 h-4 accent-[var(--taali-purple)]"
+              checked={enterpriseForm.samlEnabled}
+              onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, samlEnabled: e.target.checked }))}
+            />
+            <span className="text-sm text-[var(--taali-text)]">Enable SAML metadata configuration</span>
+          </label>
+          <label className="flex items-center gap-3 cursor-pointer">
+            <input
+              type="checkbox"
+              className="w-4 h-4 accent-[var(--taali-purple)]"
+              checked={enterpriseForm.candidateFeedbackEnabled}
+              onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, candidateFeedbackEnabled: e.target.checked }))}
+            />
+            <span className="text-sm text-[var(--taali-text)]">Enable candidate feedback reports</span>
+          </label>
+          <div>
+            <label className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">SAML metadata URL</label>
+            <Input
+              type="url"
+              className="w-full"
+              placeholder="https://idp.example.com/metadata.xml"
+              value={enterpriseForm.samlMetadataUrl}
+              onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, samlMetadataUrl: e.target.value }))}
+            />
+          </div>
+          <Button
+            type="button"
+            variant="primary"
+            disabled={enterpriseSaving}
+            onClick={handleSaveEnterprise}
+          >
+            {enterpriseSaving ? 'Saving…' : 'Save enterprise settings'}
+          </Button>
+        </div>
+      </Panel>
+    </div>
+  );
+
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="settings" onNavigate={onNavigate} /> : null}
@@ -831,534 +1360,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
           </div>
         ) : (
           <>
-            {activeSettingsTab === 'workable' && (
-              <div>
-                <Panel className={`mb-5 flex flex-wrap items-center justify-between gap-4 p-4 ${workableConnected ? 'bg-[var(--taali-success-soft)]' : 'bg-[var(--taali-warning-soft)]'}`}>
-                  <div className="flex items-center gap-4">
-                    {workableConnected ? <CheckCircle size={24} className="text-[var(--taali-success)]" /> : <AlertTriangle size={24} className="text-[var(--taali-warning)]" />}
-                    <div>
-                      <div className="font-bold text-base text-[var(--taali-text)]">Status: {workableConnected ? 'Connected' : 'Not Connected'}</div>
-                      <div className="text-sm text-[var(--taali-muted)]">
-                        {workableConnected ? 'Workable integration is active' : 'Connect your Workable account to sync candidates'}
-                      </div>
-                    </div>
-                  </div>
-                  {!workableConnected ? (
-                    ConnectWorkableButton ? (
-                      <ConnectWorkableButton onClick={openWorkableDrawer} />
-                    ) : (
-                      <Button variant="primary" onClick={openWorkableDrawer}>
-                        Connect Workable
-                      </Button>
-                    )
-                  ) : null}
-                </Panel>
+            {activeSettingsTab === 'workable' && <WorkableSettingsTab />}
 
-                <Panel className="space-y-4 p-4">
-                  <div>
-                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Organization</div>
-                    <div className="font-bold text-[var(--taali-text)]">{orgName}</div>
-                  </div>
-                  <div>
-                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Admin Email</div>
-                    <div className="font-mono text-[var(--taali-text)]">{adminEmail}</div>
-                  </div>
-                  <div>
-                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Connected Since</div>
-                    <div className="font-mono text-[var(--taali-text)]">{workableConnected ? connectedSince : '—'}</div>
-                  </div>
-                  <div>
-                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Active Claude model</div>
-                    <div className="font-mono text-[var(--taali-text)]">
-                      {`Assessment model: ${orgData?.active_claude_model || '—'} · Scoring model: ${orgData?.active_claude_scoring_model || orgData?.active_claude_model || '—'}`}
-                    </div>
-                  </div>
-                  <div>
-                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Last Sync</div>
-                    <div className="font-mono text-[var(--taali-text)]">{lastSyncAt} ({lastSyncStatus})</div>
-                    {Array.isArray(orgData?.workable_last_sync_summary?.errors) && orgData.workable_last_sync_summary.errors.length > 0 && (
-                      <div className="mt-1 text-sm text-[var(--taali-warning)] font-mono">
-                        {orgData.workable_last_sync_summary.errors[0]}
-                      </div>
-                    )}
-                  </div>
-                  <Card className="bg-[var(--taali-surface-subtle)] p-4 text-sm text-[var(--taali-text)]">
-                    <div className="font-semibold mb-1">What happens when you sync</div>
-                    <ul className="list-disc list-inside space-y-0.5">
-                      <li>Open jobs from Workable are imported as roles; job specs are saved as attachments.</li>
-                      <li>All candidates for each job are fetched (no 50-candidate limit).</li>
-                      <li>Only metadata is synced in this baseline run (roles, candidate/application records, stages).</li>
-                      <li>CV fetch and TAALI scoring are run separately from the Candidates page when needed.</li>
-                    </ul>
-                    <p className="mt-2 text-xs text-[var(--taali-muted)]">
-                      For a completely fresh import, use <strong>Remove all candidates and roles</strong> below, then run <strong>Metadata sync</strong>.
-                    </p>
-                  </Card>
-                  {workableSyncInProgress && (
-                    <Panel className="mt-3 flex items-center gap-3 border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
-                      <Spinner size={24} className="flex-shrink-0" />
-                      <div className="min-w-0 flex-1">
-                        <div className="font-semibold text-[var(--taali-text)]">
-                          {workableSyncLoading ? 'Starting…' : 'Running in background'}
-                        </div>
-                        <div className="text-sm text-[var(--taali-text)]">
-                          Sync is running in the background. We’ll notify you when it’s done. You can leave this page.
-                        </div>
-                        {orgData?.workable_sync_progress && (orgData.workable_sync_progress.current_step || orgData.workable_sync_progress.jobs_total != null || orgData.workable_sync_progress.candidates_seen != null) ? (
-                          <>
-                            {(orgData.workable_sync_progress.current_step || orgData.workable_sync_progress.last_request) && (
-                              <div className="mt-2 font-mono text-xs text-[var(--taali-text)]">
-                                {orgData.workable_sync_progress.current_step && (
-                                  <span>Step: {orgData.workable_sync_progress.current_step.replace(/_/g, ' ')}</span>
-                                )}
-                                {orgData.workable_sync_progress.current_job_shortcode && (
-                                  <span> · Job {orgData.workable_sync_progress.current_job_shortcode}</span>
-                                )}
-                                {orgData.workable_sync_progress.current_candidate_index && (
-                                  <span> · Candidate {orgData.workable_sync_progress.current_candidate_index}</span>
-                                )}
-                                {orgData.workable_sync_progress.last_request && (
-                                  <span className="block mt-0.5 text-[var(--taali-muted)]">Request: {orgData.workable_sync_progress.last_request}</span>
-                                )}
-                              </div>
-                            )}
-                            <div className="mt-2 font-mono text-xs text-[var(--taali-text)]">
-                              {orgData.workable_sync_progress.jobs_processed ?? 0}/{orgData.workable_sync_progress.jobs_total ?? 0} roles processed ({orgData.workable_sync_progress.jobs_upserted ?? 0} new) · {orgData.workable_sync_progress.candidates_seen ?? 0} candidates seen ({orgData.workable_sync_progress.candidates_upserted ?? 0} upserted)
-                            </div>
-                          </>
-                        ) : (
-                          <div className="mt-2 font-mono text-xs text-[var(--taali-muted)]">Starting sync…</div>
-                        )}
-                        <div className="mt-3">
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            size="sm"
-                            disabled={workableSyncCancelLoading}
-                            onClick={handleCancelWorkableSync}
-                          >
-                            {workableSyncCancelLoading ? 'Stopping…' : 'Stop sync'}
-                          </Button>
-                        </div>
-                      </div>
-                    </Panel>
-                  )}
-                  <hr className="border-[var(--taali-border)]" />
-                  <div>
-                    <div className="font-bold mb-3 text-[var(--taali-text)]">Sync + Invite Settings</div>
-                    <div className="grid md:grid-cols-2 gap-3">
-                      <label className="block">
-                        <span className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Email mode</span>
-                        <Select
-                          className="w-full"
-                          value={workableForm.emailMode}
-                          onChange={(e) => {
-                            const nextMode = e.target.value;
-                            setWorkableForm((prev) => ({
-                              ...prev,
-                              emailMode: nextMode,
-                              inviteStageName: nextMode === 'workable_preferred_fallback_manual' ? prev.inviteStageName : '',
-                            }));
-                          }}
-                        >
-                          <option value="manual_taali">Manual</option>
-                          <option value="workable_preferred_fallback_manual">Automated via Workable</option>
-                        </Select>
-                        <span className="font-mono text-xs text-[var(--taali-muted)] mt-1 block">
-                          Automated mode requires `w_candidates` scope and a Workable stage name.
-                        </span>
-                      </label>
-                      <label className="block">
-                        <span className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Sync interval (minutes)</span>
-                        <Input
-                          type="number"
-                          min={5}
-                          max={1440}
-                          className="w-full"
-                          value={workableForm.syncIntervalMinutes}
-                          onChange={(e) => setWorkableForm((prev) => ({ ...prev, syncIntervalMinutes: e.target.value }))}
-                        />
-                      </label>
-                      {workableForm.emailMode === 'workable_preferred_fallback_manual' ? (
-                        <label className="block md:col-span-2">
-                          <span className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Invite stage name</span>
-                          <Input
-                            type="text"
-                            className="w-full"
-                            placeholder="Enter exact Workable stage name"
-                            value={workableForm.inviteStageName}
-                            onChange={(e) => setWorkableForm((prev) => ({ ...prev, inviteStageName: e.target.value }))}
-                          />
-                          <span className="font-mono text-xs text-[var(--taali-muted)] mt-1 block">
-                            Keep this blank in manual mode. For automated mode, enter the exact stage already configured in Workable.
-                          </span>
-                        </label>
-                      ) : null}
-                    </div>
-                    <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
-                      Metadata sync is the default baseline. Use candidate-level enrichment, CV fetch, and TAALI scoring actions from the Candidates page when needed.
-                    </p>
-                    <Card className="mt-3 bg-[var(--taali-surface-subtle)] p-4">
-                      <div className="flex flex-wrap items-center justify-between gap-2">
-                        <div>
-                          <p className="text-sm font-semibold text-[var(--taali-text)]">Roles to import</p>
-                          <p className="text-xs text-[var(--taali-muted)]">
-                            {selectedRoleCountForSync}/{totalRoleCountForSync} selected
-                          </p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={loadWorkableSyncJobs}
-                            disabled={workableJobsLoading || !workableConnected}
-                          >
-                            {workableJobsLoading ? 'Refreshing…' : 'Refresh roles'}
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setWorkableSelectedJobShortcodes(workableSyncJobs.map((job) => String(job?.shortcode || job?.id || '').trim()).filter(Boolean))}
-                            disabled={workableJobsLoading || totalRoleCountForSync === 0}
-                          >
-                            Select all
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setWorkableSelectedJobShortcodes([])}
-                            disabled={workableJobsLoading || selectedRoleCountForSync === 0}
-                          >
-                            Clear
-                          </Button>
-                        </div>
-                      </div>
-                      <Input
-                        type="text"
-                        value={workableJobSearch}
-                        onChange={(e) => setWorkableJobSearch(e.target.value)}
-                        placeholder="Search role name or shortcode"
-                        disabled={workableJobsLoading || totalRoleCountForSync === 0}
-                      />
-                      {workableJobsError ? (
-                        <p className="text-xs text-[var(--taali-danger)]">{workableJobsError}</p>
-                      ) : null}
-                      <div className="max-h-56 overflow-y-auto rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3">
-                        {workableJobsLoading ? (
-                          <p className="text-xs text-[var(--taali-muted)]">Loading Workable roles…</p>
-                        ) : filteredWorkableSyncJobs.length === 0 ? (
-                          <p className="text-xs text-[var(--taali-muted)]">
-                            {totalRoleCountForSync === 0 ? 'No Workable roles available.' : 'No roles match your search.'}
-                          </p>
-                        ) : (
-                          <div className="space-y-1">
-                            {filteredWorkableSyncJobs.map((job) => {
-                              const identifier = String(job?.shortcode || job?.id || '').trim();
-                              if (!identifier) return null;
-                              return (
-                                <label key={identifier} className="flex items-start gap-2 text-sm text-[var(--taali-text)]">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedRoleSetForSync.has(identifier)}
-                                    onChange={() => toggleWorkableSyncRole(identifier)}
-                                  />
-                                  <span>
-                                    <span className="font-medium">{job?.title || identifier}</span>
-                                    <span className="ml-1 text-xs text-[var(--taali-muted)]">({identifier})</span>
-                                  </span>
-                                </label>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    </Card>
-                    <div className="mt-4 flex flex-wrap gap-3">
-                      <Button
-                        type="button"
-                        variant="primary"
-                        disabled={workableSaving}
-                        onClick={handleSaveWorkable}
-                      >
-                        {workableSaving ? 'Saving…' : 'Save Workable Settings'}
-                      </Button>
-                      <Button
-                        type="button"
-                        variant="secondary"
-                        className="bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
-                        disabled={workableSyncLoading || workableSyncInProgress || !workableConnected || (totalRoleCountForSync > 0 && selectedRoleCountForSync === 0)}
-                        onClick={handleSyncWorkable}
-                      >
-                        {workableSyncInProgress ? 'Running in background' : 'Run metadata sync'}
-                      </Button>
-                    </div>
-                  </div>
+            {activeSettingsTab === 'billing' && <BillingSettingsTab />}
 
-                  <Panel className="mt-5 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
-                    <div className="font-bold text-[var(--taali-danger)] mb-1">Remove all Workable data</div>
-                    <p className="text-sm text-[var(--taali-text)] mb-3">
-                      This will delete all roles, candidates, and applications that were imported from Workable.
-                    </p>
-                    <Button
-                      type="button"
-                      variant="danger"
-                      disabled={clearWorkableLoading}
-                      onClick={() => setClearWorkableModalOpen(true)}
-                    >
-                      {clearWorkableLoading ? 'Removing…' : 'Remove all candidates and roles'}
-                    </Button>
-                  </Panel>
+            {activeSettingsTab === 'team' && <TeamSettingsTab />}
 
-                  {clearWorkableModalOpen ? (
-                    <div
-                      className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 p-4"
-                      role="dialog"
-                      aria-modal="true"
-                      aria-labelledby="clear-workable-title"
-                    >
-                      <Panel className="max-w-md w-full bg-[var(--taali-surface)] p-5 shadow-xl">
-                        <h2 id="clear-workable-title" className="text-lg font-bold mb-2 text-[var(--taali-text)]">Remove all Workable data?</h2>
-                        <p className="text-sm text-[var(--taali-muted)] mb-4">
-                          All roles, candidates, and applications imported from Workable will be deleted from this account.
-                        </p>
-                        <div className="flex gap-3 justify-end">
-                          <Button
-                            type="button"
-                            variant="secondary"
-                            disabled={clearWorkableLoading}
-                            onClick={() => setClearWorkableModalOpen(false)}
-                          >
-                            Cancel
-                          </Button>
-                          <Button
-                            type="button"
-                            variant="danger"
-                            disabled={clearWorkableLoading}
-                            onClick={handleClearWorkableData}
-                          >
-                            {clearWorkableLoading ? 'Removing…' : 'Remove all data'}
-                          </Button>
-                        </div>
-                      </Panel>
-                    </div>
-                  ) : null}
-                </Panel>
-              </div>
-            )}
-
-            {activeSettingsTab === 'billing' && (
-              <div>
-                <Panel className="mb-5 p-4">
-                  <div className="flex items-start justify-between flex-wrap gap-4">
-                    <div>
-                      <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Current Plan</div>
-                      <div className="text-xl font-bold text-[var(--taali-text)]">{billingPlan}</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Total usage</div>
-                      <div className="text-2xl font-bold text-[var(--taali-purple)]">{toAedWithUsdLabel(monthlyCost)}</div>
-                      <div className="font-mono text-xs text-[var(--taali-muted)]">{monthlyAssessments} assessments</div>
-                    </div>
-                    <div className="text-right">
-                      <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Credits balance</div>
-                      <div className="text-2xl font-bold text-[var(--taali-purple)]">{creditsBalance}</div>
-                    </div>
-                  </div>
-                  <div className="mt-4 grid gap-3 md:grid-cols-3">
-                    {Object.entries(packCatalog).map(([packId, pack]) => (
-                      <Button
-                        key={packId}
-                        type="button"
-                        variant="secondary"
-                        className="flex items-center justify-between gap-2 !px-4 !py-3 bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
-                        onClick={() => handleAddCredits(packId)}
-                        disabled={checkoutLoading}
-                      >
-                        <span>{pack.label || packId}</span>
-                        <span className="inline-flex items-center gap-1">
-                          {checkoutLoading ? <Spinner size={14} /> : <CreditCard size={14} />}
-                          +{pack.credits || 0}
-                        </span>
-                      </Button>
-                    ))}
-                  </div>
-                </Panel>
-
-                <div className="mb-5 grid gap-4 md:grid-cols-2">
-                  <Panel className="p-4">
-                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Daily spend threshold</div>
-                    <div className="text-xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.daily_spend_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
-                    <div className={`font-mono text-xs mt-2 ${thresholdStatus.daily_spend_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
-                      Today: {toAedWithUsdLabel(Number(spendSummary.daily_spend_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.daily_spend_exceeded ? 'Exceeded' : 'Within threshold'}
-                    </div>
-                  </Panel>
-                  <Panel className="p-4">
-                    <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Cost / completed assessment threshold</div>
-                    <div className="text-xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.cost_per_completed_assessment_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
-                    <div className={`font-mono text-xs mt-2 ${thresholdStatus.cost_per_completed_assessment_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
-                      Current: {toAedWithUsdLabel(Number(spendSummary.cost_per_completed_assessment_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.cost_per_completed_assessment_exceeded ? 'Exceeded' : 'Within threshold'}
-                    </div>
-                  </Panel>
-                </div>
-
-                <TableShell>
-                  <div className="flex items-center justify-between gap-3 border-b border-[var(--taali-border-soft)] px-4 py-3">
-                    <h3 className="font-bold text-[var(--taali-text)]">Usage History</h3>
-                  </div>
-                  <table className="w-full">
-                    <thead>
-                      <tr>
-                        <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Date</th>
-                        <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Candidate</th>
-                        <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Task</th>
-                        <th className="px-4 py-2.5 text-right font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Cost</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {usageHistory.length === 0 ? (
-                        <tr>
-                          <td colSpan={4} className="px-6 py-8 font-mono text-sm text-[var(--taali-muted)] text-center">
-                            No usage yet. Completed assessments will appear here.
-                          </td>
-                        </tr>
-                      ) : (
-                        usageHistory.map((row, i) => (
-                          <tr key={row.assessment_id ?? i} className="border-b border-[var(--taali-border-muted)] hover:bg-[var(--taali-bg)]">
-                            <td className="px-4 py-2.5 font-mono text-sm text-[var(--taali-text)]">{row.date}</td>
-                            <td className="px-4 py-2.5 text-sm text-[var(--taali-text)]">{row.candidate}</td>
-                            <td className="px-4 py-2.5 font-mono text-sm text-[var(--taali-text)]">{row.task}</td>
-                            <td className="px-4 py-2.5 text-right font-mono text-sm font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(row.cost)}</td>
-                          </tr>
-                        ))
-                      )}
-                    </tbody>
-                  </table>
-                </TableShell>
-              </div>
-            )}
-
-            {activeSettingsTab === 'team' && (
-              <div className="space-y-6">
-                <Panel className="p-4">
-                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Invite Team Member</h3>
-                  <form className="grid md:grid-cols-3 gap-3" onSubmit={handleInvite}>
-                    <Input
-                      type="text"
-                      placeholder="Full name"
-                      value={inviteName}
-                      onChange={(e) => setInviteName(e.target.value)}
-                    />
-                    <Input
-                      type="email"
-                      placeholder="Email"
-                      value={inviteEmail}
-                      onChange={(e) => setInviteEmail(e.target.value)}
-                    />
-                    <Button
-                      type="submit"
-                      variant="primary"
-                      disabled={inviteLoading}
-                    >
-                      {inviteLoading ? 'Inviting…' : 'Invite'}
-                    </Button>
-                  </form>
-                </Panel>
-                <TableShell>
-                  <div className="flex items-center justify-between gap-3 border-b border-[var(--taali-border-soft)] px-4 py-3">
-                    <h3 className="font-bold text-[var(--taali-text)]">Team Members</h3>
-                  </div>
-                  <table className="w-full">
-                    <thead>
-                      <tr>
-                        <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Name</th>
-                        <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Email</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {teamMembers.length === 0 ? (
-                        <tr><td colSpan={2} className="px-6 py-8 font-mono text-sm text-[var(--taali-muted)] text-center">No members yet.</td></tr>
-                      ) : teamMembers.map((m) => (
-                        <tr key={m.id} className="border-b border-[var(--taali-border-muted)]">
-                          <td className="px-4 py-2.5 text-[var(--taali-text)]">{m.full_name || '—'}</td>
-                          <td className="px-4 py-2.5 font-mono text-sm text-[var(--taali-text)]">{m.email}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </TableShell>
-              </div>
-            )}
-
-            {activeSettingsTab === 'enterprise' && (
-              <div className="space-y-6">
-                <Panel className="p-4">
-                  <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Enterprise Access Controls</h3>
-                  <div className="space-y-4">
-                    <div>
-                      <label className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">Allowed email domains (comma separated)</label>
-                      <Input
-                        type="text"
-                        className="w-full"
-                        placeholder="acme.com, subsidiary.org"
-                        value={enterpriseForm.allowedEmailDomains}
-                        onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, allowedEmailDomains: e.target.value }))}
-                      />
-                      <div className="font-mono text-xs text-[var(--taali-muted)] mt-1">
-                        Leave empty to allow any domain.
-                      </div>
-                    </div>
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="w-4 h-4 accent-[var(--taali-purple)]"
-                        checked={enterpriseForm.ssoEnforced}
-                        onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, ssoEnforced: e.target.checked }))}
-                      />
-                      <span className="text-sm text-[var(--taali-text)]">Enforce SSO (blocks password login and invites)</span>
-                    </label>
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="w-4 h-4 accent-[var(--taali-purple)]"
-                        checked={enterpriseForm.samlEnabled}
-                        onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, samlEnabled: e.target.checked }))}
-                      />
-                      <span className="text-sm text-[var(--taali-text)]">Enable SAML metadata configuration</span>
-                    </label>
-                    <label className="flex items-center gap-3 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        className="w-4 h-4 accent-[var(--taali-purple)]"
-                        checked={enterpriseForm.candidateFeedbackEnabled}
-                        onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, candidateFeedbackEnabled: e.target.checked }))}
-                      />
-                      <span className="text-sm text-[var(--taali-text)]">Enable candidate feedback reports</span>
-                    </label>
-                    <div>
-                      <label className="font-mono text-xs text-[var(--taali-muted)] mb-1 block">SAML metadata URL</label>
-                      <Input
-                        type="url"
-                        className="w-full"
-                        placeholder="https://idp.example.com/metadata.xml"
-                        value={enterpriseForm.samlMetadataUrl}
-                        onChange={(e) => setEnterpriseForm((prev) => ({ ...prev, samlMetadataUrl: e.target.value }))}
-                      />
-                    </div>
-                    <Button
-                      type="button"
-                      variant="primary"
-                      disabled={enterpriseSaving}
-                      onClick={handleSaveEnterprise}
-                    >
-                      {enterpriseSaving ? 'Saving…' : 'Save enterprise settings'}
-                    </Button>
-                  </div>
-                </Panel>
-              </div>
-            )}
+            {activeSettingsTab === 'enterprise' && <EnterpriseSettingsTab />}
 
             {activeSettingsTab === 'preferences' && (
               <PreferencesSettingsTab

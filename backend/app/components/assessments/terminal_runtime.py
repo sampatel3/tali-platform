@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import re
 import shlex
 from dataclasses import dataclass
 from typing import Any
@@ -16,6 +15,7 @@ from ...models.task import Task
 from ...platform.config import settings
 from ...platform.secrets import decrypt_text
 from ...services.assessment_repository_service import AssessmentRepositoryService
+from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
 from .repository import append_assessment_timeline_event, utcnow
 
 
@@ -57,9 +57,7 @@ def terminal_capabilities() -> dict:
 
 
 def workspace_repo_root(task: Task) -> str:
-    root_name = (task.task_key or f"assessment-{task.id}").strip() or f"assessment-{task.id}"
-    safe_root = re.sub(r"[^a-zA-Z0-9._-]+", "-", root_name).strip("-") or f"assessment-{task.id}"
-    return f"/workspace/{safe_root}"
+    return canonical_workspace_repo_root(task)
 
 
 def _resolve_claude_api_key(org: Organization | None) -> str:

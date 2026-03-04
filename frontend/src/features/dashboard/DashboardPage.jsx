@@ -257,13 +257,16 @@ export const DashboardPage = ({
       <PageContainer density="compact" width="wide">
         <PageHeader
           density="compact"
-          className="mb-5 bg-[linear-gradient(145deg,rgba(255,255,255,0.96),rgba(246,242,255,0.88))]"
+          className="mb-5"
           title="Assessments"
           subtitle={`Welcome back, ${userName}. Review active invites, candidate progress, and completed assessments in one place.`}
         />
 
         {totalAssessmentsCount === 0 && !onboardingDismissed ? (
-          <div className="mb-5 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,rgba(255,255,255,0.98),rgba(240,234,255,0.86))] p-5 shadow-[var(--taali-shadow-soft)]">
+          <div
+            className="mb-5 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] p-5 shadow-[var(--taali-shadow-soft)]"
+            style={{ background: 'var(--taali-card-bg)' }}
+          >
             <div className="mb-3 flex items-start justify-between gap-4">
               <h2 className="taali-display text-xl font-semibold text-[var(--taali-text)]">Get started with TAALI</h2>
               <Button variant="ghost" size="sm" onClick={dismissOnboarding}>Dismiss</Button>
@@ -332,7 +335,7 @@ export const DashboardPage = ({
           </div>
         )}
 
-        <Panel className="mb-4 bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(248,246,255,0.86))] p-4">
+        <Panel className="mb-4 p-4">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <span className="text-xs font-semibold uppercase tracking-[0.1em] text-[var(--taali-muted)]">Filters</span>
             {(roleFilter || taskFilter || statusFilter) ? (
@@ -406,10 +409,10 @@ export const DashboardPage = ({
         </Panel>
 
         <TableShell>
-          <div className="flex items-center justify-between border-b border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,#181328,#242038)] px-4 py-3 text-white">
+          <div className="flex items-center justify-between border-b border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-4 py-3 text-[var(--taali-text)]">
             <h2 className="taali-display text-xl font-semibold">Assessment Inbox</h2>
             {totalAssessmentsCount > 0 ? (
-              <span className="font-mono text-xs text-white/80">
+              <span className="font-mono text-xs text-[var(--taali-muted)]">
                 Showing {startRow}–{endRow} of {totalAssessmentsCount}
               </span>
             ) : null}
@@ -418,7 +421,7 @@ export const DashboardPage = ({
           {loading ? (
             <table className="w-full">
               <thead>
-                <tr className="border-b border-[var(--taali-border-soft)] bg-[rgba(245,241,255,0.9)]">
+                <tr className="border-b border-[var(--taali-border-soft)] bg-[var(--taali-table-header)]">
                   {['Candidate', 'Role', 'Task', 'Status', 'TAALI Score', 'Assessment Score', 'Sent', 'Completed', 'Actions'].map((label) => (
                     <th key={label} className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase tracking-[0.08em]">{label}</th>
                   ))}
@@ -433,7 +436,7 @@ export const DashboardPage = ({
           ) : (
             <table className="w-full">
               <thead>
-                <tr className="border-b border-[var(--taali-border-soft)] bg-[rgba(245,241,255,0.9)]">
+                <tr className="border-b border-[var(--taali-border-soft)] bg-[var(--taali-table-header)]">
                   {['Candidate', 'Role', 'Task', 'Status', 'TAALI Score', 'Assessment Score', 'Sent', 'Completed', 'Actions'].map((label) => (
                     <th key={label} className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase tracking-[0.08em]">{label}</th>
                   ))}
@@ -515,7 +518,7 @@ export const DashboardPage = ({
                               <span className="font-mono text-xs text-[var(--taali-muted)]">In progress</span>
                             ) : null}
                             {assessment.status === 'pending' && expiryDays != null && expiryDays > 0 && expiryDays <= 3 ? (
-                              <span className="font-mono text-xs text-amber-700">{expiryDays}d left</span>
+                              <span className="font-mono text-xs text-[var(--taali-warning)]">{expiryDays}d left</span>
                             ) : null}
                           </div>
                         </td>

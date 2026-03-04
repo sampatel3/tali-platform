@@ -51,7 +51,7 @@ function CandidateAvatar({ name, imageUrl, size = 32 }) {
 
   return (
     <div
-      className="flex shrink-0 items-center justify-center rounded-full bg-[var(--taali-primary)] text-xs font-bold text-white"
+      className="flex shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,var(--taali-purple),#6b4dff)] text-xs font-bold text-white shadow-[var(--taali-shadow-soft)]"
       style={{ width: size, height: size }}
     >
       {initials}
@@ -61,10 +61,10 @@ function CandidateAvatar({ name, imageUrl, size = 32 }) {
 
 const renderModeLabel = (application) => {
   const mode = String(application.score_mode || application.score_summary?.mode || '').toLowerCase();
-  if (mode === 'assessment_plus_cv') return 'Assessment + CV';
+  if (mode === 'assessment_plus_role_fit' || mode === 'assessment_plus_cv') return 'Assessment + Role fit';
   if (mode === 'assessment_only_fallback') return 'Assessment only';
   if (mode === 'pending') return 'Pending';
-  return 'CV fit only';
+  return 'Role fit only';
 };
 
 const getTaaliScorePayload = (application) => {
@@ -237,7 +237,7 @@ export const CandidatesTable = ({
         <TableShell className="max-h-[70vh]">
           <table className="w-full table-fixed min-w-[900px]">
             <thead>
-              <tr className="text-left text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">
+              <tr className="text-left text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 {visibleColumnOrder.map((column) => (
                   <th key={column} className="sticky top-0 z-20 bg-[var(--taali-table-header)] px-3 py-2">
                     {columnLabel(column)}
@@ -258,7 +258,7 @@ export const CandidatesTable = ({
 
   if (error) {
     return (
-      <Panel className="border-red-200 bg-red-50 px-4 py-10 text-center text-sm text-red-700">
+      <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] px-4 py-10 text-center text-sm text-[var(--taali-danger)]">
         {error}
       </Panel>
     );
@@ -297,7 +297,7 @@ export const CandidatesTable = ({
   return (
     <div className="space-y-1.5">
       <div className="relative flex flex-wrap items-center justify-between gap-2 px-1">
-        <p className="text-xs text-gray-500">
+        <p className="text-xs text-[var(--taali-muted)]">
           {filtered.length}
           {' '}
           candidate{filtered.length === 1 ? '' : 's'}
@@ -306,11 +306,11 @@ export const CandidatesTable = ({
           Columns
         </Button>
         {columnsOpen ? (
-          <div className="absolute right-1 top-full z-40 mt-2 w-[280px] border-2 border-[var(--taali-border)] bg-[var(--taali-surface)] p-3 shadow-sm">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">Show columns</p>
+          <div className="absolute right-1 top-full z-40 mt-2 w-[280px] rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3 shadow-[var(--taali-shadow-soft)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Show columns</p>
             <div className="mt-2 grid gap-2">
               {allColumnCheckboxes.map(({ key, label }) => (
-                <label key={key} className="flex items-center gap-2 text-sm text-gray-700">
+                <label key={key} className="flex items-center gap-2 text-sm text-[var(--taali-text)]">
                   <input
                     type="checkbox"
                     checked={Boolean(columnPrefs[key])}
@@ -332,7 +332,7 @@ export const CandidatesTable = ({
       <TableShell className="max-h-[70vh]">
         <table className="w-full table-fixed min-w-[900px]">
           <thead>
-            <tr className="text-left text-xs font-semibold uppercase tracking-[0.08em] text-gray-600">
+            <tr className="text-left text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
               {visibleColumnOrder.map((column) => {
                 const isStickyLeft = column === 'candidate';
                 const thBase = isStickyLeft
@@ -368,11 +368,11 @@ export const CandidatesTable = ({
                     >
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1 uppercase tracking-[0.08em] text-gray-600 transition-colors hover:text-gray-900"
+                        className="inline-flex items-center gap-1 uppercase tracking-[0.08em] text-[var(--taali-muted)] transition-colors hover:text-[var(--taali-text)]"
                         onClick={() => handleSortToggle('taali_score')}
                       >
                         TAALI Score
-                        <span className="text-[0.65rem] text-gray-500">{renderSortIndicator('taali_score')}</span>
+                        <span className="text-[0.65rem] text-[var(--taali-muted)]">{renderSortIndicator('taali_score')}</span>
                       </button>
                     </th>
                   );
@@ -387,11 +387,11 @@ export const CandidatesTable = ({
                     >
                       <button
                         type="button"
-                        className="inline-flex items-center gap-1 uppercase tracking-[0.08em] text-gray-600 transition-colors hover:text-gray-900"
+                        className="inline-flex items-center gap-1 uppercase tracking-[0.08em] text-[var(--taali-muted)] transition-colors hover:text-[var(--taali-text)]"
                         onClick={() => handleSortToggle('created_at')}
                       >
                         Added
-                        <span className="text-[0.65rem] text-gray-500">{renderSortIndicator('created_at')}</span>
+                        <span className="text-[0.65rem] text-[var(--taali-muted)]">{renderSortIndicator('created_at')}</span>
                       </button>
                     </th>
                   );
@@ -430,17 +430,17 @@ export const CandidatesTable = ({
                               <div className="min-w-0 flex-1">
                                 <button
                                   type="button"
-                                  className="block w-full truncate text-left font-semibold text-gray-900 hover:underline"
+                                  className="block w-full truncate text-left font-semibold text-[var(--taali-text)] hover:underline"
                                   onClick={() => onViewCandidate(application)}
                                   disabled={viewingApplicationId === application.id}
                                 >
                                   {application.candidate_name || application.candidate_email}
                                 </button>
                                 {application.candidate_headline ? (
-                                  <p className="truncate text-xs text-gray-500">{application.candidate_headline}</p>
+                                  <p className="truncate text-xs text-[var(--taali-muted)]">{application.candidate_headline}</p>
                                 ) : null}
                                 {application.candidate_location ? (
-                                  <p className="flex items-center gap-0.5 truncate text-[11px] text-gray-400">
+                                  <p className="flex items-center gap-0.5 truncate text-[11px] text-[var(--taali-muted)]">
                                     <MapPin size={10} />
                                     {application.candidate_location}
                                   </p>
@@ -448,7 +448,7 @@ export const CandidatesTable = ({
                                 <div className="mt-1 flex flex-wrap items-center gap-2">
                                   <button
                                     type="button"
-                                    className="text-xs text-gray-500 underline decoration-gray-300 underline-offset-2 hover:text-gray-800"
+                                    className="text-xs text-[var(--taali-muted)] underline decoration-[var(--taali-border-muted)] underline-offset-2 hover:text-[var(--taali-text)]"
                                     onClick={() => onOpenDetails?.(application)}
                                   >
                                     Details
@@ -456,14 +456,14 @@ export const CandidatesTable = ({
                                   {onOpenCvSidebar ? (
                                     <button
                                     type="button"
-                                    className="text-xs font-medium text-[var(--taali-primary)] hover:underline"
+                                    className="text-xs font-medium text-[var(--taali-purple-hover)] hover:text-[var(--taali-purple)] hover:underline"
                                     onClick={() => onOpenCvSidebar(application)}
                                   >
                                       View CV
                                     </button>
                                   ) : null}
                                   {application.source === 'workable' ? (
-                                    <span className="text-xs text-gray-500">Workable</span>
+                                    <span className="text-xs text-[var(--taali-muted)]">Workable</span>
                                   ) : null}
                                 </div>
                               </div>
@@ -476,7 +476,7 @@ export const CandidatesTable = ({
                         return (
                           <td key={column} className="px-3 py-2">
                             <div className="flex flex-col items-start gap-1">
-                              <span className="text-sm text-gray-700">
+                              <span className="text-sm text-[var(--taali-text)]">
                                 {application.cv_filename ? 'Uploaded' : 'Missing'}
                               </span>
                               {!application.cv_filename && onUploadCv ? (
@@ -535,10 +535,10 @@ export const CandidatesTable = ({
                                 {hasValidAssessment ? 'Retake assessment' : 'Send assessment'}
                               </Button>
                               {!application.cv_filename ? (
-                                <span className="text-[0.7rem] font-semibold text-amber-700">No CV (role fit N/A)</span>
+                                <span className="text-[0.7rem] font-semibold text-[var(--taali-warning)]">No CV (role fit N/A)</span>
                               ) : null}
                               {roleTasks.length === 0 ? (
-                                <span className="text-[0.7rem] font-semibold text-amber-700">Link a task first</span>
+                                <span className="text-[0.7rem] font-semibold text-[var(--taali-warning)]">Link a task first</span>
                               ) : null}
                             </div>
                           </td>
@@ -557,7 +557,7 @@ export const CandidatesTable = ({
                                 strokeWidth={5}
                                 label={`TAALI Score for ${application.candidate_name || application.candidate_email || 'candidate'}`}
                               />
-                              <div className="max-w-[80px] text-[11px] leading-4 text-gray-500" title={renderTaaliScore(application)}>
+                              <div className="max-w-[80px] text-[11px] leading-4 text-[var(--taali-muted)]" title={renderTaaliScore(application)}>
                                 {renderModeLabel(application)}
                               </div>
                             </div>
@@ -566,11 +566,11 @@ export const CandidatesTable = ({
                       }
 
                       if (column === 'workable_stage') {
-                        return <td key={column} className="break-words px-3 py-2 text-sm text-gray-700">{application.workable_stage || '—'}</td>;
+                        return <td key={column} className="break-words px-3 py-2 text-sm text-[var(--taali-text)]">{application.workable_stage || '—'}</td>;
                       }
 
                       if (column === 'workable_candidate_id') {
-                        return <td key={column} className="break-all px-3 py-2 text-sm text-gray-700">{application.workable_candidate_id || '—'}</td>;
+                        return <td key={column} className="break-all px-3 py-2 text-sm text-[var(--taali-text)]">{application.workable_candidate_id || '—'}</td>;
                       }
 
                       if (column === 'status') {
@@ -582,11 +582,11 @@ export const CandidatesTable = ({
                       }
 
                       if (column === 'headline') {
-                        return <td key={column} className="truncate px-3 py-2 text-sm text-gray-700">{application.candidate_headline || '—'}</td>;
+                        return <td key={column} className="truncate px-3 py-2 text-sm text-[var(--taali-text)]">{application.candidate_headline || '—'}</td>;
                       }
 
                       if (column === 'location') {
-                        return <td key={column} className="truncate px-3 py-2 text-sm text-gray-700">{application.candidate_location || '—'}</td>;
+                        return <td key={column} className="truncate px-3 py-2 text-sm text-[var(--taali-text)]">{application.candidate_location || '—'}</td>;
                       }
 
                       if (column === 'skills') {
@@ -598,7 +598,7 @@ export const CandidatesTable = ({
                                 {skills.slice(0, 3).map((skill) => (
                                   <Badge key={skill} variant="muted">{skill}</Badge>
                                 ))}
-                                {skills.length > 3 ? <span className="text-xs text-gray-400">+{skills.length - 3}</span> : null}
+                                {skills.length > 3 ? <span className="text-xs text-[var(--taali-muted)]">+{skills.length - 3}</span> : null}
                               </div>
                             ) : '—'}
                           </td>
@@ -606,19 +606,19 @@ export const CandidatesTable = ({
                       }
 
                       if (column === 'added') {
-                        return <td key={column} className="whitespace-nowrap px-3 py-2 text-sm text-gray-700">{formatDateTime(application.created_at)}</td>;
+                        return <td key={column} className="whitespace-nowrap px-3 py-2 text-sm text-[var(--taali-text)]">{formatDateTime(application.created_at)}</td>;
                       }
 
                       if (column === 'email') {
-                        return <td key={column} className="break-all px-3 py-2 text-sm text-gray-700">{application.candidate_email || '—'}</td>;
+                        return <td key={column} className="break-all px-3 py-2 text-sm text-[var(--taali-text)]">{application.candidate_email || '—'}</td>;
                       }
 
                       if (column === 'position') {
-                        return <td key={column} className="break-words px-3 py-2 text-sm text-gray-700">{application.candidate_position || '—'}</td>;
+                        return <td key={column} className="break-words px-3 py-2 text-sm text-[var(--taali-text)]">{application.candidate_position || '—'}</td>;
                       }
 
                       if (column === 'source') {
-                        return <td key={column} className="whitespace-nowrap px-3 py-2 text-sm text-gray-700">{application.source || 'manual'}</td>;
+                        return <td key={column} className="whitespace-nowrap px-3 py-2 text-sm text-[var(--taali-text)]">{application.source || 'manual'}</td>;
                       }
 
                       return null;

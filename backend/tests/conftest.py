@@ -30,6 +30,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine, event
 from sqlalchemy.orm import sessionmaker
+from sqlalchemy.pool import NullPool
 from app.platform.database import Base, get_db
 from app.main import app
 from app.platform.middleware import _rate_limit_store
@@ -44,8 +45,12 @@ SQLALCHEMY_DATABASE_URL = os.environ["DATABASE_URL"]
 engine = create_engine(
     SQLALCHEMY_DATABASE_URL,
     connect_args={"check_same_thread": False, "timeout": 30},
+    poolclass=NullPool,
 )
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+# Keep one sync connection open so SQLite shared-memory state survives across
+# short-lived request/test sessions during the suite.
+_keepalive_connection = engine.connect()
 
 # Enable foreign key support and WAL mode for SQLite (reduces locking with async engine)
 @event.listens_for(engine, "connect")

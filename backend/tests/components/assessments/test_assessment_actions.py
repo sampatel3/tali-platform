@@ -199,6 +199,33 @@ def test_start_assessment_requires_credit_when_lemon_enabled(client, db, monkeyp
 
     resp = client.post(f"/api/v1/assessments/token/{a['token']}/start")
     assert resp.status_code == 402
+    assert resp.json()["detail"] == assessments_svc.CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE
+
+
+def test_preview_assessment_reports_credit_block_when_org_has_no_credits(client, db, monkeypatch):
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    a = _create_assessment(client, headers, task["id"])
+
+    owner = db.query(User).filter(User.email == "ops@example.com").first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.credits_balance = 0
+    db.commit()
+
+    import app.components.assessments.service as assessments_svc
+
+    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+
+    resp = client.get(f"/api/v1/assessments/token/{a['token']}/preview")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["start_gate"] == {
+        "can_start": False,
+        "reason": "insufficient_credits",
+        "message": assessments_svc.CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE,
+    }
 
 
 @pytest.mark.skip(reason="Chat mode disabled; assessments are terminal-only")

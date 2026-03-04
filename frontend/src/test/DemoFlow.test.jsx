@@ -154,12 +154,12 @@ describe('Demo flow', () => {
 
   it('keeps the global theme switch inside the landing and demo nav bars', async () => {
     renderApp();
-    expect(within(screen.getByRole('navigation')).getByRole('switch')).toBeInTheDocument();
+    expect(within(screen.getByRole('navigation')).getByRole('group', { name: /theme toggle/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
     await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 });
 
-    expect(within(screen.getByRole('navigation')).getByRole('switch')).toBeInTheDocument();
+    expect(within(screen.getByRole('navigation')).getByRole('group', { name: /theme toggle/i })).toBeInTheDocument();
   });
 
   it('requires credential fields before starting demo', async () => {
@@ -220,7 +220,7 @@ describe('Demo flow', () => {
     fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Submit' }));
 
     await waitFor(() => {
-      expect(screen.getByText('TAALI PROFILE')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Jane Doe's TAALI profile/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Join TAALI' })).toBeInTheDocument();
       expect(screen.getByText('Compared with successful candidates')).toBeInTheDocument();
       expect(screen.getByTestId('radar-chart')).toBeInTheDocument();

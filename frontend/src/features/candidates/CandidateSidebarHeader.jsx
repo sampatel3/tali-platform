@@ -20,7 +20,7 @@ export function CandidateSidebarHeader({ application }) {
           className="h-12 w-12 shrink-0 rounded-full object-cover"
         />
       ) : (
-        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[var(--taali-primary)] text-sm font-bold text-white">
+        <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[linear-gradient(135deg,var(--taali-purple),#6b4dff)] text-sm font-bold text-white shadow-[var(--taali-shadow-soft)]">
           {initials || '?'}
         </div>
       )}

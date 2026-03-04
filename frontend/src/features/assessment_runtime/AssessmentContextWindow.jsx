@@ -12,10 +12,10 @@ export const AssessmentContextWindow = ({
   const terminalModeEnabled = aiMode === 'claude_cli_terminal';
 
   return (
-    <div className={`${lightMode ? 'border-b border-gray-200 bg-gray-50' : 'border-b border-white/10 bg-[#0f131b]'}`}>
+    <div className="border-b border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)]">
       <button
         type="button"
-        className={`w-full px-4 py-2.5 flex items-center justify-between font-mono text-xs font-bold uppercase tracking-wide ${lightMode ? 'text-gray-700 hover:bg-gray-100' : 'text-gray-300 hover:bg-white/5'}`}
+        className="flex w-full items-center justify-between px-4 py-2.5 font-mono text-xs font-bold uppercase tracking-wide text-[var(--taali-runtime-text)] transition-colors hover:bg-[var(--taali-surface-hover)]"
         onClick={() => toggleSection('contextWindow')}
       >
         <span>Context Window</span>
@@ -23,21 +23,21 @@ export const AssessmentContextWindow = ({
       </button>
 
       {!collapsedSections.contextWindow && (
-        <div className={`p-4 border-t max-h-[34vh] overflow-y-auto ${lightMode ? 'border-gray-200' : 'border-white/10'}`}>
+        <div className="max-h-[34vh] overflow-y-auto border-t border-[var(--taali-runtime-border)] p-4">
           <div className="grid gap-3 md:grid-cols-2">
-            <div className={`${lightMode ? 'border border-gray-200 bg-white' : 'border border-white/12 bg-[#111726]'}`}>
+            <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)]">
               <button
                 type="button"
-                className={`w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold uppercase tracking-wide ${lightMode ? 'text-gray-700 hover:bg-gray-50' : 'text-gray-300 hover:bg-white/5'}`}
+                className="flex w-full items-center justify-between px-3 py-2 font-mono text-xs font-bold uppercase tracking-wide text-[var(--taali-runtime-text)] transition-colors hover:bg-[var(--taali-surface-hover)]"
                 onClick={() => toggleSection('taskContext')}
               >
                 <span>Task Context</span>
                 {collapsedSections.taskContext ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
               </button>
               {!collapsedSections.taskContext && (
-                <div className={`border-t px-3 py-2 ${lightMode ? 'border-gray-200' : 'border-white/10'}`}>
+                <div className="border-t border-[var(--taali-runtime-border)] px-3 py-2">
                   <div className="max-h-32 overflow-y-auto pr-1">
-                    <p className={`font-mono text-sm whitespace-pre-wrap ${lightMode ? 'text-gray-700' : 'text-gray-200'}`}>
+                    <p className="whitespace-pre-wrap font-mono text-sm text-[var(--taali-runtime-text)]">
                       {taskContext || 'Task context has not been provided yet.'}
                     </p>
                   </div>
@@ -45,19 +45,19 @@ export const AssessmentContextWindow = ({
               )}
             </div>
 
-            <div className={`${lightMode ? 'border border-gray-200 bg-white' : 'border border-white/12 bg-[#111726]'}`}>
+            <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)]">
               <button
                 type="button"
-                className={`w-full px-3 py-2 flex items-center justify-between font-mono text-xs font-bold uppercase tracking-wide ${lightMode ? 'text-gray-700 hover:bg-gray-50' : 'text-gray-300 hover:bg-white/5'}`}
+                className="flex w-full items-center justify-between px-3 py-2 font-mono text-xs font-bold uppercase tracking-wide text-[var(--taali-runtime-text)] transition-colors hover:bg-[var(--taali-surface-hover)]"
                 onClick={() => toggleSection('instructions')}
               >
                 <span>Instructions</span>
                 {collapsedSections.instructions ? <ChevronRight size={13} /> : <ChevronDown size={13} />}
               </button>
               {!collapsedSections.instructions && (
-                <div className={`border-t px-3 py-2 ${lightMode ? 'border-gray-200' : 'border-white/10'}`}>
+                <div className="border-t border-[var(--taali-runtime-border)] px-3 py-2">
                   <div className="max-h-32 overflow-y-auto pr-1">
-                    <ul className={`list-disc space-y-1 pl-4 font-mono text-xs ${lightMode ? 'text-gray-700' : 'text-gray-300'}`}>
+                    <ul className="list-disc space-y-1 pl-4 font-mono text-xs text-[var(--taali-runtime-text)]">
                       <li>Read the task context and inspect repository files before editing.</li>
                       <li>
                         {terminalModeEnabled
@@ -69,7 +69,7 @@ export const AssessmentContextWindow = ({
                     </ul>
                   </div>
                   {cloneCommand && (
-                    <div className={`font-mono text-[11px] mt-2 break-all ${lightMode ? 'text-gray-600' : 'text-gray-400'}`}>
+                    <div className="mt-2 break-all font-mono text-[11px] text-[var(--taali-runtime-muted)]">
                       Workspace clone command: <code>{cloneCommand}</code>
                     </div>
                   )}

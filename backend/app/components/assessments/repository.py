@@ -280,9 +280,18 @@ def _score_mode_for_assessment(assessment: Assessment) -> str | None:
         assessment_score = getattr(assessment, "final_score", None)
     if assessment_score is None and getattr(assessment, "score", None) is None:
         return None
-    if getattr(assessment, "cv_job_match_score", None) is None:
+    score_breakdown = (
+        assessment.score_breakdown
+        if isinstance(getattr(assessment, "score_breakdown", None), dict)
+        else {}
+    )
+    score_components = score_breakdown.get("score_components") if isinstance(score_breakdown, dict) else {}
+    role_fit_score = score_components.get("role_fit_score") if isinstance(score_components, dict) else None
+    if role_fit_score is None and getattr(assessment, "cv_job_match_details", None):
+        role_fit_score = getattr(assessment, "cv_job_match_details", {}).get("role_fit_score_100")
+    if role_fit_score is None:
         return "assessment_only_fallback"
-    return "assessment_plus_cv"
+    return "assessment_plus_role_fit"
 
 
 def assessment_to_response(assessment: Assessment, db: Optional[Session] = None) -> Dict[str, Any]:
@@ -319,6 +328,16 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
 
     # Derive a safe CV indicator (filename only, never the server path)
     cv_uploaded = bool(assessment.cv_file_url)
+
+    score_breakdown = (
+        assessment.score_breakdown
+        if isinstance(getattr(assessment, "score_breakdown", None), dict)
+        else {}
+    )
+    score_components = score_breakdown.get("score_components") if isinstance(score_breakdown, dict) else {}
+    role_fit_score = score_components.get("role_fit_score") if isinstance(score_components, dict) else None
+    if role_fit_score is None and isinstance(getattr(assessment, "cv_job_match_details", None), dict):
+        role_fit_score = assessment.cv_job_match_details.get("role_fit_score_100")
 
     data = {
         "id": assessment.id,
@@ -365,8 +384,10 @@ def assessment_to_response(assessment: Assessment, db: Optional[Session] = None)
         "final_score": assessment.final_score,
         "assessment_score": getattr(assessment, "assessment_score", None),
         "taali_score": getattr(assessment, "taali_score", None),
+        "role_fit_score": role_fit_score,
+        "score_rubric_version": score_breakdown.get("score_formula_version"),
         "score_mode": _score_mode_for_assessment(assessment),
-        "score_breakdown": assessment.score_breakdown,
+        "score_breakdown": score_breakdown or None,
         "score_weights_used": assessment.score_weights_used,
         "flags": assessment.flags,
         "scored_at": assessment.scored_at,

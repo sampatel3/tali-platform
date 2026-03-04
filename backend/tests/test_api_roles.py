@@ -7,6 +7,8 @@ from app.domains.assessments_runtime import applications_routes
 from app.domains.assessments_runtime import roles_management_routes
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate_application import CandidateApplication
+from app.models.organization import Organization
+from app.models.user import User
 from tests.conftest import auth_headers, create_task_via_api
 
 
@@ -191,6 +193,39 @@ def test_allow_assessment_creation_without_application_cv(client):
     assert body["task_id"] == task["id"]
 
 
+def test_reject_role_assessment_creation_without_available_credits(client, db, monkeypatch):
+    headers, email = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Credit gate task").json()
+    role = client.post("/api/v1/roles", json={"name": "Credit gate role"}, headers=headers).json()
+    job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Credit gate requirements"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "credit-gate@example.com"},
+        headers=headers,
+    ).json()
+
+    user = db.query(User).filter(User.email == email).first()
+    assert user is not None
+    org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+    assert org is not None
+    org.credits_balance = 0
+    db.commit()
+
+    import app.components.assessments.service as assessments_svc
+
+    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+
+    resp = client.post(
+        f"/api/v1/applications/{app['id']}/assessments",
+        json={"task_id": task["id"]},
+        headers=headers,
+    )
+    assert resp.status_code == 402
+    assert "purchase credits" in resp.json()["detail"].lower()
+
+
 def test_duplicate_role_assessment_requires_retake(client):
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers, name="Retake guard task").json()
@@ -275,7 +310,46 @@ def test_role_assessment_retake_voids_previous_attempt(client, db):
     assert old_row.id in history_ids
 
 
-def test_role_application_summary_uses_cv_fit_before_completion_and_blended_score_after_completion(client, db):
+def test_role_assessment_retake_reuses_pending_credit_reservation(client, db, monkeypatch):
+    headers, email = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Retake reserved credit task").json()
+    role = client.post("/api/v1/roles", json={"name": "Retake reserved credit role"}, headers=headers).json()
+    spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Retake reserved credit requirements"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "retake-reserved@example.com"},
+        headers=headers,
+    ).json()
+
+    user = db.query(User).filter(User.email == email).first()
+    assert user is not None
+    org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+    assert org is not None
+    org.credits_balance = 1
+    db.commit()
+
+    import app.components.assessments.service as assessments_svc
+
+    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+
+    first = client.post(
+        f"/api/v1/applications/{app['id']}/assessments",
+        json={"task_id": task["id"], "duration_minutes": 45},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+
+    retake = client.post(
+        f"/api/v1/applications/{app['id']}/assessments/retake",
+        json={"task_id": task["id"], "duration_minutes": 30, "void_reason": "Reset attempt"},
+        headers=headers,
+    )
+    assert retake.status_code == 201, retake.text
+
+
+def test_role_application_summary_uses_role_fit_before_completion_and_hierarchical_taali_after_completion(client, db):
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers, name="Score summary task").json()
     role = client.post("/api/v1/roles", json={"name": "Score summary role"}, headers=headers).json()
@@ -299,10 +373,13 @@ def test_role_application_summary_uses_cv_fit_before_completion_and_blended_scor
     pre = client.get(f"/api/v1/roles/{role['id']}/applications?sort_by=taali_score", headers=headers)
     assert pre.status_code == 200, pre.text
     pre_item = pre.json()[0]
-    assert pre_item["taali_score"] == 82.0
-    assert pre_item["score_mode"] == "cv_fit_only"
+    assert pre_item["taali_score"] == 78.0
+    assert pre_item["score_mode"] == "role_fit_only"
     assert pre_item["score_summary"]["assessment_score"] is None
+    assert pre_item["score_summary"]["role_fit_score"] == 78.0
     assert pre_item["score_summary"]["requirements_fit_score"] == 74.0
+    assert pre_item["score_summary"]["weights"]["assessment_score"] == 0.5
+    assert pre_item["score_summary"]["weights"]["role_fit_score"] == 0.5
 
     created = client.post(
         f"/api/v1/applications/{app['id']}/assessments",
@@ -316,7 +393,7 @@ def test_role_application_summary_uses_cv_fit_before_completion_and_blended_scor
     assessment_row.status = AssessmentStatus.COMPLETED
     assessment_row.completed_at = datetime.now(timezone.utc)
     assessment_row.assessment_score = 70.0
-    assessment_row.taali_score = 76.0
+    assessment_row.taali_score = 74.0
     assessment_row.final_score = 70.0
     assessment_row.cv_job_match_score = 82.0
     assessment_row.cv_job_match_details = {
@@ -328,13 +405,14 @@ def test_role_application_summary_uses_cv_fit_before_completion_and_blended_scor
     post = client.get(f"/api/v1/roles/{role['id']}/applications?sort_by=taali_score", headers=headers)
     assert post.status_code == 200, post.text
     post_item = post.json()[0]
-    assert post_item["taali_score"] == 76.0
-    assert post_item["score_mode"] == "assessment_plus_cv"
+    assert post_item["taali_score"] == 74.0
+    assert post_item["score_mode"] == "assessment_plus_role_fit"
     assert post_item["valid_assessment_id"] == assessment_id
     assert post_item["valid_assessment_status"] == AssessmentStatus.COMPLETED.value
     assert post_item["score_summary"]["assessment_score"] == 70.0
     assert post_item["score_summary"]["cv_fit_score"] == 82.0
-    assert post_item["score_summary"]["taali_score"] == 76.0
+    assert post_item["score_summary"]["role_fit_score"] == 78.0
+    assert post_item["score_summary"]["taali_score"] == 74.0
 
 
 def test_reject_delete_role_with_existing_application(client):

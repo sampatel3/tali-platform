@@ -13,6 +13,7 @@ from urllib.parse import quote
 import httpx
 
 from ..platform.config import settings
+from .task_repo_service import normalize_repo_files
 
 
 class AssessmentRepositoryError(RuntimeError):
@@ -55,16 +56,7 @@ class AssessmentRepositoryService:
 
     def _repo_files(self, task: Any) -> Dict[str, str]:
         repo_structure = getattr(task, "repo_structure", None) if not isinstance(task, dict) else task.get("repo_structure")
-        files = (repo_structure or {}).get("files") or {}
-        out: Dict[str, str] = {}
-        if isinstance(files, dict):
-            for p, c in files.items():
-                out[str(p)] = c if isinstance(c, str) else str(c)
-        elif isinstance(files, list):
-            for entry in files:
-                if isinstance(entry, dict) and (entry.get("path") or entry.get("name")):
-                    out[str(entry.get("path") or entry.get("name"))] = str(entry.get("content", ""))
-        return out
+        return normalize_repo_files(repo_structure)
 
     def _run(self, args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         return subprocess.run(args, cwd=cwd, check=False, capture_output=True, text=True)

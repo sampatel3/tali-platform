@@ -12,6 +12,7 @@ export const AssessmentTerminal = ({
   onResize,
   onStop,
   stopping = false,
+  lightMode = false,
 }) => {
   const hostRef = useRef(null);
   const terminalRef = useRef(null);
@@ -30,6 +31,24 @@ export const AssessmentTerminal = ({
     [connected],
   );
 
+  const resolveTerminalTheme = () => {
+    if (typeof window === 'undefined' || !hostRef.current) {
+      return {
+        background: '#060b14',
+        foreground: '#edf2ff',
+        cursor: '#9D00FF',
+        selectionBackground: 'rgba(157, 0, 255, 0.22)',
+      };
+    }
+    const styles = window.getComputedStyle(hostRef.current);
+    return {
+      background: styles.getPropertyValue('--taali-runtime-terminal-bg').trim() || '#060b14',
+      foreground: styles.getPropertyValue('--taali-runtime-terminal-text').trim() || '#edf2ff',
+      cursor: styles.getPropertyValue('--taali-purple').trim() || '#9D00FF',
+      selectionBackground: styles.getPropertyValue('--taali-runtime-selection').trim() || 'rgba(157, 0, 255, 0.22)',
+    };
+  };
+
   useEffect(() => {
     if (!hostRef.current || terminalRef.current) return;
 
@@ -38,12 +57,7 @@ export const AssessmentTerminal = ({
       fontSize: 13,
       convertEol: true,
       cursorBlink: true,
-      theme: {
-        background: '#000000',
-        foreground: '#e5e7eb',
-        cursor: 'var(--taali-purple)',
-        selectionBackground: '#4b556399',
-      },
+      theme: resolveTerminalTheme(),
       scrollback: 4000,
       disableStdin: false,
     });
@@ -104,6 +118,12 @@ export const AssessmentTerminal = ({
   }, [onInput, onResize]);
 
   useEffect(() => {
+    const term = terminalRef.current;
+    if (!term) return;
+    term.options.theme = resolveTerminalTheme();
+  }, [lightMode]);
+
+  useEffect(() => {
     if (!connected) return;
     const term = terminalRef.current;
     if (!term) return;
@@ -143,20 +163,24 @@ export const AssessmentTerminal = ({
   }, [events]);
 
   return (
-    <div className="h-full flex flex-col bg-black text-white">
-      <div className="border-b border-white/10 bg-[#0f141d] px-3 py-2 flex items-center justify-between gap-3">
+    <div className="flex h-full flex-col bg-[var(--taali-runtime-terminal-bg)] text-[var(--taali-runtime-terminal-text)]">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-terminal-header)] px-3 py-2">
         <div className="flex items-center gap-2">
           <span className="font-mono text-xs font-bold uppercase tracking-wide">
             Claude Code CLI
           </span>
-          <span className={`font-mono text-[11px] px-2 py-0.5 border ${connected ? 'border-emerald-500/50 text-emerald-300 bg-emerald-500/10' : 'border-amber-500/50 text-amber-300 bg-amber-500/10'}`}>
+          <span className={`rounded-full border px-2 py-0.5 font-mono text-[11px] ${
+            connected
+              ? 'border-[var(--taali-success-border)] bg-[var(--taali-success-soft)] text-[var(--taali-success)]'
+              : 'border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] text-[var(--taali-warning)]'
+          }`}>
             {connectionBadge}
           </span>
         </div>
         <div className="flex items-center gap-2">
           <button
             type="button"
-            className="border border-red-500/60 px-2 py-1 font-mono text-[11px] text-red-200 hover:bg-red-900/30 disabled:opacity-50"
+            className="rounded-[var(--taali-radius-control)] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] px-2 py-1 font-mono text-[11px] text-[var(--taali-danger)] transition-colors hover:border-[var(--taali-danger)] disabled:opacity-50"
             onClick={onStop}
             disabled={stopping}
           >

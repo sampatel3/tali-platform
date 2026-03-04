@@ -25,3 +25,5 @@ test.db
 test_mig.db
 file:taalitest*
 backend/.env
+backend/test.db-*
+frontend/test-results/

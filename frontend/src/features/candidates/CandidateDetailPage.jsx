@@ -3,8 +3,8 @@ import { ArrowLeft } from 'lucide-react';
 import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { getMetricMeta, buildGlossaryFromMetadata } from '../../lib/scoringGlossary';
-import { formatScale100Score, normalizeScore } from '../../lib/scoreDisplay';
-import { dimensionOrder, getDimensionById, normalizeScores } from '../../scoring/scoringDimensions';
+import { normalizeScores } from '../../scoring/scoringDimensions';
+import { ComparisonRadar } from '../../shared/ui/ComparisonRadar';
 import {
   Badge,
   Button,
@@ -15,7 +15,7 @@ import {
   Spinner,
   cx,
 } from '../../shared/ui/TaaliPrimitives';
-import { ComparisonRadar } from '../../shared/ui/ComparisonRadar';
+import { buildStandingCandidateReportModel } from './assessmentViewModels';
 import {
   CandidateAiUsageTab,
   CandidateCodeGitTab,
@@ -24,6 +24,7 @@ import {
 } from './CandidateDetailSecondaryTabs';
 import { CandidateEvaluateTab, CandidateResultsTab } from './CandidateDetailPrimaryTabs';
 import { CandidateInterviewDebrief } from './CandidateInterviewDebrief';
+import { CandidateReportView } from './CandidateReportView';
 
 const RESULTS_ONBOARDING_KEY = 'taali_results_onboarding_seen_v1';
 
@@ -89,22 +90,6 @@ export const AssessmentResultsPage = ({
     .map((line) => line.trim())
     .filter(Boolean);
 
-  const getRecommendation = (score100) => {
-    if (score100 >= 80) return { label: 'STRONG HIRE', color: 'var(--taali-success)' };
-    if (score100 >= 65) return { label: 'HIRE', color: 'var(--taali-info)' };
-    if (score100 >= 50) return { label: 'CONSIDER', color: 'var(--taali-warning)' };
-    return { label: 'NOT RECOMMENDED', color: 'var(--taali-danger)' };
-  };
-
-  const taaliScore100 = candidate?._raw?.taali_score ?? candidate?._raw?.final_score ?? (candidate?.score ? candidate.score * 10 : null);
-  const assessmentScore100 = candidate?._raw?.assessment_score ?? candidate?._raw?.final_score ?? (candidate?.score ? candidate.score * 10 : null);
-  const cvFitScore100 = normalizeScore(
-    candidate?._raw?.cv_job_match_score
-    ?? candidate?._raw?.score_breakdown?.score_components?.cv_fit_score
-    ?? null,
-    candidate?._raw?.cv_job_match_details?.score_scale || candidate?._raw?.score_breakdown?.score_components?.score_scale
-  );
-  const rec = taaliScore100 != null ? getRecommendation(taaliScore100) : null;
   const assessmentId = candidate?._raw?.id;
   const taskId = candidate?._raw?.task_id || candidate?._raw?.task?.id || null;
   const roleId = candidate?._raw?.role_id || null;
@@ -123,6 +108,22 @@ export const AssessmentResultsPage = ({
     || candidate?._raw?.cv_uploaded
   );
   const canRequestCvUpload = Boolean(!hasCvOnFile && assessmentId && candidate?.email);
+  const reportModel = buildStandingCandidateReportModel({
+    application: null,
+    completedAssessment: candidate?._raw,
+    identity: {
+      assessmentId,
+      sectionLabel: 'Assessment results',
+      name: candidate?.name || 'Candidate',
+      email: candidate?.email || '',
+      position: candidate?.position || '',
+      taskName: candidate?.task || '',
+      roleName: roleName || '',
+      applicationStatus: applicationStatus || '',
+      durationLabel: candidate?.time || '',
+      completedLabel: candidate?.completedDate || '',
+    },
+  });
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -285,14 +286,12 @@ export const AssessmentResultsPage = ({
   if (!candidate) {
     return (
       <PageContainer className="max-w-5xl" density="compact">
-        <Panel className="p-4 font-mono text-sm text-gray-600">
+        <Panel className="p-4 font-mono text-sm text-[var(--taali-muted)]">
           Candidate assessment not found.
         </Panel>
       </PageContainer>
     );
   }
-
-  const headerCategoryScores = getCategoryScores(candidate);
 
   const handleDownloadReport = async () => {
     if (!assessmentId) return;
@@ -629,7 +628,7 @@ export const AssessmentResultsPage = ({
         </Button>
 
         {isVoided ? (
-          <Panel className="mb-3 border-2 border-amber-300 bg-amber-50 p-3.5 text-sm text-amber-900">
+        <Panel className="mb-3 border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-3.5 text-sm text-[var(--taali-warning)]">
             <p className="font-semibold">This assessment was voided and superseded.</p>
             <p className="mt-1">
               {voidedAt ? `Voided ${new Date(voidedAt).toLocaleString()}. ` : ''}
@@ -639,76 +638,7 @@ export const AssessmentResultsPage = ({
           </Panel>
         ) : null}
 
-        <Panel className="mb-4 overflow-hidden p-0">
-          <div className="grid gap-0 xl:grid-cols-[minmax(0,1fr)_360px]">
-            <div className="bg-[linear-gradient(180deg,rgba(255,255,255,0.94),rgba(247,244,255,0.82))] px-5 py-5 md:px-6">
-              <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Assessment results</p>
-              <h1 className="taali-display text-4xl font-semibold text-[var(--taali-text)]">{candidate.name}</h1>
-              <p className="mt-2 text-sm text-[var(--taali-muted)]">{candidate.email}</p>
-              <div className="mt-4 flex flex-wrap gap-2">
-                <Badge variant="muted" className="font-mono text-[11px]">{candidate.position}</Badge>
-                <Badge variant="muted" className="font-mono text-[11px]">Task: {candidate.task}</Badge>
-                {roleName ? <Badge variant="muted" className="font-mono text-[11px]">Role: {roleName}</Badge> : null}
-                {applicationStatus ? <Badge variant="muted" className="font-mono text-[11px]">Application: {applicationStatus}</Badge> : null}
-                <Badge variant="muted" className="font-mono text-[11px]">Duration: {candidate.time}</Badge>
-                {candidate.completedDate ? <Badge variant="muted" className="font-mono text-[11px]">Completed: {candidate.completedDate}</Badge> : null}
-              </div>
-
-              {Object.keys(headerCategoryScores).length > 0 ? (
-                <div className="mt-6 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[rgba(255,255,255,0.84)] p-4">
-                  <div className="mb-3 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Dimension profile</div>
-                  <div className="space-y-2 font-mono text-xs">
-                    {dimensionOrder.map((key) => {
-                      const val = headerCategoryScores[key];
-                      const label = getDimensionById(key).label;
-                      return val != null ? (
-                        <div key={key} className="flex items-center gap-3">
-                          <span className="w-36 truncate text-[var(--taali-muted)]">{label}</span>
-                          <div className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--taali-border-subtle)]">
-                            <div
-                              className="h-full rounded-full"
-                              style={{
-                                width: `${(val / 10) * 100}%`,
-                                backgroundColor: val >= 7 ? '#16a34a' : val >= 5 ? '#d97706' : '#dc2626',
-                              }}
-                            />
-                          </div>
-                          <span className="w-10 text-right text-[var(--taali-text)]">{Number(val).toFixed(1)}</span>
-                        </div>
-                      ) : null;
-                    })}
-                  </div>
-                </div>
-              ) : null}
-            </div>
-
-            {(taaliScore100 != null || candidate.score) ? (
-              <div className="border-t border-[var(--taali-border-soft)] bg-[linear-gradient(180deg,#161127,#0f1220)] p-5 text-white xl:border-l xl:border-t-0">
-                <div className="text-xs font-semibold uppercase tracking-[0.12em] text-white/60">TAALI score</div>
-                <div className="mt-3 taali-display text-6xl font-semibold text-white">
-                  {formatScale100Score(taaliScore100 ?? candidate.score, taaliScore100 != null ? '0-100' : '0-10')}
-                </div>
-
-                {rec ? (
-                  <div className="mt-3 inline-flex rounded-full px-3 py-1 text-[11px] font-semibold tracking-[0.08em] text-white" style={{ backgroundColor: rec.color }}>
-                    {rec.label}
-                  </div>
-                ) : null}
-
-                <div className="mt-5 grid gap-3">
-                  <div className="rounded-[var(--taali-radius-card)] border border-white/10 bg-white/5 px-4 py-3">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/60">Assessment score</div>
-                    <div className="mt-2 text-xl font-semibold text-white">{formatScale100Score(assessmentScore100, '0-100')}</div>
-                  </div>
-                  <div className="rounded-[var(--taali-radius-card)] border border-white/10 bg-white/5 px-4 py-3">
-                    <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-white/60">CV fit</div>
-                    <div className="mt-2 text-xl font-semibold text-white">{formatScale100Score(cvFitScore100, '0-100')}</div>
-                  </div>
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </Panel>
+        <CandidateReportView model={reportModel} className="mb-4" />
 
         <Panel className="mb-4 p-4">
           <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">

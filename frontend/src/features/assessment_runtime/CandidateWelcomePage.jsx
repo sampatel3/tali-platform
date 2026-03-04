@@ -10,9 +10,31 @@ import {
 import ReactMarkdown from 'react-markdown';
 
 import { assessments as assessmentsApi } from '../../shared/api';
-import { Logo } from '../../shared/ui/Branding';
+import { BrandLabel, Logo } from '../../shared/ui/Branding';
 
 const CANDIDATE_START_BLOCKED_MESSAGE = 'This assessment is not available yet. Please contact the hiring team to continue.';
+
+const SCENARIO_MARKDOWN_COMPONENTS = {
+  h1: ({ children }) => <h3 className="mt-6 text-xl font-semibold text-[var(--taali-text)] first:mt-0">{children}</h3>,
+  h2: ({ children }) => <h3 className="mt-6 text-xl font-semibold text-[var(--taali-text)] first:mt-0">{children}</h3>,
+  h3: ({ children }) => <h4 className="mt-5 text-lg font-semibold text-[var(--taali-text)] first:mt-0">{children}</h4>,
+  p: ({ children }) => <p className="whitespace-pre-line text-base leading-8 text-[var(--taali-text)] [&:not(:first-child)]:mt-4">{children}</p>,
+  ul: ({ children }) => <ul className="mt-4 list-disc space-y-3 rounded-[var(--taali-radius-card)] bg-[var(--taali-surface-subtle)] p-4 pl-9">{children}</ul>,
+  ol: ({ children }) => <ol className="mt-4 list-decimal space-y-3 rounded-[var(--taali-radius-card)] bg-[var(--taali-surface-subtle)] p-4 pl-9">{children}</ol>,
+  li: ({ children }) => <li className="whitespace-pre-line pl-1 text-base leading-7 text-[var(--taali-text)] marker:text-[var(--taali-purple)]">{children}</li>,
+  blockquote: ({ children }) => (
+    <blockquote className="mt-4 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-4 py-4 text-base leading-8 text-[var(--taali-text)]">
+      {children}
+    </blockquote>
+  ),
+  strong: ({ children }) => <strong className="font-semibold text-[var(--taali-text)]">{children}</strong>,
+  em: ({ children }) => <em className="italic text-[var(--taali-text)]">{children}</em>,
+  code: ({ children }) => (
+    <code className="rounded-md bg-[var(--taali-surface-subtle)] px-1.5 py-0.5 font-mono text-[0.9em] text-[var(--taali-text)]">
+      {children}
+    </code>
+  ),
+};
 
 export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarted }) => {
   const [loadingStart, setLoadingStart] = useState(false);
@@ -64,7 +86,7 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
     const requiresWarmup = Boolean(taskPreview?.calibration_enabled);
     const warmupText = String(warmupPrompt || '').trim();
     if (requiresWarmup && !warmupText) {
-      setStartError('Complete the 2-minute warmup prompt before starting.');
+      setStartError('Write the short baseline Claude prompt before starting.');
       return;
     }
     setLoadingStart(true);
@@ -119,26 +141,22 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
   const visibleStartMessage = startError || startBlockedMessage;
 
   return (
-    <div className="min-h-screen bg-white">
-      <nav className="border-b-2 border-black bg-white">
+    <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
+      <nav className="border-b border-[var(--taali-border-soft)] bg-[var(--taali-surface)] backdrop-blur-sm">
         <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-4">
           <Logo onClick={() => {}} />
-          <span className="font-mono text-sm text-gray-500">|</span>
+          <span className="font-mono text-sm text-[var(--taali-muted)]">|</span>
           <span className="font-mono text-sm">Technical Assessment</span>
         </div>
       </nav>
       <div className="max-w-3xl mx-auto px-6 py-16">
         <div className="text-center mb-8">
-          <div
-            className="inline-block px-4 py-2 text-xs font-mono font-bold text-[var(--taali-surface)] border-2 border-[var(--taali-border)] mb-4 bg-[var(--taali-purple)]"
-          >
-            TAALI Assessment
-          </div>
+          <BrandLabel className="mb-4" toneClassName="text-[var(--taali-purple)]">TAALI Assessment</BrandLabel>
           <h1 className="text-4xl font-bold mb-2">Technical Assessment</h1>
           <p className="text-[var(--taali-muted)]">You&apos;ve been invited to complete a coding challenge</p>
         </div>
 
-        <div className="border-2 border-[var(--taali-border)] p-5 mb-6 bg-[var(--taali-bg)]">
+        <div className="mb-6 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-5 shadow-[var(--taali-shadow-soft)]">
           <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-[var(--taali-muted)]">
             <span>Role: {taskPreview?.role || 'Engineering'}</span>
             <span>•</span>
@@ -160,7 +178,7 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
           ) : null}
         </div>
 
-        <div className="border-2 border-[var(--taali-border)] p-8 mb-8">
+        <div className="mb-8 rounded-[var(--taali-radius-panel)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-8 shadow-[var(--taali-shadow-soft)]">
           <p className="text-lg mb-4">Welcome,</p>
           <p className="text-sm text-[var(--taali-text)] mb-4 leading-relaxed">
             You&apos;ve been invited to complete a technical assessment. This is a real coding environment where you can write, run, and test code with AI assistance.
@@ -179,7 +197,7 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
           <p className="text-sm text-[var(--taali-muted)] mt-4">Ready when you are.</p>
         </div>
 
-        <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-[var(--taali-purple-soft)]">
+        <div className="mb-8 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-purple-soft)] p-6 shadow-[var(--taali-shadow-soft)]">
           <h2 className="text-xl font-bold mb-3">How you&apos;ll be evaluated</h2>
           <ul className="space-y-2 font-mono text-sm text-[var(--taali-text)]">
             <li>• Ask clear, structured questions to Claude.</li>
@@ -194,7 +212,7 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
         </div>
 
         {!hasCvOnFile ? (
-          <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-white">
+          <div className="mb-8 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
             <h2 className="text-xl font-bold mb-2">Optional: Upload your CV</h2>
             <p className="text-sm text-[var(--taali-muted)] mb-3">
               Uploading a CV helps role-fit analysis. You can still continue without it.
@@ -213,37 +231,52 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
         ) : null}
 
         {taskPreview?.calibration_enabled && calibrationPromptText ? (
-          <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-[var(--taali-bg)]">
-            <h2 className="text-xl font-bold mb-2">2-minute warmup (calibration)</h2>
-            <p className="text-sm text-[var(--taali-muted)] mb-3">
-              This captures your baseline AI-collaboration style before the main task.
+          <div className="mb-8 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-muted)] p-6 shadow-[var(--taali-shadow-soft)]">
+            <h2 className="mb-2 text-xl font-bold">Quick baseline prompt (about 2 minutes)</h2>
+            <p className="mb-4 text-sm leading-6 text-[var(--taali-muted)]">
+              Before the repo opens, we ask for one short Claude prompt so TAALI can compare your initial prompting style with how you work once the real task context is available.
             </p>
-            <div className="mb-3 border border-[var(--taali-border)] bg-white p-3 font-mono text-xs text-[var(--taali-text)]">
+            <div className="mb-4 grid gap-3 md:grid-cols-3">
+              {[
+                ['What it is', 'A short prompt-only warmup, not a separate coding exercise.'],
+                ['Why it exists', 'It gives us a baseline for how you frame a problem before you have full repo context.'],
+                ['How to treat it', 'Keep it concise. The main assessment still carries the weight.'],
+              ].map(([title, text]) => (
+                <div key={title} className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-4 py-3">
+                  <div className="font-mono text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--taali-muted)]">{title}</div>
+                  <p className="mt-2 text-sm leading-6 text-[var(--taali-text)]">{text}</p>
+                </div>
+              ))}
+            </div>
+            <div className="mb-3 rounded-[var(--taali-radius-control)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3 font-mono text-xs text-[var(--taali-text)]">
               {calibrationPromptText}
             </div>
             <label className="block">
-              <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Your prompt to Claude</span>
+              <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Draft the first prompt you would send Claude</span>
               <textarea
-                className="w-full min-h-[110px] border-2 border-[var(--taali-border)] bg-white p-3 font-mono text-sm text-[var(--taali-text)] outline-none focus:border-[var(--taali-purple)]"
+                className="taali-textarea min-h-[110px] w-full bg-[var(--taali-surface)] font-mono text-sm text-[var(--taali-text)] outline-none"
                 value={warmupPrompt}
                 onChange={(event) => setWarmupPrompt(event.target.value)}
-                placeholder="Write the prompt you would send to Claude for this warmup..."
+                placeholder="Write the short prompt you would send Claude before the main task opens..."
               />
             </label>
           </div>
         ) : null}
 
         {scenarioMarkdown ? (
-          <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-white">
+          <div className="mb-8 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
             <h2 className="text-xl font-bold mb-3">Task scenario</h2>
-            <div className="prose prose-sm max-w-none text-[var(--taali-text)] prose-headings:font-bold prose-code:font-mono">
-              <ReactMarkdown>{scenarioMarkdown}</ReactMarkdown>
+            <p className="mb-4 text-sm leading-6 text-[var(--taali-muted)]">
+              This is the operating context waiting for you when the timer starts. Read it like a real handoff from the team you just joined.
+            </p>
+            <div className="max-w-none">
+              <ReactMarkdown components={SCENARIO_MARKDOWN_COMPONENTS}>{scenarioMarkdown}</ReactMarkdown>
             </div>
           </div>
         ) : null}
 
         {expectedJourney ? (
-          <div className="border-2 border-[var(--taali-border)] p-6 mb-8">
+          <div className="mb-8 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
             <h2 className="text-xl font-bold mb-3">Expected working flow</h2>
             <div className="space-y-3">
               {Object.entries(expectedJourney).map(([phase, bullets]) => (
@@ -261,7 +294,7 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
         ) : null}
 
         <div className="grid md:grid-cols-3 gap-4 mb-8">
-          <div className="border-2 border-[var(--taali-border)] p-6">
+          <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
             <Terminal size={24} className="mb-3" />
             <h3 className="font-bold mb-2">What You&apos;ll Do</h3>
             <ul className="font-mono text-xs text-[var(--taali-muted)] space-y-1">
@@ -270,7 +303,7 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
               <li>Write and run your solution</li>
             </ul>
           </div>
-          <div className="border-2 border-[var(--taali-border)] p-6">
+          <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
             <Brain size={24} className="mb-3" />
             <h3 className="font-bold mb-2">What We&apos;re Testing</h3>
             <ul className="font-mono text-xs text-[var(--taali-muted)] space-y-1">
@@ -279,7 +312,7 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
               <li>Code quality & testing</li>
             </ul>
           </div>
-          <div className="border-2 border-[var(--taali-border)] p-6">
+          <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
             <Shield size={24} className="mb-3" />
             <h3 className="font-bold mb-2">What You&apos;ll Need</h3>
             <ul className="font-mono text-xs text-[var(--taali-muted)] space-y-1">
@@ -292,13 +325,13 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
         </div>
 
         {visibleStartMessage && (
-          <div className="border-2 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4 mb-4 text-sm text-[var(--taali-danger)]">
+          <div className="mb-4 rounded-[var(--taali-radius-card)] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4 text-sm text-[var(--taali-danger)]">
             {visibleStartMessage}
           </div>
         )}
 
         <button
-          className="w-full border-2 border-[var(--taali-border)] py-4 font-bold text-lg text-[var(--taali-surface)] bg-[var(--taali-purple)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
+          className="flex w-full items-center justify-center gap-2 rounded-[var(--taali-radius-control)] border border-[var(--taali-purple)] bg-[linear-gradient(135deg,var(--taali-purple),var(--taali-purple-hover))] py-4 text-lg font-bold text-white shadow-[var(--taali-shadow-soft)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
           onClick={handleStart}
           disabled={loadingStart || isStartBlocked}
         >

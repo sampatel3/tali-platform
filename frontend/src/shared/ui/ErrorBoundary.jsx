@@ -27,7 +27,7 @@ export class ErrorBoundary extends React.Component {
             </p>
             <button
               type="button"
-              className="font-mono text-sm text-[var(--taali-purple)] underline underline-offset-2 hover:text-[var(--taali-primary)]"
+              className="font-mono text-sm text-[var(--taali-purple)] underline underline-offset-2 hover:text-[var(--taali-purple-hover)]"
               onClick={() => window.location.reload()}
             >
               Refresh page
@@ -40,4 +40,3 @@ export class ErrorBoundary extends React.Component {
     return this.props.children;
   }
 }
-

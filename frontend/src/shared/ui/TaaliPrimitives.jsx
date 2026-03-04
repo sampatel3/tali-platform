@@ -163,7 +163,7 @@ export const Spinner = ({ size = 24, className = '' }) => (
 export const TabBar = ({ tabs, activeTab, onChange, className = '', density = 'default' }) => (
   <div
     role="tablist"
-    className={cx('flex flex-wrap gap-0 border-b-2 border-[var(--taali-border)]', className)}
+    className={cx('flex flex-wrap gap-2', className)}
     aria-label="Tabs"
   >
     {tabs.map((tab) => {
@@ -179,11 +179,11 @@ export const TabBar = ({ tabs, activeTab, onChange, className = '', density = 'd
           onClick={() => onChange(tab.id)}
           className={cx(
             density === 'compact'
-              ? 'px-3 py-2 text-xs font-semibold transition-colors -mb-[2px] border-b-2'
-              : 'px-4 py-3 text-sm font-semibold transition-colors -mb-[2px] border-b-2',
+              ? 'rounded-full px-3 py-2 text-xs font-semibold transition-colors border'
+              : 'rounded-full px-4 py-2.5 text-sm font-semibold transition-colors border',
             isActive
-              ? 'border-[var(--taali-border)] bg-[var(--taali-surface)] text-[var(--taali-text)]'
-              : 'border-transparent text-[var(--taali-muted)] hover:text-[var(--taali-text)] hover:bg-[var(--taali-bg)]'
+              ? 'border-[var(--taali-border-soft)] bg-[var(--taali-surface)] text-[var(--taali-text)] shadow-[var(--taali-shadow-soft)]'
+              : 'border-transparent text-[var(--taali-muted)] hover:border-[var(--taali-border-soft)] hover:bg-[var(--taali-surface)] hover:text-[var(--taali-text)]'
           )}
         >
           {tab.label}
@@ -295,7 +295,7 @@ export const Sheet = ({
           panelClassName
         )}
       >
-        <div className={cx('border-b border-[var(--taali-border-soft)] bg-[rgba(255,255,255,0.84)] px-5 py-4 backdrop-blur-sm', headerClassName)}>
+        <div className={cx('border-b border-[var(--taali-border-soft)] bg-[color:var(--taali-surface)] px-5 py-4 backdrop-blur-sm', headerClassName)}>
           <div className="flex items-start justify-between gap-4">
             <div className="min-w-0 flex-1">
               {headerContent || (
@@ -323,7 +323,7 @@ export const Sheet = ({
           {children}
         </div>
         {footer ? (
-          <div className={cx('border-t border-[var(--taali-border-soft)] bg-[rgba(255,255,255,0.9)] px-5 py-4 backdrop-blur-sm', footerClassName)}>
+          <div className={cx('border-t border-[var(--taali-border-soft)] bg-[color:var(--taali-surface)] px-5 py-4 backdrop-blur-sm', footerClassName)}>
             {footer}
           </div>
         ) : null}

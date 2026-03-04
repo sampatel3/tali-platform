@@ -39,9 +39,16 @@ export const ComparisonRadar = ({
       <div className="w-full" style={{ height }}>
         <ResponsiveContainer>
           <RadarChart data={radarData}>
-            <PolarGrid />
-            <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 10, fontFamily: 'var(--taali-font)' }} />
-            <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10 }} />
+            <PolarGrid stroke="var(--taali-border-muted)" />
+            <PolarAngleAxis
+              dataKey="dimension"
+              tick={{ fontSize: 10, fontFamily: 'var(--taali-font)', fill: 'var(--taali-muted)' }}
+            />
+            <PolarRadiusAxis
+              domain={[0, 10]}
+              tick={{ fontSize: 10, fill: 'var(--taali-muted)' }}
+              axisLine={{ stroke: 'var(--taali-border-soft)' }}
+            />
             {assessments.map((assessment, index) => {
               const isHighlight = highlightAssessmentId != null && Number(assessment.id) === Number(highlightAssessmentId);
               const color = isHighlight ? 'var(--taali-purple)' : DEFAULT_COLORS[index % DEFAULT_COLORS.length];
@@ -57,7 +64,7 @@ export const ComparisonRadar = ({
                 />
               );
             })}
-            {showLegend ? <Legend /> : null}
+            {showLegend ? <Legend wrapperStyle={{ color: 'var(--taali-text)', fontSize: 12 }} /> : null}
           </RadarChart>
         </ResponsiveContainer>
       </div>

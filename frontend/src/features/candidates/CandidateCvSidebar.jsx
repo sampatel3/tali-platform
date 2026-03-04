@@ -25,10 +25,10 @@ const SOCIAL_ICONS = {
 const CV_SECTION_HEADERS = /^(Professional\s+)?Experience|Work\s+(?:History|Experience)|Education|Skills|Summary|Objective|Qualifications|Certifications|Projects|Achievements|Languages$/i;
 
 const modeMeta = (mode) => {
-  if (mode === 'assessment_plus_cv') return { label: 'Assessment + CV', variant: 'purple' };
+  if (mode === 'assessment_plus_role_fit' || mode === 'assessment_plus_cv') return { label: 'Assessment + Role fit', variant: 'purple' };
   if (mode === 'assessment_only_fallback') return { label: 'Assessment only', variant: 'warning' };
   if (mode === 'pending') return { label: 'Pending', variant: 'muted' };
-  return { label: 'CV fit only', variant: 'muted' };
+  return { label: 'Role fit only', variant: 'muted' };
 };
 
 function formatCvWithSections(text) {

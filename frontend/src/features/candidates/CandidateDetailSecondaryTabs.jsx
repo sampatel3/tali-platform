@@ -192,7 +192,6 @@ export const CandidateCvFitTab = ({
 }) => {
   const assessment = candidate._raw || {};
   const roleFitModel = buildRoleFitEvidenceModel({ application: null, completedAssessment: assessment });
-  const cvMatch = roleFitModel.details || {};
   const hasCv = Boolean(assessment.candidate_cv_filename || assessment.cv_filename);
 
   return (
@@ -205,10 +204,10 @@ export const CandidateCvFitTab = ({
             emptyMessage="No role-fit evidence is available for this assessment."
           />
 
-          {cvMatch.summary ? (
+          {roleFitModel.summaryText ? (
             <Panel className="p-4">
               <div className="mb-2 font-bold">Summary</div>
-              <p className="text-sm italic text-[var(--taali-text)]">"{cvMatch.summary}"</p>
+              <p className="text-sm italic text-[var(--taali-text)]">"{roleFitModel.summaryText}"</p>
             </Panel>
           ) : null}
         </>

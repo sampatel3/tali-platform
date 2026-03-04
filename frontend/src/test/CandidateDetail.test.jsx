@@ -141,6 +141,8 @@ const mockCandidate = {
   },
   _raw: {
     id: 1,
+    taali_score: 85,
+    assessment_score: 85,
     final_score: 85,
     status: 'completed',
     role_name: 'Backend Engineer',
@@ -161,6 +163,56 @@ const mockCandidate = {
     cv_uploaded: true,
     cv_filename: 'alice_cv.pdf',
     prompt_fraud_flags: [],
+    cv_job_match_score: 74.2,
+    cv_job_match_details: {
+      score_scale: '0-100',
+      matching_skills: ['Python', 'AsyncIO', 'Testing'],
+      missing_skills: ['Kubernetes', 'Terraform'],
+      experience_highlights: ['5 years of backend development', 'Led team of 4 engineers'],
+      concerns: ['No cloud infrastructure experience'],
+      score_rationale_bullets: [
+        'Composite fit 74.2/100 from skills 78.8/100, experience 71.5/100, recruiter requirements 69.0/100.',
+        'Recruiter requirements coverage: 2/3 met, 1 partial, 0 missing.',
+      ],
+      summary: 'Strong technical skills with gaps in DevOps tooling.',
+      requirements_match_score_100: 69.0,
+      requirements_coverage: {
+        total: 3,
+        met: 2,
+        partially_met: 1,
+        missing: 0,
+      },
+      requirements_assessment: [
+        {
+          requirement: 'Async backend systems experience',
+          priority: 'must_have',
+          status: 'met',
+          evidence: 'Candidate has shipped Python and AsyncIO backend services in production.',
+        },
+        {
+          requirement: 'Infrastructure automation exposure',
+          priority: 'must_have',
+          status: 'partially_met',
+          evidence: 'Testing depth is clear, but Kubernetes and Terraform coverage is still limited.',
+        },
+        {
+          requirement: 'Hands-on debugging ownership',
+          priority: 'nice_to_have',
+          status: 'met',
+          evidence: 'Timeline and prompt evidence show direct debugging and test iteration ownership.',
+        },
+      ],
+      role_fit_score_100: 71.1,
+    },
+    score_breakdown: {
+      score_components: {
+        taali_score: 85,
+        assessment_score: 85,
+        cv_fit_score: 74.2,
+        requirements_fit_score: 69.0,
+        role_fit_score: 71.1,
+      },
+    },
     evaluation_rubric: {
       correctness: { weight: 0.6 },
       code_quality: { weight: 0.4 },
@@ -179,9 +231,9 @@ const mockCandidate = {
         { clarity: 9, specificity: 8, efficiency: 9, word_count: 15, has_context: true, is_vague: false },
       ],
       cv_job_match: {
-        overall: 7,
-        skills: 8,
-        experience: 6,
+        overall: 74.2,
+        skills: 78.8,
+        experience: 71.5,
         details: {
           matching_skills: ['Python', 'AsyncIO', 'Testing'],
           missing_skills: ['Kubernetes', 'Terraform'],
@@ -240,14 +292,14 @@ describe('CandidateDetailPage', () => {
 
   it('renders score badge with recommendation', async () => {
     await renderCandidateDetail();
-    // Final score is 85 => STRONG HIRE
+    // TAALI score is 85 => Strong Hire
     expect(screen.getAllByText('85.0').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getByText('STRONG HIRE')).toBeInTheDocument();
+    expect(screen.getAllByText('Strong Hire').length).toBeGreaterThanOrEqual(1);
   });
 
   it('renders position and task info', async () => {
     await renderCandidateDetail();
-    expect(screen.getByText('Senior Engineer')).toBeInTheDocument();
+    expect(screen.getByText('Position: Senior Engineer')).toBeInTheDocument();
     expect(screen.getByText('Task: Async Pipeline Debugging')).toBeInTheDocument();
   });
 
@@ -310,55 +362,60 @@ describe('CandidateDetailPage', () => {
   it('tab switching works - CV & Fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByText('CV & Fit'));
+    fireEvent.click(screen.getByRole('button', { name: 'CV & Fit' }));
 
     await waitFor(() => {
+      expect(screen.getByText('Summary')).toBeInTheDocument();
+      expect(screen.getByText('Documents')).toBeInTheDocument();
       expect(screen.getAllByText('CV fit').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getByText('Experience')).toBeInTheDocument();
-      expect(screen.getByText('Why this score')).toBeInTheDocument();
+      expect(screen.getAllByText('Requirements fit').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Why this score').length).toBeGreaterThanOrEqual(1);
     });
   });
 
   it('shows matching skills in CV & Fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByText('CV & Fit'));
+    fireEvent.click(screen.getByRole('button', { name: 'CV & Fit' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Matching skills')).toBeInTheDocument();
-      expect(screen.getByText('Python')).toBeInTheDocument();
-      expect(screen.getByText('AsyncIO')).toBeInTheDocument();
+      expect(screen.getByText('Documents')).toBeInTheDocument();
+      expect(screen.getAllByText('Matching skills').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Python').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('AsyncIO').length).toBeGreaterThanOrEqual(1);
     });
   });
 
   it('shows missing skills in CV & Fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByText('CV & Fit'));
+    fireEvent.click(screen.getByRole('button', { name: 'CV & Fit' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Gaps')).toBeInTheDocument();
-      expect(screen.getByText('Kubernetes')).toBeInTheDocument();
-      expect(screen.getByText('Terraform')).toBeInTheDocument();
+      expect(screen.getByText('Documents')).toBeInTheDocument();
+      expect(screen.getAllByText('Gaps').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Kubernetes').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText('Terraform').length).toBeGreaterThanOrEqual(1);
     });
   });
 
   it('shows score rationale bullets in CV & Fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByText('CV & Fit'));
+    fireEvent.click(screen.getByRole('button', { name: 'CV & Fit' }));
 
     await waitFor(() => {
-      expect(screen.getByText('Why this score')).toBeInTheDocument();
-      expect(screen.getByText(/Composite fit 74\.2 from skills 78\.8, experience 71\.5, recruiter requirements 69\.0\./)).toBeInTheDocument();
-      expect(screen.getByText(/Recruiter requirements coverage: 2\/3 met/)).toBeInTheDocument();
+      expect(screen.getByText('Summary')).toBeInTheDocument();
+      expect(screen.getAllByText('Why this score').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText(/Composite fit 74\.2/).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText(/Recruiter requirements coverage: 2\/3 met/).length).toBeGreaterThanOrEqual(1);
     });
   });
 
   it('tab switching works - Timeline tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByText('Timeline'));
+    fireEvent.click(screen.getByRole('button', { name: 'Timeline' }));
 
     await waitFor(() => {
       expect(screen.getByText('Assessment started')).toBeInTheDocument();

@@ -78,17 +78,19 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
   };
 
   return (
-    <nav className="taali-nav sticky top-0 z-40 border-b border-[var(--taali-border-soft)] bg-[rgba(255,252,248,0.84)] backdrop-blur-md">
-      <div className="mx-auto flex max-w-[92rem] items-center justify-between gap-3 px-4 py-3 md:px-5">
+    <nav className="taali-nav sticky top-0 z-40">
+      <div className="mx-auto flex max-w-[88rem] items-center justify-between gap-3 px-4 py-3 md:px-5">
         <div className="flex items-center gap-6">
           <Logo onClick={() => onNavigate('assessments')} />
-          <div className="hidden md:flex items-center gap-1">
+          <div className="hidden md:flex items-center gap-1 rounded-full border border-[var(--taali-border-soft)] bg-[var(--taali-nav-pill-bg)] px-1.5 py-1 shadow-[var(--taali-shadow-soft)] backdrop-blur-md">
             {NAV_ITEMS.map((item) => (
               <Button
                 key={item.id}
-                variant={currentPage === item.id ? 'secondary' : 'ghost'}
+                variant="ghost"
                 size="xs"
-                className={currentPage === item.id ? 'min-w-[84px] !bg-[var(--taali-purple-soft)] !text-[var(--taali-text)]' : 'min-w-[84px]'}
+                className={currentPage === item.id
+                  ? 'min-w-[84px] !rounded-full !border !border-[var(--taali-border-soft)] !bg-[var(--taali-surface)] !text-[var(--taali-text)] shadow-[var(--taali-shadow-soft)]'
+                  : 'min-w-[84px] !rounded-full !text-[var(--taali-muted)] hover:!text-[var(--taali-text)]'}
                 onClick={() => onNavigate(item.id)}
               >
                 {item.label}
@@ -97,14 +99,17 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          <GlobalThemeToggle className="shrink-0" />
-          <div className="hidden sm:flex flex-col text-right leading-tight">
-            <span className="font-mono text-xs text-[var(--taali-text)]">{displayName}</span>
-            <span className="font-mono text-xs text-[var(--taali-muted)]">{orgName}</span>
+          <div className="hidden sm:flex items-center gap-2 rounded-full border border-[var(--taali-border-soft)] bg-[var(--taali-nav-pill-bg)] px-2 py-1.5 shadow-[var(--taali-shadow-soft)] backdrop-blur-md">
+            <GlobalThemeToggle className="shrink-0" />
+            <div className="flex flex-col text-right leading-tight">
+              <span className="font-mono text-xs text-[var(--taali-text)]">{displayName}</span>
+              <span className="font-mono text-xs text-[var(--taali-muted)]">{orgName}</span>
+            </div>
+            <div className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,var(--taali-purple),#6b4dff)] text-xs font-bold text-white shadow-[var(--taali-shadow-soft)]">
+              {initials}
+            </div>
           </div>
-          <div className="flex h-9 w-9 items-center justify-center rounded-full border border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,var(--taali-purple),#6b4dff)] text-xs font-bold text-white shadow-[var(--taali-shadow-soft)]">
-            {initials}
-          </div>
+          <GlobalThemeToggle className="sm:hidden shrink-0" />
           <Button
             variant="ghost"
             size="sm"
@@ -126,13 +131,24 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
         </div>
       </div>
       {mobileOpen && (
-        <div className="md:hidden border-t-2 border-[var(--taali-border)] bg-[var(--taali-surface)] px-6 py-4 flex flex-col gap-2">
+        <div className="md:hidden flex flex-col gap-2 border-t border-[var(--taali-border-soft)] bg-[var(--taali-nav-bg)] px-6 py-4 backdrop-blur-md">
+          <div className="mb-1 flex items-center justify-between rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-3 py-2">
+            <div className="min-w-0">
+              <div className="truncate font-mono text-xs text-[var(--taali-text)]">{displayName}</div>
+              <div className="truncate font-mono text-xs text-[var(--taali-muted)]">{orgName}</div>
+            </div>
+            <div className="flex h-8 w-8 items-center justify-center rounded-full border border-[var(--taali-border-soft)] bg-[linear-gradient(145deg,var(--taali-purple),#6b4dff)] text-xs font-bold text-white shadow-[var(--taali-shadow-soft)]">
+              {initials}
+            </div>
+          </div>
           {NAV_ITEMS.map((item) => (
             <Button
               key={item.id}
-              variant={currentPage === item.id ? 'primary' : 'ghost'}
+              variant={currentPage === item.id ? 'secondary' : 'ghost'}
               size="sm"
-              className="font-mono w-full justify-start"
+              className={currentPage === item.id
+                ? 'font-mono w-full justify-start !rounded-[var(--taali-radius-control)] !bg-[var(--taali-purple-soft)]'
+                : 'font-mono w-full justify-start'}
               onClick={() => handleNav(item.id)}
             >
               {item.label}

@@ -20,6 +20,10 @@ from ...services.task_repo_service import (
     task_main_repo_path,
 )
 from ...services.assessment_repository_service import AssessmentRepositoryService
+from ...services.task_catalog import (
+    canonical_task_catalog_dir,
+    sync_template_task_specs,
+)
 from ...services.task_spec_loader import load_task_specs
 
 logger = logging.getLogger(__name__)
@@ -111,50 +115,8 @@ def _serialize_task_response(task: Task) -> TaskResponse:
 
 
 def _resolve_tasks_dir() -> Optional[Path]:
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / "tasks"
-        if candidate.is_dir() and any(candidate.glob("*.json")):
-            return candidate
-    return None
-
-
-def _build_template_task_payload(spec: Dict[str, Any]) -> Dict[str, Any]:
-    task_id_str = spec.get("task_id", "unknown")
-    name = spec.get("name", task_id_str)
-    role = spec.get("role")
-    scenario = spec.get("scenario")
-    known_keys = {
-        "task_id",
-        "name",
-        "role",
-        "duration_minutes",
-        "claude_budget_limit_usd",
-        "calibration_prompt",
-        "scenario",
-        "repo_structure",
-        "evaluation_rubric",
-    }
-    extra_data = {k: v for k, v in spec.items() if k not in known_keys}
-    return {
-        "organization_id": None,
-        "name": name,
-        "description": scenario[:500] if scenario else name,
-        "task_type": role or "general",
-        "difficulty": "medium",
-        "duration_minutes": spec.get("duration_minutes", 30),
-        "starter_code": None,
-        "test_code": None,
-        "is_template": True,
-        "is_active": True,
-        "calibration_prompt": spec.get("calibration_prompt"),
-        "claude_budget_limit_usd": spec.get("claude_budget_limit_usd"),
-        "task_key": task_id_str,
-        "role": role,
-        "scenario": scenario,
-        "repo_structure": spec.get("repo_structure"),
-        "evaluation_rubric": spec.get("evaluation_rubric"),
-        "extra_data": extra_data or None,
-    }
+    candidate = canonical_task_catalog_dir()
+    return candidate if candidate.is_dir() and any(candidate.glob("*.json")) else None
 
 
 def _sync_template_task_specs_if_needed(db: Session) -> None:
@@ -181,53 +143,15 @@ def _sync_template_task_specs_if_needed(db: Session) -> None:
     if not specs:
         return
 
-    existing_templates = {
-        task.task_key: task
-        for task in db.query(Task).filter(Task.is_template == True, Task.organization_id == None).all()  # noqa: E712,E711
-        if task.task_key
-    }
-    spec_task_keys: set[str] = set()
-    created = 0
-    updated = 0
-    deactivated = 0
-
     try:
-        for spec in specs:
-            task_key = spec.get("task_id")
-            if not task_key:
-                continue
-            spec_task_keys.add(task_key)
-
-            payload = _build_template_task_payload(spec)
-            existing = existing_templates.get(task_key)
-            if existing is None:
-                db.add(Task(**payload))
-                created += 1
-                continue
-
-            has_changes = False
-            for field, value in payload.items():
-                if getattr(existing, field) != value:
-                    setattr(existing, field, value)
-                    has_changes = True
-            if has_changes:
-                updated += 1
-
-        # Soft-delete stale templates removed from tasks/*.json
-        for task_key, task in existing_templates.items():
-            if task_key in spec_task_keys:
-                continue
-            if task.is_active:
-                task.is_active = False
-                deactivated += 1
-
-        if created or updated or deactivated:
-            db.commit()
+        stats = sync_template_task_specs(db, specs)
+        if any(stats.values()):
             logger.info(
-                "Task template sync complete: created=%d updated=%d deactivated=%d",
-                created,
-                updated,
-                deactivated,
+                "Task template sync complete: created=%d updated=%d deactivated=%d preserved_referenced=%d",
+                stats["created"],
+                stats["updated"],
+                stats["deactivated"],
+                stats["preserved_referenced"],
             )
     except Exception:
         db.rollback()

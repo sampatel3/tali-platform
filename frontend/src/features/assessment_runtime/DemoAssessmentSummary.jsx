@@ -9,7 +9,9 @@ import {
 } from 'recharts';
 
 import { Button, Card, Panel } from '../../shared/ui/TaaliPrimitives';
+import { formatScale100Score } from '../../lib/scoreDisplay';
 import { AssessmentBrandGlyph } from './AssessmentBrandGlyph';
+import { BrandLabel } from '../../shared/ui/Branding';
 
 const formatDuration = (seconds) => {
   const safeSeconds = Math.max(0, Number(seconds) || 0);
@@ -47,7 +49,7 @@ export const DemoAssessmentSummary = ({
 
   return (
     <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
-      <nav className="border-b-2 border-black bg-white">
+      <nav className="border-b border-[var(--taali-border-soft)] bg-[var(--taali-surface)] backdrop-blur-sm">
         <div className="mx-auto flex max-w-7xl items-center justify-between gap-3 px-6 py-4">
           <div className="flex items-center gap-3">
             <AssessmentBrandGlyph />
@@ -61,9 +63,7 @@ export const DemoAssessmentSummary = ({
 
       <div className="mx-auto max-w-6xl px-6 py-10">
         <Panel className="p-6">
-          <div className="mb-2 inline-flex border-2 border-black bg-[var(--taali-purple)] px-3 py-1 font-mono text-xs font-bold text-white">
-            TAALI PROFILE
-          </div>
+          <BrandLabel className="mb-2" toneClassName="text-[#7F39FB]">TAALI Profile</BrandLabel>
           <h1 className="text-3xl font-bold">
             {profile?.fullName ? `${profile.fullName}'s` : 'Your'} TAALI profile
           </h1>
@@ -104,17 +104,17 @@ export const DemoAssessmentSummary = ({
               <div className="mt-3 grid gap-2 font-mono text-sm">
                 <div>
                   <span className="text-[var(--taali-muted)]">You:</span>{' '}
-                  <span className="font-bold">{summary?.comparison?.candidateScore ?? 0}/100</span>
+                  <span className="font-bold">{formatScale100Score(summary?.comparison?.candidateScore ?? 0, '0-100')}</span>
                 </div>
                 <div>
                   <span className="text-[var(--taali-muted)]">Average:</span>{' '}
-                  <span className="font-bold">{summary?.comparison?.benchmarkScore ?? 0}/100</span>
+                  <span className="font-bold">{formatScale100Score(summary?.comparison?.benchmarkScore ?? 0, '0-100')}</span>
                 </div>
                 <div>
                   <span className="text-[var(--taali-muted)]">Delta:</span>{' '}
                   <span className={`font-bold ${(summary?.comparison?.deltaScore || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
                     {(summary?.comparison?.deltaScore || 0) >= 0 ? '+' : ''}
-                    {summary?.comparison?.deltaScore || 0}
+                    {Number(summary?.comparison?.deltaScore || 0).toFixed(1)}
                   </span>
                 </div>
               </div>

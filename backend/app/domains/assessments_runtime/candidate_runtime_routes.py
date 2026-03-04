@@ -16,8 +16,10 @@ from ...components.assessments.repository import (
     validate_assessment_token,
 )
 from ...components.assessments.service import (
+    CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE,
     enforce_active_or_timeout,
     enforce_not_paused,
+    get_assessment_start_gate,
     start_or_resume_assessment,
     store_cv_upload,
     submit_assessment as _submit_assessment,
@@ -54,17 +56,18 @@ router.include_router(candidate_terminal_router)
 DEMO_ORG_SLUG = "taali-demo"
 DEMO_ORG_NAME = "TAALI Demo Leads"
 DEMO_TRACK_TASK_KEYS = {
-    # Primary demo track: canonical tasks for product demos (from tasks/*.json).
-    "data_eng_super_platform_crisis": "data_eng_super_platform_crisis",
-    "ai_eng_super_production_launch": "ai_eng_super_production_launch",
-    "full_stack_secure_feature_delivery": "full_stack_secure_feature_delivery",
+    # Primary demo track: canonical tasks for product demos.
+    "data_eng_aws_glue_pipeline_recovery": "data_eng_aws_glue_pipeline_recovery",
+    "ai_eng_genai_production_readiness": "ai_eng_genai_production_readiness",
     # Backward-compatible aliases (route to current tasks; legacy keys removed from repo).
-    "data_eng_a_pipeline_reliability": "data_eng_super_platform_crisis",
-    "data_eng_b_cdc_fix": "data_eng_super_platform_crisis",
-    "data_eng_c_backfill_schema": "data_eng_super_platform_crisis",
-    "backend-reliability": "data_eng_super_platform_crisis",
-    "frontend-debugging": "data_eng_super_platform_crisis",
-    "data-pipeline": "data_eng_super_platform_crisis",
+    "data_eng_super_platform_crisis": "data_eng_aws_glue_pipeline_recovery",
+    "ai_eng_super_production_launch": "ai_eng_genai_production_readiness",
+    "data_eng_a_pipeline_reliability": "data_eng_aws_glue_pipeline_recovery",
+    "data_eng_b_cdc_fix": "data_eng_aws_glue_pipeline_recovery",
+    "data_eng_c_backfill_schema": "data_eng_aws_glue_pipeline_recovery",
+    "backend-reliability": "data_eng_aws_glue_pipeline_recovery",
+    "frontend-debugging": "data_eng_aws_glue_pipeline_recovery",
+    "data-pipeline": "data_eng_aws_glue_pipeline_recovery",
 }
 DEMO_TRACK_KEYS = set(DEMO_TRACK_TASK_KEYS.keys())
 
@@ -179,11 +182,16 @@ def start_assessment(
         raise HTTPException(status_code=404, detail="Invalid assessment token")
     if bool(getattr(assessment, "is_voided", False)):
         raise HTTPException(status_code=400, detail="assessment_voided")
-    return start_or_resume_assessment(
-        assessment,
-        db,
-        calibration_warmup_prompt=(payload.calibration_warmup_prompt if payload else None),
-    )
+    try:
+        return start_or_resume_assessment(
+            assessment,
+            db,
+            calibration_warmup_prompt=(payload.calibration_warmup_prompt if payload else None),
+        )
+    except HTTPException as exc:
+        if exc.status_code == 402:
+            raise HTTPException(status_code=402, detail=CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE) from exc
+        raise
 
 
 @router.get("/token/{token}/preview")
@@ -207,12 +215,18 @@ def preview_assessment(token: str, db: Session = Depends(get_db)):
         or str(extra_data.get("calibration_prompt") or "").strip()
         or (settings.DEFAULT_CALIBRATION_PROMPT or "").strip()
     )
+    start_gate = get_assessment_start_gate(assessment, db)
     return {
         "assessment_id": assessment.id,
         "token": assessment.token,
         "status": str(getattr(assessment.status, "value", assessment.status) or ""),
         "expires_at": assessment.expires_at,
         "duration_minutes": assessment.duration_minutes,
+        "start_gate": {
+            "can_start": bool(start_gate.get("can_start")),
+            "reason": start_gate.get("reason"),
+            "message": start_gate.get("message"),
+        },
         "task": {
             "name": task.name,
             "role": task.role,

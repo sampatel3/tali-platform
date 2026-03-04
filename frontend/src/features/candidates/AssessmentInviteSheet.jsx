@@ -73,24 +73,24 @@ export const AssessmentInviteSheet = ({
       )}
     >
       {!draft ? (
-        <Card className="border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <Card className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-3 py-2 text-sm text-[var(--taali-warning)]">
           Invite details unavailable.
         </Card>
       ) : (
         <div className="space-y-4">
           {draft.noCv ? (
-            <Card className="border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+            <Card className="border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-3 py-2 text-sm text-[var(--taali-warning)]">
               No CV uploaded. Role fit scoring (CV ↔ Job) will show N/A until a CV is added.
             </Card>
           ) : null}
-          <Card className="bg-[var(--taali-surface-subtle)] px-3 py-2 text-sm text-gray-700">
+          <Card className="px-3 py-2 text-sm text-[var(--taali-text)]">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <div className="font-semibold text-gray-900">Candidate</div>
-                <div className="text-gray-700">{draft.to}</div>
+                <div className="font-semibold text-[var(--taali-text)]">Candidate</div>
+                <div className="text-[var(--taali-text)]">{draft.to}</div>
               </div>
               {draft.inviteSentAt ? (
-                <div className="text-xs text-gray-500">
+                <div className="text-xs text-[var(--taali-muted)]">
                   Generated {formatTimestamp(draft.inviteSentAt)}
                 </div>
               ) : null}
@@ -99,7 +99,7 @@ export const AssessmentInviteSheet = ({
 
           <div className="space-y-2">
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Assessment link
               </span>
               <div className="flex gap-2">
@@ -118,7 +118,7 @@ export const AssessmentInviteSheet = ({
             </label>
 
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Subject
               </span>
               <div className="flex gap-2">
@@ -137,7 +137,7 @@ export const AssessmentInviteSheet = ({
             </label>
 
             <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-gray-500">
+              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Email body
               </span>
               <Textarea

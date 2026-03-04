@@ -23,6 +23,13 @@ from ...models.user import User
 from ...platform.request_context import get_request_id
 from ...services.candidate_feedback_engine import build_candidate_feedback_payload
 from ...services.fit_matching_service import calculate_cv_job_match_sync
+from ...services.taali_scoring import (
+    ROLE_FIT_WEIGHTS,
+    TAALI_SCORING_RUBRIC_VERSION,
+    TAALI_WEIGHTS,
+    compute_role_fit_score,
+    compute_taali_score,
+)
 from .repository import (
     append_assessment_timeline_event,
     build_timeline,
@@ -109,6 +116,19 @@ def _extract_process_output(result: Any) -> tuple[str, str, int | None]:
     return stdout, stderr, exit_code
 
 
+def _execution_stdout_text(result: Any) -> str:
+    if isinstance(result, dict):
+        return str(result.get("stdout") or "")
+
+    logs = getattr(result, "logs", None)
+    raw_stdout = getattr(logs, "stdout", None) if logs is not None else None
+    if isinstance(raw_stdout, list):
+        return "\n".join(str(item) for item in raw_stdout)
+    if raw_stdout is not None:
+        return str(raw_stdout)
+    return str(getattr(result, "stdout", "") or "")
+
+
 def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[str, int]:
     if not parse_pattern:
         return {"passed": 0, "failed": 0, "total": 0}
@@ -142,6 +162,13 @@ def _parse_test_runner_results(output: str, parse_pattern: str | None) -> Dict[s
             except (TypeError, ValueError):
                 passed = 0
 
+    if passed == 0:
+        pass_match = re.search(r"(?i)(\d+)\s+passed", output or "")
+        if pass_match:
+            try:
+                passed = int(pass_match.group(1))
+            except (TypeError, ValueError):
+                passed = 0
     if failed == 0:
         fail_match = re.search(r"(?i)(\d+)\s+failed", output or "")
         if fail_match:
@@ -172,10 +199,10 @@ def _run_task_test_runner(
 
     working_dir = str(config.get("working_dir") or repo_root).strip() or repo_root
     try:
-        timeout_seconds = float(config.get("timeout_seconds") or 60)
+        timeout_seconds = int(config.get("timeout_seconds") or 60)
     except (TypeError, ValueError):
-        timeout_seconds = 60.0
-    timeout_seconds = max(5.0, min(timeout_seconds, 600.0))
+        timeout_seconds = 60
+    timeout_seconds = max(5, min(timeout_seconds, 600))
     parse_pattern = str(config.get("parse_pattern") or "").strip()
 
     try:
@@ -205,17 +232,21 @@ def _run_task_test_runner(
             "total": total,
         }
     except Exception as exc:
+        stdout, stderr, exit_code = _extract_process_output(exc)
+        combined = "\n".join(part for part in [stdout, stderr] if part)
+        parsed = _parse_test_runner_results(combined, parse_pattern)
         return {
             "success": False,
             "source": "task_test_runner",
             "command": command,
             "working_dir": working_dir,
-            "stdout": "",
-            "stderr": "",
-            "error": str(exc),
-            "passed": 0,
-            "failed": 0,
-            "total": 0,
+            "stdout": stdout,
+            "stderr": stderr or (str(exc) if exit_code is None else ""),
+            "exit_code": exit_code,
+            "error": str(exc) if exit_code is None else None,
+            "passed": parsed["passed"],
+            "failed": parsed["failed"],
+            "total": parsed["total"],
         }
 
 
@@ -275,45 +306,54 @@ def submit_assessment_impl(
         evidence = collect_git_evidence_fn(sandbox, repo_root)
         assessment.git_evidence = evidence
         assessment.final_repo_state = evidence.get("head_sha")
+        is_demo_assessment = bool(getattr(assessment, "is_demo", False))
         if evidence.get("status_porcelain"):
             branch_name = (getattr(assessment, "assessment_branch", None) or "").strip()
-            push_target = f"HEAD:{branch_name}" if branch_name else "HEAD"
-            push_result = sandbox.run_code(
-                "import json,subprocess,pathlib\n"
-                f"repo=pathlib.Path({repo_root!r})\n"
-                "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True,text=True)\n"
-                "commit=subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','submit: candidate'],cwd=repo,check=False,capture_output=True,text=True)\n"
-                f"push=subprocess.run(['git','push','origin',{push_target!r}],cwd=repo,check=False,capture_output=True,text=True)\n"
-                "payload={\n"
-                " 'commit_returncode': commit.returncode,\n"
-                " 'commit_stderr': (commit.stderr or '')[-500:],\n"
-                " 'push_returncode': push.returncode,\n"
-                " 'push_stderr': (push.stderr or '')[-500:],\n"
-                "}\n"
-                "print(json.dumps(payload))\n"
-            )
-            push_payload: Dict[str, Any] = {}
-            try:
-                out = (push_result.get("stdout") or "").strip().splitlines()
-                if out:
-                    push_payload = json.loads(out[-1])
-            except Exception:
-                push_payload = {}
-
-            push_rc = int(push_payload.get("push_returncode", 0) or 0)
-            if push_rc != 0:
-                evidence["push_returncode"] = push_rc
-                evidence["push_stderr"] = push_payload.get("push_stderr", "")
+            if is_demo_assessment and not branch_name:
+                evidence["push_skipped"] = True
+                evidence["push_reason"] = "demo_local_repository"
                 assessment.git_evidence = evidence
-                if not bool(getattr(settings_obj, "GITHUB_MOCK_MODE", False)):
-                    raise HTTPException(status_code=500, detail="Failed to push candidate branch updates")
+            else:
+                push_target = f"HEAD:{branch_name}" if branch_name else "HEAD"
+                push_result = sandbox.run_code(
+                    "import json,subprocess,pathlib\n"
+                    f"repo=pathlib.Path({repo_root!r})\n"
+                    "subprocess.run(['git','add','-A'],cwd=repo,check=False,capture_output=True,text=True)\n"
+                    "commit=subprocess.run(['git','-c','user.email=taali@local','-c','user.name=TAALI','commit','-m','submit: candidate'],cwd=repo,check=False,capture_output=True,text=True)\n"
+                    f"push=subprocess.run(['git','push','origin',{push_target!r}],cwd=repo,check=False,capture_output=True,text=True)\n"
+                    "payload={\n"
+                    " 'commit_returncode': commit.returncode,\n"
+                    " 'commit_stderr': (commit.stderr or '')[-500:],\n"
+                    " 'push_returncode': push.returncode,\n"
+                    " 'push_stderr': (push.stderr or '')[-500:],\n"
+                    "}\n"
+                    "print(json.dumps(payload))\n"
+                )
+                push_payload: Dict[str, Any] = {}
+                try:
+                    out = _execution_stdout_text(push_result).strip().splitlines()
+                    if out:
+                        push_payload = json.loads(out[-1])
+                except Exception:
+                    push_payload = {}
 
-            evidence = collect_git_evidence_fn(sandbox, repo_root)
-            evidence["push_returncode"] = push_payload.get("push_returncode", 0)
-            if push_payload.get("push_stderr"):
-                evidence["push_stderr"] = push_payload.get("push_stderr", "")
-            assessment.git_evidence = evidence
-            assessment.final_repo_state = evidence.get("head_sha")
+                push_rc = int(push_payload.get("push_returncode", 0) or 0)
+                if push_rc != 0:
+                    evidence["push_returncode"] = push_rc
+                    evidence["push_stderr"] = push_payload.get("push_stderr", "")
+                    assessment.git_evidence = evidence
+                    if not bool(getattr(settings_obj, "GITHUB_MOCK_MODE", False)) and not is_demo_assessment:
+                        raise HTTPException(status_code=500, detail="Failed to push candidate branch updates")
+
+                evidence = collect_git_evidence_fn(sandbox, repo_root)
+                evidence["push_returncode"] = push_payload.get("push_returncode", 0)
+                if push_payload.get("push_stderr"):
+                    evidence["push_stderr"] = push_payload.get("push_stderr", "")
+                if push_rc != 0 and is_demo_assessment:
+                    evidence["push_skipped"] = True
+                    evidence["push_reason"] = "demo_push_not_required"
+                assessment.git_evidence = evidence
+                assessment.final_repo_state = evidence.get("head_sha")
     except HTTPException:
         raise
     except Exception:
@@ -492,12 +532,20 @@ def submit_assessment_impl(
     explanations = composite.get("explanations", {})
 
     cv_fit_score_100 = cv_match_result.get("cv_job_match_score")
-    if cv_fit_score_100 is not None:
-        taali_score_100 = round((assessment_score_100 + float(cv_fit_score_100)) / 2.0, 1)
-        score_mode = "assessment_plus_cv"
-    else:
+    requirements_fit_score_100 = (
+        cv_match_result.get("match_details", {}).get("requirements_match_score_100")
+        if isinstance(cv_match_result.get("match_details", {}), dict)
+        else None
+    )
+    role_fit_score_100 = cv_match_result.get("role_fit_score")
+    if role_fit_score_100 is None:
+        role_fit_score_100 = compute_role_fit_score(cv_fit_score_100, requirements_fit_score_100)
+    taali_score_100 = compute_taali_score(assessment_score_100, role_fit_score_100)
+    if taali_score_100 is None:
         taali_score_100 = round(float(assessment_score_100), 1)
         score_mode = "assessment_only_fallback"
+    else:
+        score_mode = "assessment_plus_role_fit" if role_fit_score_100 is not None else "assessment_only_fallback"
 
     # --- 4. Persist ---
     assessment.status = AssessmentStatus.COMPLETED
@@ -586,23 +634,30 @@ def submit_assessment_impl(
         "category_scores": category_scores,
         "detailed_scores": detailed_scores,
         "explanations": explanations,
-        "score_formula_version": "taali_v2_blended_50_50",
+        "score_formula_version": TAALI_SCORING_RUBRIC_VERSION,
         "score_mode": score_mode,
         "score_components": {
             "taali_score": taali_score_100,
             "assessment_score": assessment_score_100,
             "cv_fit_score": cv_fit_score_100,
-            "requirements_fit_score": (
-                cv_match_result.get("match_details", {}).get("requirements_match_score_100")
-                if isinstance(cv_match_result.get("match_details", {}), dict)
-                else None
-            ),
-            "weights": {"assessment_score": 0.5, "cv_fit_score": 0.5},
+            "requirements_fit_score": requirements_fit_score_100,
+            "role_fit_score": role_fit_score_100,
+            "role_fit_components": {
+                "cv_fit_score": cv_fit_score_100,
+                "requirements_fit_score": requirements_fit_score_100,
+            },
+            "weights": {
+                "cv_fit_score": ROLE_FIT_WEIGHTS["cv_fit"],
+                "requirements_fit_score": ROLE_FIT_WEIGHTS["requirements_fit"],
+                "assessment_score": TAALI_WEIGHTS["assessment"],
+                "role_fit_score": TAALI_WEIGHTS["role_fit"],
+            },
         },
         "cv_job_match": {
             "overall": cv_match_result.get("cv_job_match_score"),
             "skills": cv_match_result.get("skills_match"),
             "experience": cv_match_result.get("experience_relevance"),
+            "role_fit": role_fit_score_100,
         },
         "heuristic_summary": heuristic_summary,
         "uncapped_final_score": composite.get("uncapped_final_score"),

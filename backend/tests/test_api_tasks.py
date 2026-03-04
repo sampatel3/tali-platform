@@ -132,7 +132,7 @@ def test_list_tasks_deactivates_removed_template_specs(client, db, monkeypatch):
     )
     current_template = Task(
         organization_id=None,
-        name="Data Platform Incident Triage and Recovery",
+        name="AWS Glue Pipeline Recovery",
         description="Current demo template",
         task_type="python",
         difficulty="medium",
@@ -141,7 +141,7 @@ def test_list_tasks_deactivates_removed_template_specs(client, db, monkeypatch):
         test_code="",
         is_template=True,
         is_active=True,
-        task_key="data_eng_super_platform_crisis",
+        task_key="data_eng_aws_glue_pipeline_recovery",
     )
     db.add(stale_template)
     db.add(current_template)
@@ -154,8 +154,8 @@ def test_list_tasks_deactivates_removed_template_specs(client, db, monkeypatch):
         "app.domains.tasks_repository.routes.load_task_specs",
         lambda _: [
             {
-                "task_id": "data_eng_super_platform_crisis",
-                "name": "Data Platform Incident Triage and Recovery",
+                "task_id": "data_eng_aws_glue_pipeline_recovery",
+                "name": "AWS Glue Pipeline Recovery",
                 "role": "data_engineer",
                 "duration_minutes": 30,
                 "scenario": "Current task",
@@ -169,7 +169,7 @@ def test_list_tasks_deactivates_removed_template_specs(client, db, monkeypatch):
     assert resp.status_code == 200
     data = resp.json()
     returned_keys = {task.get("task_key") for task in data}
-    assert "data_eng_super_platform_crisis" in returned_keys
+    assert "data_eng_aws_glue_pipeline_recovery" in returned_keys
     assert "data_eng_b_cdc_fix" not in returned_keys
 
     db.refresh(stale_template)
@@ -187,6 +187,17 @@ def test_get_task_success(client):
     resp = client.get(f"/api/v1/tasks/{task_id}", headers=headers)
     assert resp.status_code == 200
     assert resp.json()["name"] == "Fetch Me"
+
+
+def test_get_task_returns_full_evaluation_rubric_for_recruiter(client):
+    headers, _ = auth_headers(client)
+    rubric = {"communication": {"weight": 1.0, "criteria": {"excellent": "clear", "poor": "unclear"}}}
+    task_id = create_task_via_api(client, headers, evaluation_rubric=rubric).json()["id"]
+
+    resp = client.get(f"/api/v1/tasks/{task_id}", headers=headers)
+
+    assert resp.status_code == 200
+    assert resp.json()["evaluation_rubric"] == rubric
 
 
 def test_get_task_not_found_404(client):
@@ -338,18 +349,18 @@ def test_create_task_creates_template_repo(client, monkeypatch):
         def create_template_repo(self, task):
             captured["task_key"] = task.task_key
             captured["repo_structure"] = task.repo_structure
-            return "mock://taali-assessments/data_eng_super_platform_crisis"
+            return "mock://taali-assessments/data_eng_aws_glue_pipeline_recovery"
 
     monkeypatch.setattr("app.domains.tasks_repository.routes.AssessmentRepositoryService", StubRepoService)
 
     resp = create_task_via_api(
         client,
         headers,
-        task_id="data_eng_super_platform_crisis",
+        task_id="data_eng_aws_glue_pipeline_recovery",
         repo_structure={"name": "transaction-pipeline", "files": {"README.md": "# Transaction Pipeline"}},
     )
     assert resp.status_code == 201
-    assert captured["task_key"] == "data_eng_super_platform_crisis"
+    assert captured["task_key"] == "data_eng_aws_glue_pipeline_recovery"
     assert captured["repo_structure"]["name"] == "transaction-pipeline"
 
 
@@ -371,9 +382,9 @@ def test_update_task_recreates_template_repo(client, monkeypatch):
     task_id = create_task_via_api(client, headers, task_id="seed_task").json()["id"]
     resp = client.patch(
         f"/api/v1/tasks/{task_id}",
-        json={"task_id": "data_eng_super_platform_crisis"},
+        json={"task_id": "data_eng_aws_glue_pipeline_recovery"},
         headers=headers,
     )
     assert resp.status_code == 200
     assert calls["count"] >= 2
-    assert calls["task_key"] == "data_eng_super_platform_crisis"
+    assert calls["task_key"] == "data_eng_aws_glue_pipeline_recovery"

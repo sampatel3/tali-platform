@@ -194,7 +194,7 @@ describe('CandidatesPage', () => {
   it('renders the global theme switch inside the candidates top nav', async () => {
     await renderAppOnCandidatesPage();
 
-    expect(within(screen.getByRole('navigation')).getByRole('switch')).toBeInTheDocument();
+    expect(within(screen.getByRole('navigation')).getAllByRole('group', { name: /theme toggle/i }).length).toBeGreaterThan(0);
   });
 
   it('shows role list and role summary context', async () => {
@@ -465,18 +465,83 @@ describe('CandidatesPage', () => {
 
     await waitFor(() => {
       const dialog = screen.getByRole('dialog', { name: 'Rationale Candidate' });
-      expect(within(dialog).getByText('Assessment score')).toBeInTheDocument();
-      expect(within(dialog).getByText('CV fit')).toBeInTheDocument();
-      expect(within(dialog).getByText('Requirements fit')).toBeInTheDocument();
-      expect(within(dialog).getByText('Pipeline status')).toBeInTheDocument();
+      expect(within(dialog).getByText('TAALI score')).toBeInTheDocument();
+      expect(within(dialog).getByText('Assessment')).toBeInTheDocument();
+      expect(within(dialog).getAllByText('Role fit').length).toBeGreaterThan(0);
       expect(within(dialog).queryByText('Workable stage')).not.toBeInTheDocument();
       expect(within(dialog).getByText('Why this score')).toBeInTheDocument();
       expect(within(dialog).getByText('Recruiter requirements fit')).toBeInTheDocument();
+      expect(within(dialog).getByRole('button', { name: 'View full page' })).toBeInTheDocument();
       expect(within(dialog).getAllByText(/Matched recruiter requirements:/).length).toBeGreaterThanOrEqual(1);
-      expect(within(dialog).getByText(/Recruiter requirements coverage: 2\/2 met/)).toBeInTheDocument();
+      expect(within(dialog).getByText('Total: 2')).toBeInTheDocument();
+      expect(within(dialog).getByText('Met: 1')).toBeInTheDocument();
+      expect(within(dialog).getByText('Partial: 1')).toBeInTheDocument();
       expect(within(dialog).getByText('Matching skills')).toBeInTheDocument();
       expect(within(dialog).getByText('Enterprise production experience')).toBeInTheDocument();
-      expect(within(dialog).getByText('Compensation alignment to role band')).toBeInTheDocument();
+      expect(within(dialog).getAllByText('Compensation alignment to role band').length).toBeGreaterThan(0);
+    });
+  });
+
+  it('opens a standing candidate report page for CV-only candidates from the details sheet', async () => {
+    rolesApi.listApplications.mockResolvedValue({
+      data: [
+        {
+          id: 12,
+          candidate_id: 102,
+          candidate_email: 'standing@example.com',
+          candidate_name: 'Standing Candidate',
+          candidate_position: 'AI Full Stack Engineer',
+          role_name: 'AI Full Stack Engineer',
+          status: 'applied',
+          cv_filename: 'standing.pdf',
+          cv_match_score: 81,
+          cv_match_details: {
+            score_scale: '0-100',
+            summary: 'Strong enough CV evidence to review before sending an assessment.',
+            requirements_match_score_100: 74,
+          },
+          assessment_history: [],
+          created_at: '2026-01-10T10:00:00Z',
+          updated_at: '2026-01-10T10:00:00Z',
+        },
+      ],
+    });
+    rolesApi.getApplication.mockResolvedValue({
+      data: {
+        id: 12,
+        candidate_id: 102,
+        candidate_email: 'standing@example.com',
+        candidate_name: 'Standing Candidate',
+        candidate_position: 'AI Full Stack Engineer',
+        role_name: 'AI Full Stack Engineer',
+        status: 'applied',
+        cv_filename: 'standing.pdf',
+        cv_match_score: 81,
+        cv_match_details: {
+          score_scale: '0-100',
+          summary: 'Strong enough CV evidence to review before sending an assessment.',
+          requirements_match_score_100: 74,
+        },
+        assessment_history: [],
+        created_at: '2026-01-10T10:00:00Z',
+        updated_at: '2026-01-10T10:00:00Z',
+      },
+    });
+
+    await renderAppOnCandidatesPage();
+
+    const candidateCell = await screen.findByText('Standing Candidate');
+    const candidateRow = candidateCell.closest('tr');
+    expect(candidateRow).not.toBeNull();
+    fireEvent.click(within(candidateRow).getByRole('button', { name: 'Details' }));
+
+    const dialog = await screen.findByRole('dialog', { name: 'Standing Candidate' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'View full page' }));
+
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/candidates/12');
+      expect(screen.getByRole('button', { name: 'Back to Candidates' })).toBeInTheDocument();
+      expect(screen.getByText('Standing candidate report')).toBeInTheDocument();
     });
   });
 

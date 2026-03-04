@@ -12,6 +12,16 @@
   --taali-surface-muted: #fffaf3;
   --taali-surface-warm: #fff7eb;
   --taali-table-header: rgba(245, 241, 255, 0.92);
+  --taali-page-gradient-start: #fbf7f1;
+  --taali-page-gradient-end: #f6f3fb;
+  --taali-page-glow-left: rgba(157, 0, 255, 0.08);
+  --taali-page-glow-right: rgba(255, 196, 89, 0.08);
+  --taali-panel-bg: linear-gradient(155deg, rgba(255, 255, 255, 0.96), rgba(247, 243, 255, 0.9));
+  --taali-card-bg: linear-gradient(150deg, rgba(255, 255, 255, 0.94), rgba(248, 244, 255, 0.88));
+  --taali-page-header-bg: linear-gradient(155deg, rgba(255, 255, 255, 0.98), rgba(244, 239, 255, 0.92));
+  --taali-table-shell-bg: linear-gradient(180deg, rgba(255, 255, 255, 0.96), rgba(248, 245, 255, 0.9));
+  --taali-nav-bg: rgba(255, 251, 246, 0.82);
+  --taali-nav-pill-bg: rgba(255, 255, 255, 0.68);
   --taali-border: #1f2233;
   --taali-border-soft: rgba(31, 34, 51, 0.12);
   --taali-border-subtle: rgba(31, 34, 51, 0.08);
@@ -24,16 +34,29 @@
   --taali-purple-hover: #7f00db;
   --taali-purple-soft: #efe4ff;
   --taali-surface-hover: rgba(157, 0, 255, 0.06);
-  --taali-radius: 18px;
+  --taali-radius-control: 12px;
+  --taali-radius: var(--taali-radius-control);
   --taali-radius-card: 18px;
   --taali-radius-panel: 24px;
+  --taali-runtime-bg: #f5efe7;
+  --taali-runtime-panel: rgba(255, 255, 255, 0.92);
+  --taali-runtime-panel-alt: rgba(247, 243, 255, 0.9);
+  --taali-runtime-panel-muted: rgba(255, 247, 235, 0.9);
+  --taali-runtime-border: rgba(31, 34, 51, 0.14);
+  --taali-runtime-text: #151826;
+  --taali-runtime-muted: #676f82;
+  --taali-runtime-terminal-bg: #0f1422;
+  --taali-runtime-terminal-header: #151b2b;
+  --taali-runtime-terminal-text: #edf2ff;
+  --taali-runtime-selection: rgba(157, 0, 255, 0.22);
+  --taali-runtime-overlay: rgba(15, 23, 42, 0.62);
   --taali-font: 'IBM Plex Sans', 'Segoe UI', sans-serif;
   --taali-font-display: 'Space Grotesk', 'IBM Plex Sans', sans-serif;
   --taali-font-mono: 'JetBrains Mono', 'SFMono-Regular', monospace;
   --taali-ring: rgba(157, 0, 255, 0.18);
   --taali-shadow-soft: 0 18px 40px rgba(23, 19, 47, 0.07);
   --taali-shadow-strong: 0 28px 80px rgba(17, 24, 39, 0.18);
-  --taali-spacing: 8px;
+  --taali-spacing: 7px;
 
   /* Semantic colors */
   --taali-success: #16a34a;
@@ -66,17 +89,21 @@
   box-sizing: border-box;
 }
 
+html {
+  font-size: 15px;
+}
+
 body {
   font-family: var(--taali-font);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background:
-    radial-gradient(circle at top left, rgba(157, 0, 255, 0.08), transparent 26%),
-    radial-gradient(circle at top right, rgba(255, 196, 89, 0.08), transparent 24%),
-    linear-gradient(180deg, #fbf7f1 0%, #f6f3fb 100%);
+    radial-gradient(circle at top left, var(--taali-page-glow-left), transparent 26%),
+    radial-gradient(circle at top right, var(--taali-page-glow-right), transparent 24%),
+    linear-gradient(180deg, var(--taali-page-gradient-start) 0%, var(--taali-page-gradient-end) 100%);
   background-color: var(--taali-bg);
   color: var(--taali-text);
-  transition: background-color 0.2s ease, color 0.2s ease;
+  transition: background-color 0.2s ease, background 0.2s ease, color 0.2s ease;
 }
 
 /* Ensure all UI elements inherit the TAALI font (no system font drift) */
@@ -96,32 +123,32 @@ code {
 .taali-page {
   margin: 0 auto;
   width: 100%;
-  max-width: 80rem;
-  padding: calc(var(--taali-spacing) * 3) calc(var(--taali-spacing) * 2);
+  max-width: 78rem;
+  padding: calc(var(--taali-spacing) * 2.5) calc(var(--taali-spacing) * 2);
 }
 
 .taali-page-wide {
-  max-width: 92rem;
+  max-width: 88rem;
 }
 
 .taali-page-compact {
-  padding: calc(var(--taali-spacing) * 2.5) calc(var(--taali-spacing) * 2);
+  padding: calc(var(--taali-spacing) * 2.25) calc(var(--taali-spacing) * 2);
 }
 
 @media (min-width: 768px) {
   .taali-page {
-    padding: calc(var(--taali-spacing) * 4) calc(var(--taali-spacing) * 3);
+    padding: calc(var(--taali-spacing) * 3.5) calc(var(--taali-spacing) * 2.5);
   }
 
   .taali-page-compact {
-    padding: calc(var(--taali-spacing) * 3) calc(var(--taali-spacing) * 2.5);
+    padding: calc(var(--taali-spacing) * 2.75) calc(var(--taali-spacing) * 2.25);
   }
 }
 
 .taali-panel {
   border: 1px solid var(--taali-border-soft);
   border-radius: var(--taali-radius-panel);
-  background: var(--taali-surface);
+  background: var(--taali-panel-bg);
   box-shadow: var(--taali-shadow-soft);
   backdrop-filter: blur(10px);
 }
@@ -129,14 +156,15 @@ code {
 .taali-card {
   border: 1px solid var(--taali-border-soft);
   border-radius: var(--taali-radius-card);
-  background: rgba(255, 255, 255, 0.78);
+  background: var(--taali-card-bg);
+  box-shadow: var(--taali-shadow-soft);
 }
 
 .taali-page-header {
   border: 1px solid var(--taali-border-soft);
   border-radius: var(--taali-radius-panel);
-  background: rgba(255, 255, 255, 0.82);
-  padding: calc(var(--taali-spacing) * 3);
+  background: var(--taali-page-header-bg);
+  padding: calc(var(--taali-spacing) * 2.5);
   box-shadow: var(--taali-shadow-soft);
   backdrop-filter: blur(12px);
 }
@@ -146,11 +174,11 @@ code {
 }
 
 .taali-page-header-compact {
-  padding: calc(var(--taali-spacing) * 2);
+  padding: calc(var(--taali-spacing) * 1.75);
 }
 
 .taali-page-header-compact .taali-page-title {
-  font-size: 2rem;
+  font-size: 1.85rem;
 }
 
 .taali-page-header-compact .taali-page-subtitle {
@@ -160,7 +188,7 @@ code {
 
 .taali-btn {
   border: 1px solid var(--taali-border-soft);
-  border-radius: var(--taali-radius);
+  border-radius: var(--taali-radius-control);
   font-weight: 600;
   line-height: 1;
   transition: transform 0.18s ease, box-shadow 0.18s ease, background-color 0.18s ease, border-color 0.18s ease;
@@ -189,13 +217,13 @@ code {
 }
 
 .taali-btn-secondary {
-  background: rgba(255, 255, 255, 0.84);
+  background: var(--taali-surface);
   border-color: var(--taali-border-soft);
   color: var(--taali-text);
 }
 
 .taali-btn-secondary:hover:not(:disabled) {
-  background: rgba(243, 237, 255, 0.96);
+  background: var(--taali-surface-subtle);
   transform: translateY(-1px);
 }
 
@@ -206,7 +234,7 @@ code {
 }
 
 .taali-btn-ghost:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.7);
+  background: var(--taali-surface-hover);
   border-color: var(--taali-border-soft);
 }
 
@@ -226,8 +254,8 @@ code {
 .taali-textarea {
   width: 100%;
   border: 1px solid var(--taali-border-soft);
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.88);
+  border-radius: var(--taali-radius-control);
+  background: var(--taali-surface);
   color: var(--taali-text);
   font-size: 0.875rem;
   line-height: 1.25rem;
@@ -235,12 +263,12 @@ code {
 
 .taali-input,
 .taali-select {
-  min-height: 2.6rem;
-  padding: 0.5rem 0.75rem;
+  min-height: 2.45rem;
+  padding: 0.45rem 0.7rem;
 }
 
 .taali-textarea {
-  padding: 0.6rem 0.75rem;
+  padding: 0.55rem 0.7rem;
 }
 
 .taali-input::placeholder,
@@ -261,8 +289,8 @@ code {
   align-items: center;
   border: 1px solid var(--taali-border-muted);
   border-radius: 999px;
-  padding: 0.22rem 0.62rem;
-  font-size: 0.7rem;
+  padding: 0.18rem 0.56rem;
+  font-size: 0.68rem;
   line-height: 1.2;
   font-weight: 600;
 }
@@ -306,7 +334,7 @@ code {
 .taali-empty-state {
   border: 1.5px dashed var(--taali-border-muted);
   border-radius: var(--taali-radius-card);
-  background: #f9f8fd;
+  background: var(--taali-card-bg);
 }
 
 .taali-table-shell {
@@ -316,7 +344,7 @@ code {
   overflow-y: auto;
   max-width: 100%;
   overscroll-behavior: contain;
-  background: rgba(255, 255, 255, 0.84);
+  background: var(--taali-table-shell-bg);
   box-shadow: var(--taali-shadow-soft);
   backdrop-filter: blur(12px);
 }
@@ -332,7 +360,7 @@ code {
 
 .taali-table-shell th,
 .taali-table-shell td {
-  border-bottom: 1px solid #e7e3f4;
+  border-bottom: 1px solid var(--taali-border-subtle);
 }
 
 .taali-table-shell tbody tr:hover {
@@ -341,8 +369,64 @@ code {
 
 .taali-nav {
   border-bottom: 1px solid var(--taali-border-soft);
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--taali-nav-bg);
   backdrop-filter: blur(12px);
+  box-shadow: 0 10px 30px rgba(17, 24, 39, 0.06);
+}
+
+.taali-runtime {
+  background: var(--taali-runtime-bg);
+  color: var(--taali-runtime-text);
+}
+
+.taali-runtime-light {
+  --taali-runtime-bg: #f5efe7;
+  --taali-runtime-panel: rgba(255, 255, 255, 0.92);
+  --taali-runtime-panel-alt: rgba(247, 243, 255, 0.9);
+  --taali-runtime-panel-muted: rgba(255, 247, 235, 0.9);
+  --taali-runtime-border: rgba(31, 34, 51, 0.14);
+  --taali-runtime-text: #151826;
+  --taali-runtime-muted: #676f82;
+  --taali-runtime-terminal-bg: #0f1422;
+  --taali-runtime-terminal-header: #151b2b;
+  --taali-runtime-terminal-text: #edf2ff;
+  --taali-runtime-selection: rgba(157, 0, 255, 0.22);
+  --taali-runtime-overlay: rgba(15, 23, 42, 0.62);
+  --taali-purple-soft: #efe4ff;
+  --taali-success-soft: #edf9f1;
+  --taali-success-border: #8fd4ab;
+  --taali-warning-soft: #fff7ec;
+  --taali-warning-border: #f0c787;
+  --taali-danger-soft: #fff5f6;
+  --taali-danger-border: #f5a3a9;
+  --taali-info-soft: #eff6ff;
+  --taali-info-border: #93c5fd;
+  --taali-surface-hover: rgba(157, 0, 255, 0.06);
+}
+
+.taali-runtime-dark {
+  --taali-runtime-bg: #0b1220;
+  --taali-runtime-panel: rgba(15, 23, 42, 0.92);
+  --taali-runtime-panel-alt: rgba(23, 33, 52, 0.9);
+  --taali-runtime-panel-muted: rgba(29, 38, 58, 0.92);
+  --taali-runtime-border: rgba(148, 163, 184, 0.22);
+  --taali-runtime-text: #f8fafc;
+  --taali-runtime-muted: #b9c3d6;
+  --taali-runtime-terminal-bg: #060b14;
+  --taali-runtime-terminal-header: #0d1321;
+  --taali-runtime-terminal-text: #edf2ff;
+  --taali-runtime-selection: rgba(168, 85, 247, 0.28);
+  --taali-runtime-overlay: rgba(2, 6, 23, 0.78);
+  --taali-purple-soft: rgba(168, 85, 247, 0.28);
+  --taali-success-soft: rgba(34, 197, 94, 0.14);
+  --taali-success-border: rgba(34, 197, 94, 0.34);
+  --taali-warning-soft: rgba(245, 158, 11, 0.16);
+  --taali-warning-border: rgba(245, 158, 11, 0.34);
+  --taali-danger-soft: rgba(239, 68, 68, 0.14);
+  --taali-danger-border: rgba(239, 68, 68, 0.34);
+  --taali-info-soft: rgba(96, 165, 250, 0.16);
+  --taali-info-border: rgba(96, 165, 250, 0.34);
+  --taali-surface-hover: rgba(255, 255, 255, 0.06);
 }
 
 @keyframes taali-sheet-in {
@@ -383,25 +467,35 @@ code {
 }
 
 .dark {
-  --taali-bg: #0f172a;
-  --taali-surface: rgba(17, 24, 39, 0.82);
-  --taali-surface-elevated: #111827;
-  --taali-surface-subtle: #162033;
-  --taali-surface-muted: #192334;
-  --taali-surface-warm: #1b2434;
-  --taali-table-header: #1e293b;
-  --taali-border: #475569;
-  --taali-border-soft: rgba(148, 163, 184, 0.18);
-  --taali-border-subtle: rgba(148, 163, 184, 0.12);
-  --taali-border-muted: #334155;
+  --taali-bg: #071120;
+  --taali-surface: rgba(10, 18, 31, 0.88);
+  --taali-surface-elevated: #0d1727;
+  --taali-surface-subtle: #101b30;
+  --taali-surface-muted: #111d33;
+  --taali-surface-warm: #141d2e;
+  --taali-table-header: rgba(19, 31, 53, 0.94);
+  --taali-page-gradient-start: #060d19;
+  --taali-page-gradient-end: #0b1323;
+  --taali-page-glow-left: rgba(157, 0, 255, 0.14);
+  --taali-page-glow-right: rgba(71, 85, 105, 0.16);
+  --taali-panel-bg: linear-gradient(155deg, rgba(9, 16, 29, 0.94), rgba(15, 24, 42, 0.9));
+  --taali-card-bg: linear-gradient(150deg, rgba(11, 18, 32, 0.92), rgba(16, 25, 43, 0.86));
+  --taali-page-header-bg: linear-gradient(155deg, rgba(8, 14, 26, 0.96), rgba(17, 28, 49, 0.92));
+  --taali-table-shell-bg: linear-gradient(180deg, rgba(9, 16, 29, 0.95), rgba(13, 22, 39, 0.92));
+  --taali-nav-bg: rgba(8, 14, 26, 0.84);
+  --taali-nav-pill-bg: rgba(14, 22, 38, 0.82);
+  --taali-border: #2d3d5b;
+  --taali-border-soft: rgba(148, 163, 184, 0.17);
+  --taali-border-subtle: rgba(148, 163, 184, 0.1);
+  --taali-border-muted: rgba(148, 163, 184, 0.22);
   --taali-text: #f8fafc;
   --taali-inverse-bg: #020617;
   --taali-inverse-text: #f8fafc;
-  --taali-muted: #cbd5e1;
-  --taali-purple: #a855f7;
-  --taali-purple-hover: #9333ea;
-  --taali-purple-soft: #2e1065;
-  --taali-surface-hover: rgba(255, 255, 255, 0.04);
+  --taali-muted: #a6b3c9;
+  --taali-purple: #a243ff;
+  --taali-purple-hover: #8b2cf5;
+  --taali-purple-soft: rgba(162, 67, 255, 0.18);
+  --taali-surface-hover: rgba(162, 67, 255, 0.1);
   --taali-shadow-soft: 0 18px 40px rgba(2, 6, 23, 0.34);
   --taali-shadow-strong: 0 28px 80px rgba(2, 6, 23, 0.56);
 
@@ -431,6 +525,10 @@ code {
 }
 
 .dark body {
+  background:
+    radial-gradient(circle at top left, var(--taali-page-glow-left), transparent 28%),
+    radial-gradient(circle at top right, var(--taali-page-glow-right), transparent 24%),
+    linear-gradient(180deg, var(--taali-page-gradient-start) 0%, var(--taali-page-gradient-end) 100%);
   background-color: var(--taali-bg);
   color: var(--taali-text);
 }
@@ -445,24 +543,24 @@ code {
 }
 
 .dark .taali-table-shell tbody tr:hover {
-  background: #1e293b;
+  background: var(--taali-surface-hover);
 }
 
 .dark .taali-badge-muted {
-  background: #1e293b;
-  color: #cbd5e1;
+  background: rgba(20, 31, 53, 0.92);
+  color: var(--taali-muted);
 }
 
 .dark .taali-empty-state {
-  background: #1e293b;
+  background: var(--taali-surface-subtle);
 }
 
 .dark .taali-btn-secondary:hover:not(:disabled) {
-  background: #1e293b;
+  background: var(--taali-surface-subtle);
 }
 
 .dark .taali-btn-ghost:hover:not(:disabled) {
-  background: #1e293b;
+  background: var(--taali-surface-hover);
 }
 
 /* Utility class bridge so legacy light Tailwind classes render well in default dark mode */

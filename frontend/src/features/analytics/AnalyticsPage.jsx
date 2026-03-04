@@ -352,9 +352,16 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                   <ResponsiveContainer>
                     <BarChart data={weekly}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--taali-border-muted)" />
-                      <XAxis dataKey="week" />
-                      <YAxis domain={[0, 100]} />
-                      <Tooltip />
+                      <XAxis dataKey="week" tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
+                      <YAxis domain={[0, 100]} tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
+                      <Tooltip
+                        contentStyle={{
+                          background: 'var(--taali-surface-elevated)',
+                          border: '1px solid var(--taali-border-soft)',
+                          borderRadius: '16px',
+                          color: 'var(--taali-text)',
+                        }}
+                      />
                       <Bar dataKey="rate" fill="var(--taali-purple)" />
                     </BarChart>
                   </ResponsiveContainer>
@@ -367,9 +374,16 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                   <ResponsiveContainer>
                     <BarChart data={histogramData}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--taali-border-muted)" />
-                      <XAxis dataKey="range" />
-                      <YAxis />
-                      <Tooltip />
+                      <XAxis dataKey="range" tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
+                      <YAxis tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
+                      <Tooltip
+                        contentStyle={{
+                          background: 'var(--taali-surface-elevated)',
+                          border: '1px solid var(--taali-border-soft)',
+                          borderRadius: '16px',
+                          color: 'var(--taali-text)',
+                        }}
+                      />
                       <Bar dataKey="count" fill="var(--taali-info)" />
                     </BarChart>
                   </ResponsiveContainer>
@@ -383,8 +397,8 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                 <ResponsiveContainer>
                   <RadarChart data={radarData}>
                     <PolarGrid stroke="var(--taali-border-muted)" />
-                    <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11 }} />
-                    <PolarRadiusAxis domain={[0, 10]} />
+                    <PolarAngleAxis dataKey="dimension" tick={{ fill: 'var(--taali-muted)', fontSize: 11 }} />
+                    <PolarRadiusAxis domain={[0, 10]} tick={{ fill: 'var(--taali-muted)', fontSize: 11 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} />
                     <Radar dataKey="score" stroke="var(--taali-purple)" fill="var(--taali-purple)" fillOpacity={0.2} />
                   </RadarChart>
                 </ResponsiveContainer>
