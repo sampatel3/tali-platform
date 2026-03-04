@@ -2,6 +2,7 @@ import React from 'react';
 import { Clock } from 'lucide-react';
 
 import { AssessmentBrandGlyph } from './AssessmentBrandGlyph';
+import { ThemeModeToggle } from '../../shared/ui/ThemeModeToggle';
 
 export const AssessmentTopBar = ({
   brandName,
@@ -19,48 +20,53 @@ export const AssessmentTopBar = ({
   onToggleTheme,
   onSubmit,
 }) => (
-  <div className={`${lightMode ? 'border-b border-gray-200 bg-white' : 'border-b border-white/10 bg-[#0c1016]'} px-4 py-2.5`}>
+  <div className="border-b border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] px-4 py-3 backdrop-blur-sm">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <div className="min-w-0 flex items-center gap-3">
         <AssessmentBrandGlyph sizeClass="w-7 h-7" markSizeClass="w-5 h-5" />
         <div className="min-w-0">
-          <div className={`font-mono text-[10px] uppercase tracking-[0.2em] ${lightMode ? 'text-gray-500' : 'text-gray-500'}`}>
+          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--taali-runtime-muted)]">
             {brandName}
           </div>
-          <div className={`font-mono text-sm truncate ${lightMode ? 'text-gray-900' : 'text-gray-100'}`}>
+          <div className="truncate font-mono text-sm text-[var(--taali-runtime-text)]">
             {taskName}
           </div>
         </div>
-        <span className={`hidden md:inline-flex border px-2 py-1 font-mono text-[10px] uppercase tracking-wide ${lightMode ? 'border-gray-300 bg-gray-50 text-gray-700' : 'border-white/15 bg-[#111827] text-gray-300'}`}>
+        <span className="hidden rounded-full border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide text-[var(--taali-runtime-muted)] md:inline-flex">
           AI: {aiMode === 'claude_cli_terminal' ? 'Claude CLI' : 'Claude Chat'}
         </span>
         {aiMode === 'claude_cli_terminal' ? (
-          <span className={`hidden lg:inline-flex border px-2 py-1 font-mono text-[10px] uppercase tracking-wide ${lightMode ? 'border-gray-300 bg-gray-50 text-gray-600' : 'border-white/10 bg-[#0f172a] text-gray-400'}`}>
+          <span className="hidden rounded-full border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide text-[var(--taali-runtime-muted)] lg:inline-flex">
             Permission: {terminalCapabilities?.permission_mode || 'default'}
           </span>
         ) : null}
       </div>
 
       <div className="flex items-center gap-2 sm:gap-3">
-        <button
-          type="button"
-          onClick={onToggleTheme}
-          className={`border px-2 py-1 font-mono text-[11px] ${lightMode ? 'border-gray-300 bg-gray-50 text-gray-700 hover:bg-gray-100' : 'border-white/20 bg-[#111827] text-gray-300 hover:border-[var(--taali-purple)] hover:text-[var(--taali-purple)]'}`}
-        >
-          {lightMode ? 'Dark UI' : 'Light UI'}
-        </button>
+        <ThemeModeToggle
+          value={lightMode ? 'light' : 'dark'}
+          onChange={(nextValue) => {
+            const shouldBeLight = nextValue === 'light';
+            if (shouldBeLight !== lightMode) {
+              onToggleTheme?.();
+            }
+          }}
+          ariaLabel={`Assessment runtime theme. Current mode is ${lightMode ? 'light' : 'dark'}.`}
+          title={`Switch to ${lightMode ? 'dark' : 'light'} UI`}
+          className="shrink-0 border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)]"
+        />
         {claudeBudget?.enabled && (
-          <div className={`hidden sm:block border px-3 py-1.5 font-mono text-xs ${lightMode ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-amber-500/40 bg-amber-500/10 text-amber-200'}`}>
+          <div className="hidden rounded-full border border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-3 py-1.5 font-mono text-xs text-[var(--taali-warning)] sm:block">
             Claude Credit: {formatUsd(claudeBudget.remaining_usd)} left of {formatUsd(claudeBudget.limit_usd)}
           </div>
         )}
         <div
-          className={`flex items-center gap-2 border px-3 py-1.5 font-mono text-xs font-bold ${
+          className={`flex items-center gap-2 rounded-full border px-3 py-1.5 font-mono text-xs font-bold ${
             timeUrgencyLevel === 'danger' || isTimeLow
-              ? (lightMode ? 'border-red-300 bg-red-50 text-red-700' : 'border-red-500/60 bg-red-500/20 text-red-200')
+              ? 'border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] text-[var(--taali-danger)]'
               : timeUrgencyLevel === 'warning'
-                ? (lightMode ? 'border-amber-300 bg-amber-50 text-amber-700' : 'border-amber-500/60 bg-amber-500/20 text-amber-200')
-                : (lightMode ? 'border-gray-300 bg-gray-50 text-gray-700' : 'border-white/15 bg-[#111827] text-gray-200')
+                ? 'border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] text-[var(--taali-warning)]'
+                : 'border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] text-[var(--taali-runtime-text)]'
           }`}
         >
           <Clock size={14} />
@@ -70,7 +76,7 @@ export const AssessmentTopBar = ({
         <button
           onClick={onSubmit}
           disabled={isTimerPaused}
-          className="border border-[var(--taali-purple)] bg-[var(--taali-purple)] px-4 py-1.5 font-mono text-xs font-bold text-white transition-colors hover:bg-[#aa4dff] disabled:cursor-not-allowed disabled:opacity-50"
+          className="rounded-[var(--taali-radius-control)] border border-[var(--taali-purple)] bg-[var(--taali-purple)] px-4 py-1.5 font-mono text-xs font-bold text-white transition-colors hover:bg-[var(--taali-purple-hover)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           Submit
         </button>

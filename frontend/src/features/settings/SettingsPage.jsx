@@ -18,11 +18,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
 import { aedToUsd, formatAed } from '../../lib/currency';
-import {
-  readDarkModePreference,
-  setDarkModePreference,
-  subscribeThemePreference,
-} from '../../lib/themePreference';
+import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
 
 const WORKABLE_SCOPE_OPTIONS = [
   { id: 'r_jobs', label: 'r_jobs', description: 'Read jobs and roles from Workable.' },
@@ -95,7 +91,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [inviteEmail, setInviteEmail] = useState('');
   const [inviteName, setInviteName] = useState('');
   const [inviteLoading, setInviteLoading] = useState(false);
-  const [darkMode, setDarkMode] = useState(() => readDarkModePreference());
   const [defaultAssessmentMinutes, setDefaultAssessmentMinutes] = useState(30);
   const [customClaudeApiKey, setCustomClaudeApiKey] = useState('');
   const [customClaudeApiKeyTouched, setCustomClaudeApiKeyTouched] = useState(false);
@@ -174,16 +169,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       cancelled = true;
     };
   }, [routeSettingsTab]);
-
-  useEffect(() => {
-    setDarkModePreference(darkMode);
-  }, [darkMode]);
-
-  useEffect(() => {
-    return subscribeThemePreference((next) => {
-      setDarkMode(Boolean(next));
-    });
-  }, []);
 
   useEffect(() => {
     if (!orgData) return;
@@ -1254,16 +1239,15 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               <div className="space-y-6">
                 <Panel className="p-4">
                   <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Display Preferences</h3>
-                  <label className="flex items-center gap-3 text-sm text-[var(--taali-text)] cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={darkMode}
-                      onChange={(e) => setDarkMode(e.target.checked)}
-                      className="w-4 h-4 accent-[var(--taali-purple)]"
-                    />
-                    Dark mode
-                  </label>
-                  <p className="mt-2 text-xs text-[var(--taali-muted)]">Follows your system setting by default until you change it here.</p>
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <p className="text-sm font-medium text-[var(--taali-text)]">Theme</p>
+                      <p className="mt-1 text-xs text-[var(--taali-muted)]">
+                        Uses the same light and dark switch as the landing page and recruiter app header.
+                      </p>
+                    </div>
+                    <GlobalThemeToggle className="shrink-0" />
+                  </div>
                 </Panel>
 
                 <Panel className="p-4">

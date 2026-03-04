@@ -386,7 +386,7 @@ describe('AssessmentPage tracking metadata', () => {
     expect(await screen.findByText(/Claude Credit: \$0.75 left of \$1.00/i)).toBeInTheDocument();
   });
 
-  it('toggles assessment runtime light mode from the top bar button', async () => {
+  it('toggles assessment runtime light mode from the shared theme toggle', async () => {
     const startData = {
       assessment_id: 24,
       token: 'tok-theme',
@@ -400,10 +400,11 @@ describe('AssessmentPage tracking metadata', () => {
 
     render(<AssessmentPage token="tok-theme" startData={startData} />);
 
-    const toggleButton = await screen.findByRole('button', { name: 'Light UI' });
-    fireEvent.click(toggleButton);
+    const lightThemeButton = await screen.findByRole('button', { name: 'Switch to light theme' });
+    fireEvent.click(lightThemeButton);
 
-    expect(await screen.findByRole('button', { name: 'Dark UI' })).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: 'Switch to dark theme' })).toHaveAttribute('aria-pressed', 'false');
+    expect(await screen.findByRole('button', { name: 'Switch to light theme' })).toHaveAttribute('aria-pressed', 'true');
     expect(localStorage.getItem('taali_assessment_theme')).toBe('light');
   });
 
