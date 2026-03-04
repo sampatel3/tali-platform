@@ -83,6 +83,68 @@
   --taali-level-staff-soft: #f5f3ff;
 }
 
+.taali-preview-scope-light {
+  --taali-bg: #f8f4ed;
+  --taali-surface: rgba(255, 255, 255, 0.92);
+  --taali-surface-elevated: #ffffff;
+  --taali-surface-subtle: #f7f3ff;
+  --taali-surface-muted: #fffaf3;
+  --taali-surface-warm: #fff7eb;
+  --taali-border: #1f2233;
+  --taali-border-soft: rgba(31, 34, 51, 0.12);
+  --taali-border-subtle: rgba(31, 34, 51, 0.08);
+  --taali-border-muted: #d9d4e8;
+  --taali-text: #151826;
+  --taali-muted: #676f82;
+  --taali-purple: #9d00ff;
+  --taali-purple-soft: #efe4ff;
+  --taali-surface-hover: rgba(157, 0, 255, 0.06);
+  --taali-shadow-soft: 0 18px 40px rgba(23, 19, 47, 0.07);
+  --taali-success: #16a34a;
+  --taali-success-soft: #edf9f1;
+  --taali-success-border: #8fd4ab;
+  --taali-warning: #d97706;
+  --taali-warning-soft: #fff7ec;
+  --taali-warning-border: #f0c787;
+  --taali-danger: #b42330;
+  --taali-danger-soft: #fff5f6;
+  --taali-danger-border: #f5a3a9;
+  --taali-info: #2563eb;
+  --taali-info-soft: #eff6ff;
+  --taali-info-border: #93c5fd;
+}
+
+.taali-preview-scope-dark {
+  --taali-bg: #071120;
+  --taali-surface: rgba(10, 18, 31, 0.88);
+  --taali-surface-elevated: #0d1727;
+  --taali-surface-subtle: #101b30;
+  --taali-surface-muted: #111d33;
+  --taali-surface-warm: #141d2e;
+  --taali-border: #2d3d5b;
+  --taali-border-soft: rgba(148, 163, 184, 0.17);
+  --taali-border-subtle: rgba(148, 163, 184, 0.1);
+  --taali-border-muted: rgba(148, 163, 184, 0.22);
+  --taali-text: #f8fafc;
+  --taali-muted: #a6b3c9;
+  --taali-purple: #a243ff;
+  --taali-purple-soft: rgba(162, 67, 255, 0.18);
+  --taali-surface-hover: rgba(162, 67, 255, 0.1);
+  --taali-shadow-soft: 0 18px 40px rgba(2, 6, 23, 0.34);
+  --taali-success: #22c55e;
+  --taali-success-soft: #052e16;
+  --taali-success-border: #166534;
+  --taali-warning: #f59e0b;
+  --taali-warning-soft: #451a03;
+  --taali-warning-border: #92400e;
+  --taali-danger: #ef4444;
+  --taali-danger-soft: #450a0a;
+  --taali-danger-border: #991b1b;
+  --taali-info: #60a5fa;
+  --taali-info-soft: #1e3a5f;
+  --taali-info-border: #1e40af;
+}
+
 * {
   margin: 0;
   padding: 0;

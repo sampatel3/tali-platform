@@ -19,6 +19,8 @@ export const roles = {
   removeTask: (roleId, taskId) => api.delete(`/roles/${roleId}/tasks/${taskId}`),
   listApplications: (roleId, params = {}) => api.get(`/roles/${roleId}/applications`, { params }),
   getApplication: (applicationId, config = {}) => api.get(`/applications/${applicationId}`, config),
+  generateApplicationInterviewDebrief: (applicationId, data = {}) => api.post(`/applications/${applicationId}/interview-debrief`, data),
+  downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
   createApplication: (roleId, data) => api.post(`/roles/${roleId}/applications`, data),
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),
   uploadApplicationCv: (applicationId, file) => {

@@ -4,8 +4,10 @@ import logging
 import secrets
 import threading
 from datetime import datetime, timedelta, timezone
+import re
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi.responses import Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import asc, desc
 from sqlalchemy.orm import Session, joinedload
@@ -42,6 +44,11 @@ from ...services.document_service import (
     sanitize_text_for_storage,
     save_file_locally,
 )
+from ...services.candidate_feedback_engine import (
+    build_client_application_report_payload,
+    build_client_assessment_summary_pdf,
+    build_interview_debrief_payload_for_application,
+)
 from ...services.fit_matching_service import calculate_cv_job_match_sync
 from ...services.assessment_repository_service import (
     AssessmentRepositoryError,
@@ -58,6 +65,12 @@ from .role_support import (
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
+
+
+def _report_filename_part(value: str, fallback: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|]+', " ", str(value or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().rstrip(".")
+    return cleaned or fallback
 
 
 def _normalize_cv_match_score_100(score: float | int | None, details: dict | None = None) -> float | None:
@@ -395,6 +408,52 @@ def get_application_detail(
     """Get a single application; optionally include full cv_text for CV viewer sidebar."""
     app = get_application(application_id, current_user.organization_id, db)
     return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
+
+
+@router.post("/applications/{application_id}/interview-debrief")
+def generate_application_interview_debrief(
+    application_id: int,
+    body: dict | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    app = get_application(application_id, current_user.organization_id, db)
+    generated_at = utcnow()
+    debrief = build_interview_debrief_payload_for_application(app)
+    return {
+        "success": True,
+        "cached": False,
+        "generated_at": generated_at,
+        "interview_debrief": debrief,
+    }
+
+
+@router.get("/applications/{application_id}/report.pdf")
+def download_application_report_pdf(
+    application_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    app = get_application(application_id, current_user.organization_id, db)
+    organization = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    payload = build_client_application_report_payload(
+        app,
+        organization_name=(organization.name if organization and organization.name else "Employer"),
+    )
+    final_pdf = build_client_assessment_summary_pdf(payload)
+    candidate_name = (
+        (app.candidate.full_name if getattr(app, "candidate", None) else None)
+        or (app.candidate.email if getattr(app, "candidate", None) else "Candidate")
+    )
+    filename = (
+        f"{_report_filename_part(app.role.name if getattr(app, 'role', None) else None, 'Role')}-"
+        f"{_report_filename_part(candidate_name, 'Candidate')}.pdf"
+    )
+    return Response(
+        content=final_pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.patch("/applications/{application_id}", response_model=ApplicationResponse)

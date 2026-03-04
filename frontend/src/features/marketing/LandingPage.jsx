@@ -283,7 +283,7 @@ const AssessmentExperienceSection = ({ darkMode }) => (
           <AssessmentRuntimePreviewView
             heightClass="h-[min(72vh,44rem)]"
             defaultCollapsedSections={{ contextWindow: true }}
-            lightMode={!darkMode}
+            lightMode={darkMode}
           />
         </Suspense>
       </AmbientProductShowcase>
@@ -291,7 +291,7 @@ const AssessmentExperienceSection = ({ darkMode }) => (
   </section>
 );
 
-const CandidateSummarySection = () => (
+const CandidateSummarySection = ({ darkMode }) => (
   <section className="py-8 lg:py-12">
     <PageContainer className="space-y-5" width="wide">
       <div className="max-w-[62rem]">
@@ -318,6 +318,7 @@ const CandidateSummarySection = () => (
             maxHeightClass="max-h-[26rem]"
             scaleClassName="scale-[0.76]"
             scaledWidth="131.6%"
+            lightMode={darkMode}
           />
         </Suspense>
       </AmbientProductShowcase>
@@ -509,7 +510,7 @@ export const LandingPage = ({ onNavigate }) => {
       <HeroSection onNavigate={onNavigate} />
       <TrustStrip />
       <AssessmentExperienceSection darkMode={darkMode} />
-      <CandidateSummarySection />
+      <CandidateSummarySection darkMode={darkMode} />
       <FrameworkSection />
       <AudienceSection />
       <PricingSection onNavigate={onNavigate} />

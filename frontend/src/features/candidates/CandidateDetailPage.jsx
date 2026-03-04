@@ -64,6 +64,7 @@ const CandidateInterviewGuidanceTab = ({
   onNoteTextChange,
   onSaveNote,
   busyAction,
+  showRecruiterFeedback = true,
 }) => (
   <div className="space-y-4">
     <Panel className="p-4">
@@ -74,7 +75,7 @@ const CandidateInterviewGuidanceTab = ({
             Probe role-fit claims and assessment gaps together.
           </div>
           <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-            This pack is built from the job spec, role-fit evidence, assessment results, and TAALI signals so the interview can focus on validation instead of re-screening.
+            This pack is built from the job spec, role-fit evidence, completed assessment results when available, and TAALI signals so the interview can focus on validation instead of re-screening.
           </p>
         </div>
         {canGenerateInterviewGuide ? (
@@ -108,24 +109,26 @@ const CandidateInterviewGuidanceTab = ({
       onRegenerate={() => onGenerateInterviewGuide({ forceRegenerate: true })}
     />
 
-    <Panel className="p-4">
-      <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Recruiter feedback</div>
-      <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-        Add interview follow-up notes here. Saved notes are appended to the candidate timeline for the team.
-      </p>
-      <div className="mt-4 flex flex-col gap-3 md:flex-row">
-        <Input
-          type="text"
-          className="flex-1"
-          placeholder="Add recruiter feedback from the interview"
-          value={noteText}
-          onChange={(event) => onNoteTextChange(event.target.value)}
-        />
-        <Button type="button" size="sm" variant="secondary" onClick={onSaveNote} disabled={busyAction !== ''}>
-          {busyAction === 'note' ? 'Saving...' : 'Save feedback'}
-        </Button>
-      </div>
-    </Panel>
+    {showRecruiterFeedback ? (
+      <Panel className="p-4">
+        <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Recruiter feedback</div>
+        <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
+          Add interview follow-up notes here. Saved notes are appended to the candidate timeline for the team.
+        </p>
+        <div className="mt-4 flex flex-col gap-3 md:flex-row">
+          <Input
+            type="text"
+            className="flex-1"
+            placeholder="Add recruiter feedback from the interview"
+            value={noteText}
+            onChange={(event) => onNoteTextChange(event.target.value)}
+          />
+          <Button type="button" size="sm" variant="secondary" onClick={onSaveNote} disabled={busyAction !== ''}>
+            {busyAction === 'note' ? 'Saving...' : 'Save feedback'}
+          </Button>
+        </div>
+      </Panel>
+    ) : null}
   </div>
 );
 
@@ -139,6 +142,8 @@ const CandidateClientReportTab = ({
   canResendInvite,
   canRequestCvUpload,
   workableStatus,
+  canPostToWorkable = true,
+  canDeleteAssessment = true,
 }) => (
   <div className="space-y-4">
     <Panel className="p-4">
@@ -157,27 +162,40 @@ const CandidateClientReportTab = ({
     </Panel>
 
     <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-      <Panel className="p-4">
-        <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Recruiter actions</div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <Button type="button" size="sm" variant="secondary" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
-            {busyAction === 'workable' ? 'Posting...' : 'Post to Workable'}
-          </Button>
-          {canResendInvite ? (
-            <Button type="button" size="sm" variant="secondary" onClick={handleResendInvite} disabled={busyAction !== ''}>
-              {busyAction === 'resend' ? 'Resending...' : 'Resend invite'}
-            </Button>
-          ) : null}
-          {canRequestCvUpload ? (
-            <Button type="button" size="sm" variant="secondary" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
-              {busyAction === 'request-cv' ? 'Sending CV request...' : 'Request CV upload'}
-            </Button>
-          ) : null}
-          <Button type="button" size="sm" variant="danger" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
-            {busyAction === 'delete' ? 'Deleting...' : 'Delete assessment'}
-          </Button>
-        </div>
-      </Panel>
+      {canPostToWorkable || canResendInvite || canRequestCvUpload || canDeleteAssessment ? (
+        <Panel className="p-4">
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Recruiter actions</div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {canPostToWorkable ? (
+              <Button type="button" size="sm" variant="secondary" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
+                {busyAction === 'workable' ? 'Posting...' : 'Post to Workable'}
+              </Button>
+            ) : null}
+            {canResendInvite ? (
+              <Button type="button" size="sm" variant="secondary" onClick={handleResendInvite} disabled={busyAction !== ''}>
+                {busyAction === 'resend' ? 'Resending...' : 'Resend invite'}
+              </Button>
+            ) : null}
+            {canRequestCvUpload ? (
+              <Button type="button" size="sm" variant="secondary" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
+                {busyAction === 'request-cv' ? 'Sending CV request...' : 'Request CV upload'}
+              </Button>
+            ) : null}
+            {canDeleteAssessment ? (
+              <Button type="button" size="sm" variant="danger" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
+                {busyAction === 'delete' ? 'Deleting...' : 'Delete assessment'}
+              </Button>
+            ) : null}
+          </div>
+        </Panel>
+      ) : (
+        <Panel className="p-4">
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Report scope</div>
+          <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
+            This export is available before an assessment is completed, using CV and role-fit evidence already on file.
+          </p>
+        </Panel>
+      )}
 
       <Panel className="p-4">
         <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Workable status</div>
@@ -306,6 +324,7 @@ export const AssessmentResultsPage = ({
   const assessmentsApi = apiClient.assessments;
   const analyticsApi = apiClient.analytics;
   const candidatesApi = apiClient.candidates;
+  const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
   const scoringApi = 'scoring' in apiClient ? apiClient.scoring : null;
   const [activeTab, setActiveTab] = useState('summary');
   const [busyAction, setBusyAction] = useState('');
@@ -334,6 +353,7 @@ export const AssessmentResultsPage = ({
 
   const completedAssessment = candidate?._raw || null;
   const applicationRecord = application && typeof application === 'object' ? application : null;
+  const applicationId = applicationRecord?.id || completedAssessment?.application_id || null;
   const assessmentId = completedAssessment?.id || applicationRecord?.score_summary?.assessment_id || applicationRecord?.valid_assessment_id || null;
   const taskId = completedAssessment?.task_id || completedAssessment?.task?.id || null;
   const roleId = completedAssessment?.role_id || applicationRecord?.role_id || null;
@@ -348,9 +368,6 @@ export const AssessmentResultsPage = ({
     || ''
   ).toLowerCase();
   const canResendInvite = normalizedStatus === 'pending' || normalizedStatus === 'expired';
-  const canGenerateInterviewGuide = Boolean(completedAssessment) && (
-    normalizedStatus === 'completed' || normalizedStatus === 'completed_due_to_timeout'
-  );
   const isVoided = Boolean(completedAssessment?.is_voided);
   const voidedAt = completedAssessment?.voided_at || null;
   const voidReason = completedAssessment?.void_reason || null;
@@ -381,6 +398,11 @@ export const AssessmentResultsPage = ({
     },
   });
   const hasCompletedAssessment = Boolean(reportModel?.hasCompletedAssessment);
+  const hasInterviewGuideSource = Boolean(hasCompletedAssessment || applicationId);
+  const canGenerateInterviewGuide = hasCompletedAssessment
+    ? Boolean(completedAssessment) && (normalizedStatus === 'completed' || normalizedStatus === 'completed_due_to_timeout')
+    : Boolean(applicationId);
+  const canDownloadClientReport = Boolean(hasCompletedAssessment ? assessmentId : applicationId);
   const pendingAssessmentResults = buildAssessmentPendingMessage({
     application: applicationRecord,
     reportModel,
@@ -507,17 +529,25 @@ export const AssessmentResultsPage = ({
   }
 
   const handleDownloadReport = async () => {
-    if (!assessmentId) return;
+    if (!canDownloadClientReport) return;
     setBusyAction('report');
     try {
-      const res = await assessmentsApi.downloadReport(assessmentId);
+      const res = hasCompletedAssessment
+        ? await assessmentsApi.downloadReport(assessmentId)
+        : await rolesApi?.downloadApplicationReport?.(applicationId);
+      if (!res) {
+        throw new Error('Client report endpoint is unavailable.');
+      }
       const blob = new Blob([res.data], {
         type: res?.headers?.['content-type'] || 'application/pdf',
       });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `${buildClientReportFilenameStem(roleName, candidate?.name)}.pdf`;
+      a.download = `${buildClientReportFilenameStem(
+        roleName,
+        candidate?.name || applicationRecord?.candidate_name || applicationRecord?.candidate_email
+      )}.pdf`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -635,8 +665,15 @@ export const AssessmentResultsPage = ({
   };
 
   const handleGenerateInterviewGuide = async ({ forceRegenerate = false } = {}) => {
-    if (!assessmentId) return;
-    if (!assessmentsApi?.generateInterviewDebrief) {
+    if (!hasInterviewGuideSource) return;
+    const request = hasCompletedAssessment
+      ? assessmentsApi?.generateInterviewDebrief
+        ? () => assessmentsApi.generateInterviewDebrief(assessmentId, { force_regenerate: forceRegenerate })
+        : null
+      : rolesApi?.generateApplicationInterviewDebrief
+        ? () => rolesApi.generateApplicationInterviewDebrief(applicationId, { force_regenerate: forceRegenerate })
+        : null;
+    if (!request) {
       showToast('Interview guide endpoint is unavailable.', 'error');
       return;
     }
@@ -645,9 +682,7 @@ export const AssessmentResultsPage = ({
     setInterviewDebriefLoading(true);
     try {
       const res = await withRequestTimeout(
-        assessmentsApi.generateInterviewDebrief(assessmentId, {
-          force_regenerate: forceRegenerate,
-        }),
+        request(),
         INTERVIEW_GUIDANCE_TIMEOUT_MS,
         'Interview guidance is taking longer than expected. Please retry.'
       );
@@ -671,13 +706,20 @@ export const AssessmentResultsPage = ({
     setInterviewDebriefCached(false);
     setInterviewDebriefGeneratedAt(null);
     setInterviewDebriefAutoRequested(false);
-  }, [assessmentId]);
+  }, [assessmentId, applicationId, hasCompletedAssessment]);
 
   useEffect(() => {
     if (activeTab !== 'interview-guidance') return;
-    if (!canGenerateInterviewGuide || !assessmentId) return;
+    if (!canGenerateInterviewGuide) return;
     if (interviewDebriefLoading || interviewDebriefData || interviewDebriefAutoRequested) return;
-    if (!assessmentsApi?.generateInterviewDebrief) return;
+    const autoRequest = hasCompletedAssessment
+      ? assessmentsApi?.generateInterviewDebrief
+        ? () => assessmentsApi.generateInterviewDebrief(assessmentId, { force_regenerate: false })
+        : null
+      : rolesApi?.generateApplicationInterviewDebrief
+        ? () => rolesApi.generateApplicationInterviewDebrief(applicationId, { force_regenerate: false })
+        : null;
+    if (!autoRequest) return;
 
     let cancelled = false;
     const loadInterviewDebrief = async () => {
@@ -686,9 +728,7 @@ export const AssessmentResultsPage = ({
       setInterviewDebriefLoading(true);
       try {
         const res = await withRequestTimeout(
-          assessmentsApi.generateInterviewDebrief(assessmentId, {
-            force_regenerate: false,
-          }),
+          autoRequest(),
           INTERVIEW_GUIDANCE_TIMEOUT_MS,
           'Interview guidance is taking longer than expected. Please retry.'
         );
@@ -715,7 +755,10 @@ export const AssessmentResultsPage = ({
     activeTab,
     assessmentId,
     assessmentsApi,
+    applicationId,
     canGenerateInterviewGuide,
+    hasCompletedAssessment,
+    rolesApi,
   ]);
 
   const handleOpenComparison = async () => {
@@ -890,7 +933,7 @@ export const AssessmentResultsPage = ({
               reportModel={reportModel}
               variant="page"
               onOpenInterviewGuidance={() => setActiveTab('interview-guidance')}
-              showInterviewGuidanceAction={hasCompletedAssessment}
+              showInterviewGuidanceAction={canGenerateInterviewGuide}
             />
           </div>
         ) : null}
@@ -959,7 +1002,7 @@ export const AssessmentResultsPage = ({
 
         {activeTab === 'interview-guidance' ? (
           <div role="tabpanel" id="candidate-tabpanel-interview-guidance" aria-labelledby="interview-guidance">
-            {hasCompletedAssessment ? (
+            {hasInterviewGuideSource ? (
               <CandidateInterviewGuidanceTab
                 canGenerateInterviewGuide={canGenerateInterviewGuide}
                 debrief={interviewDebriefData}
@@ -974,6 +1017,7 @@ export const AssessmentResultsPage = ({
                 onNoteTextChange={setNoteText}
                 onSaveNote={handleAddNote}
                 busyAction={busyAction}
+                showRecruiterFeedback={Boolean(hasCompletedAssessment && assessmentId)}
               />
             ) : (
               <PendingAssessmentTab
@@ -986,7 +1030,7 @@ export const AssessmentResultsPage = ({
 
         {activeTab === 'client-report' ? (
           <div role="tabpanel" id="candidate-tabpanel-client-report" aria-labelledby="client-report">
-            {hasCompletedAssessment ? (
+            {canDownloadClientReport ? (
               <CandidateClientReportTab
                 busyAction={busyAction}
                 handleDownloadReport={handleDownloadReport}
@@ -997,6 +1041,8 @@ export const AssessmentResultsPage = ({
                 canResendInvite={canResendInvite}
                 canRequestCvUpload={canRequestCvUpload}
                 workableStatus={workableStatus}
+                canPostToWorkable={Boolean(hasCompletedAssessment && assessmentId)}
+                canDeleteAssessment={Boolean(hasCompletedAssessment && assessmentId)}
               />
             ) : (
               <PendingAssessmentTab

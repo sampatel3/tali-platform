@@ -28,6 +28,10 @@ vi.mock('../shared/api', () => ({
   billing: { usage: vi.fn(), costs: vi.fn(), credits: vi.fn(), createCheckoutSession: vi.fn() },
   organizations: { get: vi.fn(), update: vi.fn() },
   analytics: { get: vi.fn().mockResolvedValue({ data: {} }) },
+  roles: {
+    generateApplicationInterviewDebrief: vi.fn(),
+    downloadApplicationReport: vi.fn(),
+  },
   tasks: {
     list: vi.fn().mockResolvedValue({ data: [] }),
     get: vi.fn(),
@@ -82,7 +86,7 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, assessments as assessmentsApi, analytics as analyticsApi, candidates as candidatesApi } from '../shared/api';
+import { auth, assessments as assessmentsApi, analytics as analyticsApi, candidates as candidatesApi, roles as rolesApi } from '../shared/api';
 import { CandidateDetailPage } from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -344,6 +348,29 @@ describe('CandidateDetailPage', () => {
         },
       },
     });
+    rolesApi.generateApplicationInterviewDebrief.mockResolvedValue({
+      data: {
+        cached: false,
+        generated_at: '2026-01-15T10:05:00Z',
+        interview_debrief: {
+          summary: 'Validate the strongest CV claims and probe the missing Kubernetes depth.',
+          probing_questions: [
+            {
+              dimension: 'Distributed systems',
+              score: 8.1,
+              question: 'Walk me through a recent distributed systems project you owned end to end.',
+              what_to_listen_for: 'Specific architecture choices, constraints, and measurable delivery outcomes.',
+            },
+          ],
+          strengths_to_validate: [{ text: 'Python and FastAPI delivery depth' }],
+          red_flags: [{ text: 'Kubernetes gap', follow_up_question: 'Where would you need support on Kubernetes today?' }],
+        },
+      },
+    });
+    rolesApi.downloadApplicationReport.mockResolvedValue({
+      data: new Blob(['pdf-content']),
+      headers: { 'content-type': 'application/pdf' },
+    });
   });
 
   afterEach(() => {
@@ -604,7 +631,7 @@ describe('CandidateDetailPage', () => {
     expect(mockOnNavigate).toHaveBeenCalledWith('assessments');
   });
 
-  it('renders the same tab shell for pre-assessment candidates with pending tab states', async () => {
+  it('renders the same tab shell for pre-assessment candidates with pending assessment-results state', async () => {
     await renderPendingCandidateDetail();
 
     expect(screen.getByRole('tab', { name: 'SUMMARY' })).toBeInTheDocument();
@@ -619,6 +646,45 @@ describe('CandidateDetailPage', () => {
       expect(screen.getByText('Pending assessment')).toBeInTheDocument();
       expect(screen.getByText('Assessment results will populate after the assessment is completed.')).toBeInTheDocument();
     });
+  });
+
+  it('loads interview guidance for pre-assessment candidates from the application route', async () => {
+    await renderPendingCandidateDetail();
+
+    fireEvent.click(screen.getByRole('tab', { name: 'INTERVIEW GUIDANCE' }));
+
+    await waitFor(() => {
+      expect(rolesApi.generateApplicationInterviewDebrief).toHaveBeenCalledWith(12, { force_regenerate: false });
+      expect(screen.getByText(/Validate the strongest CV claims/i)).toBeInTheDocument();
+    });
+  });
+
+  it('downloads the client report for pre-assessment candidates from the application route', async () => {
+    const createObjectUrlMock = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pending-report');
+    const revokeObjectUrlMock = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
+    const originalCreateElement = document.createElement.bind(document);
+    const anchor = originalCreateElement('a');
+    const clickMock = vi.spyOn(anchor, 'click').mockImplementation(() => {});
+    const createElementMock = vi.spyOn(document, 'createElement').mockImplementation((tagName, options) => {
+      if (String(tagName).toLowerCase() === 'a') {
+        return anchor;
+      }
+      return originalCreateElement(tagName, options);
+    });
+
+    await renderPendingCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));
+    fireEvent.click(screen.getByText('Download client report'));
+
+    await waitFor(() => {
+      expect(rolesApi.downloadApplicationReport).toHaveBeenCalledWith(12);
+      expect(createObjectUrlMock).toHaveBeenCalled();
+      expect(clickMock).toHaveBeenCalled();
+    });
+
+    createElementMock.mockRestore();
+    createObjectUrlMock.mockRestore();
+    revokeObjectUrlMock.mockRestore();
   });
 
   it('renders assessment metadata in results tab', async () => {

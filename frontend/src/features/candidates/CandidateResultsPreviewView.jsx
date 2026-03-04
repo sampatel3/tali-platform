@@ -1,9 +1,9 @@
 import React from 'react';
 import { ArrowLeft } from 'lucide-react';
 
-import { PageContainer, Button } from '../../shared/ui/TaaliPrimitives';
+import { PageContainer, Button, Panel, TabBar, Badge } from '../../shared/ui/TaaliPrimitives';
 import { buildStandingCandidateReportModel } from './assessmentViewModels';
-import { CandidateReportView } from './CandidateReportView';
+import { CandidateAssessmentSummaryView } from './CandidateAssessmentSummaryView';
 
 const PREVIEW_CANDIDATE = {
   name: 'Maya Chen',
@@ -95,6 +95,7 @@ export const CandidateResultsPreviewView = ({
   scaleClassName = 'scale-[0.8]',
   scaledWidth = '125%',
   showBackButton = false,
+  lightMode = false,
 }) => {
   const reportModel = buildStandingCandidateReportModel({
     application: null,
@@ -112,9 +113,19 @@ export const CandidateResultsPreviewView = ({
       completedLabel: PREVIEW_CANDIDATE.completedDate,
     },
   });
+  const topTabs = [
+    { id: 'summary', label: 'SUMMARY', panelId: 'preview-summary' },
+    { id: 'assessment-results', label: 'ASSESSMENT RESULTS', panelId: 'preview-assessment-results' },
+    { id: 'role-fit', label: 'ROLE FIT', panelId: 'preview-role-fit' },
+    { id: 'interview-guidance', label: 'INTERVIEW GUIDANCE', panelId: 'preview-interview-guidance' },
+  ];
+  const previewThemeClass = lightMode ? 'taali-preview-scope-light' : 'taali-preview-scope-dark';
 
   return (
-    <div className={`overflow-hidden bg-[var(--taali-bg)] ${className}`}>
+    <div
+      className={`overflow-hidden bg-[var(--taali-bg)] ${previewThemeClass} ${className}`}
+      style={{ colorScheme: lightMode ? 'light' : 'dark' }}
+    >
       <div className={`${maxHeightClass} overflow-hidden`}>
         <div className={`origin-top-left ${scaleClassName}`} style={{ width: scaledWidth }}>
           <div className="min-h-full bg-[var(--taali-bg)] text-[var(--taali-text)]">
@@ -124,7 +135,25 @@ export const CandidateResultsPreviewView = ({
                   <ArrowLeft size={16} /> Back to Assessments
                 </Button>
               ) : null}
-              <CandidateReportView model={reportModel} variant="preview" />
+              <Panel className="mb-4 p-3">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+                  <TabBar tabs={topTabs} activeTab="summary" onChange={() => {}} density="compact" />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant={reportModel.source?.badgeVariant || 'muted'} className="font-mono text-[11px]">
+                      {reportModel.source?.label || 'Completed assessment'}
+                    </Badge>
+                    <Badge variant={reportModel.recommendation?.variant || 'muted'} className="font-mono text-[11px]">
+                      {reportModel.recommendation?.label || 'Pending review'}
+                    </Badge>
+                  </div>
+                </div>
+              </Panel>
+              <CandidateAssessmentSummaryView
+                reportModel={reportModel}
+                variant="preview"
+                onOpenInterviewGuidance={() => {}}
+                showInterviewGuidanceAction
+              />
             </PageContainer>
           </div>
         </div>
