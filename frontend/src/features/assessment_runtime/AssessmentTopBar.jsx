@@ -53,7 +53,7 @@ export const AssessmentTopBar = ({
           }}
           ariaLabel={`Assessment runtime theme. Current mode is ${lightMode ? 'light' : 'dark'}.`}
           title={`Switch to ${lightMode ? 'dark' : 'light'} UI`}
-          className="shrink-0 border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)]"
+          className="shrink-0"
         />
         {claudeBudget?.enabled && (
           <div className="hidden rounded-full border border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-3 py-1.5 font-mono text-xs text-[var(--taali-warning)] sm:block">
