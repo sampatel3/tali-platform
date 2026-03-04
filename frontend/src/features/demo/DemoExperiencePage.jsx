@@ -3,7 +3,7 @@ import { ArrowRight, Check } from 'lucide-react';
 
 import AssessmentPage from '../assessment_runtime/AssessmentPage';
 import { DEMO_ASSESSMENTS, DEFAULT_DEMO_ASSESSMENT_ID } from './demoAssessments';
-import { Logo } from '../../shared/ui/Branding';
+import { BrandLabel, Logo } from '../../shared/ui/Branding';
 import { assessments as assessmentsApi } from '../../shared/api';
 import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
 import {
@@ -55,7 +55,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
   const [loadingStart, setLoadingStart] = useState(false);
   const [started, setStarted] = useState(false);
   const [demoSession, setDemoSession] = useState(null);
-
+  const selectedAssessment = DEMO_ASSESSMENTS.find((assessment) => assessment.id === selectedAssessmentId) || DEMO_ASSESSMENTS[0];
   const handleStart = async () => {
     const missing = missingRequiredFields(form);
     if (missing.length > 0) {
@@ -105,7 +105,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
 
   return (
     <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
-      <nav className="taali-nav border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
+      <nav className="taali-nav bg-[var(--taali-surface)]">
         <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-4">
           <Logo onClick={() => onNavigate('landing')} />
           <div className="flex flex-wrap items-center justify-end gap-2">
@@ -122,9 +122,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
 
       <div className="mx-auto max-w-6xl px-6 py-10">
         <Panel className="p-6">
-          <div className="mb-2 inline-flex border-2 border-black bg-[var(--taali-purple)] px-3 py-1 font-mono text-xs font-bold text-white">
-            INTERACTIVE DEMO
-          </div>
+          <BrandLabel className="mb-2" toneClassName="text-[var(--taali-purple)]">TAALI Interactive Demo</BrandLabel>
           <h1 className="text-4xl font-bold">Try a candidate assessment</h1>
           <p className="mt-3 max-w-4xl font-mono text-sm text-[var(--taali-muted)]">
             Complete this short intake, review the demo task, and run through the same assessment runtime candidates use.
@@ -193,12 +191,12 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                   ))}
                 </Select>
               </label>
-              <label className="col-span-2 flex items-start gap-2 border border-[var(--taali-border)] bg-[var(--taali-surface)] px-3 py-2">
+              <label className="col-span-2 flex items-start gap-3 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-4 py-3 shadow-[var(--taali-shadow-soft)]">
                 <input
                   type="checkbox"
                   checked={Boolean(form.marketingConsent)}
                   onChange={(event) => setForm((prev) => ({ ...prev, marketingConsent: event.target.checked }))}
-                  className="mt-1 h-4 w-4"
+                  className="mt-0.5 h-4 w-4 rounded border-[var(--taali-border-soft)] accent-[var(--taali-purple)]"
                 />
                 <span className="font-mono text-xs text-[var(--taali-muted)]">
                   Send me my demo results by email and occasional product updates (optional).
@@ -210,7 +208,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
           <Panel className="p-5">
             <h2 className="text-2xl font-bold">Demo assessment task</h2>
             <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
-              Choose between our three strongest demo tracks.
+              Pick the role-specific scenario you want to run. Each option opens the same candidate runtime with a different task brief.
             </p>
             <div className="mt-4 grid gap-3">
               {DEMO_ASSESSMENTS.map((assessment) => {
@@ -220,19 +218,20 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                     key={assessment.id}
                     type="button"
                     onClick={() => setSelectedAssessmentId(assessment.id)}
-                    className={`text-left border-2 p-4 transition ${
+                    className={`rounded-[var(--taali-radius-card)] border p-5 text-left shadow-[var(--taali-shadow-soft)] transition-all duration-150 ${
                       isSelected
-                        ? 'border-black bg-[var(--taali-purple)]/10'
-                        : 'border-[var(--taali-border)] bg-[var(--taali-surface)] hover:border-black'
+                        ? 'border-[var(--taali-purple)] bg-[var(--taali-surface-subtle)] shadow-[0_18px_36px_rgba(157,0,255,0.14)]'
+                        : 'border-[var(--taali-border-soft)] bg-[var(--taali-surface)] hover:-translate-y-0.5 hover:border-[var(--taali-purple)]/40 hover:bg-[var(--taali-surface-subtle)]'
                     }`}
+                    aria-pressed={isSelected}
                   >
                     <div className="flex items-start justify-between gap-3">
                       <div>
                         <h3 className="text-lg font-bold">{assessment.title}</h3>
-                        <p className="mt-1 font-mono text-sm text-[var(--taali-muted)]">{assessment.description}</p>
+                        <p className="mt-1 font-mono text-sm leading-relaxed text-[var(--taali-muted)]">{assessment.description}</p>
                       </div>
                       {isSelected ? (
-                        <span className="inline-flex h-6 w-6 items-center justify-center border-2 border-black bg-[var(--taali-purple)] text-white">
+                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--taali-purple)]/25 bg-[linear-gradient(135deg,var(--taali-purple),var(--taali-purple-hover))] text-white shadow-[0_12px_24px_rgba(157,0,255,0.24)]">
                           <Check size={14} />
                         </span>
                       ) : null}
@@ -250,8 +249,8 @@ export const DemoExperiencePage = ({ onNavigate }) => {
         </div>
 
         {error ? (
-          <Card className="mt-5 border-red-300 bg-red-50 p-4">
-            <p className="font-mono text-sm text-red-700">{error}</p>
+          <Card className="mt-5 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
+            <p className="font-mono text-sm text-[var(--taali-danger)]">{error}</p>
           </Card>
         ) : null}
 
