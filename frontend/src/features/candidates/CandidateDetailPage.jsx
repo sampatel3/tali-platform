@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft } from 'lucide-react';
 import * as apiClient from '../../shared/api';
+import { pathForPage } from '../../app/routing';
 import { useToast } from '../../context/ToastContext';
 import { getMetricMeta, buildGlossaryFromMetadata } from '../../lib/scoringGlossary';
 import { normalizeScores } from '../../scoring/scoringDimensions';
@@ -146,7 +147,7 @@ const CandidateClientReportTab = ({
           <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Client report</div>
           <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">Download the employer-facing assessment brief.</div>
           <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-            Export a single-page TAALI summary with the hiring recommendation, role-fit view, and interview focus for employer or client review.
+            Open the print-ready summary view used on this page, with a TAALI report header added for employer or client review.
           </p>
         </div>
         <Button type="button" size="sm" variant="secondary" onClick={handleDownloadReport} disabled={busyAction !== ''}>
@@ -447,16 +448,11 @@ export const AssessmentResultsPage = ({
     if (!assessmentId) return;
     setBusyAction('report');
     try {
-      const res = await assessmentsApi.downloadReport(assessmentId);
-      const blob = new Blob([res.data], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `assessment-${assessmentId}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
+      const reportUrl = pathForPage('assessment-client-report', {
+        candidateDetailAssessmentId: assessmentId,
+        print: true,
+      });
+      window.open(reportUrl, '_blank', 'noopener,noreferrer');
     } catch (err) {
       showToast(err?.response?.data?.detail || 'Failed to download report', 'error');
     } finally {

@@ -28,6 +28,10 @@ export const pathForPage = (page, options = {}) => {
       return options.candidateDetailAssessmentId
         ? `/assessments/${encodeURIComponent(options.candidateDetailAssessmentId)}`
         : '/assessments';
+    case 'assessment-client-report':
+      return options.candidateDetailAssessmentId
+        ? `/assessments/${encodeURIComponent(options.candidateDetailAssessmentId)}/client-report${options.print ? '?print=1' : ''}`
+        : '/assessments';
     case 'tasks':
       return '/tasks';
     case 'analytics':

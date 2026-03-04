@@ -39,24 +39,24 @@ const CandidateResultsPreviewView = lazy(() =>
 );
 
 const TRUST_ITEMS = [
-  'Hire AI-native engineers based on real working behavior, not resume keywords alone',
-  'Assess prompt judgment, context framing, execution quality, and communication in one rubric',
-  'Built for recruiters, agencies, hiring managers, and technical leaders running modern hiring loops',
-  'Share evidence-backed reports with clients or employers without replaying the full session',
+  'Use role-traceable engineering tasks instead of generic coding prompts',
+  'Capture prompt, diff, and execution evidence in one review trail',
+  'Score execution, judgment, communication, and role fit in one rubric',
+  'Share a clean employer-facing summary instead of replaying the full session',
 ];
 
 const PROOF_POINTS = [
   {
     title: 'Assess AI-native skillsets',
-    description: 'Measure how candidates prompt, structure context, verify output, and recover when the first attempt fails.',
+    description: 'See how candidates frame prompts, structure context, validate AI output, and recover when the first attempt fails.',
   },
   {
-    title: 'Shortlist with confidence',
-    description: 'See score, role fit, interview probes, and recruiter evidence in one calm review surface instead of piecing together notes.',
+    title: 'Defensible shortlists',
+    description: 'Move candidates forward with role fit, TAALI score, and interview probes in one calm review surface instead of piecing together notes.',
   },
   {
-    title: 'Client-ready output',
-    description: 'Give employers and hiring managers a clear report they can use in decision meetings, not a messy transcript dump.',
+    title: 'Client-ready report',
+    description: 'Give employers and hiring managers a clear summary they can use in decision meetings, not a messy transcript dump.',
   },
 ];
 
@@ -257,7 +257,7 @@ const AudienceSection = () => (
           Made for teams hiring engineers who already work with AI.
         </h2>
         <p className="mt-4 text-base leading-8 text-[var(--taali-muted)] md:text-lg">
-          If the role depends on agent-assisted coding, prompt judgment, and shipping with modern AI tools, TAALI gives you a much clearer signal than resume screens or generic coding tests.
+          Once you understand the rubric, the fit is straightforward: TAALI is for teams hiring engineers whose real job already depends on AI-assisted execution, judgment, and delivery quality.
         </p>
       </div>
 
@@ -429,7 +429,7 @@ const ProofSection = () => (
         <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--taali-muted)]">WHY TEAMS USE TAALI</div>
         <h2 className="taali-display mt-3 text-4xl font-semibold text-[var(--taali-text)]">Built for modern technical hiring, not outdated coding tests.</h2>
         <p className="mt-4 text-base leading-8 text-[var(--taali-muted)]">
-          Resumes and generic coding exercises miss how engineers actually work with AI. TAALI shows whether a candidate can guide tools well, validate output, and turn AI assistance into reliable delivery.
+          Resumes and generic coding exercises miss how engineers actually work with AI. TAALI helps teams assess AI-native skillsets, make defensible shortlist decisions, and hand over a clean report clients or employers can actually use.
         </p>
       </Panel>
 
@@ -546,10 +546,10 @@ export const LandingPage = ({ onNavigate }) => {
       <LandingNav onNavigate={onNavigate} />
       <HeroSection onNavigate={onNavigate} />
       <TrustStrip />
-      <AudienceSection />
       <AssessmentExperienceSection darkMode={darkMode} />
       <CandidateSummarySection />
       <FrameworkSection />
+      <AudienceSection />
       <ProofSection />
       <PricingSection onNavigate={onNavigate} />
       <Footer />

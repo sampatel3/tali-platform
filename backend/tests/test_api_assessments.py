@@ -884,7 +884,7 @@ def test_recruiter_report_pdf_is_client_facing_and_wrapped(client):
     resp = client.get(f"/api/v1/assessments/{assessment_id}/report.pdf", headers=env["headers"])
     assert resp.status_code == 200, resp.text
     assert resp.headers["content-type"].startswith("application/pdf")
-    assert "taali-client-report" in resp.headers["content-disposition"]
+    assert 'filename="Role-Jane Doe.pdf"' in resp.headers["content-disposition"]
 
     reader = PdfReader(io.BytesIO(resp.content))
     assert len(reader.pages) == 1

@@ -609,3 +609,45 @@ code {
 .dark .hover\:bg-gray-200:hover {
   background-color: #334155 !important;
 }
+
+@page {
+  size: A4 landscape;
+  margin: 10mm;
+}
+
+@media print {
+  html,
+  body {
+    background: #ffffff !important;
+  }
+
+  body {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .taali-print-hidden {
+    display: none !important;
+  }
+
+  .taali-client-report-page {
+    min-height: auto;
+    background: #ffffff !important;
+  }
+
+  .taali-client-report-shell {
+    width: 1220px;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    overflow: visible !important;
+    zoom: 0.78;
+  }
+
+  .taali-panel,
+  .taali-card,
+  .taali-page-header {
+    box-shadow: none !important;
+    backdrop-filter: none !important;
+  }
+}

@@ -42,9 +42,10 @@ def _candidate_feedback_link(token: str) -> str:
     return f"{settings.FRONTEND_URL}/assessment/{token}/feedback"
 
 
-def _report_slug(value: str) -> str:
-    slug = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
-    return slug or "candidate"
+def _report_filename_part(value: str, fallback: str) -> str:
+    cleaned = re.sub(r'[\\/:*?"<>|]+', " ", str(value or "").strip())
+    cleaned = re.sub(r"\s+", " ", cleaned).strip().rstrip(".")
+    return cleaned or fallback
 
 
 def _dispatch_candidate_feedback_email(
@@ -110,7 +111,15 @@ def download_assessment_report_pdf(
         organization_name=organization_name,
     )
     final_pdf = build_client_assessment_summary_pdf(payload)
-    filename = f"taali-client-report-{_report_slug(candidate_name)}.pdf"
+    role_name = (
+        (assessment.role.name if getattr(assessment, "role", None) else None)
+        or getattr(assessment, "role_name", None)
+        or "Role"
+    )
+    filename = (
+        f"{_report_filename_part(role_name, 'Role')}-"
+        f"{_report_filename_part(candidate_name, 'Candidate')}.pdf"
+    )
     return Response(
         content=final_pdf,
         media_type="application/pdf",
