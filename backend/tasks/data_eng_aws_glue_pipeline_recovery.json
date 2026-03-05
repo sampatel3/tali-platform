@@ -1,0 +1,192 @@
+{
+  "task_id": "data_eng_aws_glue_pipeline_recovery",
+  "name": "AWS Glue Pipeline Recovery",
+  "role": "data_engineer",
+  "duration_minutes": 30,
+  "calibration_prompt": "You have 2 minutes. Ask Claude to help you write a query or validation step that detects duplicate transaction IDs in a daily batch table called `payments_raw`. Show the table schema (columns and types), your assumptions about what 'duplicate' means in this context, and exactly what output you expect the check to produce.",
+  "scenario": "You joined Deeplight as an AWS Glue Data Engineer and were dropped into a failing revenue pipeline on your first week.\n\n**Message from the VP of Engineering:**\n\n> Finance close is tomorrow morning and our Glue revenue-recovery job has been unstable for days.\n>\n> The current failures are painful because they combine three problems:\n> - the source schema changed and downstream code is behind \u2014 `payment_method` is missing and type mappings for `double` and `integer` are silently falling back to STRING,\n> - duplicate records are inflating totals on every retry because our deduplication logic is a no-op,\n> - the audit team cannot explain which runs are trustworthy because the bookmark advances even when the quality gate hasn't actually checked anything.\n>\n> There is also a fourth problem: nobody chose a loading method for this recovery window. The job is defaulting to full load when it should be using delta replay. And we have no data contract validation at all \u2014 the source team added `created_at` as a required column two sprints ago and nothing catches when it is missing.\n>\n> This is a Bronze-layer ingestion flow built in AWS Glue with PySpark under the hood. The local reproduction strips AWS infrastructure but mirrors all the logic decisions the Glue job has to make.\n>\n> I do not need a hero rewrite. I need a senior data engineer to triage the situation, make the highest-value fixes, and tell me what still blocks us.\n>\n> In 30 minutes, tell me:\n> 1. What should block the next scheduled run right now?\n> 2. What is the smallest fix set that restores trust for finance close?\n> 3. What production fixes can you land right now?\n\n**Your mission:**\nUse the local reproduction to improve the pipeline's correctness and operational safety. You are being assessed on prioritisation, data reliability judgment, and whether your fixes are credible under finance-close pressure.",
+  "repo_structure": {
+    "name": "aws-glue-revenue-recovery",
+    "files": {
+      ".gitignore": ".venv/\n.pytest_cache/\n__pycache__/\n",
+      "README.md": "# AWS Glue Revenue Recovery\n\nLocal reproduction of a failing Glue-based revenue pipeline. The job ingests transactions into the Bronze layer, applies the correct loading strategy, evolves the warehouse schema, deduplicates retries, validates the data contract, and advances a bookmark for the next run.\n\n## Why this exists\n- Finance close is blocked\n- Audit wants trustworthy lineage\n- Retry behavior is duplicating records\n- The loading method was never selected for the recovery window\n- Data contract validation is missing entirely\n- Type mappings for `double` and `integer` are silently falling back to STRING\n\n## Local workflow\n1. Create a virtualenv\n2. Install `requirements.txt`\n3. Run `pytest -q --tb=short`\n\nThe local tests do not require AWS credentials or cloud access.\n\nTreat this as a time-boxed incident recovery exercise, not a rewrite.\n",
+      "ARCHITECTURE.md": "# Pipeline Shape\n\n1. Pull daily payment records into the Bronze ingestion layer.\n2. **Select the correct loading method** for the run window: delta replay for recovery runs with a primary key, CDC when the source supports it, full load for initial seeding, snapshot for point-in-time copies.\n3. Compare the source schema with the warehouse schema and apply planned DDL changes.\n4. Normalize records for the Glue/PySpark sink, using the type registry to map source types to warehouse types.\n5. Deduplicate by `transaction_id`, keeping the record with the latest `updated_at`.\n6. **Validate the data contract** \u2014 required columns must be present in every record before the bookmark advances.\n7. Run quality checks (Soda Core-style: duplicate IDs, null required fields, row count thresholds).\n8. Advance the bookmark only if quality passed and the batch is safe to hand over as trustworthy.\n\nThe local code strips away actual AWS infrastructure and PySpark runtime, but all logic decisions mirror what the Glue job must make.\n",
+      "RUNBOOK.md": "# Incident Runbook\n\n## Immediate expectations\n- Restore trustworthy Bronze-layer writes for the next scheduled run\n- Select the correct load method for the recovery window (delta, not full load)\n- Do not advance the bookmark if the batch is unsafe\n- Validate the data contract before any bookmark movement\n- Explain remaining follow-up work separately from the immediate fix\n\n## Useful mental model\nA strong response prioritises correctness, idempotency, data-contract trust, and operator confidence before performance tuning.\n",
+      "diagnostics/job_run.log": "2026-02-27T02:15:14Z ERROR revenue_recovery schema drift detected: missing column payment_method\n2026-02-27T02:15:15Z ERROR type mapping fallback: source type 'double' not found in TYPE_MAPPING, defaulting to STRING\n2026-02-27T02:15:15Z ERROR type mapping fallback: source type 'integer' not found in TYPE_MAPPING, defaulting to STRING\n2026-02-27T02:15:16Z WARNING retry triggered for same source window \u2014 loading method not set, defaulting to full_load\n2026-02-27T02:16:02Z ERROR duplicate rows found for transaction_id TXN-9001 after retry\n2026-02-27T02:16:03Z ERROR quality_gate() returned passed=True despite 4 duplicate transaction_ids\n2026-02-27T02:16:03Z ERROR bookmark advanced despite failed quality gate\n2026-02-27T02:16:04Z WARNING data contract violation: created_at missing from 12 records \u2014 no validation caught this\n",
+      "diagnostics/audit_findings.md": "# Audit Findings\n\n- Duplicate transaction IDs (including TXN-9001) inflated totals in the January close sample.\n- `duplicate_transaction_ids()` in glue_jobs/quality.py always returns an empty list \u2014 it is a stub.\n- `quality_gate()` always returns `passed: True` regardless of duplicates.\n- `should_advance_bookmark()` in glue_jobs/bookmarks.py ignores the `quality_passed` parameter entirely.\n- `select_load_method()` in glue_jobs/loading_strategy.py always returns `full_load` regardless of context.\n- `validate_contract()` in glue_jobs/data_contract.py always returns `passed: True` \u2014 the required column check is not implemented.\n- TYPE_MAPPING in glue_jobs/schema_registry.py is missing entries for 'double' and 'integer'.\n- Operators cannot explain whether a rerun is safe because bookmark handling is inconsistent.\n",
+      "diagnostics/performance_baseline.md": "# Performance Notes\n\nVolumes are climbing, but the current business pain is correctness. The VP has explicitly asked the team not to start with DPU tuning or cluster compaction during this incident window.\n",
+      "glue_jobs/__init__.py": "",
+      "glue_jobs/bookmarks.py": "from __future__ import annotations\n\nfrom dataclasses import dataclass\n\n\n@dataclass\nclass BookmarkState:\n    last_successful_window: str\n    last_run_status: str = 'success'\n\n\ndef should_advance_bookmark(*, quality_passed: bool, records_loaded: int) -> bool:\n    # BUG: ignores quality_passed \u2014 always advances if records were loaded\n    return records_loaded > 0\n",
+      "glue_jobs/schema_registry.py": "TYPE_MAPPING = {\n    'string': 'STRING',\n    'decimal': 'DECIMAL(18,2)',\n    'timestamp': 'TIMESTAMP',\n    'json': 'STRING',\n    # BUG: 'double' and 'integer' are missing \u2014 they fall back to STRING\n}\n\n\ndef map_type(source_type: str) -> str:\n    return TYPE_MAPPING.get(source_type, 'STRING')\n\n\ndef detect_missing_columns(source_schema, warehouse_schema):\n    return [column for column in source_schema if column not in warehouse_schema]\n",
+      "glue_jobs/loading_strategy.py": "from __future__ import annotations\n\nfrom typing import Dict, List\n\nLOAD_METHODS = {'cdc', 'full_load', 'delta', 'snapshot'}\n\n\ndef select_load_method(\n    *,\n    is_recovery_run: bool,\n    has_primary_key: bool,\n    source_supports_cdc: bool,\n) -> str:\n    \"\"\"Select the correct loading method for this run window.\n\n    Decision logic:\n    - CDC if source supports it and not a recovery run\n    - delta if recovery run and primary key is available\n    - full_load for initial seeding (no primary key, not recovery)\n    - snapshot for point-in-time copies\n    \"\"\"\n    # BUG: always returns full_load regardless of run context\n    return 'full_load'\n\n\ndef loading_plan(source_tables: List[str], method: str) -> List[Dict[str, str]]:\n    return [{'table': t, 'method': method} for t in source_tables]\n",
+      "glue_jobs/data_contract.py": "from __future__ import annotations\n\nfrom typing import Dict, List\n\n# Columns the source team guarantees will always be present\nREQUIRED_COLUMNS = ['transaction_id', 'amount', 'created_at']\n\n# Columns allowed to be null\nNULLABLE_COLUMNS = ['payment_method', 'metadata']\n\n\ndef validate_contract(\n    records: List[Dict[str, object]],\n    required_columns: List[str],\n) -> Dict[str, object]:\n    \"\"\"Validate that required columns are present in every record.\n\n    Returns a result dict with:\n    - passed: bool\n    - missing_columns: list of column names absent from the record set\n    - violations: list of dicts describing which records are missing which columns\n    \"\"\"\n    # BUG: always returns passed=True \u2014 validation is not implemented\n    return {'passed': True, 'missing_columns': [], 'violations': []}\n",
+      "glue_jobs/quality.py": "from __future__ import annotations\n\nfrom typing import Dict, List\n\n\ndef duplicate_transaction_ids(records: List[Dict[str, object]]) -> List[str]:\n    # BUG: always returns empty list \u2014 duplicates are never detected\n    return []\n\n\ndef quality_gate(records: List[Dict[str, object]]) -> Dict[str, object]:\n    duplicates = duplicate_transaction_ids(records)\n    # BUG: always returns passed=True regardless of duplicates found\n    return {\n        'passed': True,\n        'duplicate_ids': duplicates,\n        'record_count': len(records),\n    }\n",
+      "glue_jobs/reconciliation.py": "from __future__ import annotations\n\nfrom typing import Dict, List\n\n\ndef revenue_delta(source_records: List[Dict[str, object]], loaded_records: List[Dict[str, object]]) -> float:\n    source_total = sum(float(item.get('amount', 0) or 0) for item in source_records)\n    loaded_total = sum(float(item.get('amount', 0) or 0) for item in loaded_records)\n    return round(source_total - loaded_total, 2)\n",
+      "glue_jobs/revenue_pipeline.py": "from __future__ import annotations\n\nfrom dataclasses import dataclass\nfrom typing import Dict, List\n\nfrom glue_jobs.bookmarks import should_advance_bookmark\nfrom glue_jobs.data_contract import validate_contract, REQUIRED_COLUMNS\nfrom glue_jobs.loading_strategy import select_load_method\nfrom glue_jobs.quality import quality_gate\nfrom glue_jobs.schema_registry import detect_missing_columns, map_type\n\n\n@dataclass\nclass PipelineResult:\n    load_method: str\n    schema_changes: List[Dict[str, str]]\n    normalized_records: List[Dict[str, object]]\n    duplicates_removed: int\n    contract_passed: bool\n    bookmark_advanced: bool\n    quality_passed: bool\n\n\nclass RevenueRecoveryPipeline:\n    def plan_schema_changes(self, source_schema: Dict[str, str], warehouse_schema: Dict[str, str]) -> List[Dict[str, str]]:\n        missing = detect_missing_columns(source_schema, warehouse_schema)\n        # BUG: returns empty list \u2014 DDL changes are never planned\n        return []\n\n    def normalize_records(self, records: List[Dict[str, object]], source_schema: Dict[str, str], warehouse_schema: Dict[str, str]) -> List[Dict[str, object]]:\n        normalized = []\n        for record in records:\n            normalized.append(dict(record))\n        return normalized\n\n    def deduplicate_records(self, records: List[Dict[str, object]]) -> List[Dict[str, object]]:\n        # BUG: returns all records unchanged \u2014 deduplication is not implemented\n        return list(records)\n\n    def run_incremental(\n        self,\n        *,\n        source_records: List[Dict[str, object]],\n        source_schema: Dict[str, str],\n        warehouse_schema: Dict[str, str],\n        is_recovery_run: bool = False,\n        has_primary_key: bool = True,\n        source_supports_cdc: bool = False,\n    ) -> PipelineResult:\n        load_method = select_load_method(\n            is_recovery_run=is_recovery_run,\n            has_primary_key=has_primary_key,\n            source_supports_cdc=source_supports_cdc,\n        )\n        schema_changes = self.plan_schema_changes(source_schema, warehouse_schema)\n        normalized = self.normalize_records(source_records, source_schema, warehouse_schema)\n        deduped = self.deduplicate_records(normalized)\n        contract = validate_contract(deduped, REQUIRED_COLUMNS)\n        quality = quality_gate(deduped)\n        quality_ok = bool(quality.get('passed')) and bool(contract.get('passed'))\n        bookmark_advanced = should_advance_bookmark(\n            quality_passed=quality_ok,\n            records_loaded=len(deduped),\n        )\n        return PipelineResult(\n            load_method=load_method,\n            schema_changes=schema_changes,\n            normalized_records=deduped,\n            duplicates_removed=max(0, len(normalized) - len(deduped)),\n            contract_passed=bool(contract.get('passed')),\n            bookmark_advanced=bookmark_advanced,\n            quality_passed=bool(quality.get('passed')),\n        )\n",
+      "tests/__init__.py": "",
+      "tests/test_revenue_pipeline.py": "from glue_jobs.revenue_pipeline import RevenueRecoveryPipeline\n\n\ndef test_plans_schema_changes_for_new_columns():\n    pipeline = RevenueRecoveryPipeline()\n    source_schema = {'transaction_id': 'string', 'amount': 'decimal', 'payment_method': 'string'}\n    warehouse_schema = {'transaction_id': 'STRING', 'amount': 'DECIMAL(18,2)'}\n\n    changes = pipeline.plan_schema_changes(source_schema, warehouse_schema)\n    assert changes == [{'column': 'payment_method', 'glue_type': 'STRING'}]\n\n\ndef test_deduplicates_retries_by_latest_record():\n    pipeline = RevenueRecoveryPipeline()\n    records = [\n        {'transaction_id': 'TXN-1', 'amount': 100, 'updated_at': '2026-02-27T02:00:00Z'},\n        {'transaction_id': 'TXN-1', 'amount': 125, 'updated_at': '2026-02-27T02:05:00Z'},\n        {'transaction_id': 'TXN-2', 'amount': 90, 'updated_at': '2026-02-27T02:01:00Z'},\n    ]\n\n    deduped = pipeline.deduplicate_records(records)\n    assert deduped == [\n        {'transaction_id': 'TXN-1', 'amount': 125, 'updated_at': '2026-02-27T02:05:00Z'},\n        {'transaction_id': 'TXN-2', 'amount': 90, 'updated_at': '2026-02-27T02:01:00Z'},\n    ]\n\n\ndef test_does_not_advance_bookmark_when_quality_gate_fails():\n    pipeline = RevenueRecoveryPipeline()\n    result = pipeline.run_incremental(\n        source_records=[\n            {'transaction_id': 'TXN-1', 'amount': 100, 'created_at': '2026-02-27'},\n            {'transaction_id': 'TXN-1', 'amount': 100, 'created_at': '2026-02-27'},\n        ],\n        source_schema={'transaction_id': 'string', 'amount': 'decimal', 'created_at': 'timestamp'},\n        warehouse_schema={'transaction_id': 'STRING', 'amount': 'DECIMAL(18,2)', 'created_at': 'TIMESTAMP'},\n    )\n\n    assert result.quality_passed is False\n    assert result.bookmark_advanced is False\n",
+      "tests/test_schema_registry.py": "from glue_jobs.schema_registry import map_type\n\n\ndef test_maps_double_types_without_falling_back_to_string():\n    assert map_type('double') == 'DOUBLE'\n\n\ndef test_maps_integer_types_without_falling_back_to_string():\n    assert map_type('integer') == 'INT'\n",
+      "tests/test_quality.py": "from glue_jobs.quality import duplicate_transaction_ids, quality_gate\n\n\ndef test_duplicate_transaction_ids_returns_repeat_ids():\n    records = [\n        {'transaction_id': 'TXN-1'},\n        {'transaction_id': 'TXN-2'},\n        {'transaction_id': 'TXN-1'},\n    ]\n\n    assert duplicate_transaction_ids(records) == ['TXN-1']\n\n\ndef test_quality_gate_fails_when_duplicates_exist():\n    records = [\n        {'transaction_id': 'TXN-9001'},\n        {'transaction_id': 'TXN-9001'},\n    ]\n\n    result = quality_gate(records)\n    assert result['passed'] is False\n    assert result['duplicate_ids'] == ['TXN-9001']\n",
+      "tests/test_loading_strategy.py": "from glue_jobs.loading_strategy import select_load_method\n\n\ndef test_selects_delta_for_recovery_run_with_primary_key():\n    \"\"\"Recovery runs with a primary key should use delta replay, not full_load.\"\"\"\n    method = select_load_method(\n        is_recovery_run=True,\n        has_primary_key=True,\n        source_supports_cdc=False,\n    )\n    assert method == 'delta'\n\n\ndef test_selects_cdc_when_source_supports_it_and_not_recovery():\n    \"\"\"Non-recovery runs should use CDC when the source supports it.\"\"\"\n    method = select_load_method(\n        is_recovery_run=False,\n        has_primary_key=True,\n        source_supports_cdc=True,\n    )\n    assert method == 'cdc'\n",
+      "tests/test_data_contract.py": "from glue_jobs.data_contract import validate_contract\n\n\ndef test_fails_when_required_column_is_missing_from_records():\n    \"\"\"Records missing created_at should fail contract validation.\"\"\"\n    records = [\n        {'transaction_id': 'TXN-1', 'amount': 100},\n        {'transaction_id': 'TXN-2', 'amount': 200},\n    ]\n    result = validate_contract(records, required_columns=['transaction_id', 'amount', 'created_at'])\n\n    assert result['passed'] is False\n    assert 'created_at' in result['missing_columns']\n\n\ndef test_passes_when_all_required_columns_present():\n    records = [\n        {'transaction_id': 'TXN-1', 'amount': 100, 'created_at': '2026-02-27'},\n    ]\n    result = validate_contract(records, required_columns=['transaction_id', 'amount', 'created_at'])\n\n    assert result['passed'] is True\n",
+      "requirements.txt": "pytest>=8.0.0\n"
+    }
+  },
+  "evaluation_rubric": {
+    "situational_assessment": {
+      "weight": 0.22,
+      "criteria": {
+        "excellent": "Reads diagnostics/audit_findings.md and job_run.log before touching code. Correctly identifies the four failure modes \u2014 quality gate stub, dedup no-op, bookmark ignoring quality_passed, and loading method hardcoded to full_load \u2014 and treats the data contract gap as a fifth. Keeps DPU tuning explicitly out of scope.",
+        "good": "Finds the main incident themes with minor gaps \u2014 for example identifies duplicates and bookmark issues but misses the loading method decision or data contract violation.",
+        "poor": "Jumps into code without reading the diagnostics. Cannot explain the business impact of the type mapping fallbacks or the bookmark advancement bug."
+      }
+    },
+    "prioritisation_judgment": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Fixes what restores trust in the next finance-close run first: quality gate, dedup logic, and bookmark gating before schema DDL or loading strategy. Clearly separates near-term incident recovery from backlog items like DPU tuning and Terraform automation.",
+        "good": "Picks a mostly sensible order with limited tradeoff explanation \u2014 for example fixes dedup but leaves the bookmark bug or contract validation untouched.",
+        "poor": "Focuses on schema planning or performance optimisation while duplicate inflation and bookmark trust remain broken."
+      }
+    },
+    "technical_design": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Implements credible logic for: duplicate detection by transaction_id, bookmark gating on quality_passed, loading method selection (delta for recovery with primary key, CDC when supported), and required-column contract validation. Changes are focused and explainable under pressure.",
+        "good": "Improves the design meaningfully \u2014 fixes dedup and quality gate \u2014 but leaves one major gap such as loading method or contract validation.",
+        "poor": "Makes ad-hoc fixes that do not restore operator trust \u2014 for example hardcodes dedup or patches bookmark logic without fixing the underlying quality gate."
+      }
+    },
+    "implementation_quality": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Ships focused code changes that make the failing tests pass. Type mapping additions are correct (DOUBLE, INT). Dedup keeps latest updated_at. Bookmark only advances when quality_passed is True. Contract check returns meaningful missing_columns list.",
+        "good": "Fixes the main failing behaviours with some rough edges \u2014 for example correct dedup but an off-by-one in the updated_at comparison.",
+        "poor": "Leaves failing tests or introduces new failures. Cannot explain what the code change does in terms the VP can understand."
+      }
+    },
+    "communication_clarity": {
+      "weight": 0.18,
+      "criteria": {
+        "excellent": "Produces a written summary the VP and Finance lead can act on: what blocks the next run, what was fixed, what remains risky, and what the next handover step is. Uses plain business language alongside technical specifics.",
+        "good": "Provides a clear engineering summary but uses jargon that would require translation for the Finance lead.",
+        "poor": "Cannot clearly explain what was fixed or what still blocks trust for the next scheduled run."
+      }
+    }
+  },
+  "expected_candidate_journey": {
+    "first_8_minutes": [
+      "Read RUNBOOK.md, diagnostics/job_run.log, and diagnostics/audit_findings.md before editing any code.",
+      "Map each log error to a specific function: duplicate_transaction_ids() in quality.py, should_advance_bookmark() in bookmarks.py, select_load_method() in loading_strategy.py, validate_contract() in data_contract.py.",
+      "Identify that correctness and operator trust, not performance, is the immediate business problem.",
+      "Run pytest -q --tb=short to see which tests fail and confirm the failure shape matches the diagnostics."
+    ],
+    "minutes_8_to_20": [
+      "Fix quality gate and dedup logic first \u2014 these directly block the finance close run.",
+      "Fix bookmark advancement to gate on quality_passed=True.",
+      "Add missing type mappings (DOUBLE, INT) to schema_registry.py \u2014 quick wins.",
+      "Implement select_load_method() to return 'delta' for recovery runs with a primary key.",
+      "Implement validate_contract() to check required columns are present in every record.",
+      "Keep changes focused and small enough to explain under pressure."
+    ],
+    "minutes_20_to_28": [
+      "Re-run pytest --tb=short and assess which tests now pass.",
+      "Identify what still blocks trust \u2014 for example plan_schema_changes() still returns [] and may need DDL automation before the next sprint.",
+      "Separate immediate incident recovery from longer-term Glue platform improvements."
+    ],
+    "final_2_minutes": [
+      "Write a VP-facing summary: what was fixed, what still blocks the next run, and what the operations handover looks like."
+    ]
+  },
+  "interviewer_signals": {
+    "strong_positive": [
+      "Reads diagnostics/audit_findings.md and quotes specific function names (duplicate_transaction_ids, should_advance_bookmark) before editing code.",
+      "Treats bookmark movement as a business-risk decision tied to quality_passed, not just a technical detail.",
+      "Explains the difference between delta and full_load in terms the Finance team can understand.",
+      "Fixes quality gate and dedup before touching schema planning or performance.",
+      "Validates the data contract and explains the business risk of missing created_at.",
+      "Explains what remains for follow-up without pretending the incident is fully solved."
+    ],
+    "red_flags": [
+      "Starts with DPU allocation, cluster tuning, or Terraform before fixing correctness.",
+      "Leaves duplicate_transaction_ids() returning an empty list.",
+      "Advances the bookmark without gating on quality_passed.",
+      "Cannot explain why delta replay is correct for the recovery window.",
+      "Treats the data contract as optional overhead.",
+      "Performs a broad rewrite instead of focused incident recovery."
+    ]
+  },
+  "scoring_hints": {
+    "min_reading_time_seconds": 300
+  },
+  "test_runner": {
+    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "working_dir": "/workspace/aws-glue-revenue-recovery",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
+    "timeout_seconds": 120
+  },
+  "workspace_bootstrap": {
+    "commands": [
+      "python3 -m venv .venv",
+      "./.venv/bin/python -m pip install --upgrade pip",
+      "./.venv/bin/python -m pip install -r requirements.txt"
+    ],
+    "working_dir": "/workspace/aws-glue-revenue-recovery",
+    "timeout_seconds": 240,
+    "must_succeed": true
+  },
+  "role_alignment": {
+    "source_user_email": "sampatel@deeplight.ae",
+    "source_role_name": "AWS Glue Data Engineer",
+    "source_role_identifier": "workable:CE038C5C15",
+    "captured_at": "2026-03-05T00:00:00Z",
+    "must_cover": [
+      "Build and recover AWS Glue Bronze-layer ingestion jobs under operational pressure.",
+      "Select and apply the correct loading method (CDC, delta, full load, snapshot) based on run context.",
+      "Handle schema drift, data contract violations, and retry deduplication safely.",
+      "Protect data quality and bookmark integrity for business-critical financial reporting.",
+      "Document recovery status and handover clearly for operations and stakeholders."
+    ],
+    "must_not_cover": [
+      "DPU allocation, cluster tuning, or broad Glue platform optimisation",
+      "Terraform or CI/CD deployment automation",
+      "Lakehouse rearchitecture beyond the immediate incident scope",
+      "Source system connectivity or CDP integration"
+    ],
+    "jd_to_signal_map": [
+      {
+        "job_requirement": "Work in a fast-paced environment and deliver aggressive migration targets while coordinating with data assurance and platform stakeholders.",
+        "task_artifact": "diagnostics/job_run.log + diagnostics/audit_findings.md \u2014 incident framing with finance-close deadline",
+        "rubric_dimension": "situational_assessment"
+      },
+      {
+        "job_requirement": "Implement correct loading methods based on source requirements such as CDC, full load, delta, and snapshot.",
+        "task_artifact": "glue_jobs/loading_strategy.py \u2014 select_load_method() always returns full_load; test_loading_strategy.py asserts correct delta and CDC selection",
+        "rubric_dimension": "prioritisation_judgment"
+      },
+      {
+        "job_requirement": "Build AWS Glue ETL ingestion jobs with strong knowledge of Lakehouse architecture, Medallion patterns, and historical ingestion strategies.",
+        "task_artifact": "glue_jobs/schema_registry.py, glue_jobs/revenue_pipeline.py, ARCHITECTURE.md \u2014 Bronze-layer shape and type registry gaps",
+        "rubric_dimension": "technical_design"
+      },
+      {
+        "job_requirement": "Ensure jobs comply with data contracts and are properly monitored with quality checks.",
+        "task_artifact": "glue_jobs/data_contract.py, glue_jobs/quality.py \u2014 validate_contract() and quality_gate() stubs that always pass",
+        "rubric_dimension": "implementation_quality"
+      },
+      {
+        "job_requirement": "Prepare documentation and handover to operational support teams while collaborating across stakeholder levels.",
+        "task_artifact": "RUNBOOK.md framing and required written VP-facing incident summary",
+        "rubric_dimension": "communication_clarity"
+      }
+    ]
+  },
+  "human_testing_checklist": {
+    "candidate_clarity": true,
+    "repo_boot_ok": true,
+    "tests_collect_ok": true,
+    "baseline_failures_meaningful": true,
+    "rubric_matches_role": true,
+    "timebox_realistic": true
+  }
+}
