@@ -15,7 +15,6 @@ import { useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import {
   assessments as assessmentsApi,
-  organizations as organizationsApi,
 } from './shared/api';
 import { pathForPage } from './app/routing';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
@@ -35,7 +34,6 @@ import {
   ConnectWorkableButton,
   WorkableCallbackPage,
 } from './features/integrations/WorkableConnection';
-import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
 
 const AssessmentPage = lazy(() => import('./features/assessment_runtime/AssessmentPage'));
 const CandidateFeedbackPage = lazy(() =>
@@ -46,12 +44,6 @@ const DemoExperiencePage = lazy(() =>
 );
 const LazyAssessmentResultsPage = lazy(() =>
   import('./features/assessments/AssessmentResultsPage').then((m) => ({ default: m.AssessmentResultsPage }))
-);
-const AssessmentsPage = lazy(() =>
-  import('./features/assessments/AssessmentsPage').then((m) => ({ default: m.AssessmentsPage }))
-);
-const CandidatesPage = lazy(() =>
-  import('./features/candidates/CandidatesPage').then((m) => ({ default: m.CandidatesPage }))
 );
 const CandidatesDirectoryPage = lazy(() =>
   import('./features/candidates/CandidatesDirectoryPage').then((m) => ({ default: m.CandidatesDirectoryPage }))
@@ -79,13 +71,10 @@ function AppContent() {
   const [searchParams] = useSearchParams();
 
   const [selectedCandidate, setSelectedCandidate] = useState(null);
-  const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'assessments', label: 'Back to Assessments' });
+  const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'jobs', label: 'Back to Jobs' });
   const [loadingCandidateDetail, setLoadingCandidateDetail] = useState(false);
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
-  const [workflowV2Enabled, setWorkflowV2Enabled] = useState(false);
-  const [workflowModeReady, setWorkflowModeReady] = useState(false);
-
-  const defaultRecruiterRoute = workflowV2Enabled ? '/jobs' : '/assessments';
+  const defaultRecruiterRoute = '/jobs';
 
   const candidateDetailAssessmentId = useMemo(() => {
     const recruiterAssessmentMatch = location.pathname.match(/^\/assessments\/(\d+)$/);
@@ -146,49 +135,13 @@ function AppContent() {
   }, [activeAssessmentToken]);
 
   useEffect(() => {
-    if (!isAuthenticated) {
-      setWorkflowV2Enabled(false);
-      setWorkflowModeReady(true);
-      return;
-    }
-    setWorkflowModeReady(false);
-    if (!organizationsApi?.get) {
-      setWorkflowV2Enabled(false);
-      setWorkflowModeReady(true);
-      return;
-    }
-    const request = organizationsApi.get();
-    if (!request || typeof request.then !== 'function') {
-      setWorkflowV2Enabled(false);
-      setWorkflowModeReady(true);
-      return;
-    }
-    let cancelled = false;
-    request
-      .then((res) => {
-        if (cancelled) return;
-        setWorkflowV2Enabled(Boolean(res?.data?.recruiter_workflow_v2_enabled));
-        setWorkflowModeReady(true);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setWorkflowV2Enabled(false);
-        setWorkflowModeReady(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isAuthenticated]);
-
-  useEffect(() => {
     if (
       isAuthenticated
-      && workflowModeReady
       && ['/', '/login', '/forgot-password'].includes(location.pathname)
     ) {
       navigate(defaultRecruiterRoute, { replace: true });
     }
-  }, [defaultRecruiterRoute, isAuthenticated, location.pathname, navigate, workflowModeReady]);
+  }, [defaultRecruiterRoute, isAuthenticated, location.pathname, navigate]);
 
   useEffect(() => {
     if (
@@ -229,7 +182,6 @@ function AppContent() {
       roleId: Object.prototype.hasOwnProperty.call(options, 'roleId')
         ? options.roleId
         : null,
-      workflowV2Enabled,
     });
 
     if (nextPath) {
@@ -298,7 +250,6 @@ function AppContent() {
       <Loader2 size={28} className="animate-spin" style={{ color: '#9D00FF' }} />
     </div>
   );
-  const workflowModeLoading = isAuthenticated && !workflowModeReady;
 
   const CandidateWelcomeRoute = () => {
     const { token } = useParams();
@@ -344,12 +295,7 @@ function AppContent() {
     );
   };
 
-  const DashboardNavWithMode = (props) => (
-    <DashboardNav
-      {...props}
-      workflowV2Enabled={workflowV2Enabled}
-    />
-  );
+  const DashboardNavWithMode = (props) => <DashboardNav {...props} />;
 
   return (
     <>
@@ -371,79 +317,49 @@ function AppContent() {
 
       <Route
         path="/dashboard"
-        element={workflowModeLoading
-          ? lazyFallback
-          : <Navigate replace to={defaultRecruiterRoute} />}
+        element={<Navigate replace to={defaultRecruiterRoute} />}
       />
 
       <Route
         path="/jobs"
-        element={workflowModeLoading
-          ? lazyFallback
-          : (workflowV2Enabled ? (
-            <Suspense fallback={lazyFallback}>
-              <JobsPage
-                onNavigate={navigateToPage}
-                NavComponent={DashboardNavWithMode}
-              />
-            </Suspense>
-          ) : (
-            <Navigate replace to="/assessments" />
-          ))}
-      />
-
-      <Route
-        path="/jobs/:roleId"
-        element={workflowModeLoading
-          ? lazyFallback
-          : (workflowV2Enabled ? (
-            <Suspense fallback={lazyFallback}>
-              <JobPipelinePage
-                onNavigate={navigateToPage}
-                onViewCandidate={(candidate) => navigateToCandidate(candidate, 'jobs')}
-                NavComponent={DashboardNavWithMode}
-              />
-            </Suspense>
-          ) : (
-            <Navigate replace to="/assessments" />
-          ))}
-      />
-
-      <Route
-        path="/assessments"
         element={(
           <Suspense fallback={lazyFallback}>
-            <AssessmentsPage
+            <JobsPage
               onNavigate={navigateToPage}
-              onViewCandidate={(candidate) => navigateToCandidate(candidate, 'assessments')}
               NavComponent={DashboardNavWithMode}
-              StatsCardComponent={StatsCard}
-              StatusBadgeComponent={StatusBadge}
             />
           </Suspense>
         )}
       />
 
       <Route
+        path="/jobs/:roleId"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <JobPipelinePage
+              onNavigate={navigateToPage}
+              onViewCandidate={(candidate) => navigateToCandidate(candidate, 'jobs')}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/assessments"
+        element={<Navigate replace to="/jobs" />}
+      />
+
+      <Route
         path="/candidates"
-        element={workflowModeLoading
-          ? lazyFallback
-          : (workflowV2Enabled ? (
-            <Suspense fallback={lazyFallback}>
-              <CandidatesDirectoryPage
-                onNavigate={navigateToPage}
-                NavComponent={DashboardNavWithMode}
-              />
-            </Suspense>
-          ) : (
-            <Suspense fallback={lazyFallback}>
-              <CandidatesPage
-                onNavigate={navigateToPage}
-                onViewCandidate={(candidate) => navigateToCandidate(candidate, 'candidates')}
-                NavComponent={DashboardNavWithMode}
-              />
-            </Suspense>
-          ))}
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <CandidatesDirectoryPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
       />
 
       <Route
@@ -460,7 +376,7 @@ function AppContent() {
 
       <Route
         path="/candidate-detail"
-        element={<Navigate replace to={candidateDetailAssessmentId ? `/assessments/${candidateDetailAssessmentId}` : '/assessments'} />}
+        element={<Navigate replace to="/jobs" />}
       />
 
       <Route

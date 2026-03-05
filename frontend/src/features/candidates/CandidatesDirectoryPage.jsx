@@ -23,6 +23,7 @@ import {
 } from '../../shared/ui/TaaliPrimitives';
 import { formatDateTime, getErrorMessage } from './candidatesUiUtils';
 import { CandidateCvSidebar } from './CandidateCvSidebar';
+import { CandidateScoreRing } from './CandidateScoreRing';
 import { CandidateScoreSummarySheet } from './CandidateScoreSummarySheet';
 import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
 
@@ -39,6 +40,11 @@ const OUTCOME_OPTIONS = [
   { value: 'rejected', label: 'Rejected' },
   { value: 'withdrawn', label: 'Withdrawn' },
   { value: 'hired', label: 'Hired' },
+];
+const SORT_OPTIONS = [
+  { value: 'pipeline_stage_updated_at:desc', label: 'Recent activity' },
+  { value: 'taali_score:desc', label: 'TAALI score (high to low)' },
+  { value: 'taali_score:asc', label: 'TAALI score (low to high)' },
 ];
 const STAGE_COUNT_DEFAULTS = {
   all: 0,
@@ -86,6 +92,81 @@ const isVersionConflictError = (error) => {
   return detail.includes('version mismatch');
 };
 
+const eventReasonToLabel = (reason) => {
+  const normalized = String(reason || '').trim().toLowerCase();
+  if (!normalized) return '';
+  if (normalized.includes('workflow v2')) return '';
+  if (normalized.includes('imported from workable')) return 'Imported from Workable';
+  if (normalized.includes('assessment invite created')) return 'Task sent';
+  if (normalized.includes('assessment retake created')) return 'Task retake sent';
+  if (normalized.includes('candidate started assessment')) return 'Candidate started task';
+  if (normalized.includes('assessment completed')) return 'Candidate completed task';
+  if (normalized.includes('auto-completed on timeout')) return 'Task auto-completed on timeout';
+  return reason;
+};
+
+const formatTimelineEvent = (event) => {
+  const eventType = String(event?.event_type || '').trim().toLowerCase();
+  const safeFromStage = formatTitleCase(event?.from_stage);
+  const safeToStage = formatTitleCase(event?.to_stage);
+  const safeFromOutcome = formatTitleCase(event?.from_outcome);
+  const safeToOutcome = formatTitleCase(event?.to_outcome);
+  const reasonLabel = eventReasonToLabel(event?.reason);
+
+  if (eventType === 'pipeline_initialized') {
+    if (reasonLabel === 'Imported from Workable') {
+      return {
+        title: 'Imported from Workable',
+        detail: safeToStage && safeToOutcome ? `${safeToStage} · ${safeToOutcome}` : 'Application added to pipeline',
+      };
+    }
+    return {
+      title: 'Pipeline initialized',
+      detail: safeToStage && safeToOutcome ? `${safeToStage} · ${safeToOutcome}` : 'Application created',
+    };
+  }
+
+  if (eventType === 'pipeline_stage_changed') {
+    return {
+      title: safeToStage ? `Stage moved to ${safeToStage}` : 'Pipeline stage updated',
+      detail: reasonLabel || `${safeFromStage || 'Unknown'} -> ${safeToStage || 'Unknown'}`,
+    };
+  }
+
+  if (eventType === 'application_outcome_changed') {
+    return {
+      title: safeToOutcome ? `Outcome changed to ${safeToOutcome}` : 'Outcome updated',
+      detail: reasonLabel || `${safeFromOutcome || 'Unknown'} -> ${safeToOutcome || 'Unknown'}`,
+    };
+  }
+
+  if (eventType === 'assessment_invite_sent') {
+    return { title: 'Task sent', detail: reasonLabel || 'Assessment invite sent to candidate' };
+  }
+  if (eventType === 'assessment_retake_sent') {
+    return { title: 'Task retake sent', detail: reasonLabel || 'Assessment retake sent to candidate' };
+  }
+  if (eventType === 'assessment_invite_resent') {
+    return { title: 'Task invite resent', detail: reasonLabel || 'Assessment invite resent to candidate' };
+  }
+  if (eventType === 'workable_candidate_imported') {
+    return { title: 'Imported from Workable', detail: reasonLabel || 'Candidate imported from Workable' };
+  }
+
+  return {
+    title: formatTitleCase(event?.event_type),
+    detail: reasonLabel || `${safeFromStage || 'Unknown'} -> ${safeToStage || 'Unknown'}`,
+  };
+};
+
+const candidateApplicationKey = (application) => {
+  const candidateId = Number(application?.candidate_id || 0);
+  if (candidateId > 0) return `candidate-id:${candidateId}`;
+  const email = String(application?.candidate_email || '').trim().toLowerCase();
+  if (email) return `candidate-email:${email}`;
+  return `application:${application?.id || 'unknown'}`;
+};
+
 export const CandidatesDirectoryPage = ({
   onNavigate,
   NavComponent = null,
@@ -110,6 +191,8 @@ export const CandidatesDirectoryPage = ({
   const [roleFilter, setRoleFilter] = useState(defaultRoleFilter);
   const [stageFilter, setStageFilter] = useState('all');
   const [outcomeFilter, setOutcomeFilter] = useState('open');
+  const [sortOption, setSortOption] = useState(SORT_OPTIONS[0].value);
+  const [minTaaliScore, setMinTaaliScore] = useState('');
   const [search, setSearch] = useState('');
   const [page, setPage] = useState(0);
 
@@ -150,6 +233,15 @@ export const CandidatesDirectoryPage = ({
     Array.isArray(applicationsPayload.items) ? applicationsPayload.items : []
   ), [applicationsPayload]);
 
+  const roleApplicationsByCandidateKey = useMemo(() => {
+    const next = {};
+    applications.forEach((application) => {
+      const key = candidateApplicationKey(application);
+      next[key] = Number(next[key] || 0) + 1;
+    });
+    return next;
+  }, [applications]);
+
   const selectedApplicationFromList = useMemo(() => (
     applications.find((application) => Number(application.id) === Number(selectedApplicationId)) || null
   ), [applications, selectedApplicationId]);
@@ -163,6 +255,10 @@ export const CandidatesDirectoryPage = ({
   const selectedEvents = useMemo(() => (
     eventsByApplicationId[String(selectedApplication?.id)] || []
   ), [eventsByApplicationId, selectedApplication?.id]);
+
+  const selectedRoleApplicationCount = useMemo(() => (
+    selectedApplication ? Number(roleApplicationsByCandidateKey[candidateApplicationKey(selectedApplication)] || 1) : 1
+  ), [roleApplicationsByCandidateKey, selectedApplication]);
 
   const selectedRoleTasks = useMemo(() => (
     roleTasksByRoleId[String(selectedApplication?.role_id)] || []
@@ -190,10 +286,17 @@ export const CandidatesDirectoryPage = ({
 
   const buildListQueryParams = useCallback(() => {
     const resolvedRoleFilter = roleFilterLocked ? lockedRoleValue : roleFilter;
+    const [sortBy, sortOrder] = String(sortOption || SORT_OPTIONS[0].value).split(':');
+    const parsedMinTaali = Number(minTaaliScore);
     const params = {
       limit: PAGE_SIZE,
       offset: currentPage * PAGE_SIZE,
+      sort_by: sortBy || 'pipeline_stage_updated_at',
+      sort_order: sortOrder || 'desc',
     };
+    if (minTaaliScore !== '' && Number.isFinite(parsedMinTaali)) {
+      params.min_taali_score = Math.max(0, Math.min(100, parsedMinTaali));
+    }
     if (!rolePipelineMode) {
       params.application_outcome = outcomeFilter || 'open';
       if (resolvedRoleFilter !== 'all') params.role_id = Number(resolvedRoleFilter);
@@ -206,29 +309,35 @@ export const CandidatesDirectoryPage = ({
     return params;
   }, [
     currentPage,
+    minTaaliScore,
     lockedRoleValue,
     outcomeFilter,
     roleFilter,
     roleFilterLocked,
     rolePipelineMode,
     search,
+    sortOption,
     stageFilter,
   ]);
 
   const buildStageCountQueryParams = useCallback((stage = 'all') => {
     if (rolePipelineMode) return null;
     const resolvedRoleFilter = roleFilterLocked ? lockedRoleValue : roleFilter;
+    const parsedMinTaali = Number(minTaaliScore);
     const params = {
       limit: 1,
       offset: 0,
       application_outcome: outcomeFilter || 'open',
     };
+    if (minTaaliScore !== '' && Number.isFinite(parsedMinTaali)) {
+      params.min_taali_score = Math.max(0, Math.min(100, parsedMinTaali));
+    }
     if (resolvedRoleFilter !== 'all') params.role_id = Number(resolvedRoleFilter);
     if (stage !== 'all') params.pipeline_stage = stage;
     const trimmed = search.trim();
     if (trimmed) params.search = trimmed;
     return params;
-  }, [lockedRoleValue, outcomeFilter, roleFilter, roleFilterLocked, rolePipelineMode, search]);
+  }, [lockedRoleValue, minTaaliScore, outcomeFilter, roleFilter, roleFilterLocked, rolePipelineMode, search]);
 
   const upsertApplicationInCache = useCallback((updatedApplication) => {
     if (!updatedApplication || !updatedApplication.id) return;
@@ -473,7 +582,7 @@ export const CandidatesDirectoryPage = ({
 
   useEffect(() => {
     setPage(0);
-  }, [outcomeFilter, roleFilter, search, stageFilter]);
+  }, [minTaaliScore, outcomeFilter, roleFilter, search, sortOption, stageFilter]);
 
   useEffect(() => {
     if (!selectedApplication) {
@@ -681,7 +790,7 @@ export const CandidatesDirectoryPage = ({
           )}
         />
 
-        <Panel className="mb-4 grid gap-3 p-3 md:grid-cols-4">
+        <Panel className="mb-4 grid gap-3 p-3 md:grid-cols-6">
           <label className="block">
             <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Search</span>
             <div className="relative">
@@ -737,6 +846,31 @@ export const CandidatesDirectoryPage = ({
               )}
             </Select>
           </label>
+
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Sort</span>
+            <Select
+              value={sortOption}
+              onChange={(event) => setSortOption(event.target.value)}
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </Select>
+          </label>
+
+          <label className="block">
+            <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Min TAALI</span>
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              step={0.1}
+              value={minTaaliScore}
+              placeholder="0-100"
+              onChange={(event) => setMinTaaliScore(event.target.value)}
+            />
+          </label>
         </Panel>
 
         <Panel className="mb-4 p-3">
@@ -777,7 +911,7 @@ export const CandidatesDirectoryPage = ({
             description="Try changing filters or add candidates from role pipelines."
           />
         ) : (
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1.15fr)_minmax(320px,0.85fr)]">
+          <div className="grid gap-4 lg:grid-cols-[minmax(300px,0.84fr)_minmax(520px,1.16fr)]">
             <Panel className="p-0">
               <div className="border-b border-[var(--taali-border-soft)] px-4 py-3 text-xs text-[var(--taali-muted)]">
                 {applicationsPayload.total} candidates
@@ -785,12 +919,15 @@ export const CandidatesDirectoryPage = ({
               <div className="max-h-[72vh] divide-y divide-[var(--taali-border-soft)] overflow-y-auto">
                 {applications.map((application) => {
                   const selected = Number(application.id) === Number(selectedApplicationId);
+                  const roleApplicationCount = Number(
+                    roleApplicationsByCandidateKey[candidateApplicationKey(application)] || 1
+                  );
                   return (
                     <button
                       key={application.id}
                       type="button"
                       className={[
-                        'w-full px-4 py-3 text-left transition-colors',
+                        'w-full px-4 py-2.5 text-left transition-colors',
                         selected
                           ? 'bg-[var(--taali-surface-subtle)]'
                           : 'hover:bg-[var(--taali-surface-subtle)]',
@@ -809,11 +946,15 @@ export const CandidatesDirectoryPage = ({
                             {application.role_name || application.candidate_position || 'Role'}
                           </p>
                         </div>
-                        <div className="text-right">
-                          <p className="text-sm font-semibold text-[var(--taali-text)]">
-                            {application.taali_score != null ? Number(application.taali_score).toFixed(1) : '—'}
-                          </p>
-                          <p className="text-[11px] text-[var(--taali-muted)]">TAALI</p>
+                        <div className="flex flex-col items-center text-right">
+                          <CandidateScoreRing
+                            score={application.taali_score}
+                            size={54}
+                            strokeWidth={6}
+                            label="TAALI score"
+                            valueClassName="text-xs"
+                          />
+                          <p className="mt-1 text-[10px] uppercase tracking-[0.08em] text-[var(--taali-muted)]">TAALI</p>
                         </div>
                       </div>
                       <div className="mt-2 flex flex-wrap items-center gap-2">
@@ -825,6 +966,9 @@ export const CandidatesDirectoryPage = ({
                         </Badge>
                         {application.pipeline_external_drift ? (
                           <Badge variant="warning">External drift</Badge>
+                        ) : null}
+                        {roleApplicationCount > 1 ? (
+                          <Badge variant="muted">{roleApplicationCount} role applications</Badge>
                         ) : null}
                         <span className="text-[11px] text-[var(--taali-muted)]">
                           Updated {formatDateTime(application.pipeline_stage_updated_at || application.updated_at || application.created_at)}
@@ -876,6 +1020,22 @@ export const CandidatesDirectoryPage = ({
                     <p className="text-xs text-[var(--taali-muted)]">
                       {selectedApplication.role_name || selectedApplication.candidate_position || 'Role'}
                     </p>
+                    {selectedApplication.candidate_headline ? (
+                      <p className="mt-2 text-xs text-[var(--taali-muted)]">{selectedApplication.candidate_headline}</p>
+                    ) : null}
+                    {selectedApplication.candidate_location ? (
+                      <p className="text-xs text-[var(--taali-muted)]">{selectedApplication.candidate_location}</p>
+                    ) : null}
+                    {selectedRoleApplicationCount > 1 ? (
+                      <p className="mt-2 text-[11px] text-[var(--taali-muted)]">
+                        This candidate has {selectedRoleApplicationCount} role applications in the current results.
+                      </p>
+                    ) : null}
+                    {selectedApplication.candidate_summary ? (
+                      <p className="mt-2 line-clamp-3 text-xs text-[var(--taali-muted)]">
+                        {selectedApplication.candidate_summary}
+                      </p>
+                    ) : null}
                   </div>
 
                   <div className="grid gap-3 md:grid-cols-2">
@@ -999,20 +1159,23 @@ export const CandidatesDirectoryPage = ({
                       </div>
                     ) : selectedEvents.length > 0 ? (
                       <div className="space-y-2">
-                        {selectedEvents.map((event) => (
-                          <div key={event.id} className="rounded-[var(--taali-radius-control)] border border-[var(--taali-border-soft)] p-2">
-                            <div className="flex items-center gap-2 text-[11px] text-[var(--taali-muted)]">
-                              <CircleDot size={11} />
-                              {formatDateTime(event.created_at)}
+                        {selectedEvents.map((event) => {
+                          const formatted = formatTimelineEvent(event);
+                          return (
+                            <div key={event.id} className="rounded-[var(--taali-radius-control)] border border-[var(--taali-border-soft)] p-2">
+                              <div className="flex items-center gap-2 text-[11px] text-[var(--taali-muted)]">
+                                <CircleDot size={11} />
+                                {formatDateTime(event.created_at)}
+                              </div>
+                              <p className="mt-1 text-xs font-semibold text-[var(--taali-text)]">
+                                {formatted.title}
+                              </p>
+                              <p className="mt-0.5 text-xs text-[var(--taali-muted)]">
+                                {formatted.detail}
+                              </p>
                             </div>
-                            <p className="mt-1 text-xs font-semibold text-[var(--taali-text)]">
-                              {formatTitleCase(event.event_type)}
-                            </p>
-                            <p className="mt-0.5 text-xs text-[var(--taali-muted)]">
-                              {event.reason || `${formatTitleCase(event.from_stage)} -> ${formatTitleCase(event.to_stage)}`}
-                            </p>
-                          </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     ) : (
                       <div className="flex items-center gap-2 text-xs text-[var(--taali-muted)]">
