@@ -66,7 +66,7 @@ def upgrade() -> None:
 
     with op.batch_alter_table("organizations") as batch:
         batch.add_column(
-            sa.Column("recruiter_workflow_v2_enabled", sa.Boolean(), nullable=True, server_default=sa.text("0"))
+            sa.Column("recruiter_workflow_v2_enabled", sa.Boolean(), nullable=True, server_default=sa.text("false"))
         )
 
     op.create_table(
