@@ -199,7 +199,18 @@ app.add_middleware(
     allow_origin_regex=_cors_origin_regex,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allow_headers=["Authorization", "Content-Type", "X-Assessment-Token", "X-Requested-With"],
+    # Include tracing headers used by browser SDKs (Sentry/OpenTelemetry) so
+    # preflight requests do not block API calls such as /applications.
+    allow_headers=[
+        "Authorization",
+        "Content-Type",
+        "X-Assessment-Token",
+        "X-Requested-With",
+        "Baggage",
+        "Sentry-Trace",
+        "Traceparent",
+        "Tracestate",
+    ],
 )
 
 # Rate limiting (auth and assessment endpoints)
