@@ -4,10 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
-import re
-import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Dict, List
 
 from fastapi import HTTPException, UploadFile
@@ -24,6 +21,8 @@ from ...components.integrations.claude.service import ClaudeService
 from ...services.document_service import process_document_upload
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.credit_ledger_service import append_credit_ledger_entry
+from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
+from ...services.task_repo_service import normalize_repo_files
 from ...services.task_spec_loader import candidate_rubric_view
 from ...domains.assessments_runtime.pipeline_service import (
     ensure_pipeline_fields,
@@ -36,6 +35,17 @@ from .terminal_runtime import resolve_ai_mode, terminal_capabilities
 
 logger = logging.getLogger(__name__)
 
+INSUFFICIENT_CREDITS_DETAIL = "Insufficient credits. Purchase credits to start this assessment."
+CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE = (
+    "This assessment is not available yet. Please contact the hiring team to continue."
+)
+ORG_INSUFFICIENT_CREDITS_MESSAGE = (
+    "No assessment credits available. Purchase credits before creating a new assessment."
+)
+ORG_RESERVED_CREDITS_MESSAGE = (
+    "All available credits are already reserved for pending assessments. Purchase more credits before creating another assessment."
+)
+
 from .repository import (
     utcnow,
     ensure_utc,
@@ -47,36 +57,94 @@ from .repository import (
 
 def _repo_files_from_structure(repo_structure: Dict[str, Any] | None) -> List[tuple[str, str]]:
     """Normalize repo_structure payload into (path, content) tuples."""
-    files = (repo_structure or {}).get("files") or {}
-    normalized: List[tuple[str, str]] = []
+    return list(normalize_repo_files(repo_structure).items())
 
-    if isinstance(files, dict):
-        for path, content in files.items():
-            if not path:
-                continue
-            if isinstance(content, str):
-                normalized.append((path, content))
-            else:
-                normalized.append((path, json.dumps(content, indent=2, sort_keys=True)))
-    elif isinstance(files, list):
-        for entry in files:
-            if not isinstance(entry, dict):
-                continue
-            path = entry.get("path") or entry.get("name")
-            if not path:
-                continue
-            content = entry.get("content", "")
-            if not isinstance(content, str):
-                content = json.dumps(content, indent=2, sort_keys=True)
-            normalized.append((path, content))
 
-    return normalized
+def _task_extra_data(task: Task) -> Dict[str, Any]:
+    extra = getattr(task, "extra_data", None)
+    return extra if isinstance(extra, dict) else {}
+
+
+def _extract_process_output(result: Any) -> tuple[str, str, int | None]:
+    if isinstance(result, dict):
+        stdout = str(result.get("stdout") or result.get("out") or "")
+        stderr = str(result.get("stderr") or result.get("err") or "")
+        exit_code = result.get("exit_code")
+        try:
+            exit_code = int(exit_code) if exit_code is not None else None
+        except (TypeError, ValueError):
+            exit_code = None
+        return stdout, stderr, exit_code
+
+    stdout = str(getattr(result, "stdout", "") or getattr(result, "out", "") or "")
+    stderr = str(getattr(result, "stderr", "") or getattr(result, "err", "") or "")
+    exit_code = getattr(result, "exit_code", None)
+    try:
+        exit_code = int(exit_code) if exit_code is not None else None
+    except (TypeError, ValueError):
+        exit_code = None
+    return stdout, stderr, exit_code
+
+
+def _execution_stdout_text(result: Any) -> str:
+    if isinstance(result, dict):
+        return str(result.get("stdout") or "")
+
+    logs = getattr(result, "logs", None)
+    raw_stdout = getattr(logs, "stdout", None) if logs is not None else None
+    if isinstance(raw_stdout, list):
+        return "\n".join(str(item) for item in raw_stdout)
+    if raw_stdout is not None:
+        return str(raw_stdout)
+    return str(getattr(result, "stdout", "") or "")
+
+
+def _trim_bootstrap_output(text: str, limit: int = 1200) -> str:
+    value = str(text or "").strip()
+    if len(value) <= limit:
+        return value
+    return value[-limit:]
 
 
 def _workspace_repo_root(task: Task) -> str:
-    root_name = (task.task_key or f"assessment-{task.id}").strip() or f"assessment-{task.id}"
-    safe_root = re.sub(r"[^a-zA-Z0-9._-]+", "-", root_name).strip("-") or f"assessment-{task.id}"
-    return f"/workspace/{safe_root}"
+    return canonical_workspace_repo_root(task)
+
+
+def _ensure_workspace_repo_permissions(sandbox: Any, repo_root: str) -> bool:
+    result = sandbox.run_code(
+        "import json, pathlib, subprocess\n"
+        f"repo_root=pathlib.Path({repo_root!r})\n"
+        "payload={'success': False, 'stderr': ''}\n"
+        "if not repo_root.exists():\n"
+        "  payload['stderr'] = 'repo_root_missing'\n"
+        "else:\n"
+        "  proc = subprocess.run(['chmod', '-R', 'a+rwX', str(repo_root)], capture_output=True, text=True)\n"
+        "  payload = {'success': proc.returncode == 0, 'stderr': (proc.stderr or '')[-500:]}\n"
+        "print(json.dumps(payload))\n"
+    )
+    try:
+        lines = _execution_stdout_text(result).strip().splitlines()
+        payload = json.loads(lines[-1]) if lines else {}
+        ok = False
+        if isinstance(payload, dict):
+            if payload.get("success") is not None:
+                ok = bool(payload.get("success"))
+            else:
+                raw_returncode = payload.get("returncode", payload.get("exit_code"))
+                try:
+                    ok = int(raw_returncode) == 0 if raw_returncode is not None else False
+                except (TypeError, ValueError):
+                    ok = False
+        if not ok:
+            logger.error(
+                "Failed to normalize workspace permissions repo_root=%s stderr=%s",
+                repo_root,
+                str(payload.get("stderr") or ""),
+            )
+        return ok
+    except Exception:
+        logger.exception("Failed to parse workspace permission output repo_root=%s", repo_root)
+        return False
 
 
 def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment, task: Task) -> bool:
@@ -105,18 +173,7 @@ def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment
         "print(json.dumps(payload))\n"
     )
     try:
-        stdout_text = ""
-        if isinstance(result, dict):
-            stdout_text = str(result.get("stdout") or "")
-        else:
-            logs = getattr(result, "logs", None)
-            raw_stdout = getattr(logs, "stdout", None) if logs is not None else None
-            if isinstance(raw_stdout, list):
-                stdout_text = "\n".join(str(item) for item in raw_stdout)
-            elif raw_stdout is not None:
-                stdout_text = str(raw_stdout)
-            else:
-                stdout_text = str(getattr(result, "stdout", "") or "")
+        stdout_text = _execution_stdout_text(result)
         lines = stdout_text.strip().splitlines()
         payload = json.loads(lines[-1]) if lines else {}
         ok = int(payload.get("returncode", 1)) == 0
@@ -127,7 +184,8 @@ def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment
                 branch_name,
                 str(payload.get("stderr") or ""),
             )
-        return ok
+            return False
+        return _ensure_workspace_repo_permissions(sandbox, repo_root)
     except Exception:
         logger.exception("Failed to parse clone command output for assessment=%s", getattr(assessment, "id", None))
         return False
@@ -162,8 +220,77 @@ def _materialize_task_repository(sandbox: Any, task: Task) -> None:
         "subprocess.run(['git', 'add', '.'], cwd=repo, check=False, capture_output=True)\n"
         "subprocess.run(['git', 'commit', '-m', 'Initial assessment context'], cwd=repo, check=False, capture_output=True)\n"
     )
+    if not _ensure_workspace_repo_permissions(sandbox, repo_root):
+        raise RuntimeError(f"Failed to normalize workspace permissions for {repo_root}")
 
     logger.info("Materialized %d repository files under %s", len(repo_files), repo_root)
+
+
+def _is_demo_workspace_fallback_enabled(assessment: Assessment) -> bool:
+    return bool(getattr(assessment, "is_demo", False))
+
+
+def _run_workspace_bootstrap(
+    e2b: Any,
+    sandbox: Any,
+    task: Task,
+    repo_root: str,
+) -> Dict[str, Any]:
+    config = _task_extra_data(task).get("workspace_bootstrap") or {}
+    if not isinstance(config, dict):
+        return {"ran": False, "success": True, "must_succeed": False, "working_dir": repo_root, "steps": []}
+
+    commands = [str(command).strip() for command in (config.get("commands") or []) if str(command or "").strip()]
+    if not commands:
+        return {"ran": False, "success": True, "must_succeed": False, "working_dir": repo_root, "steps": []}
+
+    working_dir = str(config.get("working_dir") or repo_root).strip() or repo_root
+    try:
+        timeout_seconds = int(config.get("timeout_seconds") or 90)
+    except (TypeError, ValueError):
+        timeout_seconds = 90
+    timeout_seconds = max(5, min(timeout_seconds, 900))
+    must_succeed = bool(config.get("must_succeed"))
+
+    steps: List[Dict[str, Any]] = []
+    overall_success = True
+    for command in commands:
+        try:
+            process = e2b.run_command(
+                sandbox,
+                command,
+                cwd=working_dir,
+                timeout=timeout_seconds,
+            )
+            stdout, stderr, exit_code = _extract_process_output(process)
+            step_success = exit_code in (None, 0)
+        except Exception as exc:
+            stdout, stderr, exit_code = _extract_process_output(exc)
+            if exit_code is None and not stderr:
+                stderr = str(exc)
+            step_success = False
+
+        steps.append(
+            {
+                "command": command,
+                "cwd": working_dir,
+                "exit_code": exit_code,
+                "success": step_success,
+                "stdout_tail": _trim_bootstrap_output(stdout),
+                "stderr_tail": _trim_bootstrap_output(stderr),
+            }
+        )
+        if not step_success:
+            overall_success = False
+            break
+
+    return {
+        "ran": True,
+        "success": overall_success,
+        "must_succeed": must_succeed,
+        "working_dir": working_dir,
+        "steps": steps,
+    }
 
 
 def _collect_git_evidence_from_sandbox(sandbox: Any, repo_root: str) -> Dict[str, Any]:
@@ -228,7 +355,7 @@ def _collect_git_evidence_from_sandbox(sandbox: Any, repo_root: str) -> Dict[str
             "        payload['diff_base_ref'] = payload['diff_base_ref'] or 'WORKTREE'\n"
             "print(json.dumps(payload))\n"
         )
-        out = (result.get("stdout") or "").strip().splitlines()
+        out = _execution_stdout_text(result).strip().splitlines()
         if out:
             payload = json.loads(out[-1])
             payload.setdefault("head_sha", None)
@@ -275,7 +402,7 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
             )
             push_payload: Dict[str, Any] = {}
             try:
-                out = (push_result.get("stdout") or "").strip().splitlines()
+                out = _execution_stdout_text(push_result).strip().splitlines()
                 if out:
                     push_payload = json.loads(out[-1])
             except Exception:
@@ -437,6 +564,108 @@ def store_cv_upload(assessment: Assessment, upload: UploadFile, db: Session) -> 
 # Start / resume
 # ---------------------------------------------------------------------------
 
+
+def get_assessment_creation_gate(
+    organization_id: int,
+    db: Session,
+    *,
+    exclude_assessment_id: int | None = None,
+    lock_organization: bool = False,
+) -> Dict[str, Any]:
+    """Return whether an org can create another assessment invite."""
+    org_query = db.query(Organization).filter(Organization.id == organization_id)
+    if lock_organization:
+        org_query = org_query.with_for_update()
+    org = org_query.first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    credits_balance = int(org.credits_balance or 0)
+    if settings.MVP_DISABLE_LEMON:
+        return {
+            "can_create": True,
+            "reason": None,
+            "message": None,
+            "organization": org,
+            "credits_balance": credits_balance,
+            "reserved_pending_assessments": 0,
+            "remaining_capacity": credits_balance,
+        }
+
+    now = utcnow()
+    reserved_query = db.query(Assessment).filter(
+        Assessment.organization_id == organization_id,
+        Assessment.is_voided.is_(False),
+        Assessment.is_demo.is_(False),
+        Assessment.credit_consumed_at.is_(None),
+        Assessment.status == AssessmentStatus.PENDING,
+        (Assessment.expires_at.is_(None)) | (Assessment.expires_at >= now),
+    )
+    if exclude_assessment_id is not None:
+        reserved_query = reserved_query.filter(Assessment.id != exclude_assessment_id)
+    reserved_pending_assessments = reserved_query.count()
+    remaining_capacity = credits_balance - reserved_pending_assessments
+    if remaining_capacity <= 0:
+        reason = "insufficient_credits" if credits_balance <= 0 else "credits_reserved"
+        message = (
+            ORG_INSUFFICIENT_CREDITS_MESSAGE
+            if reason == "insufficient_credits"
+            else ORG_RESERVED_CREDITS_MESSAGE
+        )
+        return {
+            "can_create": False,
+            "reason": reason,
+            "message": message,
+            "organization": org,
+            "credits_balance": credits_balance,
+            "reserved_pending_assessments": reserved_pending_assessments,
+            "remaining_capacity": remaining_capacity,
+        }
+
+    return {
+        "can_create": True,
+        "reason": None,
+        "message": None,
+        "organization": org,
+        "credits_balance": credits_balance,
+        "reserved_pending_assessments": reserved_pending_assessments,
+        "remaining_capacity": remaining_capacity,
+    }
+
+
+def get_assessment_start_gate(
+    assessment: Assessment,
+    db: Session,
+    *,
+    lock_organization: bool = False,
+) -> Dict[str, Any]:
+    """Return whether a candidate can begin the assessment right now."""
+    was_pending = assessment.status == AssessmentStatus.PENDING
+    is_demo = bool(getattr(assessment, "is_demo", False))
+    if not was_pending or settings.MVP_DISABLE_LEMON or is_demo:
+        return {"can_start": True, "reason": None, "message": None, "organization": None}
+
+    org_query = db.query(Organization).filter(Organization.id == assessment.organization_id)
+    if lock_organization:
+        org_query = org_query.with_for_update()
+    org = org_query.first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    if getattr(assessment, "credit_consumed_at", None) is not None:
+        return {"can_start": True, "reason": None, "message": None, "organization": org}
+
+    if int(org.credits_balance or 0) <= 0:
+        return {
+            "can_start": False,
+            "reason": "insufficient_credits",
+            "message": CANDIDATE_INSUFFICIENT_CREDITS_MESSAGE,
+            "organization": org,
+        }
+
+    return {"can_start": True, "reason": None, "message": None, "organization": org}
+
+
 def start_or_resume_assessment(
     assessment: Assessment,
     db: Session,
@@ -457,31 +686,21 @@ def start_or_resume_assessment(
     sandbox = None
     sandbox_id = None
     was_pending = assessment.status == AssessmentStatus.PENDING
-    is_demo = bool(getattr(assessment, "is_demo", False))
-    # Demo assessments should remain free to start (no credit consumption).
-    if was_pending and not settings.MVP_DISABLE_LEMON and not is_demo:
-        org = (
-            db.query(Organization)
-            .filter(Organization.id == assessment.organization_id)
-            .with_for_update()
-            .first()
+    start_gate = get_assessment_start_gate(assessment, db, lock_organization=True)
+    org = start_gate.get("organization")
+    if not start_gate.get("can_start"):
+        raise HTTPException(status_code=402, detail=INSUFFICIENT_CREDITS_DETAIL)
+    if was_pending and org is not None and getattr(assessment, "credit_consumed_at", None) is None:
+        append_credit_ledger_entry(
+            db,
+            organization=org,
+            delta=-1,
+            reason="assessment_started",
+            external_ref=f"assessment_start:{assessment.id}",
+            assessment_id=assessment.id,
+            metadata={"assessment_id": assessment.id, "reason": "assessment_started"},
         )
-        if not org:
-            raise HTTPException(status_code=404, detail="Organization not found")
-        if getattr(assessment, "credit_consumed_at", None) is None:
-            available_credits = int(org.credits_balance or 0)
-            if available_credits <= 0:
-                raise HTTPException(status_code=402, detail="Insufficient credits. Purchase credits to start this assessment.")
-            append_credit_ledger_entry(
-                db,
-                organization=org,
-                delta=-1,
-                reason="assessment_started",
-                external_ref=f"assessment_start:{assessment.id}",
-                assessment_id=assessment.id,
-                metadata={"assessment_id": assessment.id, "reason": "assessment_started"},
-            )
-            assessment.credit_consumed_at = utcnow()
+        assessment.credit_consumed_at = utcnow()
     try:
         e2b = E2BService(settings.E2B_API_KEY)
         if assessment.status == AssessmentStatus.IN_PROGRESS and assessment.e2b_session_id:
@@ -565,15 +784,51 @@ def start_or_resume_assessment(
         except Exception:
             db.rollback()
             logger.exception("Failed to create assessment repository branch")
-            raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
+            if not _is_demo_workspace_fallback_enabled(assessment):
+                raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
+            logger.warning(
+                "Falling back to local task repo materialization for demo assessment=%s after branch creation failure",
+                assessment.id,
+            )
 
     try:
         cloned = _clone_assessment_branch_into_workspace(sandbox, assessment, task)
-        if not cloned:
+        if not cloned and _is_demo_workspace_fallback_enabled(assessment):
+            _materialize_task_repository(sandbox, task)
+        elif not cloned:
             raise HTTPException(status_code=500, detail="Failed to clone assessment repository")
     except Exception:
         logger.exception("Failed to initialize task repository in sandbox")
-        raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
+        if not _is_demo_workspace_fallback_enabled(assessment):
+            raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
+        try:
+            _materialize_task_repository(sandbox, task)
+        except Exception:
+            logger.exception("Failed to materialize demo task repository in sandbox")
+            raise HTTPException(status_code=500, detail="Failed to initialize assessment repository")
+
+    bootstrap_result = _run_workspace_bootstrap(e2b, sandbox, task, _workspace_repo_root(task))
+    if bootstrap_result.get("ran"):
+        append_assessment_timeline_event(
+            assessment,
+            "workspace_bootstrap",
+            {
+                "success": bool(bootstrap_result.get("success")),
+                "must_succeed": bool(bootstrap_result.get("must_succeed")),
+                "working_dir": bootstrap_result.get("working_dir"),
+                "steps": bootstrap_result.get("steps") or [],
+            },
+        )
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="Failed to persist assessment workspace bootstrap logs")
+        if not bootstrap_result.get("success") and bootstrap_result.get("must_succeed"):
+            raise HTTPException(
+                status_code=500,
+                detail="Failed to prepare assessment workspace. Please try again later.",
+            )
 
     resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
 
@@ -581,7 +836,7 @@ def start_or_resume_assessment(
         is_demo=bool(getattr(assessment, "is_demo", False)),
         task_budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
     )
-    task_extra_data = task.extra_data if isinstance(task.extra_data, dict) else {}
+    task_extra_data = _task_extra_data(task)
     task_calibration_prompt = (
         (task.calibration_prompt or "").strip()
         or str(task_extra_data.get("calibration_prompt") or "").strip()

@@ -27,6 +27,10 @@ export const pathForPage = (page, options = {}) => {
       return '/demo';
     case 'candidates':
       return '/candidates';
+    case 'candidate-report':
+      return options.candidateApplicationId
+        ? `/candidates/${encodeURIComponent(options.candidateApplicationId)}`
+        : '/candidates';
     case 'candidate-detail':
     case 'assessment-results':
       return options.candidateDetailAssessmentId
