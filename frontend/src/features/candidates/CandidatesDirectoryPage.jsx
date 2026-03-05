@@ -105,6 +105,46 @@ const stripExtendedPipelineQueryParams = (params = {}) => {
   return legacy;
 };
 
+const deriveLegacyPipelineState = (status) => {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (['invited', 'pending', 'assessment_sent'].includes(normalized)) {
+    return { pipeline_stage: 'invited', application_outcome: 'open' };
+  }
+  if (['in_progress', 'started'].includes(normalized)) {
+    return { pipeline_stage: 'in_assessment', application_outcome: 'open' };
+  }
+  if (['review', 'completed', 'completed_due_to_timeout', 'scored'].includes(normalized)) {
+    return { pipeline_stage: 'review', application_outcome: 'open' };
+  }
+  if (['rejected', 'declined', 'disqualified'].includes(normalized)) {
+    return { pipeline_stage: 'review', application_outcome: 'rejected' };
+  }
+  if (normalized === 'withdrawn') {
+    return { pipeline_stage: 'review', application_outcome: 'withdrawn' };
+  }
+  if (['hired', 'offer_accepted'].includes(normalized)) {
+    return { pipeline_stage: 'review', application_outcome: 'hired' };
+  }
+  return { pipeline_stage: 'applied', application_outcome: 'open' };
+};
+
+const toFiniteNumberOrNull = (value) => {
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+};
+
+const toMillis = (value) => {
+  const timestamp = Date.parse(value || '');
+  return Number.isFinite(timestamp) ? timestamp : 0;
+};
+
+const resolveLegacyTaaliScore = (application) => (
+  toFiniteNumberOrNull(application?.taali_score)
+  ?? toFiniteNumberOrNull(application?.score_summary?.taali_score)
+  ?? toFiniteNumberOrNull(application?.score_summary?.taali_score_100)
+  ?? toFiniteNumberOrNull(application?.assessment_score)
+);
+
 const eventReasonToLabel = (reason) => {
   const normalized = String(reason || '').trim().toLowerCase();
   if (!normalized) return '';
@@ -352,6 +392,257 @@ export const CandidatesDirectoryPage = ({
     return params;
   }, [lockedRoleValue, minTaaliScore, outcomeFilter, roleFilter, roleFilterLocked, rolePipelineMode, search]);
 
+  const normalizeLegacyApplication = useCallback((application, role = null) => {
+    const mapped = deriveLegacyPipelineState(application?.status);
+    const taaliScore = resolveLegacyTaaliScore(application);
+    const normalizedRoleId = Number(application?.role_id || role?.id || 0);
+    const normalizedRoleTitle = String(
+      application?.role_title
+      || application?.role_name
+      || role?.title
+      || role?.name
+      || ''
+    ).trim();
+    return {
+      ...application,
+      role_id: normalizedRoleId > 0 ? normalizedRoleId : null,
+      role_title: normalizedRoleTitle || application?.position || 'Role',
+      pipeline_stage: application?.pipeline_stage || mapped.pipeline_stage,
+      application_outcome: application?.application_outcome || mapped.application_outcome,
+      pipeline_stage_source: application?.pipeline_stage_source || 'sync',
+      pipeline_stage_updated_at: (
+        application?.pipeline_stage_updated_at
+        || application?.updated_at
+        || application?.created_at
+        || null
+      ),
+      taali_score: taaliScore,
+      version: Number.isFinite(Number(application?.version)) ? Number(application.version) : 1,
+    };
+  }, []);
+
+  const requestApplicationsWithCompatibility = useCallback(async (queryParams) => {
+    try {
+      return rolePipelineMode
+        ? await rolesApi.listPipeline(Number(lockedRoleValue), queryParams)
+        : await rolesApi.listApplicationsGlobal(queryParams);
+    } catch (error) {
+      const hasExtendedParams = (
+        Object.prototype.hasOwnProperty.call(queryParams, 'sort_by')
+        || Object.prototype.hasOwnProperty.call(queryParams, 'sort_order')
+        || Object.prototype.hasOwnProperty.call(queryParams, 'min_taali_score')
+      );
+      if (!isUnsupportedPipelineQueryError(error) || !hasExtendedParams) {
+        throw error;
+      }
+      const legacyParams = stripExtendedPipelineQueryParams(queryParams);
+      return rolePipelineMode
+        ? rolesApi.listPipeline(Number(lockedRoleValue), legacyParams)
+        : rolesApi.listApplicationsGlobal(legacyParams);
+    }
+  }, [lockedRoleValue, rolePipelineMode, rolesApi]);
+
+  const loadApplicationsViaLegacyRoleEndpoints = useCallback(async () => {
+    if (!rolesApi?.list || !rolesApi?.listApplications) {
+      throw new Error('Legacy role applications endpoint unavailable');
+    }
+    const resolvedRoleFilter = roleFilterLocked ? lockedRoleValue : roleFilter;
+    const [sortBy, sortOrder] = String(sortOption || SORT_OPTIONS[0].value).split(':');
+    const sortDirection = sortOrder === 'asc' ? 'asc' : 'desc';
+    const parsedMinTaali = Number(minTaaliScore);
+    const minTaali = minTaaliScore !== '' && Number.isFinite(parsedMinTaali)
+      ? Math.max(0, Math.min(100, parsedMinTaali))
+      : null;
+
+    let roleCatalog = Array.isArray(roles) ? roles : [];
+    if (roleCatalog.length === 0) {
+      const rolesRes = await rolesApi.list();
+      roleCatalog = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
+      setRoles(roleCatalog);
+    }
+
+    const scopedRoles = resolvedRoleFilter !== 'all'
+      ? roleCatalog.filter((role) => Number(role.id) === Number(resolvedRoleFilter))
+      : roleCatalog;
+
+    const roleRequests = await Promise.all(
+      scopedRoles.map(async (role) => {
+        const params = {
+          sort_by: sortBy === 'taali_score' ? 'taali_score' : 'created_at',
+          sort_order: sortDirection,
+        };
+        if (stageFilter !== 'all') {
+          params.pipeline_stage = stageFilter;
+        }
+        if (outcomeFilter && outcomeFilter !== 'all') {
+          params.application_outcome = outcomeFilter;
+        }
+        const res = await rolesApi.listApplications(role.id, params);
+        const rawItems = Array.isArray(res?.data?.items)
+          ? res.data.items
+          : (Array.isArray(res?.data) ? res.data : []);
+        return rawItems.map((item) => normalizeLegacyApplication(item, role));
+      })
+    );
+
+    let combined = roleRequests.flat();
+
+    const trimmedSearch = search.trim().toLowerCase();
+    if (trimmedSearch) {
+      combined = combined.filter((application) => {
+        const haystack = [
+          application?.candidate_name,
+          application?.candidate_email,
+          application?.position,
+          application?.role_title,
+        ]
+          .map((value) => String(value || '').toLowerCase())
+          .join(' ');
+        return haystack.includes(trimmedSearch);
+      });
+    }
+
+    if (stageFilter !== 'all') {
+      combined = combined.filter((application) => application?.pipeline_stage === stageFilter);
+    }
+    if (outcomeFilter && outcomeFilter !== 'all') {
+      combined = combined.filter((application) => application?.application_outcome === outcomeFilter);
+    }
+    if (minTaali != null) {
+      combined = combined.filter((application) => {
+        const score = resolveLegacyTaaliScore(application);
+        return score != null && score >= minTaali;
+      });
+    }
+
+    combined.sort((a, b) => {
+      const primaryA = sortBy === 'taali_score'
+        ? (resolveLegacyTaaliScore(a) ?? Number.NEGATIVE_INFINITY)
+        : toMillis(a?.pipeline_stage_updated_at || a?.updated_at || a?.created_at);
+      const primaryB = sortBy === 'taali_score'
+        ? (resolveLegacyTaaliScore(b) ?? Number.NEGATIVE_INFINITY)
+        : toMillis(b?.pipeline_stage_updated_at || b?.updated_at || b?.created_at);
+      if (primaryA !== primaryB) {
+        return sortDirection === 'asc' ? primaryA - primaryB : primaryB - primaryA;
+      }
+      const createdA = toMillis(a?.created_at);
+      const createdB = toMillis(b?.created_at);
+      if (createdA !== createdB) {
+        return sortDirection === 'asc' ? createdA - createdB : createdB - createdA;
+      }
+      return Number(a?.id || 0) - Number(b?.id || 0);
+    });
+
+    const offset = currentPage * PAGE_SIZE;
+    const pagedItems = combined.slice(offset, offset + PAGE_SIZE);
+    return {
+      items: pagedItems,
+      total: combined.length,
+      limit: PAGE_SIZE,
+      offset,
+      role_name: scopedRoles.length === 1
+        ? String(scopedRoles[0]?.title || scopedRoles[0]?.name || '').trim()
+        : '',
+    };
+  }, [
+    currentPage,
+    lockedRoleValue,
+    minTaaliScore,
+    normalizeLegacyApplication,
+    outcomeFilter,
+    roleFilter,
+    roleFilterLocked,
+    roles,
+    rolesApi,
+    search,
+    sortOption,
+    stageFilter,
+  ]);
+
+  const loadStageCountsViaLegacyRoleEndpoints = useCallback(async () => {
+    if (!rolesApi?.list || !rolesApi?.listApplications) {
+      throw new Error('Legacy role applications endpoint unavailable');
+    }
+    const resolvedRoleFilter = roleFilterLocked ? lockedRoleValue : roleFilter;
+    const parsedMinTaali = Number(minTaaliScore);
+    const minTaali = minTaaliScore !== '' && Number.isFinite(parsedMinTaali)
+      ? Math.max(0, Math.min(100, parsedMinTaali))
+      : null;
+
+    let roleCatalog = Array.isArray(roles) ? roles : [];
+    if (roleCatalog.length === 0) {
+      const rolesRes = await rolesApi.list();
+      roleCatalog = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
+      setRoles(roleCatalog);
+    }
+
+    const scopedRoles = resolvedRoleFilter !== 'all'
+      ? roleCatalog.filter((role) => Number(role.id) === Number(resolvedRoleFilter))
+      : roleCatalog;
+
+    const roleRequests = await Promise.all(
+      scopedRoles.map(async (role) => {
+        const params = {
+          sort_by: 'created_at',
+          sort_order: 'desc',
+        };
+        if (outcomeFilter && outcomeFilter !== 'all') {
+          params.application_outcome = outcomeFilter;
+        }
+        const res = await rolesApi.listApplications(role.id, params);
+        const rawItems = Array.isArray(res?.data?.items)
+          ? res.data.items
+          : (Array.isArray(res?.data) ? res.data : []);
+        return rawItems.map((item) => normalizeLegacyApplication(item, role));
+      })
+    );
+
+    let combined = roleRequests.flat();
+    const trimmedSearch = search.trim().toLowerCase();
+    if (trimmedSearch) {
+      combined = combined.filter((application) => {
+        const haystack = [
+          application?.candidate_name,
+          application?.candidate_email,
+          application?.position,
+          application?.role_title,
+        ]
+          .map((value) => String(value || '').toLowerCase())
+          .join(' ');
+        return haystack.includes(trimmedSearch);
+      });
+    }
+    if (outcomeFilter && outcomeFilter !== 'all') {
+      combined = combined.filter((application) => application?.application_outcome === outcomeFilter);
+    }
+    if (minTaali != null) {
+      combined = combined.filter((application) => {
+        const score = resolveLegacyTaaliScore(application);
+        return score != null && score >= minTaali;
+      });
+    }
+
+    const nextCounts = { ...STAGE_COUNT_DEFAULTS };
+    combined.forEach((application) => {
+      const stage = String(application?.pipeline_stage || '').trim().toLowerCase();
+      if (Object.prototype.hasOwnProperty.call(nextCounts, stage)) {
+        nextCounts[stage] += 1;
+      }
+    });
+    nextCounts.all = combined.length;
+    return nextCounts;
+  }, [
+    lockedRoleValue,
+    minTaaliScore,
+    normalizeLegacyApplication,
+    outcomeFilter,
+    roleFilter,
+    roleFilterLocked,
+    roles,
+    rolesApi,
+    search,
+  ]);
+
   const upsertApplicationInCache = useCallback((updatedApplication) => {
     if (!updatedApplication || !updatedApplication.id) return;
     setApplicationsPayload((prev) => ({
@@ -408,22 +699,10 @@ export const CandidatesDirectoryPage = ({
       const queryParams = buildListQueryParams();
       let res;
       try {
-        res = rolePipelineMode
-          ? await rolesApi.listPipeline(Number(lockedRoleValue), queryParams)
-          : await rolesApi.listApplicationsGlobal(queryParams);
+        res = await requestApplicationsWithCompatibility(queryParams);
       } catch (error) {
-        const hasExtendedParams = (
-          Object.prototype.hasOwnProperty.call(queryParams, 'sort_by')
-          || Object.prototype.hasOwnProperty.call(queryParams, 'sort_order')
-          || Object.prototype.hasOwnProperty.call(queryParams, 'min_taali_score')
-        );
-        if (!isUnsupportedPipelineQueryError(error) || !hasExtendedParams) {
-          throw error;
-        }
-        const legacyParams = stripExtendedPipelineQueryParams(queryParams);
-        res = rolePipelineMode
-          ? await rolesApi.listPipeline(Number(lockedRoleValue), legacyParams)
-          : await rolesApi.listApplicationsGlobal(legacyParams);
+        const fallbackPayload = await loadApplicationsViaLegacyRoleEndpoints();
+        res = { data: fallbackPayload };
       }
       const payload = res?.data || {};
       const items = Array.isArray(payload.items) ? payload.items : [];
@@ -468,7 +747,13 @@ export const CandidatesDirectoryPage = ({
     } finally {
       setLoadingApplications(false);
     }
-  }, [buildListQueryParams, lockedRoleValue, rolePipelineMode, rolePipelineName, rolesApi]);
+  }, [
+    buildListQueryParams,
+    loadApplicationsViaLegacyRoleEndpoints,
+    requestApplicationsWithCompatibility,
+    rolePipelineMode,
+    rolePipelineName,
+  ]);
 
   const loadStageCounts = useCallback(async () => {
     if (rolePipelineMode) {
@@ -498,11 +783,16 @@ export const CandidatesDirectoryPage = ({
       });
       setStageCounts(nextCounts);
     } catch {
-      setStageCounts({ ...STAGE_COUNT_DEFAULTS });
+      try {
+        const fallbackCounts = await loadStageCountsViaLegacyRoleEndpoints();
+        setStageCounts(fallbackCounts);
+      } catch {
+        setStageCounts({ ...STAGE_COUNT_DEFAULTS });
+      }
     } finally {
       setLoadingStageCounts(false);
     }
-  }, [buildStageCountQueryParams, rolePipelineMode, rolesApi]);
+  }, [buildStageCountQueryParams, loadStageCountsViaLegacyRoleEndpoints, rolePipelineMode, rolesApi]);
 
   const loadApplicationDetail = useCallback(async (applicationId, { includeCvText = false, force = false } = {}) => {
     if (!applicationId) return null;
