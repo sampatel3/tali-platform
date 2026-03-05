@@ -1,5 +1,4 @@
 export const pathForPage = (page, options = {}) => {
-  const workflowV2Enabled = options.workflowV2Enabled === true;
   switch (page) {
     case 'landing':
       return '/';
@@ -14,7 +13,7 @@ export const pathForPage = (page, options = {}) => {
     case 'verify-email':
       return `/verify-email${options.verifyEmailToken ? `?token=${encodeURIComponent(options.verifyEmailToken)}` : ''}`;
     case 'dashboard':
-      return workflowV2Enabled ? '/jobs' : '/assessments';
+      return '/jobs';
     case 'jobs':
       return '/jobs';
     case 'job-pipeline':
@@ -22,7 +21,7 @@ export const pathForPage = (page, options = {}) => {
         ? `/jobs/${encodeURIComponent(options.roleId)}`
         : '/jobs';
     case 'assessments':
-      return '/assessments';
+      return '/jobs';
     case 'demo':
       return '/demo';
     case 'candidates':
@@ -35,7 +34,7 @@ export const pathForPage = (page, options = {}) => {
     case 'assessment-results':
       return options.candidateDetailAssessmentId
         ? `/assessments/${encodeURIComponent(options.candidateDetailAssessmentId)}`
-        : '/assessments';
+        : '/jobs';
     case 'tasks':
       return '/tasks';
     case 'analytics':

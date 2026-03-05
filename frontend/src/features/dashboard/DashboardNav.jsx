@@ -27,15 +27,7 @@ const NAV_ITEMS_V2 = [
   { id: 'settings', label: 'Settings' },
 ];
 
-const NAV_ITEMS_LEGACY = [
-  { id: 'assessments', label: 'Assessments' },
-  { id: 'candidates', label: 'Candidates' },
-  { id: 'tasks', label: 'Tasks' },
-  { id: 'reporting', label: 'Reporting' },
-  { id: 'settings', label: 'Settings' },
-];
-
-export const DashboardNav = ({ currentPage, onNavigate, workflowV2Enabled = false }) => {
+export const DashboardNav = ({ currentPage, onNavigate }) => {
   const { user, logout } = useAuth();
   const userName = pickUserName(user);
   const fallbackOrgName = pickOrganizationName(user);
@@ -67,8 +59,8 @@ export const DashboardNav = ({ currentPage, onNavigate, workflowV2Enabled = fals
   }, [fallbackOrgName, user]);
 
   const orgName = resolvedOrgName || 'No company';
-  const navItems = workflowV2Enabled ? NAV_ITEMS_V2 : NAV_ITEMS_LEGACY;
-  const homePage = workflowV2Enabled ? 'jobs' : 'assessments';
+  const navItems = NAV_ITEMS_V2;
+  const homePage = 'jobs';
   const displayName = userName || 'User';
   const initials = useMemo(() => {
     const seed = `${displayName} ${orgName}`.trim();
