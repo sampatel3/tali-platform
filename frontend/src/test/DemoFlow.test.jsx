@@ -122,19 +122,32 @@ describe('Demo flow', () => {
     });
     assessments.submit.mockResolvedValue({
       data: {
-        score: 7.4,
-        prompt_scores: {
-          prompt_clarity: 7.0,
-          prompt_efficiency: 6.8,
-          context_utilization: 7.2,
-          written_communication: 6.9,
-          requirement_comprehension: 7.1,
-          design_thinking: 7.3,
-          independence: 6.7,
+        id: 321,
+        status: 'completed',
+        tests_passed: 5,
+        tests_total: 7,
+        score_breakdown: {
+          category_scores: {
+            task_completion: 6.8,
+            prompt_clarity: 6.2,
+            context_provision: 6.0,
+            independence_efficiency: 5.9,
+            response_utilization: 6.1,
+            debugging_design: 7.0,
+            written_communication: 5.8,
+          },
+          heuristic_summary: 'Solid troubleshooting structure and clear execution path. Improve explicit validation depth before finalizing changes.',
         },
-        component_scores: {
-          tests_score: 72,
-          time_efficiency: 68,
+        prompt_analytics: {
+          category_scores: {
+            task_completion: 6.8,
+            prompt_clarity: 6.2,
+            context_provision: 6.0,
+            independence_efficiency: 5.9,
+            response_utilization: 6.1,
+            debugging_design: 7.0,
+            written_communication: 5.8,
+          },
         },
       },
     });
@@ -224,7 +237,8 @@ describe('Demo flow', () => {
       expect(screen.getByRole('button', { name: 'Join TAALI' })).toBeInTheDocument();
       expect(screen.getByText('Dimension profile')).toBeInTheDocument();
       expect(screen.getByText('Dimension scores')).toBeInTheDocument();
-      expect(screen.getByText('TAALI score')).toBeInTheDocument();
+      expect(screen.getByText('Assessment feedback')).toBeInTheDocument();
+      expect(screen.getByText(/Strongest signal observed/i)).toBeInTheDocument();
       expect(screen.getByTestId('radar-chart')).toBeInTheDocument();
     });
   });
