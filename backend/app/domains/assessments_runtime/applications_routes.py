@@ -227,6 +227,31 @@ def _apply_sorting(query, *, sort_by: str, sort_order: str):
     )
 
 
+def _build_application_detail_items(
+    rows: list[CandidateApplication],
+    *,
+    include_cv_text: bool,
+    organization_id: int,
+) -> list[ApplicationDetailResponse]:
+    items: list[ApplicationDetailResponse] = []
+    for app in rows:
+        try:
+            items.append(
+                ApplicationDetailResponse(
+                    **application_detail_payload(app, include_cv_text=include_cv_text)
+                )
+            )
+        except Exception:
+            logger.exception(
+                "Skipping invalid application payload during list serialization",
+                extra={
+                    "application_id": getattr(app, "id", None),
+                    "organization_id": organization_id,
+                },
+            )
+    return items
+
+
 def _provision_assessment_branch(assessment: Assessment, task: Task) -> None:
     repo_service = AssessmentRepositoryService(settings.GITHUB_ORG, settings.GITHUB_TOKEN)
     branch_ctx = repo_service.create_assessment_branch(task, assessment.id)
@@ -677,10 +702,11 @@ def list_applications_global(
     )
     by_id = {int(item.id): item for item in rows}
     ordered_rows = [by_id[item_id] for item_id in page_ids if item_id in by_id]
-    payload = [
-        ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
-        for app in ordered_rows
-    ]
+    payload = _build_application_detail_items(
+        ordered_rows,
+        include_cv_text=include_cv_text,
+        organization_id=current_user.organization_id,
+    )
     return {
         "items": payload,
         "total": total,
@@ -754,10 +780,11 @@ def get_role_pipeline(
     )
     by_id = {int(item.id): item for item in rows}
     ordered_rows = [by_id[item_id] for item_id in page_ids if item_id in by_id]
-    paged_items = [
-        ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
-        for app in ordered_rows
-    ]
+    paged_items = _build_application_detail_items(
+        ordered_rows,
+        include_cv_text=include_cv_text,
+        organization_id=current_user.organization_id,
+    )
     active_candidates_count = int(sum(stage_counts.values()))
     last_candidate_activity_at = (
         db.query(
