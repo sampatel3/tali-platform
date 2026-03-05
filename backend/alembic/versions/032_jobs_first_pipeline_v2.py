@@ -129,7 +129,7 @@ def upgrade() -> None:
                     application_outcome_updated_at = COALESCE(application_outcome_updated_at, :ts),
                     external_stage_raw = COALESCE(external_stage_raw, :stage_raw),
                     external_stage_normalized = COALESCE(external_stage_normalized, :stage_normalized),
-                    integration_sync_state = COALESCE(integration_sync_state, CAST(:sync_payload AS JSONB)),
+                    integration_sync_state = COALESCE(integration_sync_state, CAST(:sync_payload AS JSON)),
                     version = COALESCE(version, 1),
                     status = :status_mirror
                 WHERE id = :id
@@ -168,7 +168,7 @@ def upgrade() -> None:
                     :outcome,
                     'system',
                     'Initialized during recruiter workflow v2 migration',
-                    CAST(:metadata AS JSONB),
+                    CAST(:metadata AS JSON),
                     :ts
                 FROM candidate_applications
                 WHERE id = :id
