@@ -17,6 +17,7 @@ from ..components.integrations.claude.model_fallback import (
     is_model_not_found_error,
 )
 from ..platform.config import settings
+from .taali_scoring import TAALI_SCORING_RUBRIC_VERSION, compute_role_fit_score
 
 logger = logging.getLogger("taali.fit_matching")
 
@@ -187,6 +188,17 @@ def _score_to_100(value: Any) -> float | None:
     if numeric <= 10:
         numeric = numeric * 10.0
     return round(max(0.0, min(100.0, numeric)), 1)
+
+
+def _clamp_score(value: Any) -> float | None:
+    """Backward-compatible 0-10 clamp retained for older tests/callers."""
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return round(max(0.0, min(10.0, numeric)), 1)
 
 
 def _clamp_score_100(value: float) -> float:
@@ -1001,6 +1013,8 @@ async def calculate_cv_job_match(
             int(coverage.get("must_have_missing") or 0),
         )
 
+        role_fit_score_100 = compute_role_fit_score(final_score_100, requirements_score_100)
+        role_fit_score_10 = round((role_fit_score_100 or 0.0) / 10.0, 1) if role_fit_score_100 is not None else None
         final_score_10 = round((final_score_100 or 0.0) / 10.0, 1) if final_score_100 is not None else None
         skills_score_10 = round((skills_score_100 or 0.0) / 10.0, 1) if skills_score_100 is not None else None
         experience_score_10 = round((experience_score_100 or 0.0) / 10.0, 1) if experience_score_100 is not None else None
@@ -1008,12 +1022,16 @@ async def calculate_cv_job_match(
         return {
             "cv_job_match_score": final_score_100,
             "cv_job_match_score_10": final_score_10,
+            "role_fit_score": role_fit_score_100,
+            "role_fit_score_10": role_fit_score_10,
             "skills_match": skills_score_100,
             "skills_match_10": skills_score_10,
             "experience_relevance": experience_score_100,
             "experience_relevance_10": experience_score_10,
             "match_details": {
                 "score_scale": "0-100",
+                "role_fit_score_100": role_fit_score_100,
+                "role_fit_score_10": role_fit_score_10,
                 "model_overall_score_100": model_overall_score_100,
                 "model_skills_score_100": model_skills_score_100,
                 "model_experience_relevance_score_100": model_experience_score_100,
@@ -1033,6 +1051,7 @@ async def calculate_cv_job_match(
                 "recommendation": recommendation,
                 "score_rationale_bullets": rationale_bullets,
                 "scoring_version": "cv_fit_v3_evidence_enriched",
+                "score_rubric_version": TAALI_SCORING_RUBRIC_VERSION,
                 "summary": _safe_string(result.get("summary"), max_chars=600),
                 "_claude_usage": usage_ledger,
             },
@@ -1049,10 +1068,12 @@ async def calculate_cv_job_match(
         fallback_hint = ", ".join(candidate_models_for(model_hint))
         return {
             "cv_job_match_score": None,
+            "role_fit_score": None,
             "skills_match": None,
             "experience_relevance": None,
             "match_details": {
                 "error": err_msg[:500],
+                "score_rubric_version": TAALI_SCORING_RUBRIC_VERSION,
                 "hint": (
                     "Verify ANTHROPIC_API_KEY is set and CLAUDE_MODEL is valid "
                     f"(Haiku fallback chain: {fallback_hint})."
