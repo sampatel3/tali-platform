@@ -8,6 +8,7 @@ Create Date: 2026-03-05
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import json
 
 from alembic import op
 import sqlalchemy as sa
@@ -128,7 +129,7 @@ def upgrade() -> None:
                     application_outcome_updated_at = COALESCE(application_outcome_updated_at, :ts),
                     external_stage_raw = COALESCE(external_stage_raw, :stage_raw),
                     external_stage_normalized = COALESCE(external_stage_normalized, :stage_normalized),
-                    integration_sync_state = COALESCE(integration_sync_state, :sync_payload),
+                    integration_sync_state = COALESCE(integration_sync_state, CAST(:sync_payload AS JSONB)),
                     version = COALESCE(version, 1),
                     status = :status_mirror
                 WHERE id = :id
@@ -141,7 +142,7 @@ def upgrade() -> None:
                 "ts": ts,
                 "stage_raw": stage_raw,
                 "stage_normalized": stage_normalized,
-                "sync_payload": sync_payload,
+                "sync_payload": json.dumps(sync_payload) if sync_payload is not None else None,
                 "status_mirror": status_mirror,
             },
         )
@@ -167,7 +168,7 @@ def upgrade() -> None:
                     :outcome,
                     'system',
                     'Initialized during recruiter workflow v2 migration',
-                    :metadata,
+                    CAST(:metadata AS JSONB),
                     :ts
                 FROM candidate_applications
                 WHERE id = :id
@@ -177,10 +178,12 @@ def upgrade() -> None:
                 "id": row["id"],
                 "stage": stage,
                 "outcome": outcome,
-                "metadata": {
-                    "legacy_status": str(row.get("status") or ""),
-                    "migration": "032_jobs_first_pipeline_v2",
-                },
+                "metadata": json.dumps(
+                    {
+                        "legacy_status": str(row.get("status") or ""),
+                        "migration": "032_jobs_first_pipeline_v2",
+                    }
+                ),
                 "ts": ts,
             },
         )
