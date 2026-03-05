@@ -210,7 +210,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
           <Panel className="p-5">
             <h2 className="text-2xl font-bold">Demo assessment task</h2>
             <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
-              Choose between our three strongest demo tracks.
+              Choose between our two strongest demo tracks.
             </p>
             <div className="mt-4 grid gap-3">
               {DEMO_ASSESSMENTS.map((assessment) => {
