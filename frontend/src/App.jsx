@@ -13,7 +13,10 @@ import { Loader2 } from 'lucide-react';
 
 import { useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
-import { assessments as assessmentsApi } from './shared/api';
+import {
+  assessments as assessmentsApi,
+  organizations as organizationsApi,
+} from './shared/api';
 import { pathForPage } from './app/routing';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
 
@@ -50,8 +53,17 @@ const AssessmentsPage = lazy(() =>
 const CandidatesPage = lazy(() =>
   import('./features/candidates/CandidatesPage').then((m) => ({ default: m.CandidatesPage }))
 );
+const CandidatesDirectoryPage = lazy(() =>
+  import('./features/candidates/CandidatesDirectoryPage').then((m) => ({ default: m.CandidatesDirectoryPage }))
+);
 const CandidateStandingReportPage = lazy(() =>
   import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
+);
+const JobsPage = lazy(() =>
+  import('./features/jobs/JobsPage').then((m) => ({ default: m.JobsPage }))
+);
+const JobPipelinePage = lazy(() =>
+  import('./features/jobs/JobPipelinePage').then((m) => ({ default: m.JobPipelinePage }))
 );
 const TasksPage = lazy(() =>
   import('./features/tasks/TasksPage').then((m) => ({ default: m.TasksPage }))
@@ -70,6 +82,10 @@ function AppContent() {
   const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'assessments', label: 'Back to Assessments' });
   const [loadingCandidateDetail, setLoadingCandidateDetail] = useState(false);
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
+  const [workflowV2Enabled, setWorkflowV2Enabled] = useState(false);
+  const [workflowModeReady, setWorkflowModeReady] = useState(false);
+
+  const defaultRecruiterRoute = workflowV2Enabled ? '/jobs' : '/assessments';
 
   const candidateDetailAssessmentId = useMemo(() => {
     const recruiterAssessmentMatch = location.pathname.match(/^\/assessments\/(\d+)$/);
@@ -130,17 +146,57 @@ function AppContent() {
   }, [activeAssessmentToken]);
 
   useEffect(() => {
-    if (isAuthenticated && ['/', '/login', '/forgot-password'].includes(location.pathname)) {
-      navigate('/assessments', { replace: true });
+    if (!isAuthenticated) {
+      setWorkflowV2Enabled(false);
+      setWorkflowModeReady(true);
+      return;
     }
-  }, [isAuthenticated, location.pathname, navigate]);
+    setWorkflowModeReady(false);
+    if (!organizationsApi?.get) {
+      setWorkflowV2Enabled(false);
+      setWorkflowModeReady(true);
+      return;
+    }
+    const request = organizationsApi.get();
+    if (!request || typeof request.then !== 'function') {
+      setWorkflowV2Enabled(false);
+      setWorkflowModeReady(true);
+      return;
+    }
+    let cancelled = false;
+    request
+      .then((res) => {
+        if (cancelled) return;
+        setWorkflowV2Enabled(Boolean(res?.data?.recruiter_workflow_v2_enabled));
+        setWorkflowModeReady(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWorkflowV2Enabled(false);
+        setWorkflowModeReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (
+      isAuthenticated
+      && workflowModeReady
+      && ['/', '/login', '/forgot-password'].includes(location.pathname)
+    ) {
+      navigate(defaultRecruiterRoute, { replace: true });
+    }
+  }, [defaultRecruiterRoute, isAuthenticated, location.pathname, navigate, workflowModeReady]);
 
   useEffect(() => {
     if (
       !authLoading &&
       !isAuthenticated &&
       (
-        ['/dashboard', '/assessments', '/candidates', '/analytics', '/reporting', '/tasks', '/candidate-detail'].includes(location.pathname)
+        ['/dashboard', '/jobs', '/assessments', '/candidates', '/analytics', '/reporting', '/tasks', '/candidate-detail'].includes(location.pathname)
+        || location.pathname.startsWith('/jobs/')
         || location.pathname.startsWith('/assessments/')
         || location.pathname.startsWith('/candidates/')
         || location.pathname.startsWith('/settings')
@@ -170,6 +226,10 @@ function AppContent() {
       verifyEmailToken: Object.prototype.hasOwnProperty.call(options, 'verifyEmailToken')
         ? options.verifyEmailToken
         : verifyEmailToken,
+      roleId: Object.prototype.hasOwnProperty.call(options, 'roleId')
+        ? options.roleId
+        : null,
+      workflowV2Enabled,
     });
 
     if (nextPath) {
@@ -186,6 +246,8 @@ function AppContent() {
     setSelectedCandidate(candidate);
     if (sourcePage === 'candidates') {
       setCandidateDetailBackTo({ page: 'candidates', label: 'Back to Candidates' });
+    } else if (sourcePage === 'jobs') {
+      setCandidateDetailBackTo({ page: 'jobs', label: 'Back to Jobs' });
     } else {
       setCandidateDetailBackTo({ page: 'assessments', label: 'Back to Assessments' });
     }
@@ -236,6 +298,7 @@ function AppContent() {
       <Loader2 size={28} className="animate-spin" style={{ color: '#9D00FF' }} />
     </div>
   );
+  const workflowModeLoading = isAuthenticated && !workflowModeReady;
 
   const CandidateWelcomeRoute = () => {
     const { token } = useParams();
@@ -281,6 +344,13 @@ function AppContent() {
     );
   };
 
+  const DashboardNavWithMode = (props) => (
+    <DashboardNav
+      {...props}
+      workflowV2Enabled={workflowV2Enabled}
+    />
+  );
+
   return (
     <>
       <Routes>
@@ -301,7 +371,42 @@ function AppContent() {
 
       <Route
         path="/dashboard"
-        element={<Navigate replace to="/assessments" />}
+        element={workflowModeLoading
+          ? lazyFallback
+          : <Navigate replace to={defaultRecruiterRoute} />}
+      />
+
+      <Route
+        path="/jobs"
+        element={workflowModeLoading
+          ? lazyFallback
+          : (workflowV2Enabled ? (
+            <Suspense fallback={lazyFallback}>
+              <JobsPage
+                onNavigate={navigateToPage}
+                NavComponent={DashboardNavWithMode}
+              />
+            </Suspense>
+          ) : (
+            <Navigate replace to="/assessments" />
+          ))}
+      />
+
+      <Route
+        path="/jobs/:roleId"
+        element={workflowModeLoading
+          ? lazyFallback
+          : (workflowV2Enabled ? (
+            <Suspense fallback={lazyFallback}>
+              <JobPipelinePage
+                onNavigate={navigateToPage}
+                onViewCandidate={(candidate) => navigateToCandidate(candidate, 'jobs')}
+                NavComponent={DashboardNavWithMode}
+              />
+            </Suspense>
+          ) : (
+            <Navigate replace to="/assessments" />
+          ))}
       />
 
       <Route
@@ -311,7 +416,7 @@ function AppContent() {
             <AssessmentsPage
               onNavigate={navigateToPage}
               onViewCandidate={(candidate) => navigateToCandidate(candidate, 'assessments')}
-              NavComponent={DashboardNav}
+              NavComponent={DashboardNavWithMode}
               StatsCardComponent={StatsCard}
               StatusBadgeComponent={StatusBadge}
             />
@@ -321,15 +426,24 @@ function AppContent() {
 
       <Route
         path="/candidates"
-        element={(
-          <Suspense fallback={lazyFallback}>
-            <CandidatesPage
-              onNavigate={navigateToPage}
-              onViewCandidate={(candidate) => navigateToCandidate(candidate, 'candidates')}
-              NavComponent={DashboardNav}
-            />
-          </Suspense>
-        )}
+        element={workflowModeLoading
+          ? lazyFallback
+          : (workflowV2Enabled ? (
+            <Suspense fallback={lazyFallback}>
+              <CandidatesDirectoryPage
+                onNavigate={navigateToPage}
+                NavComponent={DashboardNavWithMode}
+              />
+            </Suspense>
+          ) : (
+            <Suspense fallback={lazyFallback}>
+              <CandidatesPage
+                onNavigate={navigateToPage}
+                onViewCandidate={(candidate) => navigateToCandidate(candidate, 'candidates')}
+                NavComponent={DashboardNavWithMode}
+              />
+            </Suspense>
+          ))}
       />
 
       <Route
@@ -338,7 +452,7 @@ function AppContent() {
           <Suspense fallback={lazyFallback}>
             <CandidateStandingReportPage
               onNavigate={navigateToPage}
-              NavComponent={DashboardNav}
+              NavComponent={DashboardNavWithMode}
             />
           </Suspense>
         )}
@@ -367,7 +481,7 @@ function AppContent() {
                 onNoteAdded={(timeline) =>
                   setSelectedCandidate((prev) => (prev ? { ...prev, timeline } : prev))
                 }
-                NavComponent={DashboardNav}
+                NavComponent={DashboardNavWithMode}
               />
             </Suspense>
           )
@@ -378,7 +492,7 @@ function AppContent() {
         path="/tasks"
         element={(
           <Suspense fallback={lazyFallback}>
-            <TasksPage onNavigate={navigateToPage} NavComponent={DashboardNav} />
+            <TasksPage onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />
           </Suspense>
         )}
       />
@@ -390,7 +504,7 @@ function AppContent() {
 
       <Route
         path="/reporting"
-        element={<ReportingPage onNavigate={navigateToPage} NavComponent={DashboardNav} />}
+        element={<ReportingPage onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />}
       />
 
       <Route
@@ -399,7 +513,7 @@ function AppContent() {
           <Suspense fallback={lazyFallback}>
             <SettingsPage
               onNavigate={navigateToPage}
-              NavComponent={DashboardNav}
+              NavComponent={DashboardNavWithMode}
               ConnectWorkableButton={ConnectWorkableButton}
             />
           </Suspense>

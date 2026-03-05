@@ -735,3 +735,253 @@ def test_list_role_applications_supports_score_sort_and_source_filter(client, db
     filtered = workable_only.json()
     assert len(filtered) == 1
     assert filtered[0]["source"] == "workable"
+
+
+def _create_role_with_spec(client, headers, *, name: str) -> dict:
+    role_resp = client.post("/api/v1/roles", json={"name": name}, headers=headers)
+    assert role_resp.status_code == 201, role_resp.text
+    role = role_resp.json()
+    spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Role requirements"), "text/plain")}
+    spec_resp = client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers)
+    assert spec_resp.status_code == 200, spec_resp.text
+    return role
+
+
+def test_pipeline_stage_and_outcome_endpoints_enforce_guards_and_events(client):
+    headers, _ = auth_headers(client)
+    role = _create_role_with_spec(client, headers, name="Pipeline guard role")
+
+    create_resp = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "pipeline-guard@example.com", "candidate_name": "Pipeline Guard"},
+        headers=headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    app = create_resp.json()
+    assert app["pipeline_stage"] == "applied"
+    assert app["application_outcome"] == "open"
+    assert app["version"] == 1
+
+    events_resp = client.get(f"/api/v1/applications/{app['id']}/events", headers=headers)
+    assert events_resp.status_code == 200, events_resp.text
+    event_types = [event["event_type"] for event in events_resp.json()]
+    assert "pipeline_initialized" in event_types
+
+    move_resp = client.patch(
+        f"/api/v1/applications/{app['id']}/stage",
+        json={
+            "pipeline_stage": "invited",
+            "expected_version": 1,
+            "reason": "Send invite",
+            "idempotency_key": "move-invited-1",
+        },
+        headers=headers,
+    )
+    assert move_resp.status_code == 200, move_resp.text
+    moved = move_resp.json()
+    assert moved["pipeline_stage"] == "invited"
+    assert moved["version"] == 2
+
+    blocked_resp = client.patch(
+        f"/api/v1/applications/{app['id']}/stage",
+        json={"pipeline_stage": "review", "expected_version": 2},
+        headers=headers,
+    )
+    assert blocked_resp.status_code == 409, blocked_resp.text
+    assert "not allowed" in blocked_resp.json()["detail"].lower()
+
+    close_resp = client.patch(
+        f"/api/v1/applications/{app['id']}/outcome",
+        json={
+            "application_outcome": "rejected",
+            "expected_version": 2,
+            "reason": "Did not pass rubric bar",
+            "idempotency_key": "outcome-rejected-1",
+        },
+        headers=headers,
+    )
+    assert close_resp.status_code == 200, close_resp.text
+    closed = close_resp.json()
+    assert closed["application_outcome"] == "rejected"
+    assert closed["status"] == "rejected"
+    assert closed["version"] == 3
+
+    events_resp = client.get(f"/api/v1/applications/{app['id']}/events", headers=headers)
+    assert events_resp.status_code == 200, events_resp.text
+    event_types = [event["event_type"] for event in events_resp.json()]
+    assert "pipeline_stage_changed" in event_types
+    assert "application_outcome_changed" in event_types
+
+
+def test_role_pipeline_counts_exclude_closed_outcomes(client):
+    headers, _ = auth_headers(client)
+    role = _create_role_with_spec(client, headers, name="Pipeline stats role")
+
+    app_open = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "open-candidate@example.com"},
+        headers=headers,
+    ).json()
+    app_closed = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "closed-candidate@example.com"},
+        headers=headers,
+    ).json()
+
+    move_resp = client.patch(
+        f"/api/v1/applications/{app_open['id']}/stage",
+        json={"pipeline_stage": "invited", "expected_version": app_open["version"]},
+        headers=headers,
+    )
+    assert move_resp.status_code == 200, move_resp.text
+
+    close_resp = client.patch(
+        f"/api/v1/applications/{app_closed['id']}/outcome",
+        json={"application_outcome": "rejected", "expected_version": app_closed["version"]},
+        headers=headers,
+    )
+    assert close_resp.status_code == 200, close_resp.text
+
+    pipeline_resp = client.get(f"/api/v1/roles/{role['id']}/pipeline", headers=headers)
+    assert pipeline_resp.status_code == 200, pipeline_resp.text
+    pipeline_payload = pipeline_resp.json()
+    assert pipeline_payload["stage_counts"]["invited"] == 1
+    assert pipeline_payload["active_candidates_count"] == 1
+    assert all(item["application_outcome"] == "open" for item in pipeline_payload["items"])
+    assert all(item["id"] != app_closed["id"] for item in pipeline_payload["items"])
+
+    roles_resp = client.get("/api/v1/roles?include_pipeline_stats=true", headers=headers)
+    assert roles_resp.status_code == 200, roles_resp.text
+    role_payload = next((item for item in roles_resp.json() if item["id"] == role["id"]), None)
+    assert role_payload is not None
+    assert role_payload["stage_counts"]["invited"] == 1
+    assert role_payload["active_candidates_count"] == 1
+    assert role_payload["last_candidate_activity_at"] is not None
+
+
+def test_global_applications_endpoint_supports_pipeline_filters(client):
+    headers, _ = auth_headers(client)
+    role_one = _create_role_with_spec(client, headers, name="Global list role one")
+    role_two = _create_role_with_spec(client, headers, name="Global list role two")
+
+    app_invited = client.post(
+        f"/api/v1/roles/{role_one['id']}/applications",
+        json={"candidate_email": "invited-global@example.com"},
+        headers=headers,
+    ).json()
+    app_applied = client.post(
+        f"/api/v1/roles/{role_one['id']}/applications",
+        json={"candidate_email": "applied-global@example.com"},
+        headers=headers,
+    ).json()
+    client.post(
+        f"/api/v1/roles/{role_two['id']}/applications",
+        json={"candidate_email": "other-role-global@example.com"},
+        headers=headers,
+    )
+
+    move_resp = client.patch(
+        f"/api/v1/applications/{app_invited['id']}/stage",
+        json={"pipeline_stage": "invited", "expected_version": app_invited["version"]},
+        headers=headers,
+    )
+    assert move_resp.status_code == 200, move_resp.text
+
+    global_resp = client.get(
+        "/api/v1/applications?pipeline_stage=invited&application_outcome=open&limit=50",
+        headers=headers,
+    )
+    assert global_resp.status_code == 200, global_resp.text
+    payload = global_resp.json()
+    ids = {item["id"] for item in payload["items"]}
+    assert app_invited["id"] in ids
+    assert app_applied["id"] not in ids
+
+    scoped_resp = client.get(
+        f"/api/v1/applications?role_id={role_one['id']}&application_outcome=open&limit=50",
+        headers=headers,
+    )
+    assert scoped_resp.status_code == 200, scoped_resp.text
+    scoped_ids = {item["id"] for item in scoped_resp.json()["items"]}
+    assert app_invited["id"] in scoped_ids
+    assert app_applied["id"] in scoped_ids
+
+
+def test_legacy_status_patch_uses_guarded_transition_path(client):
+    headers, _ = auth_headers(client)
+    role = _create_role_with_spec(client, headers, name="Legacy status compat role")
+
+    create_resp = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "legacy-status@example.com", "candidate_name": "Legacy Status"},
+        headers=headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    app = create_resp.json()
+    assert app["pipeline_stage"] == "applied"
+    assert app["version"] == 1
+
+    promote_resp = client.patch(
+        f"/api/v1/applications/{app['id']}",
+        json={"status": "completed", "expected_version": 1},
+        headers=headers,
+    )
+    assert promote_resp.status_code == 200, promote_resp.text
+    promoted = promote_resp.json()
+    assert promoted["pipeline_stage"] == "review"
+    assert promoted["application_outcome"] == "open"
+    assert promoted["status"] == "review"
+    assert promoted["version"] == 4
+
+    close_resp = client.patch(
+        f"/api/v1/applications/{app['id']}",
+        json={"status": "rejected", "expected_version": promoted["version"]},
+        headers=headers,
+    )
+    assert close_resp.status_code == 200, close_resp.text
+    closed = close_resp.json()
+    assert closed["pipeline_stage"] == "review"
+    assert closed["application_outcome"] == "rejected"
+    assert closed["status"] == "rejected"
+    assert closed["version"] == 5
+
+    events_resp = client.get(f"/api/v1/applications/{app['id']}/events", headers=headers)
+    assert events_resp.status_code == 200, events_resp.text
+    stage_change_events = [event for event in events_resp.json() if event["event_type"] == "pipeline_stage_changed"]
+    assert len(stage_change_events) >= 3
+
+
+def test_legacy_status_patch_rejects_unreachable_stage_path(client):
+    headers, _ = auth_headers(client)
+    role = _create_role_with_spec(client, headers, name="Legacy path rejection role")
+
+    create_resp = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "legacy-unreachable@example.com"},
+        headers=headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    app = create_resp.json()
+
+    move_resp = client.patch(
+        f"/api/v1/applications/{app['id']}/stage",
+        json={"pipeline_stage": "invited", "expected_version": app["version"]},
+        headers=headers,
+    )
+    assert move_resp.status_code == 200, move_resp.text
+    invited = move_resp.json()
+
+    move_review_resp = client.patch(
+        f"/api/v1/applications/{app['id']}/stage",
+        json={"pipeline_stage": "review", "expected_version": invited["version"]},
+        headers=headers,
+    )
+    assert move_review_resp.status_code == 409, move_review_resp.text
+
+    legacy_reach_resp = client.patch(
+        f"/api/v1/applications/{app['id']}",
+        json={"status": "applied", "expected_version": invited["version"]},
+        headers=headers,
+    )
+    assert legacy_reach_resp.status_code == 409, legacy_reach_resp.text
+    assert "cannot reach stage" in legacy_reach_resp.json()["detail"].lower()

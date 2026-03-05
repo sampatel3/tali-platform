@@ -20,7 +20,14 @@ const pickOrganizationName = (user) => String(
   || ''
 ).trim();
 
-const NAV_ITEMS = [
+const NAV_ITEMS_V2 = [
+  { id: 'jobs', label: 'Jobs' },
+  { id: 'candidates', label: 'Candidates' },
+  { id: 'reporting', label: 'Reporting' },
+  { id: 'settings', label: 'Settings' },
+];
+
+const NAV_ITEMS_LEGACY = [
   { id: 'assessments', label: 'Assessments' },
   { id: 'candidates', label: 'Candidates' },
   { id: 'tasks', label: 'Tasks' },
@@ -28,7 +35,7 @@ const NAV_ITEMS = [
   { id: 'settings', label: 'Settings' },
 ];
 
-export const DashboardNav = ({ currentPage, onNavigate }) => {
+export const DashboardNav = ({ currentPage, onNavigate, workflowV2Enabled = false }) => {
   const { user, logout } = useAuth();
   const userName = pickUserName(user);
   const fallbackOrgName = pickOrganizationName(user);
@@ -60,6 +67,8 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
   }, [fallbackOrgName, user]);
 
   const orgName = resolvedOrgName || 'No company';
+  const navItems = workflowV2Enabled ? NAV_ITEMS_V2 : NAV_ITEMS_LEGACY;
+  const homePage = workflowV2Enabled ? 'jobs' : 'assessments';
   const displayName = userName || 'User';
   const initials = useMemo(() => {
     const seed = `${displayName} ${orgName}`.trim();
@@ -81,9 +90,9 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
     <nav className="taali-nav sticky top-0 z-40">
       <div className="mx-auto flex max-w-[88rem] items-center justify-between gap-3 px-4 py-3 md:px-5">
         <div className="flex items-center gap-6">
-          <Logo onClick={() => onNavigate('assessments')} />
+          <Logo onClick={() => onNavigate(homePage)} />
           <div className="hidden md:flex items-center gap-2">
-            {NAV_ITEMS.map((item) => (
+            {navItems.map((item) => (
               <Button
                 key={item.id}
                 variant={currentPage === item.id ? 'secondary' : 'ghost'}
@@ -140,7 +149,7 @@ export const DashboardNav = ({ currentPage, onNavigate }) => {
               {initials}
             </div>
           </div>
-          {NAV_ITEMS.map((item) => (
+          {navItems.map((item) => (
             <Button
               key={item.id}
               variant={currentPage === item.id ? 'secondary' : 'ghost'}

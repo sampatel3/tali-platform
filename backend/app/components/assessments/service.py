@@ -14,6 +14,7 @@ from ...platform.config import settings
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.organization import Organization
 from ...models.candidate import Candidate
+from ...models.candidate_application import CandidateApplication
 from ...models.task import Task
 from ...components.integrations.e2b.service import E2BService
 from ...components.integrations.claude.service import ClaudeService
@@ -23,6 +24,11 @@ from ...services.credit_ledger_service import append_credit_ledger_entry
 from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
 from ...services.task_repo_service import normalize_repo_files
 from ...services.task_spec_loader import candidate_rubric_view
+from ...domains.assessments_runtime.pipeline_service import (
+    ensure_pipeline_fields,
+    initialize_pipeline_event_if_missing,
+    transition_stage,
+)
 from .claude_budget import build_claude_budget_snapshot, resolve_effective_budget_limit_usd
 from .submission_runtime import submit_assessment_impl
 from .terminal_runtime import resolve_ai_mode, terminal_capabilities
@@ -419,6 +425,32 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
         prompts[-1] = {**prompts[-1], "code_after": code}
         assessment.ai_prompts = prompts
     append_assessment_timeline_event(assessment, "auto_submit_timeout", {"final_repo_state": assessment.final_repo_state})
+    if assessment.application_id:
+        app = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.id == assessment.application_id,
+                CandidateApplication.organization_id == assessment.organization_id,
+            )
+            .first()
+        )
+        if app:
+            ensure_pipeline_fields(app)
+            initialize_pipeline_event_if_missing(
+                db,
+                app=app,
+                actor_type="system",
+                reason="Pipeline initialized at timeout completion",
+            )
+            transition_stage(
+                db,
+                app=app,
+                to_stage="review",
+                source="system",
+                actor_type="system",
+                reason="Assessment auto-completed on timeout",
+                metadata={"assessment_id": assessment.id, "completed_due_to_timeout": True},
+            )
     db.commit()
 
 
@@ -702,6 +734,32 @@ def start_or_resume_assessment(
                 "assessment_started",
                 {"type": "started"},
             )
+        if started_now and assessment.application_id:
+            app = (
+                db.query(CandidateApplication)
+                .filter(
+                    CandidateApplication.id == assessment.application_id,
+                    CandidateApplication.organization_id == assessment.organization_id,
+                )
+                .first()
+            )
+            if app:
+                ensure_pipeline_fields(app)
+                initialize_pipeline_event_if_missing(
+                    db,
+                    app=app,
+                    actor_type="system",
+                    reason="Pipeline initialized at assessment start",
+                )
+                transition_stage(
+                    db,
+                    app=app,
+                    to_stage="in_assessment",
+                    source="system",
+                    actor_type="system",
+                    reason="Candidate started assessment",
+                    metadata={"assessment_id": assessment.id},
+                )
         db.commit()
     except Exception:
         db.rollback()

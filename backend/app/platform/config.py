@@ -111,6 +111,10 @@ class Settings(BaseSettings):
     # V2 AI-assisted evaluator (suggestions only)
     AI_ASSISTED_EVAL_ENABLED: bool = False
 
+    # Recruiter workflow v2 rollout kill switch.
+    # When enabled, organization flags remain stored but responses force v2 off.
+    RECRUITER_WORKFLOW_V2_FORCE_OFF: bool = False
+
     # Workable
     WORKABLE_CLIENT_ID: str = ""
     WORKABLE_CLIENT_SECRET: str = ""

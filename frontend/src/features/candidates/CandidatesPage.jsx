@@ -58,7 +58,12 @@ const hasCompletedAssessment = (application) => (
   && COMPLETED_ASSESSMENT_STATUSES.has(resolveAssessmentStatus(application))
 );
 
-export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) => {
+export const CandidatesPage = ({
+  onNavigate,
+  onViewCandidate,
+  NavComponent,
+  initialRoleId = null,
+}) => {
   const { showToast } = useToast();
   const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
   const tasksApi = apiClient.tasks;
@@ -224,9 +229,9 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   }, [tasksApi]);
 
   useEffect(() => {
-    loadRoles();
+    loadRoles(initialRoleId);
     loadTasks();
-  }, [loadRoles, loadTasks]);
+  }, [initialRoleId, loadRoles, loadTasks]);
 
   useEffect(() => {
     let cancelled = false;

@@ -1,4 +1,15 @@
-from sqlalchemy import Boolean, Column, DateTime, Float, ForeignKey, Integer, JSON, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Column,
+    DateTime,
+    Float,
+    ForeignKey,
+    Integer,
+    JSON,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -16,6 +27,16 @@ class CandidateApplication(Base):
     candidate_id = Column(Integer, ForeignKey("candidates.id"), index=True, nullable=False)
     role_id = Column(Integer, ForeignKey("roles.id"), index=True, nullable=False)
     status = Column(String, default="applied", nullable=False)
+    pipeline_stage = Column(String, default="applied", nullable=False)
+    pipeline_stage_updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    pipeline_stage_source = Column(String, default="system", nullable=False)
+    application_outcome = Column(String, default="open", nullable=False)
+    application_outcome_updated_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
+    external_refs = Column(JSON, nullable=True)
+    external_stage_raw = Column(String, nullable=True)
+    external_stage_normalized = Column(String, nullable=True)
+    integration_sync_state = Column(JSON, nullable=True)
+    version = Column(Integer, default=1, nullable=False)
     notes = Column(Text, nullable=True)
     source = Column(String, default="manual", nullable=False)
     workable_candidate_id = Column(String, nullable=True, index=True)
@@ -44,3 +65,9 @@ class CandidateApplication(Base):
     candidate = relationship("Candidate", back_populates="applications")
     role = relationship("Role", back_populates="applications")
     assessments = relationship("Assessment", back_populates="application")
+    events = relationship(
+        "CandidateApplicationEvent",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        order_by="CandidateApplicationEvent.created_at.desc()",
+    )

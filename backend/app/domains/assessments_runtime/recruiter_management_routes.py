@@ -29,6 +29,11 @@ from ...services.assessment_repository_service import (
     AssessmentRepositoryError,
     AssessmentRepositoryService,
 )
+from .pipeline_service import (
+    ensure_pipeline_fields,
+    initialize_pipeline_event_if_missing,
+    transition_stage,
+)
 from .role_support import latest_valid_role_assessment
 
 router = APIRouter()
@@ -169,6 +174,26 @@ def create_assessment(
             )
             if existing is not None:
                 raise _assessment_create_conflict(existing)
+
+        if application is not None:
+            ensure_pipeline_fields(application)
+            initialize_pipeline_event_if_missing(
+                db,
+                app=application,
+                actor_type="system",
+                actor_id=current_user.id,
+                reason="Pipeline initialized before recruiter assessment create",
+            )
+            transition_stage(
+                db,
+                app=application,
+                to_stage="invited",
+                source="recruiter",
+                actor_type="recruiter",
+                actor_id=current_user.id,
+                reason="Assessment invite created",
+                metadata={"assessment_mode": "recruiter_management"},
+            )
 
         token = secrets.token_urlsafe(32)
         assessment = Assessment(

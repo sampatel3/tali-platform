@@ -23,6 +23,11 @@ from ...models.user import User
 from ...platform.request_context import get_request_id
 from ...services.candidate_feedback_engine import build_candidate_feedback_payload
 from ...services.fit_matching_service import calculate_cv_job_match_sync
+from ...domains.assessments_runtime.pipeline_service import (
+    ensure_pipeline_fields,
+    initialize_pipeline_event_if_missing,
+    transition_stage,
+)
 from ...services.taali_scoring import (
     ROLE_FIT_WEIGHTS,
     TAALI_SCORING_RUBRIC_VERSION,
@@ -269,6 +274,7 @@ def submit_assessment_impl(
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
+    application_row: CandidateApplication | None = None
 
     assessment.tab_switch_count = 0 if settings_obj.MVP_DISABLE_PROCTORING else tab_switch_count
 
@@ -473,6 +479,7 @@ def submit_assessment_impl(
             app_row = db.query(CandidateApplication).filter(
                 CandidateApplication.id == assessment.application_id
             ).first()
+            application_row = app_row
             app_cv_text = app_row.cv_text if app_row else None
         if assessment.role_id:
             role_row = db.query(Role).filter(Role.id == assessment.role_id).first()
@@ -773,6 +780,24 @@ def submit_assessment_impl(
             assessment.candidate_feedback_ready = True
         except Exception:
             assessment.candidate_feedback_ready = False
+
+    if application_row is not None:
+        ensure_pipeline_fields(application_row)
+        initialize_pipeline_event_if_missing(
+            db,
+            app=application_row,
+            actor_type="system",
+            reason="Pipeline initialized at assessment submit",
+        )
+        transition_stage(
+            db,
+            app=application_row,
+            to_stage="review",
+            source="system",
+            actor_type="system",
+            reason="Assessment completed",
+            metadata={"assessment_id": assessment.id, "completed_due_to_timeout": False},
+        )
 
     try:
         db.commit()

@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, EmailStr, Field
 
@@ -47,6 +47,9 @@ class RoleResponse(BaseModel):
     interview_focus_generated_at: Optional[datetime] = None
     tasks_count: int = 0
     applications_count: int = 0
+    stage_counts: dict[str, int] = Field(default_factory=dict)
+    active_candidates_count: int = 0
+    last_candidate_activity_at: Optional[datetime] = None
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -62,11 +65,16 @@ class ApplicationCreate(BaseModel):
     candidate_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     candidate_position: Optional[str] = Field(default=None, max_length=200)
     status: Optional[str] = Field(default="applied", max_length=100)
+    pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review"]] = None
+    application_outcome: Optional[Literal["open", "rejected", "withdrawn", "hired"]] = None
     notes: Optional[str] = Field(default=None, max_length=4000)
 
 
 class ApplicationUpdate(BaseModel):
     status: Optional[str] = Field(default=None, max_length=100)
+    pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review"]] = None
+    application_outcome: Optional[Literal["open", "rejected", "withdrawn", "hired"]] = None
+    expected_version: Optional[int] = Field(default=None, ge=1)
     notes: Optional[str] = Field(default=None, max_length=4000)
     candidate_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     candidate_position: Optional[str] = Field(default=None, max_length=200)
@@ -78,6 +86,17 @@ class ApplicationResponse(BaseModel):
     candidate_id: int
     role_id: int
     status: str
+    pipeline_stage: Literal["applied", "invited", "in_assessment", "review"] = "applied"
+    pipeline_stage_updated_at: Optional[datetime] = None
+    pipeline_stage_source: Literal["system", "recruiter", "sync"] = "system"
+    application_outcome: Literal["open", "rejected", "withdrawn", "hired"] = "open"
+    application_outcome_updated_at: Optional[datetime] = None
+    external_refs: Optional[dict[str, Any]] = None
+    external_stage_raw: Optional[str] = None
+    external_stage_normalized: Optional[str] = None
+    integration_sync_state: Optional[dict[str, Any]] = None
+    pipeline_external_drift: bool = False
+    version: int = 1
     notes: Optional[str] = None
     candidate_email: str
     candidate_name: Optional[str] = None
@@ -134,6 +153,37 @@ class ApplicationCvUploadResponse(BaseModel):
     filename: str
     text_preview: str
     uploaded_at: datetime
+
+
+class ApplicationStageUpdate(BaseModel):
+    pipeline_stage: Literal["applied", "invited", "in_assessment", "review"]
+    expected_version: Optional[int] = Field(default=None, ge=1)
+    reason: Optional[str] = Field(default=None, max_length=2000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=200)
+
+
+class ApplicationOutcomeUpdate(BaseModel):
+    application_outcome: Literal["open", "rejected", "withdrawn", "hired"]
+    expected_version: Optional[int] = Field(default=None, ge=1)
+    reason: Optional[str] = Field(default=None, max_length=2000)
+    idempotency_key: Optional[str] = Field(default=None, max_length=200)
+
+
+class ApplicationEventResponse(BaseModel):
+    id: int
+    application_id: int
+    organization_id: int
+    event_type: str
+    from_stage: Optional[str] = None
+    to_stage: Optional[str] = None
+    from_outcome: Optional[str] = None
+    to_outcome: Optional[str] = None
+    actor_type: str
+    actor_id: Optional[int] = None
+    reason: Optional[str] = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    idempotency_key: Optional[str] = None
+    created_at: datetime
 
 
 class AssessmentFromApplicationCreate(BaseModel):

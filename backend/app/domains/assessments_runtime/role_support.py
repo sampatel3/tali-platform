@@ -17,6 +17,10 @@ from ...services.taali_scoring import (
     compute_role_fit_score,
     compute_taali_score,
 )
+from .pipeline_service import (
+    ensure_pipeline_fields,
+    stage_external_drift,
+)
 
 
 def _normalize_cv_match_score_for_response(score: float | None, details: dict | None) -> float | None:
@@ -88,6 +92,9 @@ def role_to_response(
     *,
     tasks_count: int | None = None,
     applications_count: int | None = None,
+    stage_counts: dict[str, int] | None = None,
+    active_candidates_count: int | None = None,
+    last_candidate_activity_at: datetime | None = None,
 ) -> RoleResponse:
     if tasks_count is None:
         tasks_count = len(role.tasks or [])
@@ -112,6 +119,9 @@ def role_to_response(
         interview_focus_generated_at=role.interview_focus_generated_at,
         tasks_count=tasks_count,
         applications_count=applications_count,
+        stage_counts=stage_counts or {},
+        active_candidates_count=int(active_candidates_count or 0),
+        last_candidate_activity_at=last_candidate_activity_at,
         created_at=role.created_at,
         updated_at=role.updated_at,
     )
@@ -455,6 +465,7 @@ def _assessment_history_for_application(app: CandidateApplication) -> list[dict[
 
 
 def application_to_response(app: CandidateApplication) -> ApplicationResponse:
+    ensure_pipeline_fields(app)
     candidate = app.candidate
     raw_details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
     cv_match_score = _normalize_cv_match_score_for_response(app.cv_match_score, raw_details)
@@ -469,6 +480,17 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
         candidate_id=app.candidate_id,
         role_id=app.role_id,
         status=app.status,
+        pipeline_stage=app.pipeline_stage,
+        pipeline_stage_updated_at=app.pipeline_stage_updated_at,
+        pipeline_stage_source=app.pipeline_stage_source,
+        application_outcome=app.application_outcome,
+        application_outcome_updated_at=app.application_outcome_updated_at,
+        external_refs=(app.external_refs if isinstance(app.external_refs, dict) else None),
+        external_stage_raw=app.external_stage_raw,
+        external_stage_normalized=app.external_stage_normalized,
+        integration_sync_state=(app.integration_sync_state if isinstance(app.integration_sync_state, dict) else None),
+        pipeline_external_drift=stage_external_drift(app),
+        version=int(app.version or 1),
         notes=app.notes,
         candidate_email=(candidate.email if candidate else ""),
         candidate_name=(candidate.full_name if candidate else None),

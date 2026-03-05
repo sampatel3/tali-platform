@@ -9,7 +9,7 @@ import re
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import asc, desc
+from sqlalchemy import asc, desc, func
 from sqlalchemy.orm import Session, joinedload
 
 from ...components.assessments.repository import assessment_to_response, utcnow
@@ -30,7 +30,10 @@ from ...schemas.role import (
     ApplicationCreate,
     ApplicationCvUploadResponse,
     ApplicationDetailResponse,
+    ApplicationEventResponse,
+    ApplicationOutcomeUpdate,
     ApplicationResponse,
+    ApplicationStageUpdate,
     ApplicationUpdate,
     AssessmentFromApplicationCreate,
     AssessmentRetakeCreate,
@@ -61,6 +64,16 @@ from .role_support import (
     get_role,
     latest_valid_role_assessment,
     role_has_job_spec,
+)
+from .pipeline_service import (
+    apply_legacy_status_update,
+    ensure_pipeline_fields,
+    initialize_pipeline_event_if_missing,
+    list_application_events,
+    map_legacy_status_to_pipeline,
+    role_pipeline_counts,
+    transition_outcome,
+    transition_stage,
 )
 
 router = APIRouter(tags=["Roles"])
@@ -294,14 +307,33 @@ def create_application(
     if existing:
         raise HTTPException(status_code=400, detail="Candidate already has an application for this role")
 
+    mapped_stage, mapped_outcome = map_legacy_status_to_pipeline(data.status)
+    pipeline_stage = data.pipeline_stage or mapped_stage
+    application_outcome = data.application_outcome or mapped_outcome
+    now = utcnow()
     app = CandidateApplication(
         organization_id=current_user.organization_id,
         candidate_id=candidate.id,
         role_id=role.id,
-        status=data.status or "applied",
+        status=data.status or pipeline_stage,
+        pipeline_stage=pipeline_stage,
+        pipeline_stage_updated_at=now,
+        pipeline_stage_source="recruiter",
+        application_outcome=application_outcome,
+        application_outcome_updated_at=now,
+        version=1,
         notes=data.notes or None,
     )
     db.add(app)
+    ensure_pipeline_fields(app, source="recruiter")
+    db.flush()
+    initialize_pipeline_event_if_missing(
+        db,
+        app=app,
+        actor_type="recruiter",
+        actor_id=current_user.id,
+        reason="Application created",
+    )
     try:
         db.commit()
         db.refresh(app)
@@ -325,6 +357,8 @@ def list_role_applications(
     min_cv_match_score: float | None = Query(default=None),
     source: str | None = Query(default=None, pattern="^(manual|workable)$"),
     status: str | None = Query(default=None, description="Filter by application status (e.g. applied, shortlisted)"),
+    pipeline_stage: str | None = Query(default=None),
+    application_outcome: str | None = Query(default=None),
     include_cv_text: bool = Query(False, description="Include full CV text for each application (for viewer)"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -347,6 +381,10 @@ def list_role_applications(
         query = query.filter(CandidateApplication.source == source)
     if status and status.strip().lower() != "all":
         query = query.filter(CandidateApplication.status.ilike(status.strip()))
+    if pipeline_stage and pipeline_stage.strip().lower() != "all":
+        query = query.filter(CandidateApplication.pipeline_stage == pipeline_stage.strip().lower())
+    if application_outcome and application_outcome.strip().lower() != "all":
+        query = query.filter(CandidateApplication.application_outcome == application_outcome.strip().lower())
     if min_rank_score is not None:
         query = query.filter(CandidateApplication.rank_score >= min_rank_score)
     if min_workable_score is not None:
@@ -465,22 +503,326 @@ def update_application(
 ):
     app = get_application(application_id, current_user.organization_id, db)
     updates = data.model_dump(exclude_unset=True)
-    if "status" in updates and updates["status"] is not None:
-        app.status = updates["status"]
-    if "notes" in updates:
-        app.notes = updates["notes"] or None
-    if app.candidate:
-        if "candidate_name" in updates and updates["candidate_name"] is not None:
-            app.candidate.full_name = updates["candidate_name"]
-        if "candidate_position" in updates and updates["candidate_position"] is not None:
-            app.candidate.position = updates["candidate_position"]
     try:
+        ensure_pipeline_fields(app)
+        initialize_pipeline_event_if_missing(
+            db,
+            app=app,
+            actor_type="system",
+            actor_id=current_user.id,
+            reason="Pipeline initialized before update",
+        )
+        expected_version = updates.get("expected_version")
+
+        if "status" in updates and updates["status"] is not None:
+            apply_legacy_status_update(
+                db,
+                app=app,
+                status=updates["status"],
+                actor_type="recruiter",
+                actor_id=current_user.id,
+                reason="Legacy status patch",
+                expected_version=expected_version,
+            )
+        if "pipeline_stage" in updates and updates["pipeline_stage"] is not None:
+            transition_stage(
+                db,
+                app=app,
+                to_stage=updates["pipeline_stage"],
+                source="recruiter",
+                actor_type="recruiter",
+                actor_id=current_user.id,
+                reason="Application stage patch",
+                expected_version=expected_version,
+            )
+        if "application_outcome" in updates and updates["application_outcome"] is not None:
+            transition_outcome(
+                db,
+                app=app,
+                to_outcome=updates["application_outcome"],
+                actor_type="recruiter",
+                actor_id=current_user.id,
+                reason="Application outcome patch",
+                expected_version=expected_version,
+            )
+        if "notes" in updates:
+            app.notes = updates["notes"] or None
+        if app.candidate:
+            if "candidate_name" in updates and updates["candidate_name"] is not None:
+                app.candidate.full_name = updates["candidate_name"]
+            if "candidate_position" in updates and updates["candidate_position"] is not None:
+                app.candidate.position = updates["candidate_position"]
         db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update application")
     app = get_application(application_id, current_user.organization_id, db)
     return application_to_response(app)
+
+
+@router.get("/applications")
+def list_applications_global(
+    role_id: int | None = Query(default=None),
+    pipeline_stage: str | None = Query(default=None),
+    application_outcome: str | None = Query(default="open"),
+    search: str | None = Query(default=None),
+    include_cv_text: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    query = (
+        db.query(CandidateApplication)
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+        )
+        .filter(
+            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+    )
+    if role_id is not None:
+        query = query.filter(CandidateApplication.role_id == role_id)
+    if pipeline_stage and pipeline_stage.strip().lower() != "all":
+        query = query.filter(CandidateApplication.pipeline_stage == pipeline_stage.strip().lower())
+    if application_outcome and application_outcome.strip().lower() != "all":
+        query = query.filter(CandidateApplication.application_outcome == application_outcome.strip().lower())
+    if search:
+        term = f"%{search.strip()}%"
+        query = (
+            query.join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+            .filter(
+                Candidate.full_name.ilike(term)
+                | Candidate.email.ilike(term)
+                | Candidate.position.ilike(term)
+            )
+        )
+
+    total = query.count()
+    items = (
+        query.order_by(
+            desc(
+                func.coalesce(
+                    CandidateApplication.pipeline_stage_updated_at,
+                    CandidateApplication.updated_at,
+                    CandidateApplication.created_at,
+                )
+            ),
+            desc(CandidateApplication.id),
+        )
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    payload = [
+        ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
+        for app in items
+    ]
+    return {
+        "items": payload,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.get("/roles/{role_id}/pipeline")
+def get_role_pipeline(
+    role_id: int,
+    stage: str | None = Query(default=None),
+    search: str | None = Query(default=None),
+    include_cv_text: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    role = get_role(role_id, current_user.organization_id, db)
+    stage_counts = role_pipeline_counts(
+        db,
+        organization_id=current_user.organization_id,
+        role_id=role.id,
+    )
+
+    base_query = (
+        db.query(CandidateApplication)
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+        )
+        .filter(
+            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.role_id == role.id,
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "open",
+        )
+    )
+    if stage and stage.strip().lower() != "all":
+        base_query = base_query.filter(CandidateApplication.pipeline_stage == stage.strip().lower())
+    if search:
+        term = f"%{search.strip()}%"
+        base_query = (
+            base_query.join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+            .filter(
+                Candidate.full_name.ilike(term)
+                | Candidate.email.ilike(term)
+                | Candidate.position.ilike(term)
+            )
+        )
+
+    total = base_query.count()
+    rows = (
+        base_query.order_by(
+            desc(
+                func.coalesce(
+                    CandidateApplication.pipeline_stage_updated_at,
+                    CandidateApplication.updated_at,
+                    CandidateApplication.created_at,
+                )
+            ),
+            desc(CandidateApplication.id),
+        )
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    items = [
+        ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
+        for app in rows
+    ]
+    active_candidates_count = int(sum(stage_counts.values()))
+    last_candidate_activity_at = (
+        db.query(
+            func.max(
+                func.coalesce(
+                    CandidateApplication.pipeline_stage_updated_at,
+                    CandidateApplication.updated_at,
+                    CandidateApplication.created_at,
+                )
+            )
+        )
+        .filter(
+            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.role_id == role.id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .scalar()
+    )
+
+    return {
+        "role_id": role.id,
+        "role_name": role.name,
+        "stage": stage or "all",
+        "stage_counts": stage_counts,
+        "active_candidates_count": active_candidates_count,
+        "last_candidate_activity_at": last_candidate_activity_at,
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+
+
+@router.patch("/applications/{application_id}/stage", response_model=ApplicationResponse)
+def update_application_stage(
+    application_id: int,
+    data: ApplicationStageUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    app = get_application(application_id, current_user.organization_id, db)
+    try:
+        ensure_pipeline_fields(app)
+        initialize_pipeline_event_if_missing(
+            db,
+            app=app,
+            actor_type="system",
+            actor_id=current_user.id,
+            reason="Pipeline initialized before stage patch",
+        )
+        transition_stage(
+            db,
+            app=app,
+            to_stage=data.pipeline_stage,
+            source="recruiter",
+            actor_type="recruiter",
+            actor_id=current_user.id,
+            reason=data.reason or "Recruiter stage update",
+            idempotency_key=data.idempotency_key,
+            expected_version=data.expected_version,
+        )
+        db.commit()
+        db.refresh(app)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update application stage")
+    return application_to_response(app)
+
+
+@router.patch("/applications/{application_id}/outcome", response_model=ApplicationResponse)
+def update_application_outcome(
+    application_id: int,
+    data: ApplicationOutcomeUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    app = get_application(application_id, current_user.organization_id, db)
+    try:
+        ensure_pipeline_fields(app)
+        initialize_pipeline_event_if_missing(
+            db,
+            app=app,
+            actor_type="system",
+            actor_id=current_user.id,
+            reason="Pipeline initialized before outcome patch",
+        )
+        transition_outcome(
+            db,
+            app=app,
+            to_outcome=data.application_outcome,
+            actor_type="recruiter",
+            actor_id=current_user.id,
+            reason=data.reason or "Recruiter outcome update",
+            idempotency_key=data.idempotency_key,
+            expected_version=data.expected_version,
+        )
+        db.commit()
+        db.refresh(app)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update application outcome")
+    return application_to_response(app)
+
+
+@router.get("/applications/{application_id}/events", response_model=list[ApplicationEventResponse])
+def get_application_events(
+    application_id: int,
+    limit: int = Query(default=100, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    app = get_application(application_id, current_user.organization_id, db)
+    return list_application_events(
+        db,
+        organization_id=current_user.organization_id,
+        application_id=app.id,
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("/applications/{application_id}/upload-cv", response_model=ApplicationCvUploadResponse)
@@ -1097,6 +1439,23 @@ def create_assessment_for_application(
         raise _assessment_create_conflict_response(existing)
 
     try:
+        ensure_pipeline_fields(app)
+        initialize_pipeline_event_if_missing(
+            db,
+            app=app,
+            actor_type="system",
+            actor_id=current_user.id,
+            reason="Pipeline initialized before assessment create",
+        )
+        transition_stage(
+            db,
+            app=app,
+            to_stage="invited",
+            source="recruiter",
+            actor_type="recruiter",
+            actor_id=current_user.id,
+            reason="Assessment invite created",
+        )
         assessment = _create_application_assessment(
             app=app,
             role=role,
@@ -1161,6 +1520,23 @@ def retake_assessment_for_application(
         raise HTTPException(status_code=402, detail=creation_gate.get("message"))
 
     try:
+        ensure_pipeline_fields(app)
+        initialize_pipeline_event_if_missing(
+            db,
+            app=app,
+            actor_type="system",
+            actor_id=current_user.id,
+            reason="Pipeline initialized before assessment retake",
+        )
+        transition_stage(
+            db,
+            app=app,
+            to_stage="invited",
+            source="recruiter",
+            actor_type="recruiter",
+            actor_id=current_user.id,
+            reason="Assessment retake created",
+        )
         assessment = _create_application_assessment(
             app=app,
             role=role,
