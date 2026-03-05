@@ -95,6 +95,8 @@ export function CandidateReportView({
   showRoleFitSection = true,
   showIntegritySection = true,
   showEvidenceSections = true,
+  showRoleFitMetric = true,
+  radarCategoryKeys = null,
 }) {
   const config = variantConfig[variant] || variantConfig.page;
   const {
@@ -167,6 +169,7 @@ export function CandidateReportView({
                   <ComparisonRadar
                     assessments={radarSeries}
                     highlightAssessmentId={identity.assessmentId || 'report'}
+                    categoryKeys={radarCategoryKeys}
                     showLegend={false}
                     height={variant === 'sheet' ? 260 : 300}
                   />
@@ -229,8 +232,10 @@ export function CandidateReportView({
                 valueClassName={config.scoreHeroValue}
               />
 
-              <div className={cx('grid gap-3', config.scoreGrid)}>
-                <ScoreMetricCard label="Role fit" value={summaryModel.roleFitScore} />
+              <div className={cx('grid gap-3', showRoleFitMetric ? config.scoreGrid : 'grid-cols-1')}>
+                {showRoleFitMetric ? (
+                  <ScoreMetricCard label="Role fit" value={summaryModel.roleFitScore} />
+                ) : null}
                 <ScoreMetricCard label="Assessment" value={summaryModel.assessmentScore} />
               </div>
             </div>

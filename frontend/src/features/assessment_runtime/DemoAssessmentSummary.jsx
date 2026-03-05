@@ -1,17 +1,8 @@
 import React from 'react';
-import {
-  PolarAngleAxis,
-  PolarGrid,
-  PolarRadiusAxis,
-  Radar,
-  RadarChart,
-  ResponsiveContainer,
-} from 'recharts';
 
-import { Button, Card, Panel } from '../../shared/ui/TaaliPrimitives';
-import { formatScale100Score } from '../../lib/scoreDisplay';
+import { CandidateAssessmentSummaryView } from '../candidates/CandidateAssessmentSummaryView';
+import { Button, Card } from '../../shared/ui/TaaliPrimitives';
 import { AssessmentBrandGlyph } from './AssessmentBrandGlyph';
-import { BrandLabel } from '../../shared/ui/Branding';
 
 const formatDuration = (seconds) => {
   const safeSeconds = Math.max(0, Number(seconds) || 0);
@@ -21,31 +12,11 @@ const formatDuration = (seconds) => {
 };
 
 export const DemoAssessmentSummary = ({
-  assessmentName,
-  profile,
   summary,
   onRestart,
   onJoinTaali,
 }) => {
-  const comparisonCategories = summary?.comparison?.categories || [];
-  const radarData = (comparisonCategories.length > 0 ? comparisonCategories : (summary?.categories || [])).map((entry) => {
-    const candidateLevel = Number(
-      entry?.candidateLevel
-      ?? entry?.level
-      ?? (Number(entry?.candidateScore ?? 0) / 20),
-    ) || 0;
-    const benchmarkLevel = Number(
-      entry?.benchmarkLevel
-      ?? (Number(entry?.benchmarkScore ?? 0) / 20)
-      ?? candidateLevel,
-    ) || 0;
-    return {
-      dimension: entry?.label || entry?.key || 'Category',
-      candidateLevel,
-      benchmarkLevel,
-      fullMark: 5,
-    };
-  });
+  const reportModel = summary?.reportModel || null;
 
   return (
     <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
@@ -62,81 +33,35 @@ export const DemoAssessmentSummary = ({
       </nav>
 
       <div className="mx-auto max-w-6xl px-6 py-10">
-        <Panel className="p-6">
-          <BrandLabel className="mb-2" toneClassName="text-[#7F39FB]">TAALI Profile</BrandLabel>
-          <h1 className="text-3xl font-bold">
-            {profile?.fullName ? `${profile.fullName}'s` : 'Your'} TAALI profile
-          </h1>
-          <p className="mt-2 font-mono text-sm text-[var(--taali-muted)]">
-            Assessment: {assessmentName || 'Demo task'}
-          </p>
-          <p className="mt-3 font-mono text-xs text-[var(--taali-muted)]">
-            Comparison against successful-candidate average
-          </p>
-
-          <div className="mt-6 grid gap-4 lg:grid-cols-[1.45fr_1fr]">
-            <Card className="h-[360px] p-3">
-              <ResponsiveContainer width="100%" height="100%">
-                <RadarChart data={radarData} outerRadius="72%">
-                  <PolarGrid stroke="rgba(157, 0, 255, 0.22)" />
-                  <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'var(--taali-font)' }} />
-                  <PolarRadiusAxis domain={[0, 5]} tick={false} axisLine={false} />
-                  <Radar
-                    name="Your TAALI profile"
-                    dataKey="candidateLevel"
-                    stroke="var(--taali-purple)"
-                    fill="var(--taali-purple)"
-                    fillOpacity={0.18}
-                  />
-                  <Radar
-                    name={summary?.comparison?.benchmarkLabel || 'Successful-candidate average'}
-                    dataKey="benchmarkLevel"
-                    stroke="#1f2937"
-                    fill="#1f2937"
-                    fillOpacity={0.08}
-                  />
-                </RadarChart>
-              </ResponsiveContainer>
-            </Card>
-
-            <Card className="p-4">
-              <h3 className="text-lg font-bold">Compared with successful candidates</h3>
-              <div className="mt-3 grid gap-2 font-mono text-sm">
-                <div>
-                  <span className="text-[var(--taali-muted)]">You:</span>{' '}
-                  <span className="font-bold">{formatScale100Score(summary?.comparison?.candidateScore ?? 0, '0-100')}</span>
-                </div>
-                <div>
-                  <span className="text-[var(--taali-muted)]">Average:</span>{' '}
-                  <span className="font-bold">{formatScale100Score(summary?.comparison?.benchmarkScore ?? 0, '0-100')}</span>
-                </div>
-                <div>
-                  <span className="text-[var(--taali-muted)]">Delta:</span>{' '}
-                  <span className={`font-bold ${(summary?.comparison?.deltaScore || 0) >= 0 ? 'text-green-700' : 'text-red-700'}`}>
-                    {(summary?.comparison?.deltaScore || 0) >= 0 ? '+' : ''}
-                    {Number(summary?.comparison?.deltaScore || 0).toFixed(1)}
-                  </span>
-                </div>
-              </div>
-            </Card>
-          </div>
-
-          <Card className="mt-5 grid gap-2 p-4 md:grid-cols-4">
-            <div className="font-mono text-sm"><span className="text-[var(--taali-muted)]">AI prompts:</span> {summary?.meta?.promptCount ?? 0}</div>
-            <div className="font-mono text-sm"><span className="text-[var(--taali-muted)]">Code runs:</span> {summary?.meta?.runCount ?? 0}</div>
-            <div className="font-mono text-sm"><span className="text-[var(--taali-muted)]">Saves:</span> {summary?.meta?.saveCount ?? 0}</div>
-            <div className="font-mono text-sm"><span className="text-[var(--taali-muted)]">Session time:</span> {formatDuration(summary?.meta?.timeSpentSeconds)}</div>
+        {reportModel ? (
+          <CandidateAssessmentSummaryView
+            reportModel={reportModel}
+            variant="page"
+            showSupplementalPanels={false}
+            showRoleFitMetric={false}
+            radarCategoryKeys={reportModel.radarCategoryKeys}
+          />
+        ) : (
+          <Card className="p-4 font-mono text-sm text-[var(--taali-muted)]">
+            Demo summary is not available yet.
           </Card>
+        )}
 
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Button type="button" variant="primary" size="lg" onClick={onJoinTaali}>
-              Join TAALI
-            </Button>
-            <Button type="button" variant="secondary" size="lg" onClick={onRestart}>
-              Try another demo
-            </Button>
-          </div>
-        </Panel>
+        <Card className="mt-5 grid gap-2 p-4 md:grid-cols-4">
+          <div className="font-mono text-sm"><span className="text-[var(--taali-muted)]">AI prompts:</span> {summary?.meta?.promptCount ?? 0}</div>
+          <div className="font-mono text-sm"><span className="text-[var(--taali-muted)]">Code runs:</span> {summary?.meta?.runCount ?? 0}</div>
+          <div className="font-mono text-sm"><span className="text-[var(--taali-muted)]">Saves:</span> {summary?.meta?.saveCount ?? 0}</div>
+          <div className="font-mono text-sm"><span className="text-[var(--taali-muted)]">Session time:</span> {formatDuration(summary?.meta?.timeSpentSeconds)}</div>
+        </Card>
+
+        <div className="mt-6 flex flex-wrap gap-3">
+          <Button type="button" variant="primary" size="lg" onClick={onJoinTaali}>
+            Join TAALI
+          </Button>
+          <Button type="button" variant="secondary" size="lg" onClick={onRestart}>
+            Try another demo
+          </Button>
+        </div>
       </div>
     </div>
   );

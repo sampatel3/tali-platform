@@ -9,7 +9,11 @@ import {
   ResponsiveContainer,
 } from 'recharts';
 
-import { COMPARISON_CATEGORY_CONFIG, getCategoryScoresFromAssessment } from '../../lib/comparisonCategories';
+import {
+  COMPARISON_CATEGORY_CONFIG,
+  COMPARISON_CATEGORY_KEYS,
+  getCategoryScoresFromAssessment,
+} from '../../lib/comparisonCategories';
 
 const DEFAULT_COLORS = ['var(--taali-text)', 'var(--taali-success)', 'var(--taali-warning)', 'var(--taali-info)', '#ef4444'];
 
@@ -19,13 +23,29 @@ export const ComparisonRadar = ({
   className = '',
   height = 340,
   showLegend = true,
+  categoryKeys = null,
 }) => {
   if (!Array.isArray(assessments) || assessments.length === 0) {
     return <div className="text-sm text-[var(--taali-muted)]">No comparison data selected.</div>;
   }
 
+  const categoryConfigByKey = COMPARISON_CATEGORY_CONFIG.reduce((acc, item) => {
+    acc[item.key] = item;
+    return acc;
+  }, {});
+  const selectedCategoryConfig = (
+    Array.isArray(categoryKeys)
+      ? categoryKeys.filter((key) => COMPARISON_CATEGORY_KEYS.includes(key))
+      : COMPARISON_CATEGORY_KEYS
+  )
+    .map((key) => categoryConfigByKey[key])
+    .filter(Boolean);
+  const effectiveCategoryConfig = selectedCategoryConfig.length
+    ? selectedCategoryConfig
+    : COMPARISON_CATEGORY_CONFIG;
+
   const keyFor = (index) => `_series_${index}`;
-  const radarData = COMPARISON_CATEGORY_CONFIG.map((category) => {
+  const radarData = effectiveCategoryConfig.map((category) => {
     const row = { dimension: category.label, fullMark: 10 };
     assessments.forEach((assessment, index) => {
       const scores = getCategoryScoresFromAssessment(assessment);

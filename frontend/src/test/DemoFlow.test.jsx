@@ -222,7 +222,9 @@ describe('Demo flow', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /Jane Doe's TAALI profile/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: 'Join TAALI' })).toBeInTheDocument();
-      expect(screen.getByText('Compared with successful candidates')).toBeInTheDocument();
+      expect(screen.getByText('Dimension profile')).toBeInTheDocument();
+      expect(screen.getByText('Dimension scores')).toBeInTheDocument();
+      expect(screen.getByText('TAALI score')).toBeInTheDocument();
       expect(screen.getByTestId('radar-chart')).toBeInTheDocument();
     });
   });

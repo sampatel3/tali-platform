@@ -659,6 +659,8 @@ export default function AssessmentPage({
             tabSwitchCount: proctoringEnabled ? tabSwitchCount : 0,
             taskKey: assessment?.task?.task_key || null,
             submissionResult: res?.data || null,
+            profile: demoProfile,
+            assessmentName: assessment?.task_name || 'Demo assessment',
           });
           setDemoSummary(summary);
           setOutput("Demo submitted successfully.");
@@ -690,6 +692,7 @@ export default function AssessmentPage({
       demoRunCount,
       demoPromptMessages,
       demoSaveCount,
+      demoProfile,
       timeLeft,
       proctoringEnabled,
       assessment?.duration_minutes,
@@ -711,8 +714,6 @@ export default function AssessmentPage({
     if (demoMode) {
       return (
         <DemoAssessmentSummary
-          assessmentName={assessment?.task_name || 'Demo assessment'}
-          profile={demoProfile}
           summary={demoSummary}
           onRestart={onDemoRestart || (() => {})}
           onJoinTaali={onJoinTaali || (() => {})}

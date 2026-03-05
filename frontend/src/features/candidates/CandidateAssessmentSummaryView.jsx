@@ -164,6 +164,9 @@ export const CandidateAssessmentSummaryView = ({
   variant = 'page',
   onOpenInterviewGuidance = null,
   showInterviewGuidanceAction = false,
+  showSupplementalPanels = true,
+  showRoleFitMetric = true,
+  radarCategoryKeys = null,
 }) => (
   <div className="space-y-4">
     <CandidateReportView
@@ -173,15 +176,19 @@ export const CandidateAssessmentSummaryView = ({
       showRoleFitSection={false}
       showIntegritySection={false}
       showEvidenceSections={false}
+      showRoleFitMetric={showRoleFitMetric}
+      radarCategoryKeys={radarCategoryKeys}
     />
 
-    <div className={cx('grid gap-4', variant === 'sheet' ? 'grid-cols-1' : 'xl:grid-cols-2')}>
-      <RoleFitSummaryPanel reportModel={reportModel} />
-      <ProbeSummaryPanel
-        reportModel={reportModel}
-        onOpenInterviewGuidance={onOpenInterviewGuidance}
-        showInterviewGuidanceAction={showInterviewGuidanceAction}
-      />
-    </div>
+    {showSupplementalPanels ? (
+      <div className={cx('grid gap-4', variant === 'sheet' ? 'grid-cols-1' : 'xl:grid-cols-2')}>
+        <RoleFitSummaryPanel reportModel={reportModel} />
+        <ProbeSummaryPanel
+          reportModel={reportModel}
+          onOpenInterviewGuidance={onOpenInterviewGuidance}
+          showInterviewGuidanceAction={showInterviewGuidanceAction}
+        />
+      </div>
+    ) : null}
   </div>
 );
