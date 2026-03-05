@@ -1,5 +1,4 @@
 export const pathForPage = (page, options = {}) => {
-  const workflowV2Enabled = options.workflowV2Enabled === true;
   switch (page) {
     case 'landing':
       return '/';
@@ -14,7 +13,7 @@ export const pathForPage = (page, options = {}) => {
     case 'verify-email':
       return `/verify-email${options.verifyEmailToken ? `?token=${encodeURIComponent(options.verifyEmailToken)}` : ''}`;
     case 'dashboard':
-      return workflowV2Enabled ? '/jobs' : '/assessments';
+      return '/dashboard';
     case 'jobs':
       return '/jobs';
     case 'job-pipeline':

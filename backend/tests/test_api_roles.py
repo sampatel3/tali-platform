@@ -907,6 +907,104 @@ def test_global_applications_endpoint_supports_pipeline_filters(client):
     assert app_applied["id"] in scoped_ids
 
 
+def test_pipeline_endpoints_support_taali_sorting_and_min_filter(client, db):
+    headers, _ = auth_headers(client)
+    role = _create_role_with_spec(client, headers, name="TAALI sort role")
+
+    strong = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "taali-strong@example.com", "candidate_name": "Strong Candidate"},
+        headers=headers,
+    )
+    weak = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "taali-weak@example.com", "candidate_name": "Weak Candidate"},
+        headers=headers,
+    )
+    assert strong.status_code == 201, strong.text
+    assert weak.status_code == 201, weak.text
+
+    strong_row = db.query(CandidateApplication).filter(CandidateApplication.id == strong.json()["id"]).first()
+    weak_row = db.query(CandidateApplication).filter(CandidateApplication.id == weak.json()["id"]).first()
+    assert strong_row is not None
+    assert weak_row is not None
+
+    strong_row.cv_match_score = 92.0
+    strong_row.cv_match_details = {"score_scale": "0-100", "requirements_match_score_100": 88.0}
+    weak_row.cv_match_score = 54.0
+    weak_row.cv_match_details = {"score_scale": "0-100", "requirements_match_score_100": 46.0}
+    db.commit()
+
+    global_sorted = client.get(
+        f"/api/v1/applications?role_id={role['id']}&sort_by=taali_score&sort_order=desc&limit=50",
+        headers=headers,
+    )
+    assert global_sorted.status_code == 200, global_sorted.text
+    global_items = global_sorted.json()["items"]
+    assert len(global_items) == 2
+    assert global_items[0]["candidate_email"] == "taali-strong@example.com"
+    assert global_items[0]["taali_score"] >= global_items[1]["taali_score"]
+
+    global_filtered = client.get(
+        f"/api/v1/applications?role_id={role['id']}&sort_by=taali_score&sort_order=desc&min_taali_score=80&limit=50",
+        headers=headers,
+    )
+    assert global_filtered.status_code == 200, global_filtered.text
+    filtered_items = global_filtered.json()["items"]
+    assert len(filtered_items) == 1
+    assert filtered_items[0]["candidate_email"] == "taali-strong@example.com"
+
+    pipeline_sorted = client.get(
+        f"/api/v1/roles/{role['id']}/pipeline?sort_by=taali_score&sort_order=asc&limit=50",
+        headers=headers,
+    )
+    assert pipeline_sorted.status_code == 200, pipeline_sorted.text
+    pipeline_items = pipeline_sorted.json()["items"]
+    assert len(pipeline_items) == 2
+    assert pipeline_items[0]["candidate_email"] == "taali-weak@example.com"
+    assert pipeline_items[0]["taali_score"] <= pipeline_items[1]["taali_score"]
+
+
+def test_assessment_invite_event_is_logged_when_stage_is_unchanged(client):
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Timeline invite task").json()
+    role = _create_role_with_spec(client, headers, name="Timeline invite role")
+
+    link_resp = client.post(
+        f"/api/v1/roles/{role['id']}/tasks",
+        json={"task_id": task["id"]},
+        headers=headers,
+    )
+    assert link_resp.status_code == 200, link_resp.text
+
+    create_resp = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "timeline-invite@example.com", "candidate_name": "Timeline Invite"},
+        headers=headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    app = create_resp.json()
+
+    move_resp = client.patch(
+        f"/api/v1/applications/{app['id']}/stage",
+        json={"pipeline_stage": "invited", "expected_version": app["version"]},
+        headers=headers,
+    )
+    assert move_resp.status_code == 200, move_resp.text
+
+    invite_resp = client.post(
+        f"/api/v1/applications/{app['id']}/assessments",
+        json={"task_id": task["id"], "duration_minutes": 30},
+        headers=headers,
+    )
+    assert invite_resp.status_code == 201, invite_resp.text
+
+    events_resp = client.get(f"/api/v1/applications/{app['id']}/events", headers=headers)
+    assert events_resp.status_code == 200, events_resp.text
+    event_types = [event["event_type"] for event in events_resp.json()]
+    assert "assessment_invite_sent" in event_types
+
+
 def test_legacy_status_patch_uses_guarded_transition_path(client):
     headers, _ = auth_headers(client)
     role = _create_role_with_spec(client, headers, name="Legacy status compat role")

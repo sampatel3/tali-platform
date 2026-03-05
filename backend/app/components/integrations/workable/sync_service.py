@@ -18,6 +18,7 @@ from ....models.role import Role
 from ....models.workable_sync_run import WorkableSyncRun
 from ....domains.assessments_runtime.pipeline_service import (
     ensure_pipeline_fields,
+    initialize_pipeline_event_if_missing,
     map_legacy_status_to_pipeline,
     normalize_pipeline_key,
 )
@@ -1029,6 +1030,13 @@ class WorkableSyncService:
         if created_application:
             app.status = sanitize_text_for_storage(str(stage or app.status or "applied"))
         ensure_pipeline_fields(app, source="sync" if created_application else "system")
+        if created_application:
+            initialize_pipeline_event_if_missing(
+                db,
+                app=app,
+                actor_type="sync",
+                reason="Imported from Workable",
+            )
         app.workable_candidate_id = sanitize_text_for_storage(candidate_id)
         app.workable_stage = sanitize_text_for_storage(str(stage or ""))
         app.external_stage_raw = sanitize_text_for_storage(str(stage or ""))

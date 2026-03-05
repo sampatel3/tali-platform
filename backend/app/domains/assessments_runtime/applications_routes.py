@@ -66,6 +66,7 @@ from .role_support import (
     role_has_job_spec,
 )
 from .pipeline_service import (
+    append_application_event,
     apply_legacy_status_update,
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
@@ -191,6 +192,51 @@ def _is_active_role_assessment_integrity_error(err: Exception) -> bool:
         "uq_assessments_candidate_role_active" in message
         or ("assessments.candidate_id" in message and "assessments.role_id" in message and "unique" in message)
     )
+
+
+def _application_sort_value(item: ApplicationDetailResponse, sort_by: str):
+    if sort_by == "taali_score":
+        return item.taali_score if item.taali_score is not None else float("-inf")
+    if sort_by == "created_at":
+        return item.created_at or datetime.min.replace(tzinfo=timezone.utc)
+    return (
+        item.pipeline_stage_updated_at
+        or item.updated_at
+        or item.created_at
+        or datetime.min.replace(tzinfo=timezone.utc)
+    )
+
+
+def _sort_application_payload(
+    payload: list[ApplicationDetailResponse],
+    *,
+    sort_by: str,
+    sort_order: str,
+) -> list[ApplicationDetailResponse]:
+    reverse = sort_order != "asc"
+    payload.sort(
+        key=lambda item: (
+            _application_sort_value(item, sort_by),
+            item.created_at or datetime.min.replace(tzinfo=timezone.utc),
+        ),
+        reverse=reverse,
+    )
+    return payload
+
+
+def _apply_min_taali_score_filter(
+    payload: list[ApplicationDetailResponse],
+    *,
+    min_taali_score: float | None,
+) -> list[ApplicationDetailResponse]:
+    if min_taali_score is None:
+        return payload
+    threshold = float(min_taali_score)
+    return [
+        item
+        for item in payload
+        if item.taali_score is not None and float(item.taali_score) >= threshold
+    ]
 
 
 def _provision_assessment_branch(assessment: Assessment, task: Task) -> None:
@@ -569,6 +615,9 @@ def list_applications_global(
     pipeline_stage: str | None = Query(default=None),
     application_outcome: str | None = Query(default="open"),
     search: str | None = Query(default=None),
+    sort_by: str = Query(default="pipeline_stage_updated_at", pattern="^(pipeline_stage_updated_at|created_at|taali_score)$"),
+    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    min_taali_score: float | None = Query(default=None),
     include_cv_text: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -604,28 +653,17 @@ def list_applications_global(
             )
         )
 
-    total = query.count()
-    items = (
-        query.order_by(
-            desc(
-                func.coalesce(
-                    CandidateApplication.pipeline_stage_updated_at,
-                    CandidateApplication.updated_at,
-                    CandidateApplication.created_at,
-                )
-            ),
-            desc(CandidateApplication.id),
-        )
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    rows = query.all()
     payload = [
         ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
-        for app in items
+        for app in rows
     ]
+    payload = _apply_min_taali_score_filter(payload, min_taali_score=min_taali_score)
+    payload = _sort_application_payload(payload, sort_by=sort_by, sort_order=sort_order)
+    total = len(payload)
+    paged_items = payload[offset: offset + limit]
     return {
-        "items": payload,
+        "items": paged_items,
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -637,6 +675,9 @@ def get_role_pipeline(
     role_id: int,
     stage: str | None = Query(default=None),
     search: str | None = Query(default=None),
+    sort_by: str = Query(default="pipeline_stage_updated_at", pattern="^(pipeline_stage_updated_at|created_at|taali_score)$"),
+    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    min_taali_score: float | None = Query(default=None),
     include_cv_text: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -677,26 +718,15 @@ def get_role_pipeline(
             )
         )
 
-    total = base_query.count()
-    rows = (
-        base_query.order_by(
-            desc(
-                func.coalesce(
-                    CandidateApplication.pipeline_stage_updated_at,
-                    CandidateApplication.updated_at,
-                    CandidateApplication.created_at,
-                )
-            ),
-            desc(CandidateApplication.id),
-        )
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    rows = base_query.all()
     items = [
         ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
         for app in rows
     ]
+    items = _apply_min_taali_score_filter(items, min_taali_score=min_taali_score)
+    items = _sort_application_payload(items, sort_by=sort_by, sort_order=sort_order)
+    total = len(items)
+    paged_items = items[offset: offset + limit]
     active_candidates_count = int(sum(stage_counts.values()))
     last_candidate_activity_at = (
         db.query(
@@ -723,7 +753,7 @@ def get_role_pipeline(
         "stage_counts": stage_counts,
         "active_candidates_count": active_candidates_count,
         "last_candidate_activity_at": last_candidate_activity_at,
-        "items": items,
+        "items": paged_items,
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -1456,6 +1486,18 @@ def create_assessment_for_application(
             actor_id=current_user.id,
             reason="Assessment invite created",
         )
+        append_application_event(
+            db,
+            app=app,
+            event_type="assessment_invite_sent",
+            actor_type="recruiter",
+            actor_id=current_user.id,
+            reason="Task sent",
+            metadata={
+                "task_id": data.task_id,
+                "duration_minutes": data.duration_minutes,
+            },
+        )
         assessment = _create_application_assessment(
             app=app,
             role=role,
@@ -1536,6 +1578,20 @@ def retake_assessment_for_application(
             actor_type="recruiter",
             actor_id=current_user.id,
             reason="Assessment retake created",
+        )
+        append_application_event(
+            db,
+            app=app,
+            event_type="assessment_retake_sent",
+            actor_type="recruiter",
+            actor_id=current_user.id,
+            reason="Task retake sent",
+            metadata={
+                "task_id": data.task_id,
+                "duration_minutes": data.duration_minutes,
+                "void_reason": data.void_reason,
+                "previous_assessment_id": existing.id,
+            },
         )
         assessment = _create_application_assessment(
             app=app,

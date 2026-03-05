@@ -311,13 +311,13 @@ const CandidateSummarySection = ({ darkMode }) => (
         <Badge variant="muted">Interview probes that matter</Badge>
       </div>
 
-      <AmbientProductShowcase heightClass="h-[min(56vh,31rem)]">
-        <Suspense fallback={<SurfacePreviewFallback heightClass="h-[min(82vh,56rem)]" />}>
+      <AmbientProductShowcase heightClass="h-[min(72vh,44rem)]">
+        <Suspense fallback={<SurfacePreviewFallback heightClass="h-[min(68vh,42rem)]" />}>
           <CandidateResultsPreviewView
             className="h-full"
-            maxHeightClass="max-h-[26rem]"
-            scaleClassName="scale-[0.76]"
-            scaledWidth="131.6%"
+            maxHeightClass="max-h-[40rem]"
+            scaleClassName="scale-[0.92]"
+            scaledWidth="108.7%"
             lightMode={!darkMode}
           />
         </Suspense>
