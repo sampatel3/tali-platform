@@ -55,9 +55,8 @@ def _merge_workable_config(org: Organization, incoming: OrgUpdate) -> dict:
 
 
 def _workflow_v2_enabled_for_response(org: Organization) -> bool:
-    if settings.RECRUITER_WORKFLOW_V2_FORCE_OFF:
-        return False
-    return bool(getattr(org, "recruiter_workflow_v2_enabled", False))
+    # Hard cutover: recruiter workflow V2 is always enabled.
+    return True
 
 
 def _org_response_payload(org: Organization) -> OrgResponse:
@@ -116,7 +115,7 @@ def get_my_org(
     if getattr(org, "candidate_feedback_enabled", None) is None:
         org.candidate_feedback_enabled = True
     if getattr(org, "recruiter_workflow_v2_enabled", None) is None:
-        org.recruiter_workflow_v2_enabled = False
+        org.recruiter_workflow_v2_enabled = True
     if getattr(org, "default_assessment_duration_minutes", None) is None:
         org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
@@ -148,7 +147,12 @@ def update_my_org(
     if data.candidate_feedback_enabled is not None:
         org.candidate_feedback_enabled = bool(data.candidate_feedback_enabled)
     if data.recruiter_workflow_v2_enabled is not None:
-        org.recruiter_workflow_v2_enabled = bool(data.recruiter_workflow_v2_enabled)
+        if bool(data.recruiter_workflow_v2_enabled) is False:
+            raise HTTPException(
+                status_code=422,
+                detail="recruiter_workflow_v2_enabled cannot be disabled; recruiter workflow V2 is always enabled",
+            )
+        org.recruiter_workflow_v2_enabled = True
     if data.default_assessment_duration_minutes is not None:
         org.default_assessment_duration_minutes = int(data.default_assessment_duration_minutes)
     if data.invite_email_template is not None:
@@ -169,7 +173,7 @@ def update_my_org(
     if getattr(org, "candidate_feedback_enabled", None) is None:
         org.candidate_feedback_enabled = True
     if getattr(org, "recruiter_workflow_v2_enabled", None) is None:
-        org.recruiter_workflow_v2_enabled = False
+        org.recruiter_workflow_v2_enabled = True
     if getattr(org, "default_assessment_duration_minutes", None) is None:
         org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))

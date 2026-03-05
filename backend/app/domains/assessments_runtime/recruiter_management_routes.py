@@ -30,6 +30,7 @@ from ...services.assessment_repository_service import (
     AssessmentRepositoryService,
 )
 from .pipeline_service import (
+    append_application_event,
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
     transition_stage,
@@ -396,6 +397,24 @@ def resend_assessment_invite(
             candidate_name=assessment.candidate.full_name or assessment.candidate.email,
             position=(assessment.task.name if assessment.task else "Technical assessment"),
         )
+        if assessment.application:
+            ensure_pipeline_fields(assessment.application)
+            initialize_pipeline_event_if_missing(
+                db,
+                app=assessment.application,
+                actor_type="system",
+                actor_id=current_user.id,
+                reason="Pipeline initialized before invite resend",
+            )
+            append_application_event(
+                db,
+                app=assessment.application,
+                event_type="assessment_invite_resent",
+                actor_type="recruiter",
+                actor_id=current_user.id,
+                reason="Task invite resent",
+                metadata={"assessment_id": assessment.id},
+            )
         db.commit()
     return {"success": True}
 

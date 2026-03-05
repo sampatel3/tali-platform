@@ -42,3 +42,11 @@ Date: 2026-02-13
 - Reconciled active docs with updated hardening plan and shipped outcomes.
 - Added role integrity regression checks (role delete guard and task unlink guard).
 - Added migration contract test for destructive reset guarantees.
+
+## Recruiter Workflow V2 Hard Cutover (2026-03-05)
+
+- Recruiter runtime flow is now hard-cut to V2 (`/jobs` as canonical landing).
+- `recruiter_workflow_v2_enabled` remains in org responses for compatibility but is effectively always `true`.
+- `PATCH /api/v1/organizations/me` now rejects attempts to disable `recruiter_workflow_v2_enabled` with `422`.
+- `ApplicationResponse.status` and `PATCH /applications/{id}` with `status` remain supported as compatibility mirror/update path.
+- Status patch usage is deprecated and now emits backend warning logs.
