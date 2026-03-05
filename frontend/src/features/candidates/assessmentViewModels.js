@@ -1,7 +1,7 @@
 import { getDimensionById, normalizeScores } from '../../scoring/scoringDimensions';
 import { formatScale100Score, normalizeScore } from '../../lib/scoreDisplay';
 
-const COMPLETED_STATUSES = new Set(['completed', 'completed_due_to_timeout']);
+export const COMPLETED_ASSESSMENT_STATUSES = new Set(['completed', 'completed_due_to_timeout']);
 
 const normalizeStatus = (value) => String(value || '').trim().toLowerCase();
 
@@ -31,6 +31,32 @@ const uniqueTrimmed = (items, maxItems = Infinity) => {
 
   return output.slice(0, maxItems);
 };
+
+const weightedAverage100 = (...weightedValues) => {
+  let numerator = 0;
+  let denominator = 0;
+
+  weightedValues.forEach(([value, weight]) => {
+    const numericValue = toFiniteNumber(normalizeScore(value, '0-100'));
+    const numericWeight = Number(weight);
+    if (!Number.isFinite(numericValue) || !Number.isFinite(numericWeight) || numericWeight <= 0) return;
+    numerator += numericValue * numericWeight;
+    denominator += numericWeight;
+  });
+
+  if (denominator <= 0) return null;
+  return Math.round((numerator / denominator) * 10) / 10;
+};
+
+const computeRoleFitScore = (cvFitScore, requirementsFitScore) => weightedAverage100(
+  [cvFitScore, 0.5],
+  [requirementsFitScore, 0.5]
+);
+
+const computeTaaliScore = (assessmentScore, roleFitScore) => weightedAverage100(
+  [assessmentScore, 0.5],
+  [roleFitScore, 0.5]
+);
 
 const deriveCategoryScores = (assessment) => {
   if (!assessment || typeof assessment !== 'object') return {};
@@ -70,13 +96,22 @@ const deriveDimensionExtremes = (assessment) => {
   };
 };
 
-const buildFallbackRationale = (details = {}, overallScore = null) => {
+const buildFallbackRationale = (details = {}, roleFitScore = null, cvFitScore = null, requirementsFitScore = null) => {
   const coverage = details.requirements_coverage && typeof details.requirements_coverage === 'object'
     ? details.requirements_coverage
     : {};
 
   return uniqueTrimmed([
-    overallScore != null ? `Role fit score ${formatScale100Score(overallScore, '0-100')}` : null,
+    roleFitScore != null ? `Role fit ${formatScale100Score(roleFitScore, '0-100')}` : null,
+    roleFitScore != null && cvFitScore != null && requirementsFitScore != null
+      ? `Role fit blends CV fit ${formatScale100Score(cvFitScore, '0-100')} and recruiter requirements ${formatScale100Score(requirementsFitScore, '0-100')}`
+      : null,
+    roleFitScore != null && cvFitScore != null && requirementsFitScore == null
+      ? `Role fit currently reflects CV fit ${formatScale100Score(cvFitScore, '0-100')}`
+      : null,
+    roleFitScore != null && cvFitScore == null && requirementsFitScore != null
+      ? `Role fit currently reflects recruiter requirements ${formatScale100Score(requirementsFitScore, '0-100')}`
+      : null,
     coverage.total
       ? `Recruiter requirements coverage: ${coverage.met ?? 0}/${coverage.total} met, ${coverage.partially_met ?? 0} partial, ${coverage.missing ?? 0} missing`
       : null,
@@ -101,15 +136,36 @@ const getRoleFitPayload = ({ application, completedAssessment }) => {
       ? completedAssessment.cv_job_match_details
       : (completedAssessment.prompt_analytics?.cv_job_match?.details || {});
     const matchScores = completedAssessment.prompt_analytics?.cv_job_match || {};
+    const scoreComponents = completedAssessment.score_breakdown?.score_components || {};
+    const roleFitComponents = scoreComponents.role_fit_components || {};
+    const cvFitScore = normalizeScore(
+      scoreComponents.cv_fit_score
+      ?? roleFitComponents.cv_fit_score
+      ?? matchScores.overall
+      ?? completedAssessment.cv_job_match_score,
+      details.score_scale || '0-100'
+    );
+    const requirementsFitScore = normalizeScore(
+      scoreComponents.requirements_fit_score
+      ?? roleFitComponents.requirements_fit_score
+      ?? details.requirements_match_score_100,
+      '0-100'
+    );
+    const roleFitScore = normalizeScore(
+      scoreComponents.role_fit_score ?? details.role_fit_score_100 ?? computeRoleFitScore(cvFitScore, requirementsFitScore),
+      '0-100'
+    );
 
     return {
       sourceType: 'assessment',
       sourceLabel: 'Completed assessment',
       scoreScale: details.score_scale || '0-100',
-      overallScore: normalizeScore(matchScores.overall ?? completedAssessment.cv_job_match_score, details.score_scale || '0-100'),
+      overallScore: cvFitScore,
+      cvFitScore,
+      roleFitScore,
       skillsScore: normalizeScore(matchScores.skills, details.score_scale || '0-100'),
       experienceScore: normalizeScore(matchScores.experience, details.score_scale || '0-100'),
-      requirementsFitScore: normalizeScore(details.requirements_match_score_100, '0-100'),
+      requirementsFitScore,
       details,
     };
   }
@@ -118,18 +174,30 @@ const getRoleFitPayload = ({ application, completedAssessment }) => {
     ? application.cv_match_details
     : {};
   const scoreSummary = application?.score_summary || {};
+  const roleFitComponents = scoreSummary.role_fit_components || {};
+  const cvFitScore = normalizeScore(
+    scoreSummary.cv_fit_score ?? roleFitComponents.cv_fit_score ?? application?.cv_match_score,
+    details.score_scale || '0-100'
+  );
+  const requirementsFitScore = normalizeScore(
+    scoreSummary.requirements_fit_score ?? roleFitComponents.requirements_fit_score ?? details.requirements_match_score_100,
+    '0-100'
+  );
+  const roleFitScore = normalizeScore(
+    scoreSummary.role_fit_score ?? details.role_fit_score_100 ?? computeRoleFitScore(cvFitScore, requirementsFitScore),
+    '0-100'
+  );
 
   return {
     sourceType: 'application',
     sourceLabel: 'Application CV fit',
     scoreScale: details.score_scale || '0-100',
-    overallScore: normalizeScore(scoreSummary.cv_fit_score ?? application?.cv_match_score, details.score_scale || '0-100'),
+    overallScore: cvFitScore,
+    cvFitScore,
+    roleFitScore,
     skillsScore: normalizeScore(details.skills_match_score_100, '0-100'),
     experienceScore: normalizeScore(details.experience_match_score_100, '0-100'),
-    requirementsFitScore: normalizeScore(
-      scoreSummary.requirements_fit_score ?? details.requirements_match_score_100,
-      '0-100'
-    ),
+    requirementsFitScore,
     details,
   };
 };
@@ -137,7 +205,7 @@ const getRoleFitPayload = ({ application, completedAssessment }) => {
 export const resolveScoreSource = ({ application, completedAssessment }) => {
   const hasCompletedAssessment = Boolean(
     completedAssessment
-    && COMPLETED_STATUSES.has(normalizeStatus(completedAssessment.status))
+    && COMPLETED_ASSESSMENT_STATUSES.has(normalizeStatus(completedAssessment.status))
   );
 
   if (hasCompletedAssessment) {
@@ -146,7 +214,6 @@ export const resolveScoreSource = ({ application, completedAssessment }) => {
       label: 'Completed assessment',
       badgeVariant: 'purple',
       updatedAt: completedAssessment.completed_at || completedAssessment.updated_at || completedAssessment.created_at || null,
-      formulaLabel: application?.score_summary?.formula_label || 'TAALI score blends assessment and role-fit evidence when both are available.',
     };
   }
 
@@ -155,7 +222,6 @@ export const resolveScoreSource = ({ application, completedAssessment }) => {
     label: 'Application CV fit',
     badgeVariant: 'muted',
     updatedAt: application?.cv_match_scored_at || application?.updated_at || application?.created_at || null,
-    formulaLabel: application?.score_summary?.formula_label || 'TAALI score currently reflects CV fit until a completed assessment is available.',
   };
 };
 
@@ -174,55 +240,82 @@ export const buildRoleFitEvidenceModel = ({ application, completedAssessment }) 
       }))
       .filter((item) => item.requirement)
     : [];
+  const firstRequirementGap = requirementsAssessment.find((item) => item.status !== 'met') || null;
+  const summaryText = sanitizeScoreText(String(details.summary || '').trim()) || null;
 
   return {
     ...payload,
     rationaleBullets: rationaleBullets.length
       ? rationaleBullets
-      : buildFallbackRationale(details, payload.overallScore),
+      : buildFallbackRationale(details, payload.roleFitScore, payload.cvFitScore, payload.requirementsFitScore),
     requirementsCoverage: details.requirements_coverage && typeof details.requirements_coverage === 'object'
       ? details.requirements_coverage
       : {},
     requirementsAssessment,
+    firstRequirementGap,
     matchingSkills: Array.isArray(details.matching_skills) ? details.matching_skills.filter(Boolean) : [],
     missingSkills: Array.isArray(details.missing_skills) ? details.missing_skills.filter(Boolean) : [],
     experienceHighlights: Array.isArray(details.experience_highlights) ? details.experience_highlights.filter(Boolean) : [],
     concerns: Array.isArray(details.concerns) ? details.concerns.filter(Boolean) : [],
+    summaryText,
     hasAnyEvidence: Boolean(
-      payload.overallScore != null
+      payload.roleFitScore != null
+      || payload.cvFitScore != null
       || payload.requirementsFitScore != null
       || requirementsAssessment.length
       || rationaleBullets.length
-      || buildFallbackRationale(details, payload.overallScore).length
+      || buildFallbackRationale(details, payload.roleFitScore, payload.cvFitScore, payload.requirementsFitScore).length
     ),
   };
 };
 
-const buildFallbackAssessmentSummary = ({ completedAssessment, roleFitModel, strongestDimension, weakestDimension }) => {
+const buildFallbackAssessmentSummary = ({
+  completedAssessment,
+  roleFitModel,
+  strongestDimension,
+  weakestDimension,
+  categoryScores,
+}) => {
   const summaryBits = [];
+  const scoredDimensions = Object.keys(categoryScores || {}).length;
 
   if (strongestDimension) {
     summaryBits.push(`Strongest dimension: ${getDimensionById(strongestDimension).label}`);
   }
 
   if (weakestDimension) {
-    summaryBits.push(`Interview deeper on ${getDimensionById(weakestDimension).label.toLowerCase()}`);
+    summaryBits.push(`Weakest dimension to probe: ${getDimensionById(weakestDimension).label}`);
   }
 
-  if (roleFitModel?.requirementsAssessment?.length) {
-    const weakestRequirement = roleFitModel.requirementsAssessment.find((item) => item.status !== 'met');
-    if (weakestRequirement) {
-      summaryBits.push(`Probe requirement gap: ${weakestRequirement.requirement}`);
-    }
+  if (toFiniteNumber(completedAssessment?.tests_total) > 0) {
+    summaryBits.push(`Passed ${completedAssessment.tests_passed ?? 0} of ${completedAssessment.tests_total} tests`);
   }
 
-  if (!summaryBits.length && toFiniteNumber(completedAssessment?.tests_total) > 0) {
-    summaryBits.push(
-      `Passed ${completedAssessment.tests_passed ?? 0} of ${completedAssessment.tests_total} tests`
-    );
+  if (roleFitModel?.firstRequirementGap?.requirement) {
+    summaryBits.push(`First recruiter requirement gap: ${roleFitModel.firstRequirementGap.requirement}`);
   }
 
-  return sanitizeScoreText(summaryBits.join('. ') || 'Assessment evidence is available for recruiter review.');
+  if (!roleFitModel?.firstRequirementGap?.requirement && roleFitModel?.summaryText) {
+    summaryBits.push(roleFitModel.summaryText);
+  }
+
+  if (!summaryBits.length && Array.isArray(roleFitModel?.matchingSkills) && roleFitModel.matchingSkills.length) {
+    summaryBits.push(`Strong matching skills: ${roleFitModel.matchingSkills.slice(0, 4).join(', ')}`);
+  }
+
+  if (!summaryBits.length && Array.isArray(roleFitModel?.concerns) && roleFitModel.concerns.length) {
+    summaryBits.push(`Risk to probe: ${roleFitModel.concerns[0]}`);
+  }
+
+  if (!summaryBits.length && scoredDimensions > 0) {
+    summaryBits.push(`Completed assessment returned evidence across ${scoredDimensions} scored dimensions`);
+  }
+
+  if (!summaryBits.length) {
+    summaryBits.push('Completed assessment detail loaded. Review prompts, tests, and git evidence below.');
+  }
+
+  return sanitizeScoreText(summaryBits.join('. '));
 };
 
 export const buildAssessmentSummaryModel = ({ application, completedAssessment }) => {
@@ -245,8 +338,20 @@ export const buildAssessmentSummaryModel = ({ application, completedAssessment }
       completedAssessment.assessment_score ?? completedAssessment.final_score ?? completedAssessment.score,
       completedAssessment.score != null && Number(completedAssessment.score) <= 10 ? '0-10' : '0-100'
     );
+    const roleFitScore = normalizeScore(
+      completedAssessment.role_fit_score
+      ?? scoreBreakdown.score_components?.role_fit_score
+      ?? roleFitModel.roleFitScore
+      ?? computeRoleFitScore(roleFitModel.cvFitScore, roleFitModel.requirementsFitScore),
+      '0-100'
+    );
     const taaliScore = normalizeScore(
-      completedAssessment.taali_score ?? scoreSummary.taali_score ?? completedAssessment.final_score ?? completedAssessment.score,
+      completedAssessment.taali_score
+      ?? scoreBreakdown.score_components?.taali_score
+      ?? scoreSummary.taali_score
+      ?? computeTaaliScore(assessmentScore, roleFitScore)
+      ?? completedAssessment.final_score
+      ?? completedAssessment.score,
       completedAssessment.taali_score != null || completedAssessment.final_score != null ? '0-100' : '0-10'
     );
 
@@ -254,7 +359,8 @@ export const buildAssessmentSummaryModel = ({ application, completedAssessment }
       source,
       taaliScore,
       assessmentScore,
-      cvFitScore: roleFitModel.overallScore,
+      roleFitScore,
+      cvFitScore: roleFitModel.cvFitScore,
       requirementsFitScore: roleFitModel.requirementsFitScore,
       strongestDimension,
       weakestDimension,
@@ -265,6 +371,7 @@ export const buildAssessmentSummaryModel = ({ application, completedAssessment }
         roleFitModel,
         strongestDimension,
         weakestDimension,
+        categoryScores,
       }),
       categoryScores,
       assessmentStatus: completedAssessment.status || scoreSummary.assessment_status || null,
@@ -275,9 +382,16 @@ export const buildAssessmentSummaryModel = ({ application, completedAssessment }
 
   return {
     source,
-    taaliScore: normalizeScore(scoreSummary.taali_score ?? application?.taali_score ?? application?.cv_match_score, '0-100'),
+    taaliScore: normalizeScore(
+      scoreSummary.taali_score
+      ?? application?.taali_score
+      ?? roleFitModel.roleFitScore
+      ?? roleFitModel.cvFitScore,
+      '0-100'
+    ),
     assessmentScore: normalizeScore(scoreSummary.assessment_score, '0-100'),
-    cvFitScore: roleFitModel.overallScore,
+    roleFitScore: roleFitModel.roleFitScore,
+    cvFitScore: roleFitModel.cvFitScore,
     requirementsFitScore: roleFitModel.requirementsFitScore,
     strongestDimension: null,
     weakestDimension: null,
@@ -289,5 +403,206 @@ export const buildAssessmentSummaryModel = ({ application, completedAssessment }
     assessmentStatus: scoreSummary.assessment_status || null,
     completedAt: scoreSummary.assessment_completed_at || null,
     updatedAt: source.updatedAt,
+  };
+};
+
+const getRecommendation = (score100) => {
+  const numeric = toFiniteNumber(score100);
+  if (!Number.isFinite(numeric)) return { label: 'Pending', variant: 'muted' };
+  if (numeric >= 80) return { label: 'Strong Hire', variant: 'success' };
+  if (numeric >= 65) return { label: 'Hire', variant: 'info' };
+  if (numeric >= 50) return { label: 'Consider', variant: 'warning' };
+  return { label: 'No Hire', variant: 'danger' };
+};
+
+const describeTimelineStatus = (status) => {
+  const normalized = normalizeStatus(status);
+  if (!normalized) return 'No assessment attempts yet';
+  if (normalized === 'completed_due_to_timeout') return 'Latest attempt completed due to timeout';
+  return `Latest attempt ${normalized.replace(/_/g, ' ')}`;
+};
+
+const truncateToken = (value, size = 10) => {
+  const text = String(value || '').trim();
+  if (!text) return null;
+  if (text.length <= size) return text;
+  return `${text.slice(0, size)}...`;
+};
+
+const buildEvidenceSection = ({
+  title,
+  badgeLabel,
+  badgeVariant,
+  description,
+  items = [],
+  emptyMessage,
+}) => ({
+  title,
+  badgeLabel,
+  badgeVariant,
+  description,
+  items: uniqueTrimmed(items, 4),
+  emptyMessage,
+});
+
+const buildEvidenceSections = ({ application, completedAssessment, roleFitModel, summaryModel }) => {
+  const assessment = completedAssessment && typeof completedAssessment === 'object' ? completedAssessment : null;
+  const gitEvidence = assessment?.git_evidence && typeof assessment.git_evidence === 'object'
+    ? assessment.git_evidence
+    : {};
+  const timelineEvents = Array.isArray(assessment?.timeline) ? assessment.timeline : [];
+  const assessmentHistory = Array.isArray(application?.assessment_history) ? application.assessment_history : [];
+  const cvFilename = assessment?.candidate_cv_filename || assessment?.cv_filename || application?.cv_filename || null;
+  const jobSpecFilename = assessment?.candidate_job_spec_filename || application?.role_job_spec_filename || null;
+  const aiUsageItems = assessment ? [
+    assessment.total_prompts != null ? `${assessment.total_prompts} prompts captured` : null,
+    assessment.prompt_quality_score != null ? `Prompt clarity ${assessment.prompt_quality_score.toFixed(1)}/10` : null,
+    assessment.browser_focus_ratio != null ? `Browser focus ${Math.round(assessment.browser_focus_ratio * 100)}%` : null,
+    assessment.tab_switch_count != null ? `${assessment.tab_switch_count} tab switches recorded` : null,
+    assessment.calibration_score != null ? `Calibration ${assessment.calibration_score.toFixed(1)}/10` : null,
+    Array.isArray(assessment.prompt_fraud_flags) && assessment.prompt_fraud_flags.length
+      ? `${assessment.prompt_fraud_flags.length} integrity flags need review`
+      : null,
+  ] : [];
+  const codeAndGitItems = assessment ? [
+    gitEvidence.head_sha ? `Final HEAD ${truncateToken(gitEvidence.head_sha, 12)}` : null,
+    gitEvidence.commits ? 'Assessment branch commits were captured' : null,
+    gitEvidence.diff_main ? 'Diff against main was captured' : null,
+    gitEvidence.diff_staged ? 'Staged diff evidence is available' : null,
+    gitEvidence.status_porcelain ? 'Working tree status was captured' : null,
+    gitEvidence.error ? `Git evidence warning: ${gitEvidence.error}` : null,
+    assessment.final_repo_state ? 'Final repository state snapshot is attached' : null,
+  ] : [];
+  const timelineItems = assessment ? [
+    timelineEvents.length ? `${timelineEvents.length} timeline events recorded` : null,
+    describeTimelineStatus(assessment.status),
+    assessment.started_at ? `Started ${new Date(assessment.started_at).toLocaleString()}` : null,
+    assessment.completed_at ? `Completed ${new Date(assessment.completed_at).toLocaleString()}` : null,
+    assessment.superseded_by_assessment_id ? `Superseded by assessment #${assessment.superseded_by_assessment_id}` : null,
+    assessment.is_voided ? 'This attempt was voided but remains visible for audit history' : null,
+  ] : [
+    assessmentHistory.length ? `${assessmentHistory.length} assessment attempts on this role` : null,
+    describeTimelineStatus(summaryModel.assessmentStatus || application?.status),
+  ];
+  const documentItems = [
+    cvFilename ? `CV on file: ${cvFilename}` : 'CV not uploaded yet',
+    jobSpecFilename ? `Job specification on file: ${jobSpecFilename}` : null,
+    roleFitModel.summaryText || null,
+    summaryModel.source.kind === 'assessment'
+      ? 'Documents are paired with completed assessment evidence in this report'
+      : 'Documents currently drive the standing role-fit view until assessment evidence arrives',
+  ];
+
+  return {
+    aiUsage: buildEvidenceSection({
+      title: 'AI usage',
+      badgeLabel: assessment ? 'Assessment derived' : 'Pending',
+      badgeVariant: assessment ? 'purple' : 'muted',
+      description: assessment
+        ? 'Prompt activity, browser focus, and calibration stay attached to the standing report.'
+        : 'This section activates after a completed assessment adds prompt telemetry.',
+      items: aiUsageItems,
+      emptyMessage: 'No AI usage evidence is available yet.',
+    }),
+    codeAndGit: buildEvidenceSection({
+      title: 'Code and git',
+      badgeLabel: assessment ? 'Workspace evidence' : 'Pending',
+      badgeVariant: 'muted',
+      description: assessment
+        ? 'Repository evidence stays connected to the recruiter-facing report for auditability.'
+        : 'Git evidence appears once the candidate works in the assessment workspace.',
+      items: codeAndGitItems,
+      emptyMessage: assessment
+        ? 'No git evidence was captured for this assessment.'
+        : 'No code or git evidence is available before assessment completion.',
+    }),
+    timeline: buildEvidenceSection({
+      title: 'History timeline',
+      badgeLabel: assessment ? 'Assessment history' : 'Application history',
+      badgeVariant: 'muted',
+      description: 'Retakes, status changes, and submission history remain visible beside the standing report.',
+      items: timelineItems,
+      emptyMessage: 'Timeline history will appear here as recruiter activity accumulates.',
+    }),
+    documents: buildEvidenceSection({
+      title: 'Source documents',
+      badgeLabel: cvFilename ? 'On file' : 'Missing',
+      badgeVariant: cvFilename ? 'success' : 'warning',
+      description: 'Source documents stay visible so recruiters can connect the score back to the evidence.',
+      items: documentItems,
+      emptyMessage: 'No source documents are available for this candidate yet.',
+    }),
+  };
+};
+
+export const buildStandingCandidateReportModel = ({
+  application = null,
+  completedAssessment = null,
+  identity = {},
+}) => {
+  const summaryModel = buildAssessmentSummaryModel({ application, completedAssessment });
+  const roleFitModel = buildRoleFitEvidenceModel({ application, completedAssessment });
+  const categoryScores = normalizeScores(summaryModel.categoryScores || {});
+  const dimensionEntries = Object.entries(categoryScores)
+    .map(([key, value]) => ({
+      key,
+      label: getDimensionById(key).label,
+      value: Number(value),
+    }))
+    .filter((item) => Number.isFinite(item.value));
+  const recommendation = getRecommendation(summaryModel.taaliScore);
+  const recruiterSummaryText = roleFitModel.summaryText
+    || roleFitModel.rationaleBullets?.[0]
+    || summaryModel.heuristicSummary
+    || 'TAALI keeps the evidence attached to the score so recruiters can move faster with less ambiguity.';
+  const probeTitle = roleFitModel.firstRequirementGap?.requirement
+    || (summaryModel.weakestLabel !== '—' ? summaryModel.weakestLabel : 'Primary probe area');
+  const probeDescription = roleFitModel.firstRequirementGap?.impact
+    || roleFitModel.firstRequirementGap?.evidence
+    || (
+      summaryModel.weakestLabel !== '—'
+        ? `Interview deeper on ${summaryModel.weakestLabel.toLowerCase()}.`
+        : 'Probe where the candidate needs stronger evidence before moving forward.'
+    );
+  const integritySummaryText = completedAssessment?.superseded_by_assessment_id
+    ? 'A newer recruiter retake exists, but the visible completed attempt remains the source of truth until superseded in review.'
+    : completedAssessment?.is_voided
+      ? 'This attempt was voided. History remains visible so the recruiter can understand how the candidate record changed.'
+      : application?.score_summary?.has_voided_attempts
+        ? 'Historical attempts stay visible alongside the standing report so the recommendation remains auditable.'
+        : 'Retakes and prior attempts stay visible without replacing the standing candidate report.';
+  const strongestSignalTitle = summaryModel.strongestLabel !== '—'
+    ? summaryModel.strongestLabel
+    : (roleFitModel.roleFitScore != null ? 'Role fit' : 'Signal building');
+  const strongestSignalDescription = summaryModel.strongestLabel !== '—'
+    ? `Highest observed signal currently appears in ${summaryModel.strongestLabel.toLowerCase()}.`
+    : (
+      roleFitModel.roleFitScore != null
+        ? 'Role fit is the strongest available signal until more completed-assessment evidence is present.'
+        : 'Signal will strengthen as TAALI collects more completed assessment evidence.'
+    );
+  const evidenceSections = buildEvidenceSections({
+    application,
+    completedAssessment,
+    roleFitModel,
+    summaryModel,
+  });
+
+  return {
+    identity,
+    source: summaryModel.source,
+    summaryModel,
+    roleFitModel,
+    recommendation,
+    dimensionEntries,
+    recruiterSummaryText,
+    strongestSignalTitle,
+    strongestSignalDescription,
+    probeTitle,
+    probeDescription,
+    integritySummaryText,
+    evidenceSections,
+    hasCompletedAssessment: summaryModel.source.kind === 'assessment',
+    hasDimensionSignal: dimensionEntries.length > 0,
   };
 };

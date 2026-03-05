@@ -67,9 +67,9 @@ export function RoleFitEvidenceSections({
     <div className={cx('space-y-4', className)}>
       {showScoreCards ? (
         <div className={cx('grid gap-3', variant === 'compact' ? 'md:grid-cols-2' : 'md:grid-cols-3')}>
-          {model?.overallScore != null ? <ScoreCard label="CV fit" value={model.overallScore} /> : null}
+          {model?.roleFitScore != null ? <ScoreCard label="Role fit" value={model.roleFitScore} /> : null}
+          {model?.cvFitScore != null ? <ScoreCard label="CV fit" value={model.cvFitScore} /> : null}
           {model?.requirementsFitScore != null ? <ScoreCard label="Requirements fit" value={model.requirementsFitScore} /> : null}
-          {variant === 'full' && model?.experienceScore != null ? <ScoreCard label="Experience" value={model.experienceScore} /> : null}
         </div>
       ) : null}
 
