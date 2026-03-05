@@ -10,6 +10,17 @@ from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...schemas.role import ApplicationResponse, RoleResponse
+from ...services.taali_scoring import (
+    ROLE_FIT_WEIGHTS,
+    TAALI_SCORING_RUBRIC_VERSION,
+    TAALI_WEIGHTS,
+    compute_role_fit_score,
+    compute_taali_score,
+)
+from .pipeline_service import (
+    ensure_pipeline_fields,
+    stage_external_drift,
+)
 
 
 def _normalize_cv_match_score_for_response(score: float | None, details: dict | None) -> float | None:
@@ -81,6 +92,9 @@ def role_to_response(
     *,
     tasks_count: int | None = None,
     applications_count: int | None = None,
+    stage_counts: dict[str, int] | None = None,
+    active_candidates_count: int | None = None,
+    last_candidate_activity_at: datetime | None = None,
 ) -> RoleResponse:
     if tasks_count is None:
         tasks_count = len(role.tasks or [])
@@ -105,6 +119,9 @@ def role_to_response(
         interview_focus_generated_at=role.interview_focus_generated_at,
         tasks_count=tasks_count,
         applications_count=applications_count,
+        stage_counts=stage_counts or {},
+        active_candidates_count=int(active_candidates_count or 0),
+        last_candidate_activity_at=last_candidate_activity_at,
         created_at=role.created_at,
         updated_at=role.updated_at,
     )
@@ -186,6 +203,34 @@ def _assessment_taali_score_100(assessment: Assessment | None) -> float | None:
         return None
 
     assessment_score = _assessment_score_100(assessment)
+    role_fit_score = _assessment_role_fit_score_100(assessment)
+    taali_score = compute_taali_score(assessment_score, role_fit_score)
+    if taali_score is not None:
+        return taali_score
+
+    if assessment_score is None:
+        return role_fit_score
+    if role_fit_score is None:
+        return assessment_score
+    return taali_score
+
+
+def _assessment_role_fit_score_100(assessment: Assessment | None) -> float | None:
+    if not assessment:
+        return None
+    score_breakdown = (
+        assessment.score_breakdown
+        if isinstance(getattr(assessment, "score_breakdown", None), dict)
+        else {}
+    )
+    score_components = score_breakdown.get("score_components") if isinstance(score_breakdown, dict) else {}
+    if isinstance(score_components, dict):
+        try:
+            if score_components.get("role_fit_score") is not None:
+                return round(max(0.0, min(100.0, float(score_components.get("role_fit_score")))), 1)
+        except (TypeError, ValueError):
+            pass
+
     raw_details = (
         assessment.cv_job_match_details
         if isinstance(getattr(assessment, "cv_job_match_details", None), dict)
@@ -195,11 +240,8 @@ def _assessment_taali_score_100(assessment: Assessment | None) -> float | None:
         getattr(assessment, "cv_job_match_score", None),
         raw_details,
     )
-    if assessment_score is None:
-        return cv_fit_score
-    if cv_fit_score is None:
-        return assessment_score
-    return round((assessment_score + cv_fit_score) / 2.0, 1)
+    requirements_fit_score = _requirements_fit_score(raw_details)
+    return compute_role_fit_score(cv_fit_score, requirements_fit_score)
 
 
 def _dimension_extremes(category_scores: dict[str, Any] | None) -> tuple[str | None, str | None]:
@@ -292,6 +334,7 @@ def _score_summary_for_application(app: CandidateApplication) -> dict[str, Any]:
     app_cv_details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
     app_cv_fit = _normalize_cv_match_score_for_response(app.cv_match_score, app_cv_details)
     app_requirements_fit = _requirements_fit_score(app_cv_details)
+    app_role_fit = compute_role_fit_score(app_cv_fit, app_requirements_fit)
 
     if completed_assessment:
         assessment_details = (
@@ -304,37 +347,51 @@ def _score_summary_for_application(app: CandidateApplication) -> dict[str, Any]:
             assessment_details,
         )
         requirements_fit_score = _requirements_fit_score(assessment_details)
+        role_fit_score = _assessment_role_fit_score_100(completed_assessment)
         assessment_score = _assessment_score_100(completed_assessment)
         taali_score = _assessment_taali_score_100(completed_assessment)
-        mode = "assessment_plus_cv" if cv_fit_score is not None else "assessment_only_fallback"
+        mode = "assessment_plus_role_fit" if role_fit_score is not None else "assessment_only_fallback"
         assessment_status = _assessment_status_value(completed_assessment)
         assessment_id = completed_assessment.id
         assessment_completed_at = completed_assessment.completed_at
     else:
         cv_fit_score = app_cv_fit
         requirements_fit_score = app_requirements_fit
+        role_fit_score = app_role_fit
         assessment_score = None
-        taali_score = app_cv_fit
+        taali_score = app_role_fit
         assessment_status = _assessment_status_value(latest_assessment)
         assessment_id = latest_assessment.id if latest_assessment else None
         assessment_completed_at = None
-        mode = "cv_fit_only" if app_cv_fit is not None else "pending"
+        mode = "role_fit_only" if app_role_fit is not None else "pending"
 
     return {
         "taali_score": taali_score,
         "assessment_score": assessment_score,
+        "role_fit_score": role_fit_score,
         "cv_fit_score": cv_fit_score,
         "requirements_fit_score": requirements_fit_score,
+        "role_fit_components": {
+            "cv_fit_score": cv_fit_score,
+            "requirements_fit_score": requirements_fit_score,
+        },
+        "weights": {
+            "cv_fit_score": ROLE_FIT_WEIGHTS["cv_fit"],
+            "requirements_fit_score": ROLE_FIT_WEIGHTS["requirements_fit"],
+            "assessment_score": TAALI_WEIGHTS["assessment"],
+            "role_fit_score": TAALI_WEIGHTS["role_fit"],
+        },
         "mode": mode,
         "formula_label": (
-            "TAALI Score = 50% Assessment Score + 50% CV Fit"
-            if mode == "assessment_plus_cv"
+            "TAALI Score = 50% Assessment + 50% Role fit"
+            if mode == "assessment_plus_role_fit"
             else (
-                "TAALI Score currently reflects Assessment Score only"
+                "TAALI Score currently reflects Assessment only"
                 if mode == "assessment_only_fallback"
-                else "TAALI Score currently reflects CV Fit"
+                else "TAALI Score currently reflects Role fit until assessment signal is available"
             )
         ),
+        "score_rubric_version": TAALI_SCORING_RUBRIC_VERSION,
         "assessment_id": assessment_id,
         "assessment_status": assessment_status,
         "assessment_completed_at": assessment_completed_at,
@@ -367,6 +424,7 @@ def _assessment_preview_for_application(app: CandidateApplication) -> dict[str, 
         "task_name": completed_assessment.task.name if getattr(completed_assessment, "task", None) else None,
         "taali_score": _assessment_taali_score_100(completed_assessment),
         "assessment_score": _assessment_score_100(completed_assessment),
+        "role_fit_score": _assessment_role_fit_score_100(completed_assessment),
         "category_scores": category_scores if isinstance(category_scores, dict) else {},
         "heuristic_summary": score_breakdown.get("heuristic_summary"),
         "strongest_dimension": strongest_dimension,
@@ -394,6 +452,7 @@ def _assessment_history_for_application(app: CandidateApplication) -> list[dict[
             "status": _assessment_status_value(assessment),
             "assessment_score": _assessment_score_100(assessment),
             "taali_score": _assessment_taali_score_100(assessment),
+            "role_fit_score": _assessment_role_fit_score_100(assessment),
             "created_at": assessment.created_at,
             "completed_at": assessment.completed_at,
             "is_voided": bool(getattr(assessment, "is_voided", False)),
@@ -406,6 +465,7 @@ def _assessment_history_for_application(app: CandidateApplication) -> list[dict[
 
 
 def application_to_response(app: CandidateApplication) -> ApplicationResponse:
+    ensure_pipeline_fields(app)
     candidate = app.candidate
     raw_details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
     cv_match_score = _normalize_cv_match_score_for_response(app.cv_match_score, raw_details)
@@ -420,6 +480,17 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
         candidate_id=app.candidate_id,
         role_id=app.role_id,
         status=app.status,
+        pipeline_stage=app.pipeline_stage,
+        pipeline_stage_updated_at=app.pipeline_stage_updated_at,
+        pipeline_stage_source=app.pipeline_stage_source,
+        application_outcome=app.application_outcome,
+        application_outcome_updated_at=app.application_outcome_updated_at,
+        external_refs=(app.external_refs if isinstance(app.external_refs, dict) else None),
+        external_stage_raw=app.external_stage_raw,
+        external_stage_normalized=app.external_stage_normalized,
+        integration_sync_state=(app.integration_sync_state if isinstance(app.integration_sync_state, dict) else None),
+        pipeline_external_drift=stage_external_drift(app),
+        version=int(app.version or 1),
         notes=app.notes,
         candidate_email=(candidate.email if candidate else ""),
         candidate_name=(candidate.full_name if candidate else None),

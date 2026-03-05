@@ -64,6 +64,52 @@ def test_update_org_candidate_feedback_toggle(client):
     assert refetch.json()["candidate_feedback_enabled"] is False
 
 
+def test_update_org_recruiter_workflow_v2_toggle(client):
+    headers, _ = auth_headers(client)
+    resp = client.patch(
+        "/api/v1/organizations/me",
+        json={"recruiter_workflow_v2_enabled": True},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["recruiter_workflow_v2_enabled"] is True
+
+    refetch = client.get("/api/v1/organizations/me", headers=headers)
+    assert refetch.status_code == 200, refetch.text
+    assert refetch.json()["recruiter_workflow_v2_enabled"] is True
+
+
+def test_recruiter_workflow_v2_global_force_off_override(client, monkeypatch):
+    from app.domains.identity_access import organization_routes
+
+    headers, _ = auth_headers(client)
+    enable_resp = client.patch(
+        "/api/v1/organizations/me",
+        json={"recruiter_workflow_v2_enabled": True},
+        headers=headers,
+    )
+    assert enable_resp.status_code == 200, enable_resp.text
+    assert enable_resp.json()["recruiter_workflow_v2_enabled"] is True
+
+    monkeypatch.setattr(organization_routes.settings, "RECRUITER_WORKFLOW_V2_FORCE_OFF", True)
+    forced_resp = client.get("/api/v1/organizations/me", headers=headers)
+    assert forced_resp.status_code == 200, forced_resp.text
+    assert forced_resp.json()["recruiter_workflow_v2_enabled"] is False
+
+    forced_patch_resp = client.patch(
+        "/api/v1/organizations/me",
+        json={"recruiter_workflow_v2_enabled": True},
+        headers=headers,
+    )
+    assert forced_patch_resp.status_code == 200, forced_patch_resp.text
+    assert forced_patch_resp.json()["recruiter_workflow_v2_enabled"] is False
+
+    monkeypatch.setattr(organization_routes.settings, "RECRUITER_WORKFLOW_V2_FORCE_OFF", False)
+    unforced_resp = client.get("/api/v1/organizations/me", headers=headers)
+    assert unforced_resp.status_code == 200, unforced_resp.text
+    assert unforced_resp.json()["recruiter_workflow_v2_enabled"] is True
+
+
 def test_update_org_no_auth_401(client):
     resp = client.patch(
         "/api/v1/organizations/me",

@@ -1,7 +1,7 @@
 import api from './httpClient';
 
 export const roles = {
-  list: () => api.get('/roles'),
+  list: (params = {}) => api.get('/roles', { params }),
   get: (id) => api.get(`/roles/${id}`),
   create: (data) => api.post('/roles', data),
   update: (id, data) => api.patch(`/roles/${id}`, data),
@@ -18,9 +18,16 @@ export const roles = {
   addTask: (roleId, taskId) => api.post(`/roles/${roleId}/tasks`, { task_id: taskId }),
   removeTask: (roleId, taskId) => api.delete(`/roles/${roleId}/tasks/${taskId}`),
   listApplications: (roleId, params = {}) => api.get(`/roles/${roleId}/applications`, { params }),
+  listPipeline: (roleId, params = {}) => api.get(`/roles/${roleId}/pipeline`, { params }),
+  listApplicationsGlobal: (params = {}) => api.get('/applications', { params }),
   getApplication: (applicationId, config = {}) => api.get(`/applications/${applicationId}`, config),
+  listApplicationEvents: (applicationId, params = {}) => api.get(`/applications/${applicationId}/events`, { params }),
+  generateApplicationInterviewDebrief: (applicationId, data = {}) => api.post(`/applications/${applicationId}/interview-debrief`, data),
+  downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
   createApplication: (roleId, data) => api.post(`/roles/${roleId}/applications`, data),
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),
+  updateApplicationStage: (applicationId, data) => api.patch(`/applications/${applicationId}/stage`, data),
+  updateApplicationOutcome: (applicationId, data) => api.patch(`/applications/${applicationId}/outcome`, data),
   uploadApplicationCv: (applicationId, file) => {
     const form = new FormData();
     form.append('file', file);

@@ -16,6 +16,11 @@ from ....models.candidate_application import CandidateApplication
 from ....models.organization import Organization
 from ....models.role import Role
 from ....models.workable_sync_run import WorkableSyncRun
+from ....domains.assessments_runtime.pipeline_service import (
+    ensure_pipeline_fields,
+    map_legacy_status_to_pipeline,
+    normalize_pipeline_key,
+)
 from ....services.document_service import (
     sanitize_json_for_storage,
     sanitize_text_for_storage,
@@ -1001,20 +1006,49 @@ class WorkableSyncService:
             )
             .first()
         )
+        created_application = False
         if not app:
+            mapped_stage, mapped_outcome = map_legacy_status_to_pipeline(str(stage or "applied"))
             app = CandidateApplication(
                 organization_id=org.id,
                 candidate_id=candidate.id,
                 role_id=role.id,
-                status="applied",
+                status=str(stage or "applied"),
+                pipeline_stage=mapped_stage,
+                pipeline_stage_source="sync",
+                pipeline_stage_updated_at=now,
+                application_outcome=mapped_outcome,
+                application_outcome_updated_at=now,
+                version=1,
             )
             db.add(app)
+            created_application = True
 
         app.deleted_at = None  # restore if was soft-deleted
         app.source = "workable"
-        app.status = sanitize_text_for_storage(str(stage or app.status or "applied"))
+        if created_application:
+            app.status = sanitize_text_for_storage(str(stage or app.status or "applied"))
+        ensure_pipeline_fields(app, source="sync" if created_application else "system")
         app.workable_candidate_id = sanitize_text_for_storage(candidate_id)
         app.workable_stage = sanitize_text_for_storage(str(stage or ""))
+        app.external_stage_raw = sanitize_text_for_storage(str(stage or ""))
+        app.external_stage_normalized = normalize_pipeline_key(str(stage or ""))
+        app.external_refs = sanitize_json_for_storage(
+            {
+                "workable_candidate_id": candidate_id,
+                "workable_job_id": role.workable_job_id,
+                "workable_role_shortcode": job.get("shortcode"),
+                "workable_role_id": job.get("id"),
+            }
+        )
+        app.integration_sync_state = sanitize_json_for_storage(
+            {
+                "last_sync_at": now.isoformat(),
+                "sync_status": "success",
+                "run_id": run.id if run else None,
+                "source": "workable",
+            }
+        )
         app.last_synced_at = now
 
         # Extract application-level Workable fields
@@ -1039,6 +1073,9 @@ class WorkableSyncService:
             raise WorkableSyncCancelled()
 
         app.rank_score = _rank_score_for_application(app)
+        if not created_application:
+            # Preserve local source-of-truth stage for existing applications.
+            app.status = sanitize_text_for_storage(app.status)
         db.flush()
         counters["application_upserted"] += 1
         return counters

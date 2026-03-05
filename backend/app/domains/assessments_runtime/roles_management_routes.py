@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
@@ -19,6 +19,7 @@ from ...schemas.role import RoleCreate, RoleResponse, RoleTaskLinkRequest, RoleU
 from ...services.document_service import process_document_upload
 from ...services.interview_focus_service import generate_interview_focus_sync
 from .role_support import get_role, role_to_response
+from .pipeline_service import role_pipeline_counts
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.roles")
@@ -65,6 +66,7 @@ def create_role(
 
 @router.get("/roles")
 def list_roles(
+    include_pipeline_stats: bool = Query(default=False),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -93,12 +95,59 @@ def list_roles(
         .all()
     )
     app_counts = {int(role_id): int(total) for role_id, total in app_counts_rows}
+    active_counts: dict[int, int] = {}
+    last_activity_by_role: dict[int, datetime | None] = {}
+    stage_counts_by_role: dict[int, dict[str, int]] = {}
+
+    if include_pipeline_stats:
+        active_rows = (
+            db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
+            .filter(
+                CandidateApplication.organization_id == current_user.organization_id,
+                CandidateApplication.deleted_at.is_(None),
+                CandidateApplication.application_outcome == "open",
+                CandidateApplication.role_id.in_(role_ids),
+            )
+            .group_by(CandidateApplication.role_id)
+            .all()
+        )
+        active_counts = {int(role_id): int(total) for role_id, total in active_rows}
+
+        last_activity_rows = (
+            db.query(
+                CandidateApplication.role_id,
+                func.max(
+                    func.coalesce(
+                        CandidateApplication.pipeline_stage_updated_at,
+                        CandidateApplication.updated_at,
+                        CandidateApplication.created_at,
+                    )
+                ),
+            )
+            .filter(
+                CandidateApplication.organization_id == current_user.organization_id,
+                CandidateApplication.deleted_at.is_(None),
+                CandidateApplication.role_id.in_(role_ids),
+            )
+            .group_by(CandidateApplication.role_id)
+            .all()
+        )
+        last_activity_by_role = {int(role_id): ts for role_id, ts in last_activity_rows}
+        for role in roles:
+            stage_counts_by_role[role.id] = role_pipeline_counts(
+                db,
+                organization_id=current_user.organization_id,
+                role_id=role.id,
+            )
 
     return [
         role_to_response(
             role,
             tasks_count=len(role.tasks or []),
             applications_count=app_counts.get(role.id, 0),
+            stage_counts=stage_counts_by_role.get(role.id, {}),
+            active_candidates_count=active_counts.get(role.id, 0),
+            last_candidate_activity_at=last_activity_by_role.get(role.id),
         )
         for role in roles
     ]

@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { AlertCircle, Plus, UserPlus } from 'lucide-react';
 import * as apiClient from '../../shared/api';
-import { Button, Input, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
+import { Button, Card, Input, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
 
 import { useToast } from '../../context/ToastContext';
 import {
@@ -17,6 +17,7 @@ import {
   trimOrUndefined,
 } from './CandidatesUI';
 import { AssessmentInviteSheet } from './AssessmentInviteSheet';
+import { COMPLETED_ASSESSMENT_STATUSES } from './assessmentViewModels';
 import { CandidateScoreSummarySheet } from './CandidateScoreSummarySheet';
 import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
 
@@ -42,7 +43,27 @@ const applyInviteTemplate = (template, vars) => {
   });
 };
 
-export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) => {
+const resolveAssessmentId = (application) => (
+  application?.score_summary?.assessment_id
+  || application?.valid_assessment_id
+  || null
+);
+
+const resolveAssessmentStatus = (application) => (
+  String(application?.score_summary?.assessment_status || application?.valid_assessment_status || '').toLowerCase()
+);
+
+const hasCompletedAssessment = (application) => (
+  Boolean(resolveAssessmentId(application))
+  && COMPLETED_ASSESSMENT_STATUSES.has(resolveAssessmentStatus(application))
+);
+
+export const CandidatesPage = ({
+  onNavigate,
+  onViewCandidate,
+  NavComponent,
+  initialRoleId = null,
+}) => {
   const { showToast } = useToast();
   const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
   const tasksApi = apiClient.tasks;
@@ -208,9 +229,9 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   }, [tasksApi]);
 
   useEffect(() => {
-    loadRoles();
+    loadRoles(initialRoleId);
     loadTasks();
-  }, [loadRoles, loadTasks]);
+  }, [initialRoleId, loadRoles, loadTasks]);
 
   useEffect(() => {
     let cancelled = false;
@@ -505,9 +526,9 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
   }, [assessmentsApi, onViewCandidate, showToast]);
 
   const handleViewFromApplication = async (application) => {
-    const status = String(application?.valid_assessment_status || '').toLowerCase();
-    if (application?.valid_assessment_id && ['completed', 'completed_due_to_timeout'].includes(status)) {
-      await openAssessmentResults(application.valid_assessment_id, application);
+    const resolvedAssessmentId = resolveAssessmentId(application);
+    if (resolvedAssessmentId && hasCompletedAssessment(application)) {
+      await openAssessmentResults(resolvedAssessmentId, application);
       return;
     }
     setScoreSheetApplicationId(application.id);
@@ -518,12 +539,23 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
     if (!application?.id) return;
     setScoreSheetApplicationId(application.id);
     const detail = await loadApplicationDetail(application.id);
-    const resolvedAssessmentId = detail?.score_summary?.assessment_id || application?.valid_assessment_id || null;
-    const resolvedStatus = String(detail?.score_summary?.assessment_status || application?.valid_assessment_status || '').toLowerCase();
-    if (resolvedAssessmentId && ['completed', 'completed_due_to_timeout'].includes(resolvedStatus)) {
+    const resolvedApplication = detail || application;
+    const resolvedAssessmentId = resolveAssessmentId(resolvedApplication);
+    if (resolvedAssessmentId && hasCompletedAssessment(resolvedApplication)) {
       await loadAssessmentDetail(resolvedAssessmentId);
     }
   }, [loadApplicationDetail, loadAssessmentDetail]);
+
+  const handleOpenFullCandidatePage = useCallback(async (application, assessmentId = null) => {
+    if (!application?.id) return;
+    if (assessmentId && hasCompletedAssessment(application)) {
+      await openAssessmentResults(assessmentId, application);
+      return;
+    }
+
+    await loadApplicationDetail(application.id);
+    onNavigate('candidate-report', { candidateApplicationId: application.id });
+  }, [loadApplicationDetail, onNavigate, openAssessmentResults]);
 
   const handleOpenCvSidebar = useCallback(async (application) => {
     if (!application?.id) return;
@@ -611,9 +643,6 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         inviteSentAt: created.invite_sent_at || null,
       });
       setInviteSheetOpen(true);
-      if (scoreSheetApplicationId === application.id) {
-        setScoreSheetApplicationId(null);
-      }
       return true;
     } catch (err) {
       if (!retake && err?.response?.status === 409 && err?.response?.data?.detail?.code === 'retake_required' && rolesApi?.retakeAssessment) {
@@ -840,8 +869,9 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
       ? { ...(selectedScoreBaseApplication || {}), ...(selectedScoreDetail || {}) }
       : null
   );
-  const selectedScoreAssessment = selectedScoreApplication?.score_summary?.assessment_id != null
-    ? (assessmentDetailsById[String(selectedScoreApplication.score_summary.assessment_id)] ?? null)
+  const selectedScoreAssessmentId = resolveAssessmentId(selectedScoreApplication);
+  const selectedScoreAssessment = selectedScoreAssessmentId != null
+    ? (assessmentDetailsById[String(selectedScoreAssessmentId)] ?? null)
     : null;
 
   const selectedCvBaseApplication = roleApplications.find((app) => Number(app.id) === Number(cvSidebarApplicationId)) ?? null;
@@ -922,7 +952,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
               />
             </label>
           </div>
-          <div className="mt-3 border border-[var(--taali-border-muted)] bg-[var(--taali-surface)] p-3">
+          <div
+            className="mt-3 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] p-3.5 shadow-[var(--taali-shadow-soft)]"
+            style={{ background: 'var(--taali-card-bg)' }}
+          >
             <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
                 Sorting and filters
@@ -1043,10 +1076,10 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
                   </Panel>
                 ) : null}
                 {roleContextError ? (
-                  <div className="inline-flex items-center gap-2 border-2 border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  <Card className="inline-flex items-center gap-2 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] px-3 py-2 text-sm text-[var(--taali-danger)]">
                     <AlertCircle size={15} />
                     {roleContextError}
-                  </div>
+                  </Card>
                 ) : null}
                 <CandidatesTable
                   applications={roleApplications}
@@ -1113,14 +1146,15 @@ export const CandidatesPage = ({ onNavigate, onViewCandidate, NavComponent }) =>
         loading={scoreSheetApplicationId != null && loadingApplicationDetailId === scoreSheetApplicationId}
         application={selectedScoreApplication}
         completedAssessment={selectedScoreAssessment}
-        completedAssessmentLoading={selectedScoreApplication?.score_summary?.assessment_id != null
-          && Number(loadingAssessmentDetailId) === Number(selectedScoreApplication.score_summary.assessment_id)}
+        completedAssessmentLoading={selectedScoreAssessmentId != null
+          && Number(loadingAssessmentDetailId) === Number(selectedScoreAssessmentId)}
         roleTasks={roleTasks}
         creatingAssessmentId={creatingAssessmentId}
         onClose={() => setScoreSheetApplicationId(null)}
         onLaunchAssessment={handleLaunchAssessment}
         onOpenRetakeDialog={handleOpenRetakeDialog}
         onOpenCvSidebar={handleOpenCvSidebar}
+        onViewFullPage={handleOpenFullCandidatePage}
         onViewResults={openAssessmentResults}
       />
 

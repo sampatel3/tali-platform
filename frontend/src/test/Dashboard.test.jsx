@@ -46,6 +46,23 @@ vi.mock('../shared/api', () => ({
   },
   roles: {
     list: vi.fn().mockResolvedValue({ data: [] }),
+    listApplicationsGlobal: vi.fn().mockResolvedValue({ data: { items: [], total: 0, limit: 50, offset: 0 } }),
+    listPipeline: vi.fn().mockResolvedValue({
+      data: {
+        role_id: 0,
+        role_name: '',
+        stage: 'all',
+        stage_counts: { applied: 0, invited: 0, in_assessment: 0, review: 0 },
+        active_candidates_count: 0,
+        items: [],
+        total: 0,
+        limit: 50,
+        offset: 0,
+      },
+    }),
+    getApplication: vi.fn(),
+    listApplicationEvents: vi.fn().mockResolvedValue({ data: [] }),
+    listTasks: vi.fn().mockResolvedValue({ data: [] }),
   },
   team: { list: vi.fn(), invite: vi.fn() },
   default: {
@@ -212,6 +229,162 @@ describe('AssessmentsPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Assessment Inbox')).toBeInTheDocument();
+    });
+  });
+
+  it('routes authenticated users to jobs hub when workflow v2 is enabled', async () => {
+    organizationsApi.get.mockResolvedValue({
+      data: { id: 1, name: 'Acme Labs', recruiter_workflow_v2_enabled: true },
+    });
+    rolesApi.list.mockResolvedValue({
+      data: [
+        {
+          id: 101,
+          name: 'Backend Engineer',
+          stage_counts: { applied: 2, invited: 1, in_assessment: 0, review: 0 },
+          active_candidates_count: 3,
+        },
+      ],
+    });
+    renderApp();
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Jobs' })).toBeInTheDocument();
+    });
+    expect(screen.queryByRole('heading', { name: 'Assessments' })).not.toBeInTheDocument();
+  });
+
+  it('opens the global candidates directory under workflow v2', async () => {
+    organizationsApi.get.mockResolvedValue({
+      data: { id: 1, name: 'Acme Labs', recruiter_workflow_v2_enabled: true },
+    });
+    rolesApi.list.mockResolvedValue({
+      data: [{ id: 101, name: 'Backend Engineer' }],
+    });
+    rolesApi.listApplicationsGlobal.mockResolvedValue({
+      data: {
+        role_id: 101,
+        role_name: 'Backend Engineer',
+        stage: 'all',
+        stage_counts: { applied: 0, invited: 1, in_assessment: 0, review: 0 },
+        active_candidates_count: 1,
+        items: [
+          {
+            id: 501,
+            role_id: 101,
+            role_name: 'Backend Engineer',
+            candidate_name: 'Alice Johnson',
+            candidate_email: 'alice@example.com',
+            pipeline_stage: 'applied',
+            application_outcome: 'open',
+            taali_score: 84.5,
+            version: 1,
+            created_at: '2026-01-15T10:00:00Z',
+            pipeline_stage_updated_at: '2026-01-15T10:00:00Z',
+          },
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      },
+    });
+    rolesApi.getApplication.mockResolvedValue({
+      data: {
+        id: 501,
+        role_id: 101,
+        role_name: 'Backend Engineer',
+        candidate_name: 'Alice Johnson',
+        candidate_email: 'alice@example.com',
+        pipeline_stage: 'applied',
+        application_outcome: 'open',
+        taali_score: 84.5,
+        version: 1,
+        created_at: '2026-01-15T10:00:00Z',
+        pipeline_stage_updated_at: '2026-01-15T10:00:00Z',
+      },
+    });
+
+    renderApp();
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Jobs' })).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /^Candidates$/ }));
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Candidates' })).toBeInTheDocument();
+      expect(screen.getByText('Global candidate directory across all roles and stages.')).toBeInTheDocument();
+    });
+    await waitFor(() => {
+      expect(rolesApi.listApplicationsGlobal).toHaveBeenCalledWith(
+        expect.objectContaining({ application_outcome: 'open' })
+      );
+    });
+  });
+
+  it('opens role-scoped pipeline view for /jobs/:roleId under workflow v2', async () => {
+    window.history.pushState({}, '', '/jobs/101');
+    organizationsApi.get.mockResolvedValue({
+      data: { id: 1, name: 'Acme Labs', recruiter_workflow_v2_enabled: true },
+    });
+    rolesApi.list.mockResolvedValue({
+      data: [{ id: 101, name: 'Backend Engineer' }],
+    });
+    rolesApi.listPipeline.mockResolvedValue({
+      data: {
+        role_id: 101,
+        role_name: 'Backend Engineer',
+        stage: 'all',
+        stage_counts: { applied: 0, invited: 1, in_assessment: 0, review: 0 },
+        active_candidates_count: 1,
+        items: [
+          {
+            id: 501,
+            role_id: 101,
+            role_name: 'Backend Engineer',
+            candidate_name: 'Alice Johnson',
+            candidate_email: 'alice@example.com',
+            pipeline_stage: 'invited',
+            application_outcome: 'open',
+            taali_score: 84.5,
+            version: 2,
+            created_at: '2026-01-15T10:00:00Z',
+            pipeline_stage_updated_at: '2026-01-15T10:00:00Z',
+          },
+        ],
+        total: 1,
+        limit: 50,
+        offset: 0,
+      },
+    });
+    rolesApi.getApplication.mockResolvedValue({
+      data: {
+        id: 501,
+        role_id: 101,
+        role_name: 'Backend Engineer',
+        candidate_name: 'Alice Johnson',
+        candidate_email: 'alice@example.com',
+        pipeline_stage: 'invited',
+        application_outcome: 'open',
+        taali_score: 84.5,
+        version: 2,
+        created_at: '2026-01-15T10:00:00Z',
+        pipeline_stage_updated_at: '2026-01-15T10:00:00Z',
+      },
+    });
+
+    renderApp();
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Backend Engineer pipeline' })).toBeInTheDocument();
+    });
+    expect(screen.getByDisplayValue('Backend Engineer')).toBeDisabled();
+    await waitFor(() => {
+      const hasRoleScopedCall = rolesApi.listPipeline.mock.calls.some(
+        ([roleId]) => Number(roleId) === 101
+      );
+      expect(hasRoleScopedCall).toBe(true);
     });
   });
 
