@@ -3,10 +3,15 @@
 import io
 from datetime import datetime, timezone
 
+from PyPDF2 import PdfReader
+
 from app.domains.assessments_runtime import applications_routes
 from app.domains.assessments_runtime import roles_management_routes
 from app.models.assessment import Assessment, AssessmentStatus
 from app.models.candidate_application import CandidateApplication
+from app.models.organization import Organization
+from app.models.role import Role
+from app.models.user import User
 from tests.conftest import auth_headers, create_task_via_api
 
 
@@ -191,6 +196,39 @@ def test_allow_assessment_creation_without_application_cv(client):
     assert body["task_id"] == task["id"]
 
 
+def test_reject_role_assessment_creation_without_available_credits(client, db, monkeypatch):
+    headers, email = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Credit gate task").json()
+    role = client.post("/api/v1/roles", json={"name": "Credit gate role"}, headers=headers).json()
+    job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Credit gate requirements"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "credit-gate@example.com"},
+        headers=headers,
+    ).json()
+
+    user = db.query(User).filter(User.email == email).first()
+    assert user is not None
+    org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+    assert org is not None
+    org.credits_balance = 0
+    db.commit()
+
+    import app.components.assessments.service as assessments_svc
+
+    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+
+    resp = client.post(
+        f"/api/v1/applications/{app['id']}/assessments",
+        json={"task_id": task["id"]},
+        headers=headers,
+    )
+    assert resp.status_code == 402
+    assert "purchase credits" in resp.json()["detail"].lower()
+
+
 def test_duplicate_role_assessment_requires_retake(client):
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers, name="Retake guard task").json()
@@ -275,7 +313,46 @@ def test_role_assessment_retake_voids_previous_attempt(client, db):
     assert old_row.id in history_ids
 
 
-def test_role_application_summary_uses_cv_fit_before_completion_and_blended_score_after_completion(client, db):
+def test_role_assessment_retake_reuses_pending_credit_reservation(client, db, monkeypatch):
+    headers, email = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Retake reserved credit task").json()
+    role = client.post("/api/v1/roles", json={"name": "Retake reserved credit role"}, headers=headers).json()
+    spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Retake reserved credit requirements"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers).status_code == 200
+    assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "retake-reserved@example.com"},
+        headers=headers,
+    ).json()
+
+    user = db.query(User).filter(User.email == email).first()
+    assert user is not None
+    org = db.query(Organization).filter(Organization.id == user.organization_id).first()
+    assert org is not None
+    org.credits_balance = 1
+    db.commit()
+
+    import app.components.assessments.service as assessments_svc
+
+    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+
+    first = client.post(
+        f"/api/v1/applications/{app['id']}/assessments",
+        json={"task_id": task["id"], "duration_minutes": 45},
+        headers=headers,
+    )
+    assert first.status_code == 201, first.text
+
+    retake = client.post(
+        f"/api/v1/applications/{app['id']}/assessments/retake",
+        json={"task_id": task["id"], "duration_minutes": 30, "void_reason": "Reset attempt"},
+        headers=headers,
+    )
+    assert retake.status_code == 201, retake.text
+
+
+def test_role_application_summary_uses_role_fit_before_completion_and_hierarchical_taali_after_completion(client, db):
     headers, _ = auth_headers(client)
     task = create_task_via_api(client, headers, name="Score summary task").json()
     role = client.post("/api/v1/roles", json={"name": "Score summary role"}, headers=headers).json()
@@ -299,10 +376,13 @@ def test_role_application_summary_uses_cv_fit_before_completion_and_blended_scor
     pre = client.get(f"/api/v1/roles/{role['id']}/applications?sort_by=taali_score", headers=headers)
     assert pre.status_code == 200, pre.text
     pre_item = pre.json()[0]
-    assert pre_item["taali_score"] == 82.0
-    assert pre_item["score_mode"] == "cv_fit_only"
+    assert pre_item["taali_score"] == 78.0
+    assert pre_item["score_mode"] == "role_fit_only"
     assert pre_item["score_summary"]["assessment_score"] is None
+    assert pre_item["score_summary"]["role_fit_score"] == 78.0
     assert pre_item["score_summary"]["requirements_fit_score"] == 74.0
+    assert pre_item["score_summary"]["weights"]["assessment_score"] == 0.5
+    assert pre_item["score_summary"]["weights"]["role_fit_score"] == 0.5
 
     created = client.post(
         f"/api/v1/applications/{app['id']}/assessments",
@@ -316,7 +396,7 @@ def test_role_application_summary_uses_cv_fit_before_completion_and_blended_scor
     assessment_row.status = AssessmentStatus.COMPLETED
     assessment_row.completed_at = datetime.now(timezone.utc)
     assessment_row.assessment_score = 70.0
-    assessment_row.taali_score = 76.0
+    assessment_row.taali_score = 74.0
     assessment_row.final_score = 70.0
     assessment_row.cv_job_match_score = 82.0
     assessment_row.cv_job_match_details = {
@@ -328,13 +408,105 @@ def test_role_application_summary_uses_cv_fit_before_completion_and_blended_scor
     post = client.get(f"/api/v1/roles/{role['id']}/applications?sort_by=taali_score", headers=headers)
     assert post.status_code == 200, post.text
     post_item = post.json()[0]
-    assert post_item["taali_score"] == 76.0
-    assert post_item["score_mode"] == "assessment_plus_cv"
+    assert post_item["taali_score"] == 74.0
+    assert post_item["score_mode"] == "assessment_plus_role_fit"
     assert post_item["valid_assessment_id"] == assessment_id
     assert post_item["valid_assessment_status"] == AssessmentStatus.COMPLETED.value
     assert post_item["score_summary"]["assessment_score"] == 70.0
     assert post_item["score_summary"]["cv_fit_score"] == 82.0
-    assert post_item["score_summary"]["taali_score"] == 76.0
+    assert post_item["score_summary"]["role_fit_score"] == 78.0
+    assert post_item["score_summary"]["taali_score"] == 74.0
+
+
+def test_application_interview_debrief_and_client_report_work_before_completion(client, db):
+    headers, _ = auth_headers(client)
+    role = client.post("/api/v1/roles", json={"name": "Platform Engineer"}, headers=headers).json()
+    job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Platform engineering role requirements"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "pre-assessment@example.com", "candidate_name": "Pre Assessment"},
+        headers=headers,
+    ).json()
+
+    role_row = db.query(Role).filter(Role.id == role["id"]).first()
+    app_row = db.query(CandidateApplication).filter(CandidateApplication.id == app["id"]).first()
+    assert role_row is not None
+    assert app_row is not None
+    role_row.interview_focus = {
+        "role_summary": "Validate systems design depth and operational judgment.",
+        "questions": [
+            {
+                "question": "Walk me through a recent incident you owned end to end.",
+                "what_to_listen_for": ["Specific tradeoffs", "Root cause analysis", "Measurable outcomes"],
+                "concerning_signals": ["Vague ownership"],
+            },
+        ],
+    }
+    app_row.cv_match_score = 88.0
+    app_row.cv_match_details = {
+        "score_scale": "0-100",
+        "summary": "Strong CV evidence for platform and backend delivery, with one infrastructure gap to validate.",
+        "requirements_match_score_100": 82.0,
+        "requirements_coverage": {
+            "total": 3,
+            "met": 2,
+            "partially_met": 1,
+            "missing": 0,
+        },
+        "matching_skills": ["Python", "FastAPI", "Distributed systems"],
+        "missing_skills": ["Kubernetes"],
+        "experience_highlights": ["Led backend platform delivery for production systems."],
+        "concerns": ["Infrastructure automation depth needs validation."],
+        "requirements_assessment": [
+            {
+                "requirement": "Production platform ownership",
+                "status": "met",
+                "evidence": "Relevant production platform history is present in the CV.",
+            },
+            {
+                "requirement": "Kubernetes operations",
+                "status": "partially_met",
+                "evidence": "Adjacent infrastructure work is clear, but Kubernetes examples are thin.",
+            },
+        ],
+    }
+    app_row.cv_filename = "pre-assessment.txt"
+    app_row.cv_text = (
+        "Pre Assessment\n"
+        "Senior platform engineer with Python, FastAPI, and distributed systems delivery.\n\n"
+        "Experience\n"
+        "- Led backend platform delivery for production systems.\n"
+        "- Built operational tooling for engineering teams.\n"
+    )
+    db.commit()
+
+    debrief_resp = client.post(
+        f"/api/v1/applications/{app['id']}/interview-debrief",
+        json={},
+        headers=headers,
+    )
+    assert debrief_resp.status_code == 200, debrief_resp.text
+    debrief_payload = debrief_resp.json()
+    assert debrief_payload["cached"] is False
+    assert "No completed assessment exists yet" in debrief_payload["interview_debrief"]["summary"]
+    assert len(debrief_payload["interview_debrief"]["probing_questions"]) >= 1
+
+    report_resp = client.get(f"/api/v1/applications/{app['id']}/report.pdf", headers=headers)
+    assert report_resp.status_code == 200, report_resp.text
+    assert report_resp.headers["content-type"].startswith("application/pdf")
+    assert 'filename="Platform Engineer-Pre Assessment.pdf"' in report_resp.headers["content-disposition"]
+
+    reader = PdfReader(io.BytesIO(report_resp.content))
+    assert len(reader.pages) == 2
+    first_page_text = reader.pages[0].extract_text() or ""
+    second_page_text = reader.pages[1].extract_text() or ""
+    assert "Client Assessment Summary" in first_page_text
+    assert "Candidate summary" in first_page_text
+    assert "Review key points" in first_page_text
+    assert "No completed assessment exists yet" in first_page_text
+    assert "Pre Assessment" in second_page_text
+    assert "Senior platform engineer with Python" in second_page_text
 
 
 def test_reject_delete_role_with_existing_application(client):
