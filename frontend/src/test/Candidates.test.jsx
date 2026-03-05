@@ -1,5 +1,5 @@
-import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../shared/api', () => ({
   auth: {
@@ -10,6 +10,7 @@ vi.mock('../shared/api', () => ({
     resendVerification: vi.fn(),
     forgotPassword: vi.fn(),
     resetPassword: vi.fn(),
+    ssoCheck: vi.fn(),
   },
   assessments: {
     list: vi.fn().mockResolvedValue({ data: { items: [], total: 0 } }),
@@ -68,11 +69,13 @@ vi.mock('../shared/api', () => ({
         offset: 0,
       },
     }),
+    listApplicationsGlobal: vi.fn(),
     createApplication: vi.fn(),
     updateApplication: vi.fn(),
     uploadApplicationCv: vi.fn(),
     createAssessment: vi.fn(),
     retakeAssessment: vi.fn(),
+    listApplicationEvents: vi.fn().mockResolvedValue({ data: [] }),
   },
   team: { list: vi.fn(), invite: vi.fn() },
   default: {
@@ -107,12 +110,7 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import {
-  auth,
-  assessments as assessmentsApi,
-  roles as rolesApi,
-  tasks as tasksApi,
-} from '../shared/api';
+import { auth, roles as rolesApi } from '../shared/api';
 import App from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -124,14 +122,40 @@ const mockUser = {
   role: 'admin',
 };
 
-const baseRoles = [
+const applicationItems = [
   {
-    id: 9,
-    name: 'ML Engineer',
-    description: 'Own model serving reliability.',
-    job_spec_filename: 'ml-role-spec.pdf',
-    tasks_count: 1,
-    applications_count: 1,
+    id: 101,
+    role_id: 1,
+    role_name: 'Backend Engineer',
+    candidate_id: 500,
+    candidate_name: 'Taylor Lane',
+    candidate_email: 'taylor@example.com',
+    candidate_position: 'Senior Engineer',
+    status: 'applied',
+    pipeline_stage: 'applied',
+    application_outcome: 'open',
+    taali_score: 90,
+    version: 2,
+    pipeline_stage_updated_at: '2026-03-05T10:00:00Z',
+    updated_at: '2026-03-05T10:00:00Z',
+    created_at: '2026-03-05T09:00:00Z',
+  },
+  {
+    id: 102,
+    role_id: 2,
+    role_name: 'Data Engineer',
+    candidate_id: 500,
+    candidate_name: 'Taylor Lane',
+    candidate_email: 'taylor@example.com',
+    candidate_position: 'Senior Engineer',
+    status: 'review',
+    pipeline_stage: 'review',
+    application_outcome: 'open',
+    taali_score: 88,
+    version: 1,
+    pipeline_stage_updated_at: '2026-03-04T10:00:00Z',
+    updated_at: '2026-03-04T10:00:00Z',
+    created_at: '2026-03-04T09:00:00Z',
   },
 ];
 
@@ -141,677 +165,92 @@ const setupAuthenticatedUser = () => {
   auth.me.mockResolvedValue({ data: mockUser });
 };
 
-const renderAppOnCandidatesPage = async () => {
-  const result = render(
+const renderOnCandidatesPage = () => {
+  window.history.pushState({}, '', '/candidates');
+  return render(
     <AuthProvider>
       <App />
     </AuthProvider>
   );
-
-  await waitFor(() => {
-    expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
-  }, { timeout: 5000 });
-
-  const candidatesNav = screen.getByRole('button', { name: /^Candidates$/ });
-  await act(async () => {
-    fireEvent.click(candidatesNav);
-  });
-
-  // Wait for Candidates page to load (lazy + API)
-  await waitFor(() => {
-    expect(screen.getByText('Candidates', { selector: 'h1' })).toBeInTheDocument();
-  }, { timeout: 5000 });
-
-  return result;
 };
 
-describe('CandidatesPage', () => {
+describe('Candidates Directory V2', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    window.location.hash = '';
     setupAuthenticatedUser();
 
-    rolesApi.list.mockResolvedValue({ data: baseRoles });
-    rolesApi.listTasks.mockResolvedValue({ data: [{ id: 700, name: 'Async Debugging Challenge' }] });
-    rolesApi.listApplications.mockResolvedValue({
+    rolesApi.list.mockResolvedValue({
       data: [
-        {
-          id: 501,
-          candidate_id: 42,
-          candidate_email: 'apply@example.com',
-          candidate_name: 'Apply Person',
-          candidate_position: 'ML Engineer',
-          status: 'applied',
-          cv_filename: 'apply.pdf',
-          created_at: '2026-01-10T10:00:00Z',
-          updated_at: '2026-01-10T10:00:00Z',
-        },
+        { id: 1, name: 'Backend Engineer' },
+        { id: 2, name: 'Data Engineer' },
       ],
     });
-    tasksApi.list.mockResolvedValue({ data: [{ id: 700, name: 'Async Debugging Challenge' }] });
+
+    rolesApi.listApplicationsGlobal.mockImplementation(async (params = {}) => {
+      const limit = Number(params.limit || 50);
+      const offset = Number(params.offset || 0);
+      return {
+        data: {
+          items: applicationItems.slice(offset, offset + limit),
+          total: applicationItems.length,
+          limit,
+          offset,
+        },
+      };
+    });
   });
 
   afterEach(() => {
-    window.location.hash = '';
     localStorage.clear();
+    window.history.pushState({}, '', '/');
   });
 
-  it('renders candidates header controls', async () => {
-    await renderAppOnCandidatesPage();
-
-    expect(screen.getByRole('button', { name: 'New role' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Add candidate' })).toBeInTheDocument();
-    expect(screen.getByPlaceholderText('Search by name, email, position, or status')).toBeInTheDocument();
-  });
-
-  it('renders the global theme switch inside the candidates top nav', async () => {
-    await renderAppOnCandidatesPage();
-
-    expect(within(screen.getByRole('navigation')).getAllByRole('group', { name: /theme toggle/i }).length).toBeGreaterThan(0);
-  });
-
-  it('shows role list and role summary context', async () => {
-    await renderAppOnCandidatesPage();
+  it('loads V2 candidates directory with direct global applications API', async () => {
+    renderOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'ML Engineer', level: 2 })).toBeInTheDocument();
-      expect(screen.getByText('Job spec:')).toBeInTheDocument();
-      expect(screen.getByText('Tasks (1):')).toBeInTheDocument();
-    });
-  });
-
-  it('shows interview focus guidance when available', async () => {
-    rolesApi.list.mockResolvedValue({
-      data: [
-        {
-          ...baseRoles[0],
-          interview_focus_generated_at: '2026-01-12T10:00:00Z',
-          interview_focus: {
-            role_summary: 'Prioritize validation of API ownership and on-call incident depth.',
-            manual_screening_triggers: ['Ownership depth', 'Incident response'],
-            questions: [
-              {
-                question: 'Tell me about a production incident you directly owned.',
-                what_to_listen_for: ['Clear root cause and mitigation details'],
-                concerning_signals: ['Cannot explain personal decisions'],
-              },
-              {
-                question: 'How did you design a backend API for reliability?',
-                what_to_listen_for: ['Tradeoffs and failure-mode handling'],
-                concerning_signals: ['Only high-level abstractions'],
-              },
-              {
-                question: 'How do you verify compensation aligns with role scope?',
-                what_to_listen_for: ['Evidence-based impact and ownership'],
-                concerning_signals: ['Title-only justification'],
-              },
-            ],
-          },
-        },
-      ],
+      expect(screen.getByRole('heading', { name: 'Candidates' })).toBeInTheDocument();
+      expect(rolesApi.listApplicationsGlobal).toHaveBeenCalled();
     });
 
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Interview focus')).toBeInTheDocument();
-      expect(screen.getByText(/Q1\./)).toBeInTheDocument();
-      expect(screen.getAllByText(/Look for:/).length).toBeGreaterThan(0);
-      expect(screen.getAllByText(/Watch out for:/).length).toBeGreaterThan(0);
-    });
-  });
-
-  it('hides additional requirements when job spec details are collapsed', async () => {
-    rolesApi.list.mockResolvedValue({
-      data: [
-        {
-          ...baseRoles[0],
-          additional_requirements: 'Production experience with global enterprise teams.',
-        },
-      ],
-    });
-
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Additional requirements')).toBeInTheDocument();
-      expect(screen.getByText('Production experience with global enterprise teams.')).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /Hide details/i }));
-
-    await waitFor(() => {
-      expect(screen.queryByText('Additional requirements')).not.toBeInTheDocument();
-      expect(screen.queryByText('Production experience with global enterprise teams.')).not.toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /Show details/i }));
-
-    await waitFor(() => {
-      expect(screen.getByText('Additional requirements')).toBeInTheDocument();
-      expect(screen.getByText('Production experience with global enterprise teams.')).toBeInTheDocument();
-    });
-  });
-
-  it('allows collapsing and expanding interview focus guidance', async () => {
-    rolesApi.list.mockResolvedValue({
-      data: [
-        {
-          ...baseRoles[0],
-          interview_focus_generated_at: '2026-01-12T10:00:00Z',
-          interview_focus: {
-            role_summary: 'Focus on practical ownership and tradeoffs.',
-            manual_screening_triggers: ['Ownership depth'],
-            questions: [
-              {
-                question: 'Describe an incident you owned end to end.',
-                what_to_listen_for: ['Root cause and mitigation clarity'],
-                concerning_signals: ['Vague contribution details'],
-              },
-            ],
-          },
-        },
-      ],
-    });
-
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText(/Q1\./)).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /Interview focus/i }));
-
-    await waitFor(() => {
-      expect(screen.queryByText(/Q1\./)).not.toBeInTheDocument();
-      expect(screen.getByRole('button', { name: /Interview focus/i })).toBeInTheDocument();
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /Interview focus/i }));
-
-    await waitFor(() => {
-      expect(screen.getByText(/Q1\./)).toBeInTheDocument();
-    });
-  });
-
-  it('shows empty role state and disables Add candidate when there are no roles', async () => {
-    rolesApi.list.mockResolvedValue({ data: [] });
-    rolesApi.listApplications.mockResolvedValue({ data: [] });
-    rolesApi.listTasks.mockResolvedValue({ data: [] });
-
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('No roles yet')).toBeInTheDocument();
-    });
-
-    expect(screen.getByRole('button', { name: 'Add candidate' })).toBeDisabled();
-    expect(screen.getAllByRole('button', { name: 'Create your first role' }).length).toBeGreaterThan(0);
-  });
-
-  it('filters role candidates table by search text', async () => {
-    rolesApi.listApplications.mockResolvedValue({
-      data: [
-        {
-          id: 1,
-          candidate_id: 8,
-          candidate_email: 'alice@example.com',
-          candidate_name: 'Alice Johnson',
-          candidate_position: 'Senior Engineer',
-          status: 'applied',
-          cv_filename: 'alice.pdf',
-          created_at: '2026-01-10T10:00:00Z',
-          updated_at: '2026-01-10T10:00:00Z',
-        },
-        {
-          id: 2,
-          candidate_id: 9,
-          candidate_email: 'bob@example.com',
-          candidate_name: 'Bob Smith',
-          candidate_position: 'ML Engineer',
-          status: 'review',
-          cv_filename: 'bob.pdf',
-          created_at: '2026-01-11T10:00:00Z',
-          updated_at: '2026-01-11T10:00:00Z',
-        },
-      ],
-    });
-
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
-      expect(screen.getByText('Bob Smith')).toBeInTheDocument();
-    });
-
-    fireEvent.change(screen.getByPlaceholderText('Search by name, email, position, or status'), {
-      target: { value: 'Alice' },
-    });
-
-    await waitFor(() => {
-      expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
-      expect(screen.queryByText('Bob Smith')).not.toBeInTheDocument();
-    });
-  });
-
-  it('shows CV match score in role candidates table', async () => {
-    rolesApi.listApplications.mockResolvedValue({
-      data: [
-        {
-          id: 11,
-          candidate_id: 101,
-          candidate_email: 'match@example.com',
-          candidate_name: 'Match Candidate',
-          candidate_position: 'Backend Engineer',
-          status: 'applied',
-          cv_filename: 'match.pdf',
-          cv_match_score: 82,
-          created_at: '2026-01-10T10:00:00Z',
-          updated_at: '2026-01-10T10:00:00Z',
-        },
-      ],
-    });
-
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Match Candidate')).toBeInTheDocument();
-      expect(screen.getByRole('img', { name: /TAALI Score for Match Candidate: 82\.0/i })).toBeInTheDocument();
-    });
-  });
-
-  it('shows score rationale in candidate details panel with CV fit and additional requirements fit', async () => {
-    rolesApi.listApplications.mockResolvedValue({
-      data: [
-        {
-          id: 12,
-          candidate_id: 102,
-          candidate_email: 'rationale@example.com',
-          candidate_name: 'Rationale Candidate',
-          candidate_position: 'AI Full Stack Engineer',
-          status: 'applied',
-          workable_stage: 'applied',
-          cv_filename: 'rationale.pdf',
-          cv_match_score: 84.2,
-          cv_match_details: {
-            score_scale: '0-100',
-            matching_skills: ['Python', 'React', 'FastAPI'],
-            experience_highlights: ['Built and shipped production AI features for enterprise teams'],
-            score_rationale_bullets: [
-              'Matched recruiter requirements: Production experience; Salary 25k-35k AED target.',
-              'Recruiter requirements coverage: 2/2 met, 0 partial, 0 missing.',
-            ],
-            requirements_match_score_100: 78.4,
-            requirements_coverage: {
-              total: 2,
-              met: 1,
-              partially_met: 1,
-              missing: 0,
-            },
-            requirements_assessment: [
-              {
-                requirement: 'Enterprise production experience',
-                priority: 'must_have',
-                status: 'met',
-                evidence: 'CV shows 7 years delivering production systems for Fortune 500 clients.',
-              },
-              {
-                requirement: 'Compensation alignment to role band',
-                priority: 'constraint',
-                status: 'partially_met',
-                evidence: 'Current compensation is not listed; location and seniority suggest near target band.',
-              },
-            ],
-          },
-          created_at: '2026-01-10T10:00:00Z',
-          updated_at: '2026-01-10T10:00:00Z',
-        },
-      ],
-    });
-
-    await renderAppOnCandidatesPage();
-
-    const candidateCell = await screen.findByText('Rationale Candidate');
-    const candidateRow = candidateCell.closest('tr');
-    expect(candidateRow).not.toBeNull();
-    fireEvent.click(within(candidateRow).getByRole('button', { name: 'View assessment' }));
-
-    await waitFor(() => {
-      const dialog = screen.getByRole('dialog', { name: 'Rationale Candidate' });
-      expect(within(dialog).getByText('Assessment results')).toBeInTheDocument();
-      expect(within(dialog).getByText('TAALI score')).toBeInTheDocument();
-      expect(within(dialog).getByText('Assessment')).toBeInTheDocument();
-      expect(within(dialog).getAllByText('Role fit').length).toBeGreaterThan(0);
-      expect(within(dialog).getByText('Role fit summary')).toBeInTheDocument();
-      expect(within(dialog).getByText('What to probe')).toBeInTheDocument();
-      expect(within(dialog).queryByText('Workable stage')).not.toBeInTheDocument();
-      expect(within(dialog).getByRole('button', { name: 'View full page' })).toBeInTheDocument();
-      expect(within(dialog).getByText('Matching skills')).toBeInTheDocument();
-      expect(within(dialog).getByText('Enterprise production experience')).toBeInTheDocument();
-      expect(within(dialog).getAllByText('Compensation alignment to role band').length).toBeGreaterThan(0);
-    });
-  });
-
-  it('opens a standing candidate report page for CV-only candidates from the details sheet', async () => {
-    rolesApi.listApplications.mockResolvedValue({
-      data: [
-        {
-          id: 12,
-          candidate_id: 102,
-          candidate_email: 'standing@example.com',
-          candidate_name: 'Standing Candidate',
-          candidate_position: 'AI Full Stack Engineer',
-          role_name: 'AI Full Stack Engineer',
-          status: 'applied',
-          cv_filename: 'standing.pdf',
-          cv_match_score: 81,
-          cv_match_details: {
-            score_scale: '0-100',
-            summary: 'Strong enough CV evidence to review before sending an assessment.',
-            requirements_match_score_100: 74,
-          },
-          assessment_history: [],
-          created_at: '2026-01-10T10:00:00Z',
-          updated_at: '2026-01-10T10:00:00Z',
-        },
-      ],
-    });
-    rolesApi.getApplication.mockResolvedValue({
-      data: {
-        id: 12,
-        candidate_id: 102,
-        candidate_email: 'standing@example.com',
-        candidate_name: 'Standing Candidate',
-        candidate_position: 'AI Full Stack Engineer',
-        role_name: 'AI Full Stack Engineer',
-        status: 'applied',
-        cv_filename: 'standing.pdf',
-        cv_match_score: 81,
-        cv_match_details: {
-          score_scale: '0-100',
-          summary: 'Strong enough CV evidence to review before sending an assessment.',
-          requirements_match_score_100: 74,
-        },
-        assessment_history: [],
-        created_at: '2026-01-10T10:00:00Z',
-        updated_at: '2026-01-10T10:00:00Z',
-      },
-    });
-
-    await renderAppOnCandidatesPage();
-
-    const candidateCell = await screen.findByText('Standing Candidate');
-    const candidateRow = candidateCell.closest('tr');
-    expect(candidateRow).not.toBeNull();
-    fireEvent.click(within(candidateRow).getByRole('button', { name: 'View assessment' }));
-
-    const dialog = await screen.findByRole('dialog', { name: 'Standing Candidate' });
-    expect(within(dialog).getByText('Assessment results')).toBeInTheDocument();
-    expect(within(dialog).getByText('Role fit summary')).toBeInTheDocument();
-    expect(within(dialog).queryByText('Standing candidate report')).not.toBeInTheDocument();
-    fireEvent.click(within(dialog).getByRole('button', { name: 'View full page' }));
-
-    await waitFor(() => {
-      expect(window.location.pathname).toBe('/candidates/12');
-      expect(screen.getByRole('button', { name: 'Back to Candidates' })).toBeInTheDocument();
-      expect(screen.getByText('Assessment results')).toBeInTheDocument();
-      expect(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' })).toBeInTheDocument();
-      expect(screen.queryByText('Standing candidate report')).not.toBeInTheDocument();
-    });
-  });
-
-  it('shows the assessment summary view in the sidebar for completed candidates', async () => {
-    rolesApi.listApplications.mockResolvedValue({
-      data: [
-        {
-          id: 77,
-          candidate_id: 207,
-          candidate_email: 'completed@example.com',
-          candidate_name: 'Completed Candidate',
-          candidate_position: 'Senior Engineer',
-          role_name: 'Senior Engineer',
-          status: 'completed',
-          cv_filename: 'completed.pdf',
-          valid_assessment_id: 880,
-          valid_assessment_status: 'completed',
-          score_summary: {
-            assessment_id: 880,
-            assessment_status: 'completed',
-            taali_score: 68.2,
-            assessment_score: 41.0,
-            role_fit_score: 91.2,
-          },
-          assessment_history: [],
-          created_at: '2026-01-10T10:00:00Z',
-          updated_at: '2026-01-10T10:00:00Z',
-        },
-      ],
-    });
-    rolesApi.getApplication.mockResolvedValue({
-      data: {
-        id: 77,
-        candidate_id: 207,
-        candidate_email: 'completed@example.com',
-        candidate_name: 'Completed Candidate',
-        candidate_position: 'Senior Engineer',
-        role_name: 'Senior Engineer',
-        status: 'completed',
-        cv_filename: 'completed.pdf',
-        valid_assessment_id: 880,
-        valid_assessment_status: 'completed',
-        score_summary: {
-          assessment_id: 880,
-          assessment_status: 'completed',
-          taali_score: 68.2,
-          assessment_score: 41.0,
-          role_fit_score: 91.2,
-        },
-        assessment_history: [],
-        created_at: '2026-01-10T10:00:00Z',
-        updated_at: '2026-01-10T10:00:00Z',
-      },
-    });
-    assessmentsApi.get.mockResolvedValue({
-      data: {
-        id: 880,
-        candidate_email: 'completed@example.com',
-        candidate_name: 'Completed Candidate',
-        task_name: 'Async Recovery',
-        role_name: 'Senior Engineer',
-        status: 'completed',
-        taali_score: 68.2,
-        assessment_score: 41.0,
-        final_score: 41.0,
-        completed_at: '2026-01-15T09:45:00Z',
-        total_duration_seconds: 2700,
-        score_breakdown: {
-          category_scores: {
-            task_completion: 6.0,
-            prompt_clarity: 6.1,
-            context_provision: 0.3,
-            independence_efficiency: 3.5,
-            response_utilization: 1.2,
-            debugging_design: 2.3,
-            written_communication: 8.0,
-            role_fit: 9.5,
-          },
-          score_components: {
-            taali_score: 68.2,
-            assessment_score: 41.0,
-            role_fit_score: 91.2,
-            role_fit_components: {
-              cv_fit_score: 95.4,
-              requirements_fit_score: 87.0,
-            },
-          },
-        },
-        cv_job_match_score: 95.4,
-        cv_job_match_details: {
-          summary: 'Strong technical depth with one material context-sharing gap to probe.',
-          matching_skills: ['AWS', 'Python', 'Data Engineering'],
-          missing_skills: ['Legacy SQL migration'],
-          concerns: ['Context sharing was limited under time pressure.'],
-          requirements_match_score_100: 87.0,
-          requirements_assessment: [
-            {
-              requirement: 'Legacy SQL migration',
-              status: 'partially_met',
-              evidence: 'Adjacent data platform experience is strong, but direct migration depth is thinner.',
-              impact: 'Probe whether the candidate can translate prior platform work into this migration scope.',
-            },
-          ],
-        },
-      },
-    });
-
-    await renderAppOnCandidatesPage();
-
-    const candidateCell = await screen.findByText('Completed Candidate');
-    const candidateRow = candidateCell.closest('tr');
-    expect(candidateRow).not.toBeNull();
-    fireEvent.click(within(candidateRow).getByRole('button', { name: 'View assessment' }));
-
-    await waitFor(() => {
-      const dialog = screen.getByRole('dialog', { name: 'Completed Candidate' });
-      expect(within(dialog).getByText('Assessment results')).toBeInTheDocument();
-      expect(within(dialog).getByText('Role fit summary')).toBeInTheDocument();
-      expect(within(dialog).getByText('What to probe')).toBeInTheDocument();
-      expect(within(dialog).queryByText('Standing candidate report')).not.toBeInTheDocument();
-    });
-  });
-
-  it('creates a role from the role sheet', async () => {
-    rolesApi.create.mockResolvedValue({
-      data: { id: 321, name: 'Platform Engineer', description: null },
-    });
-    rolesApi.list.mockResolvedValueOnce({ data: baseRoles });
-    rolesApi.list.mockResolvedValueOnce({
-      data: [
-        { id: 321, name: 'Platform Engineer', job_spec_filename: null, tasks_count: 0, applications_count: 0 },
-        ...baseRoles,
-      ],
-    });
-
-    await renderAppOnCandidatesPage();
-    fireEvent.click(screen.getByRole('button', { name: 'New role' }));
-
-    const dialog = await screen.findByRole('dialog', { name: 'New role' });
-    fireEvent.change(within(dialog).getByPlaceholderText('e.g. Senior Backend Engineer'), {
-      target: { value: 'Platform Engineer' },
-    });
-
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Next' }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Next' }));
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Save role' }));
-
-    await waitFor(() => {
-      expect(rolesApi.create).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'Platform Engineer' })
-      );
-    });
-  });
-
-  it('creates role application and uploads CV from Add candidate sheet', async () => {
-    rolesApi.createApplication.mockResolvedValue({ data: { id: 200 } });
-    rolesApi.uploadApplicationCv.mockResolvedValue({ data: { success: true } });
-
-    const { container } = await renderAppOnCandidatesPage();
-    fireEvent.click(screen.getByRole('button', { name: 'Add candidate' }));
-
-    const dialog = await screen.findByRole('dialog', { name: 'Add candidate' });
-    fireEvent.change(within(dialog).getByPlaceholderText('candidate@company.com'), {
-      target: { value: 'new@test.com' },
-    });
-    fireEvent.change(within(dialog).getByPlaceholderText('Jane Doe'), {
-      target: { value: 'New Candidate' },
-    });
-    fireEvent.change(within(dialog).getByPlaceholderText('Defaults to role title'), {
-      target: { value: 'Mid Engineer' },
-    });
-
-    const file = new File(['cv-content'], 'resume.pdf', { type: 'application/pdf' });
-    const fileInput = container.querySelector('input[type="file"][accept=".pdf,.docx,.doc"]');
-    fireEvent.change(fileInput, { target: { files: [file] } });
-    fireEvent.click(within(dialog).getByRole('button', { name: 'Add candidate' }));
-
-    await waitFor(() => {
-      expect(rolesApi.createApplication).toHaveBeenCalledWith(
-        '9',
-        expect.objectContaining({
-          candidate_email: 'new@test.com',
-          candidate_name: 'New Candidate',
-          candidate_position: 'Mid Engineer',
-        })
-      );
-      expect(rolesApi.uploadApplicationCv).toHaveBeenCalledWith(200, file);
-    });
-  });
-
-  it('creates assessment from candidate row action', async () => {
-    const alertMock = vi.spyOn(window, 'alert').mockImplementation(() => {});
-    rolesApi.createAssessment.mockResolvedValue({ data: { id: 1000 } });
-
-    await renderAppOnCandidatesPage();
-
-    await waitFor(() => {
-      expect(screen.getByRole('button', { name: 'Send assessment' })).toBeInTheDocument();
-    });
-
-    // First click opens the task picker, second click actually sends.
-    fireEvent.click(screen.getByRole('button', { name: 'Send assessment' }));
-    fireEvent.click(screen.getAllByRole('button', { name: 'Send assessment' })[1]);
-
-    await waitFor(() => {
-      expect(rolesApi.createAssessment).toHaveBeenCalledWith(
-        501,
-        expect.objectContaining({ task_id: 700, duration_minutes: 30 })
-      );
-    });
-
-    alertMock.mockRestore();
-  });
-
-  it('switches active role from header selector and reloads role context', async () => {
-    rolesApi.list.mockResolvedValue({
-      data: [
-        { id: 1, name: 'Backend Engineer', job_spec_filename: 'backend.pdf', tasks_count: 1, applications_count: 1 },
-        { id: 2, name: 'Data Engineer', job_spec_filename: 'data.pdf', tasks_count: 1, applications_count: 1 },
-      ],
-    });
-    rolesApi.listTasks.mockImplementation((roleId) => (
-      Promise.resolve({ data: [{ id: Number(roleId) * 10, name: `Task ${roleId}` }] })
+    const calledWithDefaultOpenOutcome = rolesApi.listApplicationsGlobal.mock.calls.some(([params]) => (
+      params && params.application_outcome === 'open'
     ));
-    rolesApi.listApplications.mockImplementation((roleId) => (
-      Promise.resolve({
-        data: [
-          {
-            id: Number(roleId) * 100,
-            candidate_id: Number(roleId) * 1000,
-            candidate_email: `candidate${roleId}@example.com`,
-            candidate_name: `Candidate ${roleId}`,
-            candidate_position: 'Engineer',
-            status: 'applied',
-            cv_filename: 'resume.pdf',
-            created_at: '2026-01-10T10:00:00Z',
-            updated_at: '2026-01-10T10:00:00Z',
-          },
-        ],
-      })
-    ));
+    expect(calledWithDefaultOpenOutcome).toBe(true);
+  });
 
-    await renderAppOnCandidatesPage();
+  it('applies TAALI sort and min score filters through canonical query params', async () => {
+    renderOnCandidatesPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Candidate 1')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: 'Candidates' })).toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByLabelText('Active role'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Sort'), {
+      target: { value: 'taali_score:asc' },
+    });
+    fireEvent.change(screen.getByLabelText('Min TAALI'), {
+      target: { value: '90' },
+    });
 
     await waitFor(() => {
-      expect(screen.getByText('Candidate 2')).toBeInTheDocument();
-      expect(screen.queryByText('Candidate 1')).not.toBeInTheDocument();
+      const hasFilteredCall = rolesApi.listApplicationsGlobal.mock.calls.some(([params]) => (
+        params
+        && params.sort_by === 'taali_score'
+        && params.sort_order === 'asc'
+        && Number(params.min_taali_score) === 90
+      ));
+      expect(hasFilteredCall).toBe(true);
     });
   });
 
+  it('renders TAALI score ring and multi-role application badge for shared candidates', async () => {
+    renderOnCandidatesPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByRole('img', { name: /TAALI score/i }).length).toBeGreaterThan(0);
+      expect(screen.getAllByText('2 role applications').length).toBeGreaterThan(0);
+    });
+  });
 });
