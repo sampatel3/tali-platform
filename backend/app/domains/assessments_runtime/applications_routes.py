@@ -194,49 +194,37 @@ def _is_active_role_assessment_integrity_error(err: Exception) -> bool:
     )
 
 
-def _application_sort_value(item: ApplicationDetailResponse, sort_by: str):
-    if sort_by == "taali_score":
-        return item.taali_score if item.taali_score is not None else float("-inf")
+def _taali_sort_expr():
+    # Rank score is updated from Workable/CV fit and is the most stable DB-sort key for large orgs.
+    return func.coalesce(
+        CandidateApplication.rank_score,
+        CandidateApplication.workable_score,
+        CandidateApplication.cv_match_score,
+        -1.0,
+    )
+
+
+def _recent_activity_sort_expr():
+    return func.coalesce(
+        CandidateApplication.pipeline_stage_updated_at,
+        CandidateApplication.updated_at,
+        CandidateApplication.created_at,
+    )
+
+
+def _apply_sorting(query, *, sort_by: str, sort_order: str):
+    direction = asc if sort_order == "asc" else desc
     if sort_by == "created_at":
-        return item.created_at or datetime.min.replace(tzinfo=timezone.utc)
-    return (
-        item.pipeline_stage_updated_at
-        or item.updated_at
-        or item.created_at
-        or datetime.min.replace(tzinfo=timezone.utc)
+        sort_expr = CandidateApplication.created_at
+    elif sort_by == "taali_score":
+        sort_expr = _taali_sort_expr()
+    else:
+        sort_expr = _recent_activity_sort_expr()
+    return query.order_by(
+        direction(sort_expr),
+        direction(CandidateApplication.created_at),
+        direction(CandidateApplication.id),
     )
-
-
-def _sort_application_payload(
-    payload: list[ApplicationDetailResponse],
-    *,
-    sort_by: str,
-    sort_order: str,
-) -> list[ApplicationDetailResponse]:
-    reverse = sort_order != "asc"
-    payload.sort(
-        key=lambda item: (
-            _application_sort_value(item, sort_by),
-            item.created_at or datetime.min.replace(tzinfo=timezone.utc),
-        ),
-        reverse=reverse,
-    )
-    return payload
-
-
-def _apply_min_taali_score_filter(
-    payload: list[ApplicationDetailResponse],
-    *,
-    min_taali_score: float | None,
-) -> list[ApplicationDetailResponse]:
-    if min_taali_score is None:
-        return payload
-    threshold = float(min_taali_score)
-    return [
-        item
-        for item in payload
-        if item.taali_score is not None and float(item.taali_score) >= threshold
-    ]
 
 
 def _provision_assessment_branch(assessment: Assessment, task: Task) -> None:
@@ -630,17 +618,9 @@ def list_applications_global(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = (
-        db.query(CandidateApplication)
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
-            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
-        )
-        .filter(
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
+    query = db.query(CandidateApplication.id).filter(
+        CandidateApplication.organization_id == current_user.organization_id,
+        CandidateApplication.deleted_at.is_(None),
     )
     if role_id is not None:
         query = query.filter(CandidateApplication.role_id == role_id)
@@ -658,18 +638,51 @@ def list_applications_global(
                 | Candidate.position.ilike(term)
             )
         )
+    if min_taali_score is not None:
+        query = query.filter(_taali_sort_expr() >= float(min_taali_score))
 
-    items = query.all()
+    total = int(query.order_by(None).count())
+    if total <= 0:
+        return {
+            "items": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    id_rows = (
+        _apply_sorting(query, sort_by=sort_by, sort_order=sort_order)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    page_ids = [int(row[0]) for row in id_rows]
+    if not page_ids:
+        return {
+            "items": [],
+            "total": total,
+            "limit": limit,
+            "offset": offset,
+        }
+
+    rows = (
+        db.query(CandidateApplication)
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+        )
+        .filter(CandidateApplication.id.in_(page_ids))
+        .all()
+    )
+    by_id = {int(item.id): item for item in rows}
+    ordered_rows = [by_id[item_id] for item_id in page_ids if item_id in by_id]
     payload = [
         ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
-        for app in items
+        for app in ordered_rows
     ]
-    payload = _apply_min_taali_score_filter(payload, min_taali_score=min_taali_score)
-    payload = _sort_application_payload(payload, sort_by=sort_by, sort_order=sort_order)
-    total = len(payload)
-    paged_items = payload[offset: offset + limit]
     return {
-        "items": paged_items,
+        "items": payload,
         "total": total,
         "limit": limit,
         "offset": offset,
@@ -697,19 +710,11 @@ def get_role_pipeline(
         role_id=role.id,
     )
 
-    base_query = (
-        db.query(CandidateApplication)
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
-            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
-        )
-        .filter(
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role.id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
-        )
+    base_query = db.query(CandidateApplication.id).filter(
+        CandidateApplication.organization_id == current_user.organization_id,
+        CandidateApplication.role_id == role.id,
+        CandidateApplication.deleted_at.is_(None),
+        CandidateApplication.application_outcome == "open",
     )
     if stage and stage.strip().lower() != "all":
         base_query = base_query.filter(CandidateApplication.pipeline_stage == stage.strip().lower())
@@ -723,16 +728,36 @@ def get_role_pipeline(
                 | Candidate.position.ilike(term)
             )
         )
+    if min_taali_score is not None:
+        base_query = base_query.filter(_taali_sort_expr() >= float(min_taali_score))
 
-    rows = base_query.all()
-    items = [
+    total = int(base_query.order_by(None).count())
+    id_rows = (
+        _apply_sorting(base_query, sort_by=sort_by, sort_order=sort_order)
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+    page_ids = [int(row[0]) for row in id_rows]
+
+    rows = (
+        db.query(CandidateApplication)
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+        )
+        .filter(CandidateApplication.id.in_(page_ids))
+        .all()
+        if page_ids
+        else []
+    )
+    by_id = {int(item.id): item for item in rows}
+    ordered_rows = [by_id[item_id] for item_id in page_ids if item_id in by_id]
+    paged_items = [
         ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
-        for app in rows
+        for app in ordered_rows
     ]
-    items = _apply_min_taali_score_filter(items, min_taali_score=min_taali_score)
-    items = _sort_application_payload(items, sort_by=sort_by, sort_order=sort_order)
-    total = len(items)
-    paged_items = items[offset: offset + limit]
     active_candidates_count = int(sum(stage_counts.values()))
     last_candidate_activity_at = (
         db.query(
