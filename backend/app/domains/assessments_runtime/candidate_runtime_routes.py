@@ -56,18 +56,53 @@ router.include_router(candidate_terminal_router)
 DEMO_ORG_SLUG = "taali-demo"
 DEMO_ORG_NAME = "TAALI Demo Leads"
 DEMO_TRACK_TASK_KEYS = {
-    # Primary demo track: canonical tasks for product demos.
-    "data_eng_aws_glue_pipeline_recovery": "data_eng_aws_glue_pipeline_recovery",
-    "ai_eng_genai_production_readiness": "ai_eng_genai_production_readiness",
-    # Backward-compatible aliases (route to current tasks; legacy keys removed from repo).
-    "data_eng_super_platform_crisis": "data_eng_aws_glue_pipeline_recovery",
-    "ai_eng_super_production_launch": "ai_eng_genai_production_readiness",
-    "data_eng_a_pipeline_reliability": "data_eng_aws_glue_pipeline_recovery",
-    "data_eng_b_cdc_fix": "data_eng_aws_glue_pipeline_recovery",
-    "data_eng_c_backfill_schema": "data_eng_aws_glue_pipeline_recovery",
-    "backend-reliability": "data_eng_aws_glue_pipeline_recovery",
-    "frontend-debugging": "data_eng_aws_glue_pipeline_recovery",
-    "data-pipeline": "data_eng_aws_glue_pipeline_recovery",
+    # Canonical demo tracks (fallbacks preserve compatibility with older seeded tasks).
+    "data_eng_aws_glue_pipeline_recovery": (
+        "data_eng_aws_glue_pipeline_recovery",
+        "data_eng_super_platform_crisis",
+    ),
+    "ai_eng_genai_production_readiness": (
+        "ai_eng_genai_production_readiness",
+        "ai_eng_super_production_launch",
+    ),
+    # Backward-compatible aliases.
+    "data_eng_super_platform_crisis": (
+        "data_eng_aws_glue_pipeline_recovery",
+        "data_eng_super_platform_crisis",
+    ),
+    "ai_eng_super_production_launch": (
+        "ai_eng_genai_production_readiness",
+        "ai_eng_super_production_launch",
+    ),
+    "full_stack_secure_feature_delivery": (
+        "full_stack_secure_feature_delivery",
+        "ai_eng_genai_production_readiness",
+        "ai_eng_super_production_launch",
+    ),
+    "data_eng_a_pipeline_reliability": (
+        "data_eng_aws_glue_pipeline_recovery",
+        "data_eng_super_platform_crisis",
+    ),
+    "data_eng_b_cdc_fix": (
+        "data_eng_aws_glue_pipeline_recovery",
+        "data_eng_super_platform_crisis",
+    ),
+    "data_eng_c_backfill_schema": (
+        "data_eng_aws_glue_pipeline_recovery",
+        "data_eng_super_platform_crisis",
+    ),
+    "backend-reliability": (
+        "data_eng_aws_glue_pipeline_recovery",
+        "data_eng_super_platform_crisis",
+    ),
+    "frontend-debugging": (
+        "data_eng_aws_glue_pipeline_recovery",
+        "data_eng_super_platform_crisis",
+    ),
+    "data-pipeline": (
+        "data_eng_aws_glue_pipeline_recovery",
+        "data_eng_super_platform_crisis",
+    ),
 }
 DEMO_TRACK_KEYS = set(DEMO_TRACK_TASK_KEYS.keys())
 
@@ -95,8 +130,8 @@ def _ensure_demo_org(db: Session):
 
 
 def _resolve_demo_task(db: Session, org_id: int, track: str) -> Task | None:
-    task_key = DEMO_TRACK_TASK_KEYS.get(track)
-    if task_key:
+    task_keys = DEMO_TRACK_TASK_KEYS.get(track) or ()
+    for task_key in task_keys:
         org_task = (
             db.query(Task)
             .filter(
