@@ -291,6 +291,45 @@ def initialize_pipeline_event_if_missing(
     )
 
 
+def append_application_event(
+    db: Session,
+    *,
+    app: CandidateApplication,
+    event_type: str,
+    actor_type: str,
+    actor_id: int | None = None,
+    reason: str | None = None,
+    metadata: dict[str, Any] | None = None,
+    idempotency_key: str | None = None,
+    from_stage: str | None = None,
+    to_stage: str | None = None,
+    from_outcome: str | None = None,
+    to_outcome: str | None = None,
+) -> CandidateApplicationEvent:
+    ensure_pipeline_fields(app)
+    existing_idempotent = _existing_idempotent_event(
+        db,
+        application_id=app.id,
+        idempotency_key=idempotency_key,
+    )
+    if existing_idempotent:
+        return existing_idempotent
+    return _append_event(
+        db,
+        app=app,
+        event_type=event_type,
+        actor_type=actor_type,
+        actor_id=actor_id,
+        from_stage=from_stage,
+        to_stage=to_stage,
+        from_outcome=from_outcome,
+        to_outcome=to_outcome,
+        reason=reason,
+        metadata=metadata,
+        idempotency_key=idempotency_key,
+    )
+
+
 def transition_stage(
     db: Session,
     *,

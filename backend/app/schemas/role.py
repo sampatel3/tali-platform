@@ -71,7 +71,11 @@ class ApplicationCreate(BaseModel):
 
 
 class ApplicationUpdate(BaseModel):
-    status: Optional[str] = Field(default=None, max_length=100)
+    status: Optional[str] = Field(
+        default=None,
+        max_length=100,
+        description="Deprecated compatibility field. Prefer pipeline_stage + application_outcome.",
+    )
     pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review"]] = None
     application_outcome: Optional[Literal["open", "rejected", "withdrawn", "hired"]] = None
     expected_version: Optional[int] = Field(default=None, ge=1)
@@ -85,7 +89,7 @@ class ApplicationResponse(BaseModel):
     organization_id: int
     candidate_id: int
     role_id: int
-    status: str
+    status: str = Field(description="Deprecated compatibility mirror of pipeline_stage + application_outcome.")
     pipeline_stage: Literal["applied", "invited", "in_assessment", "review"] = "applied"
     pipeline_stage_updated_at: Optional[datetime] = None
     pipeline_stage_source: Literal["system", "recruiter", "sync"] = "system"
