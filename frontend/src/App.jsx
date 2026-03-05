@@ -77,6 +77,9 @@ function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
+  const forceRecruiterWorkflowV2 = String(import.meta.env.VITE_RECRUITER_WORKFLOW_V2_FORCE || '')
+    .trim()
+    .toLowerCase() === 'true';
 
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'assessments', label: 'Back to Assessments' });
@@ -85,7 +88,8 @@ function AppContent() {
   const [workflowV2Enabled, setWorkflowV2Enabled] = useState(false);
   const [workflowModeReady, setWorkflowModeReady] = useState(false);
 
-  const defaultRecruiterRoute = workflowV2Enabled ? '/jobs' : '/assessments';
+  const effectiveWorkflowV2Enabled = forceRecruiterWorkflowV2 || workflowV2Enabled;
+  const defaultRecruiterRoute = effectiveWorkflowV2Enabled ? '/jobs' : '/assessments';
 
   const candidateDetailAssessmentId = useMemo(() => {
     const recruiterAssessmentMatch = location.pathname.match(/^\/assessments\/(\d+)$/);
@@ -229,7 +233,7 @@ function AppContent() {
       roleId: Object.prototype.hasOwnProperty.call(options, 'roleId')
         ? options.roleId
         : null,
-      workflowV2Enabled,
+      workflowV2Enabled: effectiveWorkflowV2Enabled,
     });
 
     if (nextPath) {
@@ -347,7 +351,7 @@ function AppContent() {
   const DashboardNavWithMode = (props) => (
     <DashboardNav
       {...props}
-      workflowV2Enabled={workflowV2Enabled}
+      workflowV2Enabled={effectiveWorkflowV2Enabled}
     />
   );
 
@@ -380,7 +384,7 @@ function AppContent() {
         path="/jobs"
         element={workflowModeLoading
           ? lazyFallback
-          : (workflowV2Enabled ? (
+          : (effectiveWorkflowV2Enabled ? (
             <Suspense fallback={lazyFallback}>
               <JobsPage
                 onNavigate={navigateToPage}
@@ -396,7 +400,7 @@ function AppContent() {
         path="/jobs/:roleId"
         element={workflowModeLoading
           ? lazyFallback
-          : (workflowV2Enabled ? (
+          : (effectiveWorkflowV2Enabled ? (
             <Suspense fallback={lazyFallback}>
               <JobPipelinePage
                 onNavigate={navigateToPage}
@@ -428,7 +432,7 @@ function AppContent() {
         path="/candidates"
         element={workflowModeLoading
           ? lazyFallback
-          : (workflowV2Enabled ? (
+          : (effectiveWorkflowV2Enabled ? (
             <Suspense fallback={lazyFallback}>
               <CandidatesDirectoryPage
                 onNavigate={navigateToPage}

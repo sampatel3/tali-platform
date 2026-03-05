@@ -92,6 +92,19 @@ const isVersionConflictError = (error) => {
   return detail.includes('version mismatch');
 };
 
+const isUnsupportedPipelineQueryError = (error) => {
+  const status = Number(error?.response?.status || 0);
+  return status === 400 || status === 422;
+};
+
+const stripExtendedPipelineQueryParams = (params = {}) => {
+  const legacy = { ...params };
+  delete legacy.sort_by;
+  delete legacy.sort_order;
+  delete legacy.min_taali_score;
+  return legacy;
+};
+
 const eventReasonToLabel = (reason) => {
   const normalized = String(reason || '').trim().toLowerCase();
   if (!normalized) return '';
@@ -393,9 +406,25 @@ export const CandidatesDirectoryPage = ({
     setApplicationsError('');
     try {
       const queryParams = buildListQueryParams();
-      const res = rolePipelineMode
-        ? await rolesApi.listPipeline(Number(lockedRoleValue), queryParams)
-        : await rolesApi.listApplicationsGlobal(queryParams);
+      let res;
+      try {
+        res = rolePipelineMode
+          ? await rolesApi.listPipeline(Number(lockedRoleValue), queryParams)
+          : await rolesApi.listApplicationsGlobal(queryParams);
+      } catch (error) {
+        const hasExtendedParams = (
+          Object.prototype.hasOwnProperty.call(queryParams, 'sort_by')
+          || Object.prototype.hasOwnProperty.call(queryParams, 'sort_order')
+          || Object.prototype.hasOwnProperty.call(queryParams, 'min_taali_score')
+        );
+        if (!isUnsupportedPipelineQueryError(error) || !hasExtendedParams) {
+          throw error;
+        }
+        const legacyParams = stripExtendedPipelineQueryParams(queryParams);
+        res = rolePipelineMode
+          ? await rolesApi.listPipeline(Number(lockedRoleValue), legacyParams)
+          : await rolesApi.listApplicationsGlobal(legacyParams);
+      }
       const payload = res?.data || {};
       const items = Array.isArray(payload.items) ? payload.items : [];
       setApplicationsPayload({
@@ -450,9 +479,17 @@ export const CandidatesDirectoryPage = ({
     try {
       const stages = ['all', 'applied', 'invited', 'in_assessment', 'review'];
       const responses = await Promise.all(
-        stages.map((stage) => {
+        stages.map(async (stage) => {
           const params = buildStageCountQueryParams(stage);
-          return rolesApi.listApplicationsGlobal(params || {});
+          try {
+            return await rolesApi.listApplicationsGlobal(params || {});
+          } catch (error) {
+            const hasExtendedParams = Boolean(params && Object.prototype.hasOwnProperty.call(params, 'min_taali_score'));
+            if (!isUnsupportedPipelineQueryError(error) || !hasExtendedParams) {
+              throw error;
+            }
+            return rolesApi.listApplicationsGlobal(stripExtendedPipelineQueryParams(params || {}));
+          }
         })
       );
       const nextCounts = { ...STAGE_COUNT_DEFAULTS };
