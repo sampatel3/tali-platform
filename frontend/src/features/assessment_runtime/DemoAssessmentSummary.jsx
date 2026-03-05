@@ -1,7 +1,7 @@
 import React from 'react';
 
-import { CandidateAssessmentSummaryView } from '../candidates/CandidateAssessmentSummaryView';
-import { Button, Card } from '../../shared/ui/TaaliPrimitives';
+import { ComparisonRadar } from '../../shared/ui/ComparisonRadar';
+import { Badge, Button, Card, Panel } from '../../shared/ui/TaaliPrimitives';
 import { AssessmentBrandGlyph } from './AssessmentBrandGlyph';
 
 const formatDuration = (seconds) => {
@@ -11,12 +11,45 @@ const formatDuration = (seconds) => {
   return `${minutes}m ${String(remainder).padStart(2, '0')}s`;
 };
 
+const scoreBarColor = (value) => {
+  if (value >= 7) return 'var(--taali-success)';
+  if (value >= 5) return 'var(--taali-warning)';
+  return 'var(--taali-danger)';
+};
+
+const formatScore100 = (value) => {
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) return '—';
+  return Math.max(0, Math.min(100, numeric)).toFixed(1);
+};
+
+const renderIdentityBadges = (identity = {}) => ([
+  identity.taskName ? `Task: ${identity.taskName}` : null,
+  identity.durationLabel ? `Duration: ${identity.durationLabel}` : null,
+  identity.completedLabel ? `Completed: ${identity.completedLabel}` : null,
+].filter(Boolean));
+
 export const DemoAssessmentSummary = ({
   summary,
   onRestart,
   onJoinTaali,
 }) => {
   const reportModel = summary?.reportModel || null;
+  const identity = reportModel?.identity || {};
+  const source = reportModel?.source || null;
+  const summaryModel = reportModel?.summaryModel || {};
+  const recommendation = reportModel?.recommendation || null;
+  const hasDimensionSignal = Boolean(reportModel?.hasDimensionSignal);
+  const dimensionEntries = Array.isArray(reportModel?.dimensionEntries) ? reportModel.dimensionEntries : [];
+  const radarSeries = hasDimensionSignal ? [{
+    id: identity.assessmentId || 1,
+    name: identity.name || 'Candidate',
+    _raw: {
+      score_breakdown: {
+        category_scores: summaryModel.categoryScores || {},
+      },
+    },
+  }] : [];
 
   return (
     <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
@@ -34,13 +67,108 @@ export const DemoAssessmentSummary = ({
 
       <div className="mx-auto max-w-6xl px-6 py-10">
         {reportModel ? (
-          <CandidateAssessmentSummaryView
-            reportModel={reportModel}
-            variant="page"
-            showSupplementalPanels={false}
-            showRoleFitMetric={false}
-            radarCategoryKeys={reportModel.radarCategoryKeys}
-          />
+          <Panel className="overflow-hidden p-0">
+            <div className="grid gap-0 xl:grid-cols-[minmax(0,1fr)_340px]">
+              <div className="px-5 py-5 md:px-6" style={{ background: 'var(--taali-card-bg)' }}>
+                <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">
+                  {identity.sectionLabel || 'TAALI profile'}
+                </p>
+                <h1 className="taali-display text-4xl font-semibold text-[var(--taali-text)]">{identity.name || 'Your TAALI profile'}</h1>
+                {identity.email ? (
+                  <p className="mt-2 text-sm text-[var(--taali-muted)]">{identity.email}</p>
+                ) : null}
+                {renderIdentityBadges(identity).length ? (
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {renderIdentityBadges(identity).map((label) => (
+                      <Badge key={label} variant="muted" className="font-mono text-[11px]">{label}</Badge>
+                    ))}
+                  </div>
+                ) : null}
+
+                <div className="mt-6 grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+                  <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
+                        Dimension profile
+                      </div>
+                      {hasDimensionSignal ? (
+                        <Badge variant="muted" className="font-mono text-[11px]">{dimensionEntries.length} dimensions</Badge>
+                      ) : null}
+                    </div>
+                    {hasDimensionSignal ? (
+                      <ComparisonRadar
+                        assessments={radarSeries}
+                        highlightAssessmentId={identity.assessmentId || 1}
+                        categoryKeys={reportModel.radarCategoryKeys}
+                        showLegend={false}
+                        height={300}
+                      />
+                    ) : (
+                      <p className="text-sm text-[var(--taali-muted)]">Assessment evidence is available, but dimension-level scoring has not been returned yet.</p>
+                    )}
+                  </div>
+
+                  <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-4">
+                    <div className="mb-3 flex items-center justify-between gap-3">
+                      <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
+                        Dimension scores
+                      </div>
+                      {source ? (
+                        <Badge variant={source.badgeVariant || 'muted'} className="font-mono text-[11px]">{source.label}</Badge>
+                      ) : null}
+                    </div>
+                    {hasDimensionSignal ? (
+                      <div className="space-y-2 font-mono text-xs">
+                        {dimensionEntries.map((item) => (
+                          <div key={item.key} className="grid grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)_auto] items-center gap-3">
+                            <span className="min-w-0 leading-snug text-[var(--taali-muted)]">{item.label}</span>
+                            <div className="h-2 flex-1 overflow-hidden rounded-full bg-[var(--taali-border-subtle)]">
+                              <div
+                                className="h-full rounded-full"
+                                style={{
+                                  width: `${(item.value / 10) * 100}%`,
+                                  backgroundColor: scoreBarColor(item.value),
+                                }}
+                              />
+                            </div>
+                            <span className="w-10 text-right text-[var(--taali-text)]">{item.value.toFixed(1)}</span>
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <p className="text-sm text-[var(--taali-muted)]">Dimension scoring is still being finalized.</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+
+              <div className="border-t border-[var(--taali-border-soft)] p-4 text-[var(--taali-text)] xl:border-l xl:border-t-0" style={{ background: 'var(--taali-panel-bg)' }}>
+                <div className="grid gap-3">
+                  <Card className="bg-[var(--taali-surface)] p-4">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">TAALI score</div>
+                        <div className="mt-2 taali-display text-[3.8rem] font-semibold leading-none text-[var(--taali-text)]">
+                          {formatScore100(summaryModel.taaliScore)}
+                        </div>
+                        {summaryModel.heuristicSummary ? (
+                          <p className="mt-3 max-w-xl text-sm leading-6 text-[var(--taali-muted)]">{summaryModel.heuristicSummary}</p>
+                        ) : null}
+                      </div>
+                      {recommendation?.label ? <Badge variant={recommendation?.variant || 'muted'}>{recommendation.label}</Badge> : null}
+                    </div>
+                  </Card>
+
+                  <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-3 py-3">
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Assessment</div>
+                    <div className="mt-1.5 taali-display text-[1.55rem] font-semibold leading-none text-[var(--taali-text)]">
+                      {formatScore100(summaryModel.assessmentScore)}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </Panel>
         ) : (
           <Card className="p-4 font-mono text-sm text-[var(--taali-muted)]">
             Demo summary is not available yet.
