@@ -25,6 +25,7 @@ def test_get_org_success(client):
     data = resp.json()
     assert "id" in data
     assert "name" in data
+    assert data["recruiter_workflow_v2_enabled"] is True
 
 
 def test_get_org_no_auth_401(client):
@@ -79,35 +80,15 @@ def test_update_org_recruiter_workflow_v2_toggle(client):
     assert refetch.json()["recruiter_workflow_v2_enabled"] is True
 
 
-def test_recruiter_workflow_v2_global_force_off_override(client, monkeypatch):
-    from app.domains.identity_access import organization_routes
-
+def test_update_org_recruiter_workflow_v2_disable_rejected(client):
     headers, _ = auth_headers(client)
-    enable_resp = client.patch(
+    disable_resp = client.patch(
         "/api/v1/organizations/me",
-        json={"recruiter_workflow_v2_enabled": True},
+        json={"recruiter_workflow_v2_enabled": False},
         headers=headers,
     )
-    assert enable_resp.status_code == 200, enable_resp.text
-    assert enable_resp.json()["recruiter_workflow_v2_enabled"] is True
-
-    monkeypatch.setattr(organization_routes.settings, "RECRUITER_WORKFLOW_V2_FORCE_OFF", True)
-    forced_resp = client.get("/api/v1/organizations/me", headers=headers)
-    assert forced_resp.status_code == 200, forced_resp.text
-    assert forced_resp.json()["recruiter_workflow_v2_enabled"] is False
-
-    forced_patch_resp = client.patch(
-        "/api/v1/organizations/me",
-        json={"recruiter_workflow_v2_enabled": True},
-        headers=headers,
-    )
-    assert forced_patch_resp.status_code == 200, forced_patch_resp.text
-    assert forced_patch_resp.json()["recruiter_workflow_v2_enabled"] is False
-
-    monkeypatch.setattr(organization_routes.settings, "RECRUITER_WORKFLOW_V2_FORCE_OFF", False)
-    unforced_resp = client.get("/api/v1/organizations/me", headers=headers)
-    assert unforced_resp.status_code == 200, unforced_resp.text
-    assert unforced_resp.json()["recruiter_workflow_v2_enabled"] is True
+    assert disable_resp.status_code == 422, disable_resp.text
+    assert "cannot be disabled" in str(disable_resp.json().get("detail", "")).lower()
 
 
 def test_update_org_no_auth_401(client):
