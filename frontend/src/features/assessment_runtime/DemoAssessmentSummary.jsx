@@ -17,12 +17,6 @@ const scoreBarColor = (value) => {
   return 'var(--taali-danger)';
 };
 
-const formatScore100 = (value) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '—';
-  return Math.max(0, Math.min(100, numeric)).toFixed(1);
-};
-
 const renderIdentityBadges = (identity = {}) => ([
   identity.taskName ? `Task: ${identity.taskName}` : null,
   identity.durationLabel ? `Duration: ${identity.durationLabel}` : null,
@@ -36,9 +30,9 @@ export const DemoAssessmentSummary = ({
 }) => {
   const reportModel = summary?.reportModel || null;
   const identity = reportModel?.identity || {};
-  const source = reportModel?.source || null;
   const summaryModel = reportModel?.summaryModel || {};
-  const recommendation = reportModel?.recommendation || null;
+  const source = reportModel?.source || null;
+  const feedback = reportModel?.feedback || {};
   const hasDimensionSignal = Boolean(reportModel?.hasDimensionSignal);
   const dimensionEntries = Array.isArray(reportModel?.dimensionEntries) ? reportModel.dimensionEntries : [];
   const radarSeries = hasDimensionSignal ? [{
@@ -145,26 +139,26 @@ export const DemoAssessmentSummary = ({
               <div className="border-t border-[var(--taali-border-soft)] p-4 text-[var(--taali-text)] xl:border-l xl:border-t-0" style={{ background: 'var(--taali-panel-bg)' }}>
                 <div className="grid gap-3">
                   <Card className="bg-[var(--taali-surface)] p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div className="min-w-0 flex-1">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">TAALI score</div>
-                        <div className="mt-2 taali-display text-[3.8rem] font-semibold leading-none text-[var(--taali-text)]">
-                          {formatScore100(summaryModel.taaliScore)}
-                        </div>
-                        {summaryModel.heuristicSummary ? (
-                          <p className="mt-3 max-w-xl text-sm leading-6 text-[var(--taali-muted)]">{summaryModel.heuristicSummary}</p>
-                        ) : null}
-                      </div>
-                      {recommendation?.label ? <Badge variant={recommendation?.variant || 'muted'}>{recommendation.label}</Badge> : null}
+                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">
+                      {feedback?.title || 'Assessment feedback'}
                     </div>
+                    <p className="mt-2 text-sm leading-6 text-[var(--taali-text)]">
+                      {feedback?.summary || 'Assessment evidence is available for this demo run.'}
+                    </p>
+                    {Array.isArray(feedback?.bullets) && feedback.bullets.length ? (
+                      <ul className="mt-3 space-y-2">
+                        {feedback.bullets.map((item) => (
+                          <li key={item} className="flex gap-2 text-sm text-[var(--taali-text)]">
+                            <span className="mt-1 h-1.5 w-1.5 rounded-full bg-[var(--taali-purple)]" />
+                            <span>{item}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                    {feedback?.note ? (
+                      <p className="mt-4 text-xs leading-5 text-[var(--taali-muted)]">{feedback.note}</p>
+                    ) : null}
                   </Card>
-
-                  <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-3 py-3">
-                    <div className="text-[10px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Assessment</div>
-                    <div className="mt-1.5 taali-display text-[1.55rem] font-semibold leading-none text-[var(--taali-text)]">
-                      {formatScore100(summaryModel.assessmentScore)}
-                    </div>
-                  </div>
                 </div>
               </div>
             </div>
