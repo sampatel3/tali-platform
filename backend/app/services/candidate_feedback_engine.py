@@ -2,12 +2,20 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import datetime, timezone
+import io
+import textwrap
 from typing import Any
+import unicodedata
 
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ..models.assessment import Assessment, AssessmentStatus
+from ..models.candidate_application import CandidateApplication
+from .document_service import load_stored_document_bytes
+from .taali_scoring import compute_role_fit_score, compute_taali_score
 
 
 _DIMENSION_ALIASES = {
@@ -110,6 +118,29 @@ _CONTEXT_HINT_WORDS = {
     "integration",
 }
 
+_PDF_PAGE_WIDTH = 612
+_PDF_PAGE_HEIGHT = 792
+_PDF_LEFT_MARGIN = 54
+_PDF_TOP_MARGIN = 750
+_PDF_BOTTOM_MARGIN = 54
+_PDF_BODY_WRAP = 92
+_A4_PAGE_WIDTH = 595
+_A4_PAGE_HEIGHT = 842
+_PDF_BRAND_PURPLE = "#9D00FF"
+_PDF_BRAND_PURPLE_SOFT = "#F3E9FF"
+_PDF_BORDER_SOFT = "#D8D5E8"
+_PDF_TEXT = "#171B2D"
+_PDF_MUTED = "#667085"
+_PDF_CARD_BG = "#FFFFFF"
+
+
+@dataclass(frozen=True)
+class _PdfLine:
+    text: str
+    font: str = "F1"
+    size: int = 11
+    leading: int = 14
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -125,6 +156,17 @@ def _is_completed(assessment: Assessment) -> bool:
         AssessmentStatus.COMPLETED.value,
         AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT.value,
     }
+
+
+def _completed_assessment_query_filter():
+    return and_(
+        Assessment.completed_at.isnot(None),
+        Assessment.is_voided.is_(False),
+        or_(
+            Assessment.status == AssessmentStatus.COMPLETED,
+            Assessment.completed_due_to_timeout.is_(True),
+        ),
+    )
 
 
 def _score_100(assessment: Assessment) -> float | None:
@@ -143,6 +185,15 @@ def _score_10(assessment: Assessment) -> float | None:
         return float(score)
     score_100 = _score_100(assessment)
     return None if score_100 is None else float(score_100 / 10.0)
+
+
+def _normalize_score_100(value: Any) -> float | None:
+    if not isinstance(value, (int, float)):
+        return None
+    numeric = float(value)
+    if 0.0 <= numeric <= 10.0:
+        numeric *= 10.0
+    return round(max(0.0, min(100.0, numeric)), 1)
 
 
 def _extract_category_scores(assessment: Assessment) -> dict[str, float]:
@@ -183,9 +234,7 @@ def _benchmark_payload(db: Session, assessment: Assessment, scores: dict[str, fl
         .filter(
             Assessment.organization_id == assessment.organization_id,
             Assessment.task_id == assessment.task_id,
-            Assessment.status.in_(
-                [AssessmentStatus.COMPLETED, AssessmentStatus.COMPLETED_DUE_TO_TIMEOUT]
-            ),
+            _completed_assessment_query_filter(),
         )
         .all()
     )
@@ -536,39 +585,1454 @@ def build_feedback_text_report(payload: dict[str, Any]) -> str:
     return "\n".join(lines).strip()
 
 
-def build_plain_text_pdf(body_text: str) -> bytes:
-    escaped = (
-        str(body_text or "")
-        .replace("\\", "\\\\")
-        .replace("(", "\\(")
-        .replace(")", "\\)")
+def _pdf_escape(value: str) -> str:
+    normalized = unicodedata.normalize("NFKD", str(value or ""))
+    safe = normalized.encode("latin-1", "ignore").decode("latin-1")
+    return safe.replace("\\", "\\\\").replace("(", "\\(").replace(")", "\\)")
+
+
+def _wrap_pdf_text(text: str, width: int) -> list[str]:
+    raw = str(text or "").rstrip()
+    if not raw:
+        return [""]
+
+    stripped = raw.lstrip()
+    indent = raw[: len(raw) - len(stripped)]
+    bullet_prefix = ""
+    body = stripped
+    subsequent_indent = indent
+    if stripped.startswith("- "):
+        bullet_prefix = f"{indent}- "
+        body = stripped[2:]
+        subsequent_indent = f"{indent}  "
+    elif stripped.startswith("* "):
+        bullet_prefix = f"{indent}* "
+        body = stripped[2:]
+        subsequent_indent = f"{indent}  "
+
+    wrapped = textwrap.wrap(
+        body,
+        width=width,
+        initial_indent=bullet_prefix or indent,
+        subsequent_indent=subsequent_indent,
+        break_long_words=False,
+        break_on_hyphens=False,
     )
-    stream = f"BT /F1 11 Tf 50 780 Td ({escaped.replace(chr(10), ') Tj T* (')}) Tj ET"
-    pdf = (
-        b"%PDF-1.4\n"
-        b"1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n"
-        b"2 0 obj << /Type /Pages /Kids [3 0 R] /Count 1 >> endobj\n"
-        b"3 0 obj << /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >> endobj\n"
-        b"4 0 obj << /Type /Font /Subtype /Type1 /BaseFont /Helvetica >> endobj\n"
+    return wrapped or [bullet_prefix or indent]
+
+
+def _append_wrapped_pdf_lines(
+    output: list[_PdfLine],
+    text: str,
+    *,
+    font: str = "F1",
+    size: int = 11,
+    leading: int = 14,
+    width: int = _PDF_BODY_WRAP,
+) -> None:
+    for raw_line in str(text or "").splitlines() or [""]:
+        for wrapped in _wrap_pdf_text(raw_line, width):
+            output.append(_PdfLine(text=wrapped, font=font, size=size, leading=leading))
+
+
+def _paginate_pdf_lines(lines: list[_PdfLine]) -> list[list[tuple[float, _PdfLine]]]:
+    return _paginate_pdf_lines_with_bounds(
+        lines,
+        top_baseline=_PDF_TOP_MARGIN,
+        bottom_margin=_PDF_BOTTOM_MARGIN,
     )
-    content = stream.encode("latin-1", errors="ignore")
-    pdf += (
-        f"5 0 obj << /Length {len(content)} >> stream\n".encode("ascii")
-        + content
-        + b"\nendstream endobj\n"
-    )
+
+
+def _paginate_pdf_lines_with_bounds(
+    lines: list[_PdfLine],
+    *,
+    top_baseline: float,
+    bottom_margin: float,
+) -> list[list[tuple[float, _PdfLine]]]:
+    pages: list[list[tuple[float, _PdfLine]]] = []
+    current_page: list[tuple[float, _PdfLine]] = []
+    y = top_baseline
+
+    for line in lines:
+        if y - line.leading < bottom_margin and current_page:
+            pages.append(current_page)
+            current_page = []
+            y = top_baseline
+        current_page.append((y, line))
+        y -= line.leading
+
+    if current_page or not pages:
+        pages.append(current_page)
+    return pages
+
+
+def _build_pdf_from_page_streams(page_streams: list[bytes]) -> bytes:
+    return _build_pdf_with_dimensions(page_streams, page_width=_PDF_PAGE_WIDTH, page_height=_PDF_PAGE_HEIGHT)
+
+
+def _build_pdf_with_dimensions(
+    page_streams: list[bytes],
+    *,
+    page_width: int,
+    page_height: int,
+) -> bytes:
+    page_count = max(1, len(page_streams))
+    font_regular_obj = 3
+    font_bold_obj = 4
+    next_obj_num = 5
+    page_obj_nums: list[int] = []
+    content_obj_nums: list[int] = []
+    for _ in range(page_count):
+        page_obj_nums.append(next_obj_num)
+        content_obj_nums.append(next_obj_num + 1)
+        next_obj_num += 2
+
+    pdf = bytearray(b"%PDF-1.4\n")
+    offsets = [0] * next_obj_num
+
+    def emit(obj_num: int, payload: bytes) -> None:
+        offsets[obj_num] = len(pdf)
+        pdf.extend(f"{obj_num} 0 obj\n".encode("ascii"))
+        pdf.extend(payload)
+        pdf.extend(b"\nendobj\n")
+
+    emit(1, b"<< /Type /Catalog /Pages 2 0 R >>")
+    kids = " ".join(f"{obj_num} 0 R" for obj_num in page_obj_nums)
+    emit(2, f"<< /Type /Pages /Kids [{kids}] /Count {page_count} >>".encode("ascii"))
+    emit(font_regular_obj, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>")
+    emit(font_bold_obj, b"<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica-Bold >>")
+
+    for page_obj_num, content_obj_num, content in zip(page_obj_nums, content_obj_nums, page_streams, strict=False):
+        emit(
+            page_obj_num,
+            (
+                f"<< /Type /Page /Parent 2 0 R /MediaBox [0 0 {page_width} {page_height}] "
+                f"/Resources << /Font << /F1 {font_regular_obj} 0 R /F2 {font_bold_obj} 0 R >> >> "
+                f"/Contents {content_obj_num} 0 R >>"
+            ).encode("ascii"),
+        )
+        emit(
+            content_obj_num,
+            f"<< /Length {len(content)} >>\nstream\n".encode("ascii") + content + b"\nendstream",
+        )
+
     xref_pos = len(pdf)
-    xref = (
-        b"xref\n0 6\n"
-        b"0000000000 65535 f \n"
-        b"0000000009 00000 n \n"
-        b"0000000058 00000 n \n"
-        b"0000000115 00000 n \n"
-        b"0000000241 00000 n \n"
-        b"0000000311 00000 n \n"
+    pdf.extend(f"xref\n0 {next_obj_num}\n".encode("ascii"))
+    pdf.extend(b"0000000000 65535 f \n")
+    for obj_num in range(1, next_obj_num):
+        pdf.extend(f"{offsets[obj_num]:010d} 00000 n \n".encode("ascii"))
+    pdf.extend(f"trailer << /Size {next_obj_num} /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF".encode("ascii"))
+    return bytes(pdf)
+
+
+def build_wrapped_text_pdf(
+    body_text: str,
+    *,
+    title: str | None = None,
+    subtitle: str | None = None,
+) -> bytes:
+    lines: list[_PdfLine] = []
+    if title:
+        _append_wrapped_pdf_lines(lines, title, font="F2", size=18, leading=24, width=52)
+    if subtitle:
+        _append_wrapped_pdf_lines(lines, subtitle, font="F1", size=11, leading=16, width=82)
+    if title or subtitle:
+        lines.append(_PdfLine(text="", leading=12))
+    _append_wrapped_pdf_lines(lines, body_text, font="F1", size=11, leading=14, width=_PDF_BODY_WRAP)
+
+    page_layouts = _paginate_pdf_lines(lines)
+    page_streams: list[bytes] = []
+    for page_index, page in enumerate(page_layouts, start=1):
+        ops: list[str] = []
+        for y, line in page:
+            if not line.text:
+                continue
+            ops.append(
+                f"BT /{line.font} {line.size} Tf {_PDF_LEFT_MARGIN} {y:.1f} Td ({_pdf_escape(line.text)}) Tj ET"
+            )
+        footer = f"Page {page_index} of {len(page_layouts)}"
+        ops.append(f"BT /F1 9 Tf {_PDF_LEFT_MARGIN} 28 Td ({_pdf_escape(footer)}) Tj ET")
+        page_streams.append("\n".join(ops).encode("latin-1", "ignore"))
+
+    return _build_pdf_from_page_streams(page_streams)
+
+
+def build_plain_text_pdf(body_text: str) -> bytes:
+    return build_wrapped_text_pdf(body_text)
+
+
+def _rgb_components(hex_color: str, fallback: tuple[float, float, float] = (0.0, 0.0, 0.0)) -> tuple[float, float, float]:
+    raw = str(hex_color or "").strip().lstrip("#")
+    if len(raw) != 6:
+        return fallback
+    try:
+        return tuple(round(int(raw[index : index + 2], 16) / 255.0, 4) for index in (0, 2, 4))
+    except ValueError:
+        return fallback
+
+
+def _pdf_color_ops(hex_color: str, *, fill: bool = True) -> str:
+    r, g, b = _rgb_components(hex_color)
+    operator = "rg" if fill else "RG"
+    return f"{r} {g} {b} {operator}"
+
+
+def _pdf_rect_top(
+    x: float,
+    top: float,
+    width: float,
+    height: float,
+    *,
+    fill_color: str | None = None,
+    stroke_color: str | None = None,
+    line_width: float = 1.0,
+) -> str:
+    y = _A4_PAGE_HEIGHT - top - height
+    ops: list[str] = []
+    if fill_color:
+        ops.append(_pdf_color_ops(fill_color, fill=True))
+    if stroke_color:
+        ops.append(_pdf_color_ops(stroke_color, fill=False))
+        ops.append(f"{line_width} w")
+    paint = "B" if fill_color and stroke_color else "f" if fill_color else "S"
+    ops.append(f"{x:.1f} {y:.1f} {width:.1f} {height:.1f} re {paint}")
+    return "\n".join(ops)
+
+
+def _estimate_wrap_width(width: float, font_size: int) -> int:
+    return max(12, int(width / max(font_size * 0.54, 1.0)))
+
+
+def _truncate_pdf_line(text: str, max_chars: int) -> str:
+    if len(text) <= max_chars:
+        return text
+    trimmed = text[: max_chars - 1].rstrip(" ,.;:-")
+    return f"{trimmed}…"
+
+
+def _wrapped_pdf_lines_for_width(
+    text: str,
+    *,
+    width: float,
+    font_size: int,
+    max_lines: int | None = None,
+) -> list[str]:
+    lines: list[str] = []
+    wrap_width = _estimate_wrap_width(width, font_size)
+    for raw_line in str(text or "").splitlines() or [""]:
+        lines.extend(_wrap_pdf_text(raw_line, wrap_width))
+    if max_lines is not None and len(lines) > max_lines:
+        lines = lines[:max_lines]
+        lines[-1] = _truncate_pdf_line(lines[-1], max(8, wrap_width - 2))
+    return lines or [""]
+
+
+def _pdf_text_block_ops(
+    text: str,
+    *,
+    x: float,
+    top: float,
+    width: float,
+    font: str = "F1",
+    size: int = 11,
+    leading: int = 14,
+    color: str = _PDF_TEXT,
+    max_lines: int | None = None,
+) -> tuple[list[str], float]:
+    ops: list[str] = []
+    lines = _wrapped_pdf_lines_for_width(text, width=width, font_size=size, max_lines=max_lines)
+    for index, line in enumerate(lines):
+        baseline_y = _A4_PAGE_HEIGHT - top - (index * leading) - size
+        ops.append(
+            " ".join(
+                [
+                    "BT",
+                    f"/{font}",
+                    f"{size}",
+                    "Tf",
+                    _pdf_color_ops(color, fill=True),
+                    "1 0 0 1",
+                    f"{x:.1f}",
+                    f"{baseline_y:.1f}",
+                    "Tm",
+                    f"({_pdf_escape(line)})",
+                    "Tj ET",
+                ]
+            )
+        )
+    return ops, top + (len(lines) * leading)
+
+
+def _pdf_metric_card_ops(
+    *,
+    x: float,
+    top: float,
+    width: float,
+    height: float,
+    label: str,
+    value: float | None,
+) -> list[str]:
+    ops = [
+        _pdf_rect_top(x, top, width, height, fill_color=_PDF_CARD_BG, stroke_color=_PDF_BORDER_SOFT),
+    ]
+    label_ops, _ = _pdf_text_block_ops(
+        label.upper(),
+        x=x + 14,
+        top=top + 14,
+        width=width - 28,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
     )
-    trailer = f"trailer << /Size 6 /Root 1 0 R >>\nstartxref\n{xref_pos}\n%%EOF".encode("ascii")
-    return pdf + xref + trailer
+    value_ops, _ = _pdf_text_block_ops(
+        "—" if value is None else f"{value:.1f}",
+        x=x + 14,
+        top=top + 34,
+        width=width - 28,
+        font="F2",
+        size=22,
+        leading=24,
+        color=_PDF_TEXT,
+        max_lines=1,
+    )
+    ops.extend(label_ops)
+    ops.extend(value_ops)
+    return ops
+
+
+def _unique_text_items(items: list[str], max_items: int = 4) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in items:
+        text = str(raw or "").strip()
+        if not text:
+            continue
+        key = text.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _client_report_probe_items(payload: dict[str, Any]) -> list[str]:
+    interview_focus = payload.get("interview_focus") if isinstance(payload.get("interview_focus"), list) else []
+    requirement_gap = payload.get("first_requirement_gap") if isinstance(payload.get("first_requirement_gap"), dict) else {}
+    items = []
+    if requirement_gap.get("requirement"):
+        evidence = str(requirement_gap.get("evidence") or requirement_gap.get("impact") or "").strip()
+        items.append(
+            f"{requirement_gap.get('requirement')}: {evidence or 'Validate whether the candidate can close this gap quickly.'}"
+        )
+    for item in interview_focus[:3]:
+        dimension = str(item.get("dimension") or item.get("focus") or "Interview focus").strip()
+        summary = str(item.get("evidence") or item.get("practice_advice") or item.get("focus") or "").strip()
+        if dimension and summary:
+            items.append(f"{dimension}: {summary}")
+    return _unique_text_items(items, 3)
+
+
+def _client_report_gap_items(payload: dict[str, Any]) -> list[str]:
+    concerns = payload.get("concerns") if isinstance(payload.get("concerns"), list) else []
+    missing_skills = payload.get("missing_skills") if isinstance(payload.get("missing_skills"), list) else []
+    requirements = payload.get("requirements_assessment") if isinstance(payload.get("requirements_assessment"), list) else []
+    requirement_gaps = [
+        str(item.get("requirement") or "").strip()
+        for item in requirements
+        if str(item.get("status") or "").lower() not in {"", "met"}
+    ]
+    items = [*(f"Skill gap: {item}" for item in missing_skills), *concerns, *requirement_gaps]
+    return _unique_text_items(items, 4)
+
+
+def _client_report_assessment_key_points(payload: dict[str, Any]) -> list[str]:
+    strengths = payload.get("strengths") if isinstance(payload.get("strengths"), list) else []
+    dimension_scores = payload.get("dimension_scores") if isinstance(payload.get("dimension_scores"), list) else []
+    prompt_count = payload.get("prompt_count")
+    tests_passed = payload.get("tests_passed")
+    tests_total = payload.get("tests_total")
+    benchmark_label = str(payload.get("benchmark_label") or "").strip()
+    integrity_note = str(payload.get("integrity_note") or "").strip()
+    matching_skills = payload.get("matching_skills") if isinstance(payload.get("matching_skills"), list) else []
+    requirements_coverage = payload.get("requirements_coverage") if isinstance(payload.get("requirements_coverage"), dict) else {}
+    first_requirement_gap = payload.get("first_requirement_gap") if isinstance(payload.get("first_requirement_gap"), dict) else {}
+    source_kind = str(payload.get("source_kind") or "assessment")
+
+    items: list[str] = []
+    top_strengths = [str(item.get("dimension") or "").strip() for item in strengths[:3] if str(item.get("dimension") or "").strip()]
+    if top_strengths:
+        items.append(f"Strongest signals: {', '.join(top_strengths)}")
+
+    top_dimensions = [
+        f"{str(item.get('label') or '').strip()} {item.get('score')}/10"
+        for item in dimension_scores[:4]
+        if str(item.get("label") or "").strip() and item.get("score") is not None
+    ]
+    if top_dimensions:
+        items.append(f"Highest rubric scores: {', '.join(top_dimensions)}")
+
+    if isinstance(tests_total, (int, float)) and tests_total:
+        items.append(f"Test completion evidence: {int(tests_passed or 0)}/{int(tests_total)} tests passed")
+    if isinstance(prompt_count, (int, float)) and prompt_count:
+        items.append(f"AI interactions captured: {int(prompt_count)}")
+    if benchmark_label:
+        items.append(f"Benchmark position: {benchmark_label}")
+    if integrity_note and not integrity_note.lower().startswith("no integrity modifiers"):
+        items.append(integrity_note)
+
+    if source_kind != "assessment":
+        coverage_total = int(requirements_coverage.get("total") or 0)
+        if coverage_total:
+            items.append(
+                "Recruiter requirements coverage: "
+                f"{int(requirements_coverage.get('met') or 0)}/{coverage_total} met, "
+                f"{int(requirements_coverage.get('partially_met') or 0)} partial, "
+                f"{int(requirements_coverage.get('missing') or 0)} missing."
+            )
+        if matching_skills:
+            items.append(f"Best-matched skills: {', '.join(str(item).strip() for item in matching_skills[:5] if str(item).strip())}")
+        if first_requirement_gap.get("requirement"):
+            evidence = str(first_requirement_gap.get("impact") or first_requirement_gap.get("evidence") or "").strip()
+            items.append(
+                f"Primary validation area: {first_requirement_gap.get('requirement')}"
+                + (f" ({evidence})" if evidence else "")
+            )
+
+    return _unique_text_items(items, 5)
+
+
+def _client_report_key_points_title(payload: dict[str, Any]) -> str:
+    return "Assessment key points" if str(payload.get("source_kind") or "assessment") == "assessment" else "Review key points"
+
+
+def _looks_like_cv_heading(line: str) -> bool:
+    text = str(line or "").strip()
+    if not text:
+        return False
+    letters = "".join(ch for ch in text if ch.isalpha())
+    if len(text.split()) <= 6 and text.endswith(":"):
+        return True
+    return bool(letters) and text == text.upper() and len(letters) >= 4
+
+
+def _normalize_cv_appendix_text(value: str) -> str:
+    lines = [str(item or "").strip() for item in str(value or "").replace("\r", "\n").splitlines()]
+    lines = [line for line in lines if line]
+    if not lines:
+        return "Candidate CV text is not available for this export."
+
+    short_lines = [line for line in lines if len(line.split()) <= 3]
+    if len(short_lines) / max(1, len(lines)) < 0.45:
+        return "\n".join(lines)
+
+    paragraphs: list[str] = []
+    buffer: list[str] = []
+
+    def flush() -> None:
+        if not buffer:
+            return
+        paragraphs.append(" ".join(buffer).strip())
+        buffer.clear()
+
+    for line in lines:
+        if line.startswith(("-", "•")):
+            flush()
+            paragraphs.append(line)
+            continue
+        if "@" in line or "linkedin.com" in line or "github.com" in line:
+            flush()
+            paragraphs.append(line)
+            continue
+        if _looks_like_cv_heading(line):
+            flush()
+            paragraphs.append(line)
+            continue
+        buffer.append(line)
+        if line.endswith((".", "!", "?", ":")) or len(" ".join(buffer)) >= 260:
+            flush()
+
+    flush()
+    return "\n".join(paragraphs).strip()
+
+
+def _load_cv_pdf_bytes(payload: dict[str, Any]) -> bytes | None:
+    cv_filename = str(payload.get("cv_filename") or "").strip().lower()
+    if not cv_filename.endswith(".pdf"):
+        return None
+    cv_file_url = str(payload.get("cv_file_url") or "").strip()
+    if not cv_file_url:
+        return None
+    return load_stored_document_bytes(cv_file_url)
+
+
+def _client_report_cv_page_streams(payload: dict[str, Any]) -> list[bytes]:
+    candidate_name = str(payload.get("candidate_name") or "Candidate")
+    role_name = str(payload.get("role_name") or "Role")
+    cv_filename = str(payload.get("cv_filename") or "").strip()
+    cv_text = _normalize_cv_appendix_text(str(payload.get("cv_text") or "").strip())
+
+    lines: list[_PdfLine] = []
+    _append_wrapped_pdf_lines(lines, cv_text, font="F1", size=10, leading=14, width=82)
+    page_layouts = _paginate_pdf_lines_with_bounds(
+        lines,
+        top_baseline=616,
+        bottom_margin=64,
+    )
+
+    page_streams: list[bytes] = []
+    total_pages = max(1, len(page_layouts))
+    for page_index, page in enumerate(page_layouts, start=1):
+        ops: list[str] = []
+        ops.append(_pdf_rect_top(0, 0, _A4_PAGE_WIDTH, _A4_PAGE_HEIGHT, fill_color="#FFFFFF"))
+        ops.append(_pdf_rect_top(0, 0, _A4_PAGE_WIDTH, 72, fill_color=_PDF_BRAND_PURPLE))
+
+        header_left, _ = _pdf_text_block_ops(
+            "TAALI",
+            x=40,
+            top=18,
+            width=120,
+            font="F2",
+            size=22,
+            leading=24,
+            color="#FFFFFF",
+            max_lines=1,
+        )
+        header_title, _ = _pdf_text_block_ops(
+            "Candidate CV" if page_index == 1 else "Candidate CV (continued)",
+            x=40,
+            top=44,
+            width=220,
+            font="F1",
+            size=11,
+            leading=13,
+            color="#FFFFFF",
+            max_lines=1,
+        )
+        header_right, _ = _pdf_text_block_ops(
+            f"Page {page_index + 1}",
+            x=470,
+            top=30,
+            width=85,
+            font="F2",
+            size=10,
+            leading=12,
+            color="#FFFFFF",
+            max_lines=1,
+        )
+        ops.extend(header_left)
+        ops.extend(header_title)
+        ops.extend(header_right)
+
+        name_ops, _ = _pdf_text_block_ops(
+            candidate_name,
+            x=40,
+            top=96,
+            width=320,
+            font="F2",
+            size=20,
+            leading=24,
+            color=_PDF_TEXT,
+            max_lines=1,
+        )
+        meta_ops, _ = _pdf_text_block_ops(
+            " | ".join(
+                item for item in [
+                    role_name and f"Role: {role_name}",
+                    cv_filename and f"CV: {cv_filename}",
+                ]
+                if item
+            ),
+            x=40,
+            top=124,
+            width=420,
+            font="F1",
+            size=10,
+            leading=12,
+            color=_PDF_MUTED,
+            max_lines=1,
+        )
+        ops.extend(name_ops)
+        ops.extend(meta_ops)
+        ops.append(_pdf_rect_top(40, 152, 515, 1, fill_color=_PDF_BORDER_SOFT))
+
+        for y, line in page:
+            if not line.text:
+                continue
+            ops.append(
+                " ".join(
+                    [
+                        "BT",
+                        f"/{line.font}",
+                        f"{line.size}",
+                        "Tf",
+                        _pdf_color_ops(_PDF_TEXT, fill=True),
+                        "1 0 0 1",
+                        "40",
+                        f"{y:.1f}",
+                        "Tm",
+                        f"({_pdf_escape(line.text)})",
+                        "Tj ET",
+                    ]
+                )
+            )
+
+        footer_ops, _ = _pdf_text_block_ops(
+            "TAALI | Candidate CV appendix",
+            x=40,
+            top=806,
+            width=240,
+            font="F2",
+            size=9,
+            leading=11,
+            color=_PDF_MUTED,
+            max_lines=1,
+        )
+        ops.extend(footer_ops)
+        page_streams.append("\n".join(ops).encode("latin-1", "ignore"))
+
+    return page_streams
+
+
+def build_client_assessment_summary_pdf(payload: dict[str, Any]) -> bytes:
+    scores = payload.get("scores") if isinstance(payload.get("scores"), dict) else {}
+    candidate_name = str(payload.get("candidate_name") or "Candidate")
+    role_name = str(payload.get("role_name") or "Role")
+    task_name = str(payload.get("task_name") or "Assessment")
+    organization_name = str(payload.get("organization_name") or "Employer")
+    recommendation = str(payload.get("recommendation") or "Pending")
+    summary_text = str(payload.get("executive_summary") or "Assessment summary unavailable.").strip()
+    role_fit_summary = str(payload.get("role_fit_summary") or "Role-fit evidence is available for employer review.").strip()
+    matching_skills = _unique_text_items(payload.get("matching_skills") or [], 4)
+    gap_items = _client_report_gap_items(payload)
+    assessment_key_points = _client_report_assessment_key_points(payload)
+    summary_title = str(payload.get("summary_title") or "Assessment summary").strip()
+    key_points_title = _client_report_key_points_title(payload)
+    completed_at = str(payload.get("completed_at") or "").strip()
+    generated_at = str(payload.get("generated_at") or "").strip()
+    duration_label = str(payload.get("duration_label") or "").strip()
+    benchmark_label = str(payload.get("benchmark_label") or "").strip()
+
+    ops: list[str] = []
+    ops.append(_pdf_rect_top(0, 0, _A4_PAGE_WIDTH, _A4_PAGE_HEIGHT, fill_color="#FBF7F1"))
+    ops.append(_pdf_rect_top(0, 0, _A4_PAGE_WIDTH, 84, fill_color=_PDF_BRAND_PURPLE))
+
+    header_left, _ = _pdf_text_block_ops(
+        "TAALI",
+        x=40,
+        top=18,
+        width=120,
+        font="F2",
+        size=24,
+        leading=26,
+        color="#FFFFFF",
+        max_lines=1,
+    )
+    header_title, _ = _pdf_text_block_ops(
+        "Client Assessment Summary",
+        x=40,
+        top=46,
+        width=260,
+        font="F1",
+        size=11,
+        leading=13,
+        color="#FFFFFF",
+        max_lines=1,
+    )
+    header_right, _ = _pdf_text_block_ops(
+        f"Prepared for {organization_name}",
+        x=330,
+        top=24,
+        width=225,
+        font="F2",
+        size=11,
+        leading=13,
+        color="#FFFFFF",
+        max_lines=1,
+    )
+    header_meta, _ = _pdf_text_block_ops(
+        "Employer-facing summary for shortlist review",
+        x=330,
+        top=43,
+        width=225,
+        font="F1",
+        size=10,
+        leading=12,
+        color="#FFFFFF",
+        max_lines=1,
+    )
+    ops.extend(header_left)
+    ops.extend(header_title)
+    ops.extend(header_right)
+    ops.extend(header_meta)
+
+    name_ops, _ = _pdf_text_block_ops(
+        candidate_name,
+        x=40,
+        top=110,
+        width=360,
+        font="F2",
+        size=28,
+        leading=30,
+        color=_PDF_TEXT,
+        max_lines=1,
+    )
+    meta_text = " | ".join(
+        item for item in [
+            role_name and f"Role: {role_name}",
+            task_name and f"Assessment: {task_name}",
+            duration_label and f"Duration: {duration_label}",
+        ]
+        if item
+    )
+    secondary_meta = " | ".join(
+        item for item in [
+            completed_at and f"Completed: {completed_at[:10]}",
+            benchmark_label and f"Benchmark: {benchmark_label}",
+        ]
+        if item
+    )
+    meta_ops, _ = _pdf_text_block_ops(
+        meta_text,
+        x=40,
+        top=146,
+        width=360,
+        font="F1",
+        size=10,
+        leading=12,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    meta_secondary_ops, _ = _pdf_text_block_ops(
+        secondary_meta,
+        x=40,
+        top=162,
+        width=360,
+        font="F1",
+        size=10,
+        leading=12,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    ops.extend(name_ops)
+    ops.extend(meta_ops)
+    ops.extend(meta_secondary_ops)
+    ops.append(_pdf_rect_top(40, 190, 515, 1, fill_color=_PDF_BORDER_SOFT))
+
+    summary_card_top = 214
+    summary_card_width = 332
+    score_card_x = 398
+    score_card_width = 157
+    score_card_height = 208
+
+    summary_label_ops, _ = _pdf_text_block_ops(
+        summary_title,
+        x=40,
+        top=summary_card_top,
+        width=200,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    summary_reco_ops, _ = _pdf_text_block_ops(
+        recommendation.upper(),
+        x=286,
+        top=summary_card_top,
+        width=86,
+        font="F2",
+        size=10,
+        leading=12,
+        color=_PDF_BRAND_PURPLE,
+        max_lines=1,
+    )
+    summary_body_ops, _ = _pdf_text_block_ops(
+        summary_text,
+        x=40,
+        top=summary_card_top + 26,
+        width=summary_card_width,
+        font="F1",
+        size=12,
+        leading=18,
+        color=_PDF_TEXT,
+        max_lines=13,
+    )
+    ops.extend(summary_label_ops)
+    ops.extend(summary_reco_ops)
+    ops.extend(summary_body_ops)
+
+    ops.append(_pdf_rect_top(score_card_x, summary_card_top, score_card_width, score_card_height, fill_color=_PDF_BRAND_PURPLE_SOFT))
+    score_label_ops, _ = _pdf_text_block_ops(
+        "TAALI score",
+        x=score_card_x + 16,
+        top=summary_card_top + 16,
+        width=score_card_width - 32,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    score_value_ops, _ = _pdf_text_block_ops(
+        "—" if scores.get("taali_score") is None else f"{float(scores['taali_score']):.1f}",
+        x=score_card_x + 16,
+        top=summary_card_top + 40,
+        width=score_card_width - 32,
+        font="F2",
+        size=36,
+        leading=38,
+        color=_PDF_TEXT,
+        max_lines=1,
+    )
+    score_rec_ops, _ = _pdf_text_block_ops(
+        recommendation,
+        x=score_card_x + 16,
+        top=summary_card_top + 92,
+        width=score_card_width - 32,
+        font="F1",
+        size=11,
+        leading=13,
+        color=_PDF_TEXT,
+        max_lines=1,
+    )
+    ops.extend(score_label_ops)
+    ops.extend(score_value_ops)
+    ops.extend(score_rec_ops)
+    score_role_label_ops, _ = _pdf_text_block_ops(
+        "ROLE FIT",
+        x=score_card_x + 16,
+        top=summary_card_top + 134,
+        width=60,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    score_role_value_ops, _ = _pdf_text_block_ops(
+        "Pending" if scores.get("role_fit_score") is None else f"{float(scores['role_fit_score']):.1f}",
+        x=score_card_x + 16,
+        top=summary_card_top + 150,
+        width=60,
+        font="F2",
+        size=18,
+        leading=20,
+        color=_PDF_TEXT,
+        max_lines=1,
+    )
+    score_assessment_label_ops, _ = _pdf_text_block_ops(
+        "ASSESSMENT",
+        x=score_card_x + 84,
+        top=summary_card_top + 134,
+        width=66,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    score_assessment_value_ops, _ = _pdf_text_block_ops(
+        "Pending" if scores.get("assessment_score") is None else f"{float(scores['assessment_score']):.1f}",
+        x=score_card_x + 84,
+        top=summary_card_top + 150,
+        width=66,
+        font="F2",
+        size=18,
+        leading=20,
+        color=_PDF_TEXT,
+        max_lines=1,
+    )
+    ops.extend(score_role_label_ops)
+    ops.extend(score_role_value_ops)
+    ops.extend(score_assessment_label_ops)
+    ops.extend(score_assessment_value_ops)
+
+    lower_top = 470
+    lower_width = 246
+    gap = 23
+
+    role_fit_label_ops, _ = _pdf_text_block_ops(
+        "Role fit summary",
+        x=40,
+        top=lower_top,
+        width=lower_width,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    role_fit_body_ops, role_fit_body_bottom = _pdf_text_block_ops(
+        role_fit_summary,
+        x=40,
+        top=lower_top + 24,
+        width=lower_width,
+        font="F1",
+        size=11,
+        leading=16,
+        color=_PDF_TEXT,
+        max_lines=7,
+    )
+    role_fit_skills_label, _ = _pdf_text_block_ops(
+        "Matching skills",
+        x=40,
+        top=role_fit_body_bottom + 12,
+        width=lower_width,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    role_fit_skills_body, role_fit_skills_bottom = _pdf_text_block_ops(
+        ", ".join(matching_skills) if matching_skills else "No matching skills were extracted for the client-facing summary.",
+        x=40,
+        top=role_fit_body_bottom + 30,
+        width=lower_width,
+        font="F1",
+        size=11,
+        leading=15,
+        color=_PDF_TEXT,
+        max_lines=5,
+    )
+    role_fit_gaps_label, _ = _pdf_text_block_ops(
+        "Main gaps",
+        x=40,
+        top=role_fit_skills_bottom + 14,
+        width=lower_width,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    role_fit_gaps_body, _ = _pdf_text_block_ops(
+        "\n".join(f"- {item}" for item in gap_items) if gap_items else "No material role-fit gaps were surfaced in the exported summary.",
+        x=40,
+        top=role_fit_skills_bottom + 32,
+        width=lower_width,
+        font="F1",
+        size=10,
+        leading=14,
+        color=_PDF_TEXT,
+        max_lines=8,
+    )
+    ops.extend(role_fit_label_ops)
+    ops.extend(role_fit_body_ops)
+    ops.extend(role_fit_skills_label)
+    ops.extend(role_fit_skills_body)
+    ops.extend(role_fit_gaps_label)
+    ops.extend(role_fit_gaps_body)
+
+    summary_points_x = 40 + lower_width + gap
+    summary_points_label_ops, _ = _pdf_text_block_ops(
+        key_points_title,
+        x=summary_points_x,
+        top=lower_top,
+        width=lower_width,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    summary_points_body_ops, _ = _pdf_text_block_ops(
+        "\n".join(f"- {item}" for item in assessment_key_points)
+        if assessment_key_points
+        else "- Key review points were not available for this export.",
+        x=summary_points_x,
+        top=lower_top + 24,
+        width=lower_width,
+        font="F1",
+        size=10,
+        leading=15,
+        color=_PDF_TEXT,
+        max_lines=13,
+    )
+    ops.extend(summary_points_label_ops)
+    ops.extend(summary_points_body_ops)
+
+    footer_top = 776
+    ops.append(_pdf_rect_top(40, footer_top, 515, 1, fill_color=_PDF_BORDER_SOFT))
+    footer_text = f"Generated {generated_at[:19].replace('T', ' ')}" if generated_at else "Generated by TAALI"
+    footer_left_ops, _ = _pdf_text_block_ops(
+        footer_text,
+        x=40,
+        top=footer_top + 8,
+        width=260,
+        font="F1",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    footer_right_ops, _ = _pdf_text_block_ops(
+        "TAALI | AI-native engineering assessment",
+        x=320,
+        top=footer_top + 8,
+        width=235,
+        font="F2",
+        size=9,
+        leading=11,
+        color=_PDF_MUTED,
+        max_lines=1,
+    )
+    ops.extend(footer_left_ops)
+    ops.extend(footer_right_ops)
+
+    summary_pdf = _build_pdf_with_dimensions(
+        ["\n".join(ops).encode("latin-1", "ignore")],
+        page_width=_A4_PAGE_WIDTH,
+        page_height=_A4_PAGE_HEIGHT,
+    )
+
+    cv_pdf_bytes = _load_cv_pdf_bytes(payload)
+    if cv_pdf_bytes:
+        try:
+            from PyPDF2 import PdfReader, PdfWriter
+
+            writer = PdfWriter()
+            summary_reader = PdfReader(io.BytesIO(summary_pdf))
+            cv_reader = PdfReader(io.BytesIO(cv_pdf_bytes))
+            for page in summary_reader.pages:
+                writer.add_page(page)
+            for page in cv_reader.pages:
+                writer.add_page(page)
+            output = io.BytesIO()
+            writer.write(output)
+            return output.getvalue()
+        except Exception:
+            pass
+
+    return _build_pdf_with_dimensions(
+        [
+            "\n".join(ops).encode("latin-1", "ignore"),
+            *_client_report_cv_page_streams(payload),
+        ],
+        page_width=_A4_PAGE_WIDTH,
+        page_height=_A4_PAGE_HEIGHT,
+    )
+
+
+def _assessment_score_components_100(assessment: Assessment) -> dict[str, float | None]:
+    breakdown = assessment.score_breakdown if isinstance(assessment.score_breakdown, dict) else {}
+    score_components = breakdown.get("score_components") if isinstance(breakdown.get("score_components"), dict) else {}
+    role_fit_components = (
+        score_components.get("role_fit_components")
+        if isinstance(score_components.get("role_fit_components"), dict)
+        else {}
+    )
+    details = assessment.cv_job_match_details if isinstance(assessment.cv_job_match_details, dict) else {}
+
+    cv_fit_score = _normalize_score_100(
+        score_components.get("cv_fit_score")
+        if score_components.get("cv_fit_score") is not None
+        else role_fit_components.get("cv_fit_score")
+        if role_fit_components.get("cv_fit_score") is not None
+        else assessment.cv_job_match_score
+    )
+    requirements_fit_score = _normalize_score_100(
+        score_components.get("requirements_fit_score")
+        if score_components.get("requirements_fit_score") is not None
+        else role_fit_components.get("requirements_fit_score")
+        if role_fit_components.get("requirements_fit_score") is not None
+        else details.get("requirements_match_score_100")
+    )
+    role_fit_score = _normalize_score_100(
+        score_components.get("role_fit_score")
+        if score_components.get("role_fit_score") is not None
+        else details.get("role_fit_score_100")
+        if details.get("role_fit_score_100") is not None
+        else compute_role_fit_score(cv_fit_score, requirements_fit_score)
+    )
+    assessment_score = _normalize_score_100(
+        score_components.get("assessment_score")
+        if score_components.get("assessment_score") is not None
+        else getattr(assessment, "assessment_score", None)
+        if getattr(assessment, "assessment_score", None) is not None
+        else getattr(assessment, "final_score", None)
+        if getattr(assessment, "final_score", None) is not None
+        else getattr(assessment, "score", None)
+    )
+    taali_score = _normalize_score_100(
+        score_components.get("taali_score")
+        if score_components.get("taali_score") is not None
+        else getattr(assessment, "taali_score", None)
+        if getattr(assessment, "taali_score", None) is not None
+        else compute_taali_score(assessment_score, role_fit_score)
+    )
+
+    return {
+        "assessment_score": assessment_score,
+        "taali_score": taali_score,
+        "role_fit_score": role_fit_score,
+        "cv_fit_score": cv_fit_score,
+        "requirements_fit_score": requirements_fit_score,
+    }
+
+
+def _recommendation_label(score_100: float | None) -> str:
+    if score_100 is None:
+        return "Pending"
+    if score_100 >= 80:
+        return "Strong Hire"
+    if score_100 >= 65:
+        return "Hire"
+    if score_100 >= 50:
+        return "Consider"
+    return "No Hire"
+
+
+def _format_duration_label(total_seconds: Any) -> str | None:
+    if not isinstance(total_seconds, (int, float)) or total_seconds <= 0:
+        return None
+    total_seconds = int(total_seconds)
+    minutes, seconds = divmod(total_seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours:
+        return f"{hours}h {minutes}m"
+    if seconds:
+        return f"{minutes}m {seconds}s"
+    return f"{minutes}m"
+
+
+def _client_report_integrity_note(assessment: Assessment, score_breakdown: dict[str, Any]) -> str:
+    applied_caps = score_breakdown.get("applied_caps") if isinstance(score_breakdown.get("applied_caps"), list) else []
+    fraud_flags = assessment.prompt_fraud_flags if isinstance(assessment.prompt_fraud_flags, list) else []
+    if "severe_unprofessional_language" in applied_caps:
+        return "Score was capped because severe unprofessional language was detected in the assessment transcript."
+    if "fraud" in applied_caps or fraud_flags:
+        return "Integrity modifiers were applied and this assessment should be reviewed alongside the flagged prompt evidence."
+    return "No integrity modifiers were applied to the exported score."
+
+
+def build_client_assessment_report_payload(
+    db: Session,
+    assessment: Assessment,
+    *,
+    organization_name: str,
+) -> dict[str, Any]:
+    prompts = assessment.ai_prompts if isinstance(assessment.ai_prompts, list) else []
+    scores = _extract_category_scores(assessment)
+    stats = _prompt_stats(prompts)
+    benchmark = _benchmark_payload(db, assessment, scores)
+    strongest = _strengths(scores)
+    improvements = _improvements(scores, stats)
+    score_breakdown = assessment.score_breakdown if isinstance(assessment.score_breakdown, dict) else {}
+    score_components = _assessment_score_components_100(assessment)
+    details = assessment.cv_job_match_details if isinstance(assessment.cv_job_match_details, dict) else {}
+    requirements = details.get("requirements_assessment") if isinstance(details.get("requirements_assessment"), list) else []
+    first_requirement_gap = next(
+        (
+            item for item in requirements
+            if str(item.get("status") or "").lower() not in {"", "met"}
+        ),
+        None,
+    )
+
+    benchmark_label = _top_or_bottom_label(benchmark.get("overall_percentile")) if isinstance(benchmark, dict) else None
+    strengths_summary = ", ".join(item.get("dimension", "") for item in strongest[:2] if item.get("dimension"))
+    executive_summary_parts = [
+        f"Recommendation: {_recommendation_label(score_components['taali_score'])}.",
+        str(details.get("summary") or "").strip(),
+        (
+            f"Strongest assessment signals were {strengths_summary}."
+            if strengths_summary
+            else ""
+        ),
+        (
+            f"Primary interview focus should be {first_requirement_gap.get('requirement')}."
+            if isinstance(first_requirement_gap, dict) and first_requirement_gap.get("requirement")
+            else (
+                f"Primary interview focus should be {improvements[0].get('dimension')}."
+                if improvements
+                else ""
+            )
+        ),
+    ]
+
+    return {
+        "source_kind": "assessment",
+        "summary_title": "Assessment summary",
+        "generated_at": _utcnow().isoformat(),
+        "organization_name": organization_name,
+        "candidate_name": (
+            (assessment.candidate.full_name if getattr(assessment, "candidate", None) else None)
+            or (assessment.candidate.email if getattr(assessment, "candidate", None) else None)
+            or "Candidate"
+        ),
+        "task_name": assessment.task.name if assessment.task else "Assessment",
+        "role_name": assessment.role.name if getattr(assessment, "role", None) else None,
+        "completed_at": assessment.completed_at.isoformat() if assessment.completed_at else None,
+        "duration_label": _format_duration_label(getattr(assessment, "total_duration_seconds", None)),
+        "prompt_count": getattr(assessment, "total_prompts", None),
+        "tests_passed": getattr(assessment, "tests_passed", None),
+        "tests_total": getattr(assessment, "tests_total", None),
+        "benchmark_label": benchmark_label,
+        "recommendation": _recommendation_label(score_components["taali_score"]),
+        "scores": score_components,
+        "executive_summary": " ".join(part for part in executive_summary_parts if part).strip(),
+        "dimension_scores": [
+            {
+                "label": _DIMENSION_META.get(key, {}).get("label", key),
+                "score": round(value, 1),
+            }
+            for key, value in sorted(scores.items(), key=lambda item: item[1], reverse=True)
+        ],
+        "strengths": strongest,
+        "interview_focus": improvements,
+        "role_fit_summary": str(details.get("summary") or "").strip() or None,
+        "matching_skills": [str(item).strip() for item in details.get("matching_skills", []) if str(item).strip()],
+        "missing_skills": [str(item).strip() for item in details.get("missing_skills", []) if str(item).strip()],
+        "experience_highlights": [str(item).strip() for item in details.get("experience_highlights", []) if str(item).strip()],
+        "concerns": [str(item).strip() for item in details.get("concerns", []) if str(item).strip()],
+        "requirements_coverage": details.get("requirements_coverage") if isinstance(details.get("requirements_coverage"), dict) else {},
+        "requirements_assessment": requirements,
+        "first_requirement_gap": first_requirement_gap,
+        "integrity_note": _client_report_integrity_note(assessment, score_breakdown),
+        "score_formula_version": score_breakdown.get("score_formula_version"),
+        "cv_filename": (
+            (assessment.application.cv_filename if getattr(assessment, "application", None) and assessment.application.cv_filename else None)
+            or (assessment.candidate.cv_filename if getattr(assessment, "candidate", None) and assessment.candidate.cv_filename else None)
+            or getattr(assessment, "cv_filename", None)
+        ),
+        "cv_file_url": (
+            (assessment.application.cv_file_url if getattr(assessment, "application", None) and assessment.application.cv_file_url else None)
+            or (assessment.candidate.cv_file_url if getattr(assessment, "candidate", None) and assessment.candidate.cv_file_url else None)
+        ),
+        "cv_text": (
+            (assessment.application.cv_text if getattr(assessment, "application", None) and assessment.application.cv_text else None)
+            or (assessment.candidate.cv_text if getattr(assessment, "candidate", None) and assessment.candidate.cv_text else None)
+            or ""
+        ),
+    }
+
+
+def _application_candidate_name(application: CandidateApplication) -> str:
+    return (
+        (application.candidate.full_name if getattr(application, "candidate", None) else None)
+        or (application.candidate.email if getattr(application, "candidate", None) else None)
+        or "Candidate"
+    )
+
+
+def _application_score_components_100(application: CandidateApplication) -> dict[str, float | None]:
+    details = application.cv_match_details if isinstance(application.cv_match_details, dict) else {}
+    cv_fit_score = _normalize_score_100(application.cv_match_score)
+    requirements_fit_score = _normalize_score_100(details.get("requirements_match_score_100"))
+    role_fit_score = _normalize_score_100(
+        details.get("role_fit_score_100")
+        if details.get("role_fit_score_100") is not None
+        else compute_role_fit_score(cv_fit_score, requirements_fit_score)
+    )
+    taali_score = _normalize_score_100(role_fit_score)
+    return {
+        "assessment_score": None,
+        "taali_score": taali_score,
+        "role_fit_score": role_fit_score,
+        "cv_fit_score": cv_fit_score,
+        "requirements_fit_score": requirements_fit_score,
+    }
+
+
+def build_client_application_report_payload(
+    application: CandidateApplication,
+    *,
+    organization_name: str,
+) -> dict[str, Any]:
+    details = application.cv_match_details if isinstance(application.cv_match_details, dict) else {}
+    requirements = details.get("requirements_assessment") if isinstance(details.get("requirements_assessment"), list) else []
+    first_requirement_gap = next(
+        (
+            item for item in requirements
+            if str(item.get("status") or "").lower() not in {"", "met"}
+        ),
+        None,
+    )
+    scores = _application_score_components_100(application)
+    recommendation = _recommendation_label(scores["taali_score"])
+    role_name = application.role.name if getattr(application, "role", None) else "Role"
+    candidate_name = _application_candidate_name(application)
+    matching_skills = [str(item).strip() for item in details.get("matching_skills", []) if str(item).strip()]
+    missing_skills = [str(item).strip() for item in details.get("missing_skills", []) if str(item).strip()]
+    experience_highlights = [str(item).strip() for item in details.get("experience_highlights", []) if str(item).strip()]
+    concerns = [str(item).strip() for item in details.get("concerns", []) if str(item).strip()]
+    requirements_coverage = details.get("requirements_coverage") if isinstance(details.get("requirements_coverage"), dict) else {}
+    summary_text = str(details.get("summary") or "").strip() or "Role-fit evidence from the candidate CV is available for employer review."
+
+    executive_summary_parts = [
+        f"Recommendation: {recommendation}.",
+        summary_text,
+        (
+            f"Primary validation area is {first_requirement_gap.get('requirement')}."
+            if isinstance(first_requirement_gap, dict) and first_requirement_gap.get("requirement")
+            else ""
+        ),
+        "No completed assessment exists yet, so this report reflects CV-to-role evidence only.",
+    ]
+
+    strengths = [
+        {
+            "dimension": "Role Fit",
+            "score": round((scores["role_fit_score"] or 0.0) / 10.0, 1) if scores["role_fit_score"] is not None else None,
+            "validation_prompt": f"Validate concrete delivery evidence in {item}.",
+        }
+        for item in matching_skills[:3]
+    ]
+
+    return {
+        "source_kind": "application",
+        "summary_title": "Candidate summary",
+        "generated_at": _utcnow().isoformat(),
+        "organization_name": organization_name,
+        "candidate_name": candidate_name,
+        "task_name": "Pending assessment",
+        "role_name": role_name,
+        "completed_at": None,
+        "duration_label": None,
+        "prompt_count": None,
+        "tests_passed": None,
+        "tests_total": None,
+        "benchmark_label": None,
+        "recommendation": recommendation,
+        "scores": scores,
+        "executive_summary": " ".join(part for part in executive_summary_parts if part).strip(),
+        "dimension_scores": [],
+        "strengths": strengths,
+        "interview_focus": [],
+        "role_fit_summary": summary_text,
+        "matching_skills": matching_skills,
+        "missing_skills": missing_skills,
+        "experience_highlights": experience_highlights,
+        "concerns": concerns,
+        "requirements_coverage": requirements_coverage,
+        "requirements_assessment": requirements,
+        "first_requirement_gap": first_requirement_gap,
+        "integrity_note": "No completed assessment exists yet; this export is based on CV and recruiter role-fit evidence.",
+        "score_formula_version": "taali_v3_role_fit_blended",
+        "cv_filename": (
+            (application.cv_filename if application.cv_filename else None)
+            or (application.candidate.cv_filename if getattr(application, "candidate", None) and application.candidate.cv_filename else None)
+        ),
+        "cv_file_url": (
+            (application.cv_file_url if application.cv_file_url else None)
+            or (application.candidate.cv_file_url if getattr(application, "candidate", None) and application.candidate.cv_file_url else None)
+        ),
+        "cv_text": (
+            (application.cv_text if application.cv_text else None)
+            or (application.candidate.cv_text if getattr(application, "candidate", None) and application.candidate.cv_text else None)
+            or ""
+        ),
+    }
+
+
+def build_client_assessment_report_text(payload: dict[str, Any]) -> str:
+    scores = payload.get("scores") if isinstance(payload.get("scores"), dict) else {}
+    strengths = payload.get("strengths") if isinstance(payload.get("strengths"), list) else []
+    interview_focus = payload.get("interview_focus") if isinstance(payload.get("interview_focus"), list) else []
+    dimension_scores = payload.get("dimension_scores") if isinstance(payload.get("dimension_scores"), list) else []
+    matching_skills = payload.get("matching_skills") if isinstance(payload.get("matching_skills"), list) else []
+    experience_highlights = payload.get("experience_highlights") if isinstance(payload.get("experience_highlights"), list) else []
+    concerns = payload.get("concerns") if isinstance(payload.get("concerns"), list) else []
+    requirements_coverage = payload.get("requirements_coverage") if isinstance(payload.get("requirements_coverage"), dict) else {}
+    requirements_assessment = payload.get("requirements_assessment") if isinstance(payload.get("requirements_assessment"), list) else []
+
+    def score_text(key: str) -> str:
+        value = scores.get(key)
+        return f"{value}/100" if value is not None else "N/A"
+
+    lines = [
+        "Prepared for employer / client review",
+        f"Prepared for: {payload.get('organization_name') or 'Employer'}",
+        f"Generated: {payload.get('generated_at') or 'N/A'}",
+        f"Candidate: {payload.get('candidate_name') or 'Candidate'}",
+        f"Role: {payload.get('role_name') or 'N/A'}",
+        f"Assessment: {payload.get('task_name') or 'Assessment'}",
+        "",
+        "Executive Summary",
+        "-----------------",
+        str(payload.get("executive_summary") or "TAALI assessment evidence is available for review.").strip(),
+        "",
+        "Score Snapshot",
+        "--------------",
+        f"- Recommendation: {payload.get('recommendation') or 'Pending'}",
+        f"- TAALI score: {score_text('taali_score')}",
+        f"- Assessment score: {score_text('assessment_score')}",
+        f"- Role fit: {score_text('role_fit_score')}",
+    ]
+
+    if scores.get("cv_fit_score") is not None:
+        lines.append(f"- CV fit: {score_text('cv_fit_score')}")
+    if scores.get("requirements_fit_score") is not None:
+        lines.append(f"- Requirements fit: {score_text('requirements_fit_score')}")
+    if payload.get("benchmark_label"):
+        lines.append(f"- Benchmark position: {payload.get('benchmark_label')}")
+    if payload.get("score_formula_version"):
+        lines.append(f"- Score model: {payload.get('score_formula_version')}")
+
+    lines.extend(["", "Assessment Evidence", "-------------------"])
+    if payload.get("completed_at"):
+        lines.append(f"- Completed at: {payload.get('completed_at')}")
+    if payload.get("duration_label"):
+        lines.append(f"- Duration: {payload.get('duration_label')}")
+    if payload.get("tests_total") is not None:
+        lines.append(f"- Tests passed: {payload.get('tests_passed') or 0}/{payload.get('tests_total')}")
+    if payload.get("prompt_count") is not None:
+        lines.append(f"- AI interactions captured: {payload.get('prompt_count')}")
+    for item in dimension_scores[:4]:
+        lines.append(f"- {item.get('label')}: {item.get('score')}/10")
+
+    lines.extend(["", "Strengths To Validate", "---------------------"])
+    if strengths:
+        for item in strengths:
+            lines.append(
+                f"- {item.get('dimension')} ({item.get('score')}/10): {item.get('validation_prompt')}"
+            )
+    else:
+        lines.append("- No dimension strengths were available in the stored assessment payload.")
+
+    lines.extend(["", "Suggested Interview Focus", "-------------------------"])
+    if interview_focus:
+        for item in interview_focus:
+            summary = str(item.get("evidence") or item.get("practice_advice") or "").strip()
+            lines.append(f"- {item.get('dimension')} ({item.get('score')}/10): {summary}")
+    else:
+        lines.append("- No additional interview focus areas were generated for this assessment.")
+
+    lines.extend(["", "Role-Fit Snapshot", "-----------------"])
+    if payload.get("role_fit_summary"):
+        lines.append(str(payload.get("role_fit_summary")))
+    if requirements_coverage.get("total"):
+        lines.append(
+            "- Requirement coverage: "
+            f"{requirements_coverage.get('met', 0)} met, "
+            f"{requirements_coverage.get('partially_met', 0)} partial, "
+            f"{requirements_coverage.get('missing', 0)} missing "
+            f"out of {requirements_coverage.get('total')}."
+        )
+    if matching_skills:
+        lines.append(f"- Matching skills: {', '.join(matching_skills[:6])}")
+    for item in experience_highlights[:2]:
+        lines.append(f"- Relevant experience: {item}")
+    for item in requirements_assessment[:2]:
+        requirement = str(item.get("requirement") or "").strip()
+        status = str(item.get("status") or "").replace("_", " ").strip()
+        evidence = str(item.get("evidence") or "").strip()
+        if requirement:
+            lines.append(f"- Requirement: {requirement} ({status or 'pending'})")
+            if evidence:
+                lines.append(f"  {evidence}")
+    for item in concerns[:2]:
+        lines.append(f"- Risk to probe: {item}")
+
+    lines.extend(["", "Integrity And Caveats", "---------------------"])
+    lines.append(str(payload.get("integrity_note") or "No additional caveats were attached to this assessment."))
+
+    return "\n".join(lines).strip()
 
 
 def _role_context_text(assessment: Assessment) -> str:
@@ -609,6 +2073,134 @@ def _debrief_markdown(payload: dict[str, Any]) -> str:
             lines.append(f"  - Follow-up: {item.get('follow_up_question')}")
 
     return "\n".join(lines).strip()
+
+
+def build_interview_debrief_payload_for_application(application: CandidateApplication) -> dict[str, Any]:
+    details = application.cv_match_details if isinstance(application.cv_match_details, dict) else {}
+    requirements = details.get("requirements_assessment") if isinstance(details.get("requirements_assessment"), list) else []
+    role_focus = application.role.interview_focus if getattr(application, "role", None) and isinstance(application.role.interview_focus, dict) else {}
+    role_questions = role_focus.get("questions") if isinstance(role_focus.get("questions"), list) else []
+    role_fit_score = _application_score_components_100(application).get("role_fit_score")
+    role_score_10 = round(role_fit_score / 10.0, 1) if isinstance(role_fit_score, (int, float)) else None
+    candidate_name = _application_candidate_name(application)
+    role_name = application.role.name if getattr(application, "role", None) else "this role"
+    matching_skills = [str(item).strip() for item in details.get("matching_skills", []) if str(item).strip()]
+    missing_skills = [str(item).strip() for item in details.get("missing_skills", []) if str(item).strip()]
+    experience_highlights = [str(item).strip() for item in details.get("experience_highlights", []) if str(item).strip()]
+    concerns = [str(item).strip() for item in details.get("concerns", []) if str(item).strip()]
+
+    probing_questions: list[dict[str, Any]] = []
+    for item in requirements:
+        status = str(item.get("status") or "").lower()
+        requirement = str(item.get("requirement") or "").strip()
+        if status in {"", "met"} or not requirement:
+            continue
+        evidence = str(item.get("impact") or item.get("evidence") or "").strip()
+        probing_questions.append(
+            {
+                "dimension_id": requirement.lower().replace(" ", "_"),
+                "dimension": requirement,
+                "score": role_score_10,
+                "pattern": evidence or "Requirement gap surfaced from CV-to-role analysis.",
+                "question": f"Tell me about a recent project where you demonstrated {requirement.lower()} for {role_name}.",
+                "what_to_listen_for": "Recent ownership, tool fluency, concrete tradeoffs, and measurable outcomes.",
+            }
+        )
+        if len(probing_questions) >= 2:
+            break
+
+    for item in role_questions:
+        if len(probing_questions) >= 4:
+            break
+        question = str(item.get("question") or "").strip()
+        if not question:
+            continue
+        listen_for = item.get("what_to_listen_for") if isinstance(item.get("what_to_listen_for"), list) else []
+        concerning_signals = item.get("concerning_signals") if isinstance(item.get("concerning_signals"), list) else []
+        probing_questions.append(
+            {
+                "dimension_id": "role_validation",
+                "dimension": "Role validation",
+                "score": role_score_10,
+                "pattern": "; ".join(str(signal).strip() for signal in concerning_signals[:2] if str(signal).strip()) or "Role-specific validation prompt.",
+                "question": question,
+                "what_to_listen_for": ", ".join(str(signal).strip() for signal in listen_for[:3] if str(signal).strip()) or "Concrete examples and clear technical reasoning.",
+            }
+        )
+
+    if not probing_questions:
+        fallback_topic = missing_skills[0] if missing_skills else (concerns[0] if concerns else "the strongest CV claims")
+        probing_questions.append(
+            {
+                "dimension_id": "role_fit",
+                "dimension": "Role fit",
+                "score": role_score_10,
+                "pattern": "Generated from CV and recruiter role-fit evidence because no completed assessment exists yet.",
+                "question": f"Walk me through a recent example that validates {fallback_topic} for {role_name}.",
+                "what_to_listen_for": "Specific delivery ownership, practical tradeoffs, and evidence that the candidate can ramp quickly.",
+            }
+        )
+
+    strengths: list[dict[str, Any]] = []
+    for skill in matching_skills[:3]:
+        strengths.append(
+            {
+                "dimension_id": "role_fit",
+                "score": role_score_10,
+                "text": f"Validate delivery depth in {skill} with a recent concrete example.",
+            }
+        )
+    for item in experience_highlights[:2]:
+        strengths.append(
+            {
+                "dimension_id": "experience",
+                "score": None,
+                "text": item,
+            }
+        )
+
+    red_flags: list[dict[str, Any]] = []
+    for skill in missing_skills[:2]:
+        red_flags.append(
+            {
+                "dimension_id": "role_gap",
+                "score": role_score_10,
+                "text": f"Skill gap surfaced in role-fit review: {skill}.",
+                "follow_up_question": f"What direct experience do you have with {skill}, and where would you need support?",
+            }
+        )
+    for concern in concerns[:2]:
+        if len(red_flags) >= 4:
+            break
+        red_flags.append(
+            {
+                "dimension_id": "role_risk",
+                "score": role_score_10,
+                "text": concern,
+                "follow_up_question": "Ask for a recent example that addresses this concern directly.",
+            }
+        )
+
+    summary = (
+        f"Generated from role-fit evidence for {candidate_name}. "
+        f"No completed assessment exists yet, so use this guide to validate CV claims, close gaps, and decide whether to move the candidate forward for {role_name}."
+    )
+    payload = {
+        "version": 1,
+        "generated_at": _utcnow().isoformat(),
+        "candidate_name": candidate_name,
+        "task_name": "Pending assessment",
+        "role_name": role_name,
+        "summary": summary,
+        "transcript_available": False,
+        "source": "role_fit_v1",
+        "estimated_read_time_min": 3,
+        "probing_questions": probing_questions,
+        "strengths_to_validate": strengths,
+        "red_flags": red_flags,
+    }
+    payload["markdown"] = _debrief_markdown(payload)
+    return payload
 
 
 def build_interview_debrief_payload(assessment: Assessment) -> dict[str, Any]:
