@@ -1,15 +1,10 @@
 import React from 'react';
 import {
-  ArrowRight,
-  Check,
-  CircleDot,
-  ClipboardList,
-  ShieldCheck,
   Sparkles,
   TerminalSquare,
 } from 'lucide-react';
 
-import { MarketingNav } from '../../shared/layout/TaaliLayout';
+import { MarketingNav, TaaliLogo } from '../../shared/layout/TaaliLayout';
 
 const containerClass = 'mx-auto max-w-[1360px] px-6 md:px-10 xl:px-16';
 
@@ -109,11 +104,67 @@ const processSteps = [
 
 const productTourItems = [
   { kicker: '01 · Entry', title: 'Sign in.', body: 'Editorial welcome page for returning recruiters and candidates.', page: 'login' },
-  { kicker: '02 · Intake', title: 'Interactive demo', body: 'Enter details, pick a task, and launch the same runtime candidates use.', page: 'demo' },
-  { kicker: '03 · Runtime', title: 'Candidate workspace', body: 'Repo, live editor, and Claude side-by-side inside the assessment.', page: 'demo' },
-  { kicker: '04 · Recruiter', title: 'Jobs.', body: 'Roles at a glance with stage counts and pipeline visibility.', page: 'login' },
-  { kicker: '05 · Pipeline', title: 'Candidates.', body: 'Sorted by score, live signals, and outcome-ready detail views.', page: 'login' },
-  { kicker: '06 · Reporting', title: 'Reporting.', body: 'Completion trends, distribution, and top performers in one place.', page: 'login' },
+  { kicker: '02 · Intake', title: 'Demo request.', body: 'Review a sample candidate assessment and leave details for a callback.', page: 'demo' },
+  { kicker: '03 · Example', title: 'Assessment example.', body: 'Candidate brief, role context, and recruiter-ready signal preview.', page: 'demo' },
+  { kicker: '04 · Recruiter', title: 'Jobs.', body: 'Roles at a glance — applied, invited, in assessment, review.', page: 'login' },
+  { kicker: '05 · Pipeline', title: 'Candidates.', body: 'Sorted by Taali score, with live signals and a one-line read.', page: 'login' },
+  { kicker: '06 · Report', title: 'Assessment results.', body: 'AI-collab fingerprint, scored dimensions, and clickable evidence.', page: 'login' },
+  { kicker: '07 · Analytics', title: 'Reporting.', body: 'Pipeline health, completion trends, and score distribution.', page: 'login' },
+  { kicker: '08 · Config', title: 'Settings.', body: 'Scoring policy, AI tooling permissions, members, and access.', page: 'login' },
+];
+
+const runtimeTabs = [
+  'Candidate workspace',
+  'Repo + editor + AI',
+  'Prompt + diff telemetry',
+  'Validation runs',
+  'Structured evidence',
+];
+
+const runtimeSignalCards = [
+  {
+    kicker: 'PROMPT QUALITY',
+    body: 'Candidate scoped “highest-risk blockers first” with an explicit downstream action: “smallest safe patch sequence.”',
+  },
+  {
+    kicker: 'ERROR RECOVERY',
+    body: 'Rejected Claude’s caching proposal and asked for evidence of the original fault before touching policy logic.',
+  },
+  {
+    kicker: 'INDEPENDENCE',
+    body: 'Delegated boilerplate, then wrote the escalation and degraded-mode path herself without prompting.',
+  },
+];
+
+const footerColumns = [
+  {
+    title: 'Product',
+    items: [
+      { label: 'Live coding', section: 'runtime-preview' },
+      { label: 'AI collab score', section: 'platform' },
+      { label: 'Question bank', section: 'platform' },
+      { label: 'Integrations', section: 'platform' },
+      { label: 'Pricing', page: 'demo' },
+    ],
+  },
+  {
+    title: 'Company',
+    items: [
+      { label: 'Customers', section: 'proof' },
+      { label: 'Manifesto', section: 'problem' },
+      { label: 'Careers', page: 'demo' },
+      { label: 'Blog', page: 'demo' },
+    ],
+  },
+  {
+    title: 'Resources',
+    items: [
+      { label: 'Sample reports', section: 'runtime-preview' },
+      { label: 'Rubric library', section: 'platform' },
+      { label: 'Docs', page: 'demo' },
+      { label: 'Security', page: 'demo' },
+    ],
+  },
 ];
 
 const SectionHeading = ({ kicker, title, copy }) => (
@@ -162,8 +213,8 @@ export const LandingPage = ({ onNavigate }) => (
             <button type="button" className="btn btn-primary btn-lg" onClick={() => onNavigate('demo')}>
               Book a demo <span className="arrow">→</span>
             </button>
-            <button type="button" className="btn btn-outline btn-lg" onClick={() => document.getElementById('product-tour')?.scrollIntoView({ behavior: 'smooth' })}>
-              Walk the product
+            <button type="button" className="btn btn-outline btn-lg" onClick={() => document.getElementById('runtime-preview')?.scrollIntoView({ behavior: 'smooth' })}>
+              See the assessment example
             </button>
           </div>
           <div className="mt-10 flex items-center gap-5 text-[13px] text-[var(--mute)]">
@@ -235,7 +286,7 @@ export const LandingPage = ({ onNavigate }) => (
       </div>
     </section>
 
-    <section className="pb-20 md:pb-28">
+    <section id="problem" className="pb-20 md:pb-28">
       <div className={containerClass}>
         <SectionHeading
           kicker="01 · THE PROBLEM"
@@ -284,7 +335,7 @@ export const LandingPage = ({ onNavigate }) => (
       </div>
     </section>
 
-    <section className="pb-20 md:pb-28">
+    <section id="platform" className="pb-20 md:pb-28">
       <div className={containerClass}>
         <SectionHeading
           kicker="02 · THE PLATFORM"
@@ -346,13 +397,21 @@ export const LandingPage = ({ onNavigate }) => (
       </div>
     </section>
 
-    <section className="pb-20 md:pb-28">
+    <section id="runtime-preview" className="pb-20 md:pb-28">
       <div className={containerClass}>
         <SectionHeading
           kicker="02.5 · INSIDE THE RUNTIME"
           title={<>What your candidate <em>actually sees</em>.</>}
           copy="Not a whiteboard and not a toy sandbox: a three-pane workspace with task context, editor, repo tree, and a real Claude chat, scored silently in the background."
         />
+        <div className="mb-6 flex flex-wrap gap-3">
+          <button type="button" className="btn btn-primary" onClick={() => onNavigate('demo')}>
+            See the assessment example <span className="arrow">→</span>
+          </button>
+          <button type="button" className="btn btn-outline" onClick={() => onNavigate('demo')}>
+            Book a demo
+          </button>
+        </div>
         <div className="overflow-hidden rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] shadow-[var(--shadow-lg)]">
           <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
             <div className="flex items-center gap-3">
@@ -365,10 +424,22 @@ export const LandingPage = ({ onNavigate }) => (
               </div>
             </div>
             <div className="flex flex-wrap items-center gap-2 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
-              <span className="chip green"><span className="dot" />AI: Claude</span>
+              <span className="chip green"><span className="dot" />AI: Claude CLI + Chat</span>
               <span className="chip">Permission: default</span>
+              <span className="chip">$ Claude credit: $6.20 left of $12.00</span>
               <span className="chip">◷ 26:41</span>
+              <span className="rounded-full bg-[var(--ink)] px-3 py-1.5 text-[var(--bg)]">Submit →</span>
             </div>
+          </div>
+          <div className="flex flex-wrap gap-2 border-b border-[var(--line)] bg-[var(--bg)] px-4 py-3">
+            {runtimeTabs.map((tab, index) => (
+              <span
+                key={tab}
+                className={`rounded-full px-3 py-1.5 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] ${index === 1 ? 'bg-[var(--ink)] text-[var(--bg)]' : 'text-[var(--mute)]'}`.trim()}
+              >
+                {tab}
+              </span>
+            ))}
           </div>
           <div className="grid gap-0 border-b border-[var(--line)] lg:grid-cols-[220px_1fr_340px]">
             <aside className="border-r border-[var(--line)] bg-[var(--bg)] p-4">
@@ -382,6 +453,8 @@ export const LandingPage = ({ onNavigate }) => (
                 <div className="rounded-[8px] bg-[var(--purple-soft)] px-2 py-1 pl-4 text-[var(--purple-2)]">release_guardrails.py</div>
                 <div>▾ diagnostics/</div>
                 <div className="pl-4">release_findings.md</div>
+                <div>▸ prompts/</div>
+                <div className="pl-4">support_system.txt</div>
                 <div>▾ tests/</div>
                 <div className="pl-4">test_release_readiness.py</div>
               </div>
@@ -398,10 +471,16 @@ export const LandingPage = ({ onNavigate }) => (
                 <div><span className="text-[var(--mute)]">1</span> <span className="text-[var(--purple)]">from</span> app.policy <span className="text-[var(--purple)]">import</span> SAFETY_POLICY</div>
                 <div><span className="text-[var(--mute)]">2</span></div>
                 <div><span className="text-[var(--mute)]">3</span> <span className="text-[var(--purple)]">def</span> should_allow_response(*, moderation_result, user_intent, confidence):</div>
-                <div><span className="text-[var(--mute)]">4</span> &nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> moderation_result <span className="text-[var(--purple)]">is</span> None:</div>
-                <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--purple)_8%,transparent)]"><span className="text-[var(--mute)]">5</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--mute)]"># BUG: moderation outages should not default to allow</span></div>
-                <div><span className="text-[var(--mute)]">6</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> True</div>
-                <div><span className="text-[var(--mute)]">7</span> &nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> confidence &gt;= 0.42</div>
+                <div><span className="text-[var(--mute)]">4</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--mute)]">&quot;&quot;&quot;Return whether the assistant is allowed to answer directly.&quot;&quot;&quot;</span></div>
+                <div><span className="text-[var(--mute)]">5</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> moderation_result <span className="text-[var(--purple)]">is</span> None:</div>
+                <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--purple)_8%,transparent)]"><span className="text-[var(--mute)]">6</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--mute)]"># BUG: moderation outages should not default to allow</span></div>
+                <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--purple)_8%,transparent)]"><span className="text-[var(--mute)]">&nbsp;</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--mute)]"># for customer-facing launch traffic</span></div>
+                <div><span className="text-[var(--mute)]">7</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> True</div>
+                <div><span className="text-[var(--mute)]">8</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> moderation_result.get(&quot;blocked&quot;):</div>
+                <div><span className="text-[var(--mute)]">9</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> False</div>
+                <div><span className="text-[var(--mute)]">10</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> user_intent <span className="text-[var(--purple)]">in</span> SAFETY_POLICY[&quot;always_escalate&quot;]:</div>
+                <div><span className="text-[var(--mute)]">11</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> False</div>
+                <div><span className="text-[var(--mute)]">12</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> confidence &gt;= 0.42</div>
               </div>
             </div>
             <aside className="bg-[var(--bg)] p-4">
@@ -411,7 +490,7 @@ export const LandingPage = ({ onNavigate }) => (
               </div>
               <div className="space-y-3 rounded-[14px] bg-[var(--bg-2)] p-4 text-[13px] leading-6">
                 <div className="rounded-[12px] bg-[var(--ink)] px-4 py-3 text-[var(--bg)]">
-                  Prioritize the highest-risk launch blockers first, then propose the smallest safe patch sequence for the release review.
+                  Prioritize the highest-risk launch blockers first, then propose the smallest safe patch sequence for the GenAI release review.
                 </div>
                 <div className="rounded-[12px] border border-[var(--line)] bg-[var(--bg)] px-4 py-3 text-[var(--ink-2)]">
                   <div className="mb-1 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.1em] text-[var(--purple)]">Claude</div>
@@ -426,11 +505,7 @@ export const LandingPage = ({ onNavigate }) => (
             </aside>
           </div>
           <div className="grid gap-3 px-4 py-4 md:grid-cols-3">
-            {[
-              { kicker: 'PROMPT QUALITY', body: 'Candidate scoped “highest-risk blockers first” with an explicit downstream action.' },
-              { kicker: 'ERROR RECOVERY', body: 'Rejected Claude’s premature cache proposal and asked for evidence before changing the policy path.' },
-              { kicker: 'INDEPENDENCE', body: 'Delegated boilerplate and owned the concurrency, escalation, and release logic herself.' },
-            ].map((item) => (
+            {runtimeSignalCards.map((item) => (
               <div key={item.kicker} className="rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 text-[13px] leading-6 text-[var(--ink-2)]">
                 <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">{item.kicker}</div>
                 <p className="mt-2">{item.body}</p>
@@ -463,7 +538,7 @@ export const LandingPage = ({ onNavigate }) => (
       </div>
     </section>
 
-    <section className="pb-20 md:pb-28">
+    <section id="proof" className="pb-20 md:pb-28">
       <div className={containerClass}>
         <div className="rounded-[var(--radius-xl)] bg-[var(--ink)] px-8 py-10 text-[var(--bg)] shadow-[var(--shadow-lg)] md:px-12 md:py-12">
           <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple-2)]">04 · THE EVIDENCE</div>
@@ -499,8 +574,8 @@ export const LandingPage = ({ onNavigate }) => (
               <button type="button" className="btn btn-primary btn-lg" onClick={() => onNavigate('demo')}>
                 Book a demo <span className="arrow">→</span>
               </button>
-              <button type="button" className="btn btn-outline btn-lg" onClick={() => onNavigate('login')}>
-                Talk to founders
+              <button type="button" className="btn btn-outline btn-lg" onClick={() => onNavigate('demo')}>
+                Request callback
               </button>
             </div>
           </div>
@@ -532,10 +607,10 @@ export const LandingPage = ({ onNavigate }) => (
             <h3 className="mt-3 font-[var(--font-display)] text-[46px] leading-none tracking-[-0.04em]">Walk the whole <em>product</em>.</h3>
           </div>
           <p className="max-w-[560px] text-[15px] leading-7 text-[var(--mute)]">
-            Every surface in Taali, redesigned to match this page: recruiter workspace, candidate runtime, and assessment reporting.
+            Every surface in Taali, redesigned to match this page: demo request, candidate assessment flow, recruiter workspace, and assessment reporting.
           </p>
         </div>
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
           {productTourItems.map((item) => (
             <button
               key={item.kicker}
@@ -551,6 +626,62 @@ export const LandingPage = ({ onNavigate }) => (
         </div>
       </div>
     </section>
+
+    <footer className="border-t border-[var(--line)] bg-[var(--ink)] text-[var(--bg)]">
+      <div className={`${containerClass} py-14`}>
+        <div className="grid gap-10 lg:grid-cols-[1.1fr_.9fr_.9fr_.9fr]">
+          <div>
+            <TaaliLogo onClick={() => onNavigate('landing')} wordmarkClassName="!text-[var(--bg)]" />
+            <p className="mt-5 max-w-[280px] text-[15px] leading-7 text-white/68">
+              AI-native technical assessments that <span className="font-[var(--font-display)] text-[var(--purple)]">tally</span> real skill.
+            </p>
+          </div>
+
+          {footerColumns.map((column) => (
+            <div key={column.title}>
+              <h4 className="font-[var(--font-display)] text-[20px] tracking-[-0.02em]">{column.title}</h4>
+              <div className="mt-4 flex flex-col gap-3">
+                {column.items.map((item) => (
+                  <button
+                    key={item.label}
+                    type="button"
+                    className="w-fit text-left text-[14px] text-white/66 transition hover:text-white"
+                    onClick={() => {
+                      if (item.section) {
+                        document.getElementById(item.section)?.scrollIntoView({ behavior: 'smooth' });
+                        return;
+                      }
+                      if (item.page) {
+                        onNavigate(item.page);
+                      }
+                    }}
+                  >
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+
+        <div className="mt-12 font-[var(--font-display)] text-[clamp(72px,12vw,164px)] leading-none tracking-[-0.08em] text-white/8">
+          taali<em className="text-[var(--purple)] not-italic">.</em>
+        </div>
+
+        <div className="mt-6 flex flex-col gap-3 border-t border-white/10 pt-5 text-[13px] text-white/52 md:flex-row md:items-center md:justify-between">
+          <div>© 2026 Taali, Inc. · San Francisco</div>
+          <button
+            type="button"
+            className="w-fit text-left text-white/68 transition hover:text-white"
+            onClick={() => {
+              window.location.href = 'mailto:hello@taali.ai';
+            }}
+          >
+            hello@taali.ai
+          </button>
+        </div>
+      </div>
+    </footer>
   </div>
 );
 

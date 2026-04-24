@@ -13,14 +13,21 @@ export function AuthProvider({ children }) {
   const isAuthenticated = !!user;
 
   const login = useCallback(async (email, password) => {
-    const { data } = await authApi.login(email, password);
-    localStorage.setItem('taali_access_token', data.access_token);
+    try {
+      const { data } = await authApi.login(email, password);
+      localStorage.setItem('taali_access_token', data.access_token);
 
-    // Fetch user profile
-    const { data: profile } = await authApi.me();
-    localStorage.setItem('taali_user', JSON.stringify(profile));
-    setUser(profile);
-    return profile;
+      // Fetch user profile
+      const { data: profile } = await authApi.me();
+      localStorage.setItem('taali_user', JSON.stringify(profile));
+      setUser(profile);
+      return profile;
+    } catch (error) {
+      localStorage.removeItem('taali_access_token');
+      localStorage.removeItem('taali_user');
+      setUser(null);
+      throw error;
+    }
   }, []);
 
   const register = useCallback(async (userData) => {

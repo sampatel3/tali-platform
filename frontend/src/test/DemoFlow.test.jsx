@@ -68,8 +68,7 @@ const renderApp = () => render(
 describe('Demo flow redesign', () => {
   const expectDemoHero = async () => {
     await waitFor(() => {
-      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/Try a candidate/i);
-      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/assessment/i);
+      expect(screen.getByRole('heading', { level: 1, name: /Review a candidate/i })).toBeInTheDocument();
     }, { timeout: 5000 });
   };
 
@@ -112,7 +111,7 @@ describe('Demo flow redesign', () => {
     renderApp();
 
     await openDemoPage();
-    expect(screen.getByText(/Complete this short intake/i)).toBeInTheDocument();
+    expect(screen.getByText(/Pick the sample assessment you want to review/i)).toBeInTheDocument();
   });
 
   it('keeps the theme toggle button in both landing and demo navigation', async () => {
@@ -123,12 +122,12 @@ describe('Demo flow redesign', () => {
     expect(screen.getByRole('button', { name: 'Toggle theme' })).toBeInTheDocument();
   });
 
-  it('shows the redesigned intake validation before a demo can start', async () => {
+  it('shows the redesigned intake validation before a callback can be requested', async () => {
     renderApp();
 
     await openDemoPage();
 
-    fireEvent.click(screen.getByRole('button', { name: /Start demo assessment/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Request callback/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/Please complete:/i)).toBeInTheDocument();
@@ -136,7 +135,7 @@ describe('Demo flow redesign', () => {
     });
   });
 
-  it('starts the selected demo track and opens the assessment runtime', async () => {
+  it('submits the selected assessment track and shows the callback confirmation state', async () => {
     renderApp();
 
     await openDemoPage();
@@ -149,7 +148,7 @@ describe('Demo flow redesign', () => {
     fireEvent.change(screen.getByLabelText(/^Company size$/i), { target: { value: '51-200' } });
 
     fireEvent.click(screen.getByRole('button', { name: /GenAI Production Readiness Review/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Start demo assessment/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Request callback/i }));
 
     await waitFor(() => {
       expect(assessments.startDemo).toHaveBeenCalledWith(
@@ -161,8 +160,8 @@ describe('Demo flow redesign', () => {
       );
     });
 
-    expect(await screen.findByText('Live assessment context')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Submit' })).toBeInTheDocument();
-    expect(screen.getByTestId('code-editor')).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: /Thanks, we'll reach out/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/GenAI Production Readiness Review/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText('jane@company.com').length).toBeGreaterThan(0);
   });
 });

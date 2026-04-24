@@ -20,6 +20,14 @@ const getLoginErrorMessage = (err) => {
     return mappedMessage || normalizedDetail;
   }
 
+  if (err?.code === 'ERR_NETWORK' || message === 'Network Error') {
+    return 'Unable to reach the Taali API. Please refresh and try again.';
+  }
+
+  if (err?.response?.status === 404 || err?.response?.status === 502 || err?.response?.status === 503) {
+    return 'Unable to reach the Taali API. Please try again in a moment.';
+  }
+
   if (Array.isArray(detail) && detail.length > 0) {
     const joined = detail
       .map((item) => (typeof item?.msg === 'string' ? item.msg : String(item)))
