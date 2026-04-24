@@ -20,9 +20,11 @@ import {
 import {
   assessments as assessmentsApi,
   candidates as candidatesApi,
+  organizations as organizationsApi,
   roles as rolesApi,
 } from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { WorkableTagSm, WorkableLogo } from '../../components/integrations/workable/WorkablePrimitives';
 import { AppShell } from '../../shared/layout/TaaliLayout';
 import {
   Badge,
@@ -274,6 +276,8 @@ export const AssessmentResultsPage = ({
   const [interviewDebriefData, setInterviewDebriefData] = useState(null);
   const [interviewDebriefCached, setInterviewDebriefCached] = useState(false);
   const [interviewDebriefGeneratedAt, setInterviewDebriefGeneratedAt] = useState(null);
+  const [orgData, setOrgData] = useState(null);
+  const [workablePreviewOpen, setWorkablePreviewOpen] = useState(false);
 
   const assessmentId = assessmentIdProp || candidate?._raw?.id || candidate?.id || null;
   const assessment = candidate?._raw || null;
@@ -394,6 +398,22 @@ export const AssessmentResultsPage = ({
     };
   }, [roleId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    const loadOrg = async () => {
+      try {
+        const res = await organizationsApi.get();
+        if (!cancelled) setOrgData(res?.data || null);
+      } catch {
+        if (!cancelled) setOrgData(null);
+      }
+    };
+    void loadOrg();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const dimensionMetrics = useMemo(() => buildSixAxisMetrics(assessment), [assessment]);
   const evidenceCards = useMemo(() => buildAssessmentEvidenceCards(assessment), [assessment]);
   const timelineRows = useMemo(() => buildAssessmentTimelineRows(assessment), [assessment]);
@@ -406,6 +426,21 @@ export const AssessmentResultsPage = ({
   }), [applicationDetail, assessment, identity]);
   const recommendation = useMemo(() => recommendationFromScore(reportModel?.summaryModel?.taaliScore), [reportModel]);
   const aiCollab = useMemo(() => buildAiCollabText(assessment), [assessment]);
+  const showWorkableSurface = Boolean(
+    orgData?.workable_connected
+    && (applicationDetail?.workable_sourced === true || role?.source === 'workable')
+  );
+  const workableNotePreview = useMemo(() => ([
+    `${candidate?.name || 'Candidate'} · ${applicationDetail?.role_name || assessment?.role_name || 'Role'}`,
+    '',
+    `Taali score: ${reportModel?.summaryModel?.taaliScore != null ? formatScale100(reportModel.summaryModel.taaliScore) : '—'}`,
+    `Workable score: ${applicationDetail?.workable_score_raw != null ? Math.round(Number(applicationDetail.workable_score_raw)) : '—'}`,
+    '',
+    reportModel?.recruiterSummaryText || reportModel?.summaryModel?.heuristicSummary || recommendation.ctaLabel,
+  ].filter(Boolean).join('\n')), [applicationDetail?.role_name, applicationDetail?.workable_score_raw, assessment?.role_name, candidate?.name, recommendation.ctaLabel, reportModel]);
+  const workableScoreCaption = applicationDetail?.workable_score_raw != null
+    ? 'WILL OVERWRITE'
+    : 'NEW SCORE';
 
   const quickFacts = useMemo(() => ([
     ['Role', applicationDetail?.role_name || assessment?.role_name || '—'],
@@ -523,6 +558,21 @@ export const AssessmentResultsPage = ({
       showToast('Candidate advanced to panel review.', 'success');
     } catch (err) {
       showToast(err?.response?.data?.detail || 'Failed to update candidate stage.', 'error');
+    } finally {
+      setBusyAction('');
+    }
+  };
+
+  const handlePostToWorkable = async () => {
+    if (!assessmentId) return;
+    setBusyAction('post-to-workable');
+    try {
+      await assessmentsApi.postToWorkable(assessmentId);
+      const refreshed = await assessmentsApi.get(assessmentId);
+      setCandidate(mapAssessmentToCandidateView(refreshed?.data || {}));
+      showToast('Posted assessment note to Workable.', 'success');
+    } catch (err) {
+      showToast(err?.response?.data?.detail || 'Failed to post to Workable.', 'error');
     } finally {
       setBusyAction('');
     }
@@ -734,6 +784,15 @@ export const AssessmentResultsPage = ({
                 <Badge variant={recommendation.variant}>{recommendation.label}</Badge>
                 <Badge variant="muted">{assessment?.completed_at ? `Submitted ${formatShortDate(assessment.completed_at)}` : formatStatusLabel(assessment?.status)}</Badge>
                 {assessment?.candidate_experience_years ? <Badge variant="muted">{`${assessment.candidate_experience_years} yrs exp`}</Badge> : null}
+                {showWorkableSurface ? (
+                  <span
+                    className="inline-flex items-center gap-2 rounded-full px-3 py-1.5 font-[var(--font-mono)] text-[11px] text-white"
+                    style={{ background: 'linear-gradient(135deg, var(--workable), var(--workable-dark))' }}
+                  >
+                    <WorkableTagSm />
+                    Synced from Workable
+                  </span>
+                ) : null}
               </div>
             </div>
 
@@ -784,6 +843,41 @@ export const AssessmentResultsPage = ({
             valueStyle={recommendation.label === 'Pending' ? null : { color: 'var(--purple)' }}
           />
         </div>
+
+        {showWorkableSurface ? (
+          <div className="mt-4 grid gap-4 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] px-5 py-5 shadow-[var(--shadow-sm)] lg:grid-cols-[auto_1fr_auto] lg:items-center">
+            <WorkableLogo size={44} />
+            <div>
+              <h3 className="text-[15px] font-semibold">Push assessment result to Workable</h3>
+              <div className="mt-1 flex flex-wrap gap-3 font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">
+                <span>{assessment?.posted_to_workable ? `Posted ${assessment?.posted_to_workable_at ? formatShortDate(assessment.posted_to_workable_at) : 'recently'}` : 'Ready to post'}</span>
+                <span>{applicationDetail?.workable_stage ? `Stage: ${applicationDetail.workable_stage}` : 'Workable profile linked'}</span>
+              </div>
+              <div className="mt-3 inline-grid grid-cols-[auto_auto_auto] items-center gap-4 rounded-[10px] border border-dashed border-[var(--line)] px-3 py-2">
+                <div className="font-[var(--font-mono)] text-[12px] text-[var(--ink-2)]">WK <b className="font-[var(--font-display)] text-[18px] text-[var(--purple)]">{applicationDetail?.workable_score_raw != null ? Math.round(Number(applicationDetail.workable_score_raw)) : '—'}</b></div>
+                <div className="text-[var(--mute)]">→</div>
+                <div className="font-[var(--font-mono)] text-[12px] text-[var(--ink-2)]">Taali <b className="font-[var(--font-display)] text-[18px] text-[var(--purple)]">{reportModel?.summaryModel?.taaliScore != null ? Math.round(Number(reportModel.summaryModel.taaliScore)) : '—'}</b> <span className="ml-2 text-[10.5px] text-[var(--mute)]">{workableScoreCaption}</span></div>
+              </div>
+            </div>
+            <div className="row justify-end">
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => setWorkablePreviewOpen(true)}>
+                Preview note
+              </button>
+              {assessment?.posted_to_workable ? (
+                <span className="chip green">Posted</span>
+              ) : (
+                <button
+                  type="button"
+                  className="btn btn-purple btn-sm"
+                  onClick={handlePostToWorkable}
+                  disabled={busyAction === 'post-to-workable'}
+                >
+                  {busyAction === 'post-to-workable' ? 'Posting…' : 'Post to Workable'}
+                </button>
+              )}
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-4 inline-flex flex-wrap gap-1 rounded-full border border-[var(--line)] bg-[var(--bg-2)] p-1 shadow-[var(--shadow-sm)]">
           {TAB_ITEMS.map((tab) => (
@@ -1124,6 +1218,20 @@ export const AssessmentResultsPage = ({
           ) : null}
         </div>
       </div>
+
+      {workablePreviewOpen ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-black/35 px-4" onClick={() => setWorkablePreviewOpen(false)} role="presentation">
+          <div className="w-full max-w-[640px] rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-lg)]" onClick={(event) => event.stopPropagation()} role="dialog" aria-modal="true" aria-label="Workable note preview">
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-[var(--font-display)] text-[24px] font-semibold tracking-[-0.02em]">Workable note preview</h3>
+              <button type="button" className="btn btn-outline btn-sm" onClick={() => setWorkablePreviewOpen(false)}>Close</button>
+            </div>
+            <pre className="mt-4 overflow-auto rounded-[14px] border border-[var(--line-2)] bg-[var(--bg)] p-4 font-[var(--font-mono)] text-[12px] leading-6 text-[var(--ink-2)] whitespace-pre-wrap">
+              {workableNotePreview}
+            </pre>
+          </div>
+        </div>
+      ) : null}
     </AppShell>
   );
 };

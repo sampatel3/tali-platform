@@ -26,6 +26,11 @@ export default {
           green: 'var(--green)',
           red: 'var(--red)',
           amber: 'var(--amber)',
+          workable: 'var(--workable)',
+        },
+        workable: {
+          DEFAULT: '#2D8CFF',
+          dark: '#1A5FBF',
         },
         'taali-purple': 'var(--purple)',
         'taali-purple-dark': 'var(--purple-2)',

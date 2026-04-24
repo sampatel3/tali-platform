@@ -328,3 +328,38 @@ def connect_workable_token(
         "mode": "api_token",
         "read_only": bool(data.read_only),
     }
+
+
+@router.delete("/workable")
+def disconnect_workable(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Remove the stored Workable connection but keep synced records until explicitly cleared."""
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    config = _resolved_workable_config(org)
+    config["workflow_mode"] = "manual"
+    config["email_mode"] = "manual_taali"
+
+    org.workable_access_token = None
+    org.workable_refresh_token = None
+    org.workable_subdomain = None
+    org.workable_connected = False
+    org.workable_last_sync_at = None
+    org.workable_last_sync_status = None
+    org.workable_last_sync_summary = None
+    org.workable_sync_started_at = None
+    org.workable_sync_progress = None
+    org.workable_sync_cancel_requested_at = None
+    org.workable_config = WorkableConfigBase(**config).model_dump()
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to disconnect Workable")
+
+    return {"success": True}

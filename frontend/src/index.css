@@ -20,6 +20,8 @@
   --green: #15a36a;
   --red: #e64a4a;
   --amber: #d88a1c;
+  --workable: #2d8cff;
+  --workable-dark: #1a5fbf;
   --shadow-sm: 0 1px 0 rgba(29, 23, 48, 0.04), 0 2px 6px rgba(29, 23, 48, 0.04);
   --shadow-md: 0 1px 0 rgba(29, 23, 48, 0.04), 0 12px 32px rgba(29, 23, 48, 0.08);
   --shadow-lg: 0 2px 0 rgba(29, 23, 48, 0.04), 0 30px 60px -20px rgba(29, 23, 48, 0.22);
@@ -90,6 +92,8 @@ html[data-theme="dark"] {
   --purple: #9a5bff;
   --purple-2: #b689ff;
   --purple-soft: #2a1b4d;
+  --workable: #53a3ff;
+  --workable-dark: #2d8cff;
   --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.4);
   --shadow-md: 0 1px 0 rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.5);
   --shadow-lg: 0 2px 0 rgba(0, 0, 0, 0.3), 0 30px 60px -20px rgba(0, 0, 0, 0.7);
@@ -577,6 +581,34 @@ label.field {
   height: 6px;
   border-radius: 50%;
   background: currentColor;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.filter-chip:hover {
+  border-color: var(--purple);
+  color: var(--ink);
+}
+
+.filter-chip.on {
+  border-color: color-mix(in oklab, var(--purple) 28%, var(--line));
+  background: color-mix(in oklab, var(--purple) 10%, transparent);
+  color: var(--purple);
 }
 
 .t-pill {

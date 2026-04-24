@@ -31,6 +31,8 @@ class Role(Base):
     job_spec_text = Column(Text, nullable=True)
     job_spec_uploaded_at = Column(DateTime(timezone=True), nullable=True)
     additional_requirements = Column(Text, nullable=True)
+    scoring_criteria = Column(JSON, nullable=True)
+    reject_threshold = Column(Integer, default=60, nullable=False, server_default="60")
     interview_focus = Column(JSON, nullable=True)
     interview_focus_generated_at = Column(DateTime(timezone=True), nullable=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True)

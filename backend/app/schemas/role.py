@@ -19,6 +19,27 @@ class InterviewFocus(BaseModel):
     questions: list[InterviewFocusQuestion] = Field(default_factory=list)
 
 
+class ScoringCriterion(BaseModel):
+    id: str = Field(min_length=1, max_length=80)
+    text: str = Field(min_length=1, max_length=500)
+    source: Literal["job_spec", "recruiter"] = "job_spec"
+    order: int = Field(ge=1, le=200)
+    weight: Optional[int] = Field(default=None, ge=1, le=100)
+
+
+class ScoringCriterionCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+    source: Literal["job_spec", "recruiter"] = "recruiter"
+    weight: Optional[int] = Field(default=None, ge=1, le=100)
+
+
+class ScoringCriterionUpdate(BaseModel):
+    text: Optional[str] = Field(default=None, min_length=1, max_length=500)
+    source: Optional[Literal["job_spec", "recruiter"]] = None
+    order: Optional[int] = Field(default=None, ge=1, le=200)
+    weight: Optional[int] = Field(default=None, ge=1, le=100)
+
+
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
@@ -29,6 +50,7 @@ class RoleUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
     additional_requirements: Optional[str] = Field(default=None, max_length=ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH)
+    reject_threshold: Optional[int] = Field(default=None, ge=0, le=100)
 
 
 class RoleResponse(BaseModel):
@@ -43,6 +65,8 @@ class RoleResponse(BaseModel):
     job_spec_text: Optional[str] = None
     job_spec_uploaded_at: Optional[datetime] = None
     job_spec_present: bool = False
+    scoring_criteria: list[ScoringCriterion] = Field(default_factory=list)
+    reject_threshold: int = 60
     interview_focus: Optional[InterviewFocus] = None
     interview_focus_generated_at: Optional[datetime] = None
     tasks_count: int = 0
@@ -138,6 +162,8 @@ class ApplicationResponse(BaseModel):
     valid_assessment_id: Optional[int] = None
     valid_assessment_status: Optional[str] = None
     score_summary: Optional[dict[str, Any]] = None
+    role_reject_threshold: Optional[int] = None
+    below_role_threshold: bool = False
     created_at: datetime
     updated_at: Optional[datetime] = None
 
@@ -197,3 +223,15 @@ class AssessmentFromApplicationCreate(BaseModel):
 
 class AssessmentRetakeCreate(AssessmentFromApplicationCreate):
     void_reason: Optional[str] = Field(default=None, max_length=2000)
+
+
+class ApplicationBulkRejectRequest(BaseModel):
+    application_ids: list[int] = Field(min_length=1, max_length=200)
+    reason: Optional[str] = Field(default=None, max_length=2000)
+
+
+class ApplicationBulkRejectResponse(BaseModel):
+    success: bool = True
+    updated_count: int = 0
+    application_ids: list[int] = Field(default_factory=list)
+    workable_sync_attempted: int = 0

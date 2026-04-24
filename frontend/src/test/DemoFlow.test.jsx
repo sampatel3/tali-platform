@@ -1,9 +1,9 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import App from '../App';
-import { AuthProvider } from '../context/AuthContext';
-import { assessments, auth } from '../shared/api';
+import { DemoExperiencePage } from '../features/demo/DemoExperiencePage';
+import { LandingPage } from '../features/marketing/LandingPage';
+import { assessments } from '../shared/api';
 
 vi.mock('../shared/api', () => ({
   auth: {
@@ -55,79 +55,46 @@ vi.mock('../shared/api', () => ({
   },
 }));
 
-vi.mock('@monaco-editor/react', () => ({
-  default: () => <div data-testid="code-editor" />,
-}));
-
-const renderApp = () => render(
-  <AuthProvider>
-    <App />
-  </AuthProvider>,
-);
+const renderLanding = (onNavigate = vi.fn()) => render(<LandingPage onNavigate={onNavigate} />);
+const renderDemo = (onNavigate = vi.fn()) => render(<DemoExperiencePage onNavigate={onNavigate} />);
 
 describe('Demo flow redesign', () => {
-  const expectDemoHero = async () => {
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { level: 1, name: /Review a candidate/i })).toBeInTheDocument();
-    }, { timeout: 5000 });
-  };
-
-  const openDemoPage = async () => {
-    fireEvent.click(await screen.findByRole('button', { name: 'Demo' }));
-    await expectDemoHero();
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    window.history.replaceState(null, '', '/');
+    sessionStorage.clear();
     window.scrollTo = vi.fn();
     window.HTMLElement.prototype.scrollIntoView = vi.fn();
-    auth.me.mockRejectedValue(new Error('Not authenticated'));
     assessments.startDemo.mockResolvedValue({
       data: {
         assessment_id: 321,
         token: 'demo-token',
-        task: {
-          name: 'Demo task',
-          description: 'Demo description',
-          scenario: 'Recover a production workflow after a failed deploy.',
-          duration_minutes: 30,
-          starter_code: "print('hello')",
-          repo_structure: { files: { 'main.py': "print('hello')" } },
-          rubric_categories: [],
-          proctoring_enabled: false,
-        },
-        claude_budget: { enabled: false },
-        time_remaining: 1800,
-        is_timer_paused: false,
-        pause_reason: null,
-        total_paused_seconds: 0,
       },
     });
   });
 
   it('navigates from the marketing nav to the redesigned demo page', async () => {
-    renderApp();
+    const onNavigate = vi.fn();
+    renderLanding(onNavigate);
 
-    await openDemoPage();
-    expect(screen.getByText(/Pick the sample assessment you want to review/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
+
+    expect(onNavigate).toHaveBeenCalledWith('demo');
   });
 
   it('keeps the theme toggle button in both landing and demo navigation', async () => {
-    renderApp();
+    const { unmount } = renderLanding();
+    expect(screen.getByRole('button', { name: 'Toggle theme' })).toBeInTheDocument();
 
-    expect(await screen.findByRole('button', { name: 'Toggle theme' })).toBeInTheDocument();
-    await openDemoPage();
+    unmount();
+    renderDemo();
     expect(screen.getByRole('button', { name: 'Toggle theme' })).toBeInTheDocument();
   });
 
   it('shows the redesigned intake validation before a callback can be requested', async () => {
-    renderApp();
+    renderDemo();
 
-    await openDemoPage();
-
-    fireEvent.click(screen.getByRole('button', { name: /Request callback/i }));
+    fireEvent.click(screen.getByRole('button', { name: /See the showcase/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/Please complete:/i)).toBeInTheDocument();
@@ -135,10 +102,18 @@ describe('Demo flow redesign', () => {
     });
   });
 
-  it('submits the selected assessment track and shows the callback confirmation state', async () => {
-    renderApp();
+  it('queues the landing section when using the demo nav section links', async () => {
+    const onNavigate = vi.fn();
+    renderDemo(onNavigate);
 
-    await openDemoPage();
+    fireEvent.click(screen.getByRole('button', { name: 'How it works' }));
+
+    expect(onNavigate).toHaveBeenCalledWith('landing');
+    expect(sessionStorage.getItem('taali.pendingMarketingSection')).toBe('how-it-works');
+  });
+
+  it('submits the selected assessment track and shows the product showcase state', async () => {
+    renderDemo();
 
     fireEvent.change(screen.getByLabelText(/^Full name$/i), { target: { value: 'Jane Doe' } });
     fireEvent.change(screen.getByLabelText(/^Position$/i), { target: { value: 'Engineering Manager' } });
@@ -148,7 +123,7 @@ describe('Demo flow redesign', () => {
     fireEvent.change(screen.getByLabelText(/^Company size$/i), { target: { value: '51-200' } });
 
     fireEvent.click(screen.getByRole('button', { name: /GenAI Production Readiness Review/i }));
-    fireEvent.click(screen.getByRole('button', { name: /Request callback/i }));
+    fireEvent.click(screen.getByRole('button', { name: /See the showcase/i }));
 
     await waitFor(() => {
       expect(assessments.startDemo).toHaveBeenCalledWith(
@@ -160,8 +135,10 @@ describe('Demo flow redesign', () => {
       );
     });
 
-    expect(await screen.findByRole('heading', { level: 1, name: /Thanks, we'll reach out/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { level: 1, name: /Here's the product flow/i })).toBeInTheDocument();
     expect(screen.getAllByText(/GenAI Production Readiness Review/).length).toBeGreaterThan(0);
-    expect(screen.getAllByText('jane@company.com').length).toBeGreaterThan(0);
+    expect(
+      screen.getByText((_, element) => element?.textContent === 'Priya Anand - where she stands in the pipeline.')
+    ).toBeInTheDocument();
   });
 });

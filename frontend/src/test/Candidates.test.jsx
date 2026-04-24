@@ -98,8 +98,18 @@ const applications = [
     candidate_email: 'taylor@example.com',
     pipeline_stage: 'review',
     taali_score: 90,
+    cv_match_score: 84,
+    role_reject_threshold: 60,
+    workable_sourced: true,
+    workable_score_raw: 78,
     updated_at: '2026-03-05T10:00:00Z',
     valid_assessment_id: 901,
+    assessment_preview: {
+      category_scores: {
+        prompt_quality: 9.1,
+        independence: 8.5,
+      },
+    },
   },
   {
     id: 102,
@@ -110,6 +120,8 @@ const applications = [
     candidate_email: 'taylor@example.com',
     pipeline_stage: 'applied',
     taali_score: 88,
+    cv_match_score: 72,
+    role_reject_threshold: 60,
     updated_at: '2026-03-04T10:00:00Z',
   },
   {
@@ -121,6 +133,8 @@ const applications = [
     candidate_email: 'jamie@example.com',
     pipeline_stage: 'invited',
     taali_score: 62,
+    cv_match_score: 55,
+    role_reject_threshold: 60,
     updated_at: '2026-03-03T10:00:00Z',
   },
 ];
@@ -166,14 +180,17 @@ describe('Candidates page redesign', () => {
     localStorage.clear();
   });
 
-  it('loads the redesigned candidates workspace with duplicate-role badges', async () => {
+  it('loads the redesigned candidates workspace with workable and threshold indicators', async () => {
     renderPage();
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: /Candidates/i })).toBeInTheDocument();
       expect(screen.getAllByText('Taylor Lane').length).toBe(2);
       expect(screen.getByText('Jamie Stone')).toBeInTheDocument();
-      expect(screen.getAllByText('2 role applications').length).toBeGreaterThan(0);
+      expect(screen.getByRole('button', { name: /Below threshold · 1/i })).toBeInTheDocument();
+      expect(screen.getByText(/From Workable/i)).toBeInTheDocument();
+      expect(screen.getByText((_, element) => element?.textContent === 'WK 78')).toBeInTheDocument();
+      expect(screen.getByText('84%')).toBeInTheDocument();
       expect(rolesApi.listApplicationsGlobal).toHaveBeenCalledWith(
         expect.objectContaining({
           application_outcome: 'open',
@@ -183,7 +200,7 @@ describe('Candidates page redesign', () => {
     });
   });
 
-  it('applies the redesigned local search and score filters', async () => {
+  it('applies the redesigned local search and cv threshold filters', async () => {
     renderPage();
 
     await waitFor(() => {
@@ -202,12 +219,20 @@ describe('Candidates page redesign', () => {
     fireEvent.change(screen.getByPlaceholderText('Search by name, email, or role…'), {
       target: { value: '' },
     });
-    fireEvent.change(screen.getByLabelText('Min TAALI'), {
+    fireEvent.click(screen.getByRole('button', { name: /Below threshold · 1/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Jamie Stone')).toBeInTheDocument();
+      expect(screen.queryAllByText('Taylor Lane')).toHaveLength(0);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /Below threshold · 1/i }));
+    fireEvent.change(screen.getByLabelText('CV match minimum'), {
       target: { value: '80' },
     });
 
     await waitFor(() => {
-      expect(screen.getAllByText('Taylor Lane').length).toBe(2);
+      expect(screen.getByText('Taylor Lane')).toBeInTheDocument();
       expect(screen.queryByText('Jamie Stone')).not.toBeInTheDocument();
     });
   });
@@ -222,8 +247,34 @@ describe('Candidates page redesign', () => {
 
     fireEvent.click(screen.getAllByText('Taylor Lane')[0].closest('button'));
 
-    expect(onNavigate).toHaveBeenCalledWith('candidate-detail', {
-      candidateDetailAssessmentId: 901,
+    expect(onNavigate).toHaveBeenCalledWith('candidate-report', {
+      candidateApplicationId: 101,
     });
+  });
+
+  it('falls back to role pipelines when the global candidates feed fails', async () => {
+    rolesApi.listApplicationsGlobal.mockRejectedValueOnce(new Error('boom'));
+    rolesApi.listPipeline.mockImplementation((roleId) => Promise.resolve({
+      data: {
+        role_id: roleId,
+        role_name: roleId === 1 ? 'Backend Engineer' : 'Data Engineer',
+        stage_counts: { applied: 0, invited: 0, in_assessment: 0, review: 0 },
+        active_candidates_count: 1,
+        items: applications.filter((item) => item.role_id === roleId),
+        total: applications.filter((item) => item.role_id === roleId).length,
+        limit: 100,
+        offset: 0,
+      },
+    }));
+
+    renderPage();
+
+    await waitFor(() => {
+      expect(screen.getAllByText('Taylor Lane').length).toBe(2);
+      expect(screen.getByText('Jamie Stone')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByText(/Failed to load candidates/i)).not.toBeInTheDocument();
+    expect(rolesApi.listPipeline).toHaveBeenCalledTimes(2);
   });
 });

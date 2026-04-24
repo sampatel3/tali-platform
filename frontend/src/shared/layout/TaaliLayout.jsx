@@ -8,6 +8,7 @@ import {
   setDarkModePreference,
   subscribeThemePreference,
 } from '../../lib/themePreference';
+import { navigateToMarketingSection } from '../../lib/marketingScroll';
 
 const APP_TABS = [
   { id: 'jobs', label: 'Jobs' },
@@ -171,10 +172,10 @@ export const MarketingNav = ({ onNavigate }) => (
     <div className="app-nav-inner">
       <TaaliLogo onClick={() => onNavigate('landing')} />
       <div className="row hidden md:flex" style={{ gap: 32 }}>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => document.getElementById('how-it-works')?.scrollIntoView()}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigateToMarketingSection('how-it-works', onNavigate)}>
           How it works
         </button>
-        <button type="button" className="btn btn-ghost btn-sm" onClick={() => document.getElementById('product-tour')?.scrollIntoView()}>
+        <button type="button" className="btn btn-ghost btn-sm" onClick={() => navigateToMarketingSection('product-tour', onNavigate)}>
           Product tour
         </button>
         <button type="button" className="btn btn-ghost btn-sm" onClick={() => onNavigate('demo')}>

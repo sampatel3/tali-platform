@@ -1,62 +1,135 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
+import { WorkablePanel } from '../../components/settings/workable/WorkablePanel';
+import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
-import { billing as billingApi, organizations as orgsApi, team as teamApi } from '../../shared/api';
+import { billing as billingApi, organizations as organizationsApi, team as teamApi } from '../../shared/api';
 import { AppShell } from '../../shared/layout/TaaliLayout';
 
-const SETTINGS_SECTIONS = [
-  { id: 'overview', label: 'Workspace', path: '/settings' },
-  { id: 'team', label: 'Team', path: '/settings/team' },
-  { id: 'billing', label: 'Billing', path: '/settings/billing' },
-  { id: 'workable', label: 'Workable', path: '/settings/workable' },
-  { id: 'enterprise', label: 'Enterprise', path: '/settings/enterprise' },
-  { id: 'preferences', label: 'Preferences', path: '/settings/preferences' },
+const sectionFromPath = (pathname) => {
+  if (pathname.startsWith('/settings/team')) return 'members';
+  if (pathname.startsWith('/settings/billing')) return 'billing';
+  if (pathname.startsWith('/settings/workable')) return 'workable';
+  if (pathname.startsWith('/settings/enterprise')) return 'sso';
+  if (pathname.startsWith('/settings/preferences')) return 'notifications';
+  return 'org';
+};
+
+const SETTINGS_NAV = [
+  {
+    label: 'Workspace',
+    items: [
+      { id: 'org', label: 'Organization', path: '/settings', anchor: 'org' },
+      { id: 'scoring', label: 'Scoring policy', path: '/settings', anchor: 'scoring' },
+      { id: 'ai', label: 'AI tooling', path: '/settings/preferences', anchor: 'ai' },
+    ],
+  },
+  {
+    label: 'People',
+    items: [
+      { id: 'members', label: 'Members', path: '/settings/team', anchor: 'members' },
+      { id: 'roles', label: 'Roles & access', path: '/settings/team', anchor: 'roles' },
+    ],
+  },
+  {
+    label: 'Connected',
+    items: [
+      { id: 'workable', label: 'Workable', path: '/settings/workable', anchor: 'workable' },
+      { id: 'sso', label: 'SSO / SAML', path: '/settings/enterprise', anchor: 'sso' },
+      { id: 'api', label: 'API keys', path: '/settings/enterprise', anchor: 'api' },
+    ],
+  },
+  {
+    label: 'Account',
+    items: [
+      { id: 'billing', label: 'Billing', path: '/settings/billing', anchor: 'billing' },
+      { id: 'notifications', label: 'Notifications', path: '/settings/preferences', anchor: 'notifications' },
+    ],
+  },
 ];
 
-const sectionFromPath = (pathname) => {
-  const segment = pathname.replace(/^\/settings\/?/, '').split('/')[0];
-  return SETTINGS_SECTIONS.find((section) => section.id === segment)?.id || 'overview';
+const initialScoringToggles = {
+  promptQuality: true,
+  errorRecovery: true,
+  independence: true,
+  contextUtilization: true,
+  designThinking: true,
+  timeToFirstSignal: false,
 };
 
-const normalizeWorkableError = (input) => {
-  const raw = String(input || '').trim();
-  if (!raw) return 'Workable connection failed.';
-  return raw;
-};
-
-const SettingsCard = ({ title, subtitle, children }) => (
-  <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
-    <h3 className="font-[var(--font-display)] text-[22px] font-semibold tracking-[-0.02em]">{title}</h3>
-    {subtitle ? <p className="mt-1 text-[12.5px] text-[var(--mute)]">{subtitle}</p> : null}
-    <div className="mt-5">{children}</div>
-  </div>
+const SectionPanel = ({ id, title, subtitle, children }) => (
+  <section
+    id={id}
+    className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] px-7 py-7 shadow-[var(--shadow-sm)]"
+  >
+    {title ? (
+      <>
+        <h2 className="font-[var(--font-display)] text-[26px] font-medium tracking-[-0.015em]">
+          {title}
+        </h2>
+        {subtitle ? <p className="mt-1 text-[13.5px] text-[var(--mute)]">{subtitle}</p> : null}
+      </>
+    ) : null}
+    <div className={title ? 'mt-5' : ''}>{children}</div>
+  </section>
 );
 
-const Field = ({ label, children, hint = null }) => (
-  <label className="field">
-    <span className="k">{label}</span>
-    {children}
-    {hint ? <span className="mt-1 block text-[11.5px] text-[var(--mute)]">{hint}</span> : null}
+const ToggleRow = ({ title, body, checked, onChange, disabled = false }) => (
+  <label className={`grid grid-cols-[1fr_auto] items-center gap-4 rounded-[12px] border border-[var(--line-2)] px-4 py-4 ${disabled ? 'opacity-60' : ''}`.trim()}>
+    <div>
+      <h4 className="text-[14px] font-semibold">{title}</h4>
+      <p className="mt-1 text-[13px] leading-6 text-[var(--mute)]">{body}</p>
+    </div>
+    <span
+      className={`relative inline-block h-[22px] w-[40px] rounded-full ${checked ? 'bg-[var(--purple)]' : 'bg-[var(--line)]'}`.trim()}
+      onClick={(event) => {
+        event.preventDefault();
+        if (!disabled) onChange(!checked);
+      }}
+      aria-hidden="true"
+    >
+      <span
+        className="absolute top-[2px] h-[18px] w-[18px] rounded-full bg-white shadow-[0_1px_2px_rgba(0,0,0,.15)] transition"
+        style={{ left: checked ? 20 : 2 }}
+      />
+    </span>
   </label>
 );
 
-export const SettingsPage = ({ onNavigate, ConnectWorkableButton }) => {
+const SummaryStat = ({ label, value }) => (
+  <div className="rounded-[14px] border border-[var(--line)] bg-[var(--bg)] px-5 py-5">
+    <div className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">{label}</div>
+    <div className="mt-3 font-[var(--font-display)] text-[34px] tracking-[-0.03em]">{value}</div>
+  </div>
+);
+
+export const SettingsPage = ({ onNavigate }) => {
   const location = useLocation();
   const navigate = useNavigate();
+  const { user } = useAuth();
   const { showToast } = useToast();
-  const currentSection = sectionFromPath(location.pathname);
+  const activeSection = useMemo(
+    () => location.hash.replace(/^#/, '') || sectionFromPath(location.pathname),
+    [location.hash, location.pathname],
+  );
 
   const [orgData, setOrgData] = useState(null);
-  const [loadingOrg, setLoadingOrg] = useState(true);
+  const [loading, setLoading] = useState(true);
+  const [teamMembers, setTeamMembers] = useState([]);
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingCosts, setBillingCosts] = useState(null);
   const [billingCredits, setBillingCredits] = useState(null);
-  const [teamMembers, setTeamMembers] = useState([]);
-  const [inviteEmail, setInviteEmail] = useState('');
-  const [inviteName, setInviteName] = useState('');
-  const [loadingSection, setLoadingSection] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [inviteName, setInviteName] = useState('');
+  const [inviteEmail, setInviteEmail] = useState('');
+  const [workspaceForm, setWorkspaceForm] = useState({
+    name: '',
+    domain: '',
+    candidateBrand: '',
+    locale: 'English (US)',
+  });
   const [enterpriseForm, setEnterpriseForm] = useState({
     allowedEmailDomains: '',
     ssoEnforced: false,
@@ -69,101 +142,70 @@ export const SettingsPage = ({ onNavigate, ConnectWorkableButton }) => {
     inviteEmailTemplate: '',
     hasCustomClaudeApiKey: false,
   });
-  const [workspaceForm, setWorkspaceForm] = useState({
-    name: '',
-    workableSubdomain: '',
-  });
-  const [workableError, setWorkableError] = useState('');
-  const [workableSyncing, setWorkableSyncing] = useState(false);
-  const [checkoutLoading, setCheckoutLoading] = useState(false);
+  const [scoringToggles, setScoringToggles] = useState(initialScoringToggles);
 
   useEffect(() => {
     let cancelled = false;
-    const loadOrg = async () => {
-      setLoadingOrg(true);
+
+    const load = async () => {
+      setLoading(true);
       try {
-        const res = await orgsApi.get();
+        const [orgRes, teamRes, usageRes, costsRes, creditsRes] = await Promise.allSettled([
+          organizationsApi.get(),
+          teamApi.list(),
+          billingApi.usage(),
+          billingApi.costs(),
+          billingApi.credits(),
+        ]);
         if (cancelled) return;
-        const data = res?.data || {};
-        setOrgData(data);
+
+        const nextOrg = orgRes.status === 'fulfilled' ? (orgRes.value?.data || null) : null;
+        setOrgData(nextOrg);
         setWorkspaceForm({
-          name: data?.name || '',
-          workableSubdomain: data?.workable_subdomain || '',
+          name: nextOrg?.name || '',
+          domain: Array.isArray(nextOrg?.allowed_email_domains) ? nextOrg.allowed_email_domains[0] || '' : '',
+          candidateBrand: nextOrg?.name || '',
+          locale: 'English (US)',
         });
         setEnterpriseForm({
-          allowedEmailDomains: Array.isArray(data?.allowed_email_domains) ? data.allowed_email_domains.join(', ') : '',
-          ssoEnforced: Boolean(data?.sso_enforced),
-          samlEnabled: Boolean(data?.saml_enabled),
-          samlMetadataUrl: data?.saml_metadata_url || '',
-          candidateFeedbackEnabled: data?.candidate_feedback_enabled !== false,
+          allowedEmailDomains: Array.isArray(nextOrg?.allowed_email_domains) ? nextOrg.allowed_email_domains.join(', ') : '',
+          ssoEnforced: Boolean(nextOrg?.sso_enforced),
+          samlEnabled: Boolean(nextOrg?.saml_enabled),
+          samlMetadataUrl: nextOrg?.saml_metadata_url || '',
+          candidateFeedbackEnabled: nextOrg?.candidate_feedback_enabled !== false,
         });
         setPreferencesForm({
-          defaultAssessmentDurationMinutes: Number(data?.default_assessment_duration_minutes || 30),
-          inviteEmailTemplate: String(data?.invite_email_template || '').trim() || 'Hi {{candidate_name}}, your TAALI assessment is ready: {{assessment_link}}',
-          hasCustomClaudeApiKey: Boolean(data?.has_custom_claude_api_key),
+          defaultAssessmentDurationMinutes: Number(nextOrg?.default_assessment_duration_minutes || 30),
+          inviteEmailTemplate: String(nextOrg?.invite_email_template || '').trim() || 'Hi {{candidate_name}}, your Taali assessment is ready: {{assessment_link}}',
+          hasCustomClaudeApiKey: Boolean(nextOrg?.has_custom_claude_api_key),
         });
-      } catch {
-        if (!cancelled) {
-          setOrgData(null);
-        }
+
+        setTeamMembers(teamRes.status === 'fulfilled' && Array.isArray(teamRes.value?.data) ? teamRes.value.data : []);
+        setBillingUsage(usageRes.status === 'fulfilled' ? usageRes.value?.data || null : null);
+        setBillingCosts(costsRes.status === 'fulfilled' ? costsRes.value?.data || null : null);
+        setBillingCredits(creditsRes.status === 'fulfilled' ? creditsRes.value?.data || null : null);
       } finally {
-        if (!cancelled) setLoadingOrg(false);
+        if (!cancelled) setLoading(false);
       }
     };
-    void loadOrg();
+
+    void load();
     return () => {
       cancelled = true;
     };
   }, []);
 
   useEffect(() => {
-    let cancelled = false;
-    const loadSectionData = async () => {
-      if (currentSection === 'billing') {
-        setLoadingSection(true);
-        try {
-          const [usageRes, costsRes, creditsRes] = await Promise.all([
-            billingApi.usage(),
-            billingApi.costs(),
-            billingApi.credits(),
-          ]);
-          if (cancelled) return;
-          setBillingUsage(usageRes?.data || null);
-          setBillingCosts(costsRes?.data || null);
-          setBillingCredits(creditsRes?.data || null);
-        } catch {
-          if (cancelled) return;
-          setBillingUsage(null);
-          setBillingCosts(null);
-          setBillingCredits(null);
-        } finally {
-          if (!cancelled) setLoadingSection(false);
-        }
-        return;
-      }
+    const targetId = location.hash.replace(/^#/, '') || sectionFromPath(location.pathname);
+    if (!targetId) return undefined;
+    const timer = window.setTimeout(() => {
+      const node = document.getElementById(targetId);
+      node?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 50);
+    return () => window.clearTimeout(timer);
+  }, [location.hash, location.pathname]);
 
-      if (currentSection === 'team') {
-        setLoadingSection(true);
-        try {
-          const res = await teamApi.list();
-          if (!cancelled) setTeamMembers(Array.isArray(res?.data) ? res.data : []);
-        } catch {
-          if (!cancelled) setTeamMembers([]);
-        } finally {
-          if (!cancelled) setLoadingSection(false);
-        }
-        return;
-      }
-
-      setLoadingSection(false);
-    };
-    void loadSectionData();
-    return () => {
-      cancelled = true;
-    };
-  }, [currentSection]);
-
-  const billingStats = useMemo(() => [
+  const billingStats = useMemo(() => ([
     {
       label: 'Assessments this month',
       value: billingUsage?.assessments_this_month ?? billingUsage?.assessments_used ?? 0,
@@ -176,18 +218,25 @@ export const SettingsPage = ({ onNavigate, ConnectWorkableButton }) => {
       label: 'Spend this month',
       value: billingCosts?.current_month_total_usd != null ? `$${Number(billingCosts.current_month_total_usd).toFixed(2)}` : '$0.00',
     },
-  ], [billingCosts?.current_month_total_usd, billingCredits?.balance, billingCredits?.remaining_credits, billingUsage?.assessments_this_month, billingUsage?.assessments_used]);
+  ]), [billingCosts?.current_month_total_usd, billingCredits?.balance, billingCredits?.remaining_credits, billingUsage?.assessments_this_month, billingUsage?.assessments_used]);
+
+  const navigateToSection = (item) => {
+    navigate(`${item.path}#${item.anchor}`);
+  };
 
   const saveWorkspace = async () => {
     setSaving(true);
     try {
-      await orgsApi.update({
+      const response = await organizationsApi.update({
         name: workspaceForm.name,
-        workable_subdomain: workspaceForm.workableSubdomain || null,
+        allowed_email_domains: workspaceForm.domain
+          ? [workspaceForm.domain.trim()]
+          : [],
       });
-      showToast('Workspace updated.', 'success');
+      setOrgData(response?.data || null);
+      showToast('Organization updated.', 'success');
     } catch {
-      showToast('Failed to update workspace.', 'error');
+      showToast('Failed to update organization.', 'error');
     } finally {
       setSaving(false);
     }
@@ -196,13 +245,17 @@ export const SettingsPage = ({ onNavigate, ConnectWorkableButton }) => {
   const saveEnterprise = async () => {
     setSaving(true);
     try {
-      await orgsApi.update({
-        allowed_email_domains: enterpriseForm.allowedEmailDomains.split(',').map((value) => value.trim()).filter(Boolean),
+      const response = await organizationsApi.update({
+        allowed_email_domains: enterpriseForm.allowedEmailDomains
+          .split(',')
+          .map((value) => value.trim())
+          .filter(Boolean),
         sso_enforced: enterpriseForm.ssoEnforced,
         saml_enabled: enterpriseForm.samlEnabled,
         saml_metadata_url: enterpriseForm.samlMetadataUrl || null,
         candidate_feedback_enabled: enterpriseForm.candidateFeedbackEnabled,
       });
+      setOrgData(response?.data || null);
       showToast('Enterprise settings updated.', 'success');
     } catch {
       showToast('Failed to update enterprise settings.', 'error');
@@ -214,10 +267,11 @@ export const SettingsPage = ({ onNavigate, ConnectWorkableButton }) => {
   const savePreferences = async () => {
     setSaving(true);
     try {
-      await orgsApi.update({
+      const response = await organizationsApi.update({
         default_assessment_duration_minutes: Number(preferencesForm.defaultAssessmentDurationMinutes || 30),
         invite_email_template: preferencesForm.inviteEmailTemplate,
       });
+      setOrgData(response?.data || null);
       showToast('Preferences updated.', 'success');
     } catch {
       showToast('Failed to update preferences.', 'error');
@@ -234,11 +288,11 @@ export const SettingsPage = ({ onNavigate, ConnectWorkableButton }) => {
         email: inviteEmail.trim(),
         full_name: inviteName.trim() || undefined,
       });
-      showToast('Invite sent.', 'success');
-      setInviteEmail('');
+      const refreshed = await teamApi.list();
+      setTeamMembers(Array.isArray(refreshed?.data) ? refreshed.data : []);
       setInviteName('');
-      const res = await teamApi.list();
-      setTeamMembers(Array.isArray(res?.data) ? res.data : []);
+      setInviteEmail('');
+      showToast('Invite sent.', 'success');
     } catch {
       showToast('Failed to invite teammate.', 'error');
     } finally {
@@ -246,34 +300,16 @@ export const SettingsPage = ({ onNavigate, ConnectWorkableButton }) => {
     }
   };
 
-  const connectWorkable = async () => {
-    setWorkableSyncing(true);
-    setWorkableError('');
-    try {
-      const res = await orgsApi.getWorkableAuthorizeUrl();
-      const url = res?.data?.authorize_url || res?.data?.url;
-      if (url) {
-        window.location.href = url;
-        return;
-      }
-      setWorkableError('Workable authorize URL is unavailable.');
-    } catch (err) {
-      setWorkableError(normalizeWorkableError(err?.response?.data?.detail || err?.message));
-    } finally {
-      setWorkableSyncing(false);
-    }
-  };
-
   const addCredits = async () => {
     setCheckoutLoading(true);
     try {
       const base = `${window.location.origin}/settings/billing`;
-      const res = await billingApi.createCheckoutSession({
+      const response = await billingApi.createCheckoutSession({
         success_url: `${base}?payment=success`,
         cancel_url: base,
       });
-      if (res?.data?.url) {
-        window.location.href = res.data.url;
+      if (response?.data?.url) {
+        window.location.href = response.data.url;
       }
     } catch {
       showToast('Failed to start checkout.', 'error');
@@ -282,187 +318,7 @@ export const SettingsPage = ({ onNavigate, ConnectWorkableButton }) => {
     }
   };
 
-  const renderCurrentSection = () => {
-    if (loadingOrg) {
-      return <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-8 text-sm text-[var(--mute)]">Loading settings…</div>;
-    }
-
-    if (currentSection === 'overview') {
-      return (
-        <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
-          <SettingsCard title={<>Workspace <em>details</em>.</>} subtitle="Brand, organization, and integration defaults.">
-            <div className="grid gap-4 md:grid-cols-2">
-              <Field label="Workspace name">
-                <input value={workspaceForm.name} onChange={(event) => setWorkspaceForm((prev) => ({ ...prev, name: event.target.value }))} />
-              </Field>
-              <Field label="Workable subdomain">
-                <input value={workspaceForm.workableSubdomain} onChange={(event) => setWorkspaceForm((prev) => ({ ...prev, workableSubdomain: event.target.value }))} />
-              </Field>
-            </div>
-            <button type="button" className="btn btn-purple btn-sm mt-5" onClick={saveWorkspace} disabled={saving}>Save workspace</button>
-          </SettingsCard>
-          <SettingsCard title={<>Workspace <em>summary</em>.</>} subtitle="Quick reference for the current setup.">
-            <div className="space-y-3 text-sm">
-              <div className="flex justify-between border-b border-[var(--line-2)] pb-3"><span className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">Org</span><span>{orgData?.name || 'Taali'}</span></div>
-              <div className="flex justify-between border-b border-[var(--line-2)] pb-3"><span className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">Feedback</span><span>{orgData?.candidate_feedback_enabled === false ? 'Disabled' : 'Enabled'}</span></div>
-              <div className="flex justify-between"><span className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">Workable</span><span>{orgData?.workable_subdomain || 'Not connected'}</span></div>
-            </div>
-          </SettingsCard>
-        </div>
-      );
-    }
-
-    if (currentSection === 'team') {
-      return (
-        <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
-          <SettingsCard title={<>Team <em>members</em>.</>} subtitle="Invite recruiters, hiring managers, and reviewers.">
-            {loadingSection ? (
-              <div className="text-sm text-[var(--mute)]">Loading team…</div>
-            ) : (
-              <div className="space-y-3">
-                {teamMembers.length === 0 ? (
-                  <div className="text-sm text-[var(--mute)]">No teammates added yet.</div>
-                ) : teamMembers.map((member) => (
-                  <div key={member.id || member.email} className="flex items-center justify-between rounded-[12px] border border-[var(--line-2)] px-4 py-3">
-                    <div>
-                      <div className="text-sm font-medium">{member.full_name || member.email}</div>
-                      <div className="mt-1 text-[11.5px] text-[var(--mute)]">{member.email}</div>
-                    </div>
-                    <span className="chip">{member.role || 'member'}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </SettingsCard>
-          <SettingsCard title={<>Invite <em>member</em>.</>} subtitle="Add another teammate to the hiring workspace.">
-            <div className="space-y-4">
-              <Field label="Full name">
-                <input value={inviteName} onChange={(event) => setInviteName(event.target.value)} placeholder="Alex Weston" />
-              </Field>
-              <Field label="Email">
-                <input type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="alex@company.com" />
-              </Field>
-            </div>
-            <button type="button" className="btn btn-purple btn-sm mt-5" onClick={inviteMember} disabled={saving}>Send invite</button>
-          </SettingsCard>
-        </div>
-      );
-    }
-
-    if (currentSection === 'billing') {
-      return (
-        <div className="space-y-5">
-          <div className="grid gap-4 md:grid-cols-3">
-            {billingStats.map((stat) => (
-              <div key={stat.label} className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] px-6 py-6 shadow-[var(--shadow-sm)]">
-                <div className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">{stat.label}</div>
-                <div className="mt-3 font-[var(--font-display)] text-[40px] tracking-[-0.03em]">{stat.value}</div>
-              </div>
-            ))}
-          </div>
-          <SettingsCard title={<>Billing <em>controls</em>.</>} subtitle="Review usage and top up credits when needed.">
-            {loadingSection ? <div className="text-sm text-[var(--mute)]">Loading billing…</div> : null}
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-[12px] border border-[var(--line-2)] p-4 text-sm text-[var(--ink-2)]">
-                Current month: {billingCosts?.current_month_total_usd != null ? `$${Number(billingCosts.current_month_total_usd).toFixed(2)}` : '$0.00'}
-              </div>
-              <div className="rounded-[12px] border border-[var(--line-2)] p-4 text-sm text-[var(--ink-2)]">
-                Credits available: {billingCredits?.remaining_credits ?? billingCredits?.balance ?? 0}
-              </div>
-            </div>
-            <button type="button" className="btn btn-purple btn-sm mt-5" onClick={addCredits} disabled={checkoutLoading}>
-              {checkoutLoading ? 'Opening checkout…' : 'Add credits'}
-            </button>
-          </SettingsCard>
-        </div>
-      );
-    }
-
-    if (currentSection === 'workable') {
-      return (
-        <div className="grid gap-5 lg:grid-cols-[1fr_320px]">
-          <SettingsCard title={<>Workable <em>connection</em>.</>} subtitle="Connect the ATS, import jobs, and keep the pipeline aligned.">
-            <div className="rounded-[12px] border border-[var(--line-2)] p-4 text-sm text-[var(--ink-2)]">
-              Current status: {orgData?.workable_subdomain ? `Connected to ${orgData.workable_subdomain}` : 'Not connected'}
-            </div>
-            {workableError ? <div className="mt-4 rounded-[12px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4 text-sm text-[var(--taali-danger)]">{workableError}</div> : null}
-            <div className="mt-5 flex flex-wrap gap-3">
-              <button type="button" className="btn btn-purple btn-sm" onClick={connectWorkable} disabled={workableSyncing}>
-                {workableSyncing ? 'Connecting…' : 'Connect Workable'}
-              </button>
-              {ConnectWorkableButton ? <ConnectWorkableButton onNavigate={onNavigate} /> : null}
-            </div>
-          </SettingsCard>
-          <SettingsCard title={<>Why it <em>matters</em>.</>} subtitle="Sync candidate stages and remove manual handoffs.">
-            <ul className="space-y-3 text-sm text-[var(--ink-2)]">
-              <li>Import open roles into the recruiter workspace.</li>
-              <li>Invite candidates into Taali from the ATS loop.</li>
-              <li>Keep recruiter state and review decisions aligned.</li>
-            </ul>
-          </SettingsCard>
-        </div>
-      );
-    }
-
-    if (currentSection === 'enterprise') {
-      return (
-        <SettingsCard title={<>Enterprise <em>controls</em>.</>} subtitle="SSO, domains, and org-wide feedback policy.">
-          <div className="grid gap-4 md:grid-cols-2">
-            <Field label="Allowed email domains">
-              <input value={enterpriseForm.allowedEmailDomains} onChange={(event) => setEnterpriseForm((prev) => ({ ...prev, allowedEmailDomains: event.target.value }))} placeholder="company.com, subsidiary.com" />
-            </Field>
-            <Field label="SAML metadata URL">
-              <input value={enterpriseForm.samlMetadataUrl} onChange={(event) => setEnterpriseForm((prev) => ({ ...prev, samlMetadataUrl: event.target.value }))} placeholder="https://idp.example.com/metadata" />
-            </Field>
-          </div>
-          <div className="mt-5 grid gap-3 md:grid-cols-3">
-            {[
-              ['Enforce SSO', enterpriseForm.ssoEnforced, 'ssoEnforced'],
-              ['Enable SAML', enterpriseForm.samlEnabled, 'samlEnabled'],
-              ['Candidate feedback', enterpriseForm.candidateFeedbackEnabled, 'candidateFeedbackEnabled'],
-            ].map(([label, checked, key]) => (
-              <label key={label} className="flex items-center justify-between rounded-[12px] border border-[var(--line-2)] px-4 py-3 text-sm">
-                <span>{label}</span>
-                <input
-                  type="checkbox"
-                  checked={Boolean(checked)}
-                  onChange={(event) => setEnterpriseForm((prev) => ({ ...prev, [key]: event.target.checked }))}
-                />
-              </label>
-            ))}
-          </div>
-          <button type="button" className="btn btn-purple btn-sm mt-5" onClick={saveEnterprise} disabled={saving}>Save enterprise settings</button>
-        </SettingsCard>
-      );
-    }
-
-    return (
-      <SettingsCard title={<>Preferences <em>defaults</em>.</>} subtitle="Assessment duration, invite copy, and recruiter-side defaults.">
-        <div className="grid gap-4 md:grid-cols-2">
-          <Field label="Default assessment minutes">
-            <input
-              type="number"
-              min="15"
-              max="180"
-              value={preferencesForm.defaultAssessmentDurationMinutes}
-              onChange={(event) => setPreferencesForm((prev) => ({ ...prev, defaultAssessmentDurationMinutes: event.target.value }))}
-            />
-          </Field>
-          <Field label="Custom Claude key" hint={preferencesForm.hasCustomClaudeApiKey ? 'A custom key is already configured.' : 'No custom key configured.'}>
-            <input value={preferencesForm.hasCustomClaudeApiKey ? 'Configured' : 'Not configured'} readOnly />
-          </Field>
-        </div>
-        <Field label="Invite email template">
-          <textarea
-            className="min-h-[140px]"
-            value={preferencesForm.inviteEmailTemplate}
-            onChange={(event) => setPreferencesForm((prev) => ({ ...prev, inviteEmailTemplate: event.target.value }))}
-          />
-        </Field>
-        <button type="button" className="btn btn-purple btn-sm mt-5" onClick={savePreferences} disabled={saving}>Save preferences</button>
-      </SettingsCard>
-    );
-  };
+  const currentPlanLabel = orgData?.workable_connected ? 'Connected ATS workflow' : 'Manual recruiting workspace';
 
   return (
     <AppShell currentPage="settings" onNavigate={onNavigate}>
@@ -472,24 +328,250 @@ export const SettingsPage = ({ onNavigate, ConnectWorkableButton }) => {
           <div>
             <div className="kicker">04 · RECRUITER WORKSPACE</div>
             <h1>Settings<em>.</em></h1>
-            <p className="sub">Workspace controls, billing, integrations, and the defaults recruiters use every day.</p>
+            <p className="sub">Workspace, scoring policy, integrations, and access.</p>
           </div>
         </div>
 
-        <div className="mb-5 flex flex-wrap gap-2">
-          {SETTINGS_SECTIONS.map((section) => (
-            <button
-              key={section.id}
-              type="button"
-              className={`btn ${currentSection === section.id ? 'btn-primary' : 'btn-outline'} btn-sm`.trim()}
-              onClick={() => navigate(section.path)}
-            >
-              {section.label}
-            </button>
-          ))}
-        </div>
+        {loading ? (
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] px-6 py-8 text-sm text-[var(--mute)]">
+            Loading settings...
+          </div>
+        ) : (
+          <div className="grid gap-5 lg:grid-cols-[260px_minmax(0,1fr)]">
+            <aside className="sticky top-[88px] self-start rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-[18px] shadow-[var(--shadow-sm)]">
+              {SETTINGS_NAV.map((group) => (
+                <div key={group.label} className="mb-4 last:mb-0">
+                  <div className="mb-2 px-[10px] font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.1em] text-[var(--mute)]">
+                    {group.label}
+                  </div>
+                  <div className="space-y-1">
+                    {group.items.map((item) => (
+                      <button
+                        key={item.id}
+                        type="button"
+                        className={`block w-full rounded-[8px] px-[10px] py-[8px] text-left text-[13.5px] transition ${
+                          activeSection === item.id
+                            ? 'bg-[var(--ink)] text-[var(--bg)]'
+                            : 'text-[var(--ink-2)] hover:bg-[var(--bg-3)]'
+                        }`.trim()}
+                        onClick={() => navigateToSection(item)}
+                      >
+                        {item.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </aside>
 
-        {renderCurrentSection()}
+            <main className="flex flex-col gap-5">
+              <SectionPanel id="org" title={<>Organization<em>.</em></>} subtitle="How your workspace shows up to candidates.">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="field">
+                    <span className="k">Workspace name</span>
+                    <input value={workspaceForm.name} onChange={(event) => setWorkspaceForm((current) => ({ ...current, name: event.target.value }))} />
+                  </label>
+                  <label className="field">
+                    <span className="k">Domain</span>
+                    <input value={workspaceForm.domain} onChange={(event) => setWorkspaceForm((current) => ({ ...current, domain: event.target.value }))} />
+                  </label>
+                  <label className="field">
+                    <span className="k">Candidate-facing brand</span>
+                    <input value={workspaceForm.candidateBrand} onChange={(event) => setWorkspaceForm((current) => ({ ...current, candidateBrand: event.target.value }))} />
+                  </label>
+                  <label className="field">
+                    <span className="k">Locale</span>
+                    <input value={workspaceForm.locale} onChange={(event) => setWorkspaceForm((current) => ({ ...current, locale: event.target.value }))} />
+                  </label>
+                </div>
+                <div className="row mt-5 justify-between">
+                  <div className="text-[12.5px] text-[var(--mute)]">Current workspace mode: {currentPlanLabel}</div>
+                  <button type="button" className="btn btn-purple btn-sm" onClick={saveWorkspace} disabled={saving}>
+                    {saving ? 'Saving...' : 'Save organization'}
+                  </button>
+                </div>
+              </SectionPanel>
+
+              <SectionPanel id="scoring" title={<>Scoring <em>policy</em></>} subtitle="Turn dimensions on or off for this workspace. Changes apply to assessments created after today.">
+                <div className="space-y-3">
+                  <ToggleRow title="Prompt quality" body="Reward scoped, single-decision prompts. Penalize vague requests." checked={scoringToggles.promptQuality} onChange={(value) => setScoringToggles((current) => ({ ...current, promptQuality: value }))} />
+                  <ToggleRow title="Error recovery" body="Credit candidates who flag or reject incorrect AI output." checked={scoringToggles.errorRecovery} onChange={(value) => setScoringToggles((current) => ({ ...current, errorRecovery: value }))} />
+                  <ToggleRow title="Independence" body="Measure which parts of the final code were written by the human vs. the model." checked={scoringToggles.independence} onChange={(value) => setScoringToggles((current) => ({ ...current, independence: value }))} />
+                  <ToggleRow title="Context utilization" body="Track how AI suggestions are reviewed before being accepted." checked={scoringToggles.contextUtilization} onChange={(value) => setScoringToggles((current) => ({ ...current, contextUtilization: value }))} />
+                  <ToggleRow title="Design thinking" body="Credit decisions that connect the fix to its blast radius across the system." checked={scoringToggles.designThinking} onChange={(value) => setScoringToggles((current) => ({ ...current, designThinking: value }))} />
+                  <ToggleRow title="Time-to-first-signal" body="Include this in the composite score for leveling-sensitive roles." checked={scoringToggles.timeToFirstSignal} onChange={(value) => setScoringToggles((current) => ({ ...current, timeToFirstSignal: value }))} />
+                </div>
+              </SectionPanel>
+
+              <SectionPanel id="ai" title={<>AI <em>tooling</em></>} subtitle="What candidates can use inside the runtime and what recruiters see in reports.">
+                <div className="space-y-3">
+                  <ToggleRow title="Claude CLI + chat" body="Enabled across assessment sessions. Default AI tool for scoring-aware reviews." checked onChange={() => {}} disabled />
+                  <ToggleRow title="Cursor / Copilot style tools" body="Disabled by default until workspace-level tooling presets are expanded." checked={false} onChange={() => {}} disabled />
+                  <ToggleRow title="Candidate feedback" body="Show the candidate-facing summary after review is finalized." checked={enterpriseForm.candidateFeedbackEnabled} onChange={(value) => setEnterpriseForm((current) => ({ ...current, candidateFeedbackEnabled: value }))} />
+                </div>
+              </SectionPanel>
+
+              <SectionPanel id="members" title={<>Members<em>.</em></>} subtitle="Invite recruiters, hiring managers, and reviewers.">
+                <div className="grid gap-5 lg:grid-cols-[1.15fr_.85fr]">
+                  <div className="space-y-3">
+                    {teamMembers.length === 0 ? (
+                      <div className="rounded-[12px] border border-[var(--line-2)] px-4 py-5 text-sm text-[var(--mute)]">
+                        No teammates added yet.
+                      </div>
+                    ) : teamMembers.map((member) => (
+                      <div key={member.id || member.email} className="grid grid-cols-[40px_1fr_auto_auto] items-center gap-3 rounded-[12px] border border-[var(--line-2)] px-4 py-3">
+                        <div className="grid h-9 w-9 place-items-center rounded-full bg-[var(--purple-soft)] text-[13px] font-semibold text-[var(--purple)]">
+                          {String(member.full_name || member.email || 'TA').slice(0, 2).toUpperCase()}
+                        </div>
+                        <div>
+                          <div className="text-[14px] font-semibold">{member.full_name || member.email}</div>
+                          <div className="font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">{member.email}</div>
+                        </div>
+                        <span className="chip">{member.role || 'member'}</span>
+                        <span className="font-[var(--font-mono)] text-[11px] text-[var(--mute)]">active</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  <div className="rounded-[12px] border border-[var(--line-2)] p-5">
+                    <div className="kicker mb-2">Invite member</div>
+                    <div className="space-y-4">
+                      <label className="field">
+                        <span className="k">Full name</span>
+                        <input value={inviteName} onChange={(event) => setInviteName(event.target.value)} placeholder="Alex Weston" />
+                      </label>
+                      <label className="field">
+                        <span className="k">Email</span>
+                        <input type="email" value={inviteEmail} onChange={(event) => setInviteEmail(event.target.value)} placeholder="alex@company.com" />
+                      </label>
+                      <button type="button" className="btn btn-purple btn-sm" onClick={inviteMember} disabled={saving}>
+                        {saving ? 'Sending...' : 'Send invite'}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </SectionPanel>
+
+              <SectionPanel id="roles" title={<>Roles & <em>access</em></>} subtitle="Workspace permissions for recruiters and hiring managers.">
+                <div className="grid gap-3 md:grid-cols-3">
+                  <div className="rounded-[12px] border border-[var(--line-2)] p-4">
+                    <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">Owners</div>
+                    <p className="mt-2 text-[13px] leading-6 text-[var(--ink-2)]">Full billing, integrations, and member management access.</p>
+                  </div>
+                  <div className="rounded-[12px] border border-[var(--line-2)] p-4">
+                    <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">Admins</div>
+                    <p className="mt-2 text-[13px] leading-6 text-[var(--ink-2)]">Can manage pipeline settings, Workable, and recruiter-facing workflows.</p>
+                  </div>
+                  <div className="rounded-[12px] border border-[var(--line-2)] p-4">
+                    <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">Members</div>
+                    <p className="mt-2 text-[13px] leading-6 text-[var(--ink-2)]">Can review candidates and work inside assigned recruiting surfaces.</p>
+                  </div>
+                </div>
+              </SectionPanel>
+
+              <SectionPanel id="workable" title={null} subtitle={null}>
+                <WorkablePanel
+                  orgData={orgData}
+                  onOrgDataChange={setOrgData}
+                  currentUser={user}
+                  active={activeSection === 'workable'}
+                />
+              </SectionPanel>
+
+              <SectionPanel id="sso" title={<>SSO / <em>SAML</em></>} subtitle="Identity and domain controls for enterprise workspaces.">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="field">
+                    <span className="k">Allowed email domains</span>
+                    <input
+                      value={enterpriseForm.allowedEmailDomains}
+                      onChange={(event) => setEnterpriseForm((current) => ({ ...current, allowedEmailDomains: event.target.value }))}
+                      placeholder="company.com, subsidiary.com"
+                    />
+                  </label>
+                  <label className="field">
+                    <span className="k">SAML metadata URL</span>
+                    <input
+                      value={enterpriseForm.samlMetadataUrl}
+                      onChange={(event) => setEnterpriseForm((current) => ({ ...current, samlMetadataUrl: event.target.value }))}
+                      placeholder="https://idp.example.com/metadata"
+                    />
+                  </label>
+                </div>
+                <div className="mt-5 grid gap-3 md:grid-cols-3">
+                  <ToggleRow title="Enforce SSO" body="Require members to sign in through the workspace identity provider." checked={enterpriseForm.ssoEnforced} onChange={(value) => setEnterpriseForm((current) => ({ ...current, ssoEnforced: value }))} />
+                  <ToggleRow title="Enable SAML" body="Turn on SAML metadata validation for enterprise logins." checked={enterpriseForm.samlEnabled} onChange={(value) => setEnterpriseForm((current) => ({ ...current, samlEnabled: value }))} />
+                  <ToggleRow title="Candidate feedback" body="Allow candidates to see their finalized summary after review." checked={enterpriseForm.candidateFeedbackEnabled} onChange={(value) => setEnterpriseForm((current) => ({ ...current, candidateFeedbackEnabled: value }))} />
+                </div>
+                <div className="mt-5 flex justify-end">
+                  <button type="button" className="btn btn-purple btn-sm" onClick={saveEnterprise} disabled={saving}>
+                    {saving ? 'Saving...' : 'Save enterprise settings'}
+                  </button>
+                </div>
+              </SectionPanel>
+
+              <SectionPanel id="api" title={<>API <em>keys</em></>} subtitle="Workspace secrets and model configuration.">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div className="rounded-[12px] border border-[var(--line-2)] p-5">
+                    <div className="kicker mb-2">Claude API key</div>
+                    <div className="text-[16px] font-semibold">{preferencesForm.hasCustomClaudeApiKey ? 'Configured' : 'Not configured'}</div>
+                    <p className="mt-2 text-[13px] leading-6 text-[var(--mute)]">Recruiter runtime sessions use the workspace default unless a custom key is rotated here.</p>
+                  </div>
+                  <div className="rounded-[12px] border border-[var(--line-2)] p-5">
+                    <div className="kicker mb-2">Webhook posture</div>
+                    <div className="text-[16px] font-semibold">{orgData?.workable_connected ? 'Workable webhooks enabled' : 'No ATS webhooks connected'}</div>
+                    <p className="mt-2 text-[13px] leading-6 text-[var(--mute)]">Keep secrets in Vercel and Railway, not inside the browser workspace.</p>
+                  </div>
+                </div>
+              </SectionPanel>
+
+              <SectionPanel id="billing" title={<>Billing<em>.</em></>} subtitle="Usage, credits, and workspace spend.">
+                <div className="grid gap-4 md:grid-cols-3">
+                  {billingStats.map((stat) => (
+                    <SummaryStat key={stat.label} label={stat.label} value={stat.value} />
+                  ))}
+                </div>
+                <div className="mt-5 flex justify-end">
+                  <button type="button" className="btn btn-purple btn-sm" onClick={addCredits} disabled={checkoutLoading}>
+                    {checkoutLoading ? 'Opening checkout...' : 'Add credits'}
+                  </button>
+                </div>
+              </SectionPanel>
+
+              <SectionPanel id="notifications" title={<>Notifications<em>.</em></>} subtitle="Invite defaults and recruiter-side communication templates.">
+                <div className="grid gap-4 md:grid-cols-2">
+                  <label className="field">
+                    <span className="k">Default assessment minutes</span>
+                    <input
+                      type="number"
+                      min="15"
+                      max="180"
+                      value={preferencesForm.defaultAssessmentDurationMinutes}
+                      onChange={(event) => setPreferencesForm((current) => ({ ...current, defaultAssessmentDurationMinutes: event.target.value }))}
+                    />
+                  </label>
+                  <div className="rounded-[12px] border border-[var(--line-2)] p-5">
+                    <div className="kicker mb-2">Notification mode</div>
+                    <div className="text-[16px] font-semibold">Recruiter inbox + email</div>
+                    <p className="mt-2 text-[13px] leading-6 text-[var(--mute)]">Live candidate events appear in-product first, with email fallback for high-signal state changes.</p>
+                  </div>
+                </div>
+                <label className="field mt-4">
+                  <span className="k">Invite email template</span>
+                  <textarea
+                    className="min-h-[150px]"
+                    value={preferencesForm.inviteEmailTemplate}
+                    onChange={(event) => setPreferencesForm((current) => ({ ...current, inviteEmailTemplate: event.target.value }))}
+                  />
+                </label>
+                <div className="mt-5 flex justify-end">
+                  <button type="button" className="btn btn-purple btn-sm" onClick={savePreferences} disabled={saving}>
+                    {saving ? 'Saving...' : 'Save preferences'}
+                  </button>
+                </div>
+              </SectionPanel>
+            </main>
+          </div>
+        )}
       </div>
     </AppShell>
   );

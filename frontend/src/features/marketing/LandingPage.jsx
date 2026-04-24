@@ -1,9 +1,17 @@
-import React from 'react';
-import {
-  Sparkles,
-  TerminalSquare,
-} from 'lucide-react';
+import React, { useEffect } from 'react';
+import { Sparkles } from 'lucide-react';
 
+import {
+  MomentCards,
+  ShowcaseCtaBand,
+  TaskBriefCard,
+  WorkspaceReplayFrame,
+} from '../../components/ProductPreviewFrames';
+import {
+  consumePendingMarketingSection,
+  navigateToMarketingSection,
+  scrollToMarketingSection,
+} from '../../lib/marketingScroll';
 import { MarketingNav, TaaliLogo } from '../../shared/layout/TaaliLayout';
 
 const containerClass = 'mx-auto max-w-[1360px] px-6 md:px-10 xl:px-16';
@@ -103,37 +111,12 @@ const processSteps = [
 ];
 
 const productTourItems = [
-  { kicker: '01 · Entry', title: 'Sign in.', body: 'Editorial welcome page for returning recruiters and candidates.', page: 'login' },
-  { kicker: '02 · Intake', title: 'Demo request.', body: 'Review a sample candidate assessment and leave details for a callback.', page: 'demo' },
-  { kicker: '03 · Example', title: 'Assessment example.', body: 'Candidate brief, role context, and recruiter-ready signal preview.', page: 'demo' },
-  { kicker: '04 · Recruiter', title: 'Jobs.', body: 'Roles at a glance — applied, invited, in assessment, review.', page: 'login' },
-  { kicker: '05 · Pipeline', title: 'Candidates.', body: 'Sorted by Taali score, with live signals and a one-line read.', page: 'login' },
-  { kicker: '06 · Report', title: 'Assessment results.', body: 'AI-collab fingerprint, scored dimensions, and clickable evidence.', page: 'login' },
-  { kicker: '07 · Analytics', title: 'Reporting.', body: 'Pipeline health, completion trends, and score distribution.', page: 'login' },
-  { kicker: '08 · Config', title: 'Settings.', body: 'Scoring policy, AI tooling permissions, members, and access.', page: 'login' },
-];
-
-const runtimeTabs = [
-  'Candidate workspace',
-  'Repo + editor + AI',
-  'Prompt + diff telemetry',
-  'Validation runs',
-  'Structured evidence',
-];
-
-const runtimeSignalCards = [
-  {
-    kicker: 'PROMPT QUALITY',
-    body: 'Candidate scoped “highest-risk blockers first” with an explicit downstream action: “smallest safe patch sequence.”',
-  },
-  {
-    kicker: 'ERROR RECOVERY',
-    body: 'Rejected Claude’s caching proposal and asked for evidence of the original fault before touching policy logic.',
-  },
-  {
-    kicker: 'INDEPENDENCE',
-    body: 'Delegated boilerplate, then wrote the escalation and degraded-mode path herself without prompting.',
-  },
+  { kicker: '04 · DEMO / ONBOARDING', title: 'Book a demo.', body: 'Enter role, company, and work email, then move directly into the product showcase.', page: 'demo' },
+  { kicker: '05 · CANDIDATE WELCOME', title: 'Candidate welcome.', body: 'Clear rules, system check, and assessment framing before the timer starts.', page: 'demo' },
+  { kicker: '06 · CANDIDATE WORKSPACE', title: 'Workspace replay.', body: 'Repo, runtime, Claude chat, and evidence capture in one place.', page: 'demo' },
+  { kicker: '07 · STANDING REPORT', title: 'Assessment report.', body: 'Verdict, scored dimensions, and evidence recruiters can share with the panel.', page: 'login' },
+  { kicker: '08 · PIPELINE', title: 'Jobs + candidates.', body: 'Open the role, sort the pipeline, and jump straight into the strongest report.', page: 'login' },
+  { kicker: '09 · SETTINGS', title: 'Settings.', body: 'Scoring policy, AI tooling permissions, members, and ATS access.', page: 'login' },
 ];
 
 const footerColumns = [
@@ -187,9 +170,22 @@ const SignalRow = ({ label, value }) => (
   </div>
 );
 
-export const LandingPage = ({ onNavigate }) => (
-  <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
-    <MarketingNav onNavigate={onNavigate} />
+export const LandingPage = ({ onNavigate }) => {
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const sectionId = consumePendingMarketingSection() || window.location.hash.replace(/^#/, '');
+    if (!sectionId) return undefined;
+
+    const timer = window.setTimeout(() => {
+      scrollToMarketingSection(sectionId, { behavior: 'smooth' });
+    }, 40);
+
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
+      <MarketingNav onNavigate={onNavigate} />
 
     <section className="relative overflow-hidden pb-20 pt-16 md:pb-28 md:pt-20">
       <div
@@ -213,7 +209,7 @@ export const LandingPage = ({ onNavigate }) => (
             <button type="button" className="btn btn-primary btn-lg" onClick={() => onNavigate('demo')}>
               Book a demo <span className="arrow">→</span>
             </button>
-            <button type="button" className="btn btn-outline btn-lg" onClick={() => document.getElementById('runtime-preview')?.scrollIntoView({ behavior: 'smooth' })}>
+            <button type="button" className="btn btn-outline btn-lg" onClick={() => navigateToMarketingSection('runtime-preview', onNavigate)}>
               See the assessment example
             </button>
           </div>
@@ -400,118 +396,18 @@ export const LandingPage = ({ onNavigate }) => (
     <section id="runtime-preview" className="pb-20 md:pb-28">
       <div className={containerClass}>
         <SectionHeading
-          kicker="02.5 · INSIDE THE RUNTIME"
-          title={<>What your candidate <em>actually sees</em>.</>}
-          copy="Not a whiteboard and not a toy sandbox: a three-pane workspace with task context, editor, repo tree, and a real Claude chat, scored silently in the background."
+          kicker="02.5 · PRODUCT SHOWCASE"
+          title={<>Here&apos;s what they <em>actually do</em>.</>}
+          copy="One real task, one real candidate, one real session. We replay a GenAI Production Readiness review so you can see exactly how Taali captures signal in real time."
         />
-        <div className="mb-6 flex flex-wrap gap-3">
-          <button type="button" className="btn btn-primary" onClick={() => onNavigate('demo')}>
-            See the assessment example <span className="arrow">→</span>
-          </button>
-          <button type="button" className="btn btn-outline" onClick={() => onNavigate('demo')}>
-            Book a demo
-          </button>
-        </div>
-        <div className="overflow-hidden rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] shadow-[var(--shadow-lg)]">
-          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
-            <div className="flex items-center gap-3">
-              <div className="grid h-11 w-11 place-items-center rounded-[12px] bg-[var(--purple-soft)] text-[var(--purple)]">
-                <TerminalSquare size={20} />
-              </div>
-              <div>
-                <div className="font-[var(--font-display)] text-xl tracking-[-0.02em]">GenAI <em>Production Readiness</em> Review</div>
-                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.1em] text-[var(--mute)]">Task · candidate workspace · in progress</div>
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center gap-2 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
-              <span className="chip green"><span className="dot" />AI: Claude CLI + Chat</span>
-              <span className="chip">Permission: default</span>
-              <span className="chip">$ Claude credit: $6.20 left of $12.00</span>
-              <span className="chip">◷ 26:41</span>
-              <span className="rounded-full bg-[var(--ink)] px-3 py-1.5 text-[var(--bg)]">Submit →</span>
-            </div>
-          </div>
-          <div className="flex flex-wrap gap-2 border-b border-[var(--line)] bg-[var(--bg)] px-4 py-3">
-            {runtimeTabs.map((tab, index) => (
-              <span
-                key={tab}
-                className={`rounded-full px-3 py-1.5 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] ${index === 1 ? 'bg-[var(--ink)] text-[var(--bg)]' : 'text-[var(--mute)]'}`.trim()}
-              >
-                {tab}
-              </span>
-            ))}
-          </div>
-          <div className="grid gap-0 border-b border-[var(--line)] lg:grid-cols-[220px_1fr_340px]">
-            <aside className="border-r border-[var(--line)] bg-[var(--bg)] p-4">
-              <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--mute)]">Context window</div>
-              <button type="button" className="btn btn-outline btn-sm mt-3 w-full justify-center">+ New file</button>
-              <div className="mt-4 space-y-2 font-[var(--font-mono)] text-[12px] text-[var(--ink-2)]">
-                <div>README.md</div>
-                <div>▾ app/</div>
-                <div className="pl-4">evals.py</div>
-                <div className="pl-4">fallbacks.py</div>
-                <div className="rounded-[8px] bg-[var(--purple-soft)] px-2 py-1 pl-4 text-[var(--purple-2)]">release_guardrails.py</div>
-                <div>▾ diagnostics/</div>
-                <div className="pl-4">release_findings.md</div>
-                <div>▸ prompts/</div>
-                <div className="pl-4">support_system.txt</div>
-                <div>▾ tests/</div>
-                <div className="pl-4">test_release_readiness.py</div>
-              </div>
-            </aside>
-            <div className="border-r border-[var(--line)] p-4">
-              <div className="mb-4 flex items-center justify-between">
-                <div className="font-[var(--font-mono)] text-[12px] text-[var(--ink-2)]">app/release_guardrails.py <span className="text-[var(--mute)]">PYTHON</span></div>
-                <div className="flex gap-2">
-                  <button type="button" className="btn btn-outline btn-sm">Run</button>
-                  <button type="button" className="btn btn-outline btn-sm">Save</button>
-                </div>
-              </div>
-              <div className="space-y-1 rounded-[14px] bg-[var(--bg)] p-4 font-[var(--font-mono)] text-[12px] leading-6 text-[var(--ink-2)]">
-                <div><span className="text-[var(--mute)]">1</span> <span className="text-[var(--purple)]">from</span> app.policy <span className="text-[var(--purple)]">import</span> SAFETY_POLICY</div>
-                <div><span className="text-[var(--mute)]">2</span></div>
-                <div><span className="text-[var(--mute)]">3</span> <span className="text-[var(--purple)]">def</span> should_allow_response(*, moderation_result, user_intent, confidence):</div>
-                <div><span className="text-[var(--mute)]">4</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--mute)]">&quot;&quot;&quot;Return whether the assistant is allowed to answer directly.&quot;&quot;&quot;</span></div>
-                <div><span className="text-[var(--mute)]">5</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> moderation_result <span className="text-[var(--purple)]">is</span> None:</div>
-                <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--purple)_8%,transparent)]"><span className="text-[var(--mute)]">6</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--mute)]"># BUG: moderation outages should not default to allow</span></div>
-                <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--purple)_8%,transparent)]"><span className="text-[var(--mute)]">&nbsp;</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--mute)]"># for customer-facing launch traffic</span></div>
-                <div><span className="text-[var(--mute)]">7</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> True</div>
-                <div><span className="text-[var(--mute)]">8</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> moderation_result.get(&quot;blocked&quot;):</div>
-                <div><span className="text-[var(--mute)]">9</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> False</div>
-                <div><span className="text-[var(--mute)]">10</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> user_intent <span className="text-[var(--purple)]">in</span> SAFETY_POLICY[&quot;always_escalate&quot;]:</div>
-                <div><span className="text-[var(--mute)]">11</span> &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> False</div>
-                <div><span className="text-[var(--mute)]">12</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> confidence &gt;= 0.42</div>
-              </div>
-            </div>
-            <aside className="bg-[var(--bg)] p-4">
-              <div className="mb-3 flex items-center justify-between">
-                <span className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--mute)]">Claude</span>
-                <span className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">&gt; Show terminal</span>
-              </div>
-              <div className="space-y-3 rounded-[14px] bg-[var(--bg-2)] p-4 text-[13px] leading-6">
-                <div className="rounded-[12px] bg-[var(--ink)] px-4 py-3 text-[var(--bg)]">
-                  Prioritize the highest-risk launch blockers first, then propose the smallest safe patch sequence for the GenAI release review.
-                </div>
-                <div className="rounded-[12px] border border-[var(--line)] bg-[var(--bg)] px-4 py-3 text-[var(--ink-2)]">
-                  <div className="mb-1 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.1em] text-[var(--purple)]">Claude</div>
-                  Highest-risk blockers:
-                  <ul className="mt-2 list-disc space-y-1 pl-5">
-                    <li>Moderation outages currently default to allow, which is unsafe for launch traffic.</li>
-                    <li>Degraded mode can still answer directly on policy-sensitive requests.</li>
-                    <li>The eval gate logs failures but still marks the release approved.</li>
-                  </ul>
-                </div>
-              </div>
-            </aside>
-          </div>
-          <div className="grid gap-3 px-4 py-4 md:grid-cols-3">
-            {runtimeSignalCards.map((item) => (
-              <div key={item.kicker} className="rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 text-[13px] leading-6 text-[var(--ink-2)]">
-                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">{item.kicker}</div>
-                <p className="mt-2">{item.body}</p>
-              </div>
-            ))}
-          </div>
+        <TaskBriefCard />
+        <WorkspaceReplayFrame className="mt-6" />
+        <MomentCards className="mt-6" />
+        <div className="mt-6">
+          <ShowcaseCtaBand
+            onPrimaryAction={() => onNavigate('demo')}
+            onSecondaryAction={() => onNavigate('login')}
+          />
         </div>
       </div>
     </section>
@@ -648,7 +544,7 @@ export const LandingPage = ({ onNavigate }) => (
                     className="w-fit text-left text-[14px] text-white/66 transition hover:text-white"
                     onClick={() => {
                       if (item.section) {
-                        document.getElementById(item.section)?.scrollIntoView({ behavior: 'smooth' });
+                        navigateToMarketingSection(item.section, onNavigate);
                         return;
                       }
                       if (item.page) {
@@ -682,7 +578,8 @@ export const LandingPage = ({ onNavigate }) => (
         </div>
       </div>
     </footer>
-  </div>
-);
+    </div>
+  );
+};
 
 export default LandingPage;
