@@ -1068,6 +1068,38 @@ def test_global_applications_endpoint_supports_pipeline_filters(client):
     assert app_applied["id"] in scoped_ids
 
 
+def test_application_lists_handle_candidates_without_email(client, db):
+    headers, _ = auth_headers(client)
+    role = _create_role_with_spec(client, headers, name="Null email role")
+
+    create_resp = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "null-email@example.com", "candidate_name": "Null Email"},
+        headers=headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    app_id = create_resp.json()["id"]
+
+    application = db.query(CandidateApplication).filter(CandidateApplication.id == app_id).first()
+    assert application is not None
+    assert application.candidate is not None
+    application.candidate.email = None
+    db.commit()
+
+    global_resp = client.get(
+        f"/api/v1/applications?role_id={role['id']}&limit=50",
+        headers=headers,
+    )
+    assert global_resp.status_code == 200, global_resp.text
+    global_item = next(item for item in global_resp.json()["items"] if item["id"] == app_id)
+    assert global_item["candidate_email"] == ""
+
+    pipeline_resp = client.get(f"/api/v1/roles/{role['id']}/pipeline?limit=50", headers=headers)
+    assert pipeline_resp.status_code == 200, pipeline_resp.text
+    pipeline_item = next(item for item in pipeline_resp.json()["items"] if item["id"] == app_id)
+    assert pipeline_item["candidate_email"] == ""
+
+
 def test_pipeline_endpoints_support_taali_sorting_and_min_filter(client, db):
     headers, _ = auth_headers(client)
     role = _create_role_with_spec(client, headers, name="TAALI sort role")
