@@ -1,24 +1,16 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Bar,
-  BarChart,
   CartesianGrid,
-  PolarAngleAxis,
-  PolarGrid,
-  PolarRadiusAxis,
-  Radar,
-  RadarChart,
+  Line,
+  LineChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
   YAxis,
 } from 'recharts';
 
-import { assessments as assessmentsApi, analytics as analyticsApi, roles as rolesApi, tasks as tasksApi } from '../../shared/api';
-import { getCategoryScoresFromAssessment } from '../../lib/comparisonCategories';
-import { dimensionOrder, getDimensionById } from '../../scoring/scoringDimensions';
-import { Button, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
-import { CardSkeleton, StatCardSkeleton } from '../../shared/ui/Skeletons';
+import { analytics as analyticsApi, assessments as assessmentsApi } from '../../shared/api';
+import { AppShell } from '../../shared/layout/TaaliLayout';
 
 const DATE_RANGE_OPTIONS = [
   { value: '7d', label: 'Last 7 days' },
@@ -44,11 +36,13 @@ const getDateRangeParams = (range) => {
 
 const safeNumber = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
 
-export const ReportingPage = ({ onNavigate, NavComponent }) => {
-  const [roles, setRoles] = useState([]);
-  const [tasks, setTasks] = useState([]);
-  const [roleFilter, setRoleFilter] = useState('');
-  const [taskFilter, setTaskFilter] = useState('');
+const scoreFromAssessment = (assessment) => (
+  Number(assessment?.final_score)
+  || Number(assessment?.taali_score)
+  || (Number.isFinite(Number(assessment?.score)) ? Number(assessment.score) * 10 : 0)
+);
+
+export const ReportingPage = ({ onNavigate }) => {
   const [dateRange, setDateRange] = useState('30d');
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
@@ -57,186 +51,104 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
     total_assessments: 0,
     completed_count: 0,
     completion_rate: 0,
-    top_score: null,
     avg_score: null,
     avg_time_minutes: null,
     score_buckets: [],
-    dimension_averages: {},
   });
+  const [topAssessments, setTopAssessments] = useState([]);
+
+  const queryParams = useMemo(() => getDateRangeParams(dateRange), [dateRange]);
 
   useEffect(() => {
     let cancelled = false;
-    Promise.allSettled([rolesApi.list(), tasksApi.list()]).then(([rolesRes, tasksRes]) => {
-      if (cancelled) return;
-      if (rolesRes.status === 'fulfilled') {
-        setRoles(Array.isArray(rolesRes.value?.data) ? rolesRes.value.data : []);
-      }
-      if (tasksRes.status === 'fulfilled') {
-        setTasks(Array.isArray(tasksRes.value?.data) ? tasksRes.value.data : []);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const queryParams = useMemo(() => {
-    const params = {
-      ...getDateRangeParams(dateRange),
-    };
-    if (roleFilter) params.role_id = roleFilter;
-    if (taskFilter) params.task_id = taskFilter;
-    return params;
-  }, [dateRange, roleFilter, taskFilter]);
-
-  useEffect(() => {
-    let cancelled = false;
-    setLoading(true);
-    analyticsApi.get(queryParams)
-      .then((res) => {
-        if (!cancelled) {
-          setData({
-            weekly_completion: res?.data?.weekly_completion || [],
-            total_assessments: safeNumber(res?.data?.total_assessments),
-            completed_count: safeNumber(res?.data?.completed_count),
-            completion_rate: safeNumber(res?.data?.completion_rate),
-            top_score: res?.data?.top_score,
-            avg_score: res?.data?.avg_score,
-            avg_time_minutes: res?.data?.avg_time_minutes,
-            score_buckets: Array.isArray(res?.data?.score_buckets) ? res.data.score_buckets : [],
-            dimension_averages: res?.data?.dimension_averages || {},
-          });
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setData({
-            weekly_completion: [],
-            total_assessments: 0,
-            completed_count: 0,
-            completion_rate: 0,
-            top_score: null,
-            avg_score: null,
-            avg_time_minutes: null,
-            score_buckets: [],
-            dimension_averages: {},
-          });
-        }
-      })
-      .finally(() => {
+    const load = async () => {
+      setLoading(true);
+      try {
+        const [analyticsRes, assessmentsRes] = await Promise.all([
+          analyticsApi.get(queryParams),
+          assessmentsApi.list({ limit: 20, offset: 0 }),
+        ]);
+        if (cancelled) return;
+        const analyticsPayload = analyticsRes?.data || {};
+        const assessmentPayload = assessmentsRes?.data || {};
+        const assessmentItems = Array.isArray(assessmentPayload) ? assessmentPayload : (assessmentPayload.items || []);
+        setData({
+          weekly_completion: analyticsPayload?.weekly_completion || [],
+          total_assessments: safeNumber(analyticsPayload?.total_assessments),
+          completed_count: safeNumber(analyticsPayload?.completed_count),
+          completion_rate: safeNumber(analyticsPayload?.completion_rate),
+          avg_score: analyticsPayload?.avg_score,
+          avg_time_minutes: analyticsPayload?.avg_time_minutes,
+          score_buckets: Array.isArray(analyticsPayload?.score_buckets) ? analyticsPayload.score_buckets : [],
+        });
+        setTopAssessments(
+          assessmentItems
+            .slice()
+            .sort((left, right) => scoreFromAssessment(right) - scoreFromAssessment(left))
+            .slice(0, 5)
+        );
+      } catch {
+        if (cancelled) return;
+        setData({
+          weekly_completion: [],
+          total_assessments: 0,
+          completed_count: 0,
+          completion_rate: 0,
+          avg_score: null,
+          avg_time_minutes: null,
+          score_buckets: [],
+        });
+        setTopAssessments([]);
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    };
+    void load();
     return () => {
       cancelled = true;
     };
   }, [queryParams]);
 
-  const weekly = data.weekly_completion?.length ? data.weekly_completion : [
-    { week: 'Week 1', rate: 0, count: 0 },
-    { week: 'Week 2', rate: 0, count: 0 },
-    { week: 'Week 3', rate: 0, count: 0 },
-    { week: 'Week 4', rate: 0, count: 0 },
-    { week: 'Week 5', rate: 0, count: 0 },
-  ];
+  const trendData = data.weekly_completion?.length
+    ? data.weekly_completion.map((entry, index) => ({
+      week: entry.week || `W${index + 1}`,
+      rate: safeNumber(entry.rate),
+      count: safeNumber(entry.count),
+    }))
+    : Array.from({ length: 6 }).map((_, index) => ({ week: `W${index + 1}`, rate: 0, count: 0 }));
 
-  const histogramData = data.score_buckets?.length ? data.score_buckets : [
-    { range: '0-20', count: 0, percentage: 0 },
-    { range: '20-40', count: 0, percentage: 0 },
-    { range: '40-60', count: 0, percentage: 0 },
-    { range: '60-80', count: 0, percentage: 0 },
-    { range: '80-100', count: 0, percentage: 0 },
-  ];
+  const scoreDistribution = data.score_buckets?.length
+    ? data.score_buckets
+    : [
+      { range: '0-20', count: 0 },
+      { range: '20-40', count: 0 },
+      { range: '40-60', count: 0 },
+      { range: '60-80', count: 0 },
+      { range: '80-100', count: 0 },
+    ];
 
-  const radarData = dimensionOrder.map((key) => ({
-    dimension: getDimensionById(key).label,
-    score: safeNumber(data.dimension_averages?.[key], 0),
-    fullMark: 10,
-  }));
-
-  const handleExportCsv = async () => {
+  const exportCsv = async () => {
     setExporting(true);
     try {
-      const allItems = [];
-      let offset = 0;
-      const limit = 100;
-      let total = 0;
-      do {
-        const res = await assessmentsApi.list({
-          limit,
-          offset,
-          ...(roleFilter ? { role_id: roleFilter } : {}),
-          ...(taskFilter ? { task_id: taskFilter } : {}),
-        });
-        const payload = res?.data || {};
-        const items = Array.isArray(payload) ? payload : (payload.items || []);
-        total = typeof payload.total === 'number' ? payload.total : items.length;
-        allItems.push(...items);
-        offset += limit;
-      } while (offset < total);
-
-      const { date_from: dateFromRaw, date_to: dateToRaw } = getDateRangeParams(dateRange);
-      const dateFrom = dateFromRaw ? new Date(dateFromRaw) : null;
-      const dateTo = dateToRaw ? new Date(dateToRaw) : null;
-      const filtered = allItems.filter((item) => {
-        if (!dateFrom && !dateTo) return true;
-        const ts = item?.completed_at || item?.created_at;
-        if (!ts) return false;
-        const dt = new Date(ts);
-        if (Number.isNaN(dt.getTime())) return false;
-        if (dateFrom && dt < dateFrom) return false;
-        if (dateTo && dt > dateTo) return false;
-        return true;
-      });
-
-      const rows = filtered.map((item) => {
-        const categories = getCategoryScoresFromAssessment(item);
-        return {
-          candidate_name: item.candidate_name || item.candidate?.full_name || '',
-          candidate_email: item.candidate_email || item.candidate?.email || '',
-          task: item.task_name || item.task?.name || '',
-          role: item.role_name || item.task?.role || '',
-          status: item.status || '',
-          score_10: item.score ?? '',
-          score_100: item.final_score ?? (item.score != null ? Number(item.score) * 10 : ''),
-          completed_at: item.completed_at || '',
-          task_completion: categories.task_completion ?? '',
-          prompt_clarity: categories.prompt_clarity ?? '',
-          context_provision: categories.context_provision ?? '',
-          independence_efficiency: categories.independence_efficiency ?? '',
-          response_utilization: categories.response_utilization ?? '',
-          debugging_design: categories.debugging_design ?? '',
-          written_communication: categories.written_communication ?? '',
-          role_fit: categories.role_fit ?? '',
-        };
-      });
-
-      const columns = [
-        'candidate_name',
-        'candidate_email',
-        'task',
-        'role',
-        'status',
-        'score_10',
-        'score_100',
-        'completed_at',
-        'task_completion',
-        'prompt_clarity',
-        'context_provision',
-        'independence_efficiency',
-        'response_utilization',
-        'debugging_design',
-        'written_communication',
-        'role_fit',
-      ];
+      const res = await assessmentsApi.list({ limit: 200, offset: 0 });
+      const payload = res?.data || {};
+      const items = Array.isArray(payload) ? payload : (payload.items || []);
       const csv = [
-        columns.join(','),
-        ...rows.map((row) => columns.map((col) => `"${String(row[col] ?? '').replace(/"/g, '""')}"`).join(',')),
+        ['candidate_name', 'candidate_email', 'task_name', 'role_name', 'score_100', 'completed_at'].join(','),
+        ...items.map((item) => [
+          item?.candidate_name || item?.candidate?.full_name || '',
+          item?.candidate_email || item?.candidate?.email || '',
+          item?.task_name || item?.task?.name || '',
+          item?.role_name || '',
+          scoreFromAssessment(item),
+          item?.completed_at || '',
+        ].map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')),
       ].join('\n');
       const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
       const url = URL.createObjectURL(blob);
       const anchor = document.createElement('a');
       anchor.href = url;
-      anchor.download = 'analytics-assessments.csv';
+      anchor.download = 'taali-reporting.csv';
       anchor.click();
       URL.revokeObjectURL(url);
     } finally {
@@ -245,156 +157,108 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
   };
 
   return (
-    <div>
-      <NavComponent currentPage="reporting" onNavigate={onNavigate} />
-      <PageContainer density="compact" width="wide">
-        <PageHeader
-          density="compact"
-          className="mb-4"
-          title="Reporting"
-          subtitle="Aggregate reporting across completion trends, score distribution, and dimension performance."
-          actions={(
-            <Button type="button" variant="secondary" size="sm" onClick={handleExportCsv} disabled={loading || exporting}>
-              {exporting ? 'Exporting...' : 'Export CSV'}
-            </Button>
-          )}
-        />
+    <AppShell currentPage="reporting" onNavigate={onNavigate}>
+      <div className="page">
+        <div className="page-head">
+          <div className="tally-bg" />
+          <div>
+            <div className="kicker">03 · RECRUITER WORKSPACE</div>
+            <h1>Reporting<em>.</em></h1>
+            <p className="sub">Pipeline health, AI-collaboration quality over time, and where candidates convert or don’t.</p>
+          </div>
+          <div className="row">
+            <select className="rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-4 py-2 text-sm" value={dateRange} onChange={(event) => setDateRange(event.target.value)}>
+              {DATE_RANGE_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            <button type="button" className="btn btn-outline btn-sm" onClick={exportCsv} disabled={exporting || loading}>
+              {exporting ? 'Exporting…' : 'Export CSV'}
+            </button>
+          </div>
+        </div>
 
-        <Panel className="mb-4 p-3.5">
-          <div className="grid gap-2.5 md:grid-cols-4">
-            <label className="block">
-              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role</span>
-              <Select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
-                <option value="">All roles</option>
-                {roles.map((role) => (
-                  <option key={role.id} value={role.id}>{role.name}</option>
-                ))}
-              </Select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Task</span>
-              <Select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>
-                <option value="">All tasks</option>
-                {tasks.map((task) => (
-                  <option key={task.id} value={task.id}>{task.name}</option>
-                ))}
-              </Select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Date range</span>
-              <Select value={dateRange} onChange={(event) => setDateRange(event.target.value)}>
-                {DATE_RANGE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </Select>
-            </label>
-            <div className="flex items-end">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setRoleFilter('');
-                  setTaskFilter('');
-                  setDateRange('30d');
-                }}
-                disabled={!roleFilter && !taskFilter && dateRange === '30d'}
-              >
-                Reset filters
-              </Button>
+        <div className="mb-5 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {[
+            ['Assessments run', data.total_assessments, 'Across the selected time window'],
+            ['Median AI-collab score', data.avg_score == null ? '—' : Number(data.avg_score).toFixed(1), 'Average scored performance'],
+            ['Advance rate', `${Math.round(data.completion_rate || 0)}%`, `${data.completed_count} completed assessments`],
+            ['Time to decision', data.avg_time_minutes == null ? '—' : `${Math.round(data.avg_time_minutes)}m`, 'Average time spent in assessment'],
+          ].map(([label, value, foot]) => (
+            <div key={label} className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] px-6 py-6 shadow-[var(--shadow-sm)]">
+              <div className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.1em] text-[var(--mute)]">{label}</div>
+              <div className="mt-3 font-[var(--font-display)] text-[56px] leading-none tracking-[-0.02em]">{value}</div>
+              <div className="mt-2 text-[12.5px] text-[var(--mute)]">{foot}</div>
+            </div>
+          ))}
+        </div>
+
+        <div className="grid gap-5 xl:grid-cols-[2fr_1fr]">
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-7 shadow-[var(--shadow-sm)]">
+            <h2 className="font-[var(--font-display)] text-[26px] tracking-[-0.02em]">AI-collab score <em>over time</em>.</h2>
+            <p className="mt-1 text-[13px] text-[var(--mute)]">Median completion-rate trend across the selected period.</p>
+            <div className="mt-6 h-[260px]">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={trendData}>
+                  <CartesianGrid stroke="var(--line)" strokeDasharray="3 4" vertical={false} />
+                  <XAxis dataKey="week" tick={{ fill: 'var(--mute)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <YAxis tick={{ fill: 'var(--mute)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                  <Tooltip />
+                  <Line type="monotone" dataKey="rate" stroke="var(--purple)" strokeWidth={2.5} dot={{ r: 3, fill: 'var(--purple)' }} />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
           </div>
-        </Panel>
 
-        {loading ? (
-          <div className="space-y-4">
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-              <StatCardSkeleton />
-              <StatCardSkeleton />
-              <StatCardSkeleton />
-              <StatCardSkeleton />
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-7 shadow-[var(--shadow-sm)]">
+            <h2 className="font-[var(--font-display)] text-[26px] tracking-[-0.02em]">Score <em>distribution</em>.</h2>
+            <p className="mt-1 text-[13px] text-[var(--mute)]">Current scoring spread across the reporting window.</p>
+            <div className="mt-6 space-y-3">
+              {scoreDistribution.map((bucket) => {
+                const count = safeNumber(bucket?.count);
+                const max = Math.max(...scoreDistribution.map((entry) => safeNumber(entry?.count)), 1);
+                return (
+                  <div key={bucket.range} className="grid grid-cols-[60px_1fr_42px] items-center gap-3">
+                    <span className="font-[var(--font-mono)] text-[11px] text-[var(--mute)]">{bucket.range}</span>
+                    <div className="bar"><i style={{ width: `${(count / max) * 100}%` }} /></div>
+                    <span className="text-right font-[var(--font-mono)] text-[12px]">{count}</span>
+                  </div>
+                );
+              })}
             </div>
-            <div className="grid gap-4 lg:grid-cols-2">
-              <CardSkeleton lines={8} />
-              <CardSkeleton lines={8} />
-            </div>
-            <CardSkeleton lines={10} />
           </div>
-        ) : (
-          <div className="space-y-4">
-            <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-4">
-              <Panel className="p-3.5">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Total Assessments</div>
-                <div className="text-xl font-bold text-[var(--taali-text)]">{data.total_assessments}</div>
-              </Panel>
-              <Panel className="p-3.5">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Avg Score</div>
-                <div className="text-xl font-bold text-[var(--taali-purple)]">
-                  {data.avg_score != null ? `${Number(data.avg_score).toFixed(1)}/10` : '—'}
-                </div>
-              </Panel>
-              <Panel className="p-3.5">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Completion Rate</div>
-                <div className="text-xl font-bold text-[var(--taali-text)]">{safeNumber(data.completion_rate).toFixed(1)}%</div>
-              </Panel>
-              <Panel className="p-3.5">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Avg Time</div>
-                <div className="text-xl font-bold text-[var(--taali-text)]">
-                  {data.avg_time_minutes != null ? `${data.avg_time_minutes}m` : '—'}
-                </div>
-              </Panel>
+
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-7 shadow-[var(--shadow-sm)] xl:col-span-2">
+            <h2 className="font-[var(--font-display)] text-[26px] tracking-[-0.02em]">Top <em>candidates this week</em>.</h2>
+            <p className="mt-1 text-[13px] text-[var(--mute)]">Sorted by TAALI score from recent assessment activity.</p>
+            <div className="mt-5 space-y-3">
+              {loading ? (
+                Array.from({ length: 5 }).map((_, index) => <div key={index} className="h-16 animate-pulse rounded-[10px] bg-[var(--bg)]" />)
+              ) : topAssessments.length === 0 ? (
+                <div className="py-8 text-sm text-[var(--mute)]">No completed assessments available yet.</div>
+              ) : (
+                topAssessments.map((assessment) => (
+                  <button
+                    key={assessment.id}
+                    type="button"
+                    className="grid w-full gap-4 rounded-[10px] border border-[var(--line-2)] px-4 py-3 text-left transition hover:border-[var(--purple)] md:grid-cols-[1fr_auto_auto] md:items-center"
+                    onClick={() => onNavigate('candidate-detail', { candidateDetailAssessmentId: assessment.id })}
+                  >
+                    <div>
+                      <div className="text-[13.5px] font-medium">{assessment?.candidate_name || assessment?.candidate?.full_name || 'Unknown candidate'}</div>
+                      <div className="mt-1 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
+                        {assessment?.role_name || assessment?.task_name || 'Assessment'}
+                      </div>
+                    </div>
+                    <span className="chip green">{assessment?.status || 'completed'}</span>
+                    <span className="font-[var(--font-mono)] font-semibold text-[var(--purple)]">{scoreFromAssessment(assessment)} / 100</span>
+                  </button>
+                ))
+              )}
             </div>
-
-            <div className="grid gap-4 lg:grid-cols-2">
-              <Panel className="p-3.5">
-                <h2 className="mb-2 font-bold text-sm">Completion Rate Trend</h2>
-                <div className="h-[220px]">
-                  <ResponsiveContainer>
-                    <BarChart data={weekly}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--taali-border-muted)" />
-                      <XAxis dataKey="week" />
-                      <YAxis domain={[0, 100]} />
-                      <Tooltip />
-                      <Bar dataKey="rate" fill="var(--taali-purple)" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Panel>
-
-              <Panel className="p-3.5">
-                <h2 className="mb-2 font-bold text-sm">Score Distribution</h2>
-                <div className="h-[220px]">
-                  <ResponsiveContainer>
-                    <BarChart data={histogramData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--taali-border-muted)" />
-                      <XAxis dataKey="range" />
-                      <YAxis />
-                      <Tooltip />
-                      <Bar dataKey="count" fill="var(--taali-info)" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Panel>
-            </div>
-
-            <Panel className="p-3.5">
-              <h2 className="mb-2 font-bold text-sm">Per-Dimension Averages</h2>
-              <div className="h-[280px]">
-                <ResponsiveContainer>
-                  <RadarChart data={radarData}>
-                    <PolarGrid stroke="var(--taali-border-muted)" />
-                    <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11 }} />
-                    <PolarRadiusAxis domain={[0, 10]} />
-                    <Radar dataKey="score" stroke="var(--taali-purple)" fill="var(--taali-purple)" fillOpacity={0.2} />
-                  </RadarChart>
-                </ResponsiveContainer>
-              </div>
-            </Panel>
           </div>
-        )}
-      </PageContainer>
-    </div>
+        </div>
+      </div>
+    </AppShell>
   );
 };
 
-export const AnalyticsPage = ReportingPage;
+export default ReportingPage;

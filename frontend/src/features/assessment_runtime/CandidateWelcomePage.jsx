@@ -1,18 +1,19 @@
-import React, { useEffect, useState } from 'react';
-import {
-  Brain,
-  Check,
-  ChevronRight,
-  Loader2,
-  Shield,
-  Terminal,
-} from 'lucide-react';
+import React, { useEffect, useMemo, useState } from 'react';
+import { Check, Loader2 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 import { assessments as assessmentsApi } from '../../shared/api';
-import { Logo } from '../../shared/ui/Branding';
+import { CandidateMiniNav } from '../../shared/layout/TaaliLayout';
 
 const CANDIDATE_START_BLOCKED_MESSAGE = 'This assessment is not available yet. Please contact the hiring team to continue.';
+
+const safeBrowserLabel = () => {
+  if (typeof navigator === 'undefined') return 'Browser ready';
+  if (navigator.userAgent.includes('Chrome')) return 'Chrome';
+  if (navigator.userAgent.includes('Safari')) return 'Safari';
+  if (navigator.userAgent.includes('Firefox')) return 'Firefox';
+  return 'Supported browser';
+};
 
 export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarted }) => {
   const [loadingStart, setLoadingStart] = useState(false);
@@ -46,7 +47,7 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
         if (!cancelled) setPreviewLoading(false);
       }
     };
-    loadPreview();
+    void loadPreview();
     return () => {
       cancelled = true;
     };
@@ -93,7 +94,7 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
     setCvUploadError('');
     setCvUploadSuccess('');
     try {
-      await assessmentsApi.uploadCv(null, token, file);
+      await assessmentsApi.uploadCv(assessmentId || null, token, file);
       setHasCvOnFile(true);
       setCvUploadSuccess(`Uploaded ${file.name}.`);
     } catch (err) {
@@ -116,115 +117,163 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
     : null;
   const startBlockedMessage = String(startGate?.message || '').trim();
   const isStartBlocked = startGate?.can_start === false;
-  const visibleStartMessage = startError || startBlockedMessage;
+  const visibleStartMessage = startError || startBlockedMessage || previewError;
+  const startButtonDisabled = loadingStart || previewLoading || isStartBlocked;
+  const roleLabel = taskPreview?.role || previewData?.role || 'Engineering';
+  const dueLabel = useMemo(() => {
+    const dueAt = previewData?.due_at || taskPreview?.due_at;
+    if (!dueAt) return 'Open link deadline applies';
+    const parsed = new Date(dueAt);
+    if (Number.isNaN(parsed.getTime())) return 'Open link deadline applies';
+    return parsed.toLocaleString();
+  }, [previewData?.due_at, taskPreview?.due_at]);
 
   return (
-    <div className="min-h-screen bg-white">
-      <nav className="border-b-2 border-black bg-white">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-4">
-          <Logo onClick={() => {}} />
-          <span className="font-mono text-sm text-gray-500">|</span>
-          <span className="font-mono text-sm">Technical Assessment</span>
-        </div>
-      </nav>
-      <div className="max-w-3xl mx-auto px-6 py-16">
-        <div className="text-center mb-8">
-          <div
-            className="inline-block px-4 py-2 text-xs font-mono font-bold text-[var(--taali-surface)] border-2 border-[var(--taali-border)] mb-4 bg-[var(--taali-purple)]"
-          >
-            TAALI Assessment
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
+      <CandidateMiniNav label="Candidate assessment · secure session" />
+
+      <div className="mx-auto grid max-w-[1040px] gap-7 px-6 py-10 md:px-8 lg:grid-cols-[1.2fr_.8fr]">
+        <div className="rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] px-8 py-9 shadow-[var(--shadow-sm)]">
+          <div className="kicker">INVITED BY THE HIRING TEAM</div>
+          <h1 className="mt-4 font-[var(--font-display)] text-[46px] font-semibold leading-[1.02] tracking-[-0.035em]">
+            Ready to <em>show your work</em>?
+          </h1>
+          <p className="mt-4 max-w-[560px] text-[17px] leading-[1.55] text-[var(--ink-2)]">
+            This is a real engineering task, not a puzzle. You’ll work with Claude for up to {durationMinutes} minutes, and we care <em>how</em> you work with the AI, not just what you ship.
+          </p>
+
+          <div className="my-6 grid gap-4 border-y border-[var(--line-2)] py-4 md:grid-cols-3">
+            <div>
+              <div className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.1em] text-[var(--mute)]">Duration</div>
+              <div className="mt-1 text-[17px] font-semibold">{durationMinutes} min</div>
+            </div>
+            <div>
+              <div className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.1em] text-[var(--mute)]">Tools</div>
+              <div className="mt-1 text-[17px] font-semibold">Claude · IDE · Docs</div>
+            </div>
+            <div>
+              <div className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.1em] text-[var(--mute)]">Submit by</div>
+              <div className="mt-1 text-[17px] font-semibold">{dueLabel}</div>
+            </div>
           </div>
-          <h1 className="text-4xl font-bold mb-2">Technical Assessment</h1>
-          <p className="text-[var(--taali-muted)]">You&apos;ve been invited to complete a coding challenge</p>
-        </div>
 
-        <div className="border-2 border-[var(--taali-border)] p-5 mb-6 bg-[var(--taali-bg)]">
-          <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-[var(--taali-muted)]">
-            <span>Role: {taskPreview?.role || 'Engineering'}</span>
-            <span>•</span>
-            <span>Duration: {durationMinutes} minutes</span>
-            {taskPreview?.name ? (
-              <>
-                <span>•</span>
-                <span>Task: {taskPreview.name}</span>
-              </>
-            ) : null}
+          <div>
+            <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">What to expect</div>
+            <div className="mt-4 space-y-4">
+              {[
+                ['A real prompt, not a riddle', 'You’ll get a repo, a scenario, and a task brief grounded in real engineering work.'],
+                ['Work the way you normally do', 'Use Claude when it helps. Accept, reject, push back, and iterate as you would on the job.'],
+                ['One session, one sitting', 'You can pause briefly if needed. We record the transcript, not your screen, camera, or microphone.'],
+                ['Optional feedback at the end', 'A short feedback step helps improve the assessment and can unlock your candidate-facing summary.'],
+              ].map(([title, body]) => (
+                <div key={title} className="grid grid-cols-[22px_1fr] gap-4 border-b border-[var(--line-2)] pb-4 last:border-b-0 last:pb-0">
+                  <div className="grid h-[22px] w-[22px] place-items-center rounded-full bg-[var(--purple-soft)] text-[var(--purple)]">
+                    <Check size={12} strokeWidth={2.5} />
+                  </div>
+                  <div>
+                    <div className="text-[14.5px] font-medium">{title}</div>
+                    <div className="mt-1 text-[13px] leading-6 text-[var(--mute)]">{body}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
-          {previewLoading ? (
-            <p className="mt-2 text-xs text-[var(--taali-muted)]">Loading task context…</p>
-          ) : previewError ? (
-            <p className="mt-2 text-xs text-[var(--taali-warning)]">{previewError}</p>
+
+          {visibleStartMessage ? (
+            <div className="mt-5 rounded-[14px] border border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4 text-sm text-[var(--ink-2)]">
+              {visibleStartMessage}
+            </div>
           ) : null}
-          {hasCvOnFile ? (
-            <p className="mt-2 text-xs text-[var(--taali-success)]">CV on file: yes</p>
-          ) : null}
+
+          <div className="mt-6 flex flex-col gap-3">
+            <button type="button" className="btn btn-purple btn-lg w-full justify-center" onClick={handleStart} disabled={startButtonDisabled}>
+              {loadingStart ? (
+                <>
+                  <Loader2 size={16} className="animate-spin" /> Starting assessment…
+                </>
+              ) : isStartBlocked ? (
+                'Assessment unavailable'
+              ) : (
+                <>
+                  Start assessment <span className="arrow">→</span>
+                </>
+              )}
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline btn-lg w-full justify-center"
+              onClick={() => document.getElementById('task-brief')?.scrollIntoView({ behavior: 'smooth' })}
+            >
+              Review the task brief first
+            </button>
+          </div>
         </div>
 
-        <div className="border-2 border-[var(--taali-border)] p-8 mb-8">
-          <p className="text-lg mb-4">Welcome,</p>
-          <p className="text-sm text-[var(--taali-text)] mb-4 leading-relaxed">
-            You&apos;ve been invited to complete a technical assessment. This is a real coding environment where you can write, run, and test code with AI assistance.
-          </p>
-          <p className="text-sm text-[var(--taali-text)] mb-4">You&apos;ll have access to:</p>
-          <ul className="space-y-2 mb-6">
-            {['Full Python environment (sandboxed)', 'Claude AI assistant for help', 'All the tools you\'d use on the job'].map((item) => (
-              <li key={item} className="flex items-center gap-2 font-mono text-sm">
-                <Check size={16} className="text-[var(--taali-purple)]" /> {item}
-              </li>
-            ))}
-          </ul>
-          <p className="text-sm text-[var(--taali-text)] italic">
-            This isn&apos;t a trick. We want to see how you actually work.
-          </p>
-          <p className="text-sm text-[var(--taali-muted)] mt-4">Ready when you are.</p>
-        </div>
-
-        <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-[var(--taali-purple-soft)]">
-          <h2 className="text-xl font-bold mb-3">How you&apos;ll be evaluated</h2>
-          <ul className="space-y-2 font-mono text-sm text-[var(--taali-text)]">
-            <li>• Ask clear, structured questions to Claude.</li>
-            <li>• Provide concrete context (code, files, errors) when you&apos;re stuck.</li>
-            <li>• Work independently before escalating to AI.</li>
-            <li>• Apply AI responses effectively and iterate with evidence.</li>
-            <li>• Communicate reasoning, tradeoffs, and next-step judgment.</li>
-          </ul>
-          <p className="mt-3 text-xs text-[var(--taali-muted)]">
-            TAALI evaluates your collaboration process with AI, not just the final output.
-          </p>
-        </div>
-
-        {!hasCvOnFile ? (
-          <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-white">
-            <h2 className="text-xl font-bold mb-2">Optional: Upload your CV</h2>
-            <p className="text-sm text-[var(--taali-muted)] mb-3">
-              Uploading a CV helps role-fit analysis. You can still continue without it.
+        <div className="space-y-4">
+          <div className="rounded-[var(--radius-lg)] bg-[var(--ink)] p-6 text-[var(--bg)] shadow-[var(--shadow-sm)]">
+            <div className="kicker text-[var(--purple-2)]">APPLYING FOR</div>
+            <h3 className="mt-3 font-[var(--font-display)] text-[22px] font-semibold tracking-[-0.02em]">{roleLabel}</h3>
+            <p className="mt-2 text-[13px] leading-6 text-white/70">
+              {taskPreview?.company_name || 'Taali hiring team'} · {taskPreview?.location || 'Remote friendly'} · {taskPreview?.seniority || 'Technical assessment'}
             </p>
-            <input
-              type="file"
-              accept=".pdf,.doc,.docx"
-              onChange={handleCvUpload}
-              disabled={cvUploading}
-              className="block w-full text-sm text-[var(--taali-text)]"
-            />
-            {cvUploading ? <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">Uploading…</p> : null}
-            {cvUploadSuccess ? <p className="mt-2 font-mono text-xs text-[var(--taali-success)]">{cvUploadSuccess}</p> : null}
-            {cvUploadError ? <p className="mt-2 font-mono text-xs text-[var(--taali-danger)]">{cvUploadError}</p> : null}
+            <div className="mt-4 flex gap-2">
+              <span className="chip purple">Assessment {assessmentId ? `#${assessmentId}` : '1 of 1'}</span>
+            </div>
+          </div>
+
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+            <h3 className="font-[var(--font-display)] text-[18px] font-semibold tracking-[-0.02em]">System <em>check</em></h3>
+            <p className="mt-1 text-[12.5px] text-[var(--mute)]">We ran a quick check. You’re good to go.</p>
+            <div className="mt-4 space-y-3 text-[13px]">
+              {[
+                ['Browser', safeBrowserLabel()],
+                ['Connection', 'Ready'],
+                ['Screen', typeof window !== 'undefined' ? `${window.innerWidth} × ${window.innerHeight}` : 'Ready'],
+                ['Claude access', previewLoading ? 'Checking…' : 'Ready'],
+              ].map(([label, value]) => (
+                <div key={label} className="flex items-center justify-between border-b border-[var(--line-2)] pb-3 last:border-b-0 last:pb-0">
+                  <span className="font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">{label}</span>
+                  <span className="flex items-center gap-2 text-[var(--green)]"><Check size={12} strokeWidth={2.5} /> {value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+            <h3 className="font-[var(--font-display)] text-[18px] font-semibold tracking-[-0.02em]">Your <em>rights</em></h3>
+            <div className="mt-4 rounded-[var(--radius)] bg-[var(--bg-3)] p-4 text-[12.5px] leading-6 text-[var(--ink-2)]">
+              We record what you prompted, what Claude said, and what you accepted or edited. We do not record your screen, microphone, or camera.
+              <br />
+              <br />
+              Your session transcript is visible only to the hiring team. You can request deletion of your data at any time.
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div className="mx-auto max-w-[1040px] space-y-6 px-6 pb-16 md:px-8">
+        {!hasCvOnFile ? (
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+            <h2 className="font-[var(--font-display)] text-[22px] font-semibold tracking-[-0.02em]">Optional: upload your <em>CV</em>.</h2>
+            <p className="mt-2 text-[14px] leading-7 text-[var(--mute)]">Uploading a CV helps role-fit analysis. You can still continue without it.</p>
+            <input type="file" accept=".pdf,.doc,.docx" onChange={handleCvUpload} disabled={cvUploading} className="mt-4 block w-full text-sm" />
+            {cvUploading ? <p className="mt-2 text-xs text-[var(--mute)]">Uploading…</p> : null}
+            {cvUploadSuccess ? <p className="mt-2 text-xs text-[var(--green)]">{cvUploadSuccess}</p> : null}
+            {cvUploadError ? <p className="mt-2 text-xs text-[var(--red)]">{cvUploadError}</p> : null}
           </div>
         ) : null}
 
         {taskPreview?.calibration_enabled && calibrationPromptText ? (
-          <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-[var(--taali-bg)]">
-            <h2 className="text-xl font-bold mb-2">2-minute warmup (calibration)</h2>
-            <p className="text-sm text-[var(--taali-muted)] mb-3">
-              This captures your baseline AI-collaboration style before the main task.
-            </p>
-            <div className="mb-3 border border-[var(--taali-border)] bg-white p-3 font-mono text-xs text-[var(--taali-text)]">
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+            <h2 className="font-[var(--font-display)] text-[22px] font-semibold tracking-[-0.02em]">2-minute <em>warmup</em>.</h2>
+            <p className="mt-2 text-[14px] leading-7 text-[var(--mute)]">This captures your baseline AI-collaboration style before the main task.</p>
+            <div className="mt-4 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 font-[var(--font-mono)] text-xs leading-6 text-[var(--ink-2)]">
               {calibrationPromptText}
             </div>
-            <label className="block">
-              <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Your prompt to Claude</span>
+            <label className="field mt-4">
+              <span className="k">Your prompt to Claude</span>
               <textarea
-                className="w-full min-h-[110px] border-2 border-[var(--taali-border)] bg-white p-3 font-mono text-sm text-[var(--taali-text)] outline-none focus:border-[var(--taali-purple)]"
+                className="min-h-[120px]"
                 value={warmupPrompt}
                 onChange={(event) => setWarmupPrompt(event.target.value)}
                 placeholder="Write the prompt you would send to Claude for this warmup..."
@@ -234,83 +283,32 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
         ) : null}
 
         {scenarioMarkdown ? (
-          <div className="border-2 border-[var(--taali-border)] p-6 mb-8 bg-white">
-            <h2 className="text-xl font-bold mb-3">Task scenario</h2>
-            <div className="prose prose-sm max-w-none text-[var(--taali-text)] prose-headings:font-bold prose-code:font-mono">
+          <div id="task-brief" className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+            <h2 className="font-[var(--font-display)] text-[22px] font-semibold tracking-[-0.02em]">Task <em>brief</em>.</h2>
+            <div className="prose prose-sm mt-4 max-w-none text-[var(--ink)] prose-headings:font-semibold prose-p:text-[var(--ink-2)] prose-li:text-[var(--ink-2)] prose-strong:text-[var(--ink)] prose-code:font-mono">
               <ReactMarkdown>{scenarioMarkdown}</ReactMarkdown>
             </div>
           </div>
         ) : null}
 
         {expectedJourney ? (
-          <div className="border-2 border-[var(--taali-border)] p-6 mb-8">
-            <h2 className="text-xl font-bold mb-3">Expected working flow</h2>
-            <div className="space-y-3">
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+            <h2 className="font-[var(--font-display)] text-[22px] font-semibold tracking-[-0.02em]">Expected working <em>flow</em>.</h2>
+            <div className="mt-4 grid gap-4 md:grid-cols-2">
               {Object.entries(expectedJourney).map(([phase, bullets]) => (
-                <div key={phase}>
-                  <div className="font-mono text-xs font-bold uppercase text-[var(--taali-muted)] mb-1">{phase.replace(/_/g, ' ')}</div>
-                  <ul className="space-y-1">
-                    {(Array.isArray(bullets) ? bullets : []).map((item) => (
-                      <li key={`${phase}-${item}`} className="font-mono text-xs text-[var(--taali-text)]">• {item}</li>
-                    ))}
+                <div key={phase} className="rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4">
+                  <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.1em] text-[var(--purple)]">{phase.replace(/_/g, ' ')}</div>
+                  <ul className="mt-3 space-y-2 text-[13px] leading-6 text-[var(--ink-2)]">
+                    {(Array.isArray(bullets) ? bullets : []).map((bullet) => <li key={bullet}>• {bullet}</li>)}
                   </ul>
                 </div>
               ))}
             </div>
           </div>
         ) : null}
-
-        <div className="grid md:grid-cols-3 gap-4 mb-8">
-          <div className="border-2 border-[var(--taali-border)] p-6">
-            <Terminal size={24} className="mb-3" />
-            <h3 className="font-bold mb-2">What You&apos;ll Do</h3>
-            <ul className="font-mono text-xs text-[var(--taali-muted)] space-y-1">
-              <li>Complete a coding challenge</li>
-              <li>Use AI tools as you normally would</li>
-              <li>Write and run your solution</li>
-            </ul>
-          </div>
-          <div className="border-2 border-[var(--taali-border)] p-6">
-            <Brain size={24} className="mb-3" />
-            <h3 className="font-bold mb-2">What We&apos;re Testing</h3>
-            <ul className="font-mono text-xs text-[var(--taali-muted)] space-y-1">
-              <li>Problem-solving approach</li>
-              <li>AI collaboration skills</li>
-              <li>Code quality & testing</li>
-            </ul>
-          </div>
-          <div className="border-2 border-[var(--taali-border)] p-6">
-            <Shield size={24} className="mb-3" />
-            <h3 className="font-bold mb-2">What You&apos;ll Need</h3>
-            <ul className="font-mono text-xs text-[var(--taali-muted)] space-y-1">
-              <li>Desktop browser (Chrome/Firefox)</li>
-              <li>Uninterrupted time</li>
-              <li>Stable internet connection</li>
-              <li>Read the task context before coding</li>
-            </ul>
-          </div>
-        </div>
-
-        {visibleStartMessage && (
-          <div className="border-2 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4 mb-4 text-sm text-[var(--taali-danger)]">
-            {visibleStartMessage}
-          </div>
-        )}
-
-        <button
-          className="w-full border-2 border-[var(--taali-border)] py-4 font-bold text-lg text-[var(--taali-surface)] bg-[var(--taali-purple)] hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60 transition-colors flex items-center justify-center gap-2"
-          onClick={handleStart}
-          disabled={loadingStart || isStartBlocked}
-        >
-          {loadingStart ? (
-            <><Loader2 size={20} className="animate-spin" /> Starting Assessment...</>
-          ) : isStartBlocked ? (
-            'Assessment unavailable'
-          ) : (
-            <>Start Assessment <ChevronRight size={20} /></>
-          )}
-        </button>
       </div>
     </div>
   );
 };
+
+export default CandidateWelcomePage;

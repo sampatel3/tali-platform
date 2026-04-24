@@ -2,8 +2,7 @@ import React, { useState } from 'react';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 
 import { auth } from '../../shared/api';
-import { Logo } from '../../shared/ui/Branding';
-import { Button, Input, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { FlowLayout, AuthCard } from './AuthLayout';
 
 export const ResetPasswordPage = ({ onNavigate, token }) => {
   const [password, setPassword] = useState('');
@@ -38,89 +37,59 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
     }
   };
 
-  const navLayout = (
-    <nav className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
-      <div className="max-w-7xl mx-auto px-6 py-4">
-        <Logo onClick={() => onNavigate('landing')} />
-      </div>
-    </nav>
-  );
-
   if (!token) {
     return (
-      <div className="min-h-screen bg-[var(--taali-surface)] flex flex-col">
-        {navLayout}
-        <div className="flex-1 flex items-center justify-center p-6">
-          <div className="border-2 border-[var(--taali-border)] p-8 text-center max-w-md bg-[var(--taali-surface)]">
-            <AlertTriangle size={48} className="mx-auto mb-4 text-[var(--taali-warning)]" />
-            <h2 className="text-2xl font-bold mb-2">Invalid link</h2>
-            <p className="text-sm text-[var(--taali-muted)] mb-6">This reset link is missing or invalid. Request a new one from the login page.</p>
-            <Button variant="primary" className="w-full" onClick={() => onNavigate('forgot-password')}>Request new link</Button>
-          </div>
-        </div>
-      </div>
+      <FlowLayout>
+        <AuthCard kicker="RESET PASSWORD" title={<>Invalid <em>link</em>.</>} subtitle="This reset link is missing or invalid. Request a new one from the login page." widthClassName="max-w-[560px]">
+          <button type="button" className="btn btn-purple btn-lg w-full justify-center" onClick={() => onNavigate('forgot-password')}>
+            Request new link <span className="arrow">→</span>
+          </button>
+        </AuthCard>
+      </FlowLayout>
     );
   }
 
   if (success) {
     return (
-      <div className="min-h-screen bg-[var(--taali-surface)] flex flex-col">
-        {navLayout}
-        <div className="flex-1 flex items-center justify-center p-6">
-          <div className="border-2 border-[var(--taali-border)] p-8 text-center max-w-md bg-[var(--taali-surface)]">
-            <CheckCircle size={48} className="mx-auto mb-4 text-[var(--taali-purple)]" />
-            <h2 className="text-2xl font-bold mb-2">Password reset</h2>
-            <p className="text-sm text-[var(--taali-muted)] mb-6">You can now sign in with your new password.</p>
-            <Button variant="primary" className="w-full" onClick={() => onNavigate('login')}>Sign In</Button>
-          </div>
-        </div>
-      </div>
+      <FlowLayout>
+        <AuthCard kicker="RESET PASSWORD" title={<>Password <em>updated</em>.</>} subtitle="You can now sign in with your new password." widthClassName="max-w-[560px]">
+          <button type="button" className="btn btn-purple btn-lg w-full justify-center" onClick={() => onNavigate('login')}>
+            Sign in <span className="arrow">→</span>
+          </button>
+        </AuthCard>
+      </FlowLayout>
     );
   }
 
   return (
-    <div className="min-h-screen bg-[var(--taali-surface)] flex flex-col">
-      {navLayout}
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-md">
-          <div className="border-2 border-[var(--taali-border)] p-8 bg-[var(--taali-surface)]">
-            <h2 className="text-3xl font-bold mb-2">Set new password</h2>
-            <p className="text-sm text-[var(--taali-muted)] mb-6">Enter your new password below.</p>
-            {error && (
-              <div className="border-2 border-[var(--taali-danger)] bg-[var(--taali-danger-soft)] p-3 mb-4 flex items-center gap-2">
-                <AlertTriangle size={18} className="text-[var(--taali-danger)] flex-shrink-0" />
-                <span className="text-sm text-[var(--taali-text)]">{error}</span>
-              </div>
-            )}
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="block font-mono text-sm mb-1">New password</label>
-                <Input
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                />
-              </div>
-              <div>
-                <label className="block font-mono text-sm mb-1">Confirm password</label>
-                <Input
-                  type="password"
-                  placeholder="••••••••"
-                  value={confirm}
-                  onChange={(e) => setConfirm(e.target.value)}
-                />
-              </div>
-              <Button type="submit" variant="primary" className="w-full" disabled={loading}>
-                {loading ? <><Spinner size={18} /> Resetting...</> : 'Reset password'}
-              </Button>
-            </form>
-            <div className="mt-6 text-center">
-              <button type="button" className="text-sm hover:underline text-[var(--taali-purple)]" onClick={() => onNavigate('login')}>Back to Sign In</button>
-            </div>
+    <FlowLayout>
+      <AuthCard kicker="RESET PASSWORD" title={<>Set a <em>new</em> password.</>} subtitle="Use a strong password you haven’t used before." widthClassName="max-w-[560px]">
+        {error ? (
+          <div className="mb-4 flex items-center gap-2 rounded-[14px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-3">
+            <AlertTriangle size={18} className="shrink-0 text-[var(--taali-danger)]" />
+            <span className="text-sm text-[var(--ink)]">{error}</span>
           </div>
+        ) : null}
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <label className="field">
+            <span className="k">New password</span>
+            <input type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
+          </label>
+          <label className="field">
+            <span className="k">Confirm new password</span>
+            <input type="password" placeholder="••••••••" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+          </label>
+          <button type="submit" className="btn btn-purple btn-lg w-full justify-center" disabled={loading}>
+            {loading ? 'Updating password...' : <>Update password <span className="arrow">→</span></>}
+          </button>
+        </form>
+        <div className="mt-5 text-center text-[13.5px] text-[var(--mute)]">
+          Back to{' '}
+          <button type="button" className="font-medium text-[var(--purple)] hover:underline" onClick={() => onNavigate('login')}>
+            sign in
+          </button>
         </div>
-      </div>
-    </div>
+      </AuthCard>
+    </FlowLayout>
   );
 };

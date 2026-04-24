@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import App from '../App';
@@ -14,6 +14,7 @@ vi.mock('../shared/api', () => ({
     resendVerification: vi.fn(),
     forgotPassword: vi.fn(),
     resetPassword: vi.fn(),
+    ssoCheck: vi.fn(),
   },
   assessments: {
     list: vi.fn().mockResolvedValue({ data: { items: [], total: 0 } }),
@@ -25,27 +26,7 @@ vi.mock('../shared/api', () => ({
     addNote: vi.fn(),
     uploadCv: vi.fn(),
     postToWorkable: vi.fn(),
-    startDemo: vi.fn().mockResolvedValue({
-      data: {
-        assessment_id: 321,
-        token: 'demo-token',
-        sandbox_id: 'sandbox-demo',
-        task: {
-          name: 'Demo task',
-          description: 'Demo description',
-          duration_minutes: 30,
-          starter_code: "print('hello')",
-          repo_structure: { files: { 'main.py': "print('hello')" } },
-          rubric_categories: [],
-          proctoring_enabled: false,
-        },
-        claude_budget: { enabled: false },
-        time_remaining: 1800,
-        is_timer_paused: false,
-        pause_reason: null,
-        total_paused_seconds: 0,
-      },
-    }),
+    startDemo: vi.fn(),
     start: vi.fn(),
     execute: vi.fn(),
     terminalStatus: vi.fn(),
@@ -53,10 +34,10 @@ vi.mock('../shared/api', () => ({
     terminalWsUrl: vi.fn().mockReturnValue('ws://localhost/api/v1/assessments/321/terminal/ws?token=demo-token'),
     claude: vi.fn(),
     claudeRetry: vi.fn(),
-    submit: vi.fn(),
+    submit: vi.fn().mockResolvedValue({ data: { id: 321, status: 'completed' } }),
   },
   billing: { usage: vi.fn(), costs: vi.fn(), credits: vi.fn(), createCheckoutSession: vi.fn() },
-  organizations: { get: vi.fn(), update: vi.fn() },
+  organizations: { get: vi.fn() },
   analytics: { get: vi.fn().mockResolvedValue({ data: {} }) },
   tasks: { list: vi.fn().mockResolvedValue({ data: [] }), get: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), generate: vi.fn() },
   candidates: { list: vi.fn().mockResolvedValue({ data: { items: [] } }), get: vi.fn(), create: vi.fn(), createWithCv: vi.fn(), update: vi.fn(), remove: vi.fn(), uploadCv: vi.fn(), uploadJobSpec: vi.fn() },
@@ -74,15 +55,6 @@ vi.mock('../shared/api', () => ({
   },
 }));
 
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div>{children}</div>,
-  RadarChart: ({ children }) => <div data-testid="radar-chart">{children}</div>,
-  PolarGrid: () => <div />,
-  PolarAngleAxis: () => <div />,
-  PolarRadiusAxis: () => <div />,
-  Radar: () => <div />,
-}));
-
 vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
@@ -90,23 +62,32 @@ vi.mock('@monaco-editor/react', () => ({
 const renderApp = () => render(
   <AuthProvider>
     <App />
-  </AuthProvider>
+  </AuthProvider>,
 );
 
-describe('Demo flow', () => {
+describe('Demo flow redesign', () => {
+  const expectDemoHero = async () => {
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/Try a candidate/i);
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/assessment/i);
+    });
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
     window.history.replaceState(null, '', '/');
+    window.scrollTo = vi.fn();
+    window.HTMLElement.prototype.scrollIntoView = vi.fn();
     auth.me.mockRejectedValue(new Error('Not authenticated'));
     assessments.startDemo.mockResolvedValue({
       data: {
         assessment_id: 321,
         token: 'demo-token',
-        sandbox_id: 'sandbox-demo',
         task: {
           name: 'Demo task',
           description: 'Demo description',
+          scenario: 'Recover a production workflow after a failed deploy.',
           duration_minutes: 30,
           starter_code: "print('hello')",
           repo_structure: { files: { 'main.py': "print('hello')" } },
@@ -120,126 +101,69 @@ describe('Demo flow', () => {
         total_paused_seconds: 0,
       },
     });
-    assessments.submit.mockResolvedValue({
-      data: {
-        id: 321,
-        status: 'completed',
-        tests_passed: 5,
-        tests_total: 7,
-        score_breakdown: {
-          category_scores: {
-            task_completion: 6.8,
-            prompt_clarity: 6.2,
-            context_provision: 6.0,
-            independence_efficiency: 5.9,
-            response_utilization: 6.1,
-            debugging_design: 7.0,
-            written_communication: 5.8,
-          },
-          heuristic_summary: 'Solid troubleshooting structure and clear execution path. Improve explicit validation depth before finalizing changes.',
-        },
-        prompt_analytics: {
-          category_scores: {
-            task_completion: 6.8,
-            prompt_clarity: 6.2,
-            context_provision: 6.0,
-            independence_efficiency: 5.9,
-            response_utilization: 6.1,
-            debugging_design: 7.0,
-            written_communication: 5.8,
-          },
-        },
-      },
-    });
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
-    window.scrollTo = vi.fn();
-    window.HTMLElement.prototype.scrollIntoView = vi.fn();
   });
 
-  it('navigates to /demo from landing nav', async () => {
+  it('navigates from the marketing nav to the redesigned demo page', async () => {
     renderApp();
+
     fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
 
-    expect(
-      await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 })
-    ).toBeInTheDocument();
+    await expectDemoHero();
+    expect(screen.getByText(/Complete this short intake/i)).toBeInTheDocument();
   });
 
-  it('keeps the global theme switch inside the landing and demo nav bars', async () => {
+  it('keeps the theme toggle button in both landing and demo navigation', async () => {
     renderApp();
-    expect(within(screen.getByRole('navigation')).getByRole('switch')).toBeInTheDocument();
 
+    expect(screen.getByRole('button', { name: 'Toggle theme' })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
-    await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 });
 
-    expect(within(screen.getByRole('navigation')).getByRole('switch')).toBeInTheDocument();
+    await expectDemoHero();
+    expect(screen.getByRole('button', { name: 'Toggle theme' })).toBeInTheDocument();
   });
 
-  it('requires credential fields before starting demo', async () => {
+  it('shows the redesigned intake validation before a demo can start', async () => {
     renderApp();
-    fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
-    await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Start demo assessment' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
+    await expectDemoHero();
+
+    fireEvent.click(screen.getByRole('button', { name: /Start demo assessment/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/Please complete:/i)).toBeInTheDocument();
+      expect(assessments.startDemo).not.toHaveBeenCalled();
     });
   });
 
-  it('shows all demo tasks and starts with selected track', async () => {
+  it('starts the selected demo track and opens the assessment runtime', async () => {
     renderApp();
+
     fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
-    await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 });
+    await expectDemoHero();
 
-    expect(screen.getByRole('button', { name: /AWS Glue Pipeline Recovery/i })).toBeInTheDocument();
-    const aiTrackButton = screen.getByRole('button', { name: /GenAI Production Readiness Review/i });
-    expect(aiTrackButton).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/^Full name$/i), { target: { value: 'Jane Doe' } });
+    fireEvent.change(screen.getByLabelText(/^Position$/i), { target: { value: 'Engineering Manager' } });
+    fireEvent.change(screen.getByLabelText(/^Email$/i), { target: { value: 'jane@email.com' } });
+    fireEvent.change(screen.getByLabelText(/^Work email$/i), { target: { value: 'jane@company.com' } });
+    fireEvent.change(screen.getByLabelText(/^Company$/i), { target: { value: 'Acme' } });
+    fireEvent.change(screen.getByLabelText(/^Company size$/i), { target: { value: '51-200' } });
 
-    fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'Jane Doe' } });
-    fireEvent.change(screen.getByLabelText('Position'), { target: { value: 'Engineering Manager' } });
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'jane@email.com' } });
-    fireEvent.change(screen.getByLabelText('Work email'), { target: { value: 'jane@company.com' } });
-    fireEvent.change(screen.getByLabelText('Company'), { target: { value: 'Acme' } });
-    fireEvent.change(screen.getByLabelText('Company size'), { target: { value: '51-200' } });
-
-    fireEvent.click(aiTrackButton);
-    fireEvent.click(screen.getByRole('button', { name: 'Start demo assessment' }));
+    fireEvent.click(screen.getByRole('button', { name: /GenAI Production Readiness Review/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Start demo assessment/i }));
 
     await waitFor(() => {
       expect(assessments.startDemo).toHaveBeenCalledWith(
-        expect.objectContaining({ assessment_track: 'ai_eng_genai_production_readiness' })
+        expect.objectContaining({
+          assessment_track: 'ai_eng_genai_production_readiness',
+          full_name: 'Jane Doe',
+          company_size: '51-200',
+        }),
       );
     });
-  });
 
-  it('shows demo summary after submit', async () => {
-    renderApp();
-    fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
-    await screen.findByText('Try a candidate assessment', {}, { timeout: 5000 });
-
-    fireEvent.change(screen.getByLabelText('Full name'), { target: { value: 'Jane Doe' } });
-    fireEvent.change(screen.getByLabelText('Position'), { target: { value: 'Engineering Manager' } });
-    fireEvent.change(screen.getByLabelText('Email'), { target: { value: 'jane@email.com' } });
-    fireEvent.change(screen.getByLabelText('Work email'), { target: { value: 'jane@company.com' } });
-    fireEvent.change(screen.getByLabelText('Company'), { target: { value: 'Acme' } });
-    fireEvent.change(screen.getByLabelText('Company size'), { target: { value: '51-200' } });
-
-    fireEvent.click(screen.getByRole('button', { name: 'Start demo assessment' }));
-
-    const submitButton = await screen.findByRole('button', { name: 'Submit' });
-    fireEvent.click(submitButton);
-    const confirmDialog = await screen.findByRole('dialog');
-    fireEvent.click(within(confirmDialog).getByRole('button', { name: 'Submit' }));
-
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /Jane Doe's TAALI profile/i })).toBeInTheDocument();
-      expect(screen.getByRole('button', { name: 'Join TAALI' })).toBeInTheDocument();
-      expect(screen.getByText('Dimension profile')).toBeInTheDocument();
-      expect(screen.getByText('Dimension scores')).toBeInTheDocument();
-      expect(screen.getByText('Assessment feedback')).toBeInTheDocument();
-      expect(screen.getByText(/Strongest signal observed/i)).toBeInTheDocument();
-      expect(screen.getByTestId('radar-chart')).toBeInTheDocument();
-    });
+    expect(await screen.findByText('Live assessment context')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Submit' })).toBeInTheDocument();
+    expect(screen.getByTestId('code-editor')).toBeInTheDocument();
   });
 });

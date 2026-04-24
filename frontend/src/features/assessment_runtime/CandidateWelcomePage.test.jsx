@@ -1,5 +1,5 @@
 import { render, screen, waitFor } from '@testing-library/react';
-import { vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CandidateWelcomePage } from './CandidateWelcomePage';
 
@@ -15,11 +15,7 @@ vi.mock('../../shared/api', () => ({
   },
 }));
 
-vi.mock('../../shared/ui/Branding', () => ({
-  Logo: () => <div>TAALI</div>,
-}));
-
-describe('CandidateWelcomePage', () => {
+describe('Candidate welcome redesign', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPreview.mockResolvedValue({
@@ -45,7 +41,7 @@ describe('CandidateWelcomePage', () => {
     mockUploadCv.mockResolvedValue({ data: {} });
   });
 
-  it('shows the candidate-safe credit blocker and disables start', async () => {
+  it('shows the candidate-safe blocker and disables the redesigned start action', async () => {
     render(
       <CandidateWelcomePage
         token="candidate-token"
@@ -54,7 +50,8 @@ describe('CandidateWelcomePage', () => {
       />,
     );
 
-    expect(await screen.findByText(/Please contact the hiring team to continue/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Ready to show your work/i })).toBeInTheDocument();
+    expect(screen.getByText(/Please contact the hiring team to continue/i)).toBeInTheDocument();
 
     const startButton = screen.getByRole('button', { name: /Assessment unavailable/i });
     expect(startButton).toBeDisabled();

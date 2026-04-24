@@ -1,89 +1,129 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { vi } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { CandidateDetailPage } from './App';
-
-vi.mock('./context/AuthContext', () => ({
-  useAuth: () => ({
-    user: { organization: { name: 'Org' } },
-    logout: vi.fn(),
-  }),
-}));
+import { AuthProvider } from './context/AuthContext';
+import { ToastProvider } from './context/ToastContext';
+import { CandidateDetailPage } from './features/candidates/CandidateDetailPage';
 
 vi.mock('./shared/api', () => ({
+  auth: {
+    login: vi.fn(),
+    register: vi.fn(),
+    me: vi.fn(),
+    verifyEmail: vi.fn(),
+    resendVerification: vi.fn(),
+    forgotPassword: vi.fn(),
+    resetPassword: vi.fn(),
+    ssoCheck: vi.fn(),
+  },
   assessments: {
+    addNote: vi.fn(),
     downloadReport: vi.fn(),
     postToWorkable: vi.fn(),
     remove: vi.fn(),
-    addNote: vi.fn(),
+    resend: vi.fn(),
+    updateManualEvaluation: vi.fn(),
+    generateInterviewDebrief: vi.fn(),
+    aiEvalSuggestions: vi.fn(),
   },
-  organizations: {},
-  tasks: {},
-  analytics: {
-    get: vi.fn().mockResolvedValue({ data: { avg_calibration_score: 6.2 } }),
-  },
+  organizations: { get: vi.fn() },
+  analytics: { get: vi.fn().mockResolvedValue({ data: {} }) },
   billing: {},
   team: {},
-  candidates: {},
+  tasks: {},
+  candidates: { downloadDocument: vi.fn() },
+  roles: {
+    listTasks: vi.fn().mockResolvedValue({ data: [] }),
+    listApplicationEvents: vi.fn().mockResolvedValue({ data: [] }),
+    get: vi.fn(),
+    getApplication: vi.fn(),
+    updateApplicationStage: vi.fn(),
+    downloadApplicationReport: vi.fn(),
+  },
 }));
 
-describe('CandidateDetailPage radar chart', () => {
-  it('renders scoring dimensions in AI Usage tab', async () => {
-    const candidate = {
-      name: 'Jane Doe',
-      email: 'jane@example.com',
-      position: 'Engineer',
-      task: 'Debugging',
-      time: '30m',
-      score: 8.4,
-      completedDate: 'Today',
-      breakdown: {
-        bugsFixed: '3/3',
-        testsPassed: '5/5',
-        codeQuality: 8.0,
-        timeEfficiency: 7.8,
-        aiUsage: 8.2,
-      },
-      results: [{ title: 'Result', score: '5/5', description: 'ok' }],
-      promptsList: [{ text: 'help' }],
-      timeline: [{ time: '00:00', event: 'Started' }],
-      _raw: {
-        id: 1,
-        prompt_quality_score: 8.0,
-        prompt_efficiency_score: 7.0,
-        independence_score: 6.0,
-        context_utilization_score: 7.0,
-        design_thinking_score: 6.5,
-        debugging_strategy_score: 7.5,
-        written_communication_score: 8.0,
-        learning_velocity_score: 7.5,
-        error_recovery_score: 6.5,
-        requirement_comprehension_score: 7.0,
-        calibration_score: 6.0,
-        browser_focus_ratio: 0.9,
-        tab_switch_count: 1,
-        prompt_analytics: {
-          ai_scores: { prompt_specificity: 7.0, prompt_progression: 8.0 },
-          component_scores: { tests: 8.0, prompt_quality: 8.0 },
-          weights_used: { tests: 0.3, prompt_quality: 0.15 },
-          per_prompt_scores: [{ clarity: 7, specificity: 8, efficiency: 7 }],
-        },
-        prompt_fraud_flags: [],
-      },
-    };
+vi.mock('recharts', () => ({
+  ResponsiveContainer: ({ children }) => <div>{children}</div>,
+  RadarChart: ({ children }) => <div data-testid="radar-chart">{children}</div>,
+  PolarGrid: () => <div />,
+  PolarAngleAxis: () => <div />,
+  PolarRadiusAxis: () => <div />,
+  Radar: () => <div />,
+  CartesianGrid: () => <div />,
+  LineChart: ({ children }) => <div>{children}</div>,
+  Line: () => <div />,
+  XAxis: () => <div />,
+  YAxis: () => <div />,
+  Tooltip: () => <div />,
+}));
 
+const candidate = {
+  id: 1,
+  name: 'Jane Doe',
+  email: 'jane@example.com',
+  position: 'Engineer',
+  task: 'Debugging',
+  time: '30m',
+  score: 8.4,
+  completedDate: 'Today',
+  promptsList: [{ message: 'help' }],
+  timeline: [{ timestamp: '2026-03-05T09:00:00Z', event: 'Started' }],
+  _raw: {
+    id: 1,
+    candidate_name: 'Jane Doe',
+    candidate_email: 'jane@example.com',
+    role_name: 'Engineer',
+    task_name: 'Debugging',
+    status: 'completed',
+    final_score: 84,
+    prompt_quality_score: 8.0,
+    error_recovery_score: 6.5,
+    independence_score: 6.0,
+    context_utilization_score: 7.0,
+    design_thinking_score: 6.5,
+    time_to_first_prompt_seconds: 240,
+    started_at: '2026-03-05T09:00:00Z',
+    completed_at: '2026-03-05T09:30:00Z',
+    prompts_list: [{ message: 'help', timestamp: '2026-03-05T09:04:00Z' }],
+    timeline: [{ timestamp: '2026-03-05T09:04:00Z', event: 'First prompt' }],
+  },
+};
+
+describe('Candidate detail radar redesign', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    localStorage.clear();
+    localStorage.setItem('taali_user', JSON.stringify({
+      id: 1,
+      email: 'admin@taali.ai',
+      full_name: 'Admin User',
+      organization_name: 'Taali',
+    }));
+  });
+
+  it('renders the six builder-faithful scoring dimensions on the assessment tab', async () => {
     render(
-      <CandidateDetailPage
-        candidate={candidate}
-        onNavigate={vi.fn()}
-        onDeleted={vi.fn()}
-      />
+      <AuthProvider>
+        <ToastProvider>
+          <CandidateDetailPage
+            candidate={candidate}
+            onNavigate={vi.fn()}
+            onDeleted={vi.fn()}
+          />
+        </ToastProvider>
+      </AuthProvider>,
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'AI Usage' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Assessment' }));
 
-    // Check for elements in the redesigned AI Usage tab
-    expect(await screen.findByText(/Avg Prompt clarity/)).toBeInTheDocument();
-    expect(screen.getByText(/Prompt clarity progression/)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText('Prompt quality')).toBeInTheDocument();
+      expect(screen.getByText('Error recovery')).toBeInTheDocument();
+      expect(screen.getByText('Independence')).toBeInTheDocument();
+      expect(screen.getByText('Context utilization')).toBeInTheDocument();
+      expect(screen.getByText('Design thinking')).toBeInTheDocument();
+      expect(screen.getByText('Time to first prompt')).toBeInTheDocument();
+      expect(screen.getByTestId('radar-chart')).toBeInTheDocument();
+    });
   });
 });

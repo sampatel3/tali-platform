@@ -1,18 +1,10 @@
 import React, { useState } from 'react';
-import { ArrowRight, Check } from 'lucide-react';
+import { Check } from 'lucide-react';
 
 import AssessmentPage from '../assessment_runtime/AssessmentPage';
 import { DEMO_ASSESSMENTS, DEFAULT_DEMO_ASSESSMENT_ID } from './demoAssessments';
-import { Logo } from '../../shared/ui/Branding';
 import { assessments as assessmentsApi } from '../../shared/api';
-import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
-import {
-  Button,
-  Card,
-  Input,
-  Panel,
-  Select,
-} from '../../shared/ui/TaaliPrimitives';
+import { MarketingNav } from '../../shared/layout/TaaliLayout';
 
 const initialForm = {
   fullName: '',
@@ -33,14 +25,7 @@ const requiredFieldLabels = {
   companySize: 'Company size',
 };
 
-const companySizeOptions = [
-  '1-10',
-  '11-50',
-  '51-200',
-  '201-500',
-  '501-2000',
-  '2000+',
-];
+const companySizeOptions = ['1-10', '11-50', '51-200', '201-500', '501-2000', '2000+'];
 
 const missingRequiredFields = (form) => (
   Object.entries(requiredFieldLabels)
@@ -104,171 +89,124 @@ export const DemoExperiencePage = ({ onNavigate }) => {
   }
 
   return (
-    <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
-      <nav className="taali-nav border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-4">
-          <Logo onClick={() => onNavigate('landing')} />
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <GlobalThemeToggle className="shrink-0" />
-            <Button type="button" variant="secondary" size="sm" className="font-mono" onClick={() => onNavigate('landing')}>
-              Back to landing
-            </Button>
-            <Button type="button" variant="primary" size="sm" className="font-mono" onClick={() => onNavigate('register')}>
-              Join TAALI
-            </Button>
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
+      <MarketingNav onNavigate={onNavigate} />
+
+      <div className="mx-auto max-w-[1240px] px-6 py-10 md:px-10 md:py-12">
+        <div className="relative mb-6 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] px-8 py-10 shadow-[var(--shadow-sm)]">
+          <div
+            className="pointer-events-none absolute inset-0 opacity-60 tally-bg-soft"
+            style={{ maskImage: 'radial-gradient(50% 80% at 85% 50%, black, transparent 70%)' }}
+          />
+          <div className="relative">
+            <div className="kicker">◐ TAALI INTERACTIVE DEMO</div>
+            <h1 className="mt-4 font-[var(--font-display)] text-[clamp(48px,5.4vw,76px)] font-semibold leading-[0.95] tracking-[-0.03em]">
+              Try a candidate
+              <br />
+              <em>assessment.</em>
+            </h1>
+            <p className="mt-4 max-w-[720px] text-[16px] leading-[1.55] text-[var(--mute)]">
+              Complete this short intake, review the demo task, and run through the same assessment runtime candidates use. At the end, you&apos;ll see a short TAALI profile summary.
+            </p>
+            <p className="mt-2 text-[13.5px] text-[var(--mute)]">Note: this is a product demo and does not generate a full production report.</p>
           </div>
         </div>
-      </nav>
 
-      <div className="mx-auto max-w-6xl px-6 py-10">
-        <Panel className="p-6">
-          <div className="mb-2 inline-flex border-2 border-black bg-[var(--taali-purple)] px-3 py-1 font-mono text-xs font-bold text-white">
-            INTERACTIVE DEMO
-          </div>
-          <h1 className="text-4xl font-bold">Try a candidate assessment</h1>
-          <p className="mt-3 max-w-4xl font-mono text-sm text-[var(--taali-muted)]">
-            Complete this short intake, review the demo task, and run through the same assessment runtime candidates use.
-            At the end, you&apos;ll see a short TAALI profile summary.
-          </p>
-          <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
-            Note: this is a product demo and does not generate a full production report.
-          </p>
-        </Panel>
-
-        <div className="mt-6 grid gap-6 lg:grid-cols-[1.1fr_1fr]">
-          <Panel className="p-5">
-            <h2 className="text-2xl font-bold">Your details</h2>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Full name</span>
-                <Input
-                  value={form.fullName}
-                  onChange={(event) => setForm((prev) => ({ ...prev, fullName: event.target.value }))}
-                  placeholder="Jane Doe"
-                />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-8 shadow-[var(--shadow-sm)]">
+            <h2 className="font-[var(--font-display)] text-[34px] font-semibold tracking-[-0.02em]">
+              Your <em>details</em>
+            </h2>
+            <div className="mt-6 grid gap-4 md:grid-cols-2">
+              <label className="field">
+                <span className="k">Full name</span>
+                <input value={form.fullName} placeholder="Jane Doe" onChange={(event) => setForm((prev) => ({ ...prev, fullName: event.target.value }))} />
               </label>
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Position</span>
-                <Input
-                  value={form.position}
-                  onChange={(event) => setForm((prev) => ({ ...prev, position: event.target.value }))}
-                  placeholder="Engineering Manager"
-                />
+              <label className="field">
+                <span className="k">Position</span>
+                <input value={form.position} placeholder="Engineering Manager" onChange={(event) => setForm((prev) => ({ ...prev, position: event.target.value }))} />
               </label>
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Email</span>
-                <Input
-                  type="email"
-                  value={form.email}
-                  onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
-                  placeholder="jane@email.com"
-                />
+              <label className="field">
+                <span className="k">Email</span>
+                <input type="email" value={form.email} placeholder="jane@email.com" onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))} />
               </label>
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Work email</span>
-                <Input
-                  type="email"
-                  value={form.workEmail}
-                  onChange={(event) => setForm((prev) => ({ ...prev, workEmail: event.target.value }))}
-                  placeholder="jane@company.com"
-                />
+              <label className="field">
+                <span className="k">Work email</span>
+                <input type="email" value={form.workEmail} placeholder="jane@company.com" onChange={(event) => setForm((prev) => ({ ...prev, workEmail: event.target.value }))} />
               </label>
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Company</span>
-                <Input
-                  value={form.company}
-                  onChange={(event) => setForm((prev) => ({ ...prev, company: event.target.value }))}
-                  placeholder="Acme Inc."
-                />
+              <label className="field">
+                <span className="k">Company</span>
+                <input value={form.company} placeholder="Acme Inc." onChange={(event) => setForm((prev) => ({ ...prev, company: event.target.value }))} />
               </label>
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Company size</span>
-                <Select
-                  value={form.companySize}
-                  onChange={(event) => setForm((prev) => ({ ...prev, companySize: event.target.value }))}
-                >
+              <label className="field">
+                <span className="k">Company size</span>
+                <select value={form.companySize} onChange={(event) => setForm((prev) => ({ ...prev, companySize: event.target.value }))}>
                   <option value="">Select size</option>
-                  {companySizeOptions.map((option) => (
-                    <option key={option} value={option}>{option}</option>
-                  ))}
-                </Select>
-              </label>
-              <label className="col-span-2 flex items-start gap-2 border border-[var(--taali-border)] bg-[var(--taali-surface)] px-3 py-2">
-                <input
-                  type="checkbox"
-                  checked={Boolean(form.marketingConsent)}
-                  onChange={(event) => setForm((prev) => ({ ...prev, marketingConsent: event.target.checked }))}
-                  className="mt-1 h-4 w-4"
-                />
-                <span className="font-mono text-xs text-[var(--taali-muted)]">
-                  Send me my demo results by email and occasional product updates (optional).
-                </span>
+                  {companySizeOptions.map((option) => <option key={option} value={option}>{option}</option>)}
+                </select>
               </label>
             </div>
-          </Panel>
+            <label className="mt-5 flex items-center gap-3 rounded-[12px] border border-dashed border-[var(--line)] p-4 text-[13px] leading-6 text-[var(--ink-2)]">
+              <input
+                type="checkbox"
+                checked={Boolean(form.marketingConsent)}
+                onChange={(event) => setForm((prev) => ({ ...prev, marketingConsent: event.target.checked }))}
+              />
+              Send me my demo results by email and occasional product updates (optional).
+            </label>
+          </div>
 
-          <Panel className="p-5">
-            <h2 className="text-2xl font-bold">Demo assessment task</h2>
-            <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
-              Choose between our two strongest demo tracks.
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-8 shadow-[var(--shadow-sm)]">
+            <h2 className="font-[var(--font-display)] text-[34px] font-semibold tracking-[-0.02em]">
+              Demo <em>assessment task</em>
+            </h2>
+            <p className="mt-2 text-[14px] leading-7 text-[var(--mute)]">
+              Pick the role-specific scenario you want to run. Each option opens the same candidate runtime with a different task brief.
             </p>
-            <div className="mt-4 grid gap-3">
+            <div className="mt-5 grid gap-3">
               {DEMO_ASSESSMENTS.map((assessment) => {
-                const isSelected = assessment.id === selectedAssessmentId;
+                const selected = assessment.id === selectedAssessmentId;
                 return (
                   <button
                     key={assessment.id}
                     type="button"
+                    className={`flex items-start gap-4 rounded-[14px] border p-5 text-left transition ${selected ? 'border-[var(--purple)] bg-[color-mix(in_oklab,var(--purple)_6%,var(--bg-2))]' : 'border-[var(--line)] hover:border-[var(--purple)]'}`.trim()}
                     onClick={() => setSelectedAssessmentId(assessment.id)}
-                    className={`text-left border-2 p-4 transition ${
-                      isSelected
-                        ? 'border-black bg-[var(--taali-purple)]/10'
-                        : 'border-[var(--taali-border)] bg-[var(--taali-surface)] hover:border-black'
-                    }`}
                   >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-lg font-bold">{assessment.title}</h3>
-                        <p className="mt-1 font-mono text-sm text-[var(--taali-muted)]">{assessment.description}</p>
+                    <div className="grow">
+                      <h3 className="text-[18px] font-semibold tracking-[-0.01em]">{assessment.title}</h3>
+                      <p className="mt-2 text-[13.5px] leading-6 text-[var(--ink-2)]">{assessment.description}</p>
+                      <div className="mt-3 font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">
+                        Duration: {assessment.durationLabel} · {assessment.difficulty}
                       </div>
-                      {isSelected ? (
-                        <span className="inline-flex h-6 w-6 items-center justify-center border-2 border-black bg-[var(--taali-purple)] text-white">
-                          <Check size={14} />
-                        </span>
-                      ) : null}
                     </div>
-                    <div className="mt-3 flex gap-2 font-mono text-xs text-[var(--taali-muted)]">
-                      <span>Duration: {assessment.durationLabel}</span>
-                      <span>•</span>
-                      <span>{assessment.difficulty}</span>
+                    <div className={`grid h-7 w-7 shrink-0 place-items-center rounded-full ${selected ? 'bg-[var(--purple)] text-white' : 'bg-[var(--bg-3)] text-transparent'}`.trim()}>
+                      <Check size={14} />
                     </div>
                   </button>
                 );
               })}
             </div>
-          </Panel>
+          </div>
         </div>
 
         {error ? (
-          <Card className="mt-5 border-red-300 bg-red-50 p-4">
-            <p className="font-mono text-sm text-red-700">{error}</p>
-          </Card>
+          <div className="mt-5 rounded-[var(--radius)] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4 text-sm text-[var(--taali-danger)]">
+            {error}
+          </div>
         ) : null}
 
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          <Button type="button" variant="primary" size="lg" onClick={handleStart} disabled={loadingStart}>
-            {loadingStart ? 'Starting demo...' : (
-              <>
-                Start demo assessment
-                <ArrowRight size={16} />
-              </>
-            )}
-          </Button>
-          <Button type="button" variant="secondary" size="lg" onClick={() => onNavigate('register')}>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <button type="button" className="btn btn-purple btn-lg" onClick={handleStart} disabled={loadingStart}>
+            {loadingStart ? 'Starting demo…' : <>Start demo assessment <span className="arrow">→</span></>}
+          </button>
+          <button type="button" className="btn btn-outline btn-lg" onClick={() => onNavigate('register')}>
             Join TAALI
-          </Button>
+          </button>
         </div>
       </div>
     </div>
   );
 };
+
+export default DemoExperiencePage;

@@ -1,1180 +1,268 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { AlertCircle, Plus, UserPlus } from 'lucide-react';
-import * as apiClient from '../../shared/api';
-import { Button, Card, Input, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
+import React, { useEffect, useMemo, useState } from 'react';
+import { ChevronRight, Search } from 'lucide-react';
 
-import { useToast } from '../../context/ToastContext';
-import {
-  CandidateCvSidebar,
-  CandidateSheet,
-  CandidatesTable,
-  EmptyRoleDetail,
-  RoleSheet,
-  RoleSummaryHeader,
-  RolesList,
-  SearchInput,
-  getErrorMessage,
-  trimOrUndefined,
-} from './CandidatesUI';
-import { AssessmentInviteSheet } from './AssessmentInviteSheet';
-import { COMPLETED_ASSESSMENT_STATUSES } from './assessmentViewModels';
-import { CandidateScoreSummarySheet } from './CandidateScoreSummarySheet';
-import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
+import { roles as rolesApi } from '../../shared/api';
+import { AppShell } from '../../shared/layout/TaaliLayout';
 
-const DEFAULT_INVITE_TEMPLATE = (
-  'Hi {{candidate_name}},\n\n'
-  + "You've been invited to complete a technical assessment ({{task_name}}).\n\n"
-  + 'Start here:\n{{assessment_link}}\n\n'
-  + 'Thanks,\n{{organization_name}}\n'
-);
-
-const clampDurationMinutes = (value) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return 30;
-  return Math.max(15, Math.min(180, Math.round(numeric)));
-};
-
-const applyInviteTemplate = (template, vars) => {
-  const source = String(template || '').trim();
-  if (!source) return '';
-  return source.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, key) => {
-    const value = vars?.[key];
-    return value == null ? '' : String(value);
-  });
-};
-
-const resolveAssessmentId = (application) => (
+const statusLabel = (value) => String(value || '').replace(/_/g, ' ');
+const assessmentIdFor = (application) => (
   application?.score_summary?.assessment_id
   || application?.valid_assessment_id
   || null
 );
 
-const resolveAssessmentStatus = (application) => (
-  String(application?.score_summary?.assessment_status || application?.valid_assessment_status || '').toLowerCase()
-);
+const initialsFor = (value) => String(value || '')
+  .split(/\s+/)
+  .filter(Boolean)
+  .slice(0, 2)
+  .map((part) => part[0])
+  .join('')
+  .toUpperCase() || 'TA';
 
-const hasCompletedAssessment = (application) => (
-  Boolean(resolveAssessmentId(application))
-  && COMPLETED_ASSESSMENT_STATUSES.has(resolveAssessmentStatus(application))
-);
+const scoreTone = (score) => {
+  if (!Number.isFinite(Number(score))) return '';
+  if (score >= 80) return 'text-[var(--green)]';
+  if (score >= 65) return 'text-[var(--purple)]';
+  return 'text-[var(--red)]';
+};
 
-export const CandidatesPage = ({
-  onNavigate,
-  onViewCandidate,
-  NavComponent,
-  initialRoleId = null,
-}) => {
-  const { showToast } = useToast();
-  const rolesApi = 'roles' in apiClient ? apiClient.roles : null;
-  const tasksApi = apiClient.tasks;
-  const assessmentsApi = apiClient.assessments;
-  const orgsApi = 'organizations' in apiClient ? apiClient.organizations : null;
-
+export const CandidatesPage = ({ onNavigate }) => {
+  const [applications, setApplications] = useState([]);
   const [roles, setRoles] = useState([]);
-  const [selectedRoleId, setSelectedRoleId] = useState('');
-  const [roleTasks, setRoleTasks] = useState([]);
-  const [roleApplications, setRoleApplications] = useState([]);
-  const [allTasks, setAllTasks] = useState([]);
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState('taali_score');
-  const [sortOrder, setSortOrder] = useState('desc');
-  const [sourceFilter, setSourceFilter] = useState('all');
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [search, setSearch] = useState('');
+  const [roleFilter, setRoleFilter] = useState('all');
+  const [sortValue, setSortValue] = useState('pipeline_stage_updated_at:desc');
+  const [minTaaliScore, setMinTaaliScore] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
-  const [minCvMatchScore, setMinCvMatchScore] = useState('');
-
-  const [loadingRoles, setLoadingRoles] = useState(true);
-  const [loadingRoleContext, setLoadingRoleContext] = useState(false);
-  const [loadingTasks, setLoadingTasks] = useState(true);
-  const [rolesError, setRolesError] = useState('');
-  const [roleContextError, setRoleContextError] = useState('');
-
-  const [roleSheetOpen, setRoleSheetOpen] = useState(false);
-  const [roleSheetMode, setRoleSheetMode] = useState('create');
-  const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
-  const [savingRole, setSavingRole] = useState(false);
-  const [addingCandidate, setAddingCandidate] = useState(false);
-  const [roleSheetError, setRoleSheetError] = useState('');
-  const [candidateSheetError, setCandidateSheetError] = useState('');
-  const [creatingAssessmentId, setCreatingAssessmentId] = useState(null);
-  const [uploadingCvId, setUploadingCvId] = useState(null);
-  const [viewingApplicationId, setViewingApplicationId] = useState(null);
-  const [generatingTaaliId, setGeneratingTaaliId] = useState(null);
-  const [inviteSheetOpen, setInviteSheetOpen] = useState(false);
-  const [inviteDraft, setInviteDraft] = useState(null);
-  const [cvSidebarApplicationId, setCvSidebarApplicationId] = useState(null);
-  const [scoreSheetApplicationId, setScoreSheetApplicationId] = useState(null);
-  const [applicationDetailsById, setApplicationDetailsById] = useState({});
-  const [loadingApplicationDetailId, setLoadingApplicationDetailId] = useState(null);
-  const [assessmentDetailsById, setAssessmentDetailsById] = useState({});
-  const [loadingAssessmentDetailId, setLoadingAssessmentDetailId] = useState(null);
-  const [retakeDialogState, setRetakeDialogState] = useState({
-    applicationId: null,
-    defaultTaskId: '',
-  });
-  const [batchScoring, setBatchScoring] = useState(null);
-  const [fetchCvsProgress, setFetchCvsProgress] = useState(null);
-  const [interviewFocusGeneratingRoleId, setInterviewFocusGeneratingRoleId] = useState(null);
-  const [orgPreferences, setOrgPreferences] = useState({
-    defaultAssessmentDurationMinutes: 30,
-    inviteEmailTemplate: DEFAULT_INVITE_TEMPLATE,
-    organizationName: 'TAALI',
-  });
-  const interviewFocusAutoAttemptedRef = useRef(new Set());
-
-  const selectedRole = useMemo(
-    () => roles.find((role) => String(role.id) === String(selectedRoleId)) || null,
-    [roles, selectedRoleId]
-  );
-
-  const statusOptions = useMemo(() => {
-    const statuses = new Set();
-    roleApplications.forEach((application) => {
-      statuses.add((application.status || 'applied').toLowerCase());
-    });
-    return ['all', ...Array.from(statuses).sort()];
-  }, [roleApplications]);
-
-  const activeFilterCount = useMemo(() => (
-    [
-      searchQuery.trim() !== '',
-      sortBy !== 'taali_score',
-      sortOrder !== 'desc',
-      sourceFilter !== 'all',
-      statusFilter !== 'all',
-      minCvMatchScore !== '',
-    ].filter(Boolean).length
-  ), [
-    searchQuery,
-    sortBy,
-    sortOrder,
-    sourceFilter,
-    statusFilter,
-    minCvMatchScore,
-  ]);
-
-  const loadRoles = useCallback(async (preferredRoleId = null) => {
-    if (!rolesApi?.list) {
-      setRoles([]);
-      setLoadingRoles(false);
-      return;
-    }
-    setLoadingRoles(true);
-    setRolesError('');
-    try {
-      const res = await rolesApi.list();
-      const items = res.data || [];
-      setRoles(items);
-      setSelectedRoleId((current) => {
-        const target = preferredRoleId ? String(preferredRoleId) : String(current || '');
-        if (target && items.some((role) => String(role.id) === target)) return target;
-        return items.length > 0 ? String(items[0].id) : '';
-      });
-    } catch {
-      setRoles([]);
-      setRolesError('Failed to load roles.');
-      setSelectedRoleId('');
-    } finally {
-      setLoadingRoles(false);
-    }
-  }, [rolesApi]);
-
-  const loadRoleContext = useCallback(async (roleId) => {
-    if (!roleId) {
-      setRoleTasks([]);
-      setRoleApplications([]);
-      setRoleContextError('');
-      return;
-    }
-
-    setLoadingRoleContext(true);
-    setRoleContextError('');
-    try {
-      const appParams = {
-        sort_by: sortBy,
-        sort_order: sortOrder,
-      };
-      if (sourceFilter !== 'all') appParams.source = sourceFilter;
-      if (statusFilter !== 'all') appParams.status = statusFilter;
-      if (minCvMatchScore !== '') appParams.min_cv_match_score = Number(minCvMatchScore);
-      const [tasksRes, applicationsRes] = await Promise.all([
-        rolesApi?.listTasks ? rolesApi.listTasks(roleId) : Promise.resolve({ data: [] }),
-        rolesApi?.listApplications ? rolesApi.listApplications(roleId, appParams) : Promise.resolve({ data: [] }),
-      ]);
-      setRoleTasks(tasksRes.data || []);
-      setRoleApplications(applicationsRes.data || []);
-    } catch {
-      setRoleTasks([]);
-      setRoleApplications([]);
-      setRoleContextError('Failed to load role details.');
-    } finally {
-      setLoadingRoleContext(false);
-    }
-  }, [rolesApi, sortBy, sortOrder, sourceFilter, statusFilter, minCvMatchScore]);
-
-  const loadTasks = useCallback(async () => {
-    if (!tasksApi?.list) {
-      setAllTasks([]);
-      setLoadingTasks(false);
-      return;
-    }
-    setLoadingTasks(true);
-    try {
-      const res = await tasksApi.list();
-      setAllTasks(res.data || []);
-    } catch {
-      setAllTasks([]);
-    } finally {
-      setLoadingTasks(false);
-    }
-  }, [tasksApi]);
-
-  useEffect(() => {
-    loadRoles(initialRoleId);
-    loadTasks();
-  }, [initialRoleId, loadRoles, loadTasks]);
 
   useEffect(() => {
     let cancelled = false;
-    const loadOrgPreferences = async () => {
-      if (!orgsApi?.get) return;
+    const load = async () => {
+      setLoading(true);
+      setError('');
       try {
-        const res = await orgsApi.get();
+        const [rolesRes, applicationsRes] = await Promise.all([
+          rolesApi.list(),
+          rolesApi.listApplicationsGlobal({
+            application_outcome: 'open',
+            limit: 100,
+            offset: 0,
+            sort_by: 'pipeline_stage_updated_at',
+            sort_order: 'desc',
+          }),
+        ]);
         if (cancelled) return;
-        const data = res?.data || {};
-        setOrgPreferences({
-          defaultAssessmentDurationMinutes: clampDurationMinutes(data.default_assessment_duration_minutes),
-          inviteEmailTemplate: String(data.invite_email_template || '').trim() || DEFAULT_INVITE_TEMPLATE,
-          organizationName: String(data.name || 'TAALI').trim() || 'TAALI',
-        });
+        setRoles(Array.isArray(rolesRes?.data) ? rolesRes.data : []);
+        setApplications(Array.isArray(applicationsRes?.data?.items) ? applicationsRes.data.items : []);
       } catch {
-        if (cancelled) return;
-        setOrgPreferences((prev) => ({ ...prev }));
+        if (!cancelled) {
+          setRoles([]);
+          setApplications([]);
+          setError('Failed to load candidates.');
+        }
+      } finally {
+        if (!cancelled) setLoading(false);
       }
     };
-    loadOrgPreferences();
+    void load();
     return () => {
       cancelled = true;
     };
-  }, [orgsApi]);
-
-  useEffect(() => {
-    const onVisible = () => {
-      if (document.visibilityState === 'visible') loadRoles();
-    };
-    document.addEventListener('visibilitychange', onVisible);
-    return () => document.removeEventListener('visibilitychange', onVisible);
-  }, [loadRoles]);
-
-  useEffect(() => {
-    loadRoleContext(selectedRoleId);
-  }, [selectedRoleId, loadRoleContext]);
-
-  useEffect(() => {
-    if (statusFilter === 'all') return;
-    const hasSelectedStatus = roleApplications.some(
-      (application) => (application.status || 'applied').toLowerCase() === statusFilter
-    );
-    if (!hasSelectedStatus) setStatusFilter('all');
-  }, [roleApplications, statusFilter]);
-
-  const resetFilters = useCallback(() => {
-    setSearchQuery('');
-    setSortBy('taali_score');
-    setSortOrder('desc');
-    setSourceFilter('all');
-    setStatusFilter('all');
-    setMinCvMatchScore('');
   }, []);
 
-  const handleSortChange = useCallback((nextSortBy, nextSortOrder) => {
-    setSortBy(nextSortBy);
-    setSortOrder(nextSortOrder);
-  }, []);
+  const duplicateCounts = useMemo(() => {
+    const counts = {};
+    applications.forEach((application) => {
+      const key = application?.candidate_id || application?.candidate_email;
+      if (!key) return;
+      counts[key] = Number(counts[key] || 0) + 1;
+    });
+    return counts;
+  }, [applications]);
 
-  const mergeApplicationData = useCallback((application) => {
-    if (!application) return null;
-    return {
-      ...application,
-      role_name: application.role_name || selectedRole?.name || '',
-    };
-  }, [selectedRole?.name]);
+  const filtered = useMemo(() => {
+    const [sortBy, sortOrder] = sortValue.split(':');
+    const minScore = Number(minTaaliScore);
+    const needle = search.trim().toLowerCase();
 
-  const loadApplicationDetail = useCallback(async (applicationId, { includeCvText = false, force = false } = {}) => {
-    if (!rolesApi?.getApplication || !applicationId) return null;
-    const cacheKey = String(applicationId);
-    const cached = applicationDetailsById[cacheKey];
-    if (!force && cached && (!includeCvText || cached.cv_text)) {
-      return cached;
-    }
-
-    setLoadingApplicationDetailId(applicationId);
-    try {
-      const res = await rolesApi.getApplication(applicationId, {
-        params: { include_cv_text: includeCvText },
+    return applications
+      .filter((application) => {
+        if (roleFilter !== 'all' && String(application?.role_id) !== roleFilter) return false;
+        if (statusFilter !== 'all' && String(application?.pipeline_stage || '').toLowerCase() !== statusFilter) return false;
+        if (minTaaliScore !== '' && Number.isFinite(minScore) && Number(application?.taali_score || application?.rank_score || 0) < minScore) return false;
+        if (!needle) return true;
+        const haystack = [
+          application?.candidate_name,
+          application?.candidate_email,
+          application?.role_name,
+        ].join(' ').toLowerCase();
+        return haystack.includes(needle);
+      })
+      .sort((left, right) => {
+        const leftValue = sortBy === 'taali_score'
+          ? Number(left?.taali_score ?? left?.rank_score ?? -1)
+          : new Date(left?.updated_at || left?.pipeline_stage_updated_at || 0).getTime();
+        const rightValue = sortBy === 'taali_score'
+          ? Number(right?.taali_score ?? right?.rank_score ?? -1)
+          : new Date(right?.updated_at || right?.pipeline_stage_updated_at || 0).getTime();
+        return sortOrder === 'asc' ? leftValue - rightValue : rightValue - leftValue;
       });
-      const detail = res?.data || null;
-      if (detail) {
-        setApplicationDetailsById((prev) => ({
-          ...prev,
-          [cacheKey]: detail,
-        }));
-      }
-      return detail;
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to load candidate summary.'), 'error');
-      return null;
-    } finally {
-      setLoadingApplicationDetailId((current) => (Number(current) === Number(applicationId) ? null : current));
-    }
-  }, [applicationDetailsById, rolesApi, showToast]);
+  }, [applications, minTaaliScore, roleFilter, search, sortValue, statusFilter]);
 
-  const loadAssessmentDetail = useCallback(async (assessmentId, { force = false } = {}) => {
-    if (!assessmentsApi?.get || !assessmentId) return null;
-    const cacheKey = String(assessmentId);
-    const cached = assessmentDetailsById[cacheKey];
-    if (!force && cached) return cached;
+  const counts = useMemo(() => ({
+    all: applications.length,
+    in_assessment: applications.filter((item) => item?.pipeline_stage === 'in_assessment').length,
+    review: applications.filter((item) => item?.pipeline_stage === 'review').length,
+    shortlist: applications.filter((item) => Number(item?.taali_score ?? item?.rank_score ?? 0) >= 80).length,
+  }), [applications]);
 
-    setLoadingAssessmentDetailId(assessmentId);
-    try {
-      const res = await assessmentsApi.get(assessmentId);
-      const detail = res?.data || null;
-      if (detail) {
-        setAssessmentDetailsById((prev) => ({
-          ...prev,
-          [cacheKey]: detail,
-        }));
-      }
-      return detail;
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to load completed assessment detail.'), 'error');
-      return null;
-    } finally {
-      setLoadingAssessmentDetailId((current) => (Number(current) === Number(assessmentId) ? null : current));
-    }
-  }, [assessmentDetailsById, assessmentsApi, showToast]);
-
-  const mapAssessmentForDetail = (assessment, fallbackApp) => ({
-    id: assessment.id,
-    name: (assessment.candidate_name || fallbackApp?.candidate_name || assessment.candidate_email || '').trim() || 'Unknown',
-    email: assessment.candidate_email || fallbackApp?.candidate_email || '',
-    task: assessment.task_name || assessment.task?.name || 'Assessment',
-    status: assessment.status || 'pending',
-    score: assessment.score ?? assessment.overall_score ?? null,
-    time: assessment.duration_taken ? `${Math.round(assessment.duration_taken / 60)}m` : '—',
-    position: fallbackApp?.candidate_position || assessment.role_name || '',
-    completedDate: assessment.completed_at ? new Date(assessment.completed_at).toLocaleDateString() : null,
-    breakdown: assessment.breakdown || null,
-    prompts: assessment.prompt_count ?? 0,
-    promptsList: assessment.prompts_list || [],
-    timeline: assessment.timeline || [],
-    results: assessment.results || [],
-    token: assessment.token,
-    _raw: assessment,
-  });
-
-  const handleOpenRoleSheet = (mode) => {
-    setRoleSheetMode(mode);
-    setRoleSheetError('');
-    setRoleSheetOpen(true);
-  };
-
-  const generateInterviewFocusForRole = useCallback(async (roleId, { silent = false } = {}) => {
-    if (!rolesApi?.regenerateInterviewFocus || !roleId) return false;
-    setInterviewFocusGeneratingRoleId(String(roleId));
-    try {
-      const res = await rolesApi.regenerateInterviewFocus(roleId);
-      const data = res?.data || {};
-      if (data.interview_focus_generated) {
-        await Promise.all([
-          loadRoles(roleId),
-          loadRoleContext(roleId),
-        ]);
-        if (!silent) {
-          showToast('Interview focus pointers generated.', 'success');
-        }
-        return true;
-      }
-      if (data.interview_focus_error && !silent) {
-        showToast(data.interview_focus_error, 'error');
-      }
-      return false;
-    } catch (err) {
-      if (!silent) {
-        showToast(getErrorMessage(err, 'Failed to generate interview focus.'), 'error');
-      }
-      return false;
-    } finally {
-      setInterviewFocusGeneratingRoleId((current) => (
-        String(current) === String(roleId) ? null : current
-      ));
-    }
-  }, [loadRoleContext, loadRoles, rolesApi, showToast]);
-
-  const handleRoleSubmit = async ({ name, description, additionalRequirements, jobSpecFile, taskIds }) => {
-    if (!rolesApi) return;
-    setSavingRole(true);
-    setRoleSheetError('');
-    try {
-      let activeRoleId = selectedRoleId;
-      let shouldAutoGenerateInterviewFocus = false;
-      if (roleSheetMode === 'create') {
-        const createRes = await rolesApi.create({
-          name,
-          description: trimOrUndefined(description),
-          additional_requirements: trimOrUndefined(additionalRequirements),
-        });
-        activeRoleId = String(createRes.data.id);
-      } else if (rolesApi.update && selectedRoleId) {
-        await rolesApi.update(selectedRoleId, {
-          name,
-          description: trimOrUndefined(description),
-          additional_requirements: trimOrUndefined(additionalRequirements),
-        });
-        activeRoleId = String(selectedRoleId);
-      }
-
-      if (jobSpecFile && rolesApi.uploadJobSpec) {
-        await rolesApi.uploadJobSpec(activeRoleId, jobSpecFile);
-        shouldAutoGenerateInterviewFocus = true;
-      }
-
-      const nextTaskIds = new Set((taskIds || []).map((id) => Number(id)));
-      const currentTaskIds = new Set((roleSheetMode === 'edit' ? roleTasks : []).map((task) => Number(task.id)));
-
-      if (rolesApi.addTask) {
-        for (const taskId of nextTaskIds) {
-          if (!currentTaskIds.has(taskId)) {
-            await rolesApi.addTask(activeRoleId, taskId);
-          }
-        }
-      }
-
-      if (roleSheetMode === 'edit' && rolesApi.removeTask) {
-        for (const taskId of currentTaskIds) {
-          if (!nextTaskIds.has(taskId)) {
-            await rolesApi.removeTask(activeRoleId, taskId);
-          }
-        }
-      }
-
-      await loadRoles(activeRoleId);
-      await loadRoleContext(activeRoleId);
-      setRoleSheetOpen(false);
-
-      if (shouldAutoGenerateInterviewFocus) {
-        interviewFocusAutoAttemptedRef.current.add(String(activeRoleId));
-        void generateInterviewFocusForRole(activeRoleId, { silent: true });
-      }
-    } catch (err) {
-      setRoleSheetError(getErrorMessage(err, 'Failed to save role.'));
-    } finally {
-      setSavingRole(false);
-    }
-  };
-
-  const handleCandidateSubmit = async ({ email, name, position, cvFile }) => {
-    if (!rolesApi?.createApplication || !selectedRoleId) return;
-    setAddingCandidate(true);
-    setCandidateSheetError('');
-    try {
-      const res = await rolesApi.createApplication(selectedRoleId, {
-        candidate_email: email,
-        candidate_name: name,
-        candidate_position: trimOrUndefined(position),
-      });
-      if (cvFile && rolesApi?.uploadApplicationCv) {
-        await rolesApi.uploadApplicationCv(res.data.id, cvFile);
-      }
-
-      await Promise.all([
-        loadRoleContext(selectedRoleId),
-        loadRoles(selectedRoleId),
-      ]);
-      setCandidateSheetOpen(false);
-    } catch (err) {
-      setCandidateSheetError(getErrorMessage(err, 'Failed to add candidate.'));
-    } finally {
-      setAddingCandidate(false);
-    }
-  };
-
-  const handleUploadApplicationCv = useCallback(async (application, file) => {
-    if (!rolesApi?.uploadApplicationCv || !application?.id || !file) return;
-    setUploadingCvId(application.id);
-    try {
-      await rolesApi.uploadApplicationCv(application.id, file);
-      await loadRoleContext(selectedRoleId);
-      showToast('CV uploaded.', 'success');
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to upload CV.'), 'error');
-    } finally {
-      setUploadingCvId(null);
-    }
-  }, [loadRoleContext, rolesApi, selectedRoleId, showToast]);
-
-  const openAssessmentResults = useCallback(async (assessmentId, fallbackApplication = null) => {
-    if (!assessmentId) return;
-    setViewingApplicationId(fallbackApplication?.id ?? assessmentId);
-    try {
-      const res = await assessmentsApi.get(assessmentId);
-      onViewCandidate(mapAssessmentForDetail(res.data || {}, fallbackApplication));
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to load assessment results.'), 'error');
-    } finally {
-      setViewingApplicationId(null);
-    }
-  }, [assessmentsApi, onViewCandidate, showToast]);
-
-  const handleViewFromApplication = async (application) => {
-    const resolvedAssessmentId = resolveAssessmentId(application);
-    if (resolvedAssessmentId && hasCompletedAssessment(application)) {
-      await openAssessmentResults(resolvedAssessmentId, application);
+  const openApplication = (application) => {
+    const assessmentId = assessmentIdFor(application);
+    if (assessmentId) {
+      onNavigate('candidate-detail', { candidateDetailAssessmentId: assessmentId });
       return;
     }
-    setScoreSheetApplicationId(application.id);
-    await loadApplicationDetail(application.id);
-  };
-
-  const handleOpenScoreSummary = useCallback(async (application) => {
-    if (!application?.id) return;
-    setScoreSheetApplicationId(application.id);
-    const detail = await loadApplicationDetail(application.id);
-    const resolvedApplication = detail || application;
-    const resolvedAssessmentId = resolveAssessmentId(resolvedApplication);
-    if (resolvedAssessmentId && hasCompletedAssessment(resolvedApplication)) {
-      await loadAssessmentDetail(resolvedAssessmentId);
-    }
-  }, [loadApplicationDetail, loadAssessmentDetail]);
-
-  const handleOpenFullCandidatePage = useCallback(async (application, assessmentId = null) => {
-    if (!application?.id) return;
-    if (assessmentId && hasCompletedAssessment(application)) {
-      await openAssessmentResults(assessmentId, application);
-      return;
-    }
-
-    await loadApplicationDetail(application.id);
     onNavigate('candidate-report', { candidateApplicationId: application.id });
-  }, [loadApplicationDetail, onNavigate, openAssessmentResults]);
-
-  const handleOpenCvSidebar = useCallback(async (application) => {
-    if (!application?.id) return;
-    setCvSidebarApplicationId(application.id);
-    await loadApplicationDetail(application.id, { includeCvText: true });
-  }, [loadApplicationDetail]);
-
-  const handleOpenRetakeDialog = useCallback((application, defaultTaskId = '') => {
-    if (!application?.id) return;
-    setRetakeDialogState({
-      applicationId: application.id,
-      defaultTaskId: defaultTaskId ? String(defaultTaskId) : '',
-    });
-  }, []);
-
-  const handleCloseRetakeDialog = useCallback(() => {
-    setRetakeDialogState({
-      applicationId: null,
-      defaultTaskId: '',
-    });
-  }, []);
-
-  const handleLaunchAssessment = async (application, taskId, { retake = false, voidReason = '' } = {}) => {
-    const createFn = retake ? rolesApi?.retakeAssessment : rolesApi?.createAssessment;
-    if (!createFn) return false;
-    const taskNumber = Number(taskId);
-    if (!taskNumber) {
-      showToast('Select a task first.', 'info');
-      return false;
-    }
-    setCreatingAssessmentId(application.id);
-    try {
-      if (!application?.cv_filename) {
-        showToast('No CV uploaded — Role fit scoring will show N/A.', 'info');
-      }
-      const durationMinutes = clampDurationMinutes(orgPreferences.defaultAssessmentDurationMinutes);
-      const resolvedVoidReason = String(voidReason || '').trim() || 'Superseded by recruiter retake';
-      const res = await createFn(application.id, {
-        task_id: taskNumber,
-        duration_minutes: durationMinutes,
-        ...(retake ? { void_reason: resolvedVoidReason } : {}),
-      });
-      await loadRoleContext(selectedRoleId);
-      const refreshedDetail = await loadApplicationDetail(application.id, { force: true, includeCvText: cvSidebarApplicationId === application.id });
-      if (scoreSheetApplicationId === application.id && !refreshedDetail) {
-        setScoreSheetApplicationId(application.id);
-      }
-      const created = res?.data || {};
-      const candidateEmail = created.candidate_email || application?.candidate_email || '';
-      const candidateName = created.candidate_name || application?.candidate_name || '';
-      const taskName = (
-        roleTasks.find((task) => Number(task.id) === taskNumber)?.name
-        || created.task_name
-        || selectedRole?.name
-        || 'Technical assessment'
-      );
-      let link = '';
-      if (created.id && created.token) {
-        link = `${window.location.origin}/assessment/${created.id}?token=${created.token}`;
-      } else if (created.token) {
-        link = `${window.location.origin}/assess/${created.token}`;
-      }
-      const subject = `Technical Assessment Invitation — ${taskName}`;
-      const fallbackBody = (
-        `Hi ${candidateName || 'there'},\n\n`
-        + `You've been invited to complete a technical assessment (${taskName}).\n\n`
-        + `Start here:\n${link}\n\n`
-        + `Thanks,\n${orgPreferences.organizationName || selectedRole?.name || 'TAALI'}\n`
-      );
-      const body = applyInviteTemplate(orgPreferences.inviteEmailTemplate, {
-        candidate_name: candidateName || 'there',
-        candidate_email: candidateEmail || '',
-        assessment_link: link,
-        task_name: taskName,
-        role_name: selectedRole?.name || '',
-        organization_name: orgPreferences.organizationName || 'TAALI',
-      }) || fallbackBody;
-      setInviteDraft({
-        to: candidateEmail,
-        subject,
-        body,
-        link,
-        noCv: !application?.cv_filename,
-        inviteChannel: created.invite_channel || null,
-        inviteSentAt: created.invite_sent_at || null,
-      });
-      setInviteSheetOpen(true);
-      return true;
-    } catch (err) {
-      if (!retake && err?.response?.status === 409 && err?.response?.data?.detail?.code === 'retake_required' && rolesApi?.retakeAssessment) {
-        handleOpenRetakeDialog(application, taskNumber);
-        return true;
-      }
-      showToast(getErrorMessage(err, 'Failed to create assessment.'), 'error');
-      return false;
-    } finally {
-      setCreatingAssessmentId(null);
-    }
   };
-
-  const handleCreateAssessmentRequest = useCallback(async (application, taskId, { retake = false } = {}) => {
-    if (retake) {
-      handleOpenRetakeDialog(application, taskId);
-      return true;
-    }
-    return handleLaunchAssessment(application, taskId);
-  }, [handleLaunchAssessment, handleOpenRetakeDialog]);
-
-  const handleConfirmRetakeDialog = useCallback(async ({ taskId, reason }) => {
-    const selectedApplication = roleApplications.find((item) => Number(item.id) === Number(retakeDialogState.applicationId))
-      || applicationDetailsById[String(retakeDialogState.applicationId)]
-      || null;
-    if (!selectedApplication) return;
-    const success = await handleLaunchAssessment(selectedApplication, taskId, {
-      retake: true,
-      voidReason: reason,
-    });
-    if (success) {
-      handleCloseRetakeDialog();
-    }
-  }, [
-    applicationDetailsById,
-    handleCloseRetakeDialog,
-    handleLaunchAssessment,
-    retakeDialogState.applicationId,
-    roleApplications,
-  ]);
-
-  const handleGenerateTaaliCvAi = useCallback(async (application) => {
-    if (!rolesApi?.generateTaaliCvAi) return;
-    setGeneratingTaaliId(application.id);
-    try {
-      const res = await rolesApi.generateTaaliCvAi(application.id);
-      const updated = res?.data;
-      if (updated && updated.id) {
-        setRoleApplications((prev) =>
-          prev.map((app) => (Number(app.id) === Number(updated.id) ? { ...app, ...updated } : app))
-        );
-        setApplicationDetailsById((prev) => {
-          const existing = prev[String(updated.id)];
-          if (!existing) return prev;
-          return {
-            ...prev,
-            [String(updated.id)]: { ...existing, ...updated },
-          };
-        });
-      }
-    } catch (err) {
-      const msg = getErrorMessage(err, 'Failed to generate TAALI score.');
-      showToast(msg, err?.response?.status === 404 ? 'info' : 'error');
-    } finally {
-      setGeneratingTaaliId(null);
-    }
-  }, [rolesApi, showToast]);
-
-  const handleFetchCvs = useCallback(async () => {
-    if (!rolesApi?.fetchCvs || !selectedRoleId) return;
-    try {
-      await rolesApi.fetchCvs(selectedRoleId);
-      setFetchCvsProgress({ total: 0, fetched: 0, status: 'running' });
-
-      const poll = setInterval(async () => {
-        try {
-          const statusRes = await rolesApi.fetchCvsStatus(selectedRoleId);
-          const s = statusRes?.data || {};
-          setFetchCvsProgress({ total: s.total || 0, fetched: s.fetched || 0, status: s.status || 'running' });
-          if (s.status === 'completed' || s.status === 'failed' || s.status === 'idle') {
-            clearInterval(poll);
-            setFetchCvsProgress(null);
-            loadRoleContext(selectedRoleId);
-            if (s.status === 'completed') {
-              showToast(`Fetched ${s.fetched || 0} CVs from Workable.`, 'success');
-            }
-          }
-        } catch {
-          clearInterval(poll);
-          setFetchCvsProgress(null);
-        }
-      }, 3000);
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to start CV fetch.'), 'error');
-      setFetchCvsProgress(null);
-    }
-  }, [rolesApi, selectedRoleId, loadRoleContext, showToast]);
-
-  const handleBatchScore = useCallback(async () => {
-    if (!rolesApi?.batchScore || !selectedRoleId) return;
-    try {
-      let res = await rolesApi.batchScore(selectedRoleId);
-      let data = res?.data || {};
-      let includeScoredRun = Boolean(data.include_scored);
-
-      const hasPreviouslyScoredCandidates = roleApplications.some(
-        (app) => Number.isFinite(Number(app?.cv_match_score)),
-      );
-      const totalFromStart = Number(data.total_target ?? data.total_unscored ?? data.total ?? 0);
-      const noTargets = data.status === 'nothing_to_score' || totalFromStart === 0;
-
-      // If there are no unscored candidates but the role already has scored candidates,
-      // automatically switch to a full re-score run.
-      if (noTargets && hasPreviouslyScoredCandidates) {
-        res = await rolesApi.batchScore(selectedRoleId, { include_scored: true });
-        data = res?.data || {};
-        includeScoredRun = true;
-        if (data.status === 'started' || data.status === 'already_running') {
-          showToast('No unscored candidates found. Re-scoring all candidates for this role.', 'info');
-        }
-      }
-
-      const totalToProcess = Number(data.total_target ?? data.total_unscored ?? data.total ?? 0);
-      if (data.status === 'nothing_to_score' || totalToProcess === 0) {
-        showToast('No scorable candidates found. Upload CVs first, then retry.', 'info');
-        setBatchScoring(null);
-        return;
-      }
-
-      setBatchScoring({
-        total: totalToProcess,
-        scored: Number(data.scored || 0),
-        status: 'running',
-        include_scored: includeScoredRun,
-      });
-
-      // Poll for progress
-      const poll = setInterval(async () => {
-        try {
-          const statusRes = await rolesApi.batchScoreStatus(selectedRoleId);
-          const s = statusRes?.data || {};
-          setBatchScoring({
-            total: Number(s.total || 0),
-            scored: Number(s.scored || 0),
-            status: s.status || 'running',
-            include_scored: Boolean(s.include_scored || includeScoredRun),
-          });
-          if (s.status === 'completed' || s.status === 'failed' || s.status === 'idle') {
-            clearInterval(poll);
-            setBatchScoring(null);
-            loadRoleContext(selectedRoleId);
-            if (s.status === 'completed') {
-              const actionLabel = (s.include_scored || includeScoredRun) ? 'Re-scored' : 'Scored';
-              showToast(`${actionLabel} ${s.scored || 0} candidates.`, 'success');
-            }
-          }
-        } catch {
-          clearInterval(poll);
-          setBatchScoring(null);
-        }
-      }, 3000);
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to start batch scoring.'), 'error');
-      setBatchScoring(null);
-    }
-  }, [rolesApi, roleApplications, selectedRoleId, loadRoleContext, showToast]);
-
-  const handleRegenerateInterviewFocus = useCallback(async () => {
-    if (!selectedRoleId) return;
-    interviewFocusAutoAttemptedRef.current.delete(String(selectedRoleId));
-    await generateInterviewFocusForRole(selectedRoleId);
-  }, [generateInterviewFocusForRole, selectedRoleId]);
-
-  useEffect(() => {
-    if (!selectedRole || !rolesApi?.regenerateInterviewFocus) return;
-    const roleId = String(selectedRole.id || '');
-    if (!roleId) return;
-
-    const focus = selectedRole.interview_focus || null;
-    const hasInterviewFocus = Array.isArray(focus?.questions) && focus.questions.length > 0;
-    const hasSpecText = Boolean(
-      String(selectedRole.description || selectedRole.job_spec_text || '').trim()
-    );
-    const jobSpecReady = Boolean(selectedRole.job_spec_present || selectedRole.job_spec_filename || hasSpecText);
-
-    if (!jobSpecReady || hasInterviewFocus) return;
-    if (String(interviewFocusGeneratingRoleId) === roleId) return;
-    if (interviewFocusAutoAttemptedRef.current.has(roleId)) return;
-
-    interviewFocusAutoAttemptedRef.current.add(roleId);
-    void generateInterviewFocusForRole(roleId, { silent: true });
-  }, [generateInterviewFocusForRole, interviewFocusGeneratingRoleId, rolesApi, selectedRole]);
-
-  const handleEnrichCandidate = useCallback(async (application) => {
-    if (!rolesApi?.enrichApplication) return;
-    try {
-      const res = await rolesApi.enrichApplication(application.id);
-      const updated = res?.data;
-      if (updated && updated.id) {
-        setRoleApplications((prev) =>
-          prev.map((app) => (Number(app.id) === Number(updated.id) ? { ...app, ...updated } : app))
-        );
-        setApplicationDetailsById((prev) => {
-          const existing = prev[String(updated.id)];
-          if (!existing) return prev;
-          return {
-            ...prev,
-            [String(updated.id)]: { ...existing, ...updated },
-          };
-        });
-      }
-      showToast('Profile enriched from Workable.', 'success');
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to enrich candidate.'), 'error');
-    }
-  }, [rolesApi, showToast]);
-
-  const selectedScoreBaseApplication = roleApplications.find((app) => Number(app.id) === Number(scoreSheetApplicationId)) ?? null;
-  const selectedScoreDetail = scoreSheetApplicationId != null
-    ? (applicationDetailsById[String(scoreSheetApplicationId)] ?? null)
-    : null;
-  const selectedScoreApplication = mergeApplicationData(
-    selectedScoreBaseApplication || selectedScoreDetail
-      ? { ...(selectedScoreBaseApplication || {}), ...(selectedScoreDetail || {}) }
-      : null
-  );
-  const selectedScoreAssessmentId = resolveAssessmentId(selectedScoreApplication);
-  const selectedScoreAssessment = selectedScoreAssessmentId != null
-    ? (assessmentDetailsById[String(selectedScoreAssessmentId)] ?? null)
-    : null;
-
-  const selectedCvBaseApplication = roleApplications.find((app) => Number(app.id) === Number(cvSidebarApplicationId)) ?? null;
-  const selectedCvDetail = cvSidebarApplicationId != null
-    ? (applicationDetailsById[String(cvSidebarApplicationId)] ?? null)
-    : null;
-  const selectedCvApplication = mergeApplicationData(
-    selectedCvBaseApplication || selectedCvDetail
-      ? { ...(selectedCvBaseApplication || {}), ...(selectedCvDetail || {}) }
-      : null
-  );
-
-  const retakeDialogApplication = retakeDialogState.applicationId != null
-    ? mergeApplicationData({
-      ...(roleApplications.find((app) => Number(app.id) === Number(retakeDialogState.applicationId)) || {}),
-      ...(applicationDetailsById[String(retakeDialogState.applicationId)] || {}),
-    })
-    : null;
 
   return (
-    <div>
-      <NavComponent currentPage="candidates" onNavigate={onNavigate} />
-
-      <PageContainer density="compact" width="wide">
-        <PageHeader
-          density="compact"
-          className="mb-5"
-          title="Candidates"
-          subtitle="Manage role pipelines and assessments in one place."
-          actions={(
-            <>
-              <Button type="button" variant="primary" size="sm" onClick={() => handleOpenRoleSheet('create')}>
-                <Plus size={15} />
-                New role
-              </Button>
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                disabled={!selectedRoleId}
-                onClick={() => {
-                  setCandidateSheetError('');
-                  setCandidateSheetOpen(true);
-                }}
-              >
-                <UserPlus size={15} />
-                Add candidate
-              </Button>
-            </>
-          )}
-        >
-          <div className="grid gap-3 md:grid-cols-[240px_minmax(0,1fr)] xl:grid-cols-[260px_minmax(0,1fr)]">
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                Active role
-              </span>
-              <Select
-                aria-label="Active role"
-                value={selectedRoleId}
-                onChange={(event) => setSelectedRoleId(event.target.value)}
-                disabled={loadingRoles || roles.length === 0}
-              >
-                {roles.length === 0 ? <option value="">No roles</option> : null}
-                {roles.map((role) => (
-                  <option key={role.id} value={role.id}>{role.name}</option>
-                ))}
-              </Select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                Search candidates
-              </span>
-              <SearchInput
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Search by name, email, position, or status"
-                inputClassName="min-h-[2.35rem] text-sm"
-              />
-            </label>
+    <AppShell currentPage="candidates" onNavigate={onNavigate}>
+      <div className="page">
+        <div className="page-head">
+          <div className="tally-bg" />
+          <div>
+            <div className="kicker">02 · RECRUITER WORKSPACE</div>
+            <h1>Candidates<em>.</em></h1>
+            <p className="sub">Every person across every role, scored and filterable. Open any row to review their standing and assessment evidence.</p>
           </div>
-          <div
-            className="mt-3 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] p-3.5 shadow-[var(--taali-shadow-soft)]"
-            style={{ background: 'var(--taali-card-bg)' }}
-          >
-            <div className="mb-2.5 flex flex-wrap items-center justify-between gap-2">
-              <p className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                Sorting and filters
-              </p>
-              <div className="flex items-center gap-2 text-xs text-[var(--taali-muted)]">
-                <span>{activeFilterCount > 0 ? `${activeFilterCount} active` : 'Default view'}</span>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="xs"
-                  onClick={resetFilters}
-                  disabled={activeFilterCount === 0}
-                >
-                  Reset
-                </Button>
-              </div>
-            </div>
-            <div className="grid gap-2.5 md:grid-cols-2 lg:grid-cols-5">
-              <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                  Sort by
-                </span>
-                <Select aria-label="Sort by" value={sortBy} onChange={(event) => setSortBy(event.target.value)} className="min-h-[2.35rem] text-xs">
-                  <option value="taali_score">TAALI Score</option>
-                  <option value="cv_match_score">CV fit</option>
-                  <option value="created_at">Added</option>
-                </Select>
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                  Order
-                </span>
-                <Select aria-label="Sort order" value={sortOrder} onChange={(event) => setSortOrder(event.target.value)} className="min-h-[2.35rem] text-xs">
-                  <option value="desc">Descending</option>
-                  <option value="asc">Ascending</option>
-                </Select>
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                  Source
-                </span>
-                <Select aria-label="Source filter" value={sourceFilter} onChange={(event) => setSourceFilter(event.target.value)} className="min-h-[2.35rem] text-xs">
-                  <option value="all">All</option>
-                  <option value="manual">Manual</option>
-                  <option value="workable">Workable</option>
-                </Select>
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                  Status
-                </span>
-                <Select aria-label="Status filter" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)} className="min-h-[2.35rem] text-xs">
-                  {statusOptions.map((status) => (
-                    <option key={status} value={status}>
-                      {status === 'all'
-                        ? 'All'
-                        : status
-                          .split(/[_\s-]+/)
-                          .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
-                          .join(' ')}
-                    </option>
-                  ))}
-                </Select>
-              </label>
-              <label className="block">
-                <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                  Min CV fit
-                </span>
-                <Input
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="1"
-                  aria-label="Minimum CV fit score"
-                  placeholder="0"
-                  className="min-h-[2.35rem] text-xs"
-                  value={minCvMatchScore}
-                  onChange={(event) => setMinCvMatchScore(event.target.value)}
-                />
-              </label>
-            </div>
-          </div>
-        </PageHeader>
-
-        <div className="grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)] xl:grid-cols-[300px_minmax(0,1fr)]">
-          <RolesList
-            roles={roles}
-            selectedRoleId={selectedRoleId}
-            loading={loadingRoles}
-            error={rolesError}
-            onSelectRole={setSelectedRoleId}
-            onCreateRole={() => handleOpenRoleSheet('create')}
-            onRefresh={() => loadRoles()}
-          />
-
-          <div className="space-y-3">
-            {!selectedRole ? (
-              <EmptyRoleDetail onCreateRole={() => handleOpenRoleSheet('create')} />
-            ) : (
-              <>
-                <RoleSummaryHeader
-                  role={selectedRole}
-                  roleTasks={roleTasks}
-                  onEditRole={() => handleOpenRoleSheet('edit')}
-                  batchScoring={batchScoring}
-                  onBatchScore={handleBatchScore}
-                  onFetchCvs={rolesApi?.fetchCvs ? handleFetchCvs : null}
-                  fetchCvsProgress={fetchCvsProgress}
-                  interviewFocusGenerating={String(interviewFocusGeneratingRoleId) === String(selectedRoleId)}
-                  onRegenerateInterviewFocus={rolesApi?.regenerateInterviewFocus ? handleRegenerateInterviewFocus : null}
-                />
-                {loadingTasks ? (
-                  <Panel className="px-4 py-3">
-                    <div className="space-y-2 animate-pulse">
-                      <div className="h-3 w-32 rounded bg-[var(--taali-border)]" />
-                      <div className="h-3 w-48 rounded bg-[var(--taali-border)]" />
-                    </div>
-                  </Panel>
-                ) : null}
-                {roleContextError ? (
-                  <Card className="inline-flex items-center gap-2 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] px-3 py-2 text-sm text-[var(--taali-danger)]">
-                    <AlertCircle size={15} />
-                    {roleContextError}
-                  </Card>
-                ) : null}
-                <CandidatesTable
-                  applications={roleApplications}
-                  loading={loadingRoleContext}
-                  error={roleContextError}
-                  searchQuery={searchQuery}
-                  statusFilter={statusFilter}
-                  sortBy={sortBy}
-                  sortOrder={sortOrder}
-                  roleTasks={roleTasks}
-                  canCreateAssessment={Boolean(rolesApi?.createAssessment)}
-                  creatingAssessmentId={creatingAssessmentId}
-                  viewingApplicationId={viewingApplicationId}
-                  generatingTaaliId={generatingTaaliId}
-                  onChangeSort={handleSortChange}
-                  onAddCandidate={() => {
-                    setCandidateSheetError('');
-                    setCandidateSheetOpen(true);
-                  }}
-                  onViewCandidate={handleViewFromApplication}
-                  onOpenDetails={handleOpenScoreSummary}
-                  onOpenCvSidebar={handleOpenCvSidebar}
-                  onCreateAssessment={handleCreateAssessmentRequest}
-                  onUploadCv={handleUploadApplicationCv}
-                  uploadingCvId={uploadingCvId}
-                  onGenerateTaaliCvAi={handleGenerateTaaliCvAi}
-                  onEnrichCandidate={handleEnrichCandidate}
-                />
-              </>
-            )}
+          <div className="row">
+            <button type="button" className="btn btn-outline btn-sm">Export CSV</button>
+            <button type="button" className="btn btn-purple btn-sm" onClick={() => onNavigate('jobs')}>+ Invite candidate</button>
           </div>
         </div>
-      </PageContainer>
 
-      <RoleSheet
-        open={roleSheetOpen}
-        mode={roleSheetMode}
-        role={roleSheetMode === 'edit' ? selectedRole : null}
-        roleTasks={roleSheetMode === 'edit' ? roleTasks : []}
-        allTasks={allTasks}
-        saving={savingRole}
-        error={roleSheetError}
-        onClose={() => setRoleSheetOpen(false)}
-        onSubmit={handleRoleSubmit}
-      />
+        <div className="mb-5 flex flex-wrap items-center gap-3">
+          <div className="inline-flex gap-1 rounded-full border border-[var(--line)] bg-[var(--bg-2)] p-1 shadow-[var(--shadow-sm)]">
+            <button type="button" className="app-tab active">All · {counts.all}</button>
+            <button type="button" className="app-tab">In assessment · {counts.in_assessment}</button>
+            <button type="button" className="app-tab">Review · {counts.review}</button>
+            <button type="button" className="app-tab">Shortlist · {counts.shortlist}</button>
+          </div>
 
-      <CandidateSheet
-        open={candidateSheetOpen}
-        role={selectedRole}
-        saving={addingCandidate}
-        error={candidateSheetError}
-        onClose={() => setCandidateSheetOpen(false)}
-        onSubmit={handleCandidateSubmit}
-      />
+          <label className="grow relative min-w-[280px]">
+            <Search size={16} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[var(--mute)]" />
+            <input
+              className="w-full rounded-full border border-[var(--line)] bg-[var(--bg-2)] py-3 pl-11 pr-4 text-sm"
+              placeholder="Search by name, email, or role…"
+              value={search}
+              onChange={(event) => setSearch(event.target.value)}
+            />
+          </label>
 
-      <AssessmentInviteSheet
-        open={inviteSheetOpen}
-        onClose={() => setInviteSheetOpen(false)}
-        draft={inviteDraft}
-      />
+          <label className="sr-only" htmlFor="candidate-role-filter">Role</label>
+          <select id="candidate-role-filter" className="rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-4 py-3 text-sm" value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
+            <option value="all">All roles</option>
+            {roles.map((role) => <option key={role.id} value={String(role.id)}>{role.name}</option>)}
+          </select>
 
-      <CandidateScoreSummarySheet
-        open={scoreSheetApplicationId != null}
-        loading={scoreSheetApplicationId != null && loadingApplicationDetailId === scoreSheetApplicationId}
-        application={selectedScoreApplication}
-        completedAssessment={selectedScoreAssessment}
-        completedAssessmentLoading={selectedScoreAssessmentId != null
-          && Number(loadingAssessmentDetailId) === Number(selectedScoreAssessmentId)}
-        roleTasks={roleTasks}
-        creatingAssessmentId={creatingAssessmentId}
-        onClose={() => setScoreSheetApplicationId(null)}
-        onLaunchAssessment={handleLaunchAssessment}
-        onOpenRetakeDialog={handleOpenRetakeDialog}
-        onOpenCvSidebar={handleOpenCvSidebar}
-        onViewFullPage={handleOpenFullCandidatePage}
-        onViewResults={openAssessmentResults}
-      />
+          <label className="sr-only" htmlFor="candidate-sort">Sort</label>
+          <select id="candidate-sort" aria-label="Sort" className="rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-4 py-3 text-sm" value={sortValue} onChange={(event) => setSortValue(event.target.value)}>
+            <option value="pipeline_stage_updated_at:desc">Recent activity</option>
+            <option value="taali_score:desc">TAALI high to low</option>
+            <option value="taali_score:asc">TAALI low to high</option>
+          </select>
 
-      <CandidateCvSidebar
-        open={cvSidebarApplicationId != null}
-        application={selectedCvApplication}
-        onClose={() => setCvSidebarApplicationId(null)}
-        onFetchCvFromWorkable={handleGenerateTaaliCvAi}
-        fetchingCvApplicationId={generatingTaaliId}
-      />
+          <label className="sr-only" htmlFor="candidate-status">Status</label>
+          <select id="candidate-status" className="rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-4 py-3 text-sm" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+            <option value="all">All stages</option>
+            <option value="applied">Applied</option>
+            <option value="invited">Invited</option>
+            <option value="in_assessment">In assessment</option>
+            <option value="review">Review</option>
+          </select>
 
-      <RetakeAssessmentDialog
-        open={retakeDialogState.applicationId != null}
-        application={retakeDialogApplication}
-        roleTasks={roleTasks}
-        loading={creatingAssessmentId === retakeDialogState.applicationId}
-        defaultTaskId={retakeDialogState.defaultTaskId}
-        onClose={handleCloseRetakeDialog}
-        onConfirm={handleConfirmRetakeDialog}
-      />
-    </div>
+          <label className="sr-only" htmlFor="candidate-min-taali">Min TAALI</label>
+          <input
+            id="candidate-min-taali"
+            aria-label="Min TAALI"
+            className="w-[120px] rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-4 py-3 text-sm"
+            placeholder="Score ≥"
+            value={minTaaliScore}
+            onChange={(event) => setMinTaaliScore(event.target.value)}
+          />
+        </div>
+
+        <div className="overflow-hidden rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] shadow-[var(--shadow-sm)]">
+          <div className="hidden grid-cols-[2fr_1.2fr_1.1fr_1fr_1fr_1fr_auto] gap-4 border-b border-[var(--line)] bg-[var(--bg)] px-6 py-4 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)] md:grid">
+            <div>Candidate</div>
+            <div>Role</div>
+            <div>Composite</div>
+            <div>Role applications</div>
+            <div>Status</div>
+            <div>Updated</div>
+            <div />
+          </div>
+
+          {loading ? (
+            <div className="space-y-3 p-6">
+              {Array.from({ length: 6 }).map((_, index) => (
+                <div key={index} className="h-20 animate-pulse rounded-[14px] bg-[var(--bg)]" />
+              ))}
+            </div>
+          ) : error ? (
+            <div className="p-6 text-sm text-[var(--taali-danger)]">{error}</div>
+          ) : filtered.length === 0 ? (
+            <div className="p-10 text-center">
+              <h2 className="font-[var(--font-display)] text-[32px] tracking-[-0.03em]">No candidates yet.</h2>
+              <p className="mt-3 text-[14px] leading-7 text-[var(--mute)]">Invite your first one to start the pipeline.</p>
+            </div>
+          ) : (
+            filtered.map((application) => {
+              const score = application?.taali_score ?? application?.rank_score ?? null;
+              const key = application?.candidate_id || application?.candidate_email;
+              return (
+                <button
+                  key={application.id}
+                  type="button"
+                  className="grid w-full gap-4 border-b border-[var(--line)] px-6 py-4 text-left transition hover:bg-[var(--bg)] md:grid-cols-[2fr_1.2fr_1.1fr_1fr_1fr_1fr_auto] md:items-center"
+                  onClick={() => openApplication(application)}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="grid h-[34px] w-[34px] shrink-0 place-items-center rounded-full bg-[var(--bg-3)] text-xs font-semibold">{initialsFor(application?.candidate_name)}</div>
+                    <div className="min-w-0">
+                      <div className="truncate text-sm font-medium">{application?.candidate_name || 'Unknown candidate'}</div>
+                      <div className="truncate font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">{application?.candidate_email || 'No email'}</div>
+                    </div>
+                  </div>
+                  <div className="text-[13px] text-[var(--ink-2)]">{application?.role_name || '—'}</div>
+                  <div className={`font-[var(--font-mono)] text-[15px] font-semibold ${scoreTone(score)}`}>
+                    {score == null ? '—' : `${score}`}<span className="font-normal text-[var(--mute-2)]">/100</span>
+                  </div>
+                  <div className="text-sm text-[var(--ink-2)]">{duplicateCounts[key] > 1 ? `${duplicateCounts[key]} role applications` : '1 role application'}</div>
+                  <div>
+                    <span className="chip">
+                      <span className="dot" style={{ background: application?.pipeline_stage === 'review' ? 'var(--purple)' : application?.pipeline_stage === 'in_assessment' ? 'var(--green)' : application?.pipeline_stage === 'invited' ? 'var(--amber)' : 'var(--mute)' }} />
+                      {statusLabel(application?.pipeline_stage || 'applied')}
+                    </span>
+                  </div>
+                  <div className="font-[var(--font-mono)] text-[12.5px] text-[var(--mute)]">
+                    {application?.updated_at ? new Date(application.updated_at).toLocaleDateString() : '—'}
+                  </div>
+                  <div className="flex justify-end">
+                    <span className="grid h-[30px] w-[30px] place-items-center rounded-full border border-[var(--line)] bg-[var(--bg-2)] text-[var(--ink-2)]">
+                      <ChevronRight size={13} />
+                    </span>
+                  </div>
+                </button>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </AppShell>
   );
 };
+
+export default CandidatesPage;

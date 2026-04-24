@@ -45,8 +45,8 @@ const DemoExperiencePage = lazy(() =>
 const LazyAssessmentResultsPage = lazy(() =>
   import('./features/assessments/AssessmentResultsPage').then((m) => ({ default: m.AssessmentResultsPage }))
 );
-const CandidatesDirectoryPage = lazy(() =>
-  import('./features/candidates/CandidatesDirectoryPage').then((m) => ({ default: m.CandidatesDirectoryPage }))
+const CandidatesPage = lazy(() =>
+  import('./features/candidates/CandidatesPage').then((m) => ({ default: m.CandidatesPage }))
 );
 const CandidateStandingReportPage = lazy(() =>
   import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
@@ -354,7 +354,7 @@ function AppContent() {
         path="/candidates"
         element={(
           <Suspense fallback={lazyFallback}>
-            <CandidatesDirectoryPage
+            <CandidatesPage
               onNavigate={navigateToPage}
               NavComponent={DashboardNavWithMode}
             />

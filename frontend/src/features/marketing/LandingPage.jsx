@@ -1,522 +1,557 @@
-import React, { Suspense, lazy, useEffect, useState } from 'react';
+import React from 'react';
 import {
   ArrowRight,
   Check,
-  Menu,
-  Play,
+  CircleDot,
+  ClipboardList,
+  ShieldCheck,
   Sparkles,
-  X,
+  TerminalSquare,
 } from 'lucide-react';
-import {
-  PolarAngleAxis,
-  PolarGrid,
-  PolarRadiusAxis,
-  Radar,
-  RadarChart,
-  ResponsiveContainer,
-} from 'recharts';
 
-import { BRAND } from '../../config/brand';
-import { aedToUsd } from '../../lib/currency';
-import { readDarkModePreference, subscribeThemePreference } from '../../lib/themePreference';
-import { Logo } from '../../shared/ui/Branding';
-import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
-import {
-  Badge,
-  Button,
-  Card,
-  PageContainer,
-  Panel,
-} from '../../shared/ui/TaaliPrimitives';
-import { ScoringCardGrid } from '../../shared/ui/ScoringCardGrid';
-import { dimensionOrder, getDimensionById } from '../../scoring/scoringDimensions';
+import { MarketingNav } from '../../shared/layout/TaaliLayout';
 
-const AssessmentRuntimePreviewView = lazy(() =>
-  import('../assessment_runtime/AssessmentRuntimePreviewView').then((module) => ({ default: module.AssessmentRuntimePreviewView }))
-);
-const CandidateResultsPreviewView = lazy(() =>
-  import('../candidates/CandidateResultsPreviewView').then((module) => ({ default: module.CandidateResultsPreviewView }))
-);
+const containerClass = 'mx-auto max-w-[1360px] px-6 md:px-10 xl:px-16';
 
-const TRUST_ITEMS = [
-  'Built for modern technical hiring, not outdated coding tests',
-  'Assess AI-native skillsets through prompt framing, context, validation, and recovery',
-  'Make defensible shortlist decisions with role fit, TAALI score, and interview probes',
-  'Share a client-ready report employers can use in real decision meetings',
+// TODO(copy): verify uniqueness claim with marketing/legal before shipping.
+const heroSignals = [
+  { label: 'Prompt quality', value: 91 },
+  { label: 'Error recovery', value: 86 },
+  { label: 'Context utilization', value: 88 },
+  { label: 'Independence', value: 94 },
 ];
 
-const AUDIENCE_ITEMS = [
+const capabilityCards = [
   {
-    title: 'Recruiting agencies',
-    description: 'Send stronger shortlists with proof. TAALI helps agencies show why a candidate is worth moving forward, not just that they passed a task.',
+    kicker: '// 01 · LIVE CODING',
+    title: 'Real IDE. Real stack. Real AI tools.',
+    body: 'Candidates write code in an in-browser IDE that mirrors your team setup, with Claude, Copilot, and a terminal available inside the task.',
+    tone: 'hero',
   },
   {
-    title: 'In-house talent teams',
-    description: 'Hire engineers for modern product, platform, data, and AI roles where success depends on using AI tools well under real delivery pressure.',
+    kicker: '// 02 · AI COLLAB SCORING',
+    title: 'A score for how they use AI.',
+    body: 'Every prompt, accept, reject, and edit becomes a signal across six scored dimensions.',
+    tone: 'meter',
   },
   {
-    title: 'Hiring managers and technical leaders',
-    description: 'See how candidates scope the work, guide agents, validate outputs, and make tradeoffs before you invest in deeper interview loops.',
+    kicker: '// 03 · QUESTION BANK',
+    title: '600+ calibrated real-world tasks.',
+    body: 'From debugging a production outage to extending a flaky migration, each task starts from a working repo instead of a whiteboard puzzle.',
+    tone: 'list',
   },
   {
-    title: 'Teams building AI-native products',
-    description: 'Benchmark the operating style you actually need: prompt clarity, context quality, execution judgment, communication, and role fit.',
+    kicker: '// 04 · INTEGRITY',
+    title: 'Proctoring that won’t insult anyone.',
+    body: 'Signal, not surveillance. We flag paste-ins and suspicious patterns without turning the session into a trust exercise.',
+    tone: 'pill',
+  },
+  {
+    kicker: '// 05 · INTEGRATIONS',
+    title: 'Fits your stack.',
+    body: 'Recruiters stay in the workflow they already use while Taali handles the assessment signal underneath.',
+    tone: 'pill',
+  },
+  {
+    kicker: '// 06 · CALIBRATION',
+    title: 'Your bar, not ours.',
+    body: 'Scores can be calibrated to the hiring team, rubric, and role rather than a generic benchmark.',
+    tone: 'plain',
   },
 ];
 
-const demoComparison = dimensionOrder.map((id) => {
-  const scores = {
-    task_completion: [8.8, 7.2],
-    prompt_clarity: [9.1, 5.9],
-    context_provision: [8.7, 6.1],
-    independence_efficiency: [8.9, 5.8],
-    response_utilization: [8.6, 6.4],
-    debugging_design: [8.1, 7.7],
-    written_communication: [9.0, 6.0],
-    role_fit: [8.3, 8.0],
-  }[id] || [0, 0];
+// TODO(copy): confirm these product-capability claims against current product reality.
+const proofItems = [
+  {
+    title: 'Live stack',
+    body: 'Candidates ship real code on your real tech, not a toy sandbox.',
+  },
+  {
+    title: 'Real AI',
+    body: 'Claude and companion tools are available in the session, and Taali scores how candidates use them.',
+  },
+  {
+    title: 'Every keystroke',
+    body: 'Session replay, prompt log, and validation runs roll into the report.',
+  },
+  {
+    title: 'Your bar',
+    body: 'Calibrate scoring to the workflow and hiring bar your team actually uses.',
+  },
+];
 
-  return {
-    dimension: getDimensionById(id).label,
-    candidateA: scores[0],
-    candidateB: scores[1],
-    fullMark: 10,
-  };
-});
+const processSteps = [
+  {
+    step: 'STEP 01',
+    title: 'Pick a role.',
+    body: 'Start from the role you are hiring for and attach a rubric aligned to the work.',
+    foot: '◐ auto-calibrated rubric',
+  },
+  {
+    step: 'STEP 02',
+    title: 'Invite the candidate.',
+    body: 'They get a link into an in-browser IDE with your stack and real AI tools already loaded.',
+    foot: '→ 1-click invite from ATS',
+  },
+  {
+    step: 'STEP 03',
+    title: 'They ship the task.',
+    body: 'We record prompts, accept/reject decisions, test runs, and refactors while the candidate works.',
+    foot: '● silent scoring, every 30s',
+  },
+  {
+    step: 'STEP 04',
+    title: 'You get the signal.',
+    body: 'A composite score, an AI-collab band, replay highlights, and a recommendation land in the recruiter workspace.',
+    foot: '✓ delivered to the hiring team fast',
+  },
+];
 
-const scrollToId = (id) => {
-  document.getElementById(id)?.scrollIntoView({ behavior: 'smooth' });
-};
+const productTourItems = [
+  { kicker: '01 · Entry', title: 'Sign in.', body: 'Editorial welcome page for returning recruiters and candidates.', page: 'login' },
+  { kicker: '02 · Intake', title: 'Interactive demo', body: 'Enter details, pick a task, and launch the same runtime candidates use.', page: 'demo' },
+  { kicker: '03 · Runtime', title: 'Candidate workspace', body: 'Repo, live editor, and Claude side-by-side inside the assessment.', page: 'demo' },
+  { kicker: '04 · Recruiter', title: 'Jobs.', body: 'Roles at a glance with stage counts and pipeline visibility.', page: 'login' },
+  { kicker: '05 · Pipeline', title: 'Candidates.', body: 'Sorted by score, live signals, and outcome-ready detail views.', page: 'login' },
+  { kicker: '06 · Reporting', title: 'Reporting.', body: 'Completion trends, distribution, and top performers in one place.', page: 'login' },
+];
 
-const LandingNav = ({ onNavigate }) => {
-  const [mobileOpen, setMobileOpen] = useState(false);
-
-  const handleScroll = (id) => {
-    setMobileOpen(false);
-    scrollToId(id);
-  };
-
-  return (
-    <nav className="taali-nav sticky top-0 z-40">
-      <div className="mx-auto flex max-w-7xl items-center justify-between gap-4 px-6 py-4">
-        <Logo onClick={() => onNavigate('landing')} />
-
-        <div className="hidden items-center gap-2 md:flex">
-          <Button type="button" variant="ghost" size="sm" onClick={() => handleScroll('product')}>
-            Product
-          </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => handleScroll('framework')}>
-            Framework
-          </Button>
-          <Button type="button" variant="ghost" size="sm" onClick={() => handleScroll('pricing')}>
-            Pricing
-          </Button>
-        </div>
-
-        <div className="flex items-center gap-2">
-          <Button type="button" variant="secondary" size="sm" className="hidden md:inline-flex" onClick={() => onNavigate('login')}>
-            Sign In
-          </Button>
-          <Button type="button" variant="primary" size="sm" className="hidden md:inline-flex" onClick={() => onNavigate('demo')}>
-            Demo
-          </Button>
-          <GlobalThemeToggle className="shrink-0" />
-          <Button
-            type="button"
-            variant="ghost"
-            size="sm"
-            className="md:hidden !px-2 !py-2"
-            onClick={() => setMobileOpen((open) => !open)}
-            aria-label="Toggle navigation"
-          >
-            {mobileOpen ? <X size={18} /> : <Menu size={18} />}
-          </Button>
-        </div>
-      </div>
-
-      {mobileOpen ? (
-        <div className="border-t border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-6 py-4 backdrop-blur-md md:hidden">
-          <div className="grid gap-2">
-            <Button type="button" variant="ghost" size="sm" className="justify-start" onClick={() => handleScroll('product')}>
-              Product
-            </Button>
-            <Button type="button" variant="ghost" size="sm" className="justify-start" onClick={() => handleScroll('framework')}>
-              Framework
-            </Button>
-            <Button type="button" variant="ghost" size="sm" className="justify-start" onClick={() => handleScroll('pricing')}>
-              Pricing
-            </Button>
-            <Button type="button" variant="secondary" size="sm" onClick={() => onNavigate('login')}>
-              Sign In
-            </Button>
-            <Button type="button" variant="primary" size="sm" onClick={() => onNavigate('demo')}>
-              Demo
-            </Button>
-          </div>
-        </div>
-      ) : null}
-    </nav>
-  );
-};
-
-const SurfacePreviewFallback = ({ heightClass = 'h-[32rem]' }) => (
-  <Panel className={`overflow-hidden bg-[linear-gradient(145deg,var(--taali-surface),var(--taali-surface-subtle))] p-0 ${heightClass}`}>
-    <div className="flex h-full flex-col justify-between p-5">
-      <div className="space-y-3">
-        <div className="h-4 w-40 rounded-full bg-[var(--taali-border-subtle)]" />
-        <div className="h-10 w-3/4 rounded-[var(--taali-radius-card)] bg-[var(--taali-border-subtle)]" />
-        <div className="grid gap-2 md:grid-cols-2">
-          <div className="h-28 rounded-[var(--taali-radius-card)] bg-[var(--taali-surface-subtle)]" />
-          <div className="h-28 rounded-[var(--taali-radius-card)] bg-[var(--taali-surface-subtle)]" />
-        </div>
-      </div>
-      <div className="grid gap-2 md:grid-cols-3">
-        <div className="h-20 rounded-[var(--taali-radius-card)] bg-[var(--taali-surface-subtle)]" />
-        <div className="h-20 rounded-[var(--taali-radius-card)] bg-[var(--taali-surface-subtle)]" />
-        <div className="h-20 rounded-[var(--taali-radius-card)] bg-[var(--taali-surface-subtle)]" />
-      </div>
+const SectionHeading = ({ kicker, title, copy }) => (
+  <div className="mb-8 grid gap-8 lg:grid-cols-[minmax(0,1fr)_420px] lg:items-end">
+    <div>
+      <div className="kicker">{kicker}</div>
+      <h2 className="mt-3 font-[var(--font-display)] text-[clamp(38px,5vw,60px)] font-semibold leading-[0.95] tracking-[-0.04em]">
+        {title}
+      </h2>
     </div>
-  </Panel>
-);
-
-const AmbientProductShowcase = ({
-  children,
-  heightClass = 'h-[min(68vh,38rem)]',
-  scale = 1,
-}) => (
-  <div className={`pointer-events-none overflow-hidden rounded-[2rem] border border-[var(--taali-border-soft)] bg-[linear-gradient(180deg,var(--taali-surface-warm),var(--taali-surface-subtle))] p-4 shadow-[var(--taali-shadow-strong)] ${heightClass} md:p-6`}>
-    <div className="h-full overflow-hidden rounded-[1.5rem] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-elevated)] shadow-[var(--taali-shadow-soft)]">
-      <div
-        className="h-full"
-        style={{
-          transform: scale === 1 ? undefined : `scale(${scale})`,
-          transformOrigin: 'top left',
-          width: scale === 1 ? '100%' : `${100 / scale}%`,
-        }}
-      >
-        {children}
-      </div>
-    </div>
+    <p className="max-w-[420px] text-[15px] leading-7 text-[var(--mute)]">{copy}</p>
   </div>
 );
 
-const HeroSection = ({ onNavigate }) => (
-  <section className="relative overflow-hidden">
-    <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top_right,rgba(157,0,255,0.14),transparent_28%),radial-gradient(circle_at_bottom_left,rgba(255,196,89,0.12),transparent_24%)]" />
-    <PageContainer className="relative pb-8 pt-5 lg:pb-10 lg:pt-6" width="wide">
-      <div className="max-w-[58rem]">
-        <Badge variant="purple" className="mb-4">Hire AI-native engineers with evidence</Badge>
-        <h1 className="taali-display max-w-[52rem] text-[3rem] font-semibold leading-[0.97] text-[var(--taali-text)] md:text-[4.55rem]">
-          Assess the skills modern engineering teams actually need.
-          <br />
-          Hire AI-native talent with TAALI.
-        </h1>
-        <p className="mt-4 max-w-[46rem] text-[1rem] leading-7 text-[var(--taali-muted)] md:text-[1.08rem]">
-          TAALI is built for recruiters, agencies, hiring managers, and technical leaders evaluating engineers who work with Cursor, Codex, Claude Code, and modern AI workflows. It turns AI-assisted technical work into hiring signal you can rank, defend, and share.
-        </p>
-
-        <div className="mt-6 flex flex-wrap items-center gap-2.5">
-          <Button type="button" variant="primary" size="md" onClick={() => onNavigate('demo')}>
-            See the product
-            <ArrowRight size={16} />
-          </Button>
-          <Button type="button" variant="secondary" size="md" onClick={() => onNavigate('login')}>
-            Start hiring
-          </Button>
-          <Button type="button" variant="ghost" size="md" onClick={() => scrollToId('framework')}>
-            <Play size={16} />
-            View scoring framework
-          </Button>
-        </div>
-      </div>
-    </PageContainer>
-  </section>
+const SignalRow = ({ label, value }) => (
+  <div className="grid grid-cols-[140px_1fr_42px] items-center gap-3 text-[13.5px]">
+    <span className="text-[var(--ink-2)]">{label}</span>
+    <div className="bar"><i style={{ width: `${value}%` }} /></div>
+    <span className="text-right font-[var(--font-mono)]">{value}</span>
+  </div>
 );
 
-const AudienceSection = () => (
-  <section className="pb-8 lg:pb-10">
-    <PageContainer className="space-y-5" width="wide">
-      <div className="max-w-[62rem]">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--taali-purple)]">WHO IT&apos;S FOR</div>
-        <h2 className="taali-display mt-3 text-4xl font-semibold text-[var(--taali-text)] md:text-5xl">
-          Made for teams hiring engineers who already work with AI.
-        </h2>
-        <p className="mt-4 text-base leading-8 text-[var(--taali-muted)] md:text-lg">
-          Once you understand the rubric, the fit is straightforward: TAALI is for teams hiring engineers whose real job already depends on AI-assisted execution, judgment, and delivery quality.
-        </p>
-      </div>
+export const LandingPage = ({ onNavigate }) => (
+  <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
+    <MarketingNav onNavigate={onNavigate} />
 
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        {AUDIENCE_ITEMS.map((item) => (
-          <Card key={item.title} className="p-5">
-            <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-purple)]">{item.title}</div>
-            <p className="mt-3 text-sm leading-7 text-[var(--taali-text)]">{item.description}</p>
-          </Card>
-        ))}
-      </div>
-    </PageContainer>
-  </section>
-);
-
-const AssessmentExperienceSection = ({ darkMode }) => (
-  <section id="product" className="pb-8 lg:pb-12">
-    <PageContainer className="space-y-5" width="wide">
-      <div className="max-w-[62rem]">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--taali-purple)]">ASSESSMENT RUNTIME</div>
-        <h2 className="taali-display mt-3 text-4xl font-semibold text-[var(--taali-text)] md:text-5xl">
-          Real Tasks. Real Signal.
-        </h2>
-        <p className="mt-4 text-base leading-8 text-[var(--taali-muted)] md:text-lg">
-          TAALI drops candidates into role-traceable engineering work with real repo context, meaningful failure shape, and full telemetry. You see how they frame prompts, use AI, validate decisions, and recover under delivery pressure, so you can assess AI-native execution instead of guessing from a take-home score.
-        </p>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="muted">Role-traceable scenario</Badge>
-        <Badge variant="muted">Prompt + diff telemetry</Badge>
-        <Badge variant="muted">Deliberate failure shape</Badge>
-        <Badge variant="muted">Evidence without replay</Badge>
-      </div>
-
-      <AmbientProductShowcase heightClass="h-[min(72vh,44rem)]">
-        <Suspense fallback={<SurfacePreviewFallback heightClass="h-[min(68vh,42rem)]" />}>
-          <AssessmentRuntimePreviewView
-            heightClass="h-[min(72vh,44rem)]"
-            defaultCollapsedSections={{ contextWindow: true }}
-            lightMode={!darkMode}
-          />
-        </Suspense>
-      </AmbientProductShowcase>
-    </PageContainer>
-  </section>
-);
-
-const CandidateSummarySection = ({ darkMode }) => (
-  <section className="py-8 lg:py-12">
-    <PageContainer className="space-y-5" width="wide">
-      <div className="max-w-[62rem]">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--taali-purple)]">RECRUITER REVIEW</div>
-        <h2 className="taali-display mt-3 text-4xl font-semibold text-[var(--taali-text)] md:text-5xl">
-          Faster Recruitment Decisions.
-        </h2>
-        <p className="mt-4 text-base leading-8 text-[var(--taali-muted)] md:text-lg">
-          TAALI turns raw assessment activity into a benchmarked recruiter readout with recommendation, risk, and evidence in one place. Hiring managers get clear probe points, agencies get stronger shortlist confidence, and employers get proof they can trust without replaying the session.
-        </p>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <Badge variant="muted">Hire AI-native engineers faster</Badge>
-        <Badge variant="muted">Benchmark + percentile context</Badge>
-        <Badge variant="muted">Employer-ready proof</Badge>
-        <Badge variant="muted">Interview probes that matter</Badge>
-      </div>
-
-      <AmbientProductShowcase heightClass="h-[min(72vh,44rem)]">
-        <Suspense fallback={<SurfacePreviewFallback heightClass="h-[min(68vh,42rem)]" />}>
-          <CandidateResultsPreviewView
-            className="h-full"
-            maxHeightClass="max-h-[40rem]"
-            scaleClassName="scale-[0.92]"
-            scaledWidth="108.7%"
-            lightMode={!darkMode}
-          />
-        </Suspense>
-      </AmbientProductShowcase>
-    </PageContainer>
-  </section>
-);
-
-const TrustStrip = () => (
-  <section className="border-y border-[var(--taali-border-soft)] bg-[var(--taali-surface)] backdrop-blur-sm">
-    <PageContainer className="py-4">
-      <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
-        {TRUST_ITEMS.map((item) => (
-          <div key={item} className="flex items-start gap-3 rounded-[var(--taali-radius-card)] bg-[var(--taali-surface)] px-4 py-3">
-            <Sparkles size={16} className="mt-0.5 shrink-0 text-[var(--taali-purple)]" />
-            <p className="text-sm leading-6 text-[var(--taali-text)]">{item}</p>
-          </div>
-        ))}
-      </div>
-    </PageContainer>
-  </section>
-);
-
-const FrameworkSection = () => {
-  const dimensions = dimensionOrder.map((id) => ({
-    key: id,
-    title: getDimensionById(id).label,
-    description: getDimensionById(id).shortDescription,
-  }));
-
-  return (
-    <section id="framework" className="py-8 lg:py-12">
-      <PageContainer className="space-y-6">
-        <div className="max-w-3xl">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--taali-purple)]">SCORING FRAMEWORK</div>
-        <h2 className="taali-display mt-3 text-4xl font-semibold text-[var(--taali-text)] md:text-5xl">
-          A rubric built to measure AI-native engineering judgment.
-        </h2>
-          <p className="mt-4 text-base leading-8 text-[var(--taali-muted)] md:text-lg">
-            TAALI scores task completion, prompt strategy, context, debugging, communication, and role fit, then turns those signals into a single recruiter-facing review of AI-native engineering skill.
-          </p>
-        </div>
-
-        <div className="grid gap-6 xl:grid-cols-[1.1fr_0.9fr]">
-          <Panel className="p-5">
-            <div className="mb-4 flex items-center justify-between gap-3">
-              <div>
-                <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Dimension profile</div>
-                <div className="mt-2 taali-display text-2xl font-semibold text-[var(--taali-text)]">Two candidates. Same task. Different signal.</div>
-              </div>
-              <Badge variant="muted">0.0 to 10.0 rubric</Badge>
-            </div>
-
-            <div className="h-[340px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <RadarChart data={demoComparison} outerRadius="74%">
-                  <PolarGrid stroke="var(--taali-purple-soft)" />
-                  <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fill: 'var(--taali-muted)', fontFamily: 'var(--taali-font)' }} />
-                  <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10, fill: 'var(--taali-muted)' }} />
-                  <Radar name="AI-native product engineer" dataKey="candidateA" stroke="var(--taali-purple)" fill="var(--taali-purple)" fillOpacity={0.18} />
-                  <Radar name="Backend engineer" dataKey="candidateB" stroke="var(--taali-muted)" fill="var(--taali-muted)" fillOpacity={0.08} />
-                </RadarChart>
-              </ResponsiveContainer>
-            </div>
-          </Panel>
-
-          <div className="grid gap-4">
-            <Card className="p-4">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Candidate A</div>
-              <div className="mt-2 taali-display text-2xl font-semibold text-[var(--taali-text)]">Agent-native product builder</div>
-              <p className="mt-3 text-sm leading-6 text-[var(--taali-text)]">
-                Strong context framing, fast feedback loops, and consistent use of agent output to move the solution forward.
-              </p>
-            </Card>
-            <Card className="p-4">
-              <div className="text-[11px] font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">Candidate B</div>
-              <div className="mt-2 taali-display text-2xl font-semibold text-[var(--taali-text)]">Code-strong backend operator</div>
-              <p className="mt-3 text-sm leading-6 text-[var(--taali-text)]">
-                Good debugging depth and role fit, but weaker prompt clarity, slower iteration, and less effective agent collaboration.
-              </p>
-            </Card>
-          </div>
-        </div>
-
-        <ScoringCardGrid items={dimensions} className="md:grid-cols-2 xl:grid-cols-4" cardClassName="!p-5" />
-      </PageContainer>
-    </section>
-  );
-};
-
-const PricingSection = ({ onNavigate }) => (
-  <section id="pricing" className="py-8 lg:py-12">
-    <PageContainer className="space-y-6">
-      <div className="max-w-3xl">
-        <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--taali-purple)]">PRICING</div>
-        <h2 className="taali-display mt-3 text-4xl font-semibold text-[var(--taali-text)] md:text-5xl">
-          Simple pricing for high-signal technical hiring.
-        </h2>
-        <p className="mt-4 text-base leading-8 text-[var(--taali-muted)] md:text-lg">
-          Start pay-as-you-go, or move to a team plan when you want deeper workflow support, custom tasks, and ATS integration work.
-        </p>
-      </div>
-
-      <div className="grid gap-5 lg:grid-cols-[1.05fr_0.95fr]">
-        <Panel className="relative overflow-hidden bg-[linear-gradient(145deg,var(--taali-surface),var(--taali-surface-subtle))] p-6">
-          <Badge variant="purple" className="mb-4">Most flexible</Badge>
-          <div className="taali-display text-3xl font-semibold text-[var(--taali-text)]">Pay as you go</div>
-          <div className="mt-3 taali-display text-6xl font-semibold text-[var(--taali-text)]">AED 59</div>
-          <p className="mt-1 text-sm text-[var(--taali-muted)]">Per assessment, approximately ${aedToUsd(59)} USD. Invoiced in AED.</p>
-          <div className="mt-6 grid gap-3 md:grid-cols-2">
-            {[
-              'Real coding environment with coding-agent support',
-              'Automated scoring plus dimension-level evidence',
-              'Recruiter-ready candidate summary and report',
-              'Email support and fast setup',
-            ].map((feature) => (
-              <div key={feature} className="flex items-start gap-3 rounded-[var(--taali-radius-card)] bg-[var(--taali-surface)] px-4 py-3">
-                <Check size={16} className="mt-1 shrink-0 text-[var(--taali-purple)]" />
-                <p className="text-sm leading-6 text-[var(--taali-text)]">{feature}</p>
-              </div>
-            ))}
-          </div>
-          <div className="mt-6 flex flex-wrap gap-3">
-            <Button type="button" variant="primary" size="lg" onClick={() => onNavigate('login')}>
-              Buy credits
-            </Button>
-            <Button type="button" variant="secondary" size="lg" onClick={() => onNavigate('demo')}>
-              Talk to sales
-            </Button>
-          </div>
-        </Panel>
-
-        <Panel className="p-6">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.14em] text-[var(--taali-purple)]">TEAMS AND ENTERPRISE</div>
-          <div className="mt-3 taali-display text-3xl font-semibold text-[var(--taali-text)]">Need a tailored workflow?</div>
-          <p className="mt-4 text-base leading-8 text-[var(--taali-muted)]">
-            We support agencies, growing product teams, and enterprise hiring groups that need custom tasks, ATS integrations, invoicing, or volume pricing.
-          </p>
-          <div className="mt-6 grid gap-3">
-            {[
-              'Custom assessment templates mapped to your roles',
-              'Structured recruiter summary pages and reporting support',
-              'Guidance on rollout, rubric calibration, and hiring process fit',
-            ].map((item) => (
-              <Card key={item} className="p-4">
-                <p className="text-sm leading-6 text-[var(--taali-text)]">{item}</p>
-              </Card>
-            ))}
-          </div>
-        </Panel>
-      </div>
-    </PageContainer>
-  </section>
-);
-
-const Footer = () => (
-  <footer className="border-t border-[var(--taali-border-soft)] bg-[linear-gradient(180deg,var(--taali-surface),var(--taali-surface-subtle))] text-[var(--taali-text)]">
-    <div className="mx-auto flex max-w-7xl flex-wrap items-end justify-between gap-6 px-6 py-10">
-      <div>
+    <section className="relative overflow-hidden pb-20 pt-16 md:pb-28 md:pt-20">
+      <div
+        className="pointer-events-none absolute inset-0 opacity-60 tally-bg-soft"
+        style={{ maskImage: 'radial-gradient(60% 60% at 85% 20%, black, transparent 70%)' }}
+      />
+      <div className={`${containerClass} grid gap-12 lg:grid-cols-[1.05fr_.95fr] lg:items-center`}>
         <div>
-          <Logo />
-          <div className="pl-[3.25rem]">
-            <p className="mt-1 text-sm text-[var(--taali-muted)]">{BRAND.productTagline}</p>
+          <span className="eyebrow">
+            <span className="eyebrow-tag">NEW</span>
+            AI-tool proficiency scoring — now live
+            <span className="text-[var(--mute-2)]">→</span>
+          </span>
+          <h1 className="h-display mt-6 text-[clamp(56px,7.3vw,108px)] leading-[0.94]">
+            Hire engineers who can actually <em>ship</em> with AI.
+          </h1>
+          <p className="mt-5 max-w-[560px] text-[19px] leading-[1.55] text-[var(--mute)]">
+            Taali is the only technical assessment platform that measures how candidates <em>use</em> AI tools to solve real engineering problems, not just whether they can code without them.
+          </p>
+          <div className="mt-9 flex flex-wrap gap-3">
+            <button type="button" className="btn btn-primary btn-lg" onClick={() => onNavigate('demo')}>
+              Book a demo <span className="arrow">→</span>
+            </button>
+            <button type="button" className="btn btn-outline btn-lg" onClick={() => document.getElementById('product-tour')?.scrollIntoView({ behavior: 'smooth' })}>
+              Walk the product
+            </button>
+          </div>
+          <div className="mt-10 flex items-center gap-5 text-[13px] text-[var(--mute)]">
+            <div className="flex">
+              {['#E9DDFE', '#FFD1B8', '#C8F169', '#CDE0FF'].map((color, index) => (
+                <div
+                  key={color}
+                  className="h-7 w-7 rounded-full border-2 border-[var(--bg)]"
+                  style={{ marginLeft: index === 0 ? 0 : -8, background: color }}
+                />
+              ))}
+            </div>
+            <div>
+              {/* TODO(copy): verify customer proof references or replace with approved social proof. */}
+              Built for hiring teams evaluating engineers who already work with AI every day.
+            </div>
+          </div>
+        </div>
+
+        <div className="rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] p-5 shadow-[var(--shadow-lg)]">
+          <div className="mb-4 flex items-center justify-between border-b border-dashed border-[var(--line)] px-2 pb-4">
+            <div className="flex gap-1 font-[var(--font-mono)] text-xs text-[var(--mute)]">
+              <span className="rounded-[8px] bg-[var(--bg-3)] px-3 py-1.5 text-[var(--ink)]">Overview</span>
+              <span className="px-3 py-1.5">Signals</span>
+              <span className="px-3 py-1.5">Recording</span>
+              <span className="px-3 py-1.5">Notes</span>
+            </div>
+            <div className="flex items-center gap-2 font-[var(--font-mono)] text-xs text-[var(--ink-2)]">
+              <span className="h-2 w-2 rounded-full bg-[var(--green)] shadow-[0_0_0_3px_color-mix(in_oklab,var(--green)_25%,transparent)]" />
+              LIVE · 00:42:18
+            </div>
+          </div>
+
+          <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4 rounded-[var(--radius)] bg-[var(--bg)] p-5">
+            <div className="relative grid h-[72px] w-[72px] place-items-center">
+              <svg width="72" height="72" viewBox="0 0 72 72" className="absolute inset-0 -rotate-90">
+                <circle cx="36" cy="36" r="30" fill="none" stroke="var(--bg-3)" strokeWidth="6" />
+                <circle cx="36" cy="36" r="30" fill="none" stroke="var(--purple)" strokeWidth="6" strokeLinecap="round" strokeDasharray="188.4" strokeDashoffset="32" />
+              </svg>
+              <span className="font-[var(--font-display)] text-[28px] leading-none">83</span>
+            </div>
+            <div>
+              <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">Composite · Senior Fullstack</div>
+              <div className="mt-1 text-[17px] font-semibold">Priya Anand</div>
+              <div className="mt-1 text-[13px] text-[var(--mute)]">Task: “Review a GenAI production release with Claude Code”</div>
+            </div>
+            <div className="rounded-full bg-[color-mix(in_oklab,var(--green)_18%,transparent)] px-3 py-1.5 font-[var(--font-mono)] text-xs text-[var(--green)]">
+              Strong hire
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3">
+            {/* TODO(copy): these hero signal values are illustrative; confirm label + values before ship. */}
+            {heroSignals.map((signal) => (
+              <SignalRow key={signal.label} label={signal.label} value={signal.value} />
+            ))}
+          </div>
+
+          <div className="mt-4 flex gap-3 rounded-[var(--radius)] border border-dashed border-[color-mix(in_oklab,var(--purple)_40%,var(--line))] bg-[color-mix(in_oklab,var(--purple)_8%,var(--bg-2))] p-4 text-[13.5px] leading-6 text-[var(--ink-2)]">
+            <div className="grid h-7 w-7 shrink-0 place-items-center rounded-[8px] bg-[var(--purple)] text-white">
+              <Sparkles size={14} />
+            </div>
+            <div>
+              <b className="block text-[var(--ink)]">AI-assisted signal</b>
+              Delegated boilerplate and schema work, wrote the risky release logic herself, and pushed back on Claude&apos;s incorrect suggestions without prompting.
+            </div>
           </div>
         </div>
       </div>
+    </section>
 
-      <div className="text-sm text-[var(--taali-muted)]">
-        Questions?{' '}
-        <a href={`mailto:hello@${BRAND.domain}`} className="text-[var(--taali-text)] underline underline-offset-4">
-          hello@{BRAND.domain}
-        </a>
+    <section className="pb-20 md:pb-28">
+      <div className={containerClass}>
+        <SectionHeading
+          kicker="01 · THE PROBLEM"
+          title={<>Your test is measuring the <em>wrong</em> thing.</>}
+          copy="A candidate who can memorize algorithm trivia but cannot guide AI, validate output, or debug under pressure will still struggle in the real job. Taali swaps trivia for the behaviors modern engineering teams actually need to review."
+        />
+        <div className="grid gap-5 lg:grid-cols-2">
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-7 shadow-[var(--shadow-sm)]">
+            <span className="inline-flex rounded-full bg-[var(--bg-3)] px-3 py-1 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">Legacy platforms</span>
+            <h3 className="mt-4 font-[var(--font-display)] text-[42px] leading-[0.96] tracking-[-0.03em]">Invert a binary tree on a whiteboard.</h3>
+            <p className="mt-4 text-[14px] leading-7 text-[var(--mute)]">
+              Tests pattern recall. Optimizes for candidates who grind LeetCode. Correlates weakly with on-the-job performance and says almost nothing about AI-era collaboration skill.
+            </p>
+            <div className="mt-6 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 font-[var(--font-mono)] text-[12px] leading-6 text-[var(--ink-2)]">
+              <div className="mb-2 text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">01 · algorithmic</div>
+              <div className="text-[color:var(--mute)]">// given root of binary tree</div>
+              <div><span className="text-[var(--purple)]">function</span> invert(root) {'{'}</div>
+              <div>&nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> (!root) <span className="text-[var(--purple)]">return</span> root;</div>
+              <div>&nbsp;&nbsp;[root.left, root.right] = ...</div>
+              <div>{'}'}</div>
+            </div>
+          </div>
+
+          <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-7 shadow-[var(--shadow-sm)]">
+            <span className="inline-flex rounded-full bg-[var(--purple)] px-3 py-1 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.08em] text-white">Taali</span>
+            <h3 className="mt-4 font-[var(--font-display)] text-[42px] leading-[0.96] tracking-[-0.03em]">Review a GenAI release with Claude Code.</h3>
+            <p className="mt-4 text-[14px] leading-7 text-[var(--mute)]">
+              Tests real judgment. The candidate uses your stack, your AI tools, and your workflow. Taali scores prompt quality, error recovery, independence, and design thinking across the session.
+            </p>
+            <div className="mt-6 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 font-[var(--font-mono)] text-[12px] leading-6 text-[var(--ink-2)]">
+              <div className="mb-2 text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">01 · real task · genai production readiness</div>
+              <div className="text-[var(--mute)]"># BUG: moderation outages should not default to allow</div>
+              <div><span className="text-[var(--purple)]">if</span> moderation_result <span className="text-[var(--purple)]">is</span> None:</div>
+              <div>&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> True</div>
+              <div><span className="text-[var(--purple)]">if</span> user_intent <span className="text-[var(--purple)]">in</span> SAFETY_POLICY[&quot;always_escalate&quot;]:</div>
+              <div>&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> False</div>
+              <div className="mt-4 flex gap-3 rounded-[12px] border border-[var(--line)] bg-[var(--purple-soft)] p-3 text-[11.5px] leading-5 text-[var(--ink-2)]">
+                <div className="grid h-6 w-6 place-items-center rounded-[7px] bg-[var(--purple)] text-[10px] text-white">AI</div>
+                <div>
+                  <b>Taali scored:</b> Candidate prompted “highest-risk launch blockers first” and rejected Claude’s premature cache wrapper until the evidence was clear.
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
-  </footer>
+    </section>
+
+    <section className="pb-20 md:pb-28">
+      <div className={containerClass}>
+        <SectionHeading
+          kicker="02 · THE PLATFORM"
+          title={<>Everything you need to <em>see</em> real engineering.</>}
+          copy="Live coding in-browser, real AI tools, calibrated tasks, and recruiter views that surface only the signals that matter."
+        />
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {capabilityCards.map((card) => (
+            <div
+              key={card.kicker}
+              className={`rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)] ${card.tone === 'hero' ? 'md:col-span-2 xl:row-span-2' : ''}`.trim()}
+            >
+              <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">{card.kicker}</div>
+              <h3 className="mt-3 font-[var(--font-display)] text-[34px] leading-[1.02] tracking-[-0.03em]">{card.title}</h3>
+              <p className="mt-3 text-[14px] leading-7 text-[var(--mute)]">{card.body}</p>
+              {card.tone === 'hero' ? (
+                <div className="mt-5 rounded-[16px] border border-[var(--line)] bg-[var(--bg)] p-4">
+                  <div className="mb-3 flex items-center justify-between">
+                    <div className="flex gap-1.5">
+                      <span className="h-2 w-2 rounded-full bg-[var(--red)]" />
+                      <span className="h-2 w-2 rounded-full bg-[var(--amber)]" />
+                      <span className="h-2 w-2 rounded-full bg-[var(--green)]" />
+                    </div>
+                    <span className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">app/release_guardrails.py</span>
+                  </div>
+                  <div className="space-y-1 font-[var(--font-mono)] text-[12px] leading-6 text-[var(--ink-2)]">
+                    <div><span className="text-[var(--purple)]">from</span> app.policy <span className="text-[var(--purple)]">import</span> SAFETY_POLICY</div>
+                    <div><span className="text-[var(--purple)]">def</span> should_allow_response(*, moderation_result, confidence):</div>
+                    <div>&nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> moderation_result <span className="text-[var(--purple)]">is</span> None:</div>
+                    <div className="text-[var(--mute)]">&nbsp;&nbsp;&nbsp;&nbsp;# BUG: outage shouldn&apos;t default to allow</div>
+                    <div>&nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> True</div>
+                    <div>&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> confidence &gt;= 0.42</div>
+                  </div>
+                </div>
+              ) : null}
+              {card.tone === 'meter' ? (
+                <div className="mt-5 grid gap-3">
+                  {heroSignals.map((signal) => <SignalRow key={signal.label} label={signal.label} value={signal.value} />)}
+                </div>
+              ) : null}
+              {card.tone === 'list' ? (
+                <div className="mt-5 space-y-2 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 font-[var(--font-mono)] text-[12px] text-[var(--ink-2)]">
+                  <div className="flex items-center justify-between"><span>Q.041</span><span className="chip red">Hard</span></div>
+                  <div className="flex items-center justify-between"><span>Q.088</span><span className="chip amber">Medium</span></div>
+                  <div className="flex items-center justify-between"><span>Q.124</span><span className="chip amber">Medium</span></div>
+                  <div className="flex items-center justify-between"><span>Q.207</span><span className="chip red">Hard</span></div>
+                </div>
+              ) : null}
+              {card.tone === 'pill' ? (
+                <div className="mt-5 flex flex-wrap gap-2">
+                  {card.kicker.includes('INTEGRATIONS')
+                    ? ['Greenhouse', 'Ashby', 'Lever', 'Slack'].map((item) => <span key={item} className="chip">{item}</span>)
+                    : ['Stealth paste detection', 'Window focus trails', 'Voice verification'].map((item) => <span key={item} className="chip">{item}</span>)}
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section className="pb-20 md:pb-28">
+      <div className={containerClass}>
+        <SectionHeading
+          kicker="02.5 · INSIDE THE RUNTIME"
+          title={<>What your candidate <em>actually sees</em>.</>}
+          copy="Not a whiteboard and not a toy sandbox: a three-pane workspace with task context, editor, repo tree, and a real Claude chat, scored silently in the background."
+        />
+        <div className="overflow-hidden rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] shadow-[var(--shadow-lg)]">
+          <div className="flex flex-wrap items-center justify-between gap-4 border-b border-[var(--line)] px-5 py-4">
+            <div className="flex items-center gap-3">
+              <div className="grid h-11 w-11 place-items-center rounded-[12px] bg-[var(--purple-soft)] text-[var(--purple)]">
+                <TerminalSquare size={20} />
+              </div>
+              <div>
+                <div className="font-[var(--font-display)] text-xl tracking-[-0.02em]">GenAI <em>Production Readiness</em> Review</div>
+                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.1em] text-[var(--mute)]">Task · candidate workspace · in progress</div>
+              </div>
+            </div>
+            <div className="flex flex-wrap items-center gap-2 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
+              <span className="chip green"><span className="dot" />AI: Claude</span>
+              <span className="chip">Permission: default</span>
+              <span className="chip">◷ 26:41</span>
+            </div>
+          </div>
+          <div className="grid gap-0 border-b border-[var(--line)] lg:grid-cols-[220px_1fr_340px]">
+            <aside className="border-r border-[var(--line)] bg-[var(--bg)] p-4">
+              <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--mute)]">Context window</div>
+              <button type="button" className="btn btn-outline btn-sm mt-3 w-full justify-center">+ New file</button>
+              <div className="mt-4 space-y-2 font-[var(--font-mono)] text-[12px] text-[var(--ink-2)]">
+                <div>README.md</div>
+                <div>▾ app/</div>
+                <div className="pl-4">evals.py</div>
+                <div className="pl-4">fallbacks.py</div>
+                <div className="rounded-[8px] bg-[var(--purple-soft)] px-2 py-1 pl-4 text-[var(--purple-2)]">release_guardrails.py</div>
+                <div>▾ diagnostics/</div>
+                <div className="pl-4">release_findings.md</div>
+                <div>▾ tests/</div>
+                <div className="pl-4">test_release_readiness.py</div>
+              </div>
+            </aside>
+            <div className="border-r border-[var(--line)] p-4">
+              <div className="mb-4 flex items-center justify-between">
+                <div className="font-[var(--font-mono)] text-[12px] text-[var(--ink-2)]">app/release_guardrails.py <span className="text-[var(--mute)]">PYTHON</span></div>
+                <div className="flex gap-2">
+                  <button type="button" className="btn btn-outline btn-sm">Run</button>
+                  <button type="button" className="btn btn-outline btn-sm">Save</button>
+                </div>
+              </div>
+              <div className="space-y-1 rounded-[14px] bg-[var(--bg)] p-4 font-[var(--font-mono)] text-[12px] leading-6 text-[var(--ink-2)]">
+                <div><span className="text-[var(--mute)]">1</span> <span className="text-[var(--purple)]">from</span> app.policy <span className="text-[var(--purple)]">import</span> SAFETY_POLICY</div>
+                <div><span className="text-[var(--mute)]">2</span></div>
+                <div><span className="text-[var(--mute)]">3</span> <span className="text-[var(--purple)]">def</span> should_allow_response(*, moderation_result, user_intent, confidence):</div>
+                <div><span className="text-[var(--mute)]">4</span> &nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> moderation_result <span className="text-[var(--purple)]">is</span> None:</div>
+                <div className="rounded-[8px] bg-[color-mix(in_oklab,var(--purple)_8%,transparent)]"><span className="text-[var(--mute)]">5</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--mute)]"># BUG: moderation outages should not default to allow</span></div>
+                <div><span className="text-[var(--mute)]">6</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> True</div>
+                <div><span className="text-[var(--mute)]">7</span> &nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> confidence &gt;= 0.42</div>
+              </div>
+            </div>
+            <aside className="bg-[var(--bg)] p-4">
+              <div className="mb-3 flex items-center justify-between">
+                <span className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--mute)]">Claude</span>
+                <span className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">&gt; Show terminal</span>
+              </div>
+              <div className="space-y-3 rounded-[14px] bg-[var(--bg-2)] p-4 text-[13px] leading-6">
+                <div className="rounded-[12px] bg-[var(--ink)] px-4 py-3 text-[var(--bg)]">
+                  Prioritize the highest-risk launch blockers first, then propose the smallest safe patch sequence for the release review.
+                </div>
+                <div className="rounded-[12px] border border-[var(--line)] bg-[var(--bg)] px-4 py-3 text-[var(--ink-2)]">
+                  <div className="mb-1 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.1em] text-[var(--purple)]">Claude</div>
+                  Highest-risk blockers:
+                  <ul className="mt-2 list-disc space-y-1 pl-5">
+                    <li>Moderation outages currently default to allow, which is unsafe for launch traffic.</li>
+                    <li>Degraded mode can still answer directly on policy-sensitive requests.</li>
+                    <li>The eval gate logs failures but still marks the release approved.</li>
+                  </ul>
+                </div>
+              </div>
+            </aside>
+          </div>
+          <div className="grid gap-3 px-4 py-4 md:grid-cols-3">
+            {[
+              { kicker: 'PROMPT QUALITY', body: 'Candidate scoped “highest-risk blockers first” with an explicit downstream action.' },
+              { kicker: 'ERROR RECOVERY', body: 'Rejected Claude’s premature cache proposal and asked for evidence before changing the policy path.' },
+              { kicker: 'INDEPENDENCE', body: 'Delegated boilerplate and owned the concurrency, escalation, and release logic herself.' },
+            ].map((item) => (
+              <div key={item.kicker} className="rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 text-[13px] leading-6 text-[var(--ink-2)]">
+                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">{item.kicker}</div>
+                <p className="mt-2">{item.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="how-it-works" className="pb-20 md:pb-28">
+      <div className={containerClass}>
+        <SectionHeading
+          kicker="03 · HOW IT WORKS"
+          title={<>From job req to <em>confident</em> hire.</>}
+          copy="Four steps. Minimal coordination tax. Recruiters stay in their workflow while Taali runs underneath as signal."
+        />
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          {processSteps.map((step) => (
+            <div key={step.step} className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+              <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">{step.step}</div>
+              <h4 className="mt-4 text-[22px] font-semibold tracking-[-0.02em]">{step.title}</h4>
+              <p className="mt-3 text-[14px] leading-7 text-[var(--mute)]">{step.body}</p>
+              <div className="mt-5 rounded-[12px] bg-[var(--bg)] px-4 py-3 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--ink-2)]">
+                {step.foot}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </section>
+
+    <section className="pb-20 md:pb-28">
+      <div className={containerClass}>
+        <div className="rounded-[var(--radius-xl)] bg-[var(--ink)] px-8 py-10 text-[var(--bg)] shadow-[var(--shadow-lg)] md:px-12 md:py-12">
+          <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple-2)]">04 · THE EVIDENCE</div>
+          <h2 className="mt-4 max-w-[820px] font-[var(--font-display)] text-[clamp(36px,4.8vw,60px)] leading-[0.95] tracking-[-0.04em]">
+            Teams using Taali ship faster and <em>keep</em> the engineers they hire.
+          </h2>
+          <div className="mt-8 grid gap-6 md:grid-cols-2 xl:grid-cols-4">
+            {proofItems.map((item) => (
+              <div key={item.title}>
+                <div className="text-[42px] font-semibold tracking-[-0.03em] text-[var(--lime)]">{item.title}</div>
+                <p className="mt-3 text-[15px] leading-7 text-white/70">{item.body}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section className="pb-20 md:pb-28">
+      <div className={containerClass}>
+        <div className="relative overflow-hidden rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] px-8 py-10 shadow-[var(--shadow-md)] md:grid md:grid-cols-[1fr_320px] md:gap-8 md:px-10 md:py-12">
+          <div
+            className="pointer-events-none absolute inset-0 opacity-60 tally-bg-soft"
+            style={{ maskImage: 'radial-gradient(60% 80% at 85% 50%, black, transparent 70%)' }}
+          />
+          <div className="relative">
+            <div className="kicker">05 · GET STARTED</div>
+            <h3 className="mt-4 font-[var(--font-display)] text-[clamp(34px,4.8vw,58px)] leading-[0.95] tracking-[-0.04em]">See Taali run on a <em>real</em> role of yours.</h3>
+            <p className="mt-4 max-w-[560px] text-[15px] leading-7 text-[var(--mute)]">
+              We&apos;ll build a calibrated assessment for one of your open roles, run sample candidates through it, and walk you through the signals.
+            </p>
+            <div className="mt-6 flex flex-wrap gap-3">
+              <button type="button" className="btn btn-primary btn-lg" onClick={() => onNavigate('demo')}>
+                Book a demo <span className="arrow">→</span>
+              </button>
+              <button type="button" className="btn btn-outline btn-lg" onClick={() => onNavigate('login')}>
+                Talk to founders
+              </button>
+            </div>
+          </div>
+          <div className="relative mt-8 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg)] p-5 md:mt-0">
+            <div className="mb-2 text-sm font-semibold">Your demo · preview</div>
+            {/* TODO(copy): confirm the specific demo offer details before ship. */}
+            {[
+              ['ROLE', 'Senior Fullstack · AI Workflow'],
+              ['STACK', 'TS · Postgres · Claude'],
+              ['DURATION', '75 minutes'],
+              ['CANDIDATES', '3 sample (we provide)'],
+              ['DEBRIEF', '30 min · founders'],
+            ].map(([key, value]) => (
+              <div key={key} className="flex items-center justify-between border-b border-[var(--line-2)] py-3 last:border-b-0">
+                <span className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">{key}</span>
+                <span className="text-sm text-[var(--ink-2)]">{value}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section id="product-tour" className="pb-24">
+      <div className={containerClass}>
+        <div className="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <div className="kicker">06 · PRODUCT TOUR</div>
+            <h3 className="mt-3 font-[var(--font-display)] text-[46px] leading-none tracking-[-0.04em]">Walk the whole <em>product</em>.</h3>
+          </div>
+          <p className="max-w-[560px] text-[15px] leading-7 text-[var(--mute)]">
+            Every surface in Taali, redesigned to match this page: recruiter workspace, candidate runtime, and assessment reporting.
+          </p>
+        </div>
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+          {productTourItems.map((item) => (
+            <button
+              key={item.kicker}
+              type="button"
+              className="tile text-left transition-transform hover:-translate-y-0.5"
+              onClick={() => onNavigate(item.page)}
+            >
+              <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">{item.kicker}</div>
+              <div className="mt-2 font-[var(--font-display)] text-[26px] tracking-[-0.02em]">{item.title}</div>
+              <p className="mt-2 text-[13.5px] leading-6 text-[var(--mute)]">{item.body}</p>
+            </button>
+          ))}
+        </div>
+      </div>
+    </section>
+  </div>
 );
-
-export const LandingPage = ({ onNavigate }) => {
-  const [darkMode, setDarkMode] = useState(() => readDarkModePreference());
-
-  useEffect(() => (
-    subscribeThemePreference((next) => {
-      setDarkMode(Boolean(next));
-    })
-  ), []);
-
-  return (
-    <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
-      <LandingNav onNavigate={onNavigate} />
-      <HeroSection onNavigate={onNavigate} />
-      <TrustStrip />
-      <AssessmentExperienceSection darkMode={darkMode} />
-      <CandidateSummarySection darkMode={darkMode} />
-      <FrameworkSection />
-      <AudienceSection />
-      <PricingSection onNavigate={onNavigate} />
-      <Footer />
-    </div>
-  );
-};
 
 export default LandingPage;
