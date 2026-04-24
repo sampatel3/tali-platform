@@ -6,6 +6,10 @@ export const roles = {
   create: (data) => api.post('/roles', data),
   update: (id, data) => api.patch(`/roles/${id}`, data),
   remove: (id) => api.delete(`/roles/${id}`),
+  listCriteria: (roleId) => api.get(`/roles/${roleId}/criteria`),
+  createCriterion: (roleId, data) => api.post(`/roles/${roleId}/criteria`, data),
+  updateCriterion: (roleId, criterionId, data) => api.patch(`/roles/${roleId}/criteria/${criterionId}`, data),
+  deleteCriterion: (roleId, criterionId) => api.delete(`/roles/${roleId}/criteria/${criterionId}`),
   regenerateInterviewFocus: (roleId) => api.post(`/roles/${roleId}/regenerate-interview-focus`),
   uploadJobSpec: (roleId, file) => {
     const form = new FormData();
@@ -23,6 +27,8 @@ export const roles = {
   getApplication: (applicationId, config = {}) => api.get(`/applications/${applicationId}`, config),
   listApplicationEvents: (applicationId, params = {}) => api.get(`/applications/${applicationId}/events`, { params }),
   generateApplicationInterviewDebrief: (applicationId, data = {}) => api.post(`/applications/${applicationId}/interview-debrief`, data),
+  rescoreApplicationCv: (applicationId) => api.post(`/applications/${applicationId}/rescore-cv`),
+  bulkRejectApplications: (data) => api.post('/applications/bulk-reject', data),
   downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
   createApplication: (roleId, data) => api.post(`/roles/${roleId}/applications`, data),
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),

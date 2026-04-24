@@ -1,102 +1,735 @@
-@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600;700&family=Space+Grotesk:wght@500;600;700&display=swap');
-
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 :root {
-  --taali-bg: #f8f4ed;
-  --taali-surface: rgba(255, 255, 255, 0.92);
-  --taali-surface-elevated: #ffffff;
-  --taali-surface-subtle: #f7f3ff;
-  --taali-surface-muted: #fffaf3;
-  --taali-surface-warm: #fff7eb;
-  --taali-table-header: rgba(245, 241, 255, 0.92);
-  --taali-border: #1f2233;
-  --taali-border-soft: rgba(31, 34, 51, 0.12);
-  --taali-border-subtle: rgba(31, 34, 51, 0.08);
-  --taali-border-muted: #d9d4e8;
-  --taali-text: #151826;
-  --taali-inverse-bg: #0b1220;
-  --taali-inverse-text: #f8fafc;
-  --taali-muted: #676f82;
-  --taali-purple: #9D00FF;
-  --taali-purple-hover: #7f00db;
-  --taali-purple-soft: #efe4ff;
-  --taali-surface-hover: rgba(157, 0, 255, 0.06);
-  --taali-radius: 18px;
-  --taali-radius-card: 18px;
-  --taali-radius-panel: 24px;
-  --taali-font: 'IBM Plex Sans', 'Segoe UI', sans-serif;
-  --taali-font-display: 'Space Grotesk', 'IBM Plex Sans', sans-serif;
-  --taali-font-mono: 'JetBrains Mono', 'SFMono-Regular', monospace;
-  --taali-ring: rgba(157, 0, 255, 0.18);
-  --taali-shadow-soft: 0 18px 40px rgba(23, 19, 47, 0.07);
-  --taali-shadow-strong: 0 28px 80px rgba(17, 24, 39, 0.18);
+  --ink: #1d1730;
+  --ink-2: #2e2745;
+  --mute: #6e6580;
+  --mute-2: #9e96ae;
+  --line: #e7e0f0;
+  --line-2: #f0eaf7;
+  --bg: #f7f4fb;
+  --bg-2: #ffffff;
+  --bg-3: #efe8f7;
+  --purple: #7f39fb;
+  --purple-2: #6b21e8;
+  --purple-soft: #e9ddfe;
+  --lime: #c8f169;
+  --peach: #ffd1b8;
+  --green: #15a36a;
+  --red: #e64a4a;
+  --amber: #d88a1c;
+  --workable: #2d8cff;
+  --workable-dark: #1a5fbf;
+  --shadow-sm: 0 1px 0 rgba(29, 23, 48, 0.04), 0 2px 6px rgba(29, 23, 48, 0.04);
+  --shadow-md: 0 1px 0 rgba(29, 23, 48, 0.04), 0 12px 32px rgba(29, 23, 48, 0.08);
+  --shadow-lg: 0 2px 0 rgba(29, 23, 48, 0.04), 0 30px 60px -20px rgba(29, 23, 48, 0.22);
+  --radius-sm: 10px;
+  --radius: 14px;
+  --radius-lg: 22px;
+  --radius-xl: 28px;
+  --pad-x: 48px;
+  --section-y: 96px;
+  --font-display: 'Geist', 'Inter', system-ui, sans-serif;
+  --font-sans: 'Geist', 'Inter', system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+
+  /* Backwards-compatible variables for existing components. */
+  --taali-bg: var(--bg);
+  --taali-surface: color-mix(in oklab, var(--bg-2) 92%, transparent);
+  --taali-surface-elevated: var(--bg-2);
+  --taali-surface-subtle: var(--bg-3);
+  --taali-surface-muted: color-mix(in oklab, var(--purple) 4%, var(--bg-2));
+  --taali-surface-warm: color-mix(in oklab, var(--peach) 24%, var(--bg-2));
+  --taali-table-header: color-mix(in oklab, var(--bg) 85%, var(--bg-2));
+  --taali-border: var(--ink);
+  --taali-border-soft: color-mix(in oklab, var(--line) 78%, transparent);
+  --taali-border-subtle: color-mix(in oklab, var(--ink) 8%, transparent);
+  --taali-border-muted: var(--line);
+  --taali-text: var(--ink);
+  --taali-inverse-bg: var(--ink);
+  --taali-inverse-text: var(--bg);
+  --taali-muted: var(--mute);
+  --taali-purple: var(--purple);
+  --taali-purple-hover: var(--purple-2);
+  --taali-purple-soft: var(--purple-soft);
+  --taali-surface-hover: color-mix(in oklab, var(--purple) 8%, transparent);
+  --taali-radius: var(--radius);
+  --taali-radius-card: var(--radius-lg);
+  --taali-radius-panel: var(--radius-xl);
+  --taali-font: var(--font-sans);
+  --taali-font-display: var(--font-display);
+  --taali-font-mono: var(--font-mono);
+  --taali-ring: color-mix(in oklab, var(--purple) 18%, transparent);
+  --taali-shadow-soft: var(--shadow-md);
+  --taali-shadow-strong: var(--shadow-lg);
   --taali-spacing: 8px;
-
-  /* Semantic colors */
-  --taali-success: #16a34a;
-  --taali-success-soft: #edf9f1;
-  --taali-success-border: #8fd4ab;
-  --taali-warning: #d97706;
-  --taali-warning-soft: #fff7ec;
-  --taali-warning-border: #f0c787;
-  --taali-danger: #b42330;
-  --taali-danger-soft: #fff5f6;
-  --taali-danger-border: #f5a3a9;
-  --taali-info: #2563eb;
-  --taali-info-soft: #eff6ff;
-  --taali-info-border: #93c5fd;
-
-  /* Difficulty level colors */
-  --taali-level-junior: #16a34a;
-  --taali-level-junior-soft: #edf9f1;
-  --taali-level-mid: #d97706;
-  --taali-level-mid-soft: #fff7ec;
-  --taali-level-senior: #dc2626;
-  --taali-level-senior-soft: #fef2f2;
-  --taali-level-staff: #7c3aed;
-  --taali-level-staff-soft: #f5f3ff;
+  --taali-success: var(--green);
+  --taali-success-soft: color-mix(in oklab, var(--green) 10%, var(--bg-2));
+  --taali-success-border: color-mix(in oklab, var(--green) 28%, var(--line));
+  --taali-warning: var(--amber);
+  --taali-warning-soft: color-mix(in oklab, var(--amber) 12%, var(--bg-2));
+  --taali-warning-border: color-mix(in oklab, var(--amber) 28%, var(--line));
+  --taali-danger: var(--red);
+  --taali-danger-soft: color-mix(in oklab, var(--red) 10%, var(--bg-2));
+  --taali-danger-border: color-mix(in oklab, var(--red) 28%, var(--line));
+  --taali-info: var(--purple);
+  --taali-info-soft: color-mix(in oklab, var(--purple) 10%, var(--bg-2));
+  --taali-info-border: color-mix(in oklab, var(--purple) 28%, var(--line));
 }
 
-* {
-  margin: 0;
+html[data-theme="dark"] {
+  --ink: #f3effb;
+  --ink-2: #d9d2e8;
+  --mute: #a79cbe;
+  --mute-2: #776b8d;
+  --line: #2a2340;
+  --line-2: #201a34;
+  --bg: #0e0a18;
+  --bg-2: #16102a;
+  --bg-3: #1c1535;
+  --purple: #9a5bff;
+  --purple-2: #b689ff;
+  --purple-soft: #2a1b4d;
+  --workable: #53a3ff;
+  --workable-dark: #2d8cff;
+  --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 1px 0 rgba(0, 0, 0, 0.3), 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 2px 0 rgba(0, 0, 0, 0.3), 0 30px 60px -20px rgba(0, 0, 0, 0.7);
+}
+
+@layer base {
+  * {
+    box-sizing: border-box;
+  }
+
+  html,
+  body,
+  #root {
+    min-height: 100%;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--font-sans);
+    font-feature-settings: "ss01", "cv11";
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  a {
+    color: inherit;
+    text-decoration: none;
+  }
+
+  button,
+  input,
+  select,
+  textarea {
+    font: inherit;
+  }
+
+  code {
+    font-family: var(--font-mono);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6,
+  p {
+    margin: 0;
+  }
+
+  h1 em,
+  h2 em,
+  h3 em {
+    font-style: normal !important;
+    color: var(--purple);
+    font-weight: inherit;
+  }
+}
+
+.app-nav {
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  background: color-mix(in oklab, var(--bg) 82%, transparent);
+  backdrop-filter: saturate(1.2) blur(14px);
+  border-bottom: 1px solid var(--line);
+}
+
+.app-nav-inner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  min-height: 64px;
+  gap: 18px;
+  padding: 0 var(--pad-x);
+}
+
+.logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  background: transparent;
   padding: 0;
-  box-sizing: border-box;
+  color: inherit;
+  cursor: pointer;
 }
 
-body {
-  font-family: var(--taali-font);
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  background:
-    radial-gradient(circle at top left, rgba(157, 0, 255, 0.08), transparent 26%),
-    radial-gradient(circle at top right, rgba(255, 196, 89, 0.08), transparent 24%),
-    linear-gradient(180deg, #fbf7f1 0%, #f6f3fb 100%);
-  background-color: var(--taali-bg);
-  color: var(--taali-text);
-  transition: background-color 0.2s ease, color 0.2s ease;
+.logo-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  background: var(--purple);
+  display: grid;
+  place-items: center;
+  flex-shrink: 0;
 }
 
-/* Ensure all UI elements inherit the TAALI font (no system font drift) */
-h1, h2, h3, h4, h5, h6, button, input, select, textarea, table, th, td, label, span, p, a {
-  font-family: inherit;
+.logo-mark svg {
+  width: 20px;
+  height: 20px;
 }
 
-.taali-display {
-  font-family: var(--taali-font-display);
-  letter-spacing: -0.04em;
+.logo-word {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  text-transform: lowercase;
+  line-height: 1;
 }
 
-code {
-  font-family: var(--taali-font-mono);
+.logo-word em {
+  font-style: normal;
+  color: var(--purple);
+}
+
+.app-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+}
+
+.app-tab {
+  border: 0;
+  background: transparent;
+  padding: 7px 18px;
+  border-radius: 999px;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--mute);
+  letter-spacing: 0.01em;
+  cursor: pointer;
+}
+
+.app-tab:hover {
+  color: var(--ink);
+}
+
+.app-tab.active {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.app-user {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-user .name {
+  text-align: right;
+  font-size: 13px;
+}
+
+.app-user .name .n {
+  font-weight: 600;
+}
+
+.app-user .name .sub {
+  color: var(--mute);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+}
+
+.app-avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--purple-soft);
+  color: var(--purple);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.icon-btn {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  color: var(--ink-2);
+  transition: border-color 0.15s, color 0.15s, transform 0.08s;
+}
+
+.icon-btn:hover {
+  color: var(--purple);
+  border-color: var(--purple);
+}
+
+.icon-btn:active {
+  transform: translateY(1px);
+}
+
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  padding: 10px 18px;
+  background: transparent;
+  font-size: 14px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition: transform 0.08s ease, background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
+}
+
+.btn:active {
+  transform: translateY(1px);
+}
+
+.btn .arrow {
+  transition: transform 0.2s;
+}
+
+.btn:hover .arrow {
+  transform: translateX(3px);
+}
+
+.btn-primary {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.btn-primary:hover {
+  background: var(--purple);
+}
+
+.btn-purple {
+  background: var(--purple);
+  color: #fff;
+}
+
+.btn-purple:hover {
+  background: var(--purple-2);
+}
+
+.btn-outline {
+  background: var(--bg-2);
+  border-color: var(--line);
+  color: var(--ink-2);
+}
+
+.btn-outline:hover {
+  border-color: var(--ink);
+  color: var(--ink);
+}
+
+.btn-ghost {
+  color: var(--ink-2);
+}
+
+.btn-ghost:hover {
+  color: var(--purple);
+}
+
+.btn-sm {
+  padding: 7px 14px;
+  font-size: 13px;
+}
+
+.btn-lg {
+  padding: 14px 24px;
+  font-size: 15.5px;
+}
+
+.card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-md);
+}
+
+.card.flat {
+  box-shadow: var(--shadow-sm);
+}
+
+.tile {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+  box-shadow: var(--shadow-sm);
+}
+
+.h-display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.035em;
+  line-height: 0.98;
+  color: var(--ink);
+}
+
+.eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  width: fit-content;
+  padding: 5px 12px 5px 5px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  border-radius: 999px;
+  box-shadow: var(--shadow-sm);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.eyebrow-tag {
+  background: var(--purple);
+  color: #fff;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+}
+
+.mono-label,
+.kicker {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.mono-label {
+  color: var(--mute);
+}
+
+.kicker {
+  color: var(--purple);
+}
+
+.page {
+  max-width: 1440px;
+  margin: 0 auto;
+  padding: 40px var(--pad-x) 120px;
+}
+
+.page-head {
+  position: relative;
+  overflow: hidden;
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 24px;
+  margin-bottom: 24px;
+  padding: 32px 40px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm);
+}
+
+.page-head > * {
+  position: relative;
+}
+
+.page-head .tally-bg {
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(var(--line-2) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-2) 1px, transparent 1px);
+  background-size: 48px 48px;
+  mask-image: radial-gradient(50% 80% at 80% 50%, black, transparent 70%);
+  opacity: 0.7;
+  pointer-events: none;
+}
+
+.page-head h1 {
+  margin: 10px 0 6px;
+  font-family: var(--font-display);
+  font-size: 40px;
+  font-weight: 600;
+  line-height: 1.05;
+  letter-spacing: -0.035em;
+}
+
+.page-head .sub {
+  max-width: 620px;
+  color: var(--mute);
+  font-size: 14.5px;
+  line-height: 1.5;
+}
+
+.field,
+label.field {
+  display: block;
+}
+
+.field > .k {
+  display: block;
+  margin-bottom: 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.field input,
+.field select,
+.field textarea {
+  width: 100%;
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  color: var(--ink);
+  font-size: 14px;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  outline: 0;
+  border-color: var(--purple);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple) 16%, transparent);
+}
+
+.field input::placeholder,
+.field textarea::placeholder {
+  color: var(--mute-2);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.02em;
+}
+
+.chip.purple {
+  background: var(--purple-soft);
+  color: var(--purple-2);
+}
+
+.chip.ink {
+  background: var(--ink);
+  color: var(--bg);
+}
+
+.chip.green {
+  background: color-mix(in oklab, var(--green) 14%, transparent);
+  color: var(--green);
+}
+
+.chip.red {
+  background: color-mix(in oklab, var(--red) 14%, transparent);
+  color: var(--red);
+}
+
+.chip.amber {
+  background: color-mix(in oklab, var(--amber) 14%, transparent);
+  color: var(--amber);
+}
+
+.chip .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 40px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+}
+
+.filter-chip:hover {
+  border-color: var(--purple);
+  color: var(--ink);
+}
+
+.filter-chip.on {
+  border-color: color-mix(in oklab, var(--purple) 28%, var(--line));
+  background: color-mix(in oklab, var(--purple) 10%, transparent);
+  color: var(--purple);
+}
+
+.t-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  background: var(--bg-3);
+  color: var(--mute);
+}
+
+.t-pill.p1 {
+  background: color-mix(in oklab, var(--red) 14%, var(--bg-3));
+  color: var(--red);
+}
+
+.t-pill.p2 {
+  background: color-mix(in oklab, var(--amber) 14%, var(--bg-3));
+  color: var(--amber);
+}
+
+.t-pill.p3 {
+  background: var(--bg-3);
+  color: var(--mute);
+}
+
+.pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  animation: pulse 1.8s infinite;
+}
+
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  50% {
+    opacity: 0.5;
+    transform: scale(0.8);
+  }
+}
+
+.bar {
+  position: relative;
+  overflow: hidden;
+  height: 6px;
+  border-radius: 6px;
+  background: var(--bg-3);
+}
+
+.bar > i {
+  display: block;
+  height: 100%;
+  border-radius: 6px;
+  background: linear-gradient(90deg, var(--purple-2), var(--purple));
+}
+
+.bar.green > i {
+  background: var(--green);
+}
+
+.bar.red > i {
+  background: var(--red);
+}
+
+.bar.amber > i {
+  background: var(--amber);
+}
+
+.tally-bg-soft {
+  background-image:
+    linear-gradient(var(--line-2) 1px, transparent 1px),
+    linear-gradient(90deg, var(--line-2) 1px, transparent 1px);
+  background-size: 48px 48px;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+}
+
+.col {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.grow {
+  flex: 1 1 auto;
+}
+
+.muted {
+  color: var(--mute);
+}
+
+.mono {
+  font-family: var(--font-mono);
+}
+
+.display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.035em;
 }
 
 .taali-page {
   margin: 0 auto;
   width: 100%;
-  max-width: 80rem;
+  max-width: 88rem;
   padding: calc(var(--taali-spacing) * 3) calc(var(--taali-spacing) * 2);
 }
 
@@ -108,71 +741,26 @@ code {
   padding: calc(var(--taali-spacing) * 2.5) calc(var(--taali-spacing) * 2);
 }
 
-@media (min-width: 768px) {
-  .taali-page {
-    padding: calc(var(--taali-spacing) * 4) calc(var(--taali-spacing) * 3);
-  }
-
-  .taali-page-compact {
-    padding: calc(var(--taali-spacing) * 3) calc(var(--taali-spacing) * 2.5);
-  }
-}
-
-.taali-panel {
-  border: 1px solid var(--taali-border-soft);
-  border-radius: var(--taali-radius-panel);
-  background: var(--taali-surface);
-  box-shadow: var(--taali-shadow-soft);
-  backdrop-filter: blur(10px);
-}
-
-.taali-card {
-  border: 1px solid var(--taali-border-soft);
-  border-radius: var(--taali-radius-card);
-  background: rgba(255, 255, 255, 0.78);
-}
-
+.taali-panel,
+.taali-card,
 .taali-page-header {
   border: 1px solid var(--taali-border-soft);
-  border-radius: var(--taali-radius-panel);
-  background: rgba(255, 255, 255, 0.82);
-  padding: calc(var(--taali-spacing) * 3);
+  background: var(--taali-surface);
   box-shadow: var(--taali-shadow-soft);
+}
+
+.taali-panel,
+.taali-page-header {
+  border-radius: var(--taali-radius-panel);
   backdrop-filter: blur(12px);
 }
 
-.taali-page-title {
-  line-height: 1.05;
+.taali-card {
+  border-radius: var(--taali-radius-card);
 }
 
-.taali-page-header-compact {
-  padding: calc(var(--taali-spacing) * 2);
-}
-
-.taali-page-header-compact .taali-page-title {
-  font-size: 2rem;
-}
-
-.taali-page-header-compact .taali-page-subtitle {
-  font-size: 0.875rem;
-  line-height: 1.35;
-}
-
-.taali-page-title {
-  line-height: 1.05;
-}
-
-.taali-page-header-compact {
-  padding: calc(var(--taali-spacing) * 2);
-}
-
-.taali-page-header-compact .taali-page-title {
-  font-size: 2rem;
-}
-
-.taali-page-header-compact .taali-page-subtitle {
-  font-size: 0.875rem;
-  line-height: 1.35;
+.taali-page-header {
+  padding: calc(var(--taali-spacing) * 3);
 }
 
 .taali-btn {
@@ -188,54 +776,15 @@ code {
   box-shadow: 0 0 0 3px var(--taali-ring);
 }
 
-.taali-btn:disabled {
-  cursor: not-allowed;
-  opacity: 0.5;
-}
-
 .taali-btn-primary {
-  background: linear-gradient(135deg, var(--taali-purple), #6f53ff);
+  background: linear-gradient(135deg, var(--purple), var(--purple-2));
   border-color: transparent;
-  color: #ffffff;
-  box-shadow: 0 14px 28px rgba(157, 0, 255, 0.22);
-}
-
-.taali-btn-primary:hover:not(:disabled) {
-  background: linear-gradient(135deg, var(--taali-purple-hover), #5e46ef);
-  transform: translateY(-1px);
+  color: #fff;
 }
 
 .taali-btn-secondary {
   background: rgba(255, 255, 255, 0.84);
-  border-color: var(--taali-border-soft);
-  color: var(--taali-text);
-}
-
-.taali-btn-secondary:hover:not(:disabled) {
-  background: rgba(243, 237, 255, 0.96);
-  transform: translateY(-1px);
-}
-
-.taali-btn-ghost {
-  background: transparent;
-  border-color: transparent;
-  color: var(--taali-text);
-}
-
-.taali-btn-ghost:hover:not(:disabled) {
-  background: rgba(255, 255, 255, 0.7);
-  border-color: var(--taali-border-soft);
-}
-
-.taali-btn-danger {
-  border-color: var(--taali-danger);
-  background: var(--taali-danger-soft);
-  color: var(--taali-danger);
-}
-
-.taali-btn-danger:hover:not(:disabled) {
-  background: var(--taali-danger);
-  color: #ffffff;
+  color: var(--ink);
 }
 
 .taali-input,
@@ -245,286 +794,17 @@ code {
   border: 1px solid var(--taali-border-soft);
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.88);
-  color: var(--taali-text);
-  font-size: 0.875rem;
-  line-height: 1.25rem;
+  color: var(--ink);
 }
 
-.taali-input,
-.taali-select {
-  min-height: 2.6rem;
-  padding: 0.5rem 0.75rem;
-}
-
-.taali-textarea {
-  padding: 0.6rem 0.75rem;
-}
-
-.taali-input::placeholder,
-.taali-textarea::placeholder {
-  color: var(--taali-muted);
-}
-
-.taali-input:focus-visible,
-.taali-select:focus-visible,
-.taali-textarea:focus-visible {
-  outline: 2px solid transparent;
-  box-shadow: 0 0 0 3px var(--taali-ring);
-  border-color: var(--taali-purple);
-}
-
-.taali-badge {
-  display: inline-flex;
-  align-items: center;
-  border: 1px solid var(--taali-border-muted);
-  border-radius: 999px;
-  padding: 0.22rem 0.62rem;
-  font-size: 0.7rem;
-  line-height: 1.2;
-  font-weight: 600;
-}
-
-.taali-badge-purple {
-  border-color: #d0aaff;
-  background: var(--taali-purple-soft);
-  color: var(--taali-purple-hover);
-}
-
-.taali-badge-muted {
-  border-color: var(--taali-border-muted);
-  background: #f4f5f8;
-  color: #4b5563;
-}
-
-.taali-badge-success {
-  border-color: var(--taali-success-border);
-  background: var(--taali-success-soft);
-  color: var(--taali-success);
-}
-
-.taali-badge-warning {
-  border-color: var(--taali-warning-border);
-  background: var(--taali-warning-soft);
-  color: var(--taali-warning);
-}
-
-.taali-badge-danger {
-  border-color: var(--taali-danger-border);
-  background: var(--taali-danger-soft);
-  color: var(--taali-danger);
-}
-
-.taali-badge-info {
-  border-color: var(--taali-info-border);
-  background: var(--taali-info-soft);
-  color: var(--taali-info);
-}
-
-.taali-empty-state {
-  border: 1.5px dashed var(--taali-border-muted);
-  border-radius: var(--taali-radius-card);
-  background: #f9f8fd;
-}
-
-.taali-table-shell {
-  border: 1px solid var(--taali-border-soft);
-  border-radius: var(--taali-radius-panel);
-  overflow-x: auto;
-  overflow-y: auto;
-  max-width: 100%;
-  overscroll-behavior: contain;
-  background: rgba(255, 255, 255, 0.84);
-  box-shadow: var(--taali-shadow-soft);
-  backdrop-filter: blur(12px);
-}
-
-.taali-table-shell table {
-  width: 100%;
-  border-collapse: collapse;
-}
-
-.taali-table-shell thead tr {
-  background: var(--taali-table-header);
-}
-
-.taali-table-shell th,
-.taali-table-shell td {
-  border-bottom: 1px solid #e7e3f4;
-}
-
-.taali-table-shell tbody tr:hover {
-  background: var(--taali-surface-hover);
-}
-
-.taali-nav {
-  border-bottom: 1px solid var(--taali-border-soft);
-  background: rgba(255, 255, 255, 0.8);
-  backdrop-filter: blur(12px);
-}
-
-@keyframes taali-sheet-in {
-  from {
-    opacity: 0;
-    transform: translateY(18px);
+@media (max-width: 1024px) {
+  .app-nav-inner {
+    padding-left: 24px;
+    padding-right: 24px;
   }
-  to {
-    opacity: 1;
-    transform: translateY(0);
+
+  .page {
+    padding-left: 24px;
+    padding-right: 24px;
   }
-}
-
-@keyframes taali-dialog-in {
-  from {
-    opacity: 0;
-    transform: translateY(12px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
-}
-
-.dark {
-  color-scheme: dark;
-}
-
-.dark {
-  --taali-bg: #0f172a;
-  --taali-surface: rgba(17, 24, 39, 0.82);
-  --taali-surface-elevated: #111827;
-  --taali-surface-subtle: #162033;
-  --taali-surface-muted: #192334;
-  --taali-surface-warm: #1b2434;
-  --taali-table-header: #1e293b;
-  --taali-border: #475569;
-  --taali-border-soft: rgba(148, 163, 184, 0.18);
-  --taali-border-subtle: rgba(148, 163, 184, 0.12);
-  --taali-border-muted: #334155;
-  --taali-text: #f8fafc;
-  --taali-inverse-bg: #020617;
-  --taali-inverse-text: #f8fafc;
-  --taali-muted: #cbd5e1;
-  --taali-purple: #a855f7;
-  --taali-purple-hover: #9333ea;
-  --taali-purple-soft: #2e1065;
-  --taali-surface-hover: rgba(255, 255, 255, 0.04);
-  --taali-shadow-soft: 0 18px 40px rgba(2, 6, 23, 0.34);
-  --taali-shadow-strong: 0 28px 80px rgba(2, 6, 23, 0.56);
-
-  /* Semantic colors – dark mode */
-  --taali-success: #22c55e;
-  --taali-success-soft: #052e16;
-  --taali-success-border: #166534;
-  --taali-warning: #f59e0b;
-  --taali-warning-soft: #451a03;
-  --taali-warning-border: #92400e;
-  --taali-danger: #ef4444;
-  --taali-danger-soft: #450a0a;
-  --taali-danger-border: #991b1b;
-  --taali-info: #60a5fa;
-  --taali-info-soft: #1e3a5f;
-  --taali-info-border: #1e40af;
-
-  /* Difficulty level colors – dark mode */
-  --taali-level-junior: #22c55e;
-  --taali-level-junior-soft: #052e16;
-  --taali-level-mid: #f59e0b;
-  --taali-level-mid-soft: #451a03;
-  --taali-level-senior: #ef4444;
-  --taali-level-senior-soft: #450a0a;
-  --taali-level-staff: #a78bfa;
-  --taali-level-staff-soft: #2e1065;
-}
-
-.dark body {
-  background-color: var(--taali-bg);
-  color: var(--taali-text);
-}
-
-.dark .taali-table-shell thead tr {
-  background: var(--taali-table-header);
-}
-
-.dark .taali-table-shell th,
-.dark .taali-table-shell td {
-  border-bottom-color: var(--taali-border-muted);
-}
-
-.dark .taali-table-shell tbody tr:hover {
-  background: #1e293b;
-}
-
-.dark .taali-badge-muted {
-  background: #1e293b;
-  color: #cbd5e1;
-}
-
-.dark .taali-empty-state {
-  background: #1e293b;
-}
-
-.dark .taali-btn-secondary:hover:not(:disabled) {
-  background: #1e293b;
-}
-
-.dark .taali-btn-ghost:hover:not(:disabled) {
-  background: #1e293b;
-}
-
-/* Utility class bridge so legacy light Tailwind classes render well in default dark mode */
-.dark .bg-white {
-  background-color: #111827 !important;
-}
-
-.dark .bg-gray-50 {
-  background-color: #0f172a !important;
-}
-
-.dark .bg-gray-100 {
-  background-color: #1e293b !important;
-}
-
-.dark .bg-gray-200 {
-  background-color: #334155 !important;
-}
-
-.dark .text-gray-900,
-.dark .text-gray-800,
-.dark .text-gray-700 {
-  color: #e5e7eb !important;
-}
-
-.dark .text-gray-600,
-.dark .text-gray-500,
-.dark .text-gray-400 {
-  color: #94a3b8 !important;
-}
-
-.dark .border-black {
-  border-color: #475569 !important;
-}
-
-.dark .border-gray-100,
-.dark .border-gray-200,
-.dark .border-gray-300 {
-  border-color: #334155 !important;
-}
-
-.dark .hover\:bg-gray-100:hover {
-  background-color: #1e293b !important;
-}
-
-.dark .hover\:bg-gray-200:hover {
-  background-color: #334155 !important;
 }

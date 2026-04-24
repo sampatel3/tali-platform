@@ -106,11 +106,11 @@ Provide a JSON response with EXACTLY this structure (no markdown, no explanation
 }}
 
 Scoring policy:
-1) The score must be tailored to the actual role requirements and recruiter-added criteria.
+1) The score must be tailored to the actual role requirements and explicit scoring criteria.
 2) If a must-have requirement is missing or unsupported by evidence, reduce scores materially.
 3) Be evidence-based; do not infer experience not present in the CV text.
 4) Use the full 0-100 scale with granular precision (do not round to 10-point bands): 50 = neutral baseline, 70+ = good match, 85+ = strong match.
-5) Include a requirements_assessment entry for each recruiter-added criterion when provided.
+5) Include a requirements_assessment entry for each explicit scoring criterion when provided.
 """
 
 
@@ -153,7 +153,7 @@ def _format_additional_requirements_section(additional_requirements: Optional[st
     item_lines = "\n".join(f"- {item}" for item in items)
     return f"""
 
-Recruiter-added scoring criteria (treat these as explicit decision requirements):
+Explicit scoring criteria (treat these as decision requirements):
 {item_lines}
 """
 

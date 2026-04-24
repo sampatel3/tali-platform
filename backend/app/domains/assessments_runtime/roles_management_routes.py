@@ -15,10 +15,26 @@ from ...models.task import Task
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
-from ...schemas.role import RoleCreate, RoleResponse, RoleTaskLinkRequest, RoleUpdate
+from ...schemas.role import (
+    RoleCreate,
+    RoleResponse,
+    RoleTaskLinkRequest,
+    RoleUpdate,
+    ScoringCriterion,
+    ScoringCriterionCreate,
+    ScoringCriterionUpdate,
+)
 from ...services.document_service import process_document_upload
 from ...services.interview_focus_service import generate_interview_focus_sync
-from .role_support import get_role, role_to_response
+from .applications_routes import _rescore_role_applications
+from .role_support import (
+    default_role_scoring_criteria,
+    get_role,
+    normalize_role_scoring_criteria,
+    refresh_role_job_spec_criteria,
+    role_to_response,
+    set_role_scoring_criteria,
+)
 from .pipeline_service import role_pipeline_counts
 
 router = APIRouter(tags=["Roles"])
@@ -54,6 +70,7 @@ def create_role(
         description=(data.description or None),
         additional_requirements=(data.additional_requirements or None),
     )
+    role.scoring_criteria = default_role_scoring_criteria(role)
     db.add(role)
     try:
         db.commit()
@@ -196,6 +213,9 @@ def update_role(
         role.description = updates["description"] or None
     if "additional_requirements" in updates:
         role.additional_requirements = updates["additional_requirements"] or None
+        role.scoring_criteria = default_role_scoring_criteria(role)
+    if "reject_threshold" in updates and updates["reject_threshold"] is not None:
+        role.reject_threshold = int(updates["reject_threshold"])
     try:
         db.commit()
         db.refresh(role)
@@ -253,6 +273,7 @@ def upload_role_job_spec(
     role.job_spec_text = result["extracted_text"]
     role.description = (result.get("extracted_text") or "").strip() or role.description
     role.job_spec_uploaded_at = now
+    refresh_role_job_spec_criteria(role)
     role.interview_focus = None
     role.interview_focus_generated_at = None
 
@@ -285,6 +306,130 @@ def upload_role_job_spec(
         "interview_focus_generated_at": role.interview_focus_generated_at,
         "interview_focus": role.interview_focus,
         "interview_focus_error": interview_focus_error,
+    }
+
+
+@router.get("/roles/{role_id}/criteria", response_model=list[ScoringCriterion])
+def list_role_criteria(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    role = get_role(role_id, current_user.organization_id, db)
+    return normalize_role_scoring_criteria(role)
+
+
+@router.post("/roles/{role_id}/criteria")
+def create_role_criterion(
+    role_id: int,
+    data: ScoringCriterionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    role = get_role(role_id, current_user.organization_id, db)
+    criteria = normalize_role_scoring_criteria(role)
+    criteria.append(
+        {
+            "text": data.text,
+            "source": data.source,
+            "order": len(criteria) + 1,
+            "weight": data.weight,
+        }
+    )
+    normalized = set_role_scoring_criteria(role, criteria)
+    rescored, attempted = _rescore_role_applications(
+        role=role,
+        organization_id=current_user.organization_id,
+        db=db,
+    )
+    try:
+        db.commit()
+        db.refresh(role)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to create scoring criterion")
+    return {
+        "success": True,
+        "item": normalized[-1] if normalized else None,
+        "items": normalized,
+        "rescored_applications": rescored,
+        "attempted_applications": attempted,
+    }
+
+
+@router.patch("/roles/{role_id}/criteria/{criterion_id}")
+def update_role_criterion(
+    role_id: int,
+    criterion_id: str,
+    data: ScoringCriterionUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    role = get_role(role_id, current_user.organization_id, db)
+    criteria = normalize_role_scoring_criteria(role)
+    target = next((item for item in criteria if str(item.get("id")) == str(criterion_id)), None)
+    if not target:
+        raise HTTPException(status_code=404, detail="Scoring criterion not found")
+
+    updates = data.model_dump(exclude_unset=True)
+    if "text" in updates and updates["text"] is not None:
+        target["text"] = updates["text"]
+    if "source" in updates and updates["source"] is not None:
+        target["source"] = updates["source"]
+    if "weight" in updates:
+        target["weight"] = updates["weight"]
+    if "order" in updates and updates["order"] is not None:
+        target["order"] = int(updates["order"])
+
+    normalized = set_role_scoring_criteria(role, criteria)
+    rescored, attempted = _rescore_role_applications(
+        role=role,
+        organization_id=current_user.organization_id,
+        db=db,
+    )
+    try:
+        db.commit()
+        db.refresh(role)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update scoring criterion")
+    return {
+        "success": True,
+        "items": normalized,
+        "rescored_applications": rescored,
+        "attempted_applications": attempted,
+    }
+
+
+@router.delete("/roles/{role_id}/criteria/{criterion_id}")
+def delete_role_criterion(
+    role_id: int,
+    criterion_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    role = get_role(role_id, current_user.organization_id, db)
+    criteria = normalize_role_scoring_criteria(role)
+    next_items = [item for item in criteria if str(item.get("id")) != str(criterion_id)]
+    if len(next_items) == len(criteria):
+        raise HTTPException(status_code=404, detail="Scoring criterion not found")
+    normalized = set_role_scoring_criteria(role, next_items)
+    rescored, attempted = _rescore_role_applications(
+        role=role,
+        organization_id=current_user.organization_id,
+        db=db,
+    )
+    try:
+        db.commit()
+        db.refresh(role)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete scoring criterion")
+    return {
+        "success": True,
+        "items": normalized,
+        "rescored_applications": rescored,
+        "attempted_applications": attempted,
     }
 
 

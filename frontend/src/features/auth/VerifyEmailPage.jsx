@@ -2,8 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 
 import { auth } from '../../shared/api';
-import { Logo } from '../../shared/ui/Branding';
-import { Button, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { FlowLayout, AuthCard } from './AuthLayout';
 
 export const VerifyEmailPage = ({ onNavigate, token }) => {
   const [status, setStatus] = useState('loading');
@@ -36,43 +35,60 @@ export const VerifyEmailPage = ({ onNavigate, token }) => {
   }, [token]);
 
   return (
-    <div className="min-h-screen bg-[var(--taali-surface)] flex flex-col">
-      <nav className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <Logo onClick={() => onNavigate('landing')} />
-        </div>
-      </nav>
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="border-2 border-[var(--taali-border)] p-8 text-center max-w-md w-full bg-[var(--taali-surface)]">
-          {status === 'loading' && (
-            <>
-              <Spinner size={48} className="mx-auto mb-4" />
-              <h2 className="text-2xl font-bold mb-2">Verifying your email...</h2>
-              <p className="text-sm text-[var(--taali-muted)]">Please wait a moment.</p>
-            </>
-          )}
-          {status === 'success' && (
-            <>
-              <CheckCircle size={48} className="mx-auto mb-4 text-[var(--taali-purple)]" />
-              <h2 className="text-2xl font-bold mb-2">Email verified!</h2>
-              <p className="text-sm text-[var(--taali-muted)] mb-6">{message}</p>
-              <Button variant="primary" className="w-full" onClick={() => onNavigate('login')}>
-                Sign In
-              </Button>
-            </>
-          )}
-          {status === 'error' && (
-            <>
-              <AlertTriangle size={48} className="mx-auto mb-4 text-[var(--taali-warning)]" />
-              <h2 className="text-2xl font-bold mb-2">Verification failed</h2>
-              <p className="text-sm text-[var(--taali-muted)] mb-6">{message}</p>
-              <Button variant="primary" className="w-full" onClick={() => onNavigate('login')}>
-                Go to Sign In
-              </Button>
-            </>
-          )}
-        </div>
-      </div>
-    </div>
+    <FlowLayout>
+      <AuthCard
+        kicker="VERIFY EMAIL"
+        title={status === 'success'
+          ? <>Welcome to <em>Taali</em>.</>
+          : status === 'error'
+            ? <>Verification <em>failed</em>.</>
+            : <>Verifying your <em>email</em>.</>}
+        subtitle={status === 'loading' ? 'Please wait a moment.' : message}
+        widthClassName="max-w-[560px]"
+      >
+        {status === 'success' ? (
+          <div className="mb-6 rounded-[14px] border border-[color-mix(in_oklab,var(--green)_30%,var(--line))] bg-[color-mix(in_oklab,var(--green)_10%,var(--bg-2))] p-4">
+            <div className="flex items-start gap-3">
+              <div className="grid h-9 w-9 place-items-center rounded-[10px] bg-[var(--green)] text-white">
+                <CheckCircle size={18} />
+              </div>
+              <div>
+                <p className="text-[15px] font-semibold text-[var(--ink)]">Email verified</p>
+                <p className="mt-1 text-[13px] leading-6 text-[var(--ink-2)]">Your account is active and ready to use.</p>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {status === 'error' ? (
+          <div className="mb-6 rounded-[14px] border border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle size={18} className="mt-0.5 shrink-0 text-[var(--taali-warning)]" />
+              <div>
+                <p className="text-[15px] font-semibold text-[var(--ink)]">This link may have expired</p>
+                <p className="mt-1 text-[13px] leading-6 text-[var(--ink-2)]">{message}</p>
+              </div>
+            </div>
+          </div>
+        ) : null}
+        {status === 'loading' ? (
+          <div className="space-y-3">
+            <div className="h-3 w-1/3 rounded-full bg-[var(--line)]" />
+            <div className="h-3 w-2/3 rounded-full bg-[var(--line)]" />
+            <div className="h-3 w-1/2 rounded-full bg-[var(--line)]" />
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <button type="button" className="btn btn-purple btn-lg w-full justify-center" onClick={() => onNavigate('login')}>
+              {status === 'success' ? 'Create your first role' : 'Go to sign in'} <span className="arrow">→</span>
+            </button>
+            {status === 'success' ? (
+              <button type="button" className="btn btn-outline btn-lg w-full justify-center" onClick={() => onNavigate('demo')}>
+                Take the 2-minute tour <span className="arrow">→</span>
+              </button>
+            ) : null}
+          </div>
+        )}
+      </AuthCard>
+    </FlowLayout>
   );
 };

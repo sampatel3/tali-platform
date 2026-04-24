@@ -28,6 +28,8 @@ from ...platform.config import settings
 from ...platform.database import SessionLocal, get_db
 from ...schemas.role import (
     ApplicationCreate,
+    ApplicationBulkRejectRequest,
+    ApplicationBulkRejectResponse,
     ApplicationCvUploadResponse,
     ApplicationDetailResponse,
     ApplicationEventResponse,
@@ -64,6 +66,7 @@ from .role_support import (
     get_role,
     latest_valid_role_assessment,
     role_has_job_spec,
+    role_scoring_requirements_text,
 )
 from .pipeline_service import (
     append_application_event,
@@ -144,7 +147,7 @@ def _compute_cv_match_for_application(app: CandidateApplication, *, reset_if_una
         job_spec_text=job_spec_text,
         api_key=settings.ANTHROPIC_API_KEY,
         model=settings.resolved_claude_scoring_model,
-        additional_requirements=(role.additional_requirements or "").strip() or None,
+        additional_requirements=role_scoring_requirements_text(role),
     )
     raw_details = result.get("match_details", {}) if isinstance(result, dict) else {}
     normalized_score = _normalize_cv_match_score_100(
@@ -159,6 +162,35 @@ def _compute_cv_match_for_application(app: CandidateApplication, *, reset_if_una
     app.cv_match_scored_at = datetime.now(timezone.utc)
     _refresh_rank_score(app)
     return True
+
+
+def _rescore_role_applications(
+    *,
+    role: Role,
+    organization_id: int,
+    db: Session,
+) -> tuple[int, int]:
+    updated_count = 0
+    attempted_count = 0
+    apps = (
+        db.query(CandidateApplication)
+        .options(joinedload(CandidateApplication.role))
+        .filter(
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.role_id == role.id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .all()
+    )
+    for app in apps:
+        attempted_count += 1
+        previous_score = app.cv_match_score
+        previous_details = app.cv_match_details if isinstance(app.cv_match_details, dict) else app.cv_match_details
+        recomputed = _compute_cv_match_for_application(app, reset_if_unavailable=False)
+        _refresh_rank_score(app)
+        if recomputed or app.cv_match_score != previous_score or app.cv_match_details != previous_details:
+            updated_count += 1
+    return updated_count, attempted_count
 
 
 def _latest_active_assessment_for_application(app: CandidateApplication, db: Session) -> Assessment | None:
@@ -495,6 +527,113 @@ def list_role_applications(
     return out
 
 
+def _sync_bulk_rejection_to_workable(
+    *,
+    app: CandidateApplication,
+    organization: Organization | None,
+) -> bool:
+    if not organization:
+        return False
+    if not (
+        organization.workable_connected
+        and organization.workable_access_token
+        and organization.workable_subdomain
+        and app.workable_candidate_id
+    ):
+        return False
+
+    sync_state = app.integration_sync_state if isinstance(app.integration_sync_state, dict) else {}
+    attempted_at = utcnow().isoformat()
+    try:
+        workable = WorkableService(
+            access_token=organization.workable_access_token,
+            subdomain=organization.workable_subdomain,
+        )
+        result = workable.update_candidate_stage(str(app.workable_candidate_id), "rejected")
+        sync_state["workable_bulk_reject_sync"] = {
+            "attempted_at": attempted_at,
+            "success": bool(result.get("success")),
+            "stage": "rejected",
+        }
+        app.integration_sync_state = sync_state
+        return True
+    except Exception:
+        logger.exception("Failed Workable reject sync for application_id=%s", app.id)
+        sync_state["workable_bulk_reject_sync"] = {
+            "attempted_at": attempted_at,
+            "success": False,
+            "stage": "rejected",
+        }
+        app.integration_sync_state = sync_state
+        return True
+
+
+@router.post("/applications/bulk-reject", response_model=ApplicationBulkRejectResponse)
+def bulk_reject_applications(
+    data: ApplicationBulkRejectRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    target_ids = [int(item) for item in data.application_ids if int(item) > 0]
+    if not target_ids:
+        raise HTTPException(status_code=422, detail="application_ids must contain at least one valid id")
+
+    apps = (
+        db.query(CandidateApplication)
+        .options(joinedload(CandidateApplication.role))
+        .filter(
+            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.id.in_(target_ids),
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .order_by(CandidateApplication.id.asc())
+        .all()
+    )
+    if not apps:
+        raise HTTPException(status_code=404, detail="Applications not found")
+
+    organization = (
+        db.query(Organization)
+        .filter(Organization.id == current_user.organization_id)
+        .first()
+    )
+    reason = (data.reason or "").strip() or "Bulk reject"
+    updated_ids: list[int] = []
+    workable_sync_attempted = 0
+
+    try:
+        for app in apps:
+            ensure_pipeline_fields(app)
+            if app.application_outcome != "rejected":
+                transition_outcome(
+                    db,
+                    app=app,
+                    to_outcome="rejected",
+                    actor_type="recruiter",
+                    actor_id=current_user.id,
+                    reason=reason,
+                )
+                updated_ids.append(int(app.id))
+
+            if _sync_bulk_rejection_to_workable(app=app, organization=organization):
+                workable_sync_attempted += 1
+
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to bulk reject applications")
+
+    return ApplicationBulkRejectResponse(
+        success=True,
+        updated_count=len(updated_ids),
+        application_ids=updated_ids,
+        workable_sync_attempted=workable_sync_attempted,
+    )
+
+
 @router.get("/applications/{application_id}", response_model=ApplicationDetailResponse)
 def get_application_detail(
     application_id: int,
@@ -505,6 +644,26 @@ def get_application_detail(
     """Get a single application; optionally include full cv_text for CV viewer sidebar."""
     app = get_application(application_id, current_user.organization_id, db)
     return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
+
+
+@router.post("/applications/{application_id}/rescore-cv", response_model=ApplicationDetailResponse)
+def rescore_application_cv(
+    application_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    app = get_application(application_id, current_user.organization_id, db)
+    _compute_cv_match_for_application(app, reset_if_unavailable=True)
+    _refresh_rank_score(app)
+    try:
+        db.commit()
+        db.refresh(app)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to rescore CV")
+
+    app = get_application(application_id, current_user.organization_id, db)
+    return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=True))
 
 
 @router.post("/applications/{application_id}/interview-debrief")
@@ -634,9 +793,12 @@ def list_applications_global(
     pipeline_stage: str | None = Query(default=None),
     application_outcome: str | None = Query(default="open"),
     search: str | None = Query(default=None),
+    workable_sourced: bool | None = Query(default=None),
     sort_by: str = Query(default="pipeline_stage_updated_at", pattern="^(pipeline_stage_updated_at|created_at|taali_score)$"),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
     min_taali_score: float | None = Query(default=None),
+    min_cv_match_score: float | None = Query(default=None),
+    max_cv_match_score: float | None = Query(default=None),
     include_cv_text: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
@@ -653,6 +815,8 @@ def list_applications_global(
         query = query.filter(CandidateApplication.pipeline_stage == pipeline_stage.strip().lower())
     if application_outcome and application_outcome.strip().lower() != "all":
         query = query.filter(CandidateApplication.application_outcome == application_outcome.strip().lower())
+    if workable_sourced is not None:
+        query = query.filter(CandidateApplication.workable_sourced.is_(bool(workable_sourced)))
     if search:
         term = f"%{search.strip()}%"
         query = (
@@ -665,6 +829,16 @@ def list_applications_global(
         )
     if min_taali_score is not None:
         query = query.filter(_taali_sort_expr() >= float(min_taali_score))
+    if min_cv_match_score is not None:
+        threshold = float(min_cv_match_score)
+        if 0 <= threshold <= 10:
+            threshold *= 10.0
+        query = query.filter(CandidateApplication.cv_match_score >= threshold)
+    if max_cv_match_score is not None:
+        threshold = float(max_cv_match_score)
+        if 0 <= threshold <= 10:
+            threshold *= 10.0
+        query = query.filter(CandidateApplication.cv_match_score <= threshold)
 
     total = int(query.order_by(None).count())
     if total <= 0:

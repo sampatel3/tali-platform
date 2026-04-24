@@ -20,6 +20,7 @@ import { pathForPage } from './app/routing';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
 
 import { LandingPage } from './features/marketing/LandingPage';
+import { DemoExperiencePage } from './features/demo/DemoExperiencePage';
 import {
   ForgotPasswordPage,
   LoginPage,
@@ -39,14 +40,11 @@ const AssessmentPage = lazy(() => import('./features/assessment_runtime/Assessme
 const CandidateFeedbackPage = lazy(() =>
   import('./features/assessment_runtime/CandidateFeedbackPage').then((m) => ({ default: m.CandidateFeedbackPage }))
 );
-const DemoExperiencePage = lazy(() =>
-  import('./features/demo/DemoExperiencePage').then((m) => ({ default: m.DemoExperiencePage }))
-);
 const LazyAssessmentResultsPage = lazy(() =>
   import('./features/assessments/AssessmentResultsPage').then((m) => ({ default: m.AssessmentResultsPage }))
 );
-const CandidatesDirectoryPage = lazy(() =>
-  import('./features/candidates/CandidatesDirectoryPage').then((m) => ({ default: m.CandidatesDirectoryPage }))
+const CandidatesPage = lazy(() =>
+  import('./features/candidates/CandidatesPage').then((m) => ({ default: m.CandidatesPage }))
 );
 const CandidateStandingReportPage = lazy(() =>
   import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
@@ -303,11 +301,7 @@ function AppContent() {
       <Route path="/" element={<LandingPage onNavigate={navigateToPage} />} />
       <Route
         path="/demo"
-        element={(
-          <Suspense fallback={lazyFallback}>
-            <DemoExperiencePage onNavigate={navigateToPage} />
-          </Suspense>
-        )}
+        element={<DemoExperiencePage onNavigate={navigateToPage} />}
       />
       <Route path="/login" element={<LoginPage onNavigate={navigateToPage} />} />
       <Route path="/register" element={<RegisterPage onNavigate={navigateToPage} />} />
@@ -354,7 +348,7 @@ function AppContent() {
         path="/candidates"
         element={(
           <Suspense fallback={lazyFallback}>
-            <CandidatesDirectoryPage
+            <CandidatesPage
               onNavigate={navigateToPage}
               NavComponent={DashboardNavWithMode}
             />

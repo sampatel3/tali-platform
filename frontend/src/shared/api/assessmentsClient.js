@@ -1,8 +1,8 @@
 import api from './httpClient';
+import { resolveApiUrl } from './apiBaseUrl';
 
 const buildTerminalWsUrl = (assessmentId, assessmentToken) => {
-  const rawApi = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
-  const origin = rawApi || (typeof window !== 'undefined' ? window.location.origin : '');
+  const origin = resolveApiUrl();
   const wsOrigin = origin.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
   const token = encodeURIComponent(assessmentToken || '');
   return `${wsOrigin}/api/v1/assessments/${assessmentId}/terminal/ws?token=${token}`;

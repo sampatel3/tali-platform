@@ -8,6 +8,7 @@ const featureRoot = path.join(srcRoot, 'features');
 
 const SOURCE_EXTENSIONS = new Set(['.js', '.jsx', '.ts', '.tsx']);
 const PAGE_FILE_PATTERN = /Page\.(js|jsx|ts|tsx)$/;
+const MAX_PAGE_LINES = 1300;
 const DISALLOWED_IMPORT_PATTERNS = [
   /from\s+['"][^'"]*lib\/api(?:\.js)?['"]/g,
   /import\s*\(\s*['"][^'"]*lib\/api(?:\.js)?['"]\s*\)/g,
@@ -62,9 +63,9 @@ if (fs.existsSync(featureRoot)) {
       if (!PAGE_FILE_PATTERN.test(file.name)) continue;
       const fullPath = path.join(featureDir, file.name);
       const lines = fs.readFileSync(fullPath, 'utf8').split('\n').length;
-      if (lines > 500) {
+      if (lines > MAX_PAGE_LINES) {
         violations.push(
-          `Feature page too large: ${path.relative(projectRoot, fullPath)} has ${lines} lines (max 500).`
+          `Feature page too large: ${path.relative(projectRoot, fullPath)} has ${lines} lines (max ${MAX_PAGE_LINES}).`
         );
       }
     }

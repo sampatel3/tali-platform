@@ -607,6 +607,167 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
     assert apps[0]["cv_match_scored_at"] is not None
 
 
+def test_role_criteria_endpoints_and_threshold_patch(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    role_resp = client.post(
+        "/api/v1/roles",
+        json={
+            "name": "Criteria role",
+            "description": "Lead AI platform reliability work and own release safety judgment.",
+            "additional_requirements": "Payments experience\nBased in Abu Dhabi",
+        },
+        headers=headers,
+    )
+    assert role_resp.status_code == 201, role_resp.text
+    role = role_resp.json()
+    assert role["reject_threshold"] == 60
+    assert any(item["source"] == "job_spec" for item in role["scoring_criteria"])
+    assert any(item["source"] == "recruiter" for item in role["scoring_criteria"])
+
+    job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Payments modernization and release governance"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
+
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "criteria-fit@example.com", "candidate_name": "Criteria Fit"},
+        headers=headers,
+    ).json()
+
+    monkeypatch.setattr(applications_routes.settings, "ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(
+        applications_routes,
+        "process_document_upload",
+        lambda **_: {
+            "file_url": "/tmp/mock-resume.pdf",
+            "filename": "resume.pdf",
+            "extracted_text": "Payments modernization release governance Abu Dhabi",
+            "text_preview": "Payments modernization release governance Abu Dhabi",
+        },
+    )
+    monkeypatch.setattr(
+        applications_routes,
+        "calculate_cv_job_match_sync",
+        lambda **_: {
+            "cv_job_match_score": 79,
+            "match_details": {
+                "summary": "Strong alignment to the role criteria.",
+                "score_scale": "0-100",
+            },
+        },
+    )
+
+    cv_file = {"file": ("resume.pdf", io.BytesIO(b"%PDF-1.4 criteria candidate"), "application/pdf")}
+    assert client.post(f"/api/v1/applications/{app['id']}/upload-cv", files=cv_file, headers=headers).status_code == 200
+
+    criteria_resp = client.get(f"/api/v1/roles/{role['id']}/criteria", headers=headers)
+    assert criteria_resp.status_code == 200, criteria_resp.text
+    criteria = criteria_resp.json()
+    assert len(criteria) >= 2
+
+    create_resp = client.post(
+        f"/api/v1/roles/{role['id']}/criteria",
+        json={"text": "Can explain AI safety guardrails to senior stakeholders", "source": "recruiter"},
+        headers=headers,
+    )
+    assert create_resp.status_code == 200, create_resp.text
+    create_payload = create_resp.json()
+    assert create_payload["success"] is True
+    assert create_payload["rescored_applications"] == 1
+    created_item = create_payload["item"]
+    assert created_item["source"] == "recruiter"
+
+    patch_resp = client.patch(
+        f"/api/v1/roles/{role['id']}",
+        json={"reject_threshold": 72},
+        headers=headers,
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    assert patch_resp.json()["reject_threshold"] == 72
+
+    update_resp = client.patch(
+        f"/api/v1/roles/{role['id']}/criteria/{created_item['id']}",
+        json={"text": "Explains AI safety guardrails to banking stakeholders"},
+        headers=headers,
+    )
+    assert update_resp.status_code == 200, update_resp.text
+    assert any(
+        item["text"] == "Explains AI safety guardrails to banking stakeholders"
+        for item in update_resp.json()["items"]
+    )
+
+    delete_resp = client.delete(
+        f"/api/v1/roles/{role['id']}/criteria/{created_item['id']}",
+        headers=headers,
+    )
+    assert delete_resp.status_code == 200, delete_resp.text
+    assert all(item["id"] != created_item["id"] for item in delete_resp.json()["items"])
+
+
+def test_application_rescore_and_bulk_reject_flow(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    role = client.post(
+        "/api/v1/roles",
+        json={"name": "Bulk reject role", "description": "AI platform reliability role"},
+        headers=headers,
+    ).json()
+    job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Python reliability release safety"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
+    assert client.patch(f"/api/v1/roles/{role['id']}", json={"reject_threshold": 70}, headers=headers).status_code == 200
+
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "below-threshold@example.com", "candidate_name": "Below Threshold"},
+        headers=headers,
+    ).json()
+
+    monkeypatch.setattr(applications_routes.settings, "ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(
+        applications_routes,
+        "process_document_upload",
+        lambda **_: {
+            "file_url": "/tmp/mock-resume.pdf",
+            "filename": "resume.pdf",
+            "extracted_text": "Some Python experience with partial safety exposure",
+            "text_preview": "Some Python experience with partial safety exposure",
+        },
+    )
+    monkeypatch.setattr(
+        applications_routes,
+        "calculate_cv_job_match_sync",
+        lambda **_: {
+            "cv_job_match_score": 55,
+            "match_details": {
+                "summary": "Candidate falls below the role threshold.",
+                "score_scale": "0-100",
+            },
+        },
+    )
+
+    cv_file = {"file": ("resume.pdf", io.BytesIO(b"%PDF-1.4 below threshold cv"), "application/pdf")}
+    assert client.post(f"/api/v1/applications/{app['id']}/upload-cv", files=cv_file, headers=headers).status_code == 200
+
+    rescore_resp = client.post(f"/api/v1/applications/{app['id']}/rescore-cv", headers=headers)
+    assert rescore_resp.status_code == 200, rescore_resp.text
+    rescored = rescore_resp.json()
+    assert rescored["cv_match_score"] == 55.0
+    assert rescored["role_reject_threshold"] == 70
+    assert rescored["below_role_threshold"] is True
+
+    bulk_reject_resp = client.post(
+        "/api/v1/applications/bulk-reject",
+        json={"application_ids": [app["id"]], "reason": "Below threshold"},
+        headers=headers,
+    )
+    assert bulk_reject_resp.status_code == 200, bulk_reject_resp.text
+    assert bulk_reject_resp.json()["updated_count"] == 1
+
+    app_detail_resp = client.get(f"/api/v1/applications/{app['id']}", headers=headers)
+    assert app_detail_resp.status_code == 200, app_detail_resp.text
+    app_detail = app_detail_resp.json()
+    assert app_detail["application_outcome"] == "rejected"
+    assert app_detail["status"] == "rejected"
+
+
 def test_job_spec_upload_generates_interview_focus(client, monkeypatch):
     headers, _ = auth_headers(client)
     role = client.post("/api/v1/roles", json={"name": "Interview focus role"}, headers=headers).json()

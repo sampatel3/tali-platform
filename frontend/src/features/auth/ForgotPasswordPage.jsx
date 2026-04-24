@@ -2,8 +2,7 @@ import React, { useState } from 'react';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 
 import { auth } from '../../shared/api';
-import { Logo } from '../../shared/ui/Branding';
-import { Button, Input, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { FlowLayout, AuthCard } from './AuthLayout';
 
 export const ForgotPasswordPage = ({ onNavigate }) => {
   const [email, setEmail] = useState('');
@@ -30,62 +29,45 @@ export const ForgotPasswordPage = ({ onNavigate }) => {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--taali-surface)] flex flex-col">
-      <nav className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <Logo onClick={() => onNavigate('landing')} />
-        </div>
-      </nav>
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-md">
-          {sent ? (
-            <div className="border-2 border-[var(--taali-border)] p-8 text-center bg-[var(--taali-surface)]">
-              <CheckCircle size={48} className="mx-auto mb-4 text-[var(--taali-purple)]" />
-              <h2 className="text-2xl font-bold mb-2">Check your email</h2>
-              <p className="text-sm text-[var(--taali-muted)] mb-6">
-                If an account exists for that email, we sent a link to reset your password.
-              </p>
-              <Button variant="primary" className="w-full" onClick={() => onNavigate('login')}>
-                Back to Sign In
-              </Button>
-            </div>
-          ) : (
-            <div className="border-2 border-[var(--taali-border)] p-8 bg-[var(--taali-surface)]">
-              <h2 className="text-3xl font-bold mb-2">Forgot password?</h2>
-              <p className="text-sm text-[var(--taali-muted)] mb-6">Enter your email and we&apos;ll send a reset link.</p>
-              {error && (
-                <div className="border-2 border-[var(--taali-danger)] bg-[var(--taali-danger-soft)] p-3 mb-4 flex items-center gap-2">
-                  <AlertTriangle size={18} className="text-[var(--taali-danger)] flex-shrink-0" />
-                  <span className="text-sm text-[var(--taali-text)]">{error}</span>
-                </div>
-              )}
-              <form onSubmit={handleSubmit} className="space-y-4">
-                <div>
-                  <label className="block font-mono text-sm mb-1">Email</label>
-                  <Input
-                    type="email"
-                    placeholder="you@company.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                  />
-                </div>
-                <Button type="submit" variant="primary" className="w-full" disabled={loading}>
-                  {loading ? <><Spinner size={18} /> Sending...</> : 'Send reset link'}
-                </Button>
-              </form>
-              <div className="mt-6 text-center">
-                <button
-                  type="button"
-                  className="text-sm hover:underline text-[var(--taali-purple)]"
-                  onClick={() => onNavigate('login')}
-                >
-                  Back to Sign In
-                </button>
+    <FlowLayout>
+      <AuthCard
+        kicker="FORGOT PASSWORD"
+        title={sent ? <>Check your <em>email</em>.</> : <>Forgot your <em>password</em>?</>}
+        subtitle={sent
+          ? 'If an account exists for that email, we sent a link to reset your password.'
+          : 'Enter your email and we’ll send a reset link. Links expire in 30 minutes.'}
+        widthClassName="max-w-[560px]"
+      >
+        {sent ? (
+          <button type="button" className="btn btn-purple btn-lg w-full justify-center" onClick={() => onNavigate('login')}>
+            Back to sign in <span className="arrow">→</span>
+          </button>
+        ) : (
+          <>
+            {error ? (
+              <div className="mb-4 flex items-center gap-2 rounded-[14px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-3">
+                <AlertTriangle size={18} className="shrink-0 text-[var(--taali-danger)]" />
+                <span className="text-sm text-[var(--ink)]">{error}</span>
               </div>
+            ) : null}
+            <form onSubmit={handleSubmit} className="space-y-4">
+              <label className="field">
+                <span className="k">Email</span>
+                <input type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} />
+              </label>
+              <button type="submit" className="btn btn-purple btn-lg w-full justify-center" disabled={loading}>
+                {loading ? 'Sending...' : <>Send reset link <span className="arrow">→</span></>}
+              </button>
+            </form>
+            <div className="mt-5 text-center text-[13.5px] text-[var(--mute)]">
+              Remembered it?{' '}
+              <button type="button" className="font-medium text-[var(--purple)] hover:underline" onClick={() => onNavigate('login')}>
+                Back to sign in
+              </button>
             </div>
-          )}
-        </div>
-      </div>
-    </div>
+          </>
+        )}
+      </AuthCard>
+    </FlowLayout>
   );
 };

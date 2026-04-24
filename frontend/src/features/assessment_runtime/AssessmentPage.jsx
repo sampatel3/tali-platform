@@ -55,8 +55,10 @@ export default function AssessmentPage({
   const [terminalStopping, setTerminalStopping] = useState(false);
   const [terminalPanelOpen, setTerminalPanelOpen] = useState(false);
   const [assessmentLightMode, setAssessmentLightMode] = useState(() => {
-    if (typeof window === 'undefined') return false;
-    return localStorage.getItem('taali_assessment_theme') === 'light';
+    if (typeof window === 'undefined') return true;
+    const stored = localStorage.getItem('taali_assessment_theme');
+    if (stored === 'dark') return false;
+    return true;
   });
   const [claudePrompt, setClaudePrompt] = useState('');
   const [claudePromptSending, setClaudePromptSending] = useState(false);
@@ -724,7 +726,7 @@ export default function AssessmentPage({
   }
 
   return (
-    <div className={`h-screen flex flex-col ${assessmentLightMode ? 'bg-[#f3f4f6] text-gray-900' : 'bg-[#0b0f16] text-gray-100'}`}>
+    <div className={`min-h-screen flex flex-col ${assessmentLightMode ? 'bg-[var(--bg)] text-[var(--ink)]' : 'bg-[#0b0f16] text-gray-100'}`}>
       <AssessmentRuntimeAlerts
         showTabWarning={showTabWarning}
         proctoringEnabled={proctoringEnabled}
@@ -766,42 +768,44 @@ export default function AssessmentPage({
         lightMode={assessmentLightMode}
       />
 
-      <AssessmentWorkspace
-        hasRepoStructure={hasRepoStructure}
-        collapsedSections={collapsedSections}
-        toggleSection={toggleSection}
-        repoFileTree={repoFileTree}
-        collapsedRepoDirs={collapsedRepoDirs}
-        toggleRepoDir={toggleRepoDir}
-        selectedRepoPath={selectedRepoPath}
-        onSelectRepoFile={handleSelectRepoFile}
-        assessmentStarterCode={assessment?.starter_code || ''}
-        editorContent={editorContent}
-        onEditorChange={handleEditorChange}
-        onExecute={handleExecute}
-        onSave={handleSave}
-        editorLanguage={hasRepoStructure ? languageFromPath(selectedRepoPath) : (assessment?.language || 'python')}
-        editorFilename={selectedRepoPath || assessment?.filename || 'main'}
-        isTimerPaused={isTimerPaused}
-        showTerminal={showTerminal}
-        terminalPanelOpen={terminalPanelOpen}
-        onToggleTerminal={handleToggleTerminalPanel}
-        terminalConnected={terminalConnected}
-        terminalEvents={terminalEvents}
-        onTerminalInput={handleTerminalInput}
-        onTerminalResize={handleTerminalResize}
-        onTerminalStop={handleTerminalStop}
-        terminalStopping={terminalStopping}
-        output={output}
-        executing={executing}
-        claudeConversation={claudeConversation}
-        claudePrompt={claudePrompt}
-        onClaudePromptChange={setClaudePrompt}
-        onClaudePromptSubmit={handleClaudePromptSubmit}
-        claudePromptSending={claudePromptSending}
-        claudePromptDisabled={isTimerPaused || submitted}
-        lightMode={assessmentLightMode}
-      />
+      <div className="mx-6 mt-4 flex-1 overflow-hidden rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] shadow-[var(--shadow-md)]">
+        <AssessmentWorkspace
+          hasRepoStructure={hasRepoStructure}
+          collapsedSections={collapsedSections}
+          toggleSection={toggleSection}
+          repoFileTree={repoFileTree}
+          collapsedRepoDirs={collapsedRepoDirs}
+          toggleRepoDir={toggleRepoDir}
+          selectedRepoPath={selectedRepoPath}
+          onSelectRepoFile={handleSelectRepoFile}
+          assessmentStarterCode={assessment?.starter_code || ''}
+          editorContent={editorContent}
+          onEditorChange={handleEditorChange}
+          onExecute={handleExecute}
+          onSave={handleSave}
+          editorLanguage={hasRepoStructure ? languageFromPath(selectedRepoPath) : (assessment?.language || 'python')}
+          editorFilename={selectedRepoPath || assessment?.filename || 'main'}
+          isTimerPaused={isTimerPaused}
+          showTerminal={showTerminal}
+          terminalPanelOpen={terminalPanelOpen}
+          onToggleTerminal={handleToggleTerminalPanel}
+          terminalConnected={terminalConnected}
+          terminalEvents={terminalEvents}
+          onTerminalInput={handleTerminalInput}
+          onTerminalResize={handleTerminalResize}
+          onTerminalStop={handleTerminalStop}
+          terminalStopping={terminalStopping}
+          output={output}
+          executing={executing}
+          claudeConversation={claudeConversation}
+          claudePrompt={claudePrompt}
+          onClaudePromptChange={setClaudePrompt}
+          onClaudePromptSubmit={handleClaudePromptSubmit}
+          claudePromptSending={claudePromptSending}
+          claudePromptDisabled={isTimerPaused || submitted}
+          lightMode={assessmentLightMode}
+        />
+      </div>
 
       {submitConfirmOpen ? (
         <div

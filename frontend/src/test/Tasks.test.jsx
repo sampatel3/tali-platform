@@ -1,7 +1,11 @@
-import { act, render, screen, fireEvent, waitFor } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mock the API module
+import { AuthProvider } from '../context/AuthContext';
+import { ToastProvider } from '../context/ToastContext';
+import { TasksPage } from '../features/tasks/TasksPage';
+import { tasks as tasksApi } from '../shared/api';
+
 vi.mock('../shared/api', () => ({
   auth: {
     login: vi.fn(),
@@ -11,20 +15,13 @@ vi.mock('../shared/api', () => ({
     resendVerification: vi.fn(),
     forgotPassword: vi.fn(),
     resetPassword: vi.fn(),
+    ssoCheck: vi.fn(),
   },
   assessments: {
     list: vi.fn().mockResolvedValue({ data: { items: [], total: 0 } }),
-    get: vi.fn(),
-    create: vi.fn(),
-    remove: vi.fn(),
-    resend: vi.fn(),
-    downloadReport: vi.fn(),
-    addNote: vi.fn(),
-    uploadCv: vi.fn(),
-    postToWorkable: vi.fn(),
   },
   billing: { usage: vi.fn(), costs: vi.fn(), credits: vi.fn(), createCheckoutSession: vi.fn() },
-  organizations: { get: vi.fn(), update: vi.fn() },
+  organizations: { get: vi.fn() },
   analytics: { get: vi.fn().mockResolvedValue({ data: {} }) },
   tasks: {
     list: vi.fn(),
@@ -35,7 +32,7 @@ vi.mock('../shared/api', () => ({
     generate: vi.fn(),
   },
   candidates: {
-    list: vi.fn().mockResolvedValue({ data: { items: [] } }),
+    list: vi.fn(),
     get: vi.fn(),
     create: vi.fn(),
     createWithCv: vi.fn(),
@@ -58,56 +55,17 @@ vi.mock('../shared/api', () => ({
   },
 }));
 
-// Mock recharts
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div>{children}</div>,
-  RadarChart: () => <div data-testid="radar-chart" />,
-  PolarGrid: () => <div />,
-  PolarAngleAxis: () => <div />,
-  PolarRadiusAxis: () => <div />,
-  Radar: () => <div />,
-  LineChart: () => <div data-testid="line-chart" />,
-  Line: () => <div />,
-  XAxis: () => <div />,
-  YAxis: () => <div />,
-  CartesianGrid: () => <div />,
-  Tooltip: () => <div />,
-}));
-
-// Mock monaco editor
-vi.mock('@monaco-editor/react', () => ({
-  default: () => <div data-testid="code-editor" />,
-}));
-
-import { auth, tasks as tasksApi, assessments as assessmentsApi } from '../shared/api';
-import App from '../App';
-import { AuthProvider } from '../context/AuthContext';
-
-const mockUser = {
-  id: 1,
-  email: 'admin@taali.ai',
-  full_name: 'Admin User',
-  organization_id: 1,
-  role: 'admin',
-};
-
 const mockTasks = [
   {
     id: 10,
     name: 'Async Pipeline Debugging',
-    description: 'Fix 3 bugs in an async data pipeline that processes streaming JSON events.',
+    description: 'Fix three bugs in an async data pipeline.',
     task_type: 'debugging',
     difficulty: 'mid',
     duration_minutes: 45,
     is_template: false,
     starter_code: 'async function process() {}',
     test_code: 'test("works", () => {});',
-    task_key: 'data_eng_aws_glue_pipeline_recovery',
-    role: 'data_engineer',
-    scenario: 'Compliance audit needs full history and schema keeps changing.',
-    repo_structure: { files: { 'pipeline/main.py': 'print("ok")' } },
-    evaluation_rubric: { implementation: { weight: 0.2 } },
-    extra_data: { expected_approaches: { backfill: ['delete-then-insert'] } },
   },
   {
     id: 11,
@@ -133,169 +91,70 @@ const mockTasks = [
   },
 ];
 
-const setupAuthenticatedUser = () => {
-  localStorage.setItem('taali_access_token', 'fake-jwt-token');
-  localStorage.setItem('taali_user', JSON.stringify(mockUser));
-  auth.me.mockResolvedValue({ data: mockUser });
+const mockUser = {
+  id: 1,
+  email: 'admin@taali.ai',
+  full_name: 'Admin User',
+  organization_name: 'Taali',
+  role: 'admin',
 };
 
-const renderAppOnTasksPage = async () => {
-  assessmentsApi.list.mockResolvedValue({ data: { items: [], total: 0 } });
+const renderPage = (onNavigate = vi.fn()) => render(
+  <AuthProvider>
+    <ToastProvider>
+      <TasksPage onNavigate={onNavigate} />
+    </ToastProvider>
+  </AuthProvider>,
+);
 
-  const result = render(
-    <AuthProvider>
-      <App />
-    </AuthProvider>
-  );
-
-  // Wait for dashboard to render
-  await waitFor(() => {
-    expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
-  }, { timeout: 5000 });
-
-  // Navigate to Tasks via nav
-  const tasksNav = screen.getByRole('button', { name: /^Tasks$/ });
-  await act(async () => {
-    fireEvent.click(tasksNav);
-  });
-
-  // Wait for Tasks page to load (lazy + API)
-  await waitFor(() => {
-    expect(screen.getByText('Tasks', { selector: 'h1' })).toBeInTheDocument();
-  }, { timeout: 5000 });
-
-  return result;
-};
-
-describe('TasksPage', () => {
+describe('Tasks page redesign', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    window.location.hash = '';
-    setupAuthenticatedUser();
+    localStorage.setItem('taali_user', JSON.stringify(mockUser));
     tasksApi.list.mockResolvedValue({ data: mockTasks });
   });
 
   afterEach(() => {
-    window.location.hash = '';
     localStorage.clear();
   });
 
-  it('renders Tasks heading', async () => {
-    await renderAppOnTasksPage();
+  it('renders the redesigned task library with grouped tasks and summary stats', async () => {
+    renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Tasks', { selector: 'h1' })).toBeInTheDocument();
-      expect(screen.getByText('Assessment task catalog')).toBeInTheDocument();
-    }, { timeout: 5000 });
-  });
-
-  it('renders task list', async () => {
-    await renderAppOnTasksPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Async Pipeline Debugging')).toBeInTheDocument();
-      expect(screen.getByText('AI Agent Integration')).toBeInTheDocument();
-      expect(screen.getByText('Template Task')).toBeInTheDocument();
-    }, { timeout: 5000 });
-  });
-
-  it('renders task descriptions', async () => {
-    await renderAppOnTasksPage();
-
-    await waitFor(() => {
-      expect(screen.getByText(/Fix 3 bugs in an async data pipeline/)).toBeInTheDocument();
-      expect(screen.getByText(/Build an AI agent that can answer questions/)).toBeInTheDocument();
-    }, { timeout: 5000 });
-  });
-
-  it('renders difficulty badges', async () => {
-    await renderAppOnTasksPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('MID')).toBeInTheDocument();
-      expect(screen.getByText('SENIOR')).toBeInTheDocument();
-      expect(screen.getByText('JUNIOR')).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /What needs you, today/i })).toBeInTheDocument();
+      expect(screen.getAllByText('Async Pipeline Debugging').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('AI Agent Integration').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Template Task').length).toBeGreaterThan(0);
+      expect(screen.getByText('● Custom tasks')).toBeInTheDocument();
+      expect(screen.getByText('● Template tasks')).toBeInTheDocument();
     });
   });
 
-  it('renders duration for each task', async () => {
-    await renderAppOnTasksPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('45min')).toBeInTheDocument();
-      expect(screen.getByText('60min')).toBeInTheDocument();
-      expect(screen.getByText('30min')).toBeInTheDocument();
-    });
-  });
-
-  it('shows empty state when no tasks exist', async () => {
+  it('shows the redesigned empty state when no tasks are available', async () => {
     tasksApi.list.mockResolvedValue({ data: [] });
 
-    await renderAppOnTasksPage();
+    renderPage();
 
     await waitFor(() => {
-      expect(screen.getByText('No tasks available')).toBeInTheDocument();
+      expect(screen.getByText('No tasks available', { selector: 'h2' })).toBeInTheDocument();
       expect(screen.getByText('Create your first task to start evaluating candidates.')).toBeInTheDocument();
     });
   });
 
-  it('shows loading state while fetching tasks', async () => {
-    tasksApi.list.mockReturnValue(new Promise(() => {}));
-
-    await renderAppOnTasksPage();
+  it('opens the task overview modal from the redesigned task table', async () => {
+    renderPage();
 
     await waitFor(() => {
-      expect(document.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
-    });
-  });
-
-
-  it('view task opens task overview modal with task details', async () => {
-    await renderAppOnTasksPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Async Pipeline Debugging')).toBeInTheDocument();
+      expect(screen.getAllByText('Async Pipeline Debugging').length).toBeGreaterThan(0);
     });
 
-    const viewButtons = screen.getAllByTitle('View task');
-    fireEvent.click(viewButtons[0]);
+    fireEvent.click(screen.getAllByRole('button', { name: 'View' })[0]);
 
     await waitFor(() => {
       expect(screen.getByText('Task Overview')).toBeInTheDocument();
       expect(screen.getByDisplayValue('Async Pipeline Debugging')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('data_engineer')).toBeInTheDocument();
-      expect(screen.getByDisplayValue(/Compliance audit needs full history/)).toBeInTheDocument();
-    });
-  });
-
-  it('task authoring actions are visible when authoring is enabled', async () => {
-    await renderAppOnTasksPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('Async Pipeline Debugging')).toBeInTheDocument();
-    });
-
-    expect(screen.getByText('Create Task')).toBeInTheDocument();
-    expect(screen.queryAllByTitle('Edit task').length).toBeGreaterThan(0);
-    expect(screen.queryAllByTitle('Delete task').length).toBeGreaterThan(0);
-  });
-
-  it('shows task type badges', async () => {
-    await renderAppOnTasksPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('debugging')).toBeInTheDocument();
-      expect(screen.getByText('ai engineering')).toBeInTheDocument();
-      expect(screen.getByText('optimization')).toBeInTheDocument();
-    });
-  });
-
-  it('template tasks show template label instead of edit/delete', async () => {
-    await renderAppOnTasksPage();
-
-    await waitFor(() => {
-      expect(screen.getByText('template')).toBeInTheDocument();
     });
   });
 });

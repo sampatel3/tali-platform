@@ -1,7 +1,16 @@
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mock the API module
+import { AuthProvider } from '../context/AuthContext';
+import {
+  ForgotPasswordPage,
+  LoginPage,
+  RegisterPage,
+  ResetPasswordPage,
+  VerifyEmailPage,
+} from '../features/auth';
+import { auth } from '../shared/api';
+
 vi.mock('../shared/api', () => ({
   auth: {
     login: vi.fn(),
@@ -11,547 +20,143 @@ vi.mock('../shared/api', () => ({
     resendVerification: vi.fn(),
     forgotPassword: vi.fn(),
     resetPassword: vi.fn(),
-  },
-  assessments: {
-    list: vi.fn().mockResolvedValue({ data: { items: [], total: 0 } }),
-    get: vi.fn(),
-    create: vi.fn(),
-    remove: vi.fn(),
-    resend: vi.fn(),
-    downloadReport: vi.fn(),
-    addNote: vi.fn(),
-    uploadCv: vi.fn(),
-    postToWorkable: vi.fn(),
-  },
-  billing: { usage: vi.fn(), costs: vi.fn(), credits: vi.fn(), createCheckoutSession: vi.fn() },
-  organizations: { get: vi.fn(), update: vi.fn() },
-  analytics: { get: vi.fn().mockResolvedValue({ data: {} }) },
-  tasks: { list: vi.fn().mockResolvedValue({ data: [] }), get: vi.fn(), create: vi.fn(), update: vi.fn(), delete: vi.fn(), generate: vi.fn() },
-  candidates: { list: vi.fn().mockResolvedValue({ data: { items: [] } }), get: vi.fn(), create: vi.fn(), createWithCv: vi.fn(), update: vi.fn(), remove: vi.fn(), uploadCv: vi.fn(), uploadJobSpec: vi.fn() },
-  team: { list: vi.fn(), invite: vi.fn() },
-  default: {
-    interceptors: {
-      request: { use: vi.fn() },
-      response: { use: vi.fn() },
-    },
-    get: vi.fn(),
-    post: vi.fn(),
-    create: vi.fn().mockReturnValue({
-      interceptors: { request: { use: vi.fn() }, response: { use: vi.fn() } },
-    }),
+    ssoCheck: vi.fn(),
   },
 }));
 
-// Mock recharts to avoid canvas issues
-vi.mock('recharts', () => ({
-  ResponsiveContainer: ({ children }) => <div>{children}</div>,
-  RadarChart: () => <div data-testid="radar-chart" />,
-  PolarGrid: () => <div />,
-  PolarAngleAxis: () => <div />,
-  PolarRadiusAxis: () => <div />,
-  Radar: () => <div />,
-  LineChart: () => <div data-testid="line-chart" />,
-  Line: () => <div />,
-  XAxis: () => <div />,
-  YAxis: () => <div />,
-  CartesianGrid: () => <div />,
-  Tooltip: () => <div />,
-}));
+const renderWithAuth = (ui) => render(<AuthProvider>{ui}</AuthProvider>);
 
-// Mock monaco editor
-vi.mock('@monaco-editor/react', () => ({
-  default: () => <div data-testid="code-editor" />,
-}));
-
-import { auth } from '../shared/api';
-import App from '../App';
-import { AuthProvider } from '../context/AuthContext';
-
-const renderApp = () => {
-  return render(
-    <AuthProvider>
-      <App />
-    </AuthProvider>
-  );
-};
-
-describe('AuthPages', () => {
+describe('Auth page redesign', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     localStorage.clear();
-    window.history.replaceState(null, '', '/');
-    // Ensure auth.me rejects by default so we stay unauthenticated
-    auth.me.mockRejectedValue(new Error('Not authenticated'));
   });
 
-  afterEach(() => {
-    window.history.replaceState(null, '', '/');
-  });
-
-  // ============================================================
-  // LOGIN PAGE
-  // ============================================================
-  describe('LoginPage', () => {
-    const navigateToLogin = async () => {
-      renderApp();
-      // On landing page, click "Sign In" button
-      const signInButtons = screen.getAllByText('Sign In');
-      fireEvent.click(signInButtons[0]);
-    };
-
-    it('renders email and password fields', async () => {
-      await navigateToLogin();
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('you@company.com')).toBeInTheDocument();
-        expect(screen.getByPlaceholderText('••••••••')).toBeInTheDocument();
-      });
+  it('renders the redesigned sign-in page and submits through AuthContext', async () => {
+    const onNavigate = vi.fn();
+    auth.login.mockResolvedValue({ data: { access_token: 'tok_123' } });
+    auth.me.mockResolvedValue({
+      data: { id: 1, email: 'sam@taali.ai', full_name: 'Sam Patel' },
     });
 
-    it('renders Sign In heading', async () => {
-      await navigateToLogin();
-      await waitFor(() => {
-        expect(screen.getByText('Sign In', { selector: 'h2' })).toBeInTheDocument();
-      });
+    renderWithAuth(<LoginPage onNavigate={onNavigate} />);
+
+    expect(screen.getByRole('heading', { name: /Sign in/i })).toBeInTheDocument();
+    expect(screen.getByText('Request access')).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
+      target: { value: 'sam@taali.ai' },
     });
-
-    it('renders forgot password link', async () => {
-      await navigateToLogin();
-      await waitFor(() => {
-        expect(screen.getByText('Forgot password?')).toBeInTheDocument();
-      });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: 'password123' },
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in →' }));
 
-    it('renders register link', async () => {
-      await navigateToLogin();
-      await waitFor(() => {
-        expect(screen.getByText('Register')).toBeInTheDocument();
-      });
-    });
-
-    it('calls auth.login when form submitted with valid data', async () => {
-      auth.login.mockResolvedValue({ data: { access_token: 'tok123' } });
-      auth.me.mockResolvedValue({ data: { id: 1, email: 'test@test.com', full_name: 'Test User' } });
-
-      await navigateToLogin();
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('you@company.com')).toBeInTheDocument();
-      });
-
-      fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
-        target: { value: 'test@test.com' },
-      });
-      fireEvent.change(screen.getByPlaceholderText('••••••••'), {
-        target: { value: 'password123' },
-      });
-
-      const signInButton = screen.getByRole('button', { name: 'Sign In' });
-      fireEvent.click(signInButton);
-
-      await waitFor(() => {
-        // The AuthContext.login calls auth.login internally
-        expect(auth.login).toHaveBeenCalledWith('test@test.com', 'password123');
-      });
-    });
-
-    it('shows loading state during submission', async () => {
-      // Make login hang indefinitely
-      auth.login.mockReturnValue(new Promise(() => {}));
-
-      await navigateToLogin();
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('you@company.com')).toBeInTheDocument();
-      });
-
-      fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
-        target: { value: 'test@test.com' },
-      });
-      fireEvent.change(screen.getByPlaceholderText('••••••••'), {
-        target: { value: 'password123' },
-      });
-
-      const signInButton = screen.getByRole('button', { name: 'Sign In' });
-      fireEvent.click(signInButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Signing in...')).toBeInTheDocument();
-      });
-    });
-
-    it('shows error message on API failure', async () => {
-      auth.login.mockRejectedValue({
-        response: { status: 401, data: { detail: 'Invalid credentials' } },
-      });
-
-      await navigateToLogin();
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('you@company.com')).toBeInTheDocument();
-      });
-
-      fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
-        target: { value: 'wrong@test.com' },
-      });
-      fireEvent.change(screen.getByPlaceholderText('••••••••'), {
-        target: { value: 'wrong' },
-      });
-
-      const signInButton = screen.getByRole('button', { name: 'Sign In' });
-      fireEvent.click(signInButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Invalid credentials')).toBeInTheDocument();
-      });
-    });
-
-    it('maps raw backend bad-credentials code to a readable message', async () => {
-      auth.login.mockRejectedValue({
-        response: { status: 401, data: { detail: 'LOGIN_BAD_CREDENTIALS' } },
-      });
-
-      await navigateToLogin();
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('you@company.com')).toBeInTheDocument();
-      });
-
-      fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
-        target: { value: 'wrong@test.com' },
-      });
-      fireEvent.change(screen.getByPlaceholderText('••••••••'), {
-        target: { value: 'wrong' },
-      });
-
-      const signInButton = screen.getByRole('button', { name: 'Sign In' });
-      fireEvent.click(signInButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Incorrect email or password. Please try again.')).toBeInTheDocument();
-      });
-    });
-
-    it('shows "needs verification" message on 403 with verify detail', async () => {
-      auth.login.mockRejectedValue({
-        response: { status: 403, data: { detail: 'Please verify your email before logging in' } },
-      });
-
-      await navigateToLogin();
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('you@company.com')).toBeInTheDocument();
-      });
-
-      fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
-        target: { value: 'unverified@test.com' },
-      });
-      fireEvent.change(screen.getByPlaceholderText('••••••••'), {
-        target: { value: 'password123' },
-      });
-
-      const signInButton = screen.getByRole('button', { name: 'Sign In' });
-      fireEvent.click(signInButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Resend verification email')).toBeInTheDocument();
-      });
-    });
-
-    it('navigates to register page when Register is clicked', async () => {
-      await navigateToLogin();
-
-      await waitFor(() => {
-        expect(screen.getByText('Register')).toBeInTheDocument();
-      });
-
-      fireEvent.click(screen.getByText('Register'));
-
-      await waitFor(() => {
-        expect(screen.getByText('Create Account', { selector: 'h2' })).toBeInTheDocument();
-      });
+    await waitFor(() => {
+      expect(auth.login).toHaveBeenCalledWith('sam@taali.ai', 'password123');
+      expect(auth.me).toHaveBeenCalled();
+      expect(onNavigate).toHaveBeenCalledWith('dashboard');
     });
   });
 
-  // ============================================================
-  // REGISTER PAGE
-  // ============================================================
-  describe('RegisterPage', () => {
-    const navigateToRegister = async () => {
-      renderApp();
-      // From landing, click Sign In then Register
-      const signInButtons = screen.getAllByText('Sign In');
-      fireEvent.click(signInButtons[0]);
-      await waitFor(() => {
-        expect(screen.getByText('Register')).toBeInTheDocument();
-      });
-      fireEvent.click(screen.getByText('Register'));
-    };
-
-    it('renders all form fields', async () => {
-      await navigateToRegister();
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Jane Smith')).toBeInTheDocument();
-        expect(screen.getByPlaceholderText('you@company.com')).toBeInTheDocument();
-        expect(screen.getByPlaceholderText('••••••••')).toBeInTheDocument();
-        expect(screen.getByPlaceholderText('Acme Corp')).toBeInTheDocument();
-      });
+  it('shows the redesigned verification recovery state on sign-in failure', async () => {
+    auth.login.mockRejectedValue({
+      response: { status: 403, data: { detail: 'Please verify your email before logging in' } },
     });
 
-    it('renders Create Account heading', async () => {
-      await navigateToRegister();
-      await waitFor(() => {
-        expect(screen.getByText('Create Account', { selector: 'h2' })).toBeInTheDocument();
-      });
+    renderWithAuth(<LoginPage onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
+      target: { value: 'pending@taali.ai' },
     });
-
-    it('shows error for empty required fields', async () => {
-      await navigateToRegister();
-      await waitFor(() => {
-        expect(screen.getByText('Create Account', { selector: 'h2' })).toBeInTheDocument();
-      });
-
-      const createButton = screen.getByRole('button', { name: 'Create Account' });
-      fireEvent.click(createButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Email, password, and full name are required')).toBeInTheDocument();
-      });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: 'password123' },
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Sign in →' }));
 
-    it('shows error for short password', async () => {
-      await navigateToRegister();
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Jane Smith')).toBeInTheDocument();
-      });
-
-      fireEvent.change(screen.getByPlaceholderText('Jane Smith'), { target: { value: 'Test User' } });
-      fireEvent.change(screen.getByPlaceholderText('you@company.com'), { target: { value: 'test@test.com' } });
-      fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'short' } });
-
-      const createButton = screen.getByRole('button', { name: 'Create Account' });
-      fireEvent.click(createButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Password must be at least 8 characters long.')).toBeInTheDocument();
-      });
-    });
-
-    it('shows success message after successful registration', async () => {
-      auth.register.mockResolvedValue({ data: { id: 1, email: 'test@test.com' } });
-
-      await navigateToRegister();
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Jane Smith')).toBeInTheDocument();
-      });
-
-      fireEvent.change(screen.getByPlaceholderText('Jane Smith'), { target: { value: 'Test User' } });
-      fireEvent.change(screen.getByPlaceholderText('you@company.com'), { target: { value: 'test@test.com' } });
-      fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'longpassword123' } });
-      fireEvent.change(screen.getByPlaceholderText('Acme Corp'), { target: { value: 'Test Corp' } });
-
-      const createButton = screen.getByRole('button', { name: 'Create Account' });
-      fireEvent.click(createButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Check your email')).toBeInTheDocument();
-      });
-    });
-
-    it('shows specific error from 422 responses with validation error array', async () => {
-      auth.register.mockRejectedValue({
-        response: {
-          status: 422,
-          data: {
-            detail: [
-              { msg: 'value is not a valid email address' },
-              { msg: 'ensure this value has at least 8 characters' },
-            ],
-          },
-        },
-      });
-
-      await navigateToRegister();
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Jane Smith')).toBeInTheDocument();
-      });
-
-      fireEvent.change(screen.getByPlaceholderText('Jane Smith'), { target: { value: 'Test User' } });
-      fireEvent.change(screen.getByPlaceholderText('you@company.com'), { target: { value: 'test@test.com' } });
-      fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'longpassword123' } });
-
-      const createButton = screen.getByRole('button', { name: 'Create Account' });
-      fireEvent.click(createButton);
-
-      await waitFor(() => {
-        expect(screen.getByText(/value is not a valid email address/)).toBeInTheDocument();
-      });
-    });
-
-    it('shows loading state during registration', async () => {
-      auth.register.mockReturnValue(new Promise(() => {}));
-
-      await navigateToRegister();
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('Jane Smith')).toBeInTheDocument();
-      });
-
-      fireEvent.change(screen.getByPlaceholderText('Jane Smith'), { target: { value: 'Test User' } });
-      fireEvent.change(screen.getByPlaceholderText('you@company.com'), { target: { value: 'test@test.com' } });
-      fireEvent.change(screen.getByPlaceholderText('••••••••'), { target: { value: 'longpassword123' } });
-
-      const createButton = screen.getByRole('button', { name: 'Create Account' });
-      fireEvent.click(createButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Creating account...')).toBeInTheDocument();
-      });
-    });
-
-    it('shows Sign In link to navigate back to login', async () => {
-      await navigateToRegister();
-
-      await waitFor(() => {
-        expect(screen.getByText('Already have an account?')).toBeInTheDocument();
-      });
-
-      // Clicking "Sign In" goes back to login
-      const signInLink = screen.getByText('Sign In', { selector: 'button' });
-      fireEvent.click(signInLink);
-
-      await waitFor(() => {
-        expect(screen.getByText('Sign In', { selector: 'h2' })).toBeInTheDocument();
-      });
+    await waitFor(() => {
+      expect(screen.getByText('Sign-in failed')).toBeInTheDocument();
+      expect(screen.getByText('Please verify your email before logging in')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Resend verification email' })).toBeInTheDocument();
     });
   });
 
-  // ============================================================
-  // FORGOT PASSWORD PAGE
-  // ============================================================
-  describe('ForgotPasswordPage', () => {
-    const navigateToForgotPassword = async () => {
-      renderApp();
-      // Landing -> Login -> Forgot password
-      const signInButtons = screen.getAllByText('Sign In');
-      fireEvent.click(signInButtons[0]);
-      await waitFor(() => {
-        expect(screen.getByText('Forgot password?')).toBeInTheDocument();
-      });
-      fireEvent.click(screen.getByText('Forgot password?'));
-    };
+  it('renders the redesigned registration success state after create account', async () => {
+    auth.register.mockResolvedValue({ data: { success: true } });
 
-    it('renders email input and heading', async () => {
-      await navigateToForgotPassword();
-      await waitFor(() => {
-        expect(screen.getByText('Forgot password?', { selector: 'h2' })).toBeInTheDocument();
-        expect(screen.getByPlaceholderText('you@company.com')).toBeInTheDocument();
-      });
+    renderWithAuth(<RegisterPage onNavigate={vi.fn()} />);
+
+    fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
+      target: { value: 'sam@taali.ai' },
     });
-
-    it('renders send reset link button', async () => {
-      await navigateToForgotPassword();
-      await waitFor(() => {
-        expect(screen.getByRole('button', { name: 'Send reset link' })).toBeInTheDocument();
-      });
+    fireEvent.change(screen.getByPlaceholderText('Sam Patel'), {
+      target: { value: 'Sam Patel' },
     });
-
-    it('shows success after submit', async () => {
-      // ForgotPasswordPage uses dynamic import, mock the module resolution
-      const apiModule = await import('../shared/api');
-      apiModule.auth.forgotPassword.mockResolvedValue({ data: {} });
-
-      await navigateToForgotPassword();
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText('you@company.com')).toBeInTheDocument();
-      });
-
-      fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
-        target: { value: 'test@test.com' },
-      });
-
-      const submitButton = screen.getByRole('button', { name: 'Send reset link' });
-      fireEvent.click(submitButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Check your email')).toBeInTheDocument();
-        expect(screen.getByText(/If an account exists for that email/)).toBeInTheDocument();
-      });
+    fireEvent.change(screen.getByPlaceholderText('Deeplight AI'), {
+      target: { value: 'Taali' },
     });
+    fireEvent.change(screen.getByPlaceholderText('••••••••'), {
+      target: { value: 'password123' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Create account →' }));
 
-    it('shows back to sign in link', async () => {
-      await navigateToForgotPassword();
-      await waitFor(() => {
-        expect(screen.getByText('Back to Sign In')).toBeInTheDocument();
+    await waitFor(() => {
+      expect(auth.register).toHaveBeenCalledWith({
+        email: 'sam@taali.ai',
+        password: 'password123',
+        full_name: 'Sam Patel',
+        organization_name: 'Taali',
       });
+      expect(screen.getByRole('heading', { name: /Check your inbox/i })).toBeInTheDocument();
+      expect(screen.getByText('sam@taali.ai')).toBeInTheDocument();
     });
   });
 
-  // ============================================================
-  // RESET PASSWORD PAGE
-  // ============================================================
-  describe('ResetPasswordPage', () => {
-    it('shows invalid link message when no token is present', async () => {
-      window.history.replaceState(null, '', '/reset-password');
-      renderApp();
+  it('shows the redesigned forgot-password confirmation state', async () => {
+    auth.forgotPassword.mockResolvedValue({ data: { success: true } });
 
-      await waitFor(() => {
-        expect(screen.getByText('Invalid link')).toBeInTheDocument();
-      });
+    render(<ForgotPasswordPage onNavigate={vi.fn()} />);
+
+    expect(screen.getByRole('heading', { name: /Forgot your password/i })).toBeInTheDocument();
+    fireEvent.change(screen.getByPlaceholderText('you@company.com'), {
+      target: { value: 'sam@taali.ai' },
     });
+    fireEvent.click(screen.getByRole('button', { name: /Send reset link/i }));
 
-    it('renders password fields when token is present', async () => {
-      window.history.replaceState(null, '', '/reset-password?token=valid-token-123');
-      renderApp();
-
-      await waitFor(() => {
-        expect(screen.getByText('Set new password')).toBeInTheDocument();
-        const passwordFields = screen.getAllByPlaceholderText('••••••••');
-        expect(passwordFields.length).toBe(2);
-      });
+    await waitFor(() => {
+      expect(auth.forgotPassword).toHaveBeenCalledWith('sam@taali.ai');
+      expect(screen.getByRole('heading', { name: /Check your email/i })).toBeInTheDocument();
     });
+  });
 
-    it('validates password confirmation mismatch', async () => {
-      window.history.replaceState(null, '', '/reset-password?token=valid-token-123');
-      renderApp();
+  it('updates the password and shows the redesigned reset success state', async () => {
+    auth.resetPassword.mockResolvedValue({ data: { success: true } });
 
-      await waitFor(() => {
-        expect(screen.getByText('Set new password')).toBeInTheDocument();
-      });
+    render(<ResetPasswordPage token="reset-token" onNavigate={vi.fn()} />);
 
-      const passwordInputs = screen.getAllByPlaceholderText('••••••••');
-      fireEvent.change(passwordInputs[0], { target: { value: 'newpassword123' } });
-      fireEvent.change(passwordInputs[1], { target: { value: 'differentpassword' } });
-
-      const resetButton = screen.getByRole('button', { name: 'Reset password' });
-      fireEvent.click(resetButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Passwords do not match')).toBeInTheDocument();
-      });
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[0], {
+      target: { value: 'password123' },
     });
+    fireEvent.change(screen.getAllByPlaceholderText('••••••••')[1], {
+      target: { value: 'password123' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Update password/i }));
 
-    it('validates password minimum length', async () => {
-      window.history.replaceState(null, '', '/reset-password?token=valid-token-123');
-      renderApp();
+    await waitFor(() => {
+      expect(auth.resetPassword).toHaveBeenCalledWith('reset-token', 'password123');
+      expect(screen.getByRole('heading', { name: /Password updated/i })).toBeInTheDocument();
+    });
+  });
 
-      await waitFor(() => {
-        expect(screen.getByText('Set new password')).toBeInTheDocument();
-      });
+  it('verifies email and lands on the redesigned success screen', async () => {
+    auth.verifyEmail.mockResolvedValue({ data: { detail: 'Email verified successfully.' } });
 
-      const passwordInputs = screen.getAllByPlaceholderText('••••••••');
-      fireEvent.change(passwordInputs[0], { target: { value: 'short' } });
-      fireEvent.change(passwordInputs[1], { target: { value: 'short' } });
+    render(<VerifyEmailPage token="verify-token" onNavigate={vi.fn()} />);
 
-      const resetButton = screen.getByRole('button', { name: 'Reset password' });
-      fireEvent.click(resetButton);
-
-      await waitFor(() => {
-        expect(screen.getByText('Password must be at least 8 characters long.')).toBeInTheDocument();
-      });
+    await waitFor(() => {
+      expect(auth.verifyEmail).toHaveBeenCalledWith('verify-token');
+      expect(screen.getByRole('heading', { name: /Welcome to Taali/i })).toBeInTheDocument();
+      expect(screen.getByText('Email verified')).toBeInTheDocument();
     });
   });
 });

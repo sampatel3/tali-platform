@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 from datetime import datetime, timezone
 from typing import Any
 
@@ -20,6 +22,17 @@ from ...services.taali_scoring import (
 from .pipeline_service import (
     ensure_pipeline_fields,
     stage_external_drift,
+)
+
+_ROLE_CRITERIA_MAX_ITEMS = 12
+_ROLE_CRITERION_MAX_CHARS = 500
+_ROLE_METADATA_PREFIXES = (
+    "location:",
+    "department:",
+    "employment type:",
+    "apply:",
+    "state:",
+    "posted:",
 )
 
 
@@ -87,6 +100,234 @@ def get_application(application_id: int, org_id: int, db: Session) -> CandidateA
     return app
 
 
+def _clean_criterion_text(value: Any) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"^\s*(?:[-*•]|\d+[\).\-\s])\s*", "", text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" .;,-")
+    return text[:_ROLE_CRITERION_MAX_CHARS]
+
+
+def _criterion_id(text: str, source: str, *, order: int) -> str:
+    digest = hashlib.sha1(f"{source}:{text.lower()}:{order}".encode("utf-8")).hexdigest()[:12]
+    prefix = "jd" if source == "job_spec" else "rec"
+    return f"{prefix}_{digest}"
+
+
+def _split_requirement_text(value: str) -> list[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+
+    parts = [raw]
+    if "\n" in raw or ";" in raw:
+        parts = re.split(r"[\n;]+", raw)
+    elif len(raw) > 140:
+        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", raw)
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        cleaned = _clean_criterion_text(part)
+        lowered = cleaned.lower()
+        if len(cleaned) < 12 or lowered in seen:
+            continue
+        if lowered.startswith("http") or "workable.com/" in lowered:
+            continue
+        seen.add(lowered)
+        out.append(cleaned)
+        if len(out) >= _ROLE_CRITERIA_MAX_ITEMS:
+            break
+    return out
+
+
+def _derive_job_spec_criteria(role: Role, *, max_items: int = 4) -> list[str]:
+    source_text = str(role.job_spec_text or role.description or "").strip()
+    if not source_text:
+        return []
+
+    lines: list[str] = []
+    for raw_line in re.split(r"[\r\n]+", source_text):
+        cleaned = _clean_criterion_text(raw_line)
+        lowered = cleaned.lower()
+        if len(cleaned) < 18:
+            continue
+        if lowered.startswith(_ROLE_METADATA_PREFIXES):
+            continue
+        if "workable.com/" in lowered:
+            continue
+        lines.append(cleaned)
+
+    if len(lines) < 2:
+        paragraph_text = re.sub(r"\s+", " ", source_text)
+        sentence_candidates = [
+            _clean_criterion_text(part)
+            for part in re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", paragraph_text)
+        ]
+        lines.extend([part for part in sentence_candidates if len(part) >= 18])
+
+    out: list[str] = []
+    seen: set[str] = set()
+    for line in lines:
+        lowered = line.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        out.append(line)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _criteria_from_texts(texts: list[str], *, source: str, start_order: int) -> list[dict[str, Any]]:
+    criteria: list[dict[str, Any]] = []
+    next_order = start_order
+    for text in texts:
+        cleaned = _clean_criterion_text(text)
+        if not cleaned:
+            continue
+        criteria.append(
+            {
+                "id": _criterion_id(cleaned, source, order=next_order),
+                "text": cleaned,
+                "source": source,
+                "order": next_order,
+                "weight": None,
+            }
+        )
+        next_order += 1
+    return criteria
+
+
+def default_role_scoring_criteria(role: Role) -> list[dict[str, Any]]:
+    recruiter_texts = _split_requirement_text(role.additional_requirements or "")
+    job_spec_texts = _derive_job_spec_criteria(
+        role,
+        max_items=3 if recruiter_texts else 4,
+    )
+    criteria = _criteria_from_texts(job_spec_texts, source="job_spec", start_order=1)
+    criteria.extend(
+        _criteria_from_texts(recruiter_texts, source="recruiter", start_order=len(criteria) + 1)
+    )
+    return criteria[:_ROLE_CRITERIA_MAX_ITEMS]
+
+
+def normalize_role_scoring_criteria(role: Role, raw_criteria: Any | None = None) -> list[dict[str, Any]]:
+    source_items = raw_criteria if raw_criteria is not None else role.scoring_criteria
+    if not isinstance(source_items, list) or not source_items:
+        return default_role_scoring_criteria(role)
+
+    normalized: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(source_items, start=1):
+        if isinstance(item, str):
+            text = _clean_criterion_text(item)
+            source = "job_spec"
+            weight = None
+            order = index
+            criterion_id = ""
+        elif isinstance(item, dict):
+            text = _clean_criterion_text(item.get("text") or item.get("criterion") or item.get("name"))
+            source = str(item.get("source") or "job_spec").strip().lower()
+            source = source if source in {"job_spec", "recruiter"} else "job_spec"
+            weight = item.get("weight")
+            try:
+                weight = int(weight) if weight is not None else None
+            except (TypeError, ValueError):
+                weight = None
+            try:
+                order = int(item.get("order") or index)
+            except (TypeError, ValueError):
+                order = index
+            criterion_id = str(item.get("id") or "").strip()
+        else:
+            continue
+
+        if not text:
+            continue
+        key = f"{source}:{text.lower()}"
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(
+            {
+                "id": criterion_id or _criterion_id(text, source, order=order),
+                "text": text,
+                "source": source,
+                "order": max(1, order),
+                "weight": weight if weight is not None and weight > 0 else None,
+            }
+        )
+
+    if not normalized:
+        return default_role_scoring_criteria(role)
+
+    normalized.sort(key=lambda item: (int(item.get("order") or 0), str(item.get("id") or "")))
+    for order, item in enumerate(normalized, start=1):
+        item["order"] = order
+        item["id"] = item.get("id") or _criterion_id(item["text"], item["source"], order=order)
+    return normalized[:_ROLE_CRITERIA_MAX_ITEMS]
+
+
+def set_role_scoring_criteria(role: Role, criteria: Any) -> list[dict[str, Any]]:
+    normalized = normalize_role_scoring_criteria(role, criteria)
+    role.scoring_criteria = normalized
+
+    recruiter_criteria = [
+        item["text"]
+        for item in normalized
+        if str(item.get("source") or "").strip().lower() == "recruiter"
+    ]
+    role.additional_requirements = "\n".join(recruiter_criteria) or None
+    return normalized
+
+
+def refresh_role_job_spec_criteria(role: Role) -> list[dict[str, Any]]:
+    existing = normalize_role_scoring_criteria(role)
+    recruiter = [item for item in existing if item.get("source") == "recruiter"]
+    job_spec = _criteria_from_texts(
+        _derive_job_spec_criteria(role, max_items=3 if recruiter else 4),
+        source="job_spec",
+        start_order=1,
+    )
+    merged = job_spec + [
+        {
+            **item,
+            "order": len(job_spec) + index,
+        }
+        for index, item in enumerate(recruiter, start=1)
+    ]
+    return set_role_scoring_criteria(role, merged)
+
+
+def role_scoring_requirements_text(role: Role) -> str | None:
+    criteria = normalize_role_scoring_criteria(role)
+    if not criteria:
+        return (role.additional_requirements or "").strip() or None
+    lines = [item["text"] for item in criteria if item.get("text")]
+    return "\n".join(lines).strip() or None
+
+
+def role_reject_threshold(role: Role | None) -> int:
+    try:
+        threshold = int(getattr(role, "reject_threshold", 60) or 60)
+    except (TypeError, ValueError):
+        threshold = 60
+    return max(0, min(100, threshold))
+
+
+def application_is_below_threshold(app: CandidateApplication) -> bool:
+    score = _normalize_cv_match_score_for_response(
+        getattr(app, "cv_match_score", None),
+        app.cv_match_details if isinstance(getattr(app, "cv_match_details", None), dict) else None,
+    )
+    if score is None:
+        return False
+    return score < float(role_reject_threshold(getattr(app, "role", None)))
+
+
 def role_to_response(
     role: Role,
     *,
@@ -115,6 +356,8 @@ def role_to_response(
         job_spec_text=role.job_spec_text,
         job_spec_uploaded_at=role.job_spec_uploaded_at,
         job_spec_present=role_has_job_spec(role),
+        scoring_criteria=normalize_role_scoring_criteria(role),
+        reject_threshold=role_reject_threshold(role),
         interview_focus=role.interview_focus,
         interview_focus_generated_at=role.interview_focus_generated_at,
         tasks_count=tasks_count,
@@ -473,6 +716,7 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
     if cv_match_score is not None and "score_scale" not in cv_match_details:
         cv_match_details["score_scale"] = "0-100"
     score_summary = _score_summary_for_application(app)
+    role_threshold = role_reject_threshold(app.role)
 
     return ApplicationResponse(
         id=app.id,
@@ -527,6 +771,11 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
         valid_assessment_id=score_summary.get("assessment_id"),
         valid_assessment_status=score_summary.get("assessment_status"),
         score_summary=score_summary,
+        role_reject_threshold=role_threshold,
+        below_role_threshold=(
+            cv_match_score is not None
+            and cv_match_score < float(role_threshold)
+        ),
         created_at=app.created_at,
         updated_at=app.updated_at,
     )

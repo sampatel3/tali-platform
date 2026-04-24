@@ -3,9 +3,7 @@ import { AlertTriangle, CheckCircle, Mail } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../shared/api';
-import { BRAND } from '../../config/brand';
-import { Logo } from '../../shared/ui/Branding';
-import { Button, Input, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { FlowLayout, AuthCard } from './AuthLayout';
 
 export const RegisterPage = ({ onNavigate }) => {
   const { register } = useAuth();
@@ -82,106 +80,98 @@ export const RegisterPage = ({ onNavigate }) => {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--taali-surface)] flex flex-col">
-      <nav className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <Logo onClick={() => onNavigate('landing')} />
-        </div>
-      </nav>
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-md">
-          {success ? (
-            <div className="border-2 border-[var(--taali-border)] p-8 text-center bg-[var(--taali-surface)]">
-              <Mail size={48} className="mx-auto mb-4 text-[var(--taali-purple)]" />
-              <h2 className="text-2xl font-bold mb-2">Check your email</h2>
-              <p className="text-sm text-[var(--taali-muted)] mb-2">We sent a verification link to</p>
-              <p className="font-mono text-sm font-bold mb-6">{form.email}</p>
-              <p className="text-xs text-[var(--taali-muted)] mb-6">
-                Click the link in the email to activate your account. The link expires in 24 hours.
-              </p>
-              <Button variant="primary" className="w-full mb-3" onClick={() => onNavigate('login')}>
-                Go to Sign In
-              </Button>
-              <Button
-                variant="secondary"
-                className="w-full"
-                onClick={handleResend}
-                disabled={resending}
-              >
-                {resending ? <><Spinner size={16} /> Sending...</> : resent ? <><CheckCircle size={16} className="shrink-0 text-[var(--taali-purple)]" /> Sent!</> : 'Resend verification email'}
-              </Button>
+    <FlowLayout>
+      {success ? (
+        <AuthCard
+          kicker="VERIFY EMAIL"
+          title={<>Check your inbox<em>.</em></>}
+          subtitle="We sent a verification link to your work email."
+          widthClassName="max-w-[560px]"
+        >
+          <div className="mb-6 flex items-start gap-4 rounded-[14px] border border-[color-mix(in_oklab,var(--green)_30%,var(--line))] bg-[color-mix(in_oklab,var(--green)_10%,var(--bg-2))] p-5">
+            <div className="grid h-9 w-9 place-items-center rounded-[10px] bg-[var(--green)] text-white">
+              <Mail size={18} />
             </div>
-          ) : (
-            <div className="border-2 border-[var(--taali-border)] p-8 bg-[var(--taali-surface)]">
-              <h2 className="text-3xl font-bold mb-2">Create Account</h2>
-              <p className="text-sm text-[var(--taali-muted)] mb-8">Start using {BRAND.name} for your team</p>
-              {error && (
-                <div className="border-2 border-[var(--taali-danger)] bg-[var(--taali-danger-soft)] p-4 mb-6 flex items-center gap-2">
-                  <AlertTriangle size={18} className="text-[var(--taali-danger)] flex-shrink-0" />
-                  <span className="text-sm text-[var(--taali-text)]">{error}</span>
-                </div>
-              )}
-              <div className="space-y-4">
-                <div>
-                  <label className="block font-mono text-sm mb-1">Full Name *</label>
-                  <Input
-                    type="text"
-                    placeholder="Jane Smith"
-                    value={form.full_name}
-                    onChange={updateField('full_name')}
-                  />
-                </div>
-                <div>
-                  <label className="block font-mono text-sm mb-1">Email *</label>
-                  <Input
-                    type="email"
-                    placeholder="you@company.com"
-                    value={form.email}
-                    onChange={updateField('email')}
-                  />
-                </div>
-                <div>
-                  <label className="block font-mono text-sm mb-1">Password *</label>
-                  <Input
-                    type="password"
-                    placeholder="••••••••"
-                    value={form.password}
-                    onChange={updateField('password')}
-                    onKeyDown={(e) => e.key === 'Enter' && handleRegister()}
-                  />
-                  <p className="font-mono text-xs text-[var(--taali-muted)] mt-1">Minimum 8 characters</p>
-                </div>
-                <div>
-                  <label className="block font-mono text-sm mb-1">Organization Name</label>
-                  <Input
-                    type="text"
-                    placeholder="Acme Corp"
-                    value={form.organization_name}
-                    onChange={updateField('organization_name')}
-                  />
-                </div>
-                <Button
-                  variant="primary"
-                  className="w-full mt-4"
-                  onClick={handleRegister}
-                  disabled={loading}
-                >
-                  {loading ? <><Spinner size={18} /> Creating account...</> : 'Create Account'}
-                </Button>
-              </div>
-              <div className="mt-6 text-center">
-                <span className="text-sm text-[var(--taali-muted)]">Already have an account? </span>
-                <button
-                  className="text-sm font-bold hover:underline text-[var(--taali-purple)]"
-                  onClick={() => onNavigate('login')}
-                >
-                  Sign In
-                </button>
-              </div>
+            <div>
+              <p className="text-[15px] font-semibold text-[var(--ink)]">{form.email}</p>
+              <p className="mt-1 text-[13px] leading-6 text-[var(--ink-2)]">Click the link in the email to activate your account. The link expires in 24 hours.</p>
             </div>
-          )}
-        </div>
-      </div>
-    </div>
+          </div>
+          <div className="flex flex-col gap-3">
+            <button type="button" className="btn btn-purple btn-lg w-full justify-center" onClick={() => onNavigate('login')}>
+              Go to sign in <span className="arrow">→</span>
+            </button>
+            <button type="button" className="btn btn-outline btn-lg w-full justify-center" onClick={handleResend} disabled={resending}>
+              {resending ? 'Sending...' : resent ? <><CheckCircle size={16} /> Sent</> : 'Resend verification email'}
+            </button>
+          </div>
+        </AuthCard>
+      ) : (
+        <AuthCard
+          kicker="CREATE ACCOUNT"
+          title={<>Start hiring with <em>evidence</em>.</>}
+          subtitle="90 seconds to set up. No credit card. Your first 5 assessments are free."
+          widthClassName="max-w-[560px]"
+        >
+          {error ? (
+            <div className="mb-5 flex items-center gap-2 rounded-[14px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
+              <AlertTriangle size={18} className="shrink-0 text-[var(--taali-danger)]" />
+              <span className="text-sm text-[var(--ink)]">{error}</span>
+            </div>
+          ) : null}
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="field md:col-span-2">
+              <span className="k">Work email</span>
+              <input type="email" placeholder="you@company.com" value={form.email} onChange={updateField('email')} />
+              <span className="mt-1 block text-[11.5px] text-[var(--mute)]">We&apos;ll use your domain to find teammates to invite.</span>
+            </label>
+            <label className="field">
+              <span className="k">Full name</span>
+              <input type="text" placeholder="Sam Patel" value={form.full_name} onChange={updateField('full_name')} />
+            </label>
+            <label className="field">
+              <span className="k">Company</span>
+              <input type="text" placeholder="Deeplight AI" value={form.organization_name} onChange={updateField('organization_name')} />
+            </label>
+            <label className="field md:col-span-2">
+              <span className="k">Password</span>
+              <input
+                type="password"
+                placeholder="••••••••"
+                value={form.password}
+                onChange={updateField('password')}
+                onKeyDown={(e) => e.key === 'Enter' && handleRegister()}
+              />
+              <div className="mt-2 flex gap-1">
+                {[1, 2, 3, 4, 5].map((step) => (
+                  <i
+                    key={step}
+                    className="block h-1 flex-1 rounded-[2px]"
+                    style={{ background: step <= Math.min(4, Math.floor(form.password.length / 3)) ? 'var(--purple)' : 'var(--line)' }}
+                  />
+                ))}
+              </div>
+              <span className="mt-1 block text-[11.5px] text-[var(--mute)]">Strong · 12+ chars, 1 number</span>
+            </label>
+          </div>
+
+          <button type="button" className="btn btn-purple btn-lg mt-5 w-full justify-center" onClick={handleRegister} disabled={loading}>
+            {loading ? 'Creating account...' : <>Create account <span className="arrow">→</span></>}
+          </button>
+
+          <p className="mt-4 text-[12.5px] leading-6 text-[var(--mute)]">
+            By creating an account you agree to our Terms and Privacy. We never train models on your candidate data.
+          </p>
+
+          <div className="mt-5 text-center text-[13.5px] text-[var(--mute)]">
+            Already have an account?{' '}
+            <button type="button" className="font-medium text-[var(--purple)] hover:underline" onClick={() => onNavigate('login')}>
+              Sign in
+            </button>
+          </div>
+        </AuthCard>
+      )}
+    </FlowLayout>
   );
 };

@@ -4,7 +4,6 @@
  * Run: npm run lint:ui
  *
  * Forbidden:
- * - rounded-* (except rounded-none)
  * - border-radius: outside index.css or designated primitives
  * - font-family: outside index.css or typography primitives
  */
@@ -23,8 +22,6 @@ const ALLOWED_FILES = [
 const allowedDir = (p) => p.includes('node_modules') || p.includes('.git') || p.includes('dist');
 
 const patterns = [
-  { regex: /\brounded-(sm|md|lg|xl|2xl|3xl|full)\b/g, msg: 'rounded-* (use square corners)' },
-  { regex: /rounded-\[(?!0)[^\]]+\]/g, msg: 'rounded-[*] with non-zero value' },
   { regex: /border-radius:\s*(?!0|var\(--taali-radius\))[^;]+/g, msg: 'border-radius outside tokens' },
 ];
 
