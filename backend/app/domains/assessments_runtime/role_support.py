@@ -736,7 +736,7 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
         pipeline_external_drift=stage_external_drift(app),
         version=int(app.version or 1),
         notes=app.notes,
-        candidate_email=(candidate.email if candidate else ""),
+        candidate_email=((candidate.email or "") if candidate else ""),
         candidate_name=(candidate.full_name if candidate else None),
         candidate_position=(candidate.position if candidate else None),
         cv_filename=app.cv_filename,

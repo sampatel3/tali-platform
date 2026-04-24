@@ -21,10 +21,16 @@ if [[ ! -f "$BACKEND_DIR/railway.worker.json" ]]; then
   exit 1
 fi
 
+if ! command -v rsync >/dev/null 2>&1; then
+  echo "error: rsync is required to prepare the worker deployment bundle" >&2
+  exit 1
+fi
+
 cd "$ROOT_DIR"
 railway environment "$ENV_NAME" >/dev/null
 STATUS_FILE="$(mktemp)"
-trap 'rm -f "$STATUS_FILE"' EXIT
+WORKER_BUNDLE_DIR="$(mktemp -d)"
+trap 'rm -f "$STATUS_FILE"; rm -rf "$WORKER_BUNDLE_DIR"' EXIT
 railway status --json > "$STATUS_FILE"
 
 if [[ -z "$WORKER_SERVICE" ]]; then
@@ -74,6 +80,17 @@ fi
 
 cd "$BACKEND_DIR"
 echo "Deploying worker service '$WORKER_SERVICE' from $BACKEND_DIR (environment: $ENV_NAME)..."
-railway up --service "$WORKER_SERVICE" --environment "$ENV_NAME" --detach
+rsync -a \
+  --delete \
+  --exclude ".venv" \
+  --exclude "__pycache__" \
+  --exclude ".pytest_cache" \
+  --exclude ".mypy_cache" \
+  --exclude "htmlcov" \
+  --exclude "dist" \
+  --exclude "build" \
+  "$BACKEND_DIR"/ "$WORKER_BUNDLE_DIR"/
+cp "$BACKEND_DIR/railway.worker.json" "$WORKER_BUNDLE_DIR/railway.json"
+railway up "$WORKER_BUNDLE_DIR" --path-as-root --service "$WORKER_SERVICE" --environment "$ENV_NAME" --detach
 
-echo "Deployment submitted. Ensure worker start command is configured to celery in Railway service settings."
+echo "Deployment submitted with worker-specific Railway config. Check status with: scripts/railway/check_status.sh"

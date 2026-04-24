@@ -56,6 +56,6 @@ fi
 
 cd "$BACKEND_DIR"
 echo "Deploying backend service '$SERVICE_NAME' from $BACKEND_DIR (environment: $ENV_NAME)..."
-railway up --service "$SERVICE_NAME" --environment "$ENV_NAME" --detach
+railway up "$BACKEND_DIR" --path-as-root --service "$SERVICE_NAME" --environment "$ENV_NAME" --detach
 
 echo "Deployment submitted. Check status with: scripts/railway/check_status.sh"
