@@ -1,7 +1,7 @@
 """Add role scoring criteria and reject threshold.
 
-Revision ID: 034_add_role_scoring_criteria_threshold
-Revises: 033_add_pipeline_query_indexes
+Revision ID: 035_add_role_scoring_criteria_threshold
+Revises: 034_add_application_score_cache_columns
 Create Date: 2026-04-24
 """
 
@@ -9,8 +9,8 @@ from alembic import op
 import sqlalchemy as sa
 
 
-revision = "034_add_role_scoring_criteria_threshold"
-down_revision = "033_add_pipeline_query_indexes"
+revision = "035_add_role_scoring_criteria_threshold"
+down_revision = "034_add_application_score_cache_columns"
 branch_labels = None
 depends_on = None
 
