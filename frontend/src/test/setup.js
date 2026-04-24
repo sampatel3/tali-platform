@@ -1,5 +1,16 @@
+import React from 'react';
 import '@testing-library/jest-dom';
 import { act, cleanup } from '@testing-library/react';
+import { vi } from 'vitest';
+
+vi.mock('@monaco-editor/react', () => ({
+  default: ({ value = '', onChange = null }) => React.createElement('textarea', {
+    readOnly: true,
+    'data-testid': 'code-editor',
+    value: value ?? '',
+    onChange: onChange ? (event) => onChange(event.target.value) : undefined,
+  }),
+}));
 
 class ResizeObserverMock {
   observe() {}

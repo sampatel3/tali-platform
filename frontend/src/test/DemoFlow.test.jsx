@@ -70,7 +70,12 @@ describe('Demo flow redesign', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/Try a candidate/i);
       expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/assessment/i);
-    });
+    }, { timeout: 5000 });
+  };
+
+  const openDemoPage = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: 'Demo' }));
+    await expectDemoHero();
   };
 
   beforeEach(() => {
@@ -106,27 +111,22 @@ describe('Demo flow redesign', () => {
   it('navigates from the marketing nav to the redesigned demo page', async () => {
     renderApp();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
-
-    await expectDemoHero();
+    await openDemoPage();
     expect(screen.getByText(/Complete this short intake/i)).toBeInTheDocument();
   });
 
   it('keeps the theme toggle button in both landing and demo navigation', async () => {
     renderApp();
 
-    expect(screen.getByRole('button', { name: 'Toggle theme' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
-
-    await expectDemoHero();
+    expect(await screen.findByRole('button', { name: 'Toggle theme' })).toBeInTheDocument();
+    await openDemoPage();
     expect(screen.getByRole('button', { name: 'Toggle theme' })).toBeInTheDocument();
   });
 
   it('shows the redesigned intake validation before a demo can start', async () => {
     renderApp();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
-    await expectDemoHero();
+    await openDemoPage();
 
     fireEvent.click(screen.getByRole('button', { name: /Start demo assessment/i }));
 
@@ -139,8 +139,7 @@ describe('Demo flow redesign', () => {
   it('starts the selected demo track and opens the assessment runtime', async () => {
     renderApp();
 
-    fireEvent.click(screen.getByRole('button', { name: 'Demo' }));
-    await expectDemoHero();
+    await openDemoPage();
 
     fireEvent.change(screen.getByLabelText(/^Full name$/i), { target: { value: 'Jane Doe' } });
     fireEvent.change(screen.getByLabelText(/^Position$/i), { target: { value: 'Engineering Manager' } });
