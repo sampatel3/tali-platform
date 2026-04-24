@@ -18,11 +18,35 @@ class ResizeObserverMock {
   disconnect() {}
 }
 
+class WebSocketMock {
+  static CONNECTING = 0;
+  static OPEN = 1;
+  static CLOSING = 2;
+  static CLOSED = 3;
+
+  constructor() {
+    this.readyState = WebSocketMock.CONNECTING;
+    setTimeout(() => {
+      this.readyState = WebSocketMock.OPEN;
+      this.onopen?.();
+    }, 0);
+  }
+
+  send() {}
+
+  close() {
+    this.readyState = WebSocketMock.CLOSED;
+    this.onclose?.();
+  }
+}
+
 if (typeof window !== 'undefined' && !window.ResizeObserver) {
   window.ResizeObserver = ResizeObserverMock;
 }
 
 if (typeof window !== 'undefined') {
+  window.WebSocket = WebSocketMock;
+  globalThis.WebSocket = WebSocketMock;
   window.scrollTo = () => {};
   globalThis.scrollTo = () => {};
   Object.defineProperty(window, 'matchMedia', {
