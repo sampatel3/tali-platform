@@ -178,8 +178,15 @@ export const RoleSheet = ({
             <Textarea
               value={additionalRequirements}
               onChange={(event) => setAdditionalRequirements(event.target.value)}
-              placeholder="e.g. Large enterprise experience; production experience; holds XYZ passport; 30 days notice or less. Used by AI when scoring CVs against this role."
-              className="min-h-[100px]"
+              placeholder={`One requirement per line. Prefix with the priority so the AI weighs it correctly.
+
+Examples:
+Must have: 5+ years building data pipelines on AWS
+Preferred: Banking or fintech background
+Nice to have: AWS Solutions Architect certification
+Constraint: Based in UAE (no remote)
+Disqualifying: No experience with regulated financial data`}
+              className="min-h-[160px]"
               maxLength={ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH}
             />
             <span className="mt-1 block text-xs text-[var(--taali-muted)]">

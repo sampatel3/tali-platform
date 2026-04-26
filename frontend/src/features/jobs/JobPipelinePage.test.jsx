@@ -226,7 +226,7 @@ Banking transformation experience
     await screen.findByRole('heading', { name: /Scoring criteria/i, level: 3 });
     fireEvent.click(screen.getByRole('button', { name: /Edit criteria/i }));
 
-    fireEvent.change(screen.getByPlaceholderText(/Add recruiter-specific requirements/i), {
+    fireEvent.change(screen.getByPlaceholderText(/One requirement per line/i), {
       target: { value: 'Payments experience\nStakeholder governance' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Save criteria/i }));

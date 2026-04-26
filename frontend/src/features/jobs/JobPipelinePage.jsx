@@ -1310,8 +1310,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   value={criteriaDraft}
                   onChange={(event) => setCriteriaDraft(event.target.value)}
                   readOnly={!criteriaEditing}
-                  className="criteria-textarea min-h-[150px]"
-                  placeholder="Add recruiter-specific requirements, red flags, or context for CV scoring."
+                  className="criteria-textarea min-h-[180px]"
+                  placeholder={`One requirement per line. Prefix with the priority so the AI weighs it correctly.
+
+Examples:
+Must have: 5+ years building data pipelines on AWS
+Preferred: Banking or fintech background
+Nice to have: AWS Solutions Architect certification
+Constraint: Based in UAE (no remote)
+Disqualifying: No experience with regulated financial data`}
                 />
                 <div className="criteria-input-foot">
                   {criteriaEditing
