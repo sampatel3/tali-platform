@@ -47,6 +47,8 @@ vi.mock('../shared/api', () => ({
     list: vi.fn().mockResolvedValue({ data: [] }),
     get: vi.fn(),
     getApplication: vi.fn(),
+    getApplicationByShareToken: vi.fn(),
+    getApplicationShareLink: vi.fn(),
     create: vi.fn(),
     update: vi.fn(),
     remove: vi.fn(),
@@ -111,6 +113,7 @@ import {
   auth,
   assessments as assessmentsApi,
   roles as rolesApi,
+  team as teamApi,
   tasks as tasksApi,
 } from '../shared/api';
 import App from '../App';
@@ -142,6 +145,7 @@ const setupAuthenticatedUser = () => {
 };
 
 const renderAppOnCandidatesPage = async () => {
+  window.history.pushState({}, '', '/candidates');
   const result = render(
     <AuthProvider>
       <App />
@@ -149,19 +153,22 @@ const renderAppOnCandidatesPage = async () => {
   );
 
   await waitFor(() => {
-    expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
-  }, { timeout: 5000 });
-
-  const candidatesNav = screen.getByRole('button', { name: /^Candidates$/ });
-  await act(async () => {
-    fireEvent.click(candidatesNav);
-  });
-
-  // Wait for Candidates page to load (lazy + API)
-  await waitFor(() => {
     expect(screen.getByText('Candidates', { selector: 'h1' })).toBeInTheDocument();
   }, { timeout: 5000 });
 
+  return result;
+};
+
+const renderAppAt = async (path) => {
+  window.history.pushState({}, '', path);
+  let result;
+  await act(async () => {
+    result = render(
+      <AuthProvider>
+        <App />
+      </AuthProvider>
+    );
+  });
   return result;
 };
 
@@ -174,6 +181,21 @@ describe('CandidatesPage', () => {
 
     rolesApi.list.mockResolvedValue({ data: baseRoles });
     rolesApi.listTasks.mockResolvedValue({ data: [{ id: 700, name: 'Async Debugging Challenge' }] });
+    rolesApi.getApplicationShareLink.mockResolvedValue({
+      data: {
+        application_id: 12,
+        share_token: 'shr_candidate_report_12',
+        share_url: 'https://www.taali.ai/c/12?view=interview&k=shr_candidate_report_12',
+        created_at: '2026-01-16T10:00:00Z',
+        member_access_only: false,
+      },
+    });
+    teamApi.list.mockResolvedValue({
+      data: [
+        { id: 1, email: 'admin@taali.ai', is_active: true, is_email_verified: true },
+        { id: 2, email: 'panel@taali.ai', is_active: true, is_email_verified: true },
+      ],
+    });
     rolesApi.listApplications.mockResolvedValue({
       data: [
         {
@@ -201,7 +223,7 @@ describe('CandidatesPage', () => {
     await renderAppOnCandidatesPage();
 
     expect(screen.getByRole('button', { name: 'New role' })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Add candidate' })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Add candidate' }).length).toBeGreaterThanOrEqual(1);
     expect(screen.getByPlaceholderText('Search by name, email, position, or status')).toBeInTheDocument();
   });
 
@@ -214,11 +236,9 @@ describe('CandidatesPage', () => {
   it('shows role list and role summary context', async () => {
     await renderAppOnCandidatesPage();
 
-    await waitFor(() => {
-      expect(screen.getByRole('heading', { name: 'ML Engineer', level: 2 })).toBeInTheDocument();
-      expect(screen.getByText('Job spec:')).toBeInTheDocument();
-      expect(screen.getByText('Tasks (1):')).toBeInTheDocument();
-    });
+    expect(await screen.findByRole('heading', { name: 'ML Engineer', level: 2 }, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByText('Job spec:', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByText('Async Debugging Challenge', {}, { timeout: 5000 })).toBeInTheDocument();
   });
 
   it('shows interview focus guidance when available', async () => {
@@ -406,6 +426,7 @@ describe('CandidatesPage', () => {
           candidate_position: 'Backend Engineer',
           status: 'applied',
           cv_filename: 'match.pdf',
+          pre_screen_score: 82,
           cv_match_score: 82,
           created_at: '2026-01-10T10:00:00Z',
           updated_at: '2026-01-10T10:00:00Z',
@@ -417,7 +438,7 @@ describe('CandidatesPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Match Candidate')).toBeInTheDocument();
-      expect(screen.getByRole('img', { name: /TAALI Score for Match Candidate: 82\.0/i })).toBeInTheDocument();
+      expect(screen.getByRole('img', { name: /Pre-screen score for Match Candidate: 82\.0/i })).toBeInTheDocument();
     });
   });
 
@@ -479,7 +500,7 @@ describe('CandidatesPage', () => {
 
     await waitFor(() => {
       const dialog = screen.getByRole('dialog', { name: 'Rationale Candidate' });
-      expect(within(dialog).getByText('Assessment results')).toBeInTheDocument();
+      expect(within(dialog).getByText('Assessment')).toBeInTheDocument();
       expect(within(dialog).getByText('TAALI score')).toBeInTheDocument();
       expect(within(dialog).getByText('Assessment')).toBeInTheDocument();
       expect(within(dialog).getAllByText('Role fit').length).toBeGreaterThan(0);
@@ -547,17 +568,76 @@ describe('CandidatesPage', () => {
     fireEvent.click(within(candidateRow).getByRole('button', { name: 'View assessment' }));
 
     const dialog = await screen.findByRole('dialog', { name: 'Standing Candidate' });
-    expect(within(dialog).getByText('Assessment results')).toBeInTheDocument();
+    expect(within(dialog).getByText('Assessment')).toBeInTheDocument();
     expect(within(dialog).getByText('Role fit summary')).toBeInTheDocument();
-    expect(within(dialog).queryByText('Standing candidate report')).not.toBeInTheDocument();
+    expect(within(dialog).queryByText('Candidate standing report')).not.toBeInTheDocument();
     fireEvent.click(within(dialog).getByRole('button', { name: 'View full page' }));
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/candidates/12');
-      expect(screen.getByRole('button', { name: 'Back to Candidates' })).toBeInTheDocument();
-      expect(screen.getByText('Assessment results')).toBeInTheDocument();
-      expect(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' })).toBeInTheDocument();
-      expect(screen.queryByText('Standing candidate report')).not.toBeInTheDocument();
+    });
+
+    expect(await screen.findByRole('button', { name: /Back to candidates/i }, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByText('Candidate standing report', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(screen.getAllByText(/Standing Candidate/i).length).toBeGreaterThan(0);
+    expect(screen.getByText('Shareable link')).toBeInTheDocument();
+    expect(screen.getByLabelText('Shareable report link')).toHaveValue('https://www.taali.ai/c/12?view=interview&k=shr_candidate_report_12');
+  });
+
+  it('loads a standing report from a shared token route and copies the secure link', async () => {
+    const clipboardWriteText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(window.navigator, 'clipboard', {
+      configurable: true,
+      value: { writeText: clipboardWriteText },
+    });
+
+    rolesApi.getApplicationByShareToken.mockResolvedValue({
+      data: {
+        id: 12,
+        candidate_id: 102,
+        candidate_email: 'standing@example.com',
+        candidate_name: 'Standing Candidate',
+        candidate_position: 'AI Full Stack Engineer',
+        role_name: 'AI Full Stack Engineer',
+        pipeline_stage: 'review',
+        application_outcome: 'open',
+        status: 'applied',
+        cv_filename: 'standing.pdf',
+        cv_match_score: 81,
+        cv_match_details: {
+          score_scale: '0-100',
+          summary: 'Strong enough CV evidence to review before sending an assessment.',
+          requirements_match_score_100: 74,
+        },
+        assessment_history: [],
+        created_at: '2026-01-10T10:00:00Z',
+        updated_at: '2026-01-10T10:00:00Z',
+      },
+    });
+    rolesApi.getApplicationShareLink.mockResolvedValue({
+      data: {
+        application_id: 12,
+        share_token: 'shr_candidate_report_12',
+        share_url: 'https://www.taali.ai/c/12?view=interview&k=shr_candidate_report_12',
+        created_at: '2026-01-16T10:00:00Z',
+        member_access_only: false,
+      },
+    });
+
+    await renderAppAt('/candidates/shr_candidate_report_12');
+    const expectedVisibleShareUrl = `${window.location.origin}/c/12?view=interview&k=shr_candidate_report_12`;
+    const expectedCopiedShareUrl = 'https://www.taali.ai/c/12?view=interview&k=shr_candidate_report_12';
+
+    await waitFor(() => {
+      expect(rolesApi.getApplicationByShareToken).toHaveBeenCalledWith('shr_candidate_report_12');
+      expect(screen.getByText('Candidate standing report')).toBeInTheDocument();
+      expect(screen.getByLabelText('Shareable report link')).toHaveValue(expectedVisibleShareUrl);
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+
+    await waitFor(() => {
+      expect(clipboardWriteText).toHaveBeenCalledWith(expectedCopiedShareUrl);
     });
   });
 
@@ -674,7 +754,7 @@ describe('CandidatesPage', () => {
 
     await waitFor(() => {
       const dialog = screen.getByRole('dialog', { name: 'Completed Candidate' });
-      expect(within(dialog).getByText('Assessment results')).toBeInTheDocument();
+      expect(within(dialog).getByText('Assessment')).toBeInTheDocument();
       expect(within(dialog).getByText('Role fit summary')).toBeInTheDocument();
       expect(within(dialog).getByText('What to probe')).toBeInTheDocument();
       expect(within(dialog).queryByText('Standing candidate report')).not.toBeInTheDocument();
@@ -806,7 +886,7 @@ describe('CandidatesPage', () => {
       expect(screen.getByText('Candidate 1')).toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getByLabelText('Active role'), { target: { value: '2' } });
+    fireEvent.change(screen.getByLabelText('Active role', { selector: 'select' }), { target: { value: '2' } });
 
     await waitFor(() => {
       expect(screen.getByText('Candidate 2')).toBeInTheDocument();

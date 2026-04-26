@@ -139,6 +139,8 @@ taali-platform/
 
 - **Deployment:** [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)  
 - **Environment variables:** [docs/ENV_SETUP.md](docs/ENV_SETUP.md)  
+- **Claude API integrations:** [docs/claude/README.md](docs/claude/README.md)
+- **Repo baseline cleanup:** [docs/REPO_BASELINE_CLEANUP.md](docs/REPO_BASELINE_CLEANUP.md)
 - **Backend testing:** [backend/docs/TESTING.md](backend/docs/TESTING.md)
 - **Full task list and criteria:** [RALPH_TASK.md](RALPH_TASK.md)  
 - **Observability metrics:** [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md)

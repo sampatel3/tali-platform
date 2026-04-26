@@ -10,8 +10,11 @@ from sqlalchemy.dialects import postgresql
 
 from app.domains.assessments_runtime import candidate_runtime_routes as candidate_runtime_module
 from app.models.assessment import Assessment, AssessmentStatus
+from app.models.application_interview import ApplicationInterview
 from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
+from app.models.role import Role
 from app.models.task import Task
 from app.models.user import User
 from app.services.candidate_feedback_engine import _completed_assessment_query_filter
@@ -276,6 +279,123 @@ def test_start_assessment_invalid_token(client):
     fake_token = "nonexistent-token-value"
     resp = client.post(f"/api/v1/assessments/token/{fake_token}/start")
     assert resp.status_code == 404
+
+
+def test_start_assessment_response_includes_workspace_branch_metadata(client, db, monkeypatch):
+    task = Task(
+        name="Runtime metadata task",
+        description="Inspect runtime metadata",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=30,
+        starter_code="print('ready')",
+        test_code="def test_placeholder():\n    assert True\n",
+        task_key="runtime_start_metadata",
+    )
+    db.add(task)
+    db.flush()
+
+    assessment = Assessment(
+        task_id=task.id,
+        token="runtime-start-metadata-token",
+        duration_minutes=30,
+        status=AssessmentStatus.PENDING,
+    )
+    db.add(assessment)
+    db.commit()
+    token = assessment.token
+
+    def fake_start_or_resume(assessment, _db, calibration_warmup_prompt=None):
+        return {
+            "assessment_id": assessment.id,
+            "token": assessment.token,
+            "sandbox_id": "sandbox-start-metadata",
+            "task": {
+                "name": "Runtime metadata task",
+                "description": "Inspect runtime metadata",
+                "starter_code": "print('ready')",
+                "duration_minutes": assessment.duration_minutes,
+                "task_key": "runtime_start_metadata",
+                "role": "Backend Engineer",
+                "scenario": "Recover the branch metadata end to end.",
+                "repo_structure": {"files": {"src/main.py": "print('hi')"}},
+                "rubric_categories": [],
+                "evaluation_rubric": None,
+                "extra_data": None,
+                "calibration_prompt": None,
+                "proctoring_enabled": False,
+                "claude_budget_limit_usd": None,
+            },
+            "claude_budget": {"enabled": False},
+            "time_remaining": 1800,
+            "is_timer_paused": False,
+            "pause_reason": None,
+            "total_paused_seconds": 0,
+            "ai_mode": "claude_cli_terminal",
+            "terminal_mode": True,
+            "terminal_capabilities": {"permission_mode": "default"},
+            "repo_url": "https://github.com/taali-assessments/runtime_start_metadata.git",
+            "branch_name": f"assessment/{assessment.id}",
+            "clone_command": f"git clone --branch assessment/{assessment.id} https://github.com/taali-assessments/runtime_start_metadata.git",
+        }
+
+    monkeypatch.setattr(candidate_runtime_module, "start_or_resume_assessment", fake_start_or_resume)
+
+    resp = client.post(f"/api/v1/assessments/token/{token}/start")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["repo_url"] == "https://github.com/taali-assessments/runtime_start_metadata.git"
+    assert body["branch_name"] == f"assessment/{body['assessment_id']}"
+    assert "git clone --branch" in body["clone_command"]
+
+
+def test_preview_assessment_includes_workspace_shape_without_file_contents(client, db):
+    task = Task(
+        name="Preview workspace task",
+        description="Preview the repo shape safely.",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=30,
+        starter_code="print('preview')",
+        test_code="def test_placeholder():\n    assert True\n",
+        task_key="runtime_preview_workspace",
+        scenario="Trace the repo before you edit.",
+        repo_structure={
+            "files": {
+                "src/main.py": "print('secret preview content')",
+                "tests/test_main.py": "def test_ok():\n    assert True\n",
+            }
+        },
+    )
+    db.add(task)
+    db.flush()
+
+    assessment = Assessment(
+        task_id=task.id,
+        token="runtime-preview-workspace-token",
+        duration_minutes=30,
+        status=AssessmentStatus.PENDING,
+        ai_mode="claude_cli_terminal",
+        clone_command="git clone --branch assessment-preview https://github.com/taali-assessments/runtime_preview_workspace.git",
+    )
+    db.add(assessment)
+    db.commit()
+    token = assessment.token
+
+    resp = client.get(f"/api/v1/assessments/token/{token}/preview")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["terminal_mode"] is True
+    assert isinstance(body["terminal_capabilities"], dict)
+    assert body["clone_command"] == (
+        "git clone --branch assessment-preview https://github.com/taali-assessments/runtime_preview_workspace.git"
+    )
+    assert body["task"]["repo_structure"] == {
+        "files": {
+            "src/main.py": "",
+            "tests/test_main.py": "",
+        }
+    }
 
 
 def test_demo_start_creates_lead_and_demo_assessment(client, db, monkeypatch):
@@ -700,6 +820,10 @@ def test_manual_evaluation_saved_as_structured_result(client):
         f"/api/v1/assessments/{assessment['id']}/manual-evaluation",
         headers=headers,
         json={
+            "decision": "advance",
+            "rationale": "Advancing to panel. Strong debugging evidence and solid production judgment.",
+            "confidence": "high",
+            "next_steps": ["Schedule panel", "Notify hiring manager"],
             "category_scores": {
                 "correctness": {"score": "excellent", "evidence": ["All core tests pass", "Edge cases covered"]},
                 "code_quality": {"score": "good", "evidence": "Readable naming and clear structure"},
@@ -715,6 +839,10 @@ def test_manual_evaluation_saved_as_structured_result(client):
     assert manual["assessment_id"] == assessment["id"]
     assert manual["completed_due_to_timeout"] is False
     assert manual["overall_score"] == 8.67
+    assert manual["decision"] == "advance"
+    assert manual["rationale"] == "Advancing to panel. Strong debugging evidence and solid production judgment."
+    assert manual["confidence"] == "high"
+    assert manual["next_steps"] == ["Schedule panel", "Notify hiring manager"]
     assert manual["category_scores"]["correctness"]["weight"] == 0.6
     assert manual["category_scores"]["correctness"]["evidence"] == ["All core tests pass", "Edge cases covered"]
     assert manual["category_scores"]["code_quality"]["evidence"] == ["Readable naming and clear structure"]
@@ -725,6 +853,7 @@ def test_manual_evaluation_saved_as_structured_result(client):
     assert get_resp.status_code == 200
     detail = get_resp.json()
     assert detail["evaluation_result"] == detail["manual_evaluation"]
+    assert detail["manual_evaluation"]["decision"] == "advance"
     assert detail["manual_evaluation"]["category_scores"]["correctness"]["evidence"][0] == "All core tests pass"
 
 
@@ -745,6 +874,26 @@ def test_manual_evaluation_rejects_scored_category_without_evidence(client):
     )
     assert resp.status_code == 400
     assert "Evidence is required" in resp.json()["detail"]
+
+
+def test_manual_evaluation_rejects_invalid_decision_value(client):
+    headers, _ = auth_headers(client)
+    rubric = {"correctness": {"weight": 1.0}}
+    task = create_task_via_api(client, headers, evaluation_rubric=rubric).json()
+    assessment = create_assessment_via_api(client, headers, task["id"]).json()
+
+    resp = client.patch(
+        f"/api/v1/assessments/{assessment['id']}/manual-evaluation",
+        headers=headers,
+        json={
+            "decision": "strong_maybe",
+            "category_scores": {
+                "correctness": {"score": "good", "evidence": ["Solid implementation choices"]},
+            },
+        },
+    )
+    assert resp.status_code == 400
+    assert "decision must be one of" in resp.json()["detail"]
 
 
 def test_finalize_candidate_feedback_and_fetch_public_report(client):
@@ -986,6 +1135,95 @@ def test_interview_debrief_generation_is_cached(client):
     second_payload = second.json()
     assert second_payload["cached"] is True
     assert second_payload["interview_debrief"] == first_payload["interview_debrief"]
+
+
+def test_interview_debrief_generation_includes_linked_fireflies_context_from_application(client):
+    env = setup_full_environment(client)
+    headers = env["headers"]
+    assessment_id = env["assessment"]["id"]
+    candidate_email = env["candidate"]["email"]
+
+    role_resp = client.post("/api/v1/roles", json={"name": "Fireflies linked role"}, headers=headers)
+    assert role_resp.status_code == 201, role_resp.text
+    role = role_resp.json()
+    spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Fireflies linked role requirements"), "text/plain")}
+    spec_resp = client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers)
+    assert spec_resp.status_code == 200, spec_resp.text
+
+    app_resp = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": candidate_email, "candidate_name": env["candidate"].get("full_name") or "Test Candidate"},
+        headers=headers,
+    )
+    assert app_resp.status_code == 201, app_resp.text
+    application = app_resp.json()
+
+    with TestingSessionLocal() as db:
+        assessment = db.query(Assessment).filter(Assessment.id == assessment_id).first()
+        assert assessment is not None
+        app_row = db.query(CandidateApplication).filter(CandidateApplication.id == application["id"]).first()
+        assert app_row is not None
+        role_row = db.query(Role).filter(Role.id == role["id"]).first()
+        assert role_row is not None
+        org = db.query(Organization).filter(Organization.id == assessment.organization_id).first()
+        assert org is not None
+
+        org.fireflies_owner_email = "recruiter@example.com"
+        org.fireflies_api_key_encrypted = "encrypted"
+        org.fireflies_invite_email = "taali@fireflies.ai"
+
+        assessment.role_id = role["id"]
+        assessment.application_id = application["id"]
+        assessment.status = AssessmentStatus.COMPLETED
+        assessment.score = 7.1
+        assessment.score_breakdown = {
+            "category_scores": {
+                "prompt_clarity": 8.0,
+                "context_provision": 4.4,
+                "independence_efficiency": 7.2,
+                "written_communication": 5.0,
+            },
+        }
+
+        db.add(
+            ApplicationInterview(
+                organization_id=app_row.organization_id,
+                application_id=app_row.id,
+                stage="screening",
+                source="fireflies",
+                provider="fireflies",
+                provider_meeting_id="ff-assessment-1",
+                provider_url="https://fireflies.ai/view/ff-assessment-1",
+                status="completed",
+                transcript_text="Recruiter: Tell me about your tradeoff process.\nCandidate: I usually start with failure modes and recovery paths.",
+                summary="Stage 1 Fireflies transcript highlighted strong tradeoff framing and a need to test production debugging depth.",
+                speakers=[{"name": "Recruiter"}, {"name": "Candidate"}],
+                provider_payload={
+                    "title": "Assessment-linked screening",
+                    "taali_match": {
+                        "fireflies_invite_email": "taali@fireflies.ai",
+                        "linked_via": "webhook_auto_match",
+                        "matched_application_id": app_row.id,
+                    },
+                },
+                meeting_date=datetime(2026, 4, 24, 9, 0, tzinfo=timezone.utc),
+                linked_at=datetime(2026, 4, 24, 9, 15, tzinfo=timezone.utc),
+            )
+        )
+        db.commit()
+
+    resp = client.post(
+        f"/api/v1/assessments/{assessment_id}/interview-debrief",
+        json={},
+        headers=headers,
+    )
+    assert resp.status_code == 200, resp.text
+    payload = resp.json()
+    assert payload["cached"] is False
+    assert payload["interview_debrief"]["fireflies_context"]["status"] == "linked"
+    assert payload["interview_debrief"]["fireflies_context"]["invite_email"] == "taali@fireflies.ai"
+    assert "Stage 1 Fireflies transcript is linked" in payload["interview_debrief"]["summary"]
+    assert payload["interview_debrief"]["probing_questions"][0]["dimension"] == "Stage 1 screening"
 
 
 def test_finalize_candidate_feedback_blocked_when_org_toggle_disabled(client):

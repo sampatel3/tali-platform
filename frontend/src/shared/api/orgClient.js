@@ -12,7 +12,10 @@ export const organizations = {
   connectWorkableToken: ({ access_token, subdomain, read_only = true }) =>
     api.post('/organizations/workable/connect-token', { access_token, subdomain, read_only }),
   getWorkableSyncJobs: () => api.get('/workable/sync/jobs'),
-  syncWorkable: (data = {}) => api.post('/workable/sync', { mode: 'metadata', ...data }),
+  getWorkableMembers: (params = {}) => api.get('/workable/members', { params }),
+  getWorkableDisqualificationReasons: () => api.get('/workable/disqualification-reasons'),
+  getWorkableStages: (params = {}) => api.get('/workable/stages', { params }),
+  syncWorkable: (data = {}) => api.post('/workable/sync', { mode: 'full', ...data }),
   getWorkableSyncStatus: (runId = null) => api.get('/workable/sync/status', {
     params: runId != null ? { run_id: runId } : undefined,
   }),

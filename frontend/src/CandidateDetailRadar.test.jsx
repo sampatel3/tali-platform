@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen } from '@testing-library/react';
 import { vi } from 'vitest';
 
 import { CandidateDetailPage } from './App';
@@ -29,6 +29,8 @@ vi.mock('./shared/api', () => ({
 
 describe('CandidateDetailPage radar chart', () => {
   it('renders scoring dimensions in AI Usage tab', async () => {
+    localStorage.setItem('taali_results_onboarding_seen_v1', 'true');
+
     const candidate = {
       name: 'Jane Doe',
       email: 'jane@example.com',
@@ -49,6 +51,11 @@ describe('CandidateDetailPage radar chart', () => {
       timeline: [{ time: '00:00', event: 'Started' }],
       _raw: {
         id: 1,
+        status: 'completed',
+        completed_at: '2026-01-15T09:45:00Z',
+        taali_score: 84,
+        assessment_score: 84,
+        final_score: 84,
         prompt_quality_score: 8.0,
         prompt_efficiency_score: 7.0,
         independence_score: 6.0,
@@ -80,10 +87,11 @@ describe('CandidateDetailPage radar chart', () => {
       />
     );
 
-    fireEvent.click(screen.getByRole('button', { name: 'AI Usage' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
+    });
 
-    // Check for elements in the redesigned AI Usage tab
     expect(await screen.findByText(/Avg Prompt clarity/)).toBeInTheDocument();
-    expect(screen.getByText(/Prompt clarity progression/)).toBeInTheDocument();
+    expect(screen.getByText(/Prompt Log/)).toBeInTheDocument();
   });
 });

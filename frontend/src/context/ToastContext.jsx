@@ -59,6 +59,6 @@ function ToastContainer({ toasts, onDismiss }) {
 
 export function useToast() {
   const ctx = useContext(ToastContext);
-  if (!ctx) return { showToast: (msg) => window.alert(msg), toasts: [], dismiss: () => {} };
+  if (!ctx) return { showToast: () => {}, toasts: [], dismiss: () => {} };
   return ctx;
 }

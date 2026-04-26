@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from datetime import date, datetime
 import logging
 import re
 import time
@@ -198,6 +199,10 @@ def sanitize_json_for_storage(value: Any) -> Any:
     """Recursively sanitize strings inside JSON-like payloads."""
     if isinstance(value, str):
         return sanitize_text_for_storage(value)
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
     if isinstance(value, list):
         return [sanitize_json_for_storage(item) for item in value]
     if isinstance(value, tuple):

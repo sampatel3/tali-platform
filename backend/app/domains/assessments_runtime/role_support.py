@@ -4,12 +4,19 @@ from datetime import datetime, timezone
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import inspect as sa_inspect
+from sqlalchemy.orm.attributes import NO_VALUE
 from sqlalchemy.orm import Session, joinedload
 
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...schemas.role import ApplicationResponse, RoleResponse
+from ...services.interview_support_service import (
+    build_role_interview_pack_templates,
+    refresh_application_interview_support,
+)
+from ...services.pre_screening_service import pre_screen_snapshot, refresh_pre_screening_fields
 from ...services.taali_scoring import (
     ROLE_FIT_WEIGHTS,
     TAALI_SCORING_RUBRIC_VERSION,
@@ -44,6 +51,18 @@ def _normalize_cv_match_score_for_response(score: float | None, details: dict | 
     return round(max(0.0, min(100.0, normalized)), 1)
 
 
+def _normalize_score_100_for_response(value: float | int | None) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric < 0:
+        return None
+    if numeric <= 10.0:
+        numeric = numeric * 10.0
+    return round(max(0.0, min(100.0, numeric)), 1)
+
+
 def role_has_job_spec(role: Role) -> bool:
     return bool(
         (role.job_spec_file_url or "").strip()
@@ -72,7 +91,9 @@ def get_application(application_id: int, org_id: int, db: Session) -> CandidateA
         db.query(CandidateApplication)
         .options(
             joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.organization),
             joinedload(CandidateApplication.role),
+            joinedload(CandidateApplication.interviews),
             joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
         )
         .filter(
@@ -87,6 +108,16 @@ def get_application(application_id: int, org_id: int, db: Session) -> CandidateA
     return app
 
 
+def _loaded_relationship_items(entity: Any, relationship_name: str) -> list[Any] | None:
+    try:
+        loaded = getattr(sa_inspect(entity).attrs, relationship_name).loaded_value
+    except Exception:
+        return None
+    if loaded is NO_VALUE:
+        return None
+    return list(loaded or [])
+
+
 def role_to_response(
     role: Role,
     *,
@@ -97,12 +128,25 @@ def role_to_response(
     last_candidate_activity_at: datetime | None = None,
 ) -> RoleResponse:
     if tasks_count is None:
-        tasks_count = len(role.tasks or [])
+        loaded_tasks = _loaded_relationship_items(role, "tasks")
+        tasks_count = len(loaded_tasks or [])
     if applications_count is None:
+        loaded_applications = _loaded_relationship_items(role, "applications") or []
         applications_count = len(
-            [a for a in (role.applications or []) if getattr(a, "deleted_at", None) is None]
+            [a for a in loaded_applications if getattr(a, "deleted_at", None) is None]
         )
 
+    role_templates = build_role_interview_pack_templates(role)
+    screening_pack_template = (
+        role.screening_pack_template
+        if isinstance(role.screening_pack_template, dict)
+        else role_templates.get("screening")
+    )
+    tech_interview_pack_template = (
+        role.tech_interview_pack_template
+        if isinstance(role.tech_interview_pack_template, dict)
+        else role_templates.get("tech_stage_2")
+    )
     return RoleResponse(
         id=role.id,
         organization_id=role.organization_id,
@@ -117,6 +161,13 @@ def role_to_response(
         job_spec_present=role_has_job_spec(role),
         interview_focus=role.interview_focus,
         interview_focus_generated_at=role.interview_focus_generated_at,
+        screening_pack_template=screening_pack_template,
+        tech_interview_pack_template=tech_interview_pack_template,
+        auto_reject_enabled=role.auto_reject_enabled,
+        auto_reject_threshold_100=role.auto_reject_threshold_100,
+        workable_actor_member_id=role.workable_actor_member_id,
+        workable_disqualify_reason_id=role.workable_disqualify_reason_id,
+        auto_reject_note_template=role.auto_reject_note_template,
         tasks_count=tasks_count,
         applications_count=applications_count,
         stage_counts=stage_counts or {},
@@ -171,6 +222,14 @@ def _requirements_fit_score(details: dict | None) -> float | None:
     return round(max(0.0, min(100.0, numeric)), 1)
 
 
+def _score_formula_label(mode: str | None) -> str:
+    if mode == "assessment_plus_role_fit":
+        return "TAALI Score = 50% Assessment + 50% Role fit"
+    if mode == "assessment_only_fallback":
+        return "TAALI Score currently reflects Assessment only"
+    return "TAALI Score currently reflects Role fit until assessment signal is available"
+
+
 def _assessment_score_100(assessment: Assessment | None) -> float | None:
     if not assessment:
         return None
@@ -178,11 +237,10 @@ def _assessment_score_100(assessment: Assessment | None) -> float | None:
         getattr(assessment, "assessment_score", None),
         getattr(assessment, "final_score", None),
     ):
-        try:
-            if value is not None:
-                return round(max(0.0, min(100.0, float(value))), 1)
-        except (TypeError, ValueError):
-            continue
+        if value is not None:
+            normalized = _normalize_score_100_for_response(value)
+            if normalized is not None:
+                return normalized
 
     score_10 = getattr(assessment, "score", None)
     try:
@@ -196,11 +254,10 @@ def _assessment_score_100(assessment: Assessment | None) -> float | None:
 def _assessment_taali_score_100(assessment: Assessment | None) -> float | None:
     if not assessment:
         return None
-    try:
-        if getattr(assessment, "taali_score", None) is not None:
-            return round(max(0.0, min(100.0, float(assessment.taali_score))), 1)
-    except (TypeError, ValueError):
-        return None
+    if getattr(assessment, "taali_score", None) is not None:
+        normalized = _normalize_score_100_for_response(getattr(assessment, "taali_score", None))
+        if normalized is not None:
+            return normalized
 
     assessment_score = _assessment_score_100(assessment)
     role_fit_score = _assessment_role_fit_score_100(assessment)
@@ -276,6 +333,16 @@ def _active_assessments_for_application(app: CandidateApplication) -> list[Asses
     )
 
 
+def _has_voided_attempts_from_loaded_relationship(app: CandidateApplication) -> bool:
+    try:
+        loaded = sa_inspect(app).attrs.assessments.loaded_value
+    except Exception:
+        return False
+    if loaded is NO_VALUE:
+        return False
+    return any(bool(getattr(assessment, "is_voided", False)) for assessment in (loaded or []))
+
+
 def latest_valid_role_assessment(
     *,
     candidate_id: int | None,
@@ -326,8 +393,10 @@ def completed_valid_role_assessment(
     )
 
 
-def _score_summary_for_application(app: CandidateApplication) -> dict[str, Any]:
-    active_assessments = _active_assessments_for_application(app)
+def _score_summary_from_active_assessments(
+    app: CandidateApplication,
+    active_assessments: list[Assessment],
+) -> dict[str, Any]:
     latest_assessment = active_assessments[0] if active_assessments else None
     completed_assessment = next((assessment for assessment in active_assessments if _is_completed_assessment(assessment)), None)
 
@@ -382,20 +451,103 @@ def _score_summary_for_application(app: CandidateApplication) -> dict[str, Any]:
             "role_fit_score": TAALI_WEIGHTS["role_fit"],
         },
         "mode": mode,
-        "formula_label": (
-            "TAALI Score = 50% Assessment + 50% Role fit"
-            if mode == "assessment_plus_role_fit"
-            else (
-                "TAALI Score currently reflects Assessment only"
-                if mode == "assessment_only_fallback"
-                else "TAALI Score currently reflects Role fit until assessment signal is available"
-            )
-        ),
+        "formula_label": _score_formula_label(mode),
         "score_rubric_version": TAALI_SCORING_RUBRIC_VERSION,
         "assessment_id": assessment_id,
         "assessment_status": assessment_status,
         "assessment_completed_at": assessment_completed_at,
-        "has_voided_attempts": any(bool(getattr(assessment, "is_voided", False)) for assessment in (app.assessments or [])),
+        "has_voided_attempts": _has_voided_attempts_from_loaded_relationship(app),
+    }
+
+
+def _score_summary_for_application(app: CandidateApplication) -> dict[str, Any]:
+    active_assessments = _active_assessments_for_application(app)
+    return _score_summary_from_active_assessments(app, active_assessments)
+
+
+def _load_active_assessments_for_application(app: CandidateApplication, db: Session) -> list[Assessment]:
+    if not app.candidate_id or not app.role_id:
+        return []
+    rows = (
+        db.query(Assessment)
+        .options(joinedload(Assessment.task))
+        .filter(
+            Assessment.organization_id == app.organization_id,
+            Assessment.candidate_id == app.candidate_id,
+            Assessment.role_id == app.role_id,
+            Assessment.is_voided.is_(False),
+        )
+        .order_by(Assessment.completed_at.desc(), Assessment.created_at.desc(), Assessment.id.desc())
+        .all()
+    )
+    return rows
+
+
+def _apply_score_cache_from_summary(app: CandidateApplication, score_summary: dict[str, Any]) -> None:
+    app.taali_score_cache_100 = _normalize_score_100_for_response(score_summary.get("taali_score"))
+    app.assessment_score_cache_100 = _normalize_score_100_for_response(score_summary.get("assessment_score"))
+    app.role_fit_score_cache_100 = _normalize_score_100_for_response(score_summary.get("role_fit_score"))
+    app.score_mode_cache = (str(score_summary.get("mode") or "").strip() or None)
+    app.score_cached_at = datetime.now(timezone.utc)
+
+
+def refresh_application_score_cache(
+    app: CandidateApplication,
+    *,
+    db: Session | None = None,
+) -> dict[str, Any]:
+    if db is not None:
+        active_assessments = _load_active_assessments_for_application(app, db)
+        score_summary = _score_summary_from_active_assessments(app, active_assessments)
+    else:
+        score_summary = _score_summary_for_application(app)
+    _apply_score_cache_from_summary(app, score_summary)
+    refresh_pre_screening_fields(app)
+    return score_summary
+
+
+def score_summary_from_cache(app: CandidateApplication) -> dict[str, Any]:
+    taali_score = _normalize_score_100_for_response(getattr(app, "taali_score_cache_100", None))
+    assessment_score = _normalize_score_100_for_response(getattr(app, "assessment_score_cache_100", None))
+    role_fit_score = _normalize_score_100_for_response(getattr(app, "role_fit_score_cache_100", None))
+    cv_fit_score = _normalize_cv_match_score_for_response(
+        getattr(app, "cv_match_score", None),
+        app.cv_match_details if isinstance(getattr(app, "cv_match_details", None), dict) else {},
+    )
+    requirements_fit_score = _normalize_score_100_for_response(getattr(app, "requirements_fit_score_100", None))
+    mode = str(getattr(app, "score_mode_cache", "") or "").strip()
+    if not mode:
+        if assessment_score is not None and role_fit_score is not None:
+            mode = "assessment_plus_role_fit"
+        elif assessment_score is not None:
+            mode = "assessment_only_fallback"
+        elif role_fit_score is not None:
+            mode = "role_fit_only"
+        else:
+            mode = "pending"
+    return {
+        "taali_score": taali_score,
+        "assessment_score": assessment_score,
+        "role_fit_score": role_fit_score,
+        "cv_fit_score": cv_fit_score,
+        "requirements_fit_score": requirements_fit_score,
+        "role_fit_components": {
+            "cv_fit_score": cv_fit_score,
+            "requirements_fit_score": requirements_fit_score,
+        },
+        "weights": {
+            "cv_fit_score": ROLE_FIT_WEIGHTS["cv_fit"],
+            "requirements_fit_score": ROLE_FIT_WEIGHTS["requirements_fit"],
+            "assessment_score": TAALI_WEIGHTS["assessment"],
+            "role_fit_score": TAALI_WEIGHTS["role_fit"],
+        },
+        "mode": mode,
+        "formula_label": _score_formula_label(mode),
+        "score_rubric_version": TAALI_SCORING_RUBRIC_VERSION,
+        "assessment_id": None,
+        "assessment_status": None,
+        "assessment_completed_at": None,
+        "has_voided_attempts": False,
     }
 
 
@@ -464,7 +616,11 @@ def _assessment_history_for_application(app: CandidateApplication) -> list[dict[
     ]
 
 
-def application_to_response(app: CandidateApplication) -> ApplicationResponse:
+def application_to_response(
+    app: CandidateApplication,
+    *,
+    use_cached_score_summary: bool = False,
+) -> ApplicationResponse:
     ensure_pipeline_fields(app)
     candidate = app.candidate
     raw_details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
@@ -472,7 +628,35 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
     cv_match_details = dict(raw_details)
     if cv_match_score is not None and "score_scale" not in cv_match_details:
         cv_match_details["score_scale"] = "0-100"
-    score_summary = _score_summary_for_application(app)
+    score_summary = score_summary_from_cache(app) if use_cached_score_summary else _score_summary_for_application(app)
+    pre_screen = pre_screen_snapshot(app)
+    interview_support = refresh_application_interview_support(
+        app,
+        organization=getattr(app, "organization", None),
+    )
+    interviews = []
+    for interview in app.interviews or []:
+        interviews.append(
+            {
+                "id": interview.id,
+                "application_id": interview.application_id,
+                "organization_id": interview.organization_id,
+                "stage": interview.stage,
+                "source": interview.source,
+                "provider": interview.provider,
+                "provider_meeting_id": interview.provider_meeting_id,
+                "provider_url": interview.provider_url,
+                "status": interview.status,
+                "transcript_text": interview.transcript_text,
+                "summary": interview.summary,
+                "speakers": interview.speakers if isinstance(interview.speakers, list) else [],
+                "provider_payload": interview.provider_payload if isinstance(interview.provider_payload, dict) else None,
+                "meeting_date": interview.meeting_date,
+                "linked_at": interview.linked_at,
+                "created_at": interview.created_at,
+                "updated_at": interview.updated_at,
+            }
+        )
 
     return ApplicationResponse(
         id=app.id,
@@ -522,6 +706,19 @@ def application_to_response(app: CandidateApplication) -> ApplicationResponse:
         workable_sourced=app.workable_sourced,
         workable_profile_url=app.workable_profile_url,
         workable_enriched=(candidate.workable_enriched if candidate else None),
+        pre_screen_score=pre_screen.get("pre_screen_score"),
+        requirements_fit_score=pre_screen.get("requirements_fit_score"),
+        pre_screen_recommendation=pre_screen.get("pre_screen_recommendation"),
+        pre_screen_evidence=pre_screen.get("pre_screen_evidence"),
+        auto_reject_state=app.auto_reject_state,
+        auto_reject_reason=app.auto_reject_reason,
+        auto_reject_triggered_at=app.auto_reject_triggered_at,
+        screening_pack=interview_support.get("screening_pack"),
+        tech_interview_pack=interview_support.get("tech_interview_pack"),
+        screening_interview_summary=interview_support.get("screening_interview_summary"),
+        tech_interview_summary=interview_support.get("tech_interview_summary"),
+        interview_evidence_summary=interview_support.get("interview_evidence_summary"),
+        interviews=interviews,
         taali_score=score_summary.get("taali_score"),
         score_mode=score_summary.get("mode"),
         valid_assessment_id=score_summary.get("assessment_id"),
@@ -544,4 +741,19 @@ def application_detail_payload(app: CandidateApplication, *, include_cv_text: bo
         payload["cv_text"] = None
     payload["assessment_preview"] = _assessment_preview_for_application(app)
     payload["assessment_history"] = _assessment_history_for_application(app)
+    return payload
+
+
+def application_list_payload(app: CandidateApplication, *, include_cv_text: bool) -> dict[str, Any]:
+    data = application_to_response(app, use_cached_score_summary=True)
+    payload = data.model_dump()
+    if include_cv_text:
+        cv = (app.cv_text or "").strip()
+        if not cv and app.candidate:
+            cv = (app.candidate.cv_text or "").strip()
+        payload["cv_text"] = cv or None
+    else:
+        payload["cv_text"] = None
+    payload["assessment_preview"] = None
+    payload["assessment_history"] = []
     return payload

@@ -535,6 +535,119 @@ const buildEvidenceSections = ({ application, completedAssessment, roleFitModel,
   };
 };
 
+const normalizeFirefliesBlob = (value) => (
+  value && typeof value === 'object' ? value : {}
+);
+
+const buildFirefliesModel = ({ application }) => {
+  const screeningSummary = application?.screening_interview_summary || {};
+  const techSummary = application?.tech_interview_summary || {};
+  const evidenceSummary = application?.interview_evidence_summary || {};
+
+  const screeningFireflies = normalizeFirefliesBlob(screeningSummary.fireflies);
+  const techFireflies = normalizeFirefliesBlob(techSummary.fireflies);
+  const evidenceFireflies = normalizeFirefliesBlob(evidenceSummary.fireflies);
+  const fireflies = Object.keys(evidenceFireflies).length
+    ? evidenceFireflies
+    : (Object.keys(screeningFireflies).length ? screeningFireflies : techFireflies);
+
+  const status = normalizeStatus(fireflies.status || 'not_configured');
+  const configured = Boolean(
+    fireflies.configured
+    ?? screeningFireflies.configured
+    ?? techFireflies.configured
+  );
+  const captureExpected = Boolean(
+    fireflies.capture_expected
+    ?? screeningFireflies.capture_expected
+    ?? techFireflies.capture_expected
+  );
+  const inviteEmail = String(
+    fireflies.invite_email
+    || screeningFireflies.invite_email
+    || techFireflies.invite_email
+    || ''
+  ).trim();
+  const latestSummary = String(
+    fireflies.latest_summary
+    || screeningFireflies.latest_summary
+    || techFireflies.latest_summary
+    || ''
+  ).trim();
+  const latestProviderUrl = String(
+    fireflies.latest_provider_url
+    || screeningFireflies.latest_provider_url
+    || techFireflies.latest_provider_url
+    || screeningSummary.latest_provider_url
+    || techSummary.latest_provider_url
+    || ''
+  ).trim();
+  const latestMeetingDate = (
+    fireflies.latest_meeting_date
+    || screeningFireflies.latest_meeting_date
+    || techFireflies.latest_meeting_date
+    || screeningSummary.latest_meeting_date
+    || techSummary.latest_meeting_date
+    || null
+  );
+  const latestSource = String(
+    fireflies.latest_source
+    || screeningFireflies.latest_source
+    || techFireflies.latest_source
+    || ''
+  ).trim();
+
+  let statusLabel = 'Fireflies not configured';
+  let badgeVariant = 'muted';
+  let description = '';
+
+  if (status === 'linked') {
+    statusLabel = 'Stage 1 Fireflies transcript linked';
+    badgeVariant = 'warning';
+    description = latestSummary || 'The latest screening transcript is attached and available to recruiters.';
+  } else if (status === 'awaiting_transcript') {
+    statusLabel = 'Awaiting Fireflies transcript';
+    badgeVariant = 'info';
+    description = inviteEmail
+      ? `Include ${inviteEmail} in the Workable interview invite so TAALI can capture the Stage 1 call.`
+      : 'Fireflies is configured and TAALI is waiting for the Stage 1 transcript to be linked.';
+  } else if (status === 'not_expected') {
+    statusLabel = 'Fireflies capture not expected';
+    badgeVariant = 'muted';
+    description = 'This application is not currently expected to receive an automatic Fireflies transcript.';
+  } else if (captureExpected) {
+    statusLabel = 'Fireflies not configured';
+    badgeVariant = 'muted';
+    description = 'Workable interview capture is expected for this application, but Fireflies is not configured yet.';
+  }
+
+  const shouldSurface = Boolean(
+    status === 'linked'
+    || status === 'awaiting_transcript'
+    || captureExpected
+    || configured
+    || inviteEmail
+    || latestSummary
+    || latestProviderUrl
+  );
+
+  return {
+    shouldSurface,
+    status,
+    statusLabel,
+    badgeVariant,
+    configured,
+    captureExpected,
+    inviteEmail: inviteEmail || null,
+    latestSummary: latestSummary || null,
+    latestProviderUrl: latestProviderUrl || null,
+    latestMeetingDate,
+    latestSource: latestSource || null,
+    linked: status === 'linked',
+    description,
+  };
+};
+
 export const buildStandingCandidateReportModel = ({
   application = null,
   completedAssessment = null,
@@ -587,6 +700,7 @@ export const buildStandingCandidateReportModel = ({
     roleFitModel,
     summaryModel,
   });
+  const firefliesModel = buildFirefliesModel({ application });
 
   return {
     identity,
@@ -602,6 +716,7 @@ export const buildStandingCandidateReportModel = ({
     probeDescription,
     integritySummaryText,
     evidenceSections,
+    firefliesModel,
     hasCompletedAssessment: summaryModel.source.kind === 'assessment',
     hasDimensionSignal: dimensionEntries.length > 0,
   };

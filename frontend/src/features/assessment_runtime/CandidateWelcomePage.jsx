@@ -1,78 +1,179 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import {
-  Brain,
-  Check,
+  AlertTriangle,
+  CheckCircle2,
   ChevronRight,
+  Clock3,
   Loader2,
+  Monitor,
   Shield,
-  Terminal,
+  Sparkles,
+  TerminalSquare,
+  UploadCloud,
+  Wifi,
+  X,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 
 import { assessments as assessmentsApi } from '../../shared/api';
-import { BrandLabel, Logo } from '../../shared/ui/Branding';
+import { CandidateMiniNav } from '../../shared/layout/TaaliLayout';
+import { AssessmentRuntimePreviewView } from './AssessmentRuntimePreviewView';
+import { extractRepoFiles } from './assessmentRuntimeHelpers';
 
 const CANDIDATE_START_BLOCKED_MESSAGE = 'This assessment is not available yet. Please contact the hiring team to continue.';
 
-const SCENARIO_MARKDOWN_COMPONENTS = {
-  h1: ({ children }) => <h3 className="mt-6 text-xl font-semibold text-[var(--taali-text)] first:mt-0">{children}</h3>,
-  h2: ({ children }) => <h3 className="mt-6 text-xl font-semibold text-[var(--taali-text)] first:mt-0">{children}</h3>,
-  h3: ({ children }) => <h4 className="mt-5 text-lg font-semibold text-[var(--taali-text)] first:mt-0">{children}</h4>,
-  p: ({ children }) => <p className="whitespace-pre-line text-base leading-8 text-[var(--taali-text)] [&:not(:first-child)]:mt-4">{children}</p>,
-  ul: ({ children }) => <ul className="mt-4 list-disc space-y-3 rounded-[var(--taali-radius-card)] bg-[var(--taali-surface-subtle)] p-4 pl-9">{children}</ul>,
-  ol: ({ children }) => <ol className="mt-4 list-decimal space-y-3 rounded-[var(--taali-radius-card)] bg-[var(--taali-surface-subtle)] p-4 pl-9">{children}</ol>,
-  li: ({ children }) => <li className="whitespace-pre-line pl-1 text-base leading-7 text-[var(--taali-text)] marker:text-[var(--taali-purple)]">{children}</li>,
-  blockquote: ({ children }) => (
-    <blockquote className="mt-4 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-4 py-4 text-base leading-8 text-[var(--taali-text)]">
-      {children}
-    </blockquote>
-  ),
-  strong: ({ children }) => <strong className="font-semibold text-[var(--taali-text)]">{children}</strong>,
-  em: ({ children }) => <em className="italic text-[var(--taali-text)]">{children}</em>,
+const InfoRow = ({ label, value }) => (
+  <div className="rounded-[16px] border border-[var(--line)] bg-[var(--bg)] p-4">
+    <div className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">{label}</div>
+    <div className="mt-2 text-[14px] font-medium text-[var(--ink-2)]">{value}</div>
+  </div>
+);
+
+const ScenarioMarkdown = {
+  p: ({ children }) => <p className="text-[14px] leading-7 text-[var(--ink-2)] [&:not(:first-child)]:mt-3">{children}</p>,
+  ul: ({ children }) => <ul className="mt-3 list-disc space-y-2 pl-5 text-[14px] leading-7 text-[var(--ink-2)]">{children}</ul>,
+  ol: ({ children }) => <ol className="mt-3 list-decimal space-y-2 pl-5 text-[14px] leading-7 text-[var(--ink-2)]">{children}</ol>,
+  li: ({ children }) => <li className="pl-1 marker:text-[var(--purple)]">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-[var(--ink)]">{children}</strong>,
+  em: ({ children }) => <em className="italic text-[var(--ink-2)]">{children}</em>,
   code: ({ children }) => (
-    <code className="rounded-md bg-[var(--taali-surface-subtle)] px-1.5 py-0.5 font-mono text-[0.9em] text-[var(--taali-text)]">
+    <code className="rounded bg-[var(--purple-soft)] px-1.5 py-0.5 font-mono text-[0.88em] text-[var(--purple-2)]">
       {children}
     </code>
   ),
 };
 
+const getFirstName = (fullName) => {
+  const first = String(fullName || '').trim().split(/\s+/)[0];
+  return first || 'there';
+};
+
+const summarizeText = (value) => {
+  const compact = String(value || '')
+    .replace(/[#*_>`~-]/g, ' ')
+    .replace(/\[(.*?)\]\(.*?\)/g, '$1')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!compact) return '';
+  return compact.length > 200 ? `${compact.slice(0, 197).trim()}...` : compact;
+};
+
+const formatDeadline = (value) => {
+  if (!value) return 'No hard deadline listed';
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return 'No hard deadline listed';
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: '2-digit',
+    hour: 'numeric',
+    minute: '2-digit',
+  }).format(date);
+};
+
+const detectBrowser = (userAgent) => {
+  const ua = String(userAgent || '');
+  if (/Edg\//i.test(ua)) return 'Microsoft Edge';
+  if (/Chrome\//i.test(ua) && !/Edg\//i.test(ua)) return 'Google Chrome';
+  if (/Firefox\//i.test(ua)) return 'Mozilla Firefox';
+  if (/Safari\//i.test(ua) && !/Chrome\//i.test(ua)) return 'Safari';
+  return 'Compatible browser';
+};
+
 export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarted }) => {
-  const [loadingStart, setLoadingStart] = useState(false);
-  const [startError, setStartError] = useState('');
   const [previewLoading, setPreviewLoading] = useState(false);
   const [previewData, setPreviewData] = useState(null);
   const [previewError, setPreviewError] = useState('');
+  const [loadingStart, setLoadingStart] = useState(false);
+  const [startError, setStartError] = useState('');
   const [warmupPrompt, setWarmupPrompt] = useState('');
   const [cvUploading, setCvUploading] = useState(false);
   const [cvUploadError, setCvUploadError] = useState('');
   const [cvUploadSuccess, setCvUploadSuccess] = useState('');
   const [hasCvOnFile, setHasCvOnFile] = useState(false);
+  const [previewOpen, setPreviewOpen] = useState(false);
+  const [systemCheck, setSystemCheck] = useState({
+    browser: 'Checking...',
+    connection: 'Checking...',
+    screen: 'Checking...',
+  });
 
   useEffect(() => {
     let cancelled = false;
+
     const loadPreview = async () => {
       if (!token) return;
       setPreviewLoading(true);
       setPreviewError('');
       try {
         const res = await assessmentsApi.preview(token);
-        if (cancelled) return;
-        setPreviewData(res.data || null);
-        setHasCvOnFile(Boolean(res?.data?.task?.has_cv_on_file));
+        if (!cancelled) {
+          setPreviewData(res?.data || null);
+          setHasCvOnFile(Boolean(res?.data?.task?.has_cv_on_file));
+        }
       } catch (err) {
-        if (cancelled) return;
-        setPreviewData(null);
-        setPreviewError(err?.response?.data?.detail || 'Task preview is not available yet.');
-        setHasCvOnFile(false);
+        if (!cancelled) {
+          setPreviewData(null);
+          setHasCvOnFile(false);
+          setPreviewError(err?.response?.data?.detail || 'Task preview is not available yet.');
+        }
       } finally {
         if (!cancelled) setPreviewLoading(false);
       }
     };
-    loadPreview();
+
+    void loadPreview();
     return () => {
       cancelled = true;
     };
   }, [token]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const connection = navigator.connection || navigator.mozConnection || navigator.webkitConnection;
+    setSystemCheck({
+      browser: detectBrowser(window.navigator.userAgent),
+      connection: connection?.downlink
+        ? `${connection.effectiveType ? `${String(connection.effectiveType).toUpperCase()} · ` : ''}${connection.downlink.toFixed(0)} Mbps`
+        : 'Stable connection detected',
+      screen: `${window.screen.width} × ${window.screen.height}`,
+    });
+  }, []);
+
+  const taskPreview = previewData?.task || {};
+  const startGate = previewData?.start_gate && typeof previewData.start_gate === 'object'
+    ? previewData.start_gate
+    : null;
+  const isStartBlocked = startGate?.can_start === false;
+  const startBlockedMessage = String(startGate?.message || '').trim() || CANDIDATE_START_BLOCKED_MESSAGE;
+  const durationMinutes = Number(taskPreview?.duration_minutes ?? previewData?.duration_minutes ?? 30);
+  const candidateName = String(previewData?.candidate_name || '').trim();
+  const organizationName = String(previewData?.organization_name || '').trim();
+  const scenarioSummary = useMemo(
+    () => summarizeText(taskPreview?.description || taskPreview?.scenario),
+    [taskPreview?.description, taskPreview?.scenario],
+  );
+  const previewRepoFiles = useMemo(() => extractRepoFiles(taskPreview?.repo_structure), [taskPreview?.repo_structure]);
+  const previewWorkspaceFiles = useMemo(
+    () => previewRepoFiles.map((fileEntry) => ({
+      ...fileEntry,
+      content: String(fileEntry.content || '').trim() || [
+        `# ${fileEntry.path}`,
+        '',
+        'Workspace preview only.',
+        'The live file content loads when the assessment begins.',
+      ].join('\n'),
+    })),
+    [previewRepoFiles],
+  );
+  const previewTerminalEnabled = Boolean(previewData?.terminal_mode ?? true);
+  const previewUsesLiveRepoShape = previewWorkspaceFiles.length > 0;
+
+  const startButtonLabel = useMemo(() => {
+    if (loadingStart) return 'Starting assessment...';
+    if (isStartBlocked) return 'Assessment unavailable';
+    return 'Start assessment';
+  }, [isStartBlocked, loadingStart]);
 
   const handleStart = async () => {
     if (!token) {
@@ -80,29 +181,25 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
       return;
     }
     if (isStartBlocked) {
-      setStartError(startBlockedMessage || CANDIDATE_START_BLOCKED_MESSAGE);
+      setStartError(startBlockedMessage);
       return;
     }
-    const requiresWarmup = Boolean(taskPreview?.calibration_enabled);
-    const warmupText = String(warmupPrompt || '').trim();
-    if (requiresWarmup && !warmupText) {
+    if (taskPreview?.calibration_enabled && !String(warmupPrompt || '').trim()) {
       setStartError('Write the short baseline Claude prompt before starting.');
       return;
     }
+
     setLoadingStart(true);
     setStartError('');
     try {
       const res = await assessmentsApi.start(token, {
-        calibration_warmup_prompt: warmupText || undefined,
+        calibration_warmup_prompt: String(warmupPrompt || '').trim() || undefined,
       });
-      const data = res.data;
-      if (onStarted) onStarted(data);
-      onNavigate('assessment');
+      const payload = res?.data || {};
+      onStarted?.(payload);
+      onNavigate?.('assessment');
     } catch (err) {
-      const msg = err?.response?.status === 402
-        ? (err?.response?.data?.detail || CANDIDATE_START_BLOCKED_MESSAGE)
-        : (err?.response?.data?.detail || 'Failed to start assessment');
-      setStartError(msg);
+      setStartError(err?.response?.data?.detail || 'Failed to start assessment.');
     } finally {
       setLoadingStart(false);
     }
@@ -115,7 +212,7 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
     setCvUploadError('');
     setCvUploadSuccess('');
     try {
-      await assessmentsApi.uploadCv(null, token, file);
+      await assessmentsApi.uploadCv(assessmentId, token, file);
       setHasCvOnFile(true);
       setCvUploadSuccess(`Uploaded ${file.name}.`);
     } catch (err) {
@@ -126,165 +223,197 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
     }
   };
 
-  const taskPreview = previewData?.task || {};
-  const scenarioMarkdown = String(taskPreview?.scenario || '').trim();
-  const calibrationPromptText = String(taskPreview?.calibration_prompt || '').trim();
-  const expectedJourney = taskPreview?.expected_candidate_journey && typeof taskPreview.expected_candidate_journey === 'object'
-    ? taskPreview.expected_candidate_journey
-    : null;
-  const durationMinutes = Number(taskPreview?.duration_minutes ?? previewData?.duration_minutes ?? 30);
-  const startGate = previewData?.start_gate && typeof previewData.start_gate === 'object'
-    ? previewData.start_gate
-    : null;
-  const startBlockedMessage = String(startGate?.message || '').trim();
-  const isStartBlocked = startGate?.can_start === false;
-  const visibleStartMessage = startError || startBlockedMessage;
+  const visibleError = startError || (isStartBlocked ? startBlockedMessage : previewError);
+  const metaTitle = [
+    organizationName || 'TAALI',
+    taskPreview?.role || 'Candidate assessment',
+    candidateName || null,
+  ].filter(Boolean).join(' · ');
 
   return (
-    <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
-      <nav className="border-b border-[var(--taali-border-soft)] bg-[var(--taali-surface)] backdrop-blur-sm">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-4">
-          <Logo onClick={() => {}} />
-          <span className="font-mono text-sm text-[var(--taali-muted)]">|</span>
-          <span className="font-mono text-sm">Technical Assessment</span>
-        </div>
-      </nav>
-      <div className="max-w-3xl mx-auto px-6 py-16">
-        <div className="text-center mb-8">
-          <BrandLabel className="mb-4" toneClassName="text-[var(--taali-purple)]">TAALI Assessment</BrandLabel>
-          <h1 className="text-4xl font-bold mb-2">Technical Assessment</h1>
-          <p className="text-[var(--taali-muted)]">You&apos;ve been invited to complete a coding challenge</p>
-        </div>
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
+      <CandidateMiniNav />
 
-        <div className="mb-6 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-5 shadow-[var(--taali-shadow-soft)]">
-          <div className="flex flex-wrap items-center gap-2 font-mono text-xs text-[var(--taali-muted)]">
-            <span>Role: {taskPreview?.role || 'Engineering'}</span>
-            <span>•</span>
-            <span>Duration: {durationMinutes} minutes</span>
-            {taskPreview?.name ? (
-              <>
-                <span>•</span>
-                <span>Task: {taskPreview.name}</span>
-              </>
-            ) : null}
-          </div>
-          {previewLoading ? (
-            <p className="mt-2 text-xs text-[var(--taali-muted)]">Loading task context…</p>
-          ) : previewError ? (
-            <p className="mt-2 text-xs text-[var(--taali-warning)]">{previewError}</p>
-          ) : null}
-          {hasCvOnFile ? (
-            <p className="mt-2 text-xs text-[var(--taali-success)]">CV on file: yes</p>
-          ) : null}
-        </div>
+      <div className="mx-auto max-w-[1120px] px-6 py-10 md:px-10 md:py-14">
+        <div className="grid gap-6 lg:grid-cols-[1.08fr_.92fr]">
+          <div className="relative overflow-hidden rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] p-8 shadow-[var(--shadow-lg)]">
+            <div className="absolute right-[-60px] top-[-60px] h-56 w-56 rounded-full bg-[radial-gradient(circle,var(--purple-soft),transparent_68%)] opacity-80" />
+            <div className="relative">
+              <div className="kicker">{organizationName ? `Invited by ${organizationName}` : 'Candidate assessment'}</div>
+              <h1 className="mt-4 font-[var(--font-display)] text-[clamp(42px,5vw,64px)] leading-[0.96] tracking-[-0.04em]">
+                Hi {getFirstName(candidateName)} - ready to show your <em>work</em>?
+              </h1>
+              <p className="mt-4 max-w-[620px] text-[15px] leading-7 text-[var(--mute)]">
+                {scenarioSummary || 'This is a real engineering task, not a puzzle. You’ll work in a browser-based IDE with the same repo, runtime, and AI tooling your hiring team wants to evaluate.'}
+              </p>
 
-        <div className="mb-8 rounded-[var(--taali-radius-panel)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-8 shadow-[var(--taali-shadow-soft)]">
-          <p className="text-lg mb-4">Welcome,</p>
-          <p className="text-sm text-[var(--taali-text)] mb-4 leading-relaxed">
-            You&apos;ve been invited to complete a technical assessment. This is a real coding environment where you can write, run, and test code with AI assistance.
-          </p>
-          <p className="text-sm text-[var(--taali-text)] mb-4">You&apos;ll have access to:</p>
-          <ul className="space-y-2 mb-6">
-            {['Full Python environment (sandboxed)', 'Claude AI assistant for help', 'All the tools you\'d use on the job'].map((item) => (
-              <li key={item} className="flex items-center gap-2 font-mono text-sm">
-                <Check size={16} className="text-[var(--taali-purple)]" /> {item}
-              </li>
-            ))}
-          </ul>
-          <p className="text-sm text-[var(--taali-text)] italic">
-            This isn&apos;t a trick. We want to see how you actually work.
-          </p>
-          <p className="text-sm text-[var(--taali-muted)] mt-4">Ready when you are.</p>
-        </div>
+              <div className="mt-6 grid gap-4 md:grid-cols-3">
+                <InfoRow label="Role" value={taskPreview?.role || 'Engineering'} />
+                <InfoRow label="Duration" value={`${durationMinutes} min`} />
+                <InfoRow label="Submit by" value={formatDeadline(previewData?.expires_at)} />
+              </div>
 
-        <div className="mb-8 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-purple-soft)] p-6 shadow-[var(--taali-shadow-soft)]">
-          <h2 className="text-xl font-bold mb-3">How you&apos;ll be evaluated</h2>
-          <ul className="space-y-2 font-mono text-sm text-[var(--taali-text)]">
-            <li>• Ask clear, structured questions to Claude.</li>
-            <li>• Provide concrete context (code, files, errors) when you&apos;re stuck.</li>
-            <li>• Work independently before escalating to AI.</li>
-            <li>• Apply AI responses effectively and iterate with evidence.</li>
-            <li>• Communicate reasoning, tradeoffs, and next-step judgment.</li>
-          </ul>
-          <p className="mt-3 text-xs text-[var(--taali-muted)]">
-            TAALI evaluates your collaboration process with AI, not just the final output.
-          </p>
-        </div>
+              <div className="mt-6 space-y-3">
+                {[
+                  'A real prompt, not a riddle.',
+                  'Work the way you normally do with Claude and the live repo.',
+                  'We evaluate how you collaborate with AI, not just the final answer.',
+                  'The session transcript is reviewed - not your screen, mic, or camera.',
+                ].map((item) => (
+                  <div key={item} className="flex items-start gap-3 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] px-4 py-3">
+                    <CheckCircle2 size={18} className="mt-0.5 shrink-0 text-[var(--purple)]" />
+                    <div className="text-[13px] leading-6 text-[var(--ink-2)]">{item}</div>
+                  </div>
+                ))}
+              </div>
 
-        {!hasCvOnFile ? (
-          <div className="mb-8 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
-            <h2 className="text-xl font-bold mb-2">Optional: Upload your CV</h2>
-            <p className="text-sm text-[var(--taali-muted)] mb-3">
-              Uploading a CV helps role-fit analysis. You can still continue without it.
-            </p>
-            <input
-              type="file"
-              accept=".pdf,.doc,.docx"
-              onChange={handleCvUpload}
-              disabled={cvUploading}
-              className="block w-full text-sm text-[var(--taali-text)]"
-            />
-            {cvUploading ? <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">Uploading…</p> : null}
-            {cvUploadSuccess ? <p className="mt-2 font-mono text-xs text-[var(--taali-success)]">{cvUploadSuccess}</p> : null}
-            {cvUploadError ? <p className="mt-2 font-mono text-xs text-[var(--taali-danger)]">{cvUploadError}</p> : null}
-          </div>
-        ) : null}
-
-        {taskPreview?.calibration_enabled && calibrationPromptText ? (
-          <div className="mb-8 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-muted)] p-6 shadow-[var(--taali-shadow-soft)]">
-            <h2 className="mb-2 text-xl font-bold">Quick baseline prompt (about 2 minutes)</h2>
-            <p className="mb-4 text-sm leading-6 text-[var(--taali-muted)]">
-              Before the repo opens, we ask for one short Claude prompt so TAALI can compare your initial prompting style with how you work once the real task context is available.
-            </p>
-            <div className="mb-4 grid gap-3 md:grid-cols-3">
-              {[
-                ['What it is', 'A short prompt-only warmup, not a separate coding exercise.'],
-                ['Why it exists', 'It gives us a baseline for how you frame a problem before you have full repo context.'],
-                ['How to treat it', 'Keep it concise. The main assessment still carries the weight.'],
-              ].map(([title, text]) => (
-                <div key={title} className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] px-4 py-3">
-                  <div className="font-mono text-[11px] font-bold uppercase tracking-[0.12em] text-[var(--taali-muted)]">{title}</div>
-                  <p className="mt-2 text-sm leading-6 text-[var(--taali-text)]">{text}</p>
+              {visibleError ? (
+                <div className="mt-6 rounded-[14px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4 text-sm text-[var(--taali-danger)]">
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+                    <div>{visibleError}</div>
+                  </div>
                 </div>
-              ))}
+              ) : null}
+
+              <div className="mt-6 flex flex-col gap-3">
+                <button
+                  type="button"
+                  className="btn btn-primary btn-lg w-full justify-center disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={handleStart}
+                  disabled={loadingStart || isStartBlocked}
+                >
+                  {loadingStart ? (
+                    <>
+                      <Loader2 size={18} className="animate-spin" />
+                      {startButtonLabel}
+                    </>
+                  ) : (
+                    <>
+                      {startButtonLabel} {!isStartBlocked ? <ChevronRight size={18} /> : null}
+                    </>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-outline btn-lg w-full justify-center"
+                  onClick={() => setPreviewOpen(true)}
+                >
+                  Preview the environment (no timer)
+                </button>
+              </div>
             </div>
-            <div className="mb-3 rounded-[var(--taali-radius-control)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-3 font-mono text-xs text-[var(--taali-text)]">
-              {calibrationPromptText}
+          </div>
+
+          <div className="space-y-4">
+            <div className="rounded-[var(--radius-xl)] bg-[var(--ink)] p-6 text-[var(--bg)] shadow-[var(--shadow-lg)]">
+              <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--purple-2)]">What to expect</div>
+              <h2 className="mt-4 font-[var(--font-display)] text-[30px] leading-[1] tracking-[-0.03em]">
+                Repo, editor, {previewTerminalEnabled ? 'terminal, ' : ''}and Claude - all in one workspace.
+              </h2>
+              <p className="mt-4 text-[14px] leading-7 text-white/72">
+                We record prompts, accept/reject decisions, and validation runs so the hiring team can review your process with context.
+              </p>
+              <div className="mt-5 rounded-[14px] border border-white/10 bg-white/10 px-4 py-3 font-mono text-[11px] uppercase tracking-[0.08em] text-white/80">
+                {metaTitle || 'Candidate workspace'}
+              </div>
             </div>
-            <label className="block">
-              <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Draft the first prompt you would send Claude</span>
-              <textarea
-                className="taali-textarea min-h-[110px] w-full bg-[var(--taali-surface)] font-mono text-sm text-[var(--taali-text)] outline-none"
-                value={warmupPrompt}
-                onChange={(event) => setWarmupPrompt(event.target.value)}
-                placeholder="Write the short prompt you would send Claude before the main task opens..."
-              />
-            </label>
+
+            {!hasCvOnFile ? (
+              <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+                <div className="text-[20px] font-semibold tracking-[-0.02em]">Optional CV upload</div>
+                <p className="mt-2 text-[13px] leading-6 text-[var(--mute)]">
+                  Uploading your CV helps the role-fit analysis. You can still continue without it.
+                </p>
+                <label className="mt-4 flex cursor-pointer items-center justify-center gap-2 rounded-[14px] border border-dashed border-[var(--line)] bg-[var(--bg)] px-4 py-4 text-[13px] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)]">
+                  <UploadCloud size={16} />
+                  <span>{cvUploading ? 'Uploading...' : 'Choose PDF, DOC, or DOCX'}</span>
+                  <input type="file" accept=".pdf,.doc,.docx" onChange={handleCvUpload} disabled={cvUploading} className="hidden" />
+                </label>
+                {cvUploadSuccess ? <div className="mt-3 font-mono text-[11px] text-[var(--green)]">{cvUploadSuccess}</div> : null}
+                {cvUploadError ? <div className="mt-3 font-mono text-[11px] text-[var(--red)]">{cvUploadError}</div> : null}
+              </div>
+            ) : null}
+
+            <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+              <div className="text-[20px] font-semibold tracking-[-0.02em]">System check</div>
+              <div className="mt-4 space-y-3 text-[13px]">
+                {[
+                  ['Browser', systemCheck.browser, Monitor],
+                  ['Connection', systemCheck.connection, Wifi],
+                  ['Screen', systemCheck.screen, Monitor],
+                  ['Claude access', isStartBlocked ? 'Blocked' : 'Ready', Sparkles],
+                ].map(([label, value, Icon]) => (
+                  <div key={label} className="flex items-center justify-between border-b border-[var(--line-2)] pb-3 last:border-b-0 last:pb-0">
+                    <span className="text-[var(--mute)]">{label}</span>
+                    <span className="inline-flex items-center gap-2 text-[var(--ink-2)]">
+                      <Icon size={14} />
+                      {value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+              <div className="text-[20px] font-semibold tracking-[-0.02em]">Your rights</div>
+              <div className="mt-4 rounded-[14px] bg-[var(--bg-3)] p-4 text-[13px] leading-6 text-[var(--ink-2)]">
+                <div className="flex items-start gap-3">
+                  <Shield size={18} className="mt-0.5 shrink-0 text-[var(--purple)]" />
+                  <div>
+                    We record your prompts, Claude responses, accepted edits, and validation runs. We do not record your screen, microphone, or camera.
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {taskPreview?.calibration_enabled && taskPreview?.calibration_prompt ? (
+          <div className="mt-6 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="kicker">Baseline prompt</div>
+                <h2 className="mt-2 font-[var(--font-display)] text-[28px] tracking-[-0.03em]">Quick warmup before the repo opens</h2>
+              </div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-[var(--line)] bg-[var(--bg)] px-4 py-2 font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
+                <Clock3 size={12} />
+                About 2 minutes
+              </div>
+            </div>
+            <div className="mt-4 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 font-mono text-[12px] leading-6 text-[var(--ink)]">
+              {taskPreview.calibration_prompt}
+            </div>
+            <textarea
+              value={warmupPrompt}
+              onChange={(event) => setWarmupPrompt(event.target.value)}
+              placeholder="Write the short prompt you would send Claude before the main task opens..."
+              className="mt-4 min-h-[120px] w-full rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 font-mono text-[13px] text-[var(--ink)] outline-none transition-colors focus:border-[var(--purple)]"
+            />
           </div>
         ) : null}
 
-        {scenarioMarkdown ? (
-          <div className="mb-8 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
-            <h2 className="text-xl font-bold mb-3">Task scenario</h2>
-            <p className="mb-4 text-sm leading-6 text-[var(--taali-muted)]">
-              This is the operating context waiting for you when the timer starts. Read it like a real handoff from the team you just joined.
-            </p>
-            <div className="max-w-none">
-              <ReactMarkdown components={SCENARIO_MARKDOWN_COMPONENTS}>{scenarioMarkdown}</ReactMarkdown>
+        {taskPreview?.scenario ? (
+          <div className="mt-6 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+            <div className="kicker">Task scenario</div>
+            <h2 className="mt-2 font-[var(--font-display)] text-[28px] tracking-[-0.03em]">The operating context waiting in the <em>repo</em></h2>
+            <div className="mt-4">
+              <ReactMarkdown components={ScenarioMarkdown}>{String(taskPreview.scenario || '')}</ReactMarkdown>
             </div>
           </div>
         ) : null}
 
-        {expectedJourney ? (
-          <div className="mb-8 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
-            <h2 className="text-xl font-bold mb-3">Expected working flow</h2>
-            <div className="space-y-3">
-              {Object.entries(expectedJourney).map(([phase, bullets]) => (
-                <div key={phase}>
-                  <div className="font-mono text-xs font-bold uppercase text-[var(--taali-muted)] mb-1">{phase.replace(/_/g, ' ')}</div>
-                  <ul className="space-y-1">
+        {taskPreview?.expected_candidate_journey ? (
+          <div className="mt-6 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
+            <div className="kicker">Suggested flow</div>
+            <h2 className="mt-2 font-[var(--font-display)] text-[28px] tracking-[-0.03em]">A strong candidate journey through this <em>task</em></h2>
+            <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+              {Object.entries(taskPreview.expected_candidate_journey).map(([phase, bullets]) => (
+                <div key={phase} className="rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4">
+                  <div className="font-mono text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">{phase.replace(/_/g, ' ')}</div>
+                  <ul className="mt-3 space-y-2 text-[13px] leading-6 text-[var(--ink-2)]">
                     {(Array.isArray(bullets) ? bullets : []).map((item) => (
-                      <li key={`${phase}-${item}`} className="font-mono text-xs text-[var(--taali-text)]">• {item}</li>
+                      <li key={`${phase}-${item}`}>{item}</li>
                     ))}
                   </ul>
                 </div>
@@ -293,57 +422,53 @@ export const CandidateWelcomePage = ({ token, assessmentId, onNavigate, onStarte
           </div>
         ) : null}
 
-        <div className="grid md:grid-cols-3 gap-4 mb-8">
-          <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
-            <Terminal size={24} className="mb-3" />
-            <h3 className="font-bold mb-2">What You&apos;ll Do</h3>
-            <ul className="font-mono text-xs text-[var(--taali-muted)] space-y-1">
-              <li>Complete a coding challenge</li>
-              <li>Use AI tools as you normally would</li>
-              <li>Write and run your solution</li>
-            </ul>
+        {(previewLoading || previewError) ? (
+          <div className="mt-6 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-5 shadow-[var(--shadow-sm)]">
+            <div className="font-mono text-[12px] text-[var(--mute)]">
+              {previewLoading ? 'Loading task preview...' : previewError}
+            </div>
           </div>
-          <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
-            <Brain size={24} className="mb-3" />
-            <h3 className="font-bold mb-2">What We&apos;re Testing</h3>
-            <ul className="font-mono text-xs text-[var(--taali-muted)] space-y-1">
-              <li>Problem-solving approach</li>
-              <li>AI collaboration skills</li>
-              <li>Code quality & testing</li>
-            </ul>
-          </div>
-          <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface)] p-6 shadow-[var(--taali-shadow-soft)]">
-            <Shield size={24} className="mb-3" />
-            <h3 className="font-bold mb-2">What You&apos;ll Need</h3>
-            <ul className="font-mono text-xs text-[var(--taali-muted)] space-y-1">
-              <li>Desktop browser (Chrome/Firefox)</li>
-              <li>Uninterrupted time</li>
-              <li>Stable internet connection</li>
-              <li>Read the task context before coding</li>
-            </ul>
+        ) : null}
+      </div>
+
+      {previewOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm">
+          <div className="flex max-h-[95vh] w-full max-w-[1280px] flex-col overflow-hidden rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg)] shadow-[var(--shadow-lg)]">
+            <div className="flex items-center justify-between border-b border-[var(--line)] bg-[var(--bg-2)] px-5 py-4">
+              <div>
+                <div className="kicker">Environment preview</div>
+                <h2 className="mt-1 font-[var(--font-display)] text-[20px] tracking-[-0.02em]">Workspace layout before the timer starts</h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setPreviewOpen(false)}
+                className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-[var(--line)] bg-[var(--bg-2)] text-[var(--ink-2)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)]"
+                aria-label="Close workspace preview"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-5">
+              <div className="mb-4 rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] p-4 text-[13px] leading-6 text-[var(--mute)]">
+                {previewUsesLiveRepoShape
+                  ? 'This preview shows the real repo structure and workspace layout for this task. The timer, editable file contents, and live Claude session start only after you launch the assessment.'
+                  : 'This preview shows the workspace structure and interaction model you\'ll use once the assessment begins. The live repo, timer, and Claude session start only after you launch the assessment.'}
+              </div>
+              <AssessmentRuntimePreviewView
+                heightClass="h-[46rem]"
+                lightMode
+                taskName={taskPreview?.name || 'Assessment workspace'}
+                taskContext={taskPreview?.scenario || taskPreview?.description || ''}
+                taskRole={metaTitle || 'Candidate workspace'}
+                repoFiles={previewWorkspaceFiles}
+                showTerminal={previewTerminalEnabled}
+              />
+            </div>
           </div>
         </div>
-
-        {visibleStartMessage && (
-          <div className="mb-4 rounded-[var(--taali-radius-card)] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4 text-sm text-[var(--taali-danger)]">
-            {visibleStartMessage}
-          </div>
-        )}
-
-        <button
-          className="flex w-full items-center justify-center gap-2 rounded-[var(--taali-radius-control)] border border-[var(--taali-purple)] bg-[linear-gradient(135deg,var(--taali-purple),var(--taali-purple-hover))] py-4 text-lg font-bold text-white shadow-[var(--taali-shadow-soft)] transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
-          onClick={handleStart}
-          disabled={loadingStart || isStartBlocked}
-        >
-          {loadingStart ? (
-            <><Loader2 size={20} className="animate-spin" /> Starting Assessment...</>
-          ) : isStartBlocked ? (
-            'Assessment unavailable'
-          ) : (
-            <>Start Assessment <ChevronRight size={20} /></>
-          )}
-        </button>
-      </div>
+      ) : null}
     </div>
   );
 };
+
+export default CandidateWelcomePage;

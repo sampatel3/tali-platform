@@ -1,0 +1,636 @@
+import React, { Suspense, lazy, useEffect, useMemo, useState } from 'react';
+import {
+  BrowserRouter,
+  Navigate,
+  Route,
+  Routes,
+  useLocation,
+  useNavigate,
+  useParams,
+  useSearchParams,
+} from 'react-router-dom';
+import { Loader2 } from 'lucide-react';
+
+import { useAuth } from './context/AuthContext';
+import { ToastProvider } from './context/ToastContext';
+import {
+  assessments as assessmentsApi,
+  organizations as organizationsApi,
+} from './shared/api';
+import { pathForPage } from './app/routing';
+import { ErrorBoundary } from './shared/ui/ErrorBoundary';
+import {
+  PRODUCT_WALKTHROUGH,
+  PRODUCT_WALKTHROUGH_START_DATA,
+} from './features/demo/productWalkthroughModels';
+
+import { LandingPage } from './features/marketing/LandingPage';
+import {
+  ForgotPasswordPage,
+  LoginPage,
+  RegisterPage,
+  ResetPasswordPage,
+  VerifyEmailPage,
+} from './features/auth';
+import { DashboardNav } from './features/dashboard/DashboardNav';
+import { ReportingPage } from './features/analytics/AnalyticsPage';
+import { CandidateWelcomePage } from './features/assessment_runtime/CandidateWelcomePage';
+import {
+  ConnectWorkableButton,
+  WorkableCallbackPage,
+} from './features/integrations/WorkableConnection';
+import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
+
+const AssessmentPage = lazy(() => import('./features/assessment_runtime/AssessmentPage'));
+const CandidateFeedbackPage = lazy(() =>
+  import('./features/assessment_runtime/CandidateFeedbackPage').then((m) => ({ default: m.CandidateFeedbackPage }))
+);
+const DemoExperiencePage = lazy(() =>
+  import('./features/demo/DemoExperiencePage').then((m) => ({ default: m.DemoExperiencePage }))
+);
+const LazyAssessmentResultsPage = lazy(() =>
+  import('./features/assessments/AssessmentResultsPage').then((m) => ({ default: m.AssessmentResultsPage }))
+);
+const AssessmentsPage = lazy(() =>
+  import('./features/assessments/AssessmentsPage').then((m) => ({ default: m.AssessmentsPage }))
+);
+const CandidatesPage = lazy(() =>
+  import('./features/candidates/CandidatesPage').then((m) => ({ default: m.CandidatesPage }))
+);
+const CandidatesDirectoryPage = lazy(() =>
+  import('./features/candidates/CandidatesDirectoryPage').then((m) => ({ default: m.CandidatesDirectoryPage }))
+);
+const CandidateStandingReportPage = lazy(() =>
+  import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
+);
+const JobsPage = lazy(() =>
+  import('./features/jobs/JobsPage').then((m) => ({ default: m.JobsPage }))
+);
+const JobPipelinePage = lazy(() =>
+  import('./features/jobs/JobPipelinePage').then((m) => ({ default: m.JobPipelinePage }))
+);
+const TasksPage = lazy(() =>
+  import('./features/tasks/TasksPage').then((m) => ({ default: m.TasksPage }))
+);
+const TaskPreviewPage = lazy(() =>
+  import('./features/tasks/TasksPage').then((m) => ({ default: m.TaskPreviewPage }))
+);
+const SettingsPage = lazy(() =>
+  import('./features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage }))
+);
+
+const isPublicCandidateSharePath = (pathname, search = '') => {
+  if (pathname.startsWith('/c/')) return true;
+  const params = new URLSearchParams(search || '');
+  const hasInterviewToken = params.get('view') === 'interview' && Boolean(String(params.get('k') || '').trim());
+  if (pathname.startsWith('/candidates/') && hasInterviewToken) return true;
+  if (/^\/candidates\/shr_[^/]+$/.test(pathname)) return true;
+  return false;
+};
+
+const isProtectedRecruiterPath = (pathname, search = '') => {
+  if (isPublicCandidateSharePath(pathname, search)) return false;
+  return (
+    [
+    '/dashboard',
+    '/jobs',
+    '/assessments',
+    '/candidates',
+    '/analytics',
+    '/reporting',
+    '/tasks',
+    '/candidate-detail',
+    ].includes(pathname)
+    || pathname.startsWith('/jobs/')
+    || pathname.startsWith('/assessments/')
+    || pathname.startsWith('/candidates/')
+    || pathname.startsWith('/settings')
+  );
+};
+
+const resolveSafeNextPath = (rawValue) => {
+  if (typeof rawValue !== 'string') return '';
+  const nextPath = rawValue.trim();
+  if (!nextPath.startsWith('/') || nextPath.startsWith('//') || nextPath.includes('://')) {
+    return '';
+  }
+  return nextPath;
+};
+
+function AppContent() {
+  const { isAuthenticated, loading: authLoading } = useAuth();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const forceRecruiterWorkflowV2 = String(import.meta.env.VITE_RECRUITER_WORKFLOW_V2_FORCE || '')
+    .trim()
+    .toLowerCase() === 'true';
+
+  const [selectedCandidate, setSelectedCandidate] = useState(null);
+  const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'assessments', label: 'Back to Assessments' });
+  const [loadingCandidateDetail, setLoadingCandidateDetail] = useState(false);
+  const [startedAssessmentData, setStartedAssessmentData] = useState(null);
+  const [workflowV2Enabled, setWorkflowV2Enabled] = useState(false);
+  const [workflowModeReady, setWorkflowModeReady] = useState(false);
+
+  const effectiveWorkflowV2Enabled = forceRecruiterWorkflowV2 || workflowV2Enabled;
+  const defaultRecruiterRoute = effectiveWorkflowV2Enabled ? '/jobs' : '/assessments';
+  const nextRedirectPath = useMemo(
+    () => resolveSafeNextPath(searchParams.get('next')),
+    [searchParams]
+  );
+
+  const candidateDetailAssessmentId = useMemo(() => {
+    const recruiterAssessmentMatch = location.pathname.match(/^\/assessments\/(\d+)$/);
+    if (recruiterAssessmentMatch?.[1]) {
+      return Number(recruiterAssessmentMatch[1]);
+    }
+    const legacyAssessmentId = searchParams.get('assessmentId');
+    return legacyAssessmentId ? Number(legacyAssessmentId) : null;
+  }, [location.pathname, searchParams]);
+
+  const assessmentIdFromLink = useMemo(() => {
+    const m = location.pathname.match(/^\/assessment\/(\d+)$/);
+    return m ? Number(m[1]) : null;
+  }, [location.pathname]);
+
+  const activeAssessmentToken = useMemo(() => {
+    const fromAssessPath = location.pathname.match(/^\/assess\/(.+)$/);
+    if (fromAssessPath?.[1]) {
+      return decodeURIComponent(fromAssessPath[1]);
+    }
+    if (assessmentIdFromLink) {
+      return searchParams.get('token') || null;
+    }
+    if (location.pathname === '/assessment/live') {
+      return searchParams.get('token') || null;
+    }
+    return null;
+  }, [assessmentIdFromLink, location.pathname, searchParams]);
+
+  const resetPasswordToken = location.pathname === '/reset-password'
+    ? (searchParams.get('token') || '')
+    : '';
+  const verifyEmailToken = location.pathname === '/verify-email'
+    ? (searchParams.get('token') || '')
+    : '';
+  const mapAssessmentToCandidateView = (assessment) => ({
+    id: assessment.id,
+    name: (assessment.candidate_name || assessment.candidate?.full_name || assessment.candidate_email || '').trim() || 'Unknown',
+    email: assessment.candidate_email || assessment.candidate?.email || '',
+    task: assessment.task_name || assessment.task?.name || 'Assessment',
+    status: assessment.status || 'pending',
+    score: assessment.score ?? assessment.overall_score ?? null,
+    time: assessment.duration_taken ? `${Math.round(assessment.duration_taken / 60)}m` : '—',
+    position: assessment.role_name || assessment.candidate?.position || '',
+    completedDate: assessment.completed_at ? new Date(assessment.completed_at).toLocaleDateString() : null,
+    breakdown: assessment.breakdown || null,
+    prompts: assessment.prompt_count ?? 0,
+    promptsList: assessment.prompts_list || [],
+    timeline: assessment.timeline || [],
+    results: assessment.results || [],
+    token: assessment.token,
+    _raw: assessment,
+  });
+
+  useEffect(() => {
+    setStartedAssessmentData(null);
+  }, [activeAssessmentToken]);
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setWorkflowV2Enabled(false);
+      setWorkflowModeReady(true);
+      return;
+    }
+    setWorkflowModeReady(false);
+    if (!organizationsApi?.get) {
+      setWorkflowV2Enabled(false);
+      setWorkflowModeReady(true);
+      return;
+    }
+    const request = organizationsApi.get();
+    if (!request || typeof request.then !== 'function') {
+      setWorkflowV2Enabled(false);
+      setWorkflowModeReady(true);
+      return;
+    }
+    let cancelled = false;
+    request
+      .then((res) => {
+        if (cancelled) return;
+        setWorkflowV2Enabled(Boolean(res?.data?.recruiter_workflow_v2_enabled));
+        setWorkflowModeReady(true);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWorkflowV2Enabled(false);
+        setWorkflowModeReady(true);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    if (
+      isAuthenticated
+      && workflowModeReady
+      && ['/', '/login', '/forgot-password'].includes(location.pathname)
+    ) {
+      navigate(location.pathname === '/login' && nextRedirectPath ? nextRedirectPath : defaultRecruiterRoute, { replace: true });
+    }
+  }, [defaultRecruiterRoute, isAuthenticated, location.pathname, navigate, nextRedirectPath, workflowModeReady]);
+
+  useEffect(() => {
+    if (
+      !authLoading &&
+      !isAuthenticated &&
+      isProtectedRecruiterPath(location.pathname, location.search)
+    ) {
+      const nextPath = `${location.pathname}${location.search}${location.hash}`;
+      navigate(`/login?next=${encodeURIComponent(nextPath)}`, { replace: true });
+    }
+  }, [isAuthenticated, authLoading, location.hash, location.pathname, location.search, navigate]);
+
+  const navigateToPage = (page, options = {}) => {
+    const nextPath = pathForPage(page, {
+      assessmentToken: Object.prototype.hasOwnProperty.call(options, 'assessmentToken')
+        ? options.assessmentToken
+        : activeAssessmentToken,
+      assessmentIdFromLink: Object.prototype.hasOwnProperty.call(options, 'assessmentIdFromLink')
+        ? options.assessmentIdFromLink
+        : assessmentIdFromLink,
+      candidateApplicationId: Object.prototype.hasOwnProperty.call(options, 'candidateApplicationId')
+        ? options.candidateApplicationId
+        : null,
+      candidateDetailAssessmentId: Object.prototype.hasOwnProperty.call(options, 'candidateDetailAssessmentId')
+        ? options.candidateDetailAssessmentId
+        : candidateDetailAssessmentId,
+      resetPasswordToken: Object.prototype.hasOwnProperty.call(options, 'resetPasswordToken')
+        ? options.resetPasswordToken
+        : resetPasswordToken,
+      verifyEmailToken: Object.prototype.hasOwnProperty.call(options, 'verifyEmailToken')
+        ? options.verifyEmailToken
+        : verifyEmailToken,
+      roleId: Object.prototype.hasOwnProperty.call(options, 'roleId')
+        ? options.roleId
+        : null,
+      workflowV2Enabled: effectiveWorkflowV2Enabled,
+    });
+
+    if (nextPath) {
+      navigate(nextPath, { replace: Boolean(options.replace) });
+    }
+    window.scrollTo(0, 0);
+  };
+
+  const handleCandidateStarted = (startData) => {
+    setStartedAssessmentData(startData);
+  };
+
+  const navigateToCandidate = (candidate, sourcePage = 'assessments') => {
+    setSelectedCandidate(candidate);
+    if (sourcePage === 'candidates') {
+      setCandidateDetailBackTo({ page: 'candidates', label: 'Back to Candidates' });
+    } else if (sourcePage === 'jobs') {
+      setCandidateDetailBackTo({ page: 'jobs', label: 'Back to Jobs' });
+    } else {
+      setCandidateDetailBackTo({ page: 'assessments', label: 'Back to Assessments' });
+    }
+    navigateToPage('candidate-detail', {
+      candidateDetailAssessmentId: candidate?.id || candidate?._raw?.id || null,
+    });
+  };
+
+  useEffect(() => {
+    const isAssessmentResultsRoute = location.pathname === '/candidate-detail' || /^\/assessments\/\d+$/.test(location.pathname);
+    if (!isAssessmentResultsRoute || !candidateDetailAssessmentId || !isAuthenticated) {
+      return;
+    }
+    if (selectedCandidate && Number(selectedCandidate.id) === Number(candidateDetailAssessmentId)) {
+      setLoadingCandidateDetail(false);
+      return;
+    }
+
+    let cancelled = false;
+    setLoadingCandidateDetail(true);
+    assessmentsApi.get(candidateDetailAssessmentId)
+      .then((res) => {
+        if (cancelled) return;
+        setSelectedCandidate(mapAssessmentToCandidateView(res.data || {}));
+        setLoadingCandidateDetail(false);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSelectedCandidate(null);
+        setLoadingCandidateDetail(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [location.pathname, candidateDetailAssessmentId, isAuthenticated, selectedCandidate]);
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <Loader2 size={32} className="animate-spin" style={{ color: '#9D00FF' }} />
+      </div>
+    );
+  }
+
+  const lazyFallback = (
+    <div className="min-h-screen flex items-center justify-center">
+      <Loader2 size={28} className="animate-spin" style={{ color: '#9D00FF' }} />
+    </div>
+  );
+  const workflowModeLoading = isAuthenticated && !workflowModeReady;
+
+  const CandidateWelcomeRoute = () => {
+    const { token } = useParams();
+    return (
+      <CandidateWelcomePage
+        token={token || null}
+        assessmentId={null}
+        onNavigate={navigateToPage}
+        onStarted={handleCandidateStarted}
+      />
+    );
+  };
+
+  const CandidateWelcomeWithIdRoute = () => {
+    const { assessmentId } = useParams();
+    const token = searchParams.get('token');
+    if (!token) return <Navigate to="/" replace />;
+    return (
+      <CandidateWelcomePage
+        token={token}
+        assessmentId={Number(assessmentId)}
+        onNavigate={navigateToPage}
+        onStarted={handleCandidateStarted}
+      />
+    );
+  };
+
+  const AssessmentLiveRoute = () => {
+    const token = searchParams.get('token');
+    const demo = searchParams.get('demo') === '1';
+    return (
+      <Suspense fallback={lazyFallback}>
+        <AssessmentPage
+          token={demo ? null : token}
+          startData={demo ? PRODUCT_WALKTHROUGH_START_DATA : startedAssessmentData}
+          demoMode={demo}
+          demoProfile={{
+            ...PRODUCT_WALKTHROUGH.runtime,
+            output: PRODUCT_WALKTHROUGH.runtime.output,
+          }}
+        />
+      </Suspense>
+    );
+  };
+
+  const CandidateFeedbackRoute = () => {
+    const { token } = useParams();
+    return (
+      <Suspense fallback={lazyFallback}>
+        <CandidateFeedbackPage token={token || ''} />
+      </Suspense>
+    );
+  };
+
+  const DashboardNavWithMode = (props) => (
+    <DashboardNav
+      {...props}
+      workflowV2Enabled={effectiveWorkflowV2Enabled}
+    />
+  );
+
+  return (
+    <>
+      <Routes>
+      <Route path="/" element={<LandingPage onNavigate={navigateToPage} />} />
+      <Route
+        path="/demo"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <DemoExperiencePage onNavigate={navigateToPage} />
+          </Suspense>
+        )}
+      />
+      <Route path="/login" element={<LoginPage onNavigate={navigateToPage} />} />
+      <Route path="/register" element={<RegisterPage onNavigate={navigateToPage} />} />
+      <Route path="/forgot-password" element={<ForgotPasswordPage onNavigate={navigateToPage} />} />
+      <Route path="/reset-password" element={<ResetPasswordPage onNavigate={navigateToPage} token={resetPasswordToken} />} />
+      <Route path="/verify-email" element={<VerifyEmailPage onNavigate={navigateToPage} token={verifyEmailToken} />} />
+
+      <Route
+        path="/dashboard"
+        element={workflowModeLoading
+          ? lazyFallback
+          : <Navigate replace to={defaultRecruiterRoute} />}
+      />
+
+      <Route
+        path="/jobs"
+        element={workflowModeLoading
+          ? lazyFallback
+          : (effectiveWorkflowV2Enabled ? (
+            <Suspense fallback={lazyFallback}>
+              <JobsPage
+                onNavigate={navigateToPage}
+                NavComponent={DashboardNavWithMode}
+              />
+            </Suspense>
+          ) : (
+            <Navigate replace to="/assessments" />
+          ))}
+      />
+
+      <Route
+        path="/jobs/:roleId"
+        element={workflowModeLoading
+          ? lazyFallback
+          : (effectiveWorkflowV2Enabled ? (
+            <Suspense fallback={lazyFallback}>
+              <JobPipelinePage
+                onNavigate={navigateToPage}
+                onViewCandidate={(candidate) => navigateToCandidate(candidate, 'jobs')}
+                NavComponent={DashboardNavWithMode}
+              />
+            </Suspense>
+          ) : (
+            <Navigate replace to="/assessments" />
+          ))}
+      />
+
+      <Route
+        path="/assessments"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <AssessmentsPage
+              onNavigate={navigateToPage}
+              onViewCandidate={(candidate) => navigateToCandidate(candidate, 'assessments')}
+              NavComponent={DashboardNavWithMode}
+              StatsCardComponent={StatsCard}
+              StatusBadgeComponent={StatusBadge}
+            />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/candidates"
+        element={workflowModeLoading
+          ? lazyFallback
+          : (effectiveWorkflowV2Enabled ? (
+            <Suspense fallback={lazyFallback}>
+              <CandidatesDirectoryPage
+                onNavigate={navigateToPage}
+                NavComponent={DashboardNavWithMode}
+              />
+            </Suspense>
+          ) : (
+            <Suspense fallback={lazyFallback}>
+              <CandidatesPage
+                onNavigate={navigateToPage}
+                onViewCandidate={(candidate) => navigateToCandidate(candidate, 'candidates')}
+                NavComponent={DashboardNavWithMode}
+              />
+            </Suspense>
+          ))}
+      />
+
+      <Route
+        path="/candidates/:applicationId"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <CandidateStandingReportPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/c/:applicationId"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <CandidateStandingReportPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/candidate-detail"
+        element={<Navigate replace to={candidateDetailAssessmentId ? `/assessments/${candidateDetailAssessmentId}` : '/assessments'} />}
+      />
+
+      <Route
+        path="/assessments/:assessmentId"
+        element={
+          loadingCandidateDetail ? (
+            <div className="min-h-screen flex items-center justify-center">
+              <Loader2 size={28} className="animate-spin" style={{ color: '#9D00FF' }} />
+            </div>
+          ) : (
+            <Suspense fallback={lazyFallback}>
+              <LazyAssessmentResultsPage
+                candidate={selectedCandidate}
+                assessmentId={candidateDetailAssessmentId}
+                onNavigate={navigateToPage}
+                backTo={candidateDetailBackTo}
+                onDeleted={() => setSelectedCandidate(null)}
+                onNoteAdded={(timeline) =>
+                  setSelectedCandidate((prev) => (prev ? { ...prev, timeline } : prev))
+                }
+                NavComponent={DashboardNavWithMode}
+              />
+            </Suspense>
+          )
+        }
+      />
+
+      <Route
+        path="/tasks"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <TasksPage onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/tasks/:taskId/preview"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <TaskPreviewPage />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/analytics"
+        element={<Navigate replace to="/reporting" />}
+      />
+
+      <Route
+        path="/reporting"
+        element={<ReportingPage onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />}
+      />
+
+      <Route
+        path="/settings/*"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <SettingsPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+              ConnectWorkableButton={ConnectWorkableButton}
+            />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/settings/workable/callback"
+        element={(
+          <WorkableCallbackPage
+            code={searchParams.get('code')}
+            error={searchParams.get('error')}
+            errorDescription={searchParams.get('error_description')}
+            onNavigate={navigateToPage}
+          />
+        )}
+      />
+
+      <Route path="/assess/:token" element={<CandidateWelcomeRoute />} />
+      <Route path="/assessment/:token/feedback" element={<CandidateFeedbackRoute />} />
+      <Route path="/assessment/:assessmentId" element={<CandidateWelcomeWithIdRoute />} />
+      <Route path="/assessment/live" element={<AssessmentLiveRoute />} />
+
+      <Route path="*" element={<Navigate to="/" replace />} />
+      </Routes>
+    </>
+  );
+}
+
+function App() {
+  return (
+    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+      <ToastProvider>
+        <ErrorBoundary>
+          <AppContent />
+        </ErrorBoundary>
+      </ToastProvider>
+    </BrowserRouter>
+  );
+}
+
+export default App;
+export { CandidateDetailPage, AssessmentResultsPage } from './features/candidates/CandidateDetailPage';

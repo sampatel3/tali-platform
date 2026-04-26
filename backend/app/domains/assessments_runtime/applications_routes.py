@@ -4,39 +4,48 @@ import logging
 import secrets
 import threading
 from datetime import datetime, timedelta, timezone
+from time import perf_counter
 import re
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import Response
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import asc, desc, func
+from sqlalchemy import asc, desc, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from ...components.assessments.repository import assessment_to_response, utcnow
 from ...components.assessments.service import get_assessment_creation_gate
 from ...components.integrations.workable.sync_service import _extract_candidate_fields
-from ...deps import get_current_user
+from ...deps import get_current_user, get_optional_current_user
 from ...domains.integrations_notifications.invite_flow import dispatch_assessment_invite
 from ...models.assessment import Assessment
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
+from ...models.candidate_application_event import CandidateApplicationEvent
+from ...models.application_interview import ApplicationInterview
 from ...models.organization import Organization
 from ...models.role import Role
 from ...models.task import Task
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import SessionLocal, get_db
+from ...platform.request_context import get_request_id
+from ...platform.secrets import decrypt_text
 from ...schemas.role import (
     ApplicationCreate,
     ApplicationCvUploadResponse,
     ApplicationDetailResponse,
     ApplicationEventResponse,
+    ApplicationInterviewResponse,
     ApplicationOutcomeUpdate,
+    ApplicationReportShareLinkResponse,
     ApplicationResponse,
     ApplicationStageUpdate,
     ApplicationUpdate,
     AssessmentFromApplicationCreate,
     AssessmentRetakeCreate,
+    FirefliesInterviewLinkCreate,
+    ManualApplicationInterviewCreate,
 )
 from ...components.integrations.workable.service import WorkableRateLimitError, WorkableService
 from ...services.document_service import (
@@ -52,17 +61,31 @@ from ...services.candidate_feedback_engine import (
     build_client_assessment_summary_pdf,
     build_interview_debrief_payload_for_application,
 )
+from ...services.application_automation_service import run_auto_reject_if_needed
+from ...services.fireflies_service import (
+    FirefliesService,
+    attach_fireflies_match_metadata,
+    normalized_transcript_bundle,
+)
 from ...services.fit_matching_service import calculate_cv_job_match_sync
+from ...services.interview_support_service import refresh_application_interview_support
+from ...services.pre_screening_service import refresh_pre_screening_fields
+from ...services.workable_actions_service import (
+    disqualify_candidate_in_workable,
+    revert_candidate_disqualification_in_workable,
+)
 from ...services.assessment_repository_service import (
     AssessmentRepositoryError,
     AssessmentRepositoryService,
 )
 from .role_support import (
+    application_list_payload,
     application_detail_payload,
     application_to_response,
     get_application,
     get_role,
     latest_valid_role_assessment,
+    refresh_application_score_cache,
     role_has_job_spec,
 )
 from .pipeline_service import (
@@ -72,13 +95,175 @@ from .pipeline_service import (
     initialize_pipeline_event_if_missing,
     list_application_events,
     map_legacy_status_to_pipeline,
-    role_pipeline_counts,
     transition_outcome,
     transition_stage,
 )
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.applications")
+
+PIPELINE_STAGE_VALUES = {"applied", "invited", "in_assessment", "review"}
+APPLICATION_OUTCOME_VALUES = {"open", "rejected", "withdrawn", "hired"}
+
+
+def _application_is_workable_linked(app: CandidateApplication) -> bool:
+    return bool(sanitize_text_for_storage(str(getattr(app, "workable_candidate_id", None) or "").strip()))
+
+
+def _generate_application_report_share_token() -> str:
+    return f"shr_{secrets.token_urlsafe(18)}"
+
+
+def _build_application_report_share_url(application_id: int, share_token: str) -> str:
+    frontend_base = str(settings.FRONTEND_URL or "").rstrip("/")
+    path = f"/c/{application_id}?view=interview&k={share_token}"
+    if not frontend_base:
+        return path
+    return f"{frontend_base}{path}"
+
+
+def _application_report_share_response(app: CandidateApplication) -> ApplicationReportShareLinkResponse:
+    token = sanitize_text_for_storage(str(app.report_share_token or "").strip())
+    if not token:
+        raise HTTPException(status_code=500, detail="Candidate report share link is unavailable.")
+    created_at = app.report_share_created_at or app.updated_at or app.created_at or utcnow()
+    return ApplicationReportShareLinkResponse(
+        application_id=app.id,
+        share_token=token,
+        share_url=_build_application_report_share_url(app.id, token),
+        created_at=created_at,
+        member_access_only=False,
+    )
+
+
+def _ensure_application_report_share_link(*, db: Session, app: CandidateApplication) -> CandidateApplication:
+    existing_token = sanitize_text_for_storage(str(app.report_share_token or "").strip())
+    if existing_token:
+        if app.report_share_created_at is None:
+            app.report_share_created_at = app.updated_at or app.created_at or utcnow()
+            db.add(app)
+            db.commit()
+            db.refresh(app)
+        return app
+
+    for _ in range(5):
+        app.report_share_token = _generate_application_report_share_token()
+        app.report_share_created_at = utcnow()
+        db.add(app)
+        try:
+            db.commit()
+            db.refresh(app)
+            return app
+        except IntegrityError:
+            db.rollback()
+
+    raise HTTPException(status_code=500, detail="Failed to create candidate report share link.")
+
+
+def _get_application_by_share_token(
+    share_token: str,
+    *,
+    org_id: int | None = None,
+    db: Session,
+) -> CandidateApplication:
+    normalized_token = sanitize_text_for_storage(str(share_token or "").strip())
+    if not normalized_token or not normalized_token.startswith("shr_"):
+        raise HTTPException(status_code=404, detail="Candidate report unavailable.")
+
+    query = (
+        db.query(CandidateApplication)
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+            joinedload(CandidateApplication.interviews),
+            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+        )
+        .filter(
+            CandidateApplication.report_share_token == normalized_token,
+            CandidateApplication.deleted_at.is_(None),
+        )
+    )
+
+    if org_id is not None:
+        query = query.filter(CandidateApplication.organization_id == org_id)
+
+    app = query.first()
+    if not app:
+        raise HTTPException(status_code=404, detail="Candidate report unavailable.")
+    return app
+
+
+def _sync_workable_outcome_change(
+    *,
+    db: Session,
+    app: CandidateApplication,
+    target_outcome: str,
+    current_user: User,
+    reason: str | None = None,
+) -> dict | None:
+    current_outcome = sanitize_text_for_storage(str(app.application_outcome or "").strip()) or "open"
+    normalized_target = sanitize_text_for_storage(str(target_outcome or "").strip()) or current_outcome
+    if not _application_is_workable_linked(app):
+        return None
+    if normalized_target == current_outcome:
+        return None
+    if (current_outcome, normalized_target) not in {("open", "rejected"), ("rejected", "open")}:
+        return None
+
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+
+    if normalized_target == "rejected":
+        result = disqualify_candidate_in_workable(
+            org=org,
+            app=app,
+            role=app.role,
+            reason=reason or "Rejected in TAALI",
+            withdrew=False,
+        )
+        if not result.get("success"):
+            append_application_event(
+                db,
+                app=app,
+                event_type="workable_writeback_failed",
+                actor_type="recruiter",
+                actor_id=current_user.id,
+                reason=result.get("message") or reason or "Failed to reject candidate in Workable",
+                metadata={
+                    "action": result.get("action"),
+                    "code": result.get("code"),
+                    "target_outcome": normalized_target,
+                    "workable_candidate_id": app.workable_candidate_id,
+                },
+            )
+            db.commit()
+            raise HTTPException(status_code=502, detail=result.get("message") or "Failed to reject candidate in Workable")
+        return result
+
+    result = revert_candidate_disqualification_in_workable(
+        org=org,
+        app=app,
+        role=app.role,
+    )
+    if not result.get("success"):
+        append_application_event(
+            db,
+            app=app,
+            event_type="workable_writeback_failed",
+            actor_type="recruiter",
+            actor_id=current_user.id,
+            reason=result.get("message") or reason or "Failed to reopen candidate in Workable",
+            metadata={
+                "action": result.get("action"),
+                "code": result.get("code"),
+                "target_outcome": normalized_target,
+                "workable_candidate_id": app.workable_candidate_id,
+            },
+        )
+        db.commit()
+        raise HTTPException(status_code=502, detail=result.get("message") or "Failed to reopen candidate in Workable")
+    return result
 
 
 def _report_filename_part(value: str, fallback: str) -> str:
@@ -116,7 +301,7 @@ def _normalize_cv_match_details(details: dict | None, *, final_score_100: float 
 
 
 def _refresh_rank_score(app: CandidateApplication) -> None:
-    app.rank_score = app.workable_score if app.workable_score is not None else app.cv_match_score
+    refresh_pre_screening_fields(app)
 
 
 def _compute_cv_match_for_application(app: CandidateApplication, *, reset_if_unavailable: bool) -> bool:
@@ -195,8 +380,11 @@ def _is_active_role_assessment_integrity_error(err: Exception) -> bool:
 
 
 def _application_sort_value(item: ApplicationDetailResponse, sort_by: str):
+    if sort_by == "pre_screen_score":
+        return item.pre_screen_score if item.pre_screen_score is not None else float("-inf")
     if sort_by == "taali_score":
-        return item.taali_score if item.taali_score is not None else float("-inf")
+        normalized = _normalize_taali_score_for_filter(item.taali_score)
+        return normalized if normalized is not None else float("-inf")
     if sort_by == "created_at":
         return item.created_at or datetime.min.replace(tzinfo=timezone.utc)
     return (
@@ -231,12 +419,147 @@ def _apply_min_taali_score_filter(
 ) -> list[ApplicationDetailResponse]:
     if min_taali_score is None:
         return payload
-    threshold = float(min_taali_score)
+    threshold = _normalize_taali_score_for_filter(min_taali_score)
+    if threshold is None:
+        return payload
+    filtered: list[ApplicationDetailResponse] = []
+    for item in payload:
+        normalized = _normalize_taali_score_for_filter(item.taali_score)
+        if normalized is None:
+            continue
+        if normalized >= threshold:
+            filtered.append(item)
+    return filtered
+
+
+def _normalize_taali_score_for_filter(value: float | int | None) -> float | None:
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    if numeric < 0:
+        return None
+    # Legacy payloads can still surface 0-10 scale values.
+    if numeric <= 10:
+        numeric = numeric * 10.0
+    return round(max(0.0, min(100.0, numeric)), 1)
+
+
+def _parse_csv_tokens(raw_value: str | None) -> list[str]:
+    if raw_value is None:
+        return []
     return [
-        item
-        for item in payload
-        if item.taali_score is not None and float(item.taali_score) >= threshold
+        token.strip()
+        for token in str(raw_value).split(",")
+        if token and token.strip()
     ]
+
+
+def _parse_int_csv_filter(raw_value: str | None, *, field_name: str) -> list[int]:
+    tokens = _parse_csv_tokens(raw_value)
+    values: list[int] = []
+    for token in tokens:
+        try:
+            parsed = int(token)
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid {field_name} value '{token}'. Expected comma-separated integers.",
+            ) from None
+        if parsed <= 0:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid {field_name} value '{token}'. Expected positive integers.",
+            )
+        values.append(parsed)
+    return values
+
+
+def _parse_choice_csv_filter(raw_value: str | None, *, allowed: set[str], field_name: str) -> list[str]:
+    tokens = [token.lower() for token in _parse_csv_tokens(raw_value)]
+    if not tokens:
+        return []
+    if "all" in tokens:
+        return []
+    invalid = [token for token in tokens if token not in allowed]
+    if invalid:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid {field_name} value(s): {', '.join(sorted(set(invalid)))}",
+        )
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for token in tokens:
+        if token in seen:
+            continue
+        seen.add(token)
+        ordered.append(token)
+    return ordered
+
+
+def _empty_stage_counts() -> dict[str, int]:
+    return {
+        "all": 0,
+        "applied": 0,
+        "invited": 0,
+        "in_assessment": 0,
+        "review": 0,
+    }
+
+
+def _build_stage_counts(stage_rows: list[tuple[str | None, int]]) -> dict[str, int]:
+    counts = _empty_stage_counts()
+    for stage, total in stage_rows:
+        key = str(stage or "").strip().lower()
+        if key in counts:
+            counts[key] = int(total or 0)
+    counts["all"] = int(sum(counts[key] for key in ("applied", "invited", "in_assessment", "review")))
+    return counts
+
+
+def _application_order_columns(sort_by: str, sort_order: str):
+    reverse = sort_order != "asc"
+    if sort_by == "pre_screen_score":
+        primary = func.coalesce(
+            CandidateApplication.pre_screen_score_100,
+            -1.0 if reverse else 101.0,
+        )
+    elif sort_by == "taali_score":
+        primary = func.coalesce(
+            CandidateApplication.taali_score_cache_100,
+            -1.0 if reverse else 101.0,
+        )
+    elif sort_by == "created_at":
+        primary = CandidateApplication.created_at
+    else:
+        primary = func.coalesce(
+            CandidateApplication.pipeline_stage_updated_at,
+            CandidateApplication.updated_at,
+            CandidateApplication.created_at,
+        )
+    if reverse:
+        return [primary.desc(), CandidateApplication.created_at.desc(), CandidateApplication.id.desc()]
+    return [primary.asc(), CandidateApplication.created_at.asc(), CandidateApplication.id.asc()]
+
+
+def _apply_application_source_filter(query, source: str | None):
+    normalized = str(source or "").strip().lower()
+    if normalized == "workable":
+        return query.filter(
+            or_(
+                CandidateApplication.source == "workable",
+                CandidateApplication.workable_sourced.is_(True),
+            )
+        )
+    if normalized == "manual":
+        return query.filter(
+            CandidateApplication.source != "workable",
+            or_(
+                CandidateApplication.workable_sourced.is_(False),
+                CandidateApplication.workable_sourced.is_(None),
+            ),
+        )
+    return query
 
 
 def _provision_assessment_branch(assessment: Assessment, task: Task) -> None:
@@ -380,6 +703,7 @@ def create_application(
         actor_id=current_user.id,
         reason="Application created",
     )
+    refresh_application_score_cache(app, db=db)
     try:
         db.commit()
         db.refresh(app)
@@ -396,8 +720,9 @@ def create_application(
 @router.get("/roles/{role_id}/applications")
 def list_role_applications(
     role_id: int,
-    sort_by: str = Query(default="created_at", pattern="^(rank_score|workable_score|cv_match_score|taali_score|created_at)$"),
+    sort_by: str = Query(default="pre_screen_score", pattern="^(pre_screen_score|rank_score|workable_score|cv_match_score|taali_score|created_at)$"),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    min_pre_screen_score: float | None = Query(default=None),
     min_rank_score: float | None = Query(default=None),
     min_workable_score: float | None = Query(default=None),
     min_cv_match_score: float | None = Query(default=None),
@@ -414,7 +739,9 @@ def list_role_applications(
         db.query(CandidateApplication)
         .options(
             joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.organization),
             joinedload(CandidateApplication.role),
+            joinedload(CandidateApplication.interviews),
             joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
         )
         .filter(
@@ -431,6 +758,10 @@ def list_role_applications(
         query = query.filter(CandidateApplication.pipeline_stage == pipeline_stage.strip().lower())
     if application_outcome and application_outcome.strip().lower() != "all":
         query = query.filter(CandidateApplication.application_outcome == application_outcome.strip().lower())
+    if min_pre_screen_score is not None:
+        threshold = _normalize_taali_score_for_filter(min_pre_screen_score)
+        if threshold is not None:
+            query = query.filter(CandidateApplication.pre_screen_score_100 >= threshold)
     if min_rank_score is not None:
         query = query.filter(CandidateApplication.rank_score >= min_rank_score)
     if min_workable_score is not None:
@@ -445,12 +776,18 @@ def list_role_applications(
 
     updated = False
     for app in apps:
+        score_inputs_changed = False
         try:
             if app.cv_match_score is None and app.cv_text:
-                updated = _compute_cv_match_for_application(app, reset_if_unavailable=False) or updated
+                score_inputs_changed = _compute_cv_match_for_application(app, reset_if_unavailable=False) or score_inputs_changed
             old_rank = app.rank_score
-            _refresh_rank_score(app)
-            if app.rank_score != old_rank:
+            if score_inputs_changed or old_rank is None:
+                _refresh_rank_score(app)
+                if app.rank_score != old_rank:
+                    score_inputs_changed = True
+            needs_pre_screen_backfill = sort_by == "pre_screen_score" and app.pre_screen_score_100 is None
+            if score_inputs_changed or app.score_cached_at is None or needs_pre_screen_backfill:
+                refresh_application_score_cache(app)
                 updated = True
         except Exception:
             logger.exception("Failed to update scoring fields for application_id=%s", app.id)
@@ -464,6 +801,8 @@ def list_role_applications(
     out = [ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text)) for app in apps]
 
     def _sort_value(item: ApplicationDetailResponse):
+        if sort_by == "pre_screen_score":
+            return item.pre_screen_score if item.pre_screen_score is not None else float("-inf")
         if sort_by == "taali_score":
             return item.taali_score if item.taali_score is not None else float("-inf")
         if sort_by == "rank_score":
@@ -494,6 +833,32 @@ def get_application_detail(
     return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
 
 
+@router.get("/applications/share/{share_token}", response_model=ApplicationDetailResponse)
+def get_application_detail_by_share_token(
+    share_token: str,
+    include_cv_text: bool = Query(False, description="Include full CV extracted text for viewer"),
+    db: Session = Depends(get_db),
+    current_user: User | None = Depends(get_optional_current_user),
+):
+    app = _get_application_by_share_token(
+        share_token,
+        org_id=current_user.organization_id if current_user else None,
+        db=db,
+    )
+    return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
+
+
+@router.post("/applications/{application_id}/share-link", response_model=ApplicationReportShareLinkResponse)
+def ensure_application_report_share_link(
+    application_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    app = get_application(application_id, current_user.organization_id, db)
+    app = _ensure_application_report_share_link(db=db, app=app)
+    return _application_report_share_response(app)
+
+
 @router.post("/applications/{application_id}/interview-debrief")
 def generate_application_interview_debrief(
     application_id: int,
@@ -510,6 +875,154 @@ def generate_application_interview_debrief(
         "generated_at": generated_at,
         "interview_debrief": debrief,
     }
+
+
+def _fireflies_service_for_org(org: Organization) -> FirefliesService:
+    api_key = decrypt_text(getattr(org, "fireflies_api_key_encrypted", None), settings.SECRET_KEY)
+    if not api_key:
+        raise HTTPException(status_code=400, detail="Fireflies is not configured")
+    return FirefliesService(api_key=api_key)
+
+
+def _application_interview_response(interview: ApplicationInterview) -> ApplicationInterviewResponse:
+    return ApplicationInterviewResponse.model_validate(interview)
+
+
+def _upsert_application_interview(
+    *,
+    db: Session,
+    app: CandidateApplication,
+    stage: str,
+    source: str,
+    provider: str,
+    provider_meeting_id: str | None = None,
+) -> ApplicationInterview:
+    interview = None
+    if provider_meeting_id:
+        interview = (
+            db.query(ApplicationInterview)
+            .filter(
+                ApplicationInterview.organization_id == app.organization_id,
+                ApplicationInterview.application_id == app.id,
+                ApplicationInterview.provider == provider,
+                ApplicationInterview.provider_meeting_id == provider_meeting_id,
+            )
+            .first()
+        )
+    if interview is None:
+        interview = ApplicationInterview(
+            organization_id=app.organization_id,
+            application_id=app.id,
+            stage=stage,
+            source=source,
+            provider=provider,
+            provider_meeting_id=provider_meeting_id,
+        )
+        db.add(interview)
+        db.flush()
+    interview.stage = stage
+    interview.source = source
+    interview.provider = provider
+    interview.provider_meeting_id = provider_meeting_id
+    return interview
+
+
+@router.post(
+    "/applications/{application_id}/interviews",
+    response_model=ApplicationInterviewResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_manual_application_interview(
+    application_id: int,
+    data: ManualApplicationInterviewCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    app = get_application(application_id, current_user.organization_id, db)
+    interview = _upsert_application_interview(
+        db=db,
+        app=app,
+        stage=data.stage,
+        source="manual",
+        provider="manual",
+        provider_meeting_id=None,
+    )
+    interview.provider_url = sanitize_text_for_storage(str(data.provider_url or "").strip()) or None
+    interview.status = "completed"
+    interview.transcript_text = sanitize_text_for_storage(data.transcript_text)
+    interview.summary = sanitize_text_for_storage(
+        str(data.summary or "").strip()
+    ) or sanitize_text_for_storage(data.transcript_text[:400])
+    interview.speakers = sanitize_json_for_storage(data.speakers or [])
+    interview.provider_payload = {
+        "source": "manual",
+        "captured_by_user_id": current_user.id,
+    }
+    interview.meeting_date = data.meeting_date or datetime.now(timezone.utc)
+    interview.linked_at = datetime.now(timezone.utc)
+    refresh_application_interview_support(app)
+    try:
+        db.commit()
+        db.refresh(interview)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to save interview transcript")
+    return _application_interview_response(interview)
+
+
+@router.post(
+    "/applications/{application_id}/interviews/fireflies-link",
+    response_model=ApplicationInterviewResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+def link_fireflies_interview(
+    application_id: int,
+    data: FirefliesInterviewLinkCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    app = get_application(application_id, current_user.organization_id, db)
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    fireflies = _fireflies_service_for_org(org)
+    try:
+        transcript = fireflies.get_transcript(data.fireflies_meeting_id)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch Fireflies transcript: {exc}") from exc
+    if not transcript:
+        raise HTTPException(status_code=404, detail="Fireflies transcript not found")
+    normalized = normalized_transcript_bundle(transcript)
+    interview = _upsert_application_interview(
+        db=db,
+        app=app,
+        stage=data.stage,
+        source="fireflies",
+        provider="fireflies",
+        provider_meeting_id=normalized.get("provider_meeting_id"),
+    )
+    interview.provider_url = sanitize_text_for_storage(str(data.provider_url or normalized.get("provider_url") or "").strip()) or None
+    interview.status = "completed"
+    interview.transcript_text = normalized.get("transcript_text")
+    interview.summary = normalized.get("summary")
+    interview.speakers = normalized.get("speakers") if isinstance(normalized.get("speakers"), list) else []
+    interview.provider_payload = attach_fireflies_match_metadata(
+        normalized.get("raw") if isinstance(normalized.get("raw"), dict) else {},
+        invite_email=getattr(org, "fireflies_invite_email", None),
+        linked_via="manual_link",
+        matched_application_id=app.id,
+        linked_by_user_id=current_user.id,
+    )
+    interview.meeting_date = normalized.get("meeting_date")
+    interview.linked_at = datetime.now(timezone.utc)
+    refresh_application_interview_support(app, organization=org)
+    try:
+        db.commit()
+        db.refresh(interview)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to link Fireflies transcript")
+    return _application_interview_response(interview)
 
 
 @router.get("/applications/{application_id}/report.pdf")
@@ -612,101 +1125,61 @@ def update_application(
 @router.get("/applications")
 def list_applications_global(
     role_id: int | None = Query(default=None),
+    role_ids: str | None = Query(default=None),
+    source: str | None = Query(default=None, pattern="^(manual|workable)$"),
     pipeline_stage: str | None = Query(default=None),
-    application_outcome: str | None = Query(default="open"),
+    pipeline_stages: str | None = Query(default=None),
+    application_outcome: str | None = Query(default=None),
+    application_outcomes: str | None = Query(default=None),
     search: str | None = Query(default=None),
-    sort_by: str = Query(default="pipeline_stage_updated_at", pattern="^(pipeline_stage_updated_at|created_at|taali_score)$"),
+    sort_by: str = Query(default="pre_screen_score", pattern="^(pre_screen_score|pipeline_stage_updated_at|created_at|taali_score)$"),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
-    min_taali_score: float | None = Query(default=None),
+    min_pre_screen_score: float | None = Query(default=None, ge=0, le=100),
+    min_taali_score: float | None = Query(default=None, ge=0, le=100),
+    include_stage_counts: bool = Query(default=True),
     include_cv_text: bool = Query(default=False),
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    query = (
-        db.query(CandidateApplication)
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
-            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
-        )
-        .filter(
-            CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-    )
-    if role_id is not None:
-        query = query.filter(CandidateApplication.role_id == role_id)
-    if pipeline_stage and pipeline_stage.strip().lower() != "all":
-        query = query.filter(CandidateApplication.pipeline_stage == pipeline_stage.strip().lower())
-    if application_outcome and application_outcome.strip().lower() != "all":
-        query = query.filter(CandidateApplication.application_outcome == application_outcome.strip().lower())
-    if search:
-        term = f"%{search.strip()}%"
-        query = (
-            query.join(Candidate, Candidate.id == CandidateApplication.candidate_id)
-            .filter(
-                Candidate.full_name.ilike(term)
-                | Candidate.email.ilike(term)
-                | Candidate.position.ilike(term)
-            )
-        )
-
-    rows = query.all()
-    payload = [
-        ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
-        for app in rows
-    ]
-    payload = _apply_min_taali_score_filter(payload, min_taali_score=min_taali_score)
-    payload = _sort_application_payload(payload, sort_by=sort_by, sort_order=sort_order)
-    total = len(payload)
-    paged_items = payload[offset: offset + limit]
-    return {
-        "items": paged_items,
-        "total": total,
-        "limit": limit,
-        "offset": offset,
-    }
-
-
-@router.get("/roles/{role_id}/pipeline")
-def get_role_pipeline(
-    role_id: int,
-    stage: str | None = Query(default=None),
-    search: str | None = Query(default=None),
-    sort_by: str = Query(default="pipeline_stage_updated_at", pattern="^(pipeline_stage_updated_at|created_at|taali_score)$"),
-    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
-    min_taali_score: float | None = Query(default=None),
-    include_cv_text: bool = Query(default=False),
-    limit: int = Query(default=50, ge=1, le=200),
-    offset: int = Query(default=0, ge=0),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    role = get_role(role_id, current_user.organization_id, db)
-    stage_counts = role_pipeline_counts(
-        db,
-        organization_id=current_user.organization_id,
-        role_id=role.id,
-    )
-
+    started_at = perf_counter()
     base_query = (
         db.query(CandidateApplication)
-        .options(
-            joinedload(CandidateApplication.candidate),
-            joinedload(CandidateApplication.role),
-            joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
-        )
         .filter(
             CandidateApplication.organization_id == current_user.organization_id,
-            CandidateApplication.role_id == role.id,
             CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
         )
     )
-    if stage and stage.strip().lower() != "all":
-        base_query = base_query.filter(CandidateApplication.pipeline_stage == stage.strip().lower())
+    requested_role_ids = _parse_int_csv_filter(role_ids, field_name="role_ids")
+    if role_id is not None:
+        requested_role_ids = [int(role_id), *requested_role_ids]
+    if requested_role_ids:
+        unique_role_ids = sorted(set(requested_role_ids))
+        if len(unique_role_ids) == 1:
+            base_query = base_query.filter(CandidateApplication.role_id == unique_role_ids[0])
+        else:
+            base_query = base_query.filter(CandidateApplication.role_id.in_(unique_role_ids))
+    base_query = _apply_application_source_filter(base_query, source)
+
+    requested_outcomes = _parse_choice_csv_filter(
+        application_outcomes,
+        allowed=APPLICATION_OUTCOME_VALUES,
+        field_name="application_outcomes",
+    )
+    single_outcome = str(application_outcome or "").strip().lower()
+    if not single_outcome and not requested_outcomes:
+        single_outcome = "open"
+    if single_outcome and single_outcome != "all":
+        if single_outcome not in APPLICATION_OUTCOME_VALUES:
+            raise HTTPException(
+                status_code=422,
+                detail=f"Invalid application_outcome value '{single_outcome}'",
+            )
+        if single_outcome not in requested_outcomes:
+            requested_outcomes.append(single_outcome)
+    if requested_outcomes:
+        base_query = base_query.filter(CandidateApplication.application_outcome.in_(requested_outcomes))
     if search:
         term = f"%{search.strip()}%"
         base_query = (
@@ -717,17 +1190,230 @@ def get_role_pipeline(
                 | Candidate.position.ilike(term)
             )
         )
+    threshold = _normalize_taali_score_for_filter(min_taali_score)
+    if threshold is not None:
+        base_query = base_query.filter(
+            CandidateApplication.taali_score_cache_100.is_not(None),
+            CandidateApplication.taali_score_cache_100 >= threshold,
+        )
+    pre_screen_threshold = _normalize_taali_score_for_filter(min_pre_screen_score)
+    if pre_screen_threshold is not None:
+        base_query = base_query.filter(
+            CandidateApplication.pre_screen_score_100.is_not(None),
+            CandidateApplication.pre_screen_score_100 >= pre_screen_threshold,
+        )
 
-    rows = base_query.all()
+    stage_counts = _empty_stage_counts()
+    if include_stage_counts:
+        stage_rows = (
+            base_query.with_entities(
+                CandidateApplication.pipeline_stage,
+                func.count(CandidateApplication.id),
+            )
+            .group_by(CandidateApplication.pipeline_stage)
+            .all()
+        )
+        stage_counts = _build_stage_counts(stage_rows)
+
+    requested_stages = _parse_choice_csv_filter(
+        pipeline_stages,
+        allowed=PIPELINE_STAGE_VALUES,
+        field_name="pipeline_stages",
+    )
+    single_stage = str(pipeline_stage or "").strip().lower()
+    if single_stage and single_stage != "all":
+        if single_stage not in PIPELINE_STAGE_VALUES:
+            raise HTTPException(status_code=422, detail=f"Invalid pipeline_stage value '{single_stage}'")
+        if single_stage not in requested_stages:
+            requested_stages.append(single_stage)
+
+    filtered_query = base_query
+    if requested_stages:
+        filtered_query = filtered_query.filter(CandidateApplication.pipeline_stage.in_(requested_stages))
+
+    total = filtered_query.order_by(None).count()
+    page_ids = [
+        int(row_id)
+        for (row_id,) in (
+            filtered_query.with_entities(CandidateApplication.id)
+            .order_by(*_application_order_columns(sort_by, sort_order))
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+    ]
+    rows: list[CandidateApplication] = []
+    if page_ids:
+        fetched = (
+            db.query(CandidateApplication)
+            .options(
+                joinedload(CandidateApplication.candidate),
+                joinedload(CandidateApplication.organization),
+                joinedload(CandidateApplication.role),
+                joinedload(CandidateApplication.interviews),
+                joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+            )
+            .filter(CandidateApplication.id.in_(page_ids))
+            .all()
+        )
+        by_id = {int(item.id): item for item in fetched}
+        rows = [by_id[row_id] for row_id in page_ids if row_id in by_id]
+
     items = [
-        ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
+        application_list_payload(app, include_cv_text=include_cv_text)
         for app in rows
     ]
-    items = _apply_min_taali_score_filter(items, min_taali_score=min_taali_score)
-    items = _sort_application_payload(items, sort_by=sort_by, sort_order=sort_order)
-    total = len(items)
-    paged_items = items[offset: offset + limit]
-    active_candidates_count = int(sum(stage_counts.values()))
+    duration_ms = (perf_counter() - started_at) * 1000.0
+    logged_role_ids = sorted(set(requested_role_ids))
+    logger.info(
+        (
+            "list_applications_global org_id=%s role_id=%s stage=%s outcome=%s search=%s "
+            "source=%s total=%s limit=%s offset=%s sort_by=%s sort_order=%s include_stage_counts=%s duration_ms=%.1f request_id=%s"
+        ),
+        current_user.organization_id,
+        ",".join(str(item) for item in logged_role_ids) or None,
+        ",".join(requested_stages) or pipeline_stage,
+        ",".join(requested_outcomes) or single_outcome or "all",
+        bool(search and search.strip()),
+        source or "all",
+        total,
+        limit,
+        offset,
+        sort_by,
+        sort_order,
+        include_stage_counts,
+        duration_ms,
+        get_request_id(),
+    )
+    response_payload = {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+    }
+    if include_stage_counts:
+        response_payload["stage_counts"] = stage_counts
+    return response_payload
+
+
+@router.get("/roles/{role_id}/pipeline")
+def get_role_pipeline(
+    role_id: int,
+    stage: str | None = Query(default=None),
+    stages: str | None = Query(default=None),
+    source: str | None = Query(default=None, pattern="^(manual|workable)$"),
+    search: str | None = Query(default=None),
+    sort_by: str = Query(default="pre_screen_score", pattern="^(pre_screen_score|pipeline_stage_updated_at|created_at|taali_score)$"),
+    sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
+    min_pre_screen_score: float | None = Query(default=None, ge=0, le=100),
+    min_taali_score: float | None = Query(default=None, ge=0, le=100),
+    include_stage_counts: bool = Query(default=True),
+    include_cv_text: bool = Query(default=False),
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    started_at = perf_counter()
+    role = get_role(role_id, current_user.organization_id, db)
+    base_query = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.role_id == role.id,
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "open",
+        )
+    )
+    base_query = _apply_application_source_filter(base_query, source)
+    if search:
+        term = f"%{search.strip()}%"
+        base_query = (
+            base_query.join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+            .filter(
+                Candidate.full_name.ilike(term)
+                | Candidate.email.ilike(term)
+                | Candidate.position.ilike(term)
+            )
+        )
+    threshold = _normalize_taali_score_for_filter(min_taali_score)
+    if threshold is not None:
+        base_query = base_query.filter(
+            CandidateApplication.taali_score_cache_100.is_not(None),
+            CandidateApplication.taali_score_cache_100 >= threshold,
+        )
+    pre_screen_threshold = _normalize_taali_score_for_filter(min_pre_screen_score)
+    if pre_screen_threshold is not None:
+        base_query = base_query.filter(
+            CandidateApplication.pre_screen_score_100.is_not(None),
+            CandidateApplication.pre_screen_score_100 >= pre_screen_threshold,
+        )
+
+    stage_counts = _empty_stage_counts()
+    if include_stage_counts:
+        stage_rows = (
+            base_query.with_entities(
+                CandidateApplication.pipeline_stage,
+                func.count(CandidateApplication.id),
+            )
+            .group_by(CandidateApplication.pipeline_stage)
+            .all()
+        )
+        stage_counts = _build_stage_counts(stage_rows)
+
+    requested_stages = _parse_choice_csv_filter(
+        stages,
+        allowed=PIPELINE_STAGE_VALUES,
+        field_name="stages",
+    )
+    single_stage = str(stage or "").strip().lower()
+    if single_stage and single_stage != "all":
+        if single_stage not in PIPELINE_STAGE_VALUES:
+            raise HTTPException(status_code=422, detail=f"Invalid stage value '{single_stage}'")
+        if single_stage not in requested_stages:
+            requested_stages.append(single_stage)
+
+    filtered_query = base_query
+    if requested_stages:
+        filtered_query = filtered_query.filter(CandidateApplication.pipeline_stage.in_(requested_stages))
+
+    total = filtered_query.order_by(None).count()
+    page_ids = [
+        int(row_id)
+        for (row_id,) in (
+            filtered_query.with_entities(CandidateApplication.id)
+            .order_by(*_application_order_columns(sort_by, sort_order))
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+    ]
+    rows: list[CandidateApplication] = []
+    if page_ids:
+        fetched = (
+            db.query(CandidateApplication)
+            .options(
+                joinedload(CandidateApplication.candidate),
+                joinedload(CandidateApplication.organization),
+                joinedload(CandidateApplication.role),
+                joinedload(CandidateApplication.interviews),
+                joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+            )
+            .filter(CandidateApplication.id.in_(page_ids))
+            .all()
+        )
+        by_id = {int(item.id): item for item in fetched}
+        rows = [by_id[row_id] for row_id in page_ids if row_id in by_id]
+
+    items = [
+        application_list_payload(app, include_cv_text=include_cv_text)
+        for app in rows
+    ]
+    active_candidates_count = (
+        int(stage_counts.get("all", 0))
+        if include_stage_counts
+        else int(base_query.order_by(None).count())
+    )
     last_candidate_activity_at = (
         db.query(
             func.max(
@@ -742,22 +1428,45 @@ def get_role_pipeline(
             CandidateApplication.organization_id == current_user.organization_id,
             CandidateApplication.role_id == role.id,
             CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.application_outcome == "open",
         )
         .scalar()
     )
+    duration_ms = (perf_counter() - started_at) * 1000.0
+    logger.info(
+        (
+            "get_role_pipeline org_id=%s role_id=%s stage=%s search=%s total=%s limit=%s offset=%s "
+            "source=%s sort_by=%s sort_order=%s include_stage_counts=%s duration_ms=%.1f request_id=%s"
+        ),
+        current_user.organization_id,
+        role.id,
+        ",".join(requested_stages) or stage,
+        bool(search and search.strip()),
+        total,
+        limit,
+        offset,
+        source or "all",
+        sort_by,
+        sort_order,
+        include_stage_counts,
+        duration_ms,
+        get_request_id(),
+    )
 
-    return {
+    payload = {
         "role_id": role.id,
         "role_name": role.name,
-        "stage": stage or "all",
-        "stage_counts": stage_counts,
+        "stage": ",".join(requested_stages) if requested_stages else "all",
         "active_candidates_count": active_candidates_count,
         "last_candidate_activity_at": last_candidate_activity_at,
-        "items": paged_items,
+        "items": items,
         "total": total,
         "limit": limit,
         "offset": offset,
     }
+    if include_stage_counts:
+        payload["stage_counts"] = stage_counts
+    return payload
 
 
 @router.patch("/applications/{application_id}/stage", response_model=ApplicationResponse)
@@ -809,12 +1518,36 @@ def update_application_outcome(
     app = get_application(application_id, current_user.organization_id, db)
     try:
         ensure_pipeline_fields(app)
+        if data.expected_version is not None and int(data.expected_version) != int(app.version or 0):
+            raise HTTPException(
+                status_code=409,
+                detail=f"Version mismatch: expected={data.expected_version}, current={app.version}",
+            )
+        existing_idempotent = None
+        if str(data.idempotency_key or "").strip():
+            existing_idempotent = (
+                db.query(CandidateApplicationEvent.id)
+                .filter(
+                    CandidateApplicationEvent.application_id == app.id,
+                    CandidateApplicationEvent.idempotency_key == str(data.idempotency_key).strip(),
+                )
+                .first()
+            )
+        if existing_idempotent:
+            return application_to_response(app)
         initialize_pipeline_event_if_missing(
             db,
             app=app,
             actor_type="system",
             actor_id=current_user.id,
             reason="Pipeline initialized before outcome patch",
+        )
+        writeback_result = _sync_workable_outcome_change(
+            db=db,
+            app=app,
+            target_outcome=data.application_outcome,
+            current_user=current_user,
+            reason=data.reason,
         )
         transition_outcome(
             db,
@@ -826,6 +1559,22 @@ def update_application_outcome(
             idempotency_key=data.idempotency_key,
             expected_version=data.expected_version,
         )
+        if writeback_result and writeback_result.get("success"):
+            append_application_event(
+                db,
+                app=app,
+                event_type="workable_reverted" if data.application_outcome == "open" else "workable_disqualified",
+                actor_type="recruiter",
+                actor_id=current_user.id,
+                reason=data.reason or writeback_result.get("message") or "Workable outcome synced",
+                metadata={
+                    "action": writeback_result.get("action"),
+                    "code": writeback_result.get("code"),
+                    "workable_candidate_id": app.workable_candidate_id,
+                    "workable_actor_member_id": (writeback_result.get("config") or {}).get("actor_member_id"),
+                    "workable_disqualify_reason_id": (writeback_result.get("config") or {}).get("workable_disqualify_reason_id"),
+                },
+            )
         db.commit()
         db.refresh(app)
     except HTTPException:
@@ -894,6 +1643,18 @@ def upload_application_cv(
         app.cv_match_details = {"error": err_msg[:300], "hint": hint}
         app.cv_match_scored_at = None
     _refresh_rank_score(app)
+    refresh_application_score_cache(app, db=db)
+    refresh_application_interview_support(app)
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if org:
+        run_auto_reject_if_needed(
+            db=db,
+            org=org,
+            app=app,
+            role=app.role,
+            actor_type="recruiter",
+            actor_id=current_user.id,
+        )
     try:
         db.commit()
     except Exception:
@@ -958,6 +1719,18 @@ def generate_taali_cv_ai(
         app.cv_match_details = {"error": err_msg[:300], "hint": hint}
         app.cv_match_scored_at = None
     _refresh_rank_score(app)
+    refresh_application_score_cache(app, db=db)
+    refresh_application_interview_support(app)
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    if org:
+        run_auto_reject_if_needed(
+            db=db,
+            org=org,
+            app=app,
+            role=app.role,
+            actor_type="recruiter",
+            actor_id=current_user.id,
+        )
 
     try:
         db.commit()
@@ -1124,7 +1897,12 @@ def _run_batch_score(role_id: int, org_id: int, *, include_scored: bool = False)
 
         apps_query = (
             db.query(CandidateApplication)
-            .options(joinedload(CandidateApplication.candidate), joinedload(CandidateApplication.role))
+            .options(
+                joinedload(CandidateApplication.candidate),
+                joinedload(CandidateApplication.role),
+                joinedload(CandidateApplication.interviews),
+                joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+            )
             .filter(
                 CandidateApplication.role_id == role_id,
                 CandidateApplication.organization_id == org_id,
@@ -1185,7 +1963,16 @@ def _run_batch_score(role_id: int, org_id: int, *, include_scored: bool = False)
                     final_score_100=normalized_score,
                 )
                 app.cv_match_scored_at = datetime.now(timezone.utc)
-                app.rank_score = app.workable_score if app.workable_score is not None else app.cv_match_score
+                _refresh_rank_score(app)
+                refresh_application_score_cache(app, db=db)
+                refresh_application_interview_support(app)
+                run_auto_reject_if_needed(
+                    db=db,
+                    org=org,
+                    app=app,
+                    role=role,
+                    actor_type="system",
+                )
                 db.flush()
             except Exception:
                 logger.exception("Batch score failed for application_id=%s", app.id)
@@ -1506,6 +2293,8 @@ def create_assessment_for_application(
             current_user=current_user,
             db=db,
         )
+        refresh_application_score_cache(app, db=db)
+        db.commit()
     except AssessmentRepositoryError:
         db.rollback()
         logger.exception("Assessment repository provisioning failed for application_id=%s", app.id)
@@ -1603,6 +2392,8 @@ def retake_assessment_for_application(
             void_existing=existing,
             void_reason=data.void_reason,
         )
+        refresh_application_score_cache(app, db=db)
+        db.commit()
     except AssessmentRepositoryError:
         db.rollback()
         logger.exception("Assessment retake provisioning failed for application_id=%s", app.id)

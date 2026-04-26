@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { cleanup, render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Mock the API module
@@ -26,11 +26,14 @@ vi.mock('../shared/api', () => ({
     updateManualEvaluation: vi.fn(),
   },
   billing: { usage: vi.fn(), costs: vi.fn(), credits: vi.fn(), createCheckoutSession: vi.fn() },
-  organizations: { get: vi.fn(), update: vi.fn() },
+  organizations: { get: vi.fn().mockResolvedValue({ data: { workable_connected: false } }), update: vi.fn() },
   analytics: { get: vi.fn().mockResolvedValue({ data: {} }) },
   roles: {
     generateApplicationInterviewDebrief: vi.fn(),
     downloadApplicationReport: vi.fn(),
+    getApplication: vi.fn().mockResolvedValue({ data: null }),
+    linkFirefliesInterview: vi.fn(),
+    createManualInterview: vi.fn(),
   },
   tasks: {
     list: vi.fn().mockResolvedValue({ data: [] }),
@@ -86,7 +89,14 @@ vi.mock('@monaco-editor/react', () => ({
   default: () => <div data-testid="code-editor" />,
 }));
 
-import { auth, assessments as assessmentsApi, analytics as analyticsApi, candidates as candidatesApi, roles as rolesApi } from '../shared/api';
+import {
+  auth,
+  assessments as assessmentsApi,
+  analytics as analyticsApi,
+  candidates as candidatesApi,
+  organizations as organizationsApi,
+  roles as rolesApi,
+} from '../shared/api';
 import { CandidateDetailPage } from '../App';
 import { AuthProvider } from '../context/AuthContext';
 
@@ -147,6 +157,7 @@ const mockCandidate = {
   },
   _raw: {
     id: 1,
+    application_id: 12,
     taali_score: 85,
     assessment_score: 85,
     final_score: 85,
@@ -285,11 +296,153 @@ const mockApplication = {
   updated_at: '2026-01-10T10:00:00Z',
 };
 
+const mockInterviewApplication = {
+  ...mockApplication,
+  candidate_name: 'Alice Johnson',
+  candidate_email: 'alice@example.com',
+  candidate_position: 'Senior Engineer',
+  role_name: 'Backend Engineer',
+  status: 'review',
+  workable_sourced: true,
+  workable_profile_url: 'https://acme.workable.com/candidates/212',
+  workable_score_raw: 78,
+  pre_screen_score: 74,
+  pre_screen_recommendation: 'Proceed to screening',
+  pre_screen_evidence: {
+    summary: 'Strong async backend delivery with a cloud tooling gap to validate in screening.',
+    matching_skills: ['Python', 'AsyncIO', 'Testing'],
+    missing_skills: ['Kubernetes', 'Terraform'],
+    concerns: ['Limited cloud automation depth'],
+  },
+  notes: 'Panel should test release judgment and cloud tooling depth.',
+  screening_pack: {
+    stage: 'screening',
+    source: 'application_generated',
+    generated_at: '2026-01-12T08:00:00Z',
+    questions: [
+      {
+        question: 'Walk me through a production async system you shipped recently.',
+        why_this_matters: 'Confirms the candidate can talk concretely about distributed backend ownership.',
+        evidence_anchor: 'Python, AsyncIO, Testing',
+        positive_signals: ['Specific system boundaries', 'Ownership language'],
+        red_flags: ['Only conceptual answers'],
+        follow_up_probe: 'Ask what broke first and how they instrumented it.',
+      },
+      {
+        question: 'Where have you personally used Terraform or Kubernetes?',
+        why_this_matters: 'Closes the cloud automation gap before a technical panel.',
+        evidence_anchor: 'Missing skills: Kubernetes, Terraform',
+        positive_signals: ['Hands-on examples', 'Specific tooling decisions'],
+        red_flags: ['No direct ownership'],
+        follow_up_probe: 'Ask what support they would need today.',
+      },
+    ],
+  },
+  tech_interview_pack: {
+    stage: 'tech_stage_2',
+    source: 'application_generated',
+    generated_at: '2026-01-14T09:30:00Z',
+    questions: [
+      {
+        question: 'Design the async pipeline retry model you would ship for this role.',
+        why_this_matters: 'Pushes beyond the CV narrative into concrete implementation decisions.',
+        evidence_anchor: 'Assessment evidence + backend role fit',
+        positive_signals: ['Failure mode thinking', 'Tradeoff awareness'],
+        red_flags: ['No rollback strategy'],
+        follow_up_probe: 'Ask which decision they would keep as a human judgment call instead of delegating to AI.',
+      },
+    ],
+  },
+  screening_interview_summary: {
+    summary: 'Screening call confirmed strong backend delivery, but the candidate hedged on cloud tooling depth.',
+    interviews_count: 1,
+    latest_provider_url: 'https://fireflies.ai/view/ff-123',
+    fireflies: {
+      status: 'linked',
+      configured: true,
+      capture_expected: true,
+      invite_email: 'taali@fireflies.ai',
+      latest_summary: 'Fireflies transcript confirmed the candidate owned async retry logic but needs deeper cloud validation.',
+      latest_provider_url: 'https://fireflies.ai/view/ff-123',
+      latest_meeting_date: '2026-01-14T12:00:00Z',
+      latest_source: 'fireflies',
+      latest_stage: 'screening',
+    },
+  },
+  tech_interview_summary: {
+    summary: 'No technical interview has been logged yet.',
+    fireflies: {
+      status: 'linked',
+      configured: true,
+      capture_expected: true,
+      invite_email: 'taali@fireflies.ai',
+      latest_summary: 'Fireflies transcript confirmed the candidate owned async retry logic but needs deeper cloud validation.',
+      latest_provider_url: 'https://fireflies.ai/view/ff-123',
+      latest_meeting_date: '2026-01-14T12:00:00Z',
+      latest_source: 'fireflies',
+      latest_stage: 'screening',
+    },
+  },
+  interview_evidence_summary: {
+    screening_summary: 'Screening call confirmed strong backend delivery, but the candidate hedged on cloud tooling depth.',
+    missing_skills: ['Kubernetes', 'Terraform'],
+    assessment_signal: {
+      assessment_id: 1,
+      assessment_score: 85,
+      task_name: 'Async Pipeline Debugging',
+    },
+    fireflies: {
+      status: 'linked',
+      configured: true,
+      capture_expected: true,
+      invite_email: 'taali@fireflies.ai',
+      latest_summary: 'Fireflies transcript confirmed the candidate owned async retry logic but needs deeper cloud validation.',
+      latest_provider_url: 'https://fireflies.ai/view/ff-123',
+      latest_meeting_date: '2026-01-14T12:00:00Z',
+      latest_source: 'fireflies',
+      latest_stage: 'screening',
+    },
+  },
+  interviews: [
+    {
+      id: 91,
+      application_id: 12,
+      organization_id: 1,
+      stage: 'screening',
+      source: 'fireflies',
+      provider: 'fireflies',
+      provider_meeting_id: 'ff-123',
+      provider_url: 'https://fireflies.ai/view/ff-123',
+      status: 'completed',
+      transcript_text: 'Sam Patel: Tell me about your async pipeline work.\nAlice Johnson: I shipped a queue-backed Python pipeline and owned the retry logic in production.',
+      summary: 'Fireflies transcript confirmed the candidate owned async retry logic but needs deeper cloud validation.',
+      speakers: [
+        { id: '1', name: 'Sam Patel' },
+        { id: '2', name: 'Alice Johnson' },
+      ],
+      provider_payload: {
+        title: 'Alice Johnson screen call',
+        transcript_url: 'https://fireflies.ai/view/ff-123',
+      },
+      meeting_date: '2026-01-14T12:00:00Z',
+      linked_at: '2026-01-14T12:45:00Z',
+      created_at: '2026-01-14T12:45:00Z',
+      updated_at: '2026-01-14T12:45:00Z',
+    },
+  ],
+  score_summary: {
+    assessment_id: 1,
+    taali_score: 85,
+    assessment_status: 'completed',
+  },
+};
+
 const mockOnNavigate = vi.fn();
 const mockOnDeleted = vi.fn();
 const mockOnNoteAdded = vi.fn();
 
 const renderCandidateDetail = async (candidateOverrides = {}) => {
+  localStorage.setItem('taali_results_onboarding_seen_v1', 'true');
   const candidate = { ...mockCandidate, ...candidateOverrides };
   const view = render(
     <AuthProvider>
@@ -306,6 +459,7 @@ const renderCandidateDetail = async (candidateOverrides = {}) => {
 };
 
 const renderPendingCandidateDetail = async (applicationOverrides = {}) => {
+  localStorage.setItem('taali_results_onboarding_seen_v1', 'true');
   const application = { ...mockApplication, ...applicationOverrides };
   const view = render(
     <AuthProvider>
@@ -335,6 +489,16 @@ describe('CandidateDetailPage', () => {
         generated_at: '2026-01-15T10:00:00Z',
         interview_debrief: {
           summary: 'Probe async debugging depth and cloud infrastructure gaps.',
+          fireflies_context: {
+            status: 'linked',
+            configured: true,
+            capture_expected: true,
+            invite_email: 'taali@fireflies.ai',
+            latest_summary: 'Stage 1 Fireflies transcript highlighted async retry ownership but left cloud tooling depth unresolved.',
+            latest_provider_url: 'https://fireflies.ai/view/ff-123',
+            latest_meeting_date: '2026-01-14T12:00:00Z',
+            latest_source: 'fireflies',
+          },
           probing_questions: [
             {
               dimension: 'Context provision',
@@ -354,6 +518,12 @@ describe('CandidateDetailPage', () => {
         generated_at: '2026-01-15T10:05:00Z',
         interview_debrief: {
           summary: 'Validate the strongest CV claims and probe the missing Kubernetes depth.',
+          fireflies_context: {
+            status: 'awaiting_transcript',
+            configured: true,
+            capture_expected: true,
+            invite_email: 'taali@fireflies.ai',
+          },
           probing_questions: [
             {
               dimension: 'Distributed systems',
@@ -367,6 +537,9 @@ describe('CandidateDetailPage', () => {
         },
       },
     });
+    rolesApi.getApplication.mockResolvedValue({ data: mockInterviewApplication });
+    rolesApi.linkFirefliesInterview.mockResolvedValue({ data: mockInterviewApplication });
+    rolesApi.createManualInterview.mockResolvedValue({ data: mockInterviewApplication });
     rolesApi.downloadApplicationReport.mockResolvedValue({
       data: new Blob(['pdf-content']),
       headers: { 'content-type': 'application/pdf' },
@@ -374,8 +547,10 @@ describe('CandidateDetailPage', () => {
   });
 
   afterEach(() => {
+    cleanup();
     window.location.hash = '';
     localStorage.clear();
+    vi.restoreAllMocks();
   });
 
   it('renders candidate name and email', async () => {
@@ -410,13 +585,16 @@ describe('CandidateDetailPage', () => {
 
   it('renders summary tab by default', async () => {
     await renderCandidateDetail();
-    expect(screen.getByRole('tab', { name: 'SUMMARY' })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByText('Assessment results')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Summary/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByText('Role fit summary')).toBeInTheDocument();
+    expect(screen.getByText('What to probe')).toBeInTheDocument();
+    expect(screen.getByText('Fireflies capture')).toBeInTheDocument();
+    expect(screen.getByText('Stage 1 Fireflies transcript linked')).toBeInTheDocument();
   });
 
   it('renders category scores in results tab', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
     // Category names appear in the expandable sections
     const taskCompletionElements = screen.getAllByText('Task completion');
     expect(taskCompletionElements.length).toBeGreaterThanOrEqual(1);
@@ -427,14 +605,33 @@ describe('CandidateDetailPage', () => {
 
   it('renders radar chart in results tab', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
     expect(screen.getByTestId('radar-chart')).toBeInTheDocument();
+  });
+
+  it('keeps assessment detail stable when sparse result arrays are missing', async () => {
+    await renderCandidateDetail({
+      results: undefined,
+      breakdown: null,
+      promptsList: undefined,
+      _raw: {
+        ...mockCandidate._raw,
+        score_breakdown: {},
+        prompt_analytics: {},
+      },
+    });
+
+    fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText(/Score data unavailable/i)).toBeInTheDocument();
+    });
   });
 
   it('assessment results tab includes AI usage and prompt quality', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
 
     await waitFor(() => {
       expect(screen.getByText('Avg Prompt clarity')).toBeInTheDocument();
@@ -446,7 +643,7 @@ describe('CandidateDetailPage', () => {
   it('shows prompt log in assessment results tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
 
     await waitFor(() => {
       expect(screen.getByText(/Prompt Log/)).toBeInTheDocument();
@@ -457,7 +654,7 @@ describe('CandidateDetailPage', () => {
   it('tab switching works - role fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'ROLE FIT' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Role fit/i }));
 
     await waitFor(() => {
       expect(screen.getAllByText('Summary').length).toBeGreaterThanOrEqual(1);
@@ -470,7 +667,7 @@ describe('CandidateDetailPage', () => {
   it('shows matching skills in role fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'ROLE FIT' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Role fit/i }));
 
     await waitFor(() => {
       expect(screen.getAllByText('Matching skills').length).toBeGreaterThanOrEqual(1);
@@ -482,7 +679,7 @@ describe('CandidateDetailPage', () => {
   it('shows missing skills in role fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'ROLE FIT' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Role fit/i }));
 
     await waitFor(() => {
       expect(screen.getAllByText('Gaps').length).toBeGreaterThanOrEqual(1);
@@ -494,7 +691,7 @@ describe('CandidateDetailPage', () => {
   it('shows score rationale bullets in role fit tab', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'ROLE FIT' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Role fit/i }));
 
     await waitFor(() => {
       expect(screen.getAllByText('Summary').length).toBeGreaterThanOrEqual(1);
@@ -507,7 +704,7 @@ describe('CandidateDetailPage', () => {
   it('assessment results tab includes timeline evidence', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
 
     await waitFor(() => {
       expect(screen.getByText('Assessment started')).toBeInTheDocument();
@@ -516,10 +713,35 @@ describe('CandidateDetailPage', () => {
     });
   });
 
-  it('interview guidance tab renders recruiter feedback input and save button', async () => {
+  it('stage 1 tab renders the screening question pack from the application record', async () => {
     await renderCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'INTERVIEW GUIDANCE' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Stage 1/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Recruiter screening questions')).toBeInTheDocument();
+      expect(screen.getByText(/Walk me through a production async system you shipped recently/i)).toBeInTheDocument();
+      expect(screen.getByText(/Where have you personally used Terraform or Kubernetes/i)).toBeInTheDocument();
+    });
+  });
+
+  it('stage 2 tab shows linked screening transcript evidence', async () => {
+    await renderCandidateDetail();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Stage 2/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Screening Transcript')).toBeInTheDocument();
+      expect(screen.getByText('Alice Johnson screen call')).toBeInTheDocument();
+      expect(screen.getByText(/Fireflies transcript confirmed the candidate owned async retry logic/i)).toBeInTheDocument();
+      expect(screen.getByText('Open transcript')).toBeInTheDocument();
+    });
+  });
+
+  it('notes tab renders recruiter feedback input and save button', async () => {
+    await renderCandidateDetail();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Notes & team/i }));
 
     await waitFor(() => {
       expect(screen.getByPlaceholderText('Add recruiter feedback from the interview')).toBeInTheDocument();
@@ -527,11 +749,11 @@ describe('CandidateDetailPage', () => {
     });
   });
 
-  it('interview guidance tab saves recruiter feedback notes', async () => {
+  it('notes tab saves recruiter feedback notes', async () => {
     assessmentsApi.addNote.mockResolvedValue({ data: { timeline: [] } });
 
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'INTERVIEW GUIDANCE' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Notes & team/i }));
 
     const noteInput = await screen.findByPlaceholderText('Add recruiter feedback from the interview');
     fireEvent.change(noteInput, { target: { value: 'Great candidate, recommend for next round' } });
@@ -543,7 +765,19 @@ describe('CandidateDetailPage', () => {
     });
   });
 
-  it('interview guidance tab surfaces load errors and stops loading state', async () => {
+  it('activity tab renders the candidate timeline view', async () => {
+    await renderCandidateDetail();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Activity/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Assessment Timeline')).toBeInTheDocument();
+      expect(screen.getByText('Assessment started')).toBeInTheDocument();
+      expect(screen.getByText('First prompt sent')).toBeInTheDocument();
+    });
+  });
+
+  it('stage 2 tab surfaces load errors and stops loading state', async () => {
     assessmentsApi.generateInterviewDebrief.mockRejectedValueOnce({
       response: {
         data: {
@@ -553,7 +787,7 @@ describe('CandidateDetailPage', () => {
     });
 
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'INTERVIEW GUIDANCE' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Stage 2/i }));
 
     await waitFor(() => {
       expect(assessmentsApi.generateInterviewDebrief).toHaveBeenCalledWith(1, { force_regenerate: false });
@@ -565,13 +799,75 @@ describe('CandidateDetailPage', () => {
     });
   });
 
-  it('Download client report button exists', async () => {
+  it('evaluate tab shows recruiter decision controls', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));
-    expect(screen.getByText('Download client report')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: /Evaluate/i }));
+
+    expect(screen.getByText('Record your decision.')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decision Advance/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decision Hold/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Decision Reject/i })).toBeInTheDocument();
+    expect(screen.getByText('Download report')).toBeInTheDocument();
   });
 
-  it('Download client report calls report API and downloads the PDF', async () => {
+  it('evaluate tab saves the recruiter evaluation payload', async () => {
+    assessmentsApi.updateManualEvaluation.mockResolvedValue({
+      data: {
+        evaluation_result: {
+          assessment_id: 1,
+          overall_score: 8.67,
+          decision: 'advance',
+          rationale: 'Advancing to panel.',
+          confidence: 'high',
+          next_steps: ['Schedule panel'],
+          category_scores: {
+            correctness: {
+              score: 'excellent',
+              evidence: ['All core tests pass'],
+            },
+            code_quality: {
+              score: 'good',
+              evidence: ['Readable naming and clear structure'],
+            },
+          },
+          strengths: ['Strong debugging discipline'],
+          improvements: ['Add stronger edge-case tests'],
+        },
+      },
+    });
+
+    await renderCandidateDetail();
+    fireEvent.click(screen.getByRole('tab', { name: /Evaluate/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Decision Advance/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'High' }));
+    fireEvent.change(screen.getByPlaceholderText(/Why are you advancing/i), {
+      target: { value: 'Advancing to panel.' },
+    });
+    fireEvent.click(screen.getByLabelText('Schedule panel'));
+
+    const selects = screen.getAllByRole('combobox');
+    fireEvent.change(selects[0], { target: { value: 'excellent' } });
+    fireEvent.change(screen.getAllByPlaceholderText('Evidence (required for this category)')[0], {
+      target: { value: 'All core tests pass' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit evaluation' }));
+
+    await waitFor(() => {
+      expect(assessmentsApi.updateManualEvaluation).toHaveBeenCalledWith(
+        1,
+        expect.objectContaining({
+          decision: 'advance',
+          rationale: 'Advancing to panel.',
+          confidence: 'high',
+          next_steps: ['Schedule panel'],
+        })
+      );
+    });
+  });
+
+  it('Download report action calls report API and downloads the PDF', async () => {
     assessmentsApi.downloadReport.mockResolvedValue({
       data: new Blob(['pdf-content']),
       headers: { 'content-type': 'application/pdf' },
@@ -589,9 +885,9 @@ describe('CandidateDetailPage', () => {
     });
 
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Evaluate/i }));
 
-    fireEvent.click(screen.getByText('Download client report'));
+    fireEvent.click(screen.getByText('Download report'));
 
     await waitFor(() => {
       expect(assessmentsApi.downloadReport).toHaveBeenCalledWith(1);
@@ -609,7 +905,7 @@ describe('CandidateDetailPage', () => {
     assessmentsApi.remove.mockResolvedValue({ data: {} });
 
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Evaluate/i }));
 
     const deleteButton = screen.getByRole('button', { name: 'Delete assessment' });
     fireEvent.click(deleteButton);
@@ -618,7 +914,6 @@ describe('CandidateDetailPage', () => {
       expect(confirmMock).toHaveBeenCalledWith('Delete this assessment? This cannot be undone.');
       expect(assessmentsApi.remove).toHaveBeenCalledWith(1);
     });
-
     confirmMock.mockRestore();
   });
 
@@ -634,28 +929,68 @@ describe('CandidateDetailPage', () => {
   it('renders the same tab shell for pre-assessment candidates with pending assessment-results state', async () => {
     await renderPendingCandidateDetail();
 
-    expect(screen.getByRole('tab', { name: 'SUMMARY' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' })).toBeInTheDocument();
-    expect(screen.getByRole('tab', { name: 'ROLE FIT' })).toBeInTheDocument();
-    expect(screen.getByText('Assessment results')).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Summary/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Assessment/i })).toBeInTheDocument();
+    expect(screen.getByRole('tab', { name: /Role fit/i })).toBeInTheDocument();
     expect(screen.queryByText('Standing candidate report')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
 
     await waitFor(() => {
       expect(screen.getByText('Pending assessment')).toBeInTheDocument();
-      expect(screen.getByText('Assessment results will populate after the assessment is completed.')).toBeInTheDocument();
+      expect(screen.getByText('Assessment will populate after the assessment is completed.')).toBeInTheDocument();
     });
   });
 
   it('loads interview guidance for pre-assessment candidates from the application route', async () => {
     await renderPendingCandidateDetail();
 
-    fireEvent.click(screen.getByRole('tab', { name: 'INTERVIEW GUIDANCE' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Stage 2/i }));
 
     await waitFor(() => {
       expect(rolesApi.generateApplicationInterviewDebrief).toHaveBeenCalledWith(12, { force_regenerate: false });
       expect(screen.getByText(/Validate the strongest CV claims/i)).toBeInTheDocument();
+    });
+  });
+
+  it('summary tab shows awaiting Fireflies transcript state for workable applications', async () => {
+    await renderPendingCandidateDetail({
+      source: 'workable',
+      screening_interview_summary: {
+        fireflies: {
+          status: 'awaiting_transcript',
+          configured: true,
+          capture_expected: true,
+          invite_email: 'taali@fireflies.ai',
+        },
+      },
+      interview_evidence_summary: {
+        fireflies: {
+          status: 'awaiting_transcript',
+          configured: true,
+          capture_expected: true,
+          invite_email: 'taali@fireflies.ai',
+        },
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Awaiting Fireflies transcript')).toBeInTheDocument();
+      expect(screen.getByText('taali@fireflies.ai')).toBeInTheDocument();
+    });
+  });
+
+  it('stage 2 guidance surfaces Fireflies transcript context when linked', async () => {
+    await renderCandidateDetail();
+
+    fireEvent.click(screen.getByRole('tab', { name: /Stage 2/i }));
+
+    await waitFor(() => {
+      expect(screen.getByText('Fireflies context')).toBeInTheDocument();
+      expect(screen.getByText('Stage 1 Fireflies transcript linked')).toBeInTheDocument();
+      expect(screen.getByText(/async retry ownership/i)).toBeInTheDocument();
+      expect(screen.getByText('taali@fireflies.ai')).toBeInTheDocument();
+      expect(screen.getByRole('link', { name: 'Open transcript source' })).toBeInTheDocument();
     });
   });
 
@@ -673,8 +1008,7 @@ describe('CandidateDetailPage', () => {
     });
 
     await renderPendingCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));
-    fireEvent.click(screen.getByText('Download client report'));
+    fireEvent.click(screen.getAllByRole('button', { name: 'Download report' })[0]);
 
     await waitFor(() => {
       expect(rolesApi.downloadApplicationReport).toHaveBeenCalledWith(12);
@@ -689,7 +1023,7 @@ describe('CandidateDetailPage', () => {
 
   it('renders assessment metadata in results tab', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
 
     expect(screen.getByText('Assessment Metadata')).toBeInTheDocument();
     // Duration appears in both header and metadata, check metadata section specifically
@@ -701,7 +1035,7 @@ describe('CandidateDetailPage', () => {
 
   it('renders test results when available', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
 
     expect(screen.getByText('Test results')).toBeInTheDocument();
     expect(screen.getByText('Pipeline Processing')).toBeInTheDocument();
@@ -711,23 +1045,24 @@ describe('CandidateDetailPage', () => {
 
   it('renders scoring glossary with plain-English dimension descriptions', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
 
     expect(screen.getByText('Scoring Glossary')).toBeInTheDocument();
     expect(screen.getAllByText('Task completion').length).toBeGreaterThanOrEqual(1);
     expect(screen.getByText(/Measures delivery outcomes under assessment constraints/i)).toBeInTheDocument();
   });
 
-  it('renders Post to Workable button', async () => {
+  it('renders Post to Workable for completed assessments when Workable is connected', async () => {
+    organizationsApi.get.mockResolvedValueOnce({ data: { workable_connected: true } });
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'CLIENT REPORT' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Evaluate/i }));
 
-    expect(screen.getByText('Post to Workable')).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: 'Post to Workable' }).length).toBeGreaterThan(0);
   });
 
   it('shows inline comparison hint and action', async () => {
     await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: 'ASSESSMENT RESULTS' }));
+    fireEvent.click(screen.getByRole('tab', { name: /Assessment/i }));
 
     expect(screen.getByText(/Compare this candidate with others in the same role/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Compare with...' })).toBeInTheDocument();

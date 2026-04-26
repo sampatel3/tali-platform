@@ -2,7 +2,7 @@
 
 Date: 2026-03-05
 Owner: Engineering
-Status: V1-ready (read-only Workable)
+Status: V1-ready with bounded Workable write-back
 
 ## Workable Field Coverage
 - External identifiers and metadata preserved via `external_refs`.
@@ -14,13 +14,19 @@ Status: V1-ready (read-only Workable)
 - Local terminal state is `application_outcome` (`open`, `rejected`, `withdrawn`, `hired`).
 - Workable stage does not overwrite local stage for existing applications.
 
+## Supported Write-Back Scope
+- TAALI can move Workable-linked candidates to the configured invite stage.
+- TAALI can disqualify Workable-linked candidates on manual reject, bulk reject, and auto-reject paths.
+- TAALI can revert Workable disqualification when recruiters reopen a rejected candidate in TAALI.
+- Bulk reject is TAALI-driven sequential fan-out over Workable single-candidate APIs, not a native Workable bulk API.
+
 ## Failure/Retry Handling
 - Sync failures recorded in integration metadata; retries are non-destructive to local recruiter stage/outcome.
 - Drift surfaced via derived `pipeline_external_drift` boolean.
 
 ## Future Write-Back Seams
-- Existing metadata fields and normalized stage mapping provide non-breaking seam for future bidirectional sync.
-- Append-only application events can anchor outbound stage-write auditability.
+- Existing metadata fields and normalized stage mapping provide a non-breaking seam for broader bidirectional sync later.
+- Append-only application events anchor outbound Workable auditability for invite, reject, reopen, and failure events.
 
 ## Risks and Mitigations
 - Risk: external stage drift growth if recruiter teams diverge from ATS stage names.

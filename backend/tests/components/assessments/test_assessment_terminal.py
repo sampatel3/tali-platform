@@ -354,6 +354,101 @@ def test_claude_endpoint_returns_cursor_style_wrapper_response(client, monkeypat
     assert payload["claude_budget"]["remaining_usd"] < payload["claude_budget"]["limit_usd"]
 
 
+def test_claude_endpoint_strips_internal_tool_markup_from_response(client, monkeypatch):
+    headers = _register_and_login(client)
+    task = _create_task(client, headers)
+    assessment = _create_assessment(client, headers, task["id"])
+
+    import app.domains.assessments_runtime.routes as assessments_api
+    import app.domains.assessments_runtime.candidate_claude_routes as candidate_claude_routes
+    import app.domains.integrations_notifications.adapters as integrations_adapters
+    import app.components.assessments.service as assessments_svc
+    import app.components.assessments.claude_budget as claude_budget
+    import app.components.assessments.terminal_runtime as terminal_runtime
+
+    class FakeSandbox:
+        def __init__(self, sid):
+            self.sandbox_id = sid
+            self.files = type("Files", (), {"write": lambda self, *args, **kwargs: None})()
+
+        def run_code(self, _code):
+            return {"stdout": "", "stderr": "", "error": None}
+
+    class FakeE2BService:
+        def __init__(self, api_key):
+            self.api_key = api_key
+
+        def create_sandbox(self):
+            return FakeSandbox("terminal-sandbox")
+
+        def connect_sandbox(self, sandbox_id):
+            return FakeSandbox(sandbox_id)
+
+        def get_sandbox_id(self, sandbox):
+            return sandbox.sandbox_id
+
+        def close_sandbox(self, _sandbox):
+            return None
+
+    class FakeClaudeService:
+        def __init__(self, _api_key):
+            pass
+
+        def chat(self, messages, system=None):
+            assert messages[-1]["role"] == "user"
+            assert system is not None
+            return {
+                "success": True,
+                "content": (
+                    "I found the likely blockers and I am reviewing the repo context first.\n\n"
+                    "<read_file>\n"
+                    "<path>diagnostics/audit_findings.md</path>\n"
+                    "</read_file>\n\n"
+                    "<read_file>\n"
+                    "<path>README.md</path>\n"
+                    "</read_file>"
+                ),
+                "tokens_used": 20,
+                "input_tokens": 12,
+                "output_tokens": 8,
+            }
+
+    monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_api.settings, "ASSESSMENT_TERMINAL_ENABLED", True)
+    monkeypatch.setattr(assessments_api.settings, "ASSESSMENT_TERMINAL_DEFAULT_MODE", "claude_cli_terminal")
+    monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
+    monkeypatch.setattr(assessments_svc.settings, "ASSESSMENT_TERMINAL_ENABLED", True)
+    monkeypatch.setattr(assessments_svc.settings, "ASSESSMENT_TERMINAL_DEFAULT_MODE", "claude_cli_terminal")
+    monkeypatch.setattr(terminal_runtime.settings, "ASSESSMENT_TERMINAL_ENABLED", True)
+    monkeypatch.setattr(terminal_runtime.settings, "ASSESSMENT_TERMINAL_DEFAULT_MODE", "claude_cli_terminal")
+    monkeypatch.setattr(terminal_runtime.settings, "ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK", True)
+    monkeypatch.setattr(terminal_runtime.settings, "ANTHROPIC_API_KEY", "test-anthropic-key")
+    monkeypatch.setattr(claude_budget.settings, "ASSESSMENT_CLAUDE_BUDGET_DEFAULT_USD", 1.0)
+    monkeypatch.setattr(claude_budget.settings, "CLAUDE_INPUT_COST_PER_MILLION_USD", 1.0)
+    monkeypatch.setattr(claude_budget.settings, "CLAUDE_OUTPUT_COST_PER_MILLION_USD", 1.0)
+    monkeypatch.setattr(integrations_adapters, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
+    monkeypatch.setattr(assessments_svc, "_clone_assessment_branch_into_workspace", lambda *_args, **_kwargs: True)
+    monkeypatch.setattr(candidate_claude_routes, "ClaudeService", FakeClaudeService)
+
+    start = client.post(f"/api/v1/assessments/token/{assessment['token']}/start")
+    assert start.status_code == 200
+    assessment_id = start.json()["assessment_id"]
+
+    claude = client.post(
+        f"/api/v1/assessments/{assessment_id}/claude",
+        json={"message": "help", "conversation_history": []},
+        headers={"x-assessment-token": assessment["token"]},
+    )
+    assert claude.status_code == 200
+    payload = claude.json()
+    assert payload["success"] is True
+    assert "I found the likely blockers" in payload["content"]
+    assert "<read_file>" not in payload["content"]
+    assert "diagnostics/audit_findings.md" not in payload["content"]
+    assert "README.md" not in payload["content"]
+
+
 def test_terminal_ws_rejects_invalid_token(client, monkeypatch):
     headers = _register_and_login(client)
     task = _create_task(client, headers)

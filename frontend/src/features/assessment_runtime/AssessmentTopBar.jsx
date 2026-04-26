@@ -1,86 +1,102 @@
 import React from 'react';
-import { Clock } from 'lucide-react';
+import { AlertTriangle, ChevronRight, CircleHelp, Clock } from 'lucide-react';
 
 import { AssessmentBrandGlyph } from './AssessmentBrandGlyph';
-import { ThemeModeToggle } from '../../shared/ui/ThemeModeToggle';
+
+const HelpPillButton = ({ as: Component = 'button', children, className = '', ...props }) => (
+  <Component
+    className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] font-medium text-[var(--mute)] transition-colors hover:bg-[var(--purple-soft)] hover:text-[var(--purple)] ${className}`.trim()}
+    {...props}
+  >
+    {children}
+  </Component>
+);
 
 export const AssessmentTopBar = ({
-  brandName,
   taskName,
+  metaLine = '',
   claudeBudget,
-  aiMode,
-  terminalCapabilities,
   formatUsd,
+  formatBudgetUsd = formatUsd,
   isTimeLow,
   timeUrgencyLevel = 'normal',
   timeLeft,
   formatTime,
   isTimerPaused,
-  lightMode = false,
-  onToggleTheme,
+  onOpenGuide,
+  reportIssueHref = 'mailto:support@taali.ai',
   onSubmit,
 }) => (
-  <div className="border-b border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] px-4 py-3 backdrop-blur-sm">
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="min-w-0 flex items-center gap-3">
-        <AssessmentBrandGlyph sizeClass="w-7 h-7" markSizeClass="w-5 h-5" />
-        <div className="min-w-0">
-          <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--taali-runtime-muted)]">
-            {brandName}
-          </div>
-          <div className="truncate font-mono text-sm text-[var(--taali-runtime-text)]">
+  <header
+    className="sticky top-0 z-30 border-b border-[var(--line)] backdrop-blur-[14px]"
+    style={{ background: 'color-mix(in oklab, var(--bg) 88%, transparent)' }}
+  >
+    <div className="flex min-h-[68px] flex-wrap items-center justify-between gap-3 px-4 py-3 lg:px-8">
+      <div className="min-w-0 flex items-center gap-4">
+        <div className="flex items-center gap-3">
+          <AssessmentBrandGlyph variant="compact-square" sizeClass="h-[30px] w-[30px]" markSizeClass="h-5 w-5" />
+          <span className="hidden h-[22px] w-px bg-[var(--line)] sm:block" />
+        </div>
+        <div className="min-w-0 leading-tight">
+          <div className="truncate font-display text-[17px] font-semibold tracking-[-0.01em] text-[var(--ink)]">
             {taskName}
           </div>
+          <div className="mt-1 truncate font-mono text-[10.5px] uppercase tracking-[0.1em] text-[var(--mute)]">
+            {metaLine || 'Candidate assessment'}
+          </div>
         </div>
-        <span className="hidden rounded-full border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide text-[var(--taali-runtime-muted)] md:inline-flex">
-          AI: {aiMode === 'claude_cli_terminal' ? 'Claude CLI' : 'Claude Chat'}
-        </span>
-        {aiMode === 'claude_cli_terminal' ? (
-          <span className="hidden rounded-full border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-2.5 py-1 font-mono text-[10px] uppercase tracking-wide text-[var(--taali-runtime-muted)] lg:inline-flex">
-            Permission: {terminalCapabilities?.permission_mode || 'default'}
-          </span>
-        ) : null}
       </div>
 
-      <div className="flex items-center gap-2 sm:gap-3">
-        <ThemeModeToggle
-          value={lightMode ? 'light' : 'dark'}
-          onChange={(nextValue) => {
-            const shouldBeLight = nextValue === 'light';
-            if (shouldBeLight !== lightMode) {
-              onToggleTheme?.();
-            }
-          }}
-          ariaLabel={`Assessment runtime theme. Current mode is ${lightMode ? 'light' : 'dark'}.`}
-          title={`Switch to ${lightMode ? 'dark' : 'light'} UI`}
-          className="shrink-0"
-        />
-        {claudeBudget?.enabled && (
-          <div className="hidden rounded-full border border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-3 py-1.5 font-mono text-xs text-[var(--taali-warning)] sm:block">
-            Claude Credit: {formatUsd(claudeBudget.remaining_usd)} left of {formatUsd(claudeBudget.limit_usd)}
+      <div className="flex flex-wrap items-center justify-end gap-3">
+        <div className="hidden items-center rounded-full border border-[var(--line)] bg-[var(--bg-2)] p-[3px] shadow-[var(--shadow-sm)] lg:inline-flex">
+          <HelpPillButton type="button" onClick={onOpenGuide}>
+            <CircleHelp size={12} />
+            Guide
+          </HelpPillButton>
+          <HelpPillButton as="a" href={reportIssueHref}>
+            <AlertTriangle size={12} />
+            Report
+          </HelpPillButton>
+        </div>
+
+        {claudeBudget?.enabled ? (
+          <div
+            className="hidden items-center gap-2 rounded-full px-3.5 py-2 font-mono text-[12px] text-[color-mix(in_oklab,var(--amber)_60%,var(--ink))] md:inline-flex"
+            style={{
+              border: '1px solid color-mix(in oklab, var(--peach) 80%, var(--line))',
+              background: 'color-mix(in oklab, var(--peach) 55%, transparent)',
+            }}
+          >
+            <span>Claude</span>
+            <span>{formatBudgetUsd(claudeBudget.remaining_usd)} of {formatUsd(claudeBudget.limit_usd)}</span>
           </div>
-        )}
+        ) : null}
+
         <div
-          className={`flex items-center gap-2 rounded-full border px-3 py-1.5 font-mono text-xs font-bold ${
+          className={`inline-flex items-center gap-2 rounded-full border px-4 py-2 font-mono text-[13.5px] font-medium ${
             timeUrgencyLevel === 'danger' || isTimeLow
               ? 'border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] text-[var(--taali-danger)]'
               : timeUrgencyLevel === 'warning'
                 ? 'border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] text-[var(--taali-warning)]'
-                : 'border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] text-[var(--taali-runtime-text)]'
+                : 'border-[var(--line)] bg-[var(--bg-2)] text-[var(--ink)]'
           }`}
         >
-          <Clock size={14} />
-          <span>{formatTime(timeLeft)}</span>
-          {isTimerPaused && <span className="text-[10px] uppercase tracking-wide">Paused</span>}
+          <span className={`h-[7px] w-[7px] rounded-full ${timeUrgencyLevel === 'danger' || isTimeLow ? 'bg-[var(--taali-danger)]' : 'bg-[var(--purple)]'}`} />
+          <Clock size={13} />
+          <span>{formatTime(timeLeft)} left</span>
+          {isTimerPaused ? <span className="text-[10px] uppercase tracking-[0.08em]">Paused</span> : null}
         </div>
+
         <button
+          type="button"
           onClick={onSubmit}
           disabled={isTimerPaused}
-          className="rounded-[var(--taali-radius-control)] border border-[var(--taali-purple)] bg-[var(--taali-purple)] px-4 py-1.5 font-mono text-xs font-bold text-white transition-colors hover:bg-[var(--taali-purple-hover)] disabled:cursor-not-allowed disabled:opacity-50"
+          className="inline-flex items-center gap-2 rounded-full bg-[var(--ink)] px-4 py-2 text-[13px] font-medium text-[var(--bg)] transition-colors hover:bg-[var(--purple)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           Submit
+          <ChevronRight size={14} />
         </button>
       </div>
     </div>
-  </div>
+  </header>
 );

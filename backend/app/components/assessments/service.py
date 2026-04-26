@@ -29,6 +29,7 @@ from ...domains.assessments_runtime.pipeline_service import (
     initialize_pipeline_event_if_missing,
     transition_stage,
 )
+from ...domains.assessments_runtime.role_support import refresh_application_score_cache
 from .claude_budget import build_claude_budget_snapshot, resolve_effective_budget_limit_usd
 from .submission_runtime import submit_assessment_impl
 from .terminal_runtime import resolve_ai_mode, terminal_capabilities
@@ -451,6 +452,7 @@ def _auto_submit_on_timeout(assessment: Assessment, task: Task, db: Session) -> 
                 reason="Assessment auto-completed on timeout",
                 metadata={"assessment_id": assessment.id, "completed_due_to_timeout": True},
             )
+            refresh_application_score_cache(app, db=db)
     db.commit()
 
 
@@ -849,6 +851,10 @@ def start_or_resume_assessment(
         "assessment_id": assessment.id,
         "token": assessment.token,
         "sandbox_id": sandbox_id,
+        "candidate_name": getattr(getattr(assessment, "candidate", None), "full_name", None),
+        "organization_name": getattr(getattr(assessment, "organization", None), "name", None),
+        "expires_at": getattr(assessment, "expires_at", None),
+        "invite_sent_at": getattr(assessment, "invite_sent_at", None),
         "task": {
             "name": task.name,
             "description": task.description,

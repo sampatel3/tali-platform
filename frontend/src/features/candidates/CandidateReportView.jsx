@@ -92,6 +92,7 @@ export function CandidateReportView({
   variant = 'page',
   className = '',
   showInsights = true,
+  showIdentityTitle = true,
   showRoleFitSection = true,
   showIntegritySection = true,
   showEvidenceSections = true,
@@ -102,17 +103,17 @@ export function CandidateReportView({
   const {
     identity = {},
     source,
-    summaryModel,
-    roleFitModel,
+    summaryModel = {},
+    roleFitModel = {},
     recommendation,
-    dimensionEntries,
+    dimensionEntries = [],
     recruiterSummaryText,
     strongestSignalTitle,
     strongestSignalDescription,
     probeTitle,
     probeDescription,
     integritySummaryText,
-    evidenceSections,
+    evidenceSections = {},
     hasCompletedAssessment,
     hasDimensionSignal,
   } = model || {};
@@ -139,9 +140,11 @@ export function CandidateReportView({
             <p className="mb-2 text-xs font-semibold uppercase tracking-[0.12em] text-[var(--taali-muted)]">
               {identity.sectionLabel || 'Candidate report'}
             </p>
-            <h1 className="taali-display text-4xl font-semibold text-[var(--taali-text)]">{identity.name || 'Candidate'}</h1>
+            {showIdentityTitle ? (
+              <h1 className="taali-display text-4xl font-semibold text-[var(--taali-text)]">{identity.name || 'Candidate'}</h1>
+            ) : null}
             {identity.email ? (
-              <p className="mt-2 text-sm text-[var(--taali-muted)]">{identity.email}</p>
+              <p className={`${showIdentityTitle ? 'mt-2' : 'mt-1'} text-sm text-[var(--taali-muted)]`}>{identity.email}</p>
             ) : null}
             {renderIdentityBadges(identity).length ? (
               <div className="mt-4 flex flex-wrap gap-2">

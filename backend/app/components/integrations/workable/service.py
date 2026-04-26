@@ -360,7 +360,7 @@ class WorkableService:
             return {"success": True, "response": payload}
         except Exception as exc:
             logger.exception("Failed posting candidate activity")
-            return {"success": False, "response": {"error": str(exc)}}
+            return self._failure_result(exc)
 
     def post_assessment_result(self, candidate_id: str, assessment_data: dict) -> dict:
         score = assessment_data.get("score", 0)
@@ -378,13 +378,112 @@ class WorkableService:
         )
         return self.post_candidate_activity(candidate_id, body)
 
-    def update_candidate_stage(self, candidate_id: str, stage: str) -> dict:
+    def move_candidate(
+        self,
+        *,
+        candidate_id: str,
+        member_id: str,
+        target_stage: str,
+    ) -> dict:
+        payload: dict[str, Any] = {
+            "member_id": str(member_id),
+            "target_stage": str(target_stage),
+        }
         try:
-            payload = self._request("PATCH", f"/candidates/{candidate_id}", json={"stage": stage})
-            return {"success": True, "response": payload}
+            response = self._request("POST", f"/candidates/{candidate_id}/move", json=payload)
+            return {"success": True, "response": response}
         except Exception as exc:
-            logger.exception("Failed updating candidate stage")
-            return {"success": False, "response": {"error": str(exc)}}
+            logger.exception("Failed moving candidate")
+            return self._failure_result(exc)
+
+    def update_candidate_stage(self, candidate_id: str, stage: str, member_id: str | None = None) -> dict:
+        if not str(member_id or "").strip():
+            return {
+                "success": False,
+                "error": "member_id is required to move candidate stage",
+                "status_code": None,
+                "response": {"error": "member_id is required to move candidate stage"},
+            }
+        return self.move_candidate(
+            candidate_id=candidate_id,
+            member_id=str(member_id).strip(),
+            target_stage=stage,
+        )
+
+    def _extract_collection(self, payload: Any, *, keys: tuple[str, ...]) -> list[dict]:
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if not isinstance(payload, dict):
+            return []
+        for key in keys:
+            value = payload.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+        return []
+
+    def list_members(self, *, limit: int = 100, shortcode: str | None = None) -> list[dict]:
+        params: dict[str, str] = {
+            "limit": str(max(1, min(int(limit or 100), 100))),
+            "status": "all",
+        }
+        if shortcode:
+            params["shortcode"] = str(shortcode)
+        payload = self._request_optional("GET", "/members", params=params)
+        return self._extract_collection(payload, keys=("members", "data", "results"))
+
+    def list_disqualification_reasons(self) -> list[dict]:
+        payload = self._request_optional("GET", "/disqualification_reasons")
+        return self._extract_collection(payload, keys=("disqualification_reasons", "reasons", "data", "results"))
+
+    def list_stages(self) -> list[dict]:
+        payload = self._request_optional("GET", "/stages")
+        return self._extract_collection(payload, keys=("stages", "data", "results"))
+
+    def list_job_stages(self, shortcode: str) -> list[dict]:
+        payload = self._request_optional("GET", f"/jobs/{shortcode}/stages")
+        return self._extract_collection(payload, keys=("stages", "data", "results"))
+
+    def disqualify_candidate(
+        self,
+        *,
+        candidate_id: str,
+        member_id: str,
+        disqualify_reason_id: str | None = None,
+        disqualify_note: str | None = None,
+        withdrew: bool = False,
+    ) -> dict:
+        payload: dict[str, Any] = {
+            "member_id": str(member_id),
+            "withdrew": bool(withdrew),
+        }
+        reason_id = str(disqualify_reason_id or "").strip()
+        if reason_id:
+            payload["disqualify_reason_id"] = reason_id
+        note = str(disqualify_note or "").strip()
+        if note:
+            payload["disqualify_note"] = note[:256]
+        try:
+            response = self._request("POST", f"/candidates/{candidate_id}/disqualify", json=payload)
+            return {"success": True, "response": response}
+        except Exception as exc:
+            logger.exception("Failed disqualifying candidate")
+            return self._failure_result(exc)
+
+    def revert_candidate_disqualification(
+        self,
+        *,
+        candidate_id: str,
+        member_id: str,
+    ) -> dict:
+        payload: dict[str, Any] = {
+            "member_id": str(member_id),
+        }
+        try:
+            response = self._request("POST", f"/candidates/{candidate_id}/revert", json=payload)
+            return {"success": True, "response": response}
+        except Exception as exc:
+            logger.exception("Failed reverting candidate disqualification")
+            return self._failure_result(exc)
 
     def download_candidate_resume(self, candidate_payload: dict) -> tuple[str, bytes] | None:
         resume_url = candidate_payload.get("resume_url")
@@ -512,3 +611,25 @@ class WorkableService:
         elif isinstance(payload, list):
             for idx, value in enumerate(payload):
                 self._collect_score_candidates(value, prefix=f"{prefix}[{idx}]", output=output)
+
+    def _failure_result(self, exc: Exception) -> dict:
+        status_code = None
+        response_body = None
+        if isinstance(exc, httpx.HTTPStatusError):
+            status_code = exc.response.status_code if exc.response else None
+            if exc.response is not None and exc.response.content:
+                try:
+                    response_body = exc.response.text[:500]
+                except Exception:
+                    response_body = None
+        error_message = str(exc)
+        return {
+            "success": False,
+            "error": error_message,
+            "status_code": status_code,
+            "response": {
+                "error": error_message,
+                "status_code": status_code,
+                "body": response_body,
+            },
+        }

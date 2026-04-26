@@ -2,6 +2,108 @@ import React from 'react';
 
 import { Badge, Button, Panel } from '../../shared/ui/TaaliPrimitives';
 
+const normalizeStatus = (value) => String(value || '').trim().toLowerCase();
+
+const formatDateTime = (value) => {
+  if (!value) return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toLocaleString();
+};
+
+const firefliesStatusMeta = (status) => {
+  if (status === 'linked') {
+    return { label: 'Stage 1 Fireflies transcript linked', badgeVariant: 'warning' };
+  }
+  if (status === 'awaiting_transcript') {
+    return { label: 'Awaiting Fireflies transcript', badgeVariant: 'info' };
+  }
+  if (status === 'not_expected') {
+    return { label: 'Fireflies capture not expected', badgeVariant: 'muted' };
+  }
+  return { label: 'Fireflies not configured', badgeVariant: 'muted' };
+};
+
+const FirefliesContextPanel = ({ firefliesContext }) => {
+  const status = normalizeStatus(firefliesContext?.status);
+  const shouldShow = Boolean(
+    status === 'linked'
+    || status === 'awaiting_transcript'
+    || firefliesContext?.capture_expected
+    || firefliesContext?.configured
+    || firefliesContext?.invite_email
+    || firefliesContext?.latest_summary
+    || firefliesContext?.latest_provider_url
+  );
+
+  if (!shouldShow) {
+    return null;
+  }
+
+  const { label, badgeVariant } = firefliesStatusMeta(status);
+  const inviteEmail = String(firefliesContext?.invite_email || '').trim();
+  const latestSummary = String(firefliesContext?.latest_summary || '').trim();
+  const latestProviderUrl = String(firefliesContext?.latest_provider_url || '').trim();
+  const latestSource = String(firefliesContext?.latest_source || '').trim();
+  const meetingDateLabel = formatDateTime(firefliesContext?.latest_meeting_date);
+
+  let description = latestSummary;
+  if (!description && status === 'awaiting_transcript') {
+    description = inviteEmail
+      ? `Include ${inviteEmail} in the Workable interview invite so TAALI can capture the Stage 1 call.`
+      : 'Fireflies is configured and TAALI is waiting for the Stage 1 transcript.';
+  }
+  if (!description && status === 'linked') {
+    description = 'The linked Stage 1 transcript is now part of the recruiter guidance context.';
+  }
+  if (!description && firefliesContext?.capture_expected) {
+    description = 'This application is expected to receive Fireflies capture once the Stage 1 interview is workable.';
+  }
+
+  return (
+    <Panel className="p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Fireflies context</div>
+          <div className="mt-2 text-lg font-semibold text-[var(--taali-text)]">{label}</div>
+        </div>
+        <Badge variant={badgeVariant} className="font-mono text-[11px]">
+          {status === 'linked' ? 'Linked' : (firefliesContext?.capture_expected ? 'Workable flow' : 'Optional')}
+        </Badge>
+      </div>
+
+      {description ? (
+        <p className="mt-3 text-sm leading-6 text-[var(--taali-muted)]">{description}</p>
+      ) : null}
+
+      <div className="mt-4 grid gap-3 md:grid-cols-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Invite email</div>
+          <div className="mt-2 text-sm text-[var(--taali-text)]">{inviteEmail || 'Not configured'}</div>
+        </div>
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Latest source</div>
+          <div className="mt-2 text-sm text-[var(--taali-text)]">{latestSource || 'No transcript linked yet'}</div>
+        </div>
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Latest meeting</div>
+          <div className="mt-2 text-sm text-[var(--taali-text)]">{meetingDateLabel || 'Not linked yet'}</div>
+        </div>
+      </div>
+
+      {latestProviderUrl ? (
+        <a
+          href={latestProviderUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-4 inline-flex text-sm font-medium text-[var(--taali-purple-hover)] underline-offset-2 hover:underline"
+        >
+          Open transcript source
+        </a>
+      ) : null}
+    </Panel>
+  );
+};
+
 export const CandidateInterviewDebrief = ({
   debrief,
   loading = false,
@@ -57,6 +159,8 @@ export const CandidateInterviewDebrief = ({
           </Button>
         </div>
       </div>
+
+      <FirefliesContextPanel firefliesContext={debrief.fireflies_context} />
 
       {debrief.summary ? (
         <Panel className="p-4 bg-[var(--taali-purple-soft)]">
@@ -132,4 +236,3 @@ export const CandidateInterviewDebrief = ({
     </div>
   );
 };
-

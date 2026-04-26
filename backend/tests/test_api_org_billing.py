@@ -7,9 +7,14 @@ import uuid
 from datetime import datetime, timezone
 
 from app.models.assessment import Assessment, AssessmentStatus
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
+from app.models.role import Role
 from app.models.user import User
 from app.domains.billing_webhooks import billing_routes, webhook_routes
+from app.deps import get_current_user
+from app.main import app
 from tests.conftest import auth_headers, register_user, verify_user
 
 
@@ -62,6 +67,105 @@ def test_update_org_candidate_feedback_toggle(client):
     refetch = client.get("/api/v1/organizations/me", headers=headers)
     assert refetch.status_code == 200
     assert refetch.json()["candidate_feedback_enabled"] is False
+
+
+def test_update_org_workspace_scoring_ai_and_notifications(client):
+    headers, _ = auth_headers(client)
+    payload = {
+        "workspace_settings": {
+            "candidate_facing_brand": "DeepLight · Engineering",
+            "primary_domain": "deeplight.ai",
+            "locale": "English (UK)",
+        },
+        "scoring_policy": {
+            "prompt_quality": False,
+            "time_to_first_signal": True,
+        },
+        "ai_tooling_config": {
+            "cursor_inline_enabled": True,
+            "claude_credit_per_candidate_usd": 18.5,
+            "session_timeout_minutes": 75,
+        },
+        "notification_preferences": {
+            "daily_digest": False,
+            "sync_failures": True,
+        },
+    }
+    resp = client.patch("/api/v1/organizations/me", json=payload, headers=headers)
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["workspace_settings"]["candidate_facing_brand"] == "DeepLight · Engineering"
+    assert data["workspace_settings"]["primary_domain"] == "deeplight.ai"
+    assert data["workspace_settings"]["locale"] == "English (UK)"
+    assert data["scoring_policy"]["prompt_quality"] is False
+    assert data["scoring_policy"]["time_to_first_signal"] is True
+    assert data["ai_tooling_config"]["cursor_inline_enabled"] is True
+    assert data["ai_tooling_config"]["claude_credit_per_candidate_usd"] == 18.5
+    assert data["ai_tooling_config"]["session_timeout_minutes"] == 75
+    assert data["notification_preferences"]["daily_digest"] is False
+    assert data["notification_preferences"]["sync_failures"] is True
+
+    refetch = client.get("/api/v1/organizations/me", headers=headers)
+    assert refetch.status_code == 200, refetch.text
+    refetched = refetch.json()
+    assert refetched["workspace_settings"]["candidate_facing_brand"] == "DeepLight · Engineering"
+    assert refetched["scoring_policy"]["prompt_quality"] is False
+    assert refetched["ai_tooling_config"]["cursor_inline_enabled"] is True
+    assert refetched["notification_preferences"]["daily_digest"] is False
+
+
+def test_update_org_workable_and_fireflies_configs(client, db):
+    org = Organization(name="Fireflies Config Org", slug="fireflies-config-org")
+    db.add(org)
+    db.flush()
+    user = User(
+        email="config-owner@example.com",
+        hashed_password="hashed",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=org.id,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+
+    app.dependency_overrides[get_current_user] = lambda: user
+    try:
+        resp = client.patch(
+            "/api/v1/organizations/me",
+            json={
+                "workable_config": {
+                    "default_sync_mode": "full",
+                    "auto_reject_enabled": True,
+                    "auto_reject_threshold_100": 55,
+                    "workable_actor_member_id": "member-1",
+                    "workable_disqualify_reason_id": "reason-1",
+                    "auto_reject_note_template": "Auto reject {{pre_screen_score}} below {{threshold}}.",
+                },
+                "fireflies_config": {
+                    "api_key": "fireflies-test-api-key",
+                    "webhook_secret": "fireflies-webhook-secret",
+                    "owner_email": "recruiter@example.com",
+                    "invite_email": " TaAli@Fireflies.ai ",
+                    "single_account_mode": True,
+                },
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        payload = resp.json()
+        assert payload["workable_config"]["default_sync_mode"] == "full"
+        assert payload["workable_config"]["auto_reject_enabled"] is True
+        assert payload["workable_config"]["auto_reject_threshold_100"] == 55
+        assert payload["workable_config"]["workable_actor_member_id"] == "member-1"
+        assert payload["workable_config"]["workable_disqualify_reason_id"] == "reason-1"
+        assert payload["fireflies_config"]["has_api_key"] is True
+        assert payload["fireflies_config"]["webhook_secret_configured"] is True
+        assert payload["fireflies_config"]["owner_email"] == "recruiter@example.com"
+        assert payload["fireflies_config"]["invite_email"] == "taali@fireflies.ai"
+        assert payload["fireflies_config"]["single_account_mode"] is True
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)
 
 
 def test_update_org_recruiter_workflow_v2_toggle(client):
@@ -459,3 +563,109 @@ def test_jwt_login_blocked_when_org_enforces_sso(client, db):
     )
     assert login_resp.status_code == 403
     assert "Organization enforces SSO" in login_resp.json()["detail"]
+
+
+def test_fireflies_webhook_links_matching_application(client, db, monkeypatch):
+    org = Organization(
+        name="Fireflies Org",
+        fireflies_webhook_secret="fireflies-secret",
+        fireflies_api_key_encrypted="encrypted",
+        fireflies_owner_email="recruiter@example.com",
+        fireflies_invite_email="taali@fireflies.ai",
+    )
+    db.add(org)
+    db.flush()
+    owner = User(
+        email="owner@fireflies.example.com",
+        hashed_password="hashed",
+        is_active=True,
+        is_superuser=False,
+        is_verified=True,
+        organization_id=org.id,
+    )
+    db.add(owner)
+    db.flush()
+    role = Role(
+        organization_id=org.id,
+        name="Fireflies role",
+        job_spec_filename="job-spec.txt",
+        job_spec_text="Fireflies requirements",
+    )
+    db.add(role)
+    db.flush()
+    candidate = Candidate(
+        organization_id=org.id,
+        email="candidate@fireflies.example.com",
+        full_name="Fireflies Candidate",
+    )
+    db.add(candidate)
+    db.flush()
+    app_row = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=role.id,
+    )
+    db.add(app_row)
+    db.commit()
+
+    monkeypatch.setattr(webhook_routes, "decrypt_text", lambda value, key: "decrypted-api-key")
+
+    def mock_get_transcript(self, meeting_id):
+        assert meeting_id == "meeting-789"
+        return {
+            "id": meeting_id,
+            "date": "2026-04-24T10:15:00Z",
+            "transcript_url": "https://fireflies.ai/view/meeting-789",
+            "organizer_email": "recruiter@example.com",
+            "participants": [
+                "candidate@fireflies.example.com",
+                "recruiter@example.com",
+                "taali@fireflies.ai",
+            ],
+            "meeting_attendees": [
+                {"email": "candidate@fireflies.example.com", "name": "Fireflies Candidate"},
+                {"email": "recruiter@example.com", "name": "Recruiter"},
+                {"email": "taali@fireflies.ai", "name": "TAALI Fireflies"},
+            ],
+            "summary": {"short_summary": "Candidate gave concrete scaling examples."},
+            "speakers": [{"id": "host", "name": "Recruiter"}, {"id": "cand", "name": "Candidate"}],
+            "sentences": [
+                {"speaker_name": "Recruiter", "text": "Tell me about scaling APIs."},
+                {"speaker_name": "Candidate", "text": "We introduced queues and caching layers."},
+            ],
+        }
+
+    monkeypatch.setattr(webhook_routes.FirefliesService, "get_transcript", mock_get_transcript)
+
+    payload = {
+        "eventType": "Transcription completed",
+        "meetingId": "meeting-789",
+    }
+    raw = json.dumps(payload).encode("utf-8")
+    signature = hmac.new(b"fireflies-secret", raw, hashlib.sha256).hexdigest()
+
+    resp = client.post(
+        "/api/v1/webhooks/fireflies",
+        data=raw,
+        headers={
+            "x-hub-signature": signature,
+            "Content-Type": "application/json",
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["status"] == "linked"
+    assert body["application_id"] == app_row.id
+
+    app.dependency_overrides[get_current_user] = lambda: owner
+    try:
+        app_detail = client.get(f"/api/v1/applications/{app_row.id}")
+        assert app_detail.status_code == 200, app_detail.text
+        interviews = app_detail.json()["interviews"]
+        assert len(interviews) == 1
+        assert interviews[0]["provider"] == "fireflies"
+        assert interviews[0]["provider_meeting_id"] == "meeting-789"
+        assert interviews[0]["provider_payload"]["taali_match"]["fireflies_invite_email"] == "taali@fireflies.ai"
+        assert app_detail.json()["screening_interview_summary"]["fireflies"]["status"] == "linked"
+    finally:
+        app.dependency_overrides.pop(get_current_user, None)

@@ -1,4 +1,4 @@
-from sqlalchemy import JSON, Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint
+from sqlalchemy import Boolean, JSON, Column, DateTime, ForeignKey, Integer, String, Table, Text, UniqueConstraint
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 
@@ -33,6 +33,13 @@ class Role(Base):
     additional_requirements = Column(Text, nullable=True)
     interview_focus = Column(JSON, nullable=True)
     interview_focus_generated_at = Column(DateTime(timezone=True), nullable=True)
+    screening_pack_template = Column(JSON, nullable=True)
+    tech_interview_pack_template = Column(JSON, nullable=True)
+    auto_reject_enabled = Column(Boolean, nullable=True)
+    auto_reject_threshold_100 = Column(Integer, nullable=True)
+    workable_actor_member_id = Column(String, nullable=True)
+    workable_disqualify_reason_id = Column(String, nullable=True)
+    auto_reject_note_template = Column(Text, nullable=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

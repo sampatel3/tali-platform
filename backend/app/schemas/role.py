@@ -19,16 +19,69 @@ class InterviewFocus(BaseModel):
     questions: list[InterviewFocusQuestion] = Field(default_factory=list)
 
 
+class InterviewPackQuestion(BaseModel):
+    question: str
+    why_this_matters: Optional[str] = None
+    evidence_anchor: Optional[str] = None
+    positive_signals: list[str] = Field(default_factory=list)
+    red_flags: list[str] = Field(default_factory=list)
+    follow_up_probe: Optional[str] = None
+
+
+class InterviewPack(BaseModel):
+    stage: Literal["screening", "tech_stage_2"]
+    summary: Optional[str] = None
+    source: Optional[str] = None
+    generated_at: Optional[datetime] = None
+    questions: list[InterviewPackQuestion] = Field(default_factory=list)
+
+
+class ApplicationInterviewResponse(BaseModel):
+    id: int
+    application_id: int
+    organization_id: int
+    stage: Literal["screening", "tech_stage_2"]
+    source: Literal["fireflies", "manual"]
+    provider: Optional[str] = None
+    provider_meeting_id: Optional[str] = None
+    provider_url: Optional[str] = None
+    status: Optional[str] = None
+    transcript_text: Optional[str] = None
+    summary: Optional[str] = None
+    speakers: list[dict[str, Any]] = Field(default_factory=list)
+    provider_payload: Optional[dict[str, Any]] = None
+    meeting_date: Optional[datetime] = None
+    linked_at: Optional[datetime] = None
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
     additional_requirements: Optional[str] = Field(default=None, max_length=ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH)
+    screening_pack_template: Optional[InterviewPack] = None
+    tech_interview_pack_template: Optional[InterviewPack] = None
+    auto_reject_enabled: Optional[bool] = None
+    auto_reject_threshold_100: Optional[int] = Field(default=None, ge=0, le=100)
+    workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
+    workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
+    auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
 
 
 class RoleUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
     additional_requirements: Optional[str] = Field(default=None, max_length=ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH)
+    screening_pack_template: Optional[InterviewPack] = None
+    tech_interview_pack_template: Optional[InterviewPack] = None
+    auto_reject_enabled: Optional[bool] = None
+    auto_reject_threshold_100: Optional[int] = Field(default=None, ge=0, le=100)
+    workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
+    workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
+    auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
 
 
 class RoleResponse(BaseModel):
@@ -45,6 +98,13 @@ class RoleResponse(BaseModel):
     job_spec_present: bool = False
     interview_focus: Optional[InterviewFocus] = None
     interview_focus_generated_at: Optional[datetime] = None
+    screening_pack_template: Optional[InterviewPack] = None
+    tech_interview_pack_template: Optional[InterviewPack] = None
+    auto_reject_enabled: Optional[bool] = None
+    auto_reject_threshold_100: Optional[int] = None
+    workable_actor_member_id: Optional[str] = None
+    workable_disqualify_reason_id: Optional[str] = None
+    auto_reject_note_template: Optional[str] = None
     tasks_count: int = 0
     applications_count: int = 0
     stage_counts: dict[str, int] = Field(default_factory=dict)
@@ -129,6 +189,19 @@ class ApplicationResponse(BaseModel):
     workable_sourced: Optional[bool] = None
     workable_profile_url: Optional[str] = None
     workable_enriched: Optional[bool] = None
+    pre_screen_score: Optional[float] = None
+    requirements_fit_score: Optional[float] = None
+    pre_screen_recommendation: Optional[str] = None
+    pre_screen_evidence: Optional[dict[str, Any]] = None
+    auto_reject_state: Optional[str] = None
+    auto_reject_reason: Optional[str] = None
+    auto_reject_triggered_at: Optional[datetime] = None
+    screening_pack: Optional[InterviewPack] = None
+    tech_interview_pack: Optional[InterviewPack] = None
+    screening_interview_summary: Optional[dict[str, Any]] = None
+    tech_interview_summary: Optional[dict[str, Any]] = None
+    interview_evidence_summary: Optional[dict[str, Any]] = None
+    interviews: list[ApplicationInterviewResponse] = Field(default_factory=list)
     taali_score: Optional[float] = None
     score_mode: Optional[str] = None
     valid_assessment_id: Optional[int] = None
@@ -145,6 +218,14 @@ class ApplicationDetailResponse(ApplicationResponse):
     cv_text: Optional[str] = None
     assessment_preview: Optional[dict[str, Any]] = None
     assessment_history: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class ApplicationReportShareLinkResponse(BaseModel):
+    application_id: int
+    share_token: str
+    share_url: str
+    created_at: datetime
+    member_access_only: bool = True
 
 
 class ApplicationCvUploadResponse(BaseModel):
@@ -193,3 +274,18 @@ class AssessmentFromApplicationCreate(BaseModel):
 
 class AssessmentRetakeCreate(AssessmentFromApplicationCreate):
     void_reason: Optional[str] = Field(default=None, max_length=2000)
+
+
+class ManualApplicationInterviewCreate(BaseModel):
+    stage: Literal["screening", "tech_stage_2"]
+    transcript_text: str = Field(min_length=1, max_length=200000)
+    provider_url: Optional[str] = Field(default=None, max_length=2000)
+    meeting_date: Optional[datetime] = None
+    summary: Optional[str] = Field(default=None, max_length=4000)
+    speakers: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class FirefliesInterviewLinkCreate(BaseModel):
+    stage: Literal["screening", "tech_stage_2"]
+    fireflies_meeting_id: str = Field(min_length=1, max_length=200)
+    provider_url: Optional[str] = Field(default=None, max_length=2000)

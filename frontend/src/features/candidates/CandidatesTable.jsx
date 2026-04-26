@@ -60,6 +60,7 @@ function CandidateAvatar({ name, imageUrl, size = 32 }) {
 }
 
 const renderModeLabel = (application) => {
+  if (typeof application.pre_screen_score === 'number') return 'Workable pre-screen';
   const mode = String(application.score_mode || application.score_summary?.mode || '').toLowerCase();
   if (mode === 'assessment_plus_role_fit' || mode === 'assessment_plus_cv') return 'Assessment + Role fit';
   if (mode === 'assessment_only_fallback') return 'Assessment only';
@@ -67,7 +68,10 @@ const renderModeLabel = (application) => {
   return 'Role fit only';
 };
 
-const getTaaliScorePayload = (application) => {
+const getPrimaryScorePayload = (application) => {
+  if (typeof application.pre_screen_score === 'number') {
+    return { score: application.pre_screen_score, details: { score_scale: '0-100' } };
+  }
   if (typeof application.taali_score === 'number') {
     return { score: application.taali_score, details: { score_scale: '0-100' } };
   }
@@ -80,8 +84,8 @@ const getTaaliScorePayload = (application) => {
   return { score: null, details: null };
 };
 
-const renderTaaliScore = (application) => {
-  const payload = getTaaliScorePayload(application);
+const renderPrimaryScore = (application) => {
+  const payload = getPrimaryScorePayload(application);
   if (typeof payload.score === 'number') {
     return formatCvScore100(payload.score, payload.details);
   }
@@ -93,7 +97,7 @@ const columnLabel = (column) => ({
   candidate: 'Candidate',
   cv: 'CV',
   send: 'Assessment',
-  taali_ai: 'TAALI Score',
+  taali_ai: 'Pre-screen',
   workable_stage: 'Workable stage',
   workable_candidate_id: 'Workable id',
   status: 'Status',
@@ -112,7 +116,7 @@ export const CandidatesTable = ({
   error,
   searchQuery = '',
   statusFilter = 'all',
-  sortBy = 'taali_score',
+  sortBy = 'pre_screen_score',
   sortOrder = 'desc',
   roleTasks,
   canCreateAssessment,
@@ -364,15 +368,15 @@ export const CandidatesTable = ({
                     <th
                       key={column}
                       className={`${thBase} ${widthClass} px-3 py-2`}
-                      aria-sort={sortBy === 'taali_score' ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'}
+                      aria-sort={sortBy === 'pre_screen_score' ? (sortOrder === 'asc' ? 'ascending' : 'descending') : 'none'}
                     >
                       <button
                         type="button"
                         className="inline-flex items-center gap-1 uppercase tracking-[0.08em] text-[var(--taali-muted)] transition-colors hover:text-[var(--taali-text)]"
-                        onClick={() => handleSortToggle('taali_score')}
+                        onClick={() => handleSortToggle('pre_screen_score')}
                       >
-                        TAALI Score
-                        <span className="text-[0.65rem] text-[var(--taali-muted)]">{renderSortIndicator('taali_score')}</span>
+                        Pre-screen
+                        <span className="text-[0.65rem] text-[var(--taali-muted)]">{renderSortIndicator('pre_screen_score')}</span>
                       </button>
                     </th>
                   );
@@ -546,18 +550,18 @@ export const CandidatesTable = ({
                       }
 
                       if (column === 'taali_ai') {
-                        const taaliScore = getTaaliScorePayload(application);
+                        const scorePayload = getPrimaryScorePayload(application);
                         return (
                           <td key={column} className="px-3 py-2">
                             <div className="flex flex-col items-center gap-2 text-center">
                               <CandidateScoreRing
-                                score={taaliScore.score}
-                                details={taaliScore.details}
+                                score={scorePayload.score}
+                                details={scorePayload.details}
                                 size={48}
                                 strokeWidth={5}
-                                label={`TAALI Score for ${application.candidate_name || application.candidate_email || 'candidate'}`}
+                                label={`Pre-screen score for ${application.candidate_name || application.candidate_email || 'candidate'}`}
                               />
-                              <div className="max-w-[80px] text-[11px] leading-4 text-[var(--taali-muted)]" title={renderTaaliScore(application)}>
+                              <div className="max-w-[80px] text-[11px] leading-4 text-[var(--taali-muted)]" title={renderPrimaryScore(application)}>
                                 {renderModeLabel(application)}
                               </div>
                             </div>

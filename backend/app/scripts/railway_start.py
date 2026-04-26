@@ -1,0 +1,136 @@
+from __future__ import annotations
+
+import argparse
+import os
+import subprocess
+import sys
+import time
+from urllib.parse import urlparse
+
+from sqlalchemy import create_engine, text
+
+from app.platform.config import settings
+from app.platform.startup_validation import (
+    collect_railway_failures,
+    collect_railway_warnings,
+    collect_startup_failures,
+)
+
+
+def _log(message: str) -> None:
+    print(f"[railway-start] {message}", flush=True)
+
+
+def _database_url() -> str:
+    return os.environ.get("DATABASE_PUBLIC_URL") or settings.DATABASE_URL
+
+
+def _database_target_label(url: str) -> str:
+    parsed = urlparse(url)
+    if parsed.hostname:
+        if parsed.port:
+            return f"{parsed.hostname}:{parsed.port}"
+        return parsed.hostname
+    if url.startswith("sqlite"):
+        return "sqlite"
+    return "database"
+
+
+def _emit_configuration_messages() -> list[str]:
+    failures = [
+        *collect_startup_failures(settings),
+        *collect_railway_failures(settings, os.environ),
+    ]
+    for warning in collect_railway_warnings(settings, os.environ):
+        _log(f"WARNING: {warning}")
+    for failure in failures:
+        _log(f"ERROR: {failure}")
+    return failures
+
+
+def _wait_for_database(timeout_seconds: int, interval_seconds: float) -> None:
+    database_url = _database_url()
+    target = _database_target_label(database_url)
+    deadline = time.monotonic() + timeout_seconds
+    last_error = "unknown error"
+
+    engine_kwargs: dict = {}
+    if "sqlite" not in database_url:
+        engine_kwargs["pool_pre_ping"] = True
+
+    _log(f"Waiting for database connectivity ({target})...")
+    while time.monotonic() < deadline:
+        engine = None
+        try:
+            engine = create_engine(database_url, **engine_kwargs)
+            with engine.connect() as connection:
+                connection.execute(text("SELECT 1"))
+            _log("Database connection is ready.")
+            return
+        except Exception as exc:  # pragma: no cover - exercised via deployment/runtime
+            last_error = str(exc).splitlines()[0]
+        finally:
+            if engine is not None:
+                engine.dispose()
+        time.sleep(interval_seconds)
+
+    raise SystemExit(
+        f"[railway-start] ERROR: Timed out waiting for database connectivity ({target}) after "
+        f"{timeout_seconds}s. Last error: {last_error}"
+    )
+
+
+def _run_checked(command: list[str], label: str) -> None:
+    _log(f"Running {label}...")
+    try:
+        subprocess.run(command, check=True)
+    except subprocess.CalledProcessError as exc:
+        raise SystemExit(
+            f"[railway-start] ERROR: {label.capitalize()} failed with exit code {exc.returncode}."
+        ) from exc
+
+
+def _exec_uvicorn(port: str) -> None:
+    _log(f"Starting uvicorn on port {port}...")
+    os.execvp(
+        sys.executable,
+        [
+            sys.executable,
+            "-m",
+            "uvicorn",
+            "app.main:app",
+            "--host",
+            "0.0.0.0",
+            "--port",
+            port,
+        ],
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="Bootstrap Railway web startup safely.")
+    parser.add_argument(
+        "--check-only",
+        action="store_true",
+        help="Validate Railway config and exit without waiting for the database or starting the app.",
+    )
+    args = parser.parse_args(argv)
+
+    failures = _emit_configuration_messages()
+    if failures:
+        return 1
+
+    if args.check_only:
+        _log("Configuration check passed.")
+        return 0
+
+    timeout_seconds = int(os.environ.get("RAILWAY_DB_WAIT_TIMEOUT_SECONDS", "90"))
+    interval_seconds = float(os.environ.get("RAILWAY_DB_WAIT_INTERVAL_SECONDS", "2"))
+    _wait_for_database(timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
+    _run_checked([sys.executable, "-m", "alembic", "upgrade", "head"], "database migrations")
+    _exec_uvicorn(os.environ.get("PORT", "8000"))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -4,7 +4,9 @@ import asyncio
 import json
 import re
 import secrets
+import shlex
 import threading
+import time
 
 from fastapi import APIRouter, Depends, Header, WebSocket, WebSocketDisconnect
 from sqlalchemy.orm import Session
@@ -16,6 +18,7 @@ from ...components.assessments.claude_budget import (
 from ...components.assessments.repository import (
     append_assessment_timeline_event,
     get_active_assessment,
+    utcnow,
     validate_assessment_token,
 )
 from ...components.assessments.terminal_runtime import (
@@ -50,6 +53,11 @@ def _seed_cli_usage_from_transcript(transcript: list[dict] | None) -> tuple[int,
 
 
 TOKEN_ESTIMATE_CHARS_PER_TOKEN = 4
+_CLAUDE_CHAT_BEGIN_PREFIX = "TAALI_CLAUDE_CHAT_BEGIN "
+_CLAUDE_CHAT_END_PREFIX = "TAALI_CLAUDE_CHAT_END "
+_MAX_CLAUDE_CHAT_REQUEST_ID_LEN = 64
+_MAX_CLAUDE_CHAT_MESSAGE_CHARS = 4000
+_ANSI_ESCAPE_RE = re.compile(r"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 
 def _estimate_token_delta(text: str, remainder_chars: int) -> tuple[int, int]:
@@ -59,6 +67,87 @@ def _estimate_token_delta(text: str, remainder_chars: int) -> tuple[int, int]:
     total_chars = max(0, int(remainder_chars or 0)) + len(raw_text.encode("utf-8"))
     tokens = total_chars // TOKEN_ESTIMATE_CHARS_PER_TOKEN
     return max(0, int(tokens)), max(0, int(total_chars % TOKEN_ESTIMATE_CHARS_PER_TOKEN))
+
+
+def _sanitize_chat_request_id(value: object) -> str:
+    raw = re.sub(r"[^a-zA-Z0-9_-]+", "-", str(value or "").strip())
+    raw = raw.strip("-")
+    return raw[:_MAX_CLAUDE_CHAT_REQUEST_ID_LEN]
+
+
+def _sanitize_chat_selected_file(value: object) -> str:
+    raw = str(value or "").strip().replace("\\", "/")
+    raw = re.sub(r"[\r\n\t]+", " ", raw)
+    return raw[:500]
+
+
+def _build_terminal_chat_command(*, request_id: str, message: str, selected_file_path: str = "") -> str:
+    safe_request_id = _sanitize_chat_request_id(request_id)
+    safe_message = str(message or "").strip()[:_MAX_CLAUDE_CHAT_MESSAGE_CHARS]
+    safe_selected_file = _sanitize_chat_selected_file(selected_file_path)
+    if not safe_request_id or not safe_message:
+        raise ValueError("request_id and message are required")
+    delimiter = f"TAALI_CLAUDE_PROMPT_{safe_request_id}_{secrets.token_hex(6)}"
+    return (
+        f"taali_ui_chat {shlex.quote(safe_request_id)} {shlex.quote(safe_selected_file)} <<'{delimiter}'\n"
+        f"{safe_message}\n"
+        f"{delimiter}\n"
+    )
+
+
+def _strip_ansi_sequences(text: str) -> str:
+    return _ANSI_ESCAPE_RE.sub("", str(text or ""))
+
+
+def _consume_terminal_chat_output(text: str, state: dict[str, object]) -> tuple[str, list[dict[str, object]]]:
+    combined = f"{state.get('line_buffer', '')}{text}"
+    lines = combined.splitlines(keepends=True)
+    if lines and not lines[-1].endswith(("\n", "\r")):
+        state["line_buffer"] = lines.pop()
+    else:
+        state["line_buffer"] = ""
+
+    filtered_lines: list[str] = []
+    completed: list[dict[str, object]] = []
+    active_request_id = state.get("active_request_id")
+    active_output = list(state.get("active_output") or [])
+
+    for line in lines:
+        stripped = line.rstrip("\r\n")
+        if stripped.startswith(_CLAUDE_CHAT_BEGIN_PREFIX):
+            active_request_id = stripped[len(_CLAUDE_CHAT_BEGIN_PREFIX):].strip()
+            active_output = []
+            continue
+
+        if active_request_id and stripped.startswith(_CLAUDE_CHAT_END_PREFIX):
+            tail = stripped[len(_CLAUDE_CHAT_END_PREFIX):].strip()
+            parts = tail.split(maxsplit=1)
+            request_id = parts[0].strip() if parts else str(active_request_id)
+            exit_status = 0
+            if len(parts) > 1:
+                try:
+                    exit_status = int(parts[1].strip())
+                except Exception:
+                    exit_status = 0
+            completed.append(
+                {
+                    "request_id": request_id,
+                    "content": _strip_ansi_sequences("".join(active_output)).strip(),
+                    "exit_status": exit_status,
+                }
+            )
+            active_request_id = None
+            active_output = []
+            continue
+
+        if active_request_id:
+            active_output.append(line)
+
+        filtered_lines.append(line)
+
+    state["active_request_id"] = active_request_id
+    state["active_output"] = active_output
+    return "".join(filtered_lines), completed
 
 
 def _extract_provider_usage(text: str) -> dict | None:
@@ -275,6 +364,12 @@ async def terminal_ws(
     using_provider_usage = provider_usage_events_seen > 0
     input_token_remainder_chars = 0
     output_token_remainder_chars = 0
+    pending_chat_requests: dict[str, dict[str, object]] = {}
+    chat_capture_state: dict[str, object] = {
+        "line_buffer": "",
+        "active_request_id": None,
+        "active_output": [],
+    }
 
     org = db.query(Organization).filter(Organization.id == assessment.organization_id).first()
     e2b = build_sandbox_adapter()
@@ -445,6 +540,172 @@ async def terminal_ws(
                         rows = max(10, min(rows, 300))
                         cols = max(20, min(cols, 600))
                         e2b.resize_pty(session.sandbox, session.pid, rows=rows, cols=cols)
+                    elif msg_type == "claude_prompt":
+                        request_id = _sanitize_chat_request_id(payload.get("request_id"))
+                        prompt_message = str(payload.get("message") or "").strip()[:_MAX_CLAUDE_CHAT_MESSAGE_CHARS]
+                        selected_file_path = _sanitize_chat_selected_file(payload.get("selected_file_path"))
+                        if not request_id or not prompt_message:
+                            await _ws_send_json(
+                                websocket,
+                                {
+                                    "type": "claude_chat_error",
+                                    "request_id": request_id or None,
+                                    "message": "Claude prompt is missing a request id or message.",
+                                },
+                            )
+                        elif request_id in pending_chat_requests or chat_capture_state.get("active_request_id"):
+                            await _ws_send_json(
+                                websocket,
+                                {
+                                    "type": "claude_chat_error",
+                                    "request_id": request_id,
+                                    "message": "Claude is already working on the previous request.",
+                                },
+                            )
+                        else:
+                            try:
+                                command = _build_terminal_chat_command(
+                                    request_id=request_id,
+                                    message=prompt_message,
+                                    selected_file_path=selected_file_path,
+                                )
+                                e2b.send_pty_input(session.sandbox, session.pid, command)
+                            except Exception as exc:
+                                await _ws_send_json(
+                                    websocket,
+                                    {
+                                        "type": "claude_chat_error",
+                                        "request_id": request_id,
+                                        "message": str(exc) or "Failed to send prompt to Claude CLI.",
+                                    },
+                                )
+                            else:
+                                prompts = list(getattr(assessment, "ai_prompts", None) or [])
+                                pending_chat_requests[request_id] = {
+                                    "message": prompt_message,
+                                    "selected_file_path": selected_file_path,
+                                    "code_context": str(payload.get("code_context") or "")[:12000],
+                                    "paste_detected": bool(payload.get("paste_detected")),
+                                    "browser_focused": bool(payload.get("browser_focused", True)),
+                                    "time_since_assessment_start_ms": payload.get("time_since_assessment_start_ms"),
+                                    "time_since_last_prompt_ms": payload.get("time_since_last_prompt_ms"),
+                                    "input_tokens_start": input_tokens_used,
+                                    "output_tokens_start": output_tokens_used,
+                                    "started_at_monotonic": time.perf_counter(),
+                                    "is_first_prompt": len(prompts) == 0,
+                                }
+                                append_cli_transcript(
+                                    assessment,
+                                    "claude_prompt",
+                                    {
+                                        "pid": session.pid,
+                                        "request_id": request_id,
+                                        "message": prompt_message[:500],
+                                        "selected_file_path": selected_file_path,
+                                    },
+                                )
+                                append_assessment_timeline_event(
+                                    assessment,
+                                    "ai_prompt_started",
+                                    {
+                                        "request_id": request_id,
+                                        "transport": "terminal_cli",
+                                        "paste_detected": bool(payload.get("paste_detected")),
+                                        "browser_focused": bool(payload.get("browser_focused", True)),
+                                        "time_since_assessment_start_ms": payload.get("time_since_assessment_start_ms"),
+                                        "time_since_last_prompt_ms": payload.get("time_since_last_prompt_ms"),
+                                    },
+                                )
+                                touch_terminal_session(assessment)
+                                if not using_provider_usage:
+                                    estimated_input_tokens, input_token_remainder_chars = _estimate_token_delta(
+                                        prompt_message,
+                                        input_token_remainder_chars,
+                                    )
+                                    if estimated_input_tokens > 0:
+                                        input_tokens_used += estimated_input_tokens
+                                        assessment.total_input_tokens = int(getattr(assessment, "total_input_tokens", 0) or 0) + estimated_input_tokens
+                                        append_cli_transcript(
+                                            assessment,
+                                            "terminal_usage",
+                                            {
+                                                "pid": session.pid,
+                                                "input_tokens": estimated_input_tokens,
+                                                "output_tokens": 0,
+                                                "request_cost_usd": float(
+                                                    round(
+                                                        compute_claude_cost_usd(
+                                                            input_tokens=estimated_input_tokens,
+                                                            output_tokens=0,
+                                                        ),
+                                                        6,
+                                                    )
+                                                ),
+                                                "source": "estimated_chat_input",
+                                            },
+                                        )
+                                db.commit()
+                                await _ws_send_json(
+                                    websocket,
+                                    {
+                                        "type": "claude_chat_started",
+                                        "request_id": request_id,
+                                    },
+                                )
+                                budget_snapshot = _cli_budget_snapshot(
+                                    effective_budget_limit,
+                                    input_tokens_used,
+                                    output_tokens_used,
+                                )
+                                if budget_snapshot["enabled"] and budget_snapshot["is_exhausted"]:
+                                    pending_chat_requests.pop(request_id, None)
+                                    killed = e2b.kill_process(session.sandbox, session.pid)
+                                    append_assessment_timeline_event(
+                                        assessment,
+                                        "terminal_exit",
+                                        {
+                                            "pid": session.pid,
+                                            "reason": "budget_exhausted",
+                                            "killed": bool(killed),
+                                            "used_usd": budget_snapshot["used_usd"],
+                                            "limit_usd": budget_snapshot["limit_usd"],
+                                        },
+                                    )
+                                    append_cli_transcript(
+                                        assessment,
+                                        "terminal_exit",
+                                        {
+                                            "pid": session.pid,
+                                            "reason": "budget_exhausted",
+                                            "killed": bool(killed),
+                                            "used_usd": budget_snapshot["used_usd"],
+                                            "limit_usd": budget_snapshot["limit_usd"],
+                                        },
+                                    )
+                                    stop_terminal_session(assessment)
+                                    db.commit()
+                                    await _ws_send_json(
+                                        websocket,
+                                        {
+                                            "type": "claude_chat_error",
+                                            "request_id": request_id,
+                                            "message": "Claude budget limit reached for this assessment.",
+                                        },
+                                    )
+                                    await _ws_send_json(
+                                        websocket,
+                                        {
+                                            "type": "error",
+                                            "message": "Claude budget limit reached for this assessment.",
+                                            "requires_budget_top_up": True,
+                                            "claude_budget": budget_snapshot,
+                                        },
+                                    )
+                                    await _ws_send_json(
+                                        websocket,
+                                        {"type": "exit", "pid": session.pid, "killed": bool(killed)},
+                                    )
+                                    should_break = True
                     elif msg_type == "input":
                         data = str(payload.get("data") or "")
                         if data:
@@ -568,6 +829,12 @@ async def terminal_ws(
 
                 if msg_type == "output":
                     output_text = str(message.get("data") or "")
+                    completed_chat_events: list[dict[str, object]] = []
+                    if output_text and str(message.get("stream") or "") == "pty":
+                        output_text, completed_chat_events = _consume_terminal_chat_output(
+                            output_text,
+                            chat_capture_state,
+                        )
                     if output_text:
                         append_cli_transcript(
                             assessment,
@@ -684,11 +951,111 @@ async def terminal_ws(
                                 {"type": "exit", "pid": session.pid, "killed": bool(killed)},
                             )
                             break
-                    await _ws_send_json(websocket, message)
+                    if output_text:
+                        await _ws_send_json(websocket, {**message, "data": output_text})
+                    for completed in completed_chat_events:
+                        request_id = _sanitize_chat_request_id(completed.get("request_id"))
+                        if not request_id:
+                            continue
+                        metadata = pending_chat_requests.pop(request_id, {})
+                        latency_ms = int(
+                            (time.perf_counter() - float(metadata.get("started_at_monotonic") or time.perf_counter()))
+                            * 1000
+                        )
+                        response_text = str(completed.get("content") or "").strip()
+                        exit_status = int(completed.get("exit_status") or 0)
+                        if not response_text and exit_status != 0:
+                            response_text = f"Claude CLI exited with status {exit_status} before returning a response."
+                        elif not response_text:
+                            response_text = "Claude completed without returning a visible response."
+
+                        input_tokens = max(
+                            0,
+                            input_tokens_used - int(metadata.get("input_tokens_start") or 0),
+                        )
+                        output_tokens = max(
+                            0,
+                            output_tokens_used - int(metadata.get("output_tokens_start") or 0),
+                        )
+                        prompts = list(getattr(assessment, "ai_prompts", None) or [])
+                        prompts.append(
+                            {
+                                "message": str(metadata.get("message") or ""),
+                                "response": response_text,
+                                "code_context": str(metadata.get("code_context") or "")[:12000],
+                                "paste_detected": bool(metadata.get("paste_detected")),
+                                "browser_focused": bool(metadata.get("browser_focused", True)),
+                                "time_since_assessment_start_ms": metadata.get("time_since_assessment_start_ms"),
+                                "time_since_last_prompt_ms": metadata.get("time_since_last_prompt_ms"),
+                                "response_latency_ms": latency_ms,
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "selected_file_path": str(metadata.get("selected_file_path") or ""),
+                                "timestamp": utcnow().isoformat(),
+                                "transport": "terminal_cli",
+                                "exit_status": exit_status,
+                            }
+                        )
+                        assessment.ai_prompts = prompts
+                        append_assessment_timeline_event(
+                            assessment,
+                            "ai_prompt",
+                            {
+                                "latency_ms": latency_ms,
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "paste_detected": bool(metadata.get("paste_detected")),
+                                "browser_focused": bool(metadata.get("browser_focused", True)),
+                                "time_since_assessment_start_ms": metadata.get("time_since_assessment_start_ms"),
+                                "time_since_last_prompt_ms": metadata.get("time_since_last_prompt_ms"),
+                                "transport": "terminal_cli",
+                                "request_id": request_id,
+                                "exit_status": exit_status,
+                            },
+                        )
+                        if bool(metadata.get("is_first_prompt")):
+                            append_assessment_timeline_event(
+                                assessment,
+                                "first_prompt",
+                                {
+                                    "preview": str(metadata.get("message") or "")[:120],
+                                },
+                            )
+                        db.commit()
+                        budget_snapshot = _cli_budget_snapshot(
+                            effective_budget_limit,
+                            input_tokens_used,
+                            output_tokens_used,
+                        )
+                        await _ws_send_json(
+                            websocket,
+                            {
+                                "type": "claude_chat_done",
+                                "request_id": request_id,
+                                "content": response_text,
+                                "exit_status": exit_status,
+                                "latency_ms": latency_ms,
+                                "input_tokens": input_tokens,
+                                "output_tokens": output_tokens,
+                                "tokens_used": input_tokens + output_tokens,
+                                "claude_budget": budget_snapshot,
+                            },
+                        )
                     out_task = asyncio.create_task(output_queue.get())
                     continue
 
                 if msg_type == "error":
+                    active_request_id = _sanitize_chat_request_id(chat_capture_state.get("active_request_id"))
+                    if active_request_id and active_request_id in pending_chat_requests:
+                        pending_chat_requests.pop(active_request_id, None)
+                        await _ws_send_json(
+                            websocket,
+                            {
+                                "type": "claude_chat_error",
+                                "request_id": active_request_id,
+                                "message": str(message.get("message") or "Claude CLI encountered an error."),
+                            },
+                        )
                     append_assessment_timeline_event(
                         assessment,
                         "terminal_error",
@@ -706,6 +1073,17 @@ async def terminal_ws(
                     continue
 
                 if msg_type == "exit":
+                    active_request_id = _sanitize_chat_request_id(chat_capture_state.get("active_request_id"))
+                    if active_request_id and active_request_id in pending_chat_requests:
+                        pending_chat_requests.pop(active_request_id, None)
+                        await _ws_send_json(
+                            websocket,
+                            {
+                                "type": "claude_chat_error",
+                                "request_id": active_request_id,
+                                "message": "Claude CLI exited before the request completed.",
+                            },
+                        )
                     append_assessment_timeline_event(
                         assessment,
                         "terminal_exit",

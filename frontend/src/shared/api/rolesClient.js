@@ -21,6 +21,8 @@ export const roles = {
   listPipeline: (roleId, params = {}) => api.get(`/roles/${roleId}/pipeline`, { params }),
   listApplicationsGlobal: (params = {}) => api.get('/applications', { params }),
   getApplication: (applicationId, config = {}) => api.get(`/applications/${applicationId}`, config),
+  getApplicationByShareToken: (shareToken, config = {}) => api.get(`/applications/share/${shareToken}`, config),
+  getApplicationShareLink: (applicationId) => api.post(`/applications/${applicationId}/share-link`),
   listApplicationEvents: (applicationId, params = {}) => api.get(`/applications/${applicationId}/events`, { params }),
   generateApplicationInterviewDebrief: (applicationId, data = {}) => api.post(`/applications/${applicationId}/interview-debrief`, data),
   downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
@@ -35,6 +37,8 @@ export const roles = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
+  createManualInterview: (applicationId, data) => api.post(`/applications/${applicationId}/interviews`, data),
+  linkFirefliesInterview: (applicationId, data) => api.post(`/applications/${applicationId}/interviews/fireflies-link`, data),
   generateTaaliCvAi: (applicationId) => api.post(`/applications/${applicationId}/generate-taali-cv-ai`),
   enrichApplication: (applicationId) => api.post(`/applications/${applicationId}/enrich`),
   batchScore: (roleId, options = {}) => api.post(

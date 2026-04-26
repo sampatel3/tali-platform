@@ -9,13 +9,35 @@ export const ThemeModeToggle = ({
   className = '',
   ariaLabel = 'Theme toggle',
   title,
+  appearance = 'dual',
 }) => {
   const isDark = value === 'dark';
+  const targetMode = isDark ? 'light' : 'dark';
 
   const handleSelect = (nextValue) => {
     if (nextValue === value) return;
     onChange?.(nextValue);
   };
+
+  if (appearance === 'single') {
+    return (
+      <div role="group" aria-label={ariaLabel} className={cx('inline-flex', className)}>
+        <button
+          type="button"
+          aria-label={ariaLabel}
+          aria-pressed={isDark}
+          title={title || `Switch to ${targetMode} mode`}
+          onClick={() => handleSelect(targetMode)}
+          className={cx(
+            'icon-btn focus:outline-none focus-visible:ring-2 focus-visible:ring-[var(--taali-purple)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--taali-surface)]',
+            isDark ? 'text-[var(--ink-2)]' : 'text-[var(--ink)]'
+          )}
+        >
+          {isDark ? <Moon size={15} /> : <Sun size={15} />}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div

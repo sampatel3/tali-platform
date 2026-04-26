@@ -10,6 +10,7 @@ from ...domains.identity_access.users_fastapi import (
     auth_backend,
     fastapi_users,
     current_active_user,
+    current_active_user_optional,
 )
 
 __all__ = [
@@ -19,4 +20,5 @@ __all__ = [
     "auth_backend",
     "fastapi_users",
     "current_active_user",
+    "current_active_user_optional",
 ]

@@ -56,7 +56,7 @@ def test_workable_sync_manual_trigger_success(client, db, monkeypatch):
     payload = resp.json()
     assert payload["status"] == "started"
     assert isinstance(payload.get("run_id"), int)
-    assert payload.get("mode") == "metadata"
+    assert payload.get("mode") == "full"
     assert "message" in payload
 
     # Wait for background sync to finish (fake_sync is fast; thread may use separate session)
@@ -132,6 +132,61 @@ def test_workable_sync_status_shows_in_progress_after_start(client, db, monkeypa
         if not data.get("sync_in_progress"):
             assert data.get("workable_last_sync_summary", {}).get("jobs_seen") == 2
             time.sleep(0.3)  # let background thread close connection
+            break
+    else:
+        assert False, "Sync did not finish within ~4.5s"
+
+
+def test_workable_sync_reuses_existing_running_run(client, db, monkeypatch):
+    headers, email = auth_headers(client, email="sync-existing@example.com", organization_name="Sync Existing Org")
+    owner = db.query(User).filter(User.email == email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "example"
+    db.commit()
+
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", True)
+
+    def slow_fake_sync(
+        self,
+        db_session,
+        org_obj,
+        full_resync=False,
+        run_id=None,
+        mode="metadata",
+        selected_job_shortcodes=None,
+    ):
+        time.sleep(1.0)
+        org_obj.workable_last_sync_status = "success"
+        org_obj.workable_last_sync_summary = {"jobs_seen": 1, "run_id": run_id, "mode": mode}
+        db_session.commit()
+        return {"jobs_seen": 1}
+
+    monkeypatch.setattr(workable_sync_runner.WorkableSyncService, "sync_org", slow_fake_sync)
+
+    first = client.post("/api/v1/workable/sync", headers=headers)
+    assert first.status_code == 200, first.text
+    first_payload = first.json()
+    run_id = first_payload.get("run_id")
+    assert isinstance(run_id, int)
+
+    second = client.post("/api/v1/workable/sync", headers=headers)
+    assert second.status_code == 202, second.text
+    second_payload = second.json()
+    assert second_payload.get("status") == "already_running"
+    assert second_payload.get("run_id") == run_id
+    assert second_payload.get("execution_backend") == "existing"
+
+    for _ in range(15):
+        time.sleep(0.3)
+        status_resp = client.get("/api/v1/workable/sync/status", headers=headers)
+        status_resp.raise_for_status()
+        data = status_resp.json()
+        if not data.get("sync_in_progress"):
             break
     else:
         assert False, "Sync did not finish within ~4.5s"
@@ -401,6 +456,50 @@ def test_workable_sync_passes_selected_role_shortcodes(client, db, monkeypatch):
     assert payload["status"] == "started"
     assert payload["selected_jobs_count"] == 2
     assert queued.get("selected_job_shortcodes") == ["A1", "B2"]
+
+
+def test_workable_lookup_endpoints_return_configuration_data(client, db, monkeypatch):
+    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
+
+    headers, email = auth_headers(client, email="lookup@example.com", organization_name="Lookup Org")
+    owner = db.query(User).filter(User.email == email).first()
+    assert owner is not None
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org is not None
+    org.workable_connected = True
+    org.workable_access_token = "token"
+    org.workable_subdomain = "example"
+    db.commit()
+
+    captured: dict[str, object] = {}
+
+    def mock_list_members(self, *, limit=100, shortcode=None):
+        captured["shortcode"] = shortcode
+        return [{"id": "member-1", "name": "Sam Patel"}]
+
+    def mock_list_reasons(self):
+        return [{"id": "reason-1", "name": "Below threshold"}]
+
+    def mock_list_job_stages(self, shortcode):
+        captured["stage_shortcode"] = shortcode
+        return [{"id": "stage-1", "name": "Screening"}]
+
+    monkeypatch.setattr(workable_routes.WorkableService, "list_members", mock_list_members)
+    monkeypatch.setattr(workable_routes.WorkableService, "list_disqualification_reasons", mock_list_reasons)
+    monkeypatch.setattr(workable_routes.WorkableService, "list_job_stages", mock_list_job_stages)
+
+    members_resp = client.get("/api/v1/workable/members?shortcode=ENG-1", headers=headers)
+    assert members_resp.status_code == 200, members_resp.text
+    assert members_resp.json() == {"members": [{"id": "member-1", "name": "Sam Patel"}]}
+
+    reasons_resp = client.get("/api/v1/workable/disqualification-reasons", headers=headers)
+    assert reasons_resp.status_code == 200, reasons_resp.text
+    assert reasons_resp.json() == {"disqualification_reasons": [{"id": "reason-1", "name": "Below threshold"}]}
+
+    stages_resp = client.get("/api/v1/workable/stages?shortcode=ENG-1", headers=headers)
+    assert stages_resp.status_code == 200, stages_resp.text
+    assert stages_resp.json() == {"stages": [{"id": "stage-1", "name": "Screening"}]}
+    assert captured == {"shortcode": "ENG-1", "stage_shortcode": "ENG-1"}
 
 
 def test_run_workable_sync_script_exits_without_email():

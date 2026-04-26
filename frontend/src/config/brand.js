@@ -1,5 +1,6 @@
 export const BRAND = {
-  name: 'TAALI',
+  name: 'Taali',
+  wordmark: 'taali',
   domain: 'taali.ai',
   productTagline: 'Technical assessments for AI-native engineering teams.',
   appTitle: 'AI Technical Assessments That Tally Real Skill',

@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 
 import { AssessmentContextWindow } from './AssessmentContextWindow';
 import { AssessmentTopBar } from './AssessmentTopBar';
@@ -71,31 +71,57 @@ const PREVIEW_CONVERSATION = [
 export const AssessmentRuntimePreviewView = ({
   className = '',
   heightClass = 'h-[44rem]',
-  defaultCollapsedSections = {},
   lightMode = false,
+  taskName,
+  taskContext,
+  taskRole,
+  repoFiles = PREVIEW_REPO_FILES,
+  initialSelectedRepoPath = 'src/revenue_recovery.py',
+  claudeConversation = PREVIEW_CONVERSATION,
+  initialClaudePrompt = 'Ask Claude: compare retry dedupe with the failing regression test',
+  output = '42 rows recovered | 2 duplicates removed | schema validated',
+  showTerminal = true,
 }) => {
-  const [collapsedSections, setCollapsedSections] = useState(() => ({
-    contextWindow: false,
-    taskContext: false,
-    instructions: false,
-    repoTree: false,
-    ...defaultCollapsedSections,
-  }));
-  const [collapsedRepoDirs, setCollapsedRepoDirs] = useState({});
-  const [selectedRepoPath, setSelectedRepoPath] = useState('src/revenue_recovery.py');
-  const [editorContent, setEditorContent] = useState(
-    PREVIEW_REPO_FILES.find((file) => file.path === 'src/revenue_recovery.py')?.content || ''
+  const previewRepoFiles = useMemo(
+    () => (Array.isArray(repoFiles) && repoFiles.length > 0 ? repoFiles : PREVIEW_REPO_FILES),
+    [repoFiles],
   );
-  const [claudePrompt, setClaudePrompt] = useState('Ask Claude: compare retry dedupe with the failing regression test');
+  const [collapsedRepoDirs, setCollapsedRepoDirs] = useState({});
+  const [selectedRepoPath, setSelectedRepoPath] = useState(
+    previewRepoFiles.find((file) => file.path === initialSelectedRepoPath)?.path
+      || previewRepoFiles[0]?.path
+      || initialSelectedRepoPath
+  );
+  const [editorContent, setEditorContent] = useState(
+    previewRepoFiles.find((file) => file.path === initialSelectedRepoPath)?.content
+      || previewRepoFiles[0]?.content
+      || ''
+  );
+  const [claudePrompt, setClaudePrompt] = useState(initialClaudePrompt);
+  const [repoPanelCollapsed, setRepoPanelCollapsed] = useState(false);
+  const [assistantPanelCollapsed, setAssistantPanelCollapsed] = useState(false);
+  const [terminalPanelOpen, setTerminalPanelOpen] = useState(true);
+  const [outputPanelOpen, setOutputPanelOpen] = useState(true);
 
-  const repoFileTree = useMemo(() => buildRepoFileTree(PREVIEW_REPO_FILES), []);
+  useEffect(() => {
+    const fallbackPath = previewRepoFiles.find((file) => file.path === initialSelectedRepoPath)?.path
+      || previewRepoFiles[0]?.path
+      || null;
+    if (!fallbackPath) {
+      setSelectedRepoPath(initialSelectedRepoPath);
+      setEditorContent('');
+      return;
+    }
 
-  const toggleSection = (key) => {
-    setCollapsedSections((current) => ({
-      ...current,
-      [key]: !current[key],
-    }));
-  };
+    if (!previewRepoFiles.some((file) => file.path === selectedRepoPath)) {
+      setSelectedRepoPath(fallbackPath);
+      setEditorContent(
+        previewRepoFiles.find((file) => file.path === fallbackPath)?.content || ''
+      );
+    }
+  }, [initialSelectedRepoPath, previewRepoFiles, selectedRepoPath]);
+
+  const repoFileTree = useMemo(() => buildRepoFileTree(previewRepoFiles), [previewRepoFiles]);
 
   const toggleRepoDir = (dir) => {
     setCollapsedRepoDirs((current) => ({
@@ -106,7 +132,7 @@ export const AssessmentRuntimePreviewView = ({
 
   const handleSelectRepoFile = (path) => {
     setSelectedRepoPath(path);
-    const nextFile = PREVIEW_REPO_FILES.find((file) => file.path === path);
+    const nextFile = previewRepoFiles.find((file) => file.path === path);
     setEditorContent(nextFile?.content || '');
   };
 
@@ -115,8 +141,8 @@ export const AssessmentRuntimePreviewView = ({
       className={`taali-runtime ${lightMode ? 'taali-runtime-light' : 'taali-runtime-dark'} flex ${heightClass} flex-col overflow-hidden rounded-[var(--taali-radius-panel)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-bg)] text-[var(--taali-runtime-text)] shadow-[var(--taali-shadow-soft)] ${className}`}
     >
       <AssessmentTopBar
-        brandName="TAALI runtime"
-        taskName="Revenue Recovery Incident"
+        taskName={taskName || 'Revenue Recovery Incident'}
+        metaLine={taskRole || 'Preview workspace'}
         claudeBudget={{
           enabled: true,
           remaining_usd: 6.2,
@@ -136,19 +162,18 @@ export const AssessmentRuntimePreviewView = ({
       />
 
       <AssessmentContextWindow
-        collapsedSections={collapsedSections}
-        toggleSection={toggleSection}
-        taskContext={PREVIEW_TASK_CONTEXT}
-        aiMode="claude_chat"
+        taskName={taskName || 'Assessment workspace'}
+        taskRole={taskRole || 'Preview workspace'}
+        taskContext={taskContext || PREVIEW_TASK_CONTEXT}
+        repoFiles={previewRepoFiles}
         cloneCommand={null}
-        lightMode={lightMode}
       />
 
       <AssessmentWorkspace
         hasRepoStructure
-        collapsedSections={collapsedSections}
-        toggleSection={toggleSection}
         repoFileTree={repoFileTree}
+        repoPanelCollapsed={repoPanelCollapsed}
+        onToggleRepoPanel={() => setRepoPanelCollapsed((current) => !current)}
         collapsedRepoDirs={collapsedRepoDirs}
         toggleRepoDir={toggleRepoDir}
         selectedRepoPath={selectedRepoPath}
@@ -161,18 +186,22 @@ export const AssessmentRuntimePreviewView = ({
         editorLanguage={languageFromPath(selectedRepoPath)}
         editorFilename={selectedRepoPath}
         isTimerPaused={false}
-        showTerminal={false}
-        terminalPanelOpen={false}
-        onToggleTerminal={() => {}}
+        showTerminal={showTerminal}
+        assistantPanelCollapsed={assistantPanelCollapsed}
+        onToggleAssistantPanel={() => setAssistantPanelCollapsed((current) => !current)}
+        terminalPanelOpen={terminalPanelOpen}
+        onToggleTerminal={() => setTerminalPanelOpen((current) => !current)}
+        outputPanelOpen={outputPanelOpen}
+        onToggleOutput={() => setOutputPanelOpen((current) => !current)}
         terminalConnected={false}
         terminalEvents={[]}
         onTerminalInput={() => {}}
         onTerminalResize={() => {}}
-        onTerminalStop={() => {}}
-        terminalStopping={false}
-        output="42 rows recovered | 2 duplicates removed | schema validated"
+        onRestartTerminal={() => {}}
+        terminalRestarting={false}
+        output={output}
         executing={false}
-        claudeConversation={PREVIEW_CONVERSATION}
+        claudeConversation={claudeConversation}
         claudePrompt={claudePrompt}
         onClaudePromptChange={setClaudePrompt}
         onClaudePromptSubmit={() => {}}

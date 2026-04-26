@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 from ..models.assessment import Assessment, AssessmentStatus
 from ..models.candidate_application import CandidateApplication
 from .document_service import load_stored_document_bytes
+from .interview_support_service import refresh_application_interview_support
 from .taali_scoring import compute_role_fit_score, compute_taali_score
 
 
@@ -1839,11 +1840,123 @@ def _application_score_components_100(application: CandidateApplication) -> dict
     }
 
 
+def _screening_fireflies_context_from_support(interview_support: dict[str, Any]) -> dict[str, Any]:
+    screening_summary = interview_support.get("screening_interview_summary") if isinstance(interview_support.get("screening_interview_summary"), dict) else {}
+    interview_evidence = interview_support.get("interview_evidence_summary") if isinstance(interview_support.get("interview_evidence_summary"), dict) else {}
+    screening_fireflies = screening_summary.get("fireflies") if isinstance(screening_summary.get("fireflies"), dict) else {}
+    evidence_fireflies = interview_evidence.get("fireflies") if isinstance(interview_evidence.get("fireflies"), dict) else {}
+
+    status = str(
+        screening_fireflies.get("status")
+        or evidence_fireflies.get("status")
+        or "not_configured"
+    ).strip().lower()
+    latest_summary = (
+        str(screening_fireflies.get("latest_summary") or "").strip()
+        or str(screening_summary.get("summary") or "").strip()
+        or str(evidence_fireflies.get("latest_summary") or "").strip()
+    ) or None
+    latest_stage = (
+        str(screening_fireflies.get("latest_stage") or "").strip()
+        or ("screening" if latest_summary or screening_summary.get("latest_provider_url") else "")
+        or str(evidence_fireflies.get("latest_stage") or "").strip()
+    ) or None
+
+    return {
+        "status": status,
+        "linked": status == "linked",
+        "configured": bool(
+            screening_fireflies.get("configured")
+            if screening_fireflies.get("configured") is not None
+            else evidence_fireflies.get("configured")
+        ),
+        "capture_expected": bool(
+            screening_fireflies.get("capture_expected")
+            if screening_fireflies.get("capture_expected") is not None
+            else evidence_fireflies.get("capture_expected")
+        ),
+        "invite_email": (
+            str(screening_fireflies.get("invite_email") or "").strip()
+            or str(evidence_fireflies.get("invite_email") or "").strip()
+            or None
+        ),
+        "latest_summary": latest_summary,
+        "latest_provider_url": (
+            str(screening_fireflies.get("latest_provider_url") or "").strip()
+            or str(screening_summary.get("latest_provider_url") or "").strip()
+            or str(evidence_fireflies.get("latest_provider_url") or "").strip()
+            or None
+        ),
+        "latest_meeting_date": (
+            screening_fireflies.get("latest_meeting_date")
+            or screening_summary.get("latest_meeting_date")
+            or evidence_fireflies.get("latest_meeting_date")
+        ),
+        "latest_source": (
+            str(screening_fireflies.get("latest_source") or "").strip()
+            or str(evidence_fireflies.get("latest_source") or "").strip()
+            or None
+        ),
+        "latest_stage": latest_stage,
+    }
+
+
+def _fireflies_context_note(fireflies_context: dict[str, Any]) -> str | None:
+    status = str(fireflies_context.get("status") or "").strip().lower()
+    invite_email = str(fireflies_context.get("invite_email") or "").strip()
+    latest_summary = str(fireflies_context.get("latest_summary") or "").strip()
+    if status == "linked":
+        if latest_summary:
+            return f"Stage 1 Fireflies transcript is linked. Screening summary: {latest_summary}"
+        return "Stage 1 Fireflies transcript is linked and available for interviewer context."
+    if status == "awaiting_transcript":
+        if invite_email:
+            return (
+                f"Fireflies is configured for Workable interviews and TAALI is awaiting the Stage 1 transcript. "
+                f"Include {invite_email} in the interview invite to capture it."
+            )
+        return "Fireflies is configured for Workable interviews and TAALI is awaiting the Stage 1 transcript."
+    if status == "not_configured" and fireflies_context.get("capture_expected"):
+        return "Fireflies is not configured for this org, so no Stage 1 screening transcript is available yet."
+    return None
+
+
 def build_client_application_report_payload(
     application: CandidateApplication,
     *,
     organization_name: str,
 ) -> dict[str, Any]:
+    interview_support = refresh_application_interview_support(
+        application,
+        organization=getattr(application, "organization", None),
+    )
+    screening_pack = interview_support.get("screening_pack") if isinstance(interview_support.get("screening_pack"), dict) else {}
+    tech_pack = interview_support.get("tech_interview_pack") if isinstance(interview_support.get("tech_interview_pack"), dict) else {}
+    interview_focus_items: list[dict[str, Any]] = []
+    role_fit_score = _application_score_components_100(application).get("role_fit_score")
+    role_score_10 = round((role_fit_score or 0.0) / 10.0, 1) if role_fit_score is not None else None
+    for item in (screening_pack.get("questions") if isinstance(screening_pack.get("questions"), list) else [])[:3]:
+        if not isinstance(item, dict):
+            continue
+        interview_focus_items.append(
+            {
+                "dimension": str(item.get("question") or "Screening question"),
+                "score": role_score_10,
+                "evidence": str(item.get("why_this_matters") or item.get("evidence_anchor") or "").strip(),
+                "practice_advice": str(item.get("follow_up_probe") or "").strip(),
+            }
+        )
+    for item in (tech_pack.get("questions") if isinstance(tech_pack.get("questions"), list) else [])[:2]:
+        if not isinstance(item, dict):
+            continue
+        interview_focus_items.append(
+            {
+                "dimension": str(item.get("question") or "Technical question"),
+                "score": role_score_10,
+                "evidence": str(item.get("why_this_matters") or item.get("evidence_anchor") or "").strip(),
+                "practice_advice": str(item.get("follow_up_probe") or "").strip(),
+            }
+        )
     details = application.cv_match_details if isinstance(application.cv_match_details, dict) else {}
     requirements = details.get("requirements_assessment") if isinstance(details.get("requirements_assessment"), list) else []
     first_requirement_gap = next(
@@ -1903,7 +2016,7 @@ def build_client_application_report_payload(
         "executive_summary": " ".join(part for part in executive_summary_parts if part).strip(),
         "dimension_scores": [],
         "strengths": strengths,
-        "interview_focus": [],
+        "interview_focus": interview_focus_items,
         "role_fit_summary": summary_text,
         "matching_skills": matching_skills,
         "missing_skills": missing_skills,
@@ -1927,6 +2040,11 @@ def build_client_application_report_payload(
             or (application.candidate.cv_text if getattr(application, "candidate", None) and application.candidate.cv_text else None)
             or ""
         ),
+        "screening_pack": screening_pack,
+        "tech_interview_pack": tech_pack,
+        "screening_interview_summary": interview_support.get("screening_interview_summary"),
+        "tech_interview_summary": interview_support.get("tech_interview_summary"),
+        "interview_evidence_summary": interview_support.get("interview_evidence_summary"),
     }
 
 
@@ -2088,8 +2206,27 @@ def build_interview_debrief_payload_for_application(application: CandidateApplic
     missing_skills = [str(item).strip() for item in details.get("missing_skills", []) if str(item).strip()]
     experience_highlights = [str(item).strip() for item in details.get("experience_highlights", []) if str(item).strip()]
     concerns = [str(item).strip() for item in details.get("concerns", []) if str(item).strip()]
+    interview_support = refresh_application_interview_support(
+        application,
+        organization=getattr(application, "organization", None),
+    )
+    fireflies_context = _screening_fireflies_context_from_support(interview_support)
+    fireflies_note = _fireflies_context_note(fireflies_context)
 
     probing_questions: list[dict[str, Any]] = []
+    if fireflies_context.get("linked"):
+        probing_questions.append(
+            {
+                "dimension_id": "screening_transcript",
+                "dimension": "Stage 1 screening",
+                "score": role_score_10,
+                "pattern": fireflies_context.get("latest_summary") or "Stage 1 Fireflies transcript is linked.",
+                "question": (
+                    f"Follow up on the strongest claim and unresolved risk from the Stage 1 screening call for {role_name}."
+                ),
+                "what_to_listen_for": "Consistency with the screening call, concrete examples, and any clarified gaps or tradeoffs.",
+            }
+        )
     for item in requirements:
         status = str(item.get("status") or "").lower()
         requirement = str(item.get("requirement") or "").strip()
@@ -2182,8 +2319,17 @@ def build_interview_debrief_payload_for_application(application: CandidateApplic
         )
 
     summary = (
-        f"Generated from role-fit evidence for {candidate_name}. "
-        f"No completed assessment exists yet, so use this guide to validate CV claims, close gaps, and decide whether to move the candidate forward for {role_name}."
+        " ".join(
+            part for part in [
+                f"Generated from role-fit evidence for {candidate_name}.",
+                fireflies_note,
+                (
+                    f"No completed assessment exists yet, so use this guide to validate CV claims, close gaps, "
+                    f"and decide whether to move the candidate forward for {role_name}."
+                ),
+            ]
+            if part
+        )
     )
     payload = {
         "version": 1,
@@ -2192,12 +2338,13 @@ def build_interview_debrief_payload_for_application(application: CandidateApplic
         "task_name": "Pending assessment",
         "role_name": role_name,
         "summary": summary,
-        "transcript_available": False,
-        "source": "role_fit_v1",
+        "transcript_available": bool(fireflies_context.get("linked")),
+        "source": "role_fit_fireflies_v1" if fireflies_context.get("linked") else "role_fit_v1",
         "estimated_read_time_min": 3,
         "probing_questions": probing_questions,
         "strengths_to_validate": strengths,
         "red_flags": red_flags,
+        "fireflies_context": fireflies_context,
     }
     payload["markdown"] = _debrief_markdown(payload)
     return payload
@@ -2216,10 +2363,31 @@ def build_interview_debrief_payload(assessment: Assessment) -> dict[str, Any]:
     interviewer_signals = extra_data.get("interviewer_signals") if isinstance(extra_data.get("interviewer_signals"), dict) else {}
     strong_positive_signals = interviewer_signals.get("strong_positive") if isinstance(interviewer_signals.get("strong_positive"), list) else []
     rubric_red_flag_signals = interviewer_signals.get("red_flags") if isinstance(interviewer_signals.get("red_flags"), list) else []
+    fireflies_context: dict[str, Any] = {}
+    if getattr(assessment, "application", None) is not None:
+        interview_support = refresh_application_interview_support(
+            assessment.application,
+            organization=getattr(assessment.application, "organization", None),
+        )
+        fireflies_context = _screening_fireflies_context_from_support(interview_support)
+    fireflies_note = _fireflies_context_note(fireflies_context)
 
     ranked = sorted(scores.items(), key=lambda item: item[1])
     weakest = ranked[:5] if ranked else [(key, 5.0) for key in _DIMENSION_ORDER[:3]]
     probing_questions: list[dict[str, Any]] = []
+    if fireflies_context.get("linked"):
+        probing_questions.append(
+            {
+                "dimension_id": "screening_transcript",
+                "dimension": "Stage 1 screening",
+                "score": None,
+                "pattern": fireflies_context.get("latest_summary") or "Stage 1 Fireflies transcript is linked.",
+                "question": f"Use the screening transcript to clarify the key claims before testing them against the TAALI assessment for {role_context}.",
+                "what_to_listen_for": "Consistency between screening claims, assessment behavior, and concrete technical examples.",
+                "rubric_dimension": None,
+                "rubric_weight": None,
+            }
+        )
     for idx, (key, score) in enumerate(weakest[: max(3, min(5, len(weakest)))]):
         meta = _DIMENSION_META.get(key, {})
         rubric_key = None
@@ -2308,8 +2476,14 @@ def build_interview_debrief_payload(assessment: Assessment) -> dict[str, Any]:
         or "Candidate"
     )
     summary = (
-        f"Generated from TAALI assessment behavior for {candidate_name}. "
-        f"Focus this interview on the highest-risk collaboration patterns first, then validate task-specific rubric signals."
+        " ".join(
+            part for part in [
+                f"Generated from TAALI assessment behavior for {candidate_name}.",
+                fireflies_note,
+                "Focus this interview on the highest-risk collaboration patterns first, then validate task-specific rubric signals.",
+            ]
+            if part
+        )
     )
     payload = {
         "version": 1,
@@ -2324,6 +2498,7 @@ def build_interview_debrief_payload(assessment: Assessment) -> dict[str, Any]:
         "probing_questions": probing_questions,
         "strengths_to_validate": strengths,
         "red_flags": red_flags,
+        "fireflies_context": fireflies_context,
     }
     payload["markdown"] = _debrief_markdown(payload)
     return payload

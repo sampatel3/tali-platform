@@ -62,7 +62,9 @@ def test_file_size_guard_for_api_and_service_paths() -> None:
         "app/components/integrations/workable/sync_service.py": "Workable sync flow",
         "app/components/integrations/workable/service.py": "legacy Workable integration service",
         "app/domains/assessments_runtime/applications_routes.py": "applications API",
+        "app/domains/assessments_runtime/candidate_runtime_routes.py": "candidate runtime API",
         "app/domains/assessments_runtime/candidate_terminal_routes.py": "candidate terminal API",
+        "app/domains/assessments_runtime/pipeline_service.py": "assessment runtime pipeline orchestration",
         "app/domains/workable_sync/routes.py": "legacy Workable sync API",
         "app/services/fit_matching_service.py": "CV-to-role fit scoring pipeline",
     }

@@ -16,6 +16,10 @@ export type DimensionDefinition = {
   legacyAliases: string[];
 };
 
+type DimensionLookupDefinition = Omit<DimensionDefinition, 'id'> & {
+  id: string;
+};
+
 export const dimensionOrder: CanonicalId[] = [
   'task_completion',
   'prompt_clarity',
@@ -201,7 +205,23 @@ const aliasToCanonicalId: Record<string, CanonicalId> = (() => {
   return mapping;
 })();
 
-export const getDimensionById = (id: CanonicalId): DimensionDefinition => DIMENSION_BY_ID[id];
+const fallbackDimension = (id: string): DimensionLookupDefinition => {
+  const safeId = String(id || '').trim() || 'unknown_dimension';
+  const label = safeId
+    .replace(/_/g, ' ')
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+  return {
+    id: safeId,
+    label,
+    shortDescription: 'Additional scoring signal.',
+    longDescription: 'Additional scoring signal returned by the evaluation payload.',
+    legacyAliases: [],
+  };
+};
+
+export const getDimensionById = (id: string): DimensionLookupDefinition => (
+  DIMENSION_BY_ID[id as CanonicalId] || fallbackDimension(id)
+);
 
 export function toCanonicalId(input: string): CanonicalId | null {
   if (!input) return null;

@@ -9,6 +9,7 @@ from ...models.organization import Organization
 from ...platform.config import settings
 from ...platform.request_context import get_request_id
 from .adapters import build_workable_adapter
+from ...services.workable_actions_service import move_candidate_in_workable
 
 logger = logging.getLogger(__name__)
 
@@ -78,17 +79,21 @@ def dispatch_assessment_invite(
     ):
         attempted_workable = True
         try:
-            adapter = build_workable_adapter(
-                access_token=org.workable_access_token,
-                subdomain=org.workable_subdomain,
-            )
             assessment_link = f"{settings.FRONTEND_URL}/assessment/{assessment.id}?token={assessment.token}"
             activity = (
                 "TAALI assessment invite generated.\n\n"
                 f"Candidate: {candidate_name} <{candidate_email}>\n"
                 f"Assessment link: {assessment_link}\n"
             )
-            stage_result = adapter.update_candidate_stage(assessment.workable_candidate_id, stage_name)
+            stage_result = move_candidate_in_workable(
+                org=org,
+                candidate_id=assessment.workable_candidate_id,
+                target_stage=stage_name,
+            )
+            adapter = build_workable_adapter(
+                access_token=org.workable_access_token,
+                subdomain=org.workable_subdomain,
+            )
             activity_result = adapter.post_candidate_activity(assessment.workable_candidate_id, activity)
             if stage_result.get("success") and activity_result.get("success"):
                 assessment.invite_channel = "workable"

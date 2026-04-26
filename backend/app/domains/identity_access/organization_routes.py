@@ -2,6 +2,7 @@ import re
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import EmailStr, TypeAdapter, ValidationError
 from sqlalchemy.orm import Session
 from ...components.integrations.workable.service import WorkableService
 from ...platform.database import get_db
@@ -9,8 +10,13 @@ from ...deps import get_current_user
 from ...models.user import User
 from ...models.organization import Organization
 from ...schemas.organization import (
+    AiToolingConfig,
+    FirefliesConfig,
+    NotificationPreferences,
     OrgResponse,
     OrgUpdate,
+    ScoringPolicy,
+    WorkspaceSettings,
     WorkableConfigBase,
     WorkableConnect,
     WorkableTokenConnect,
@@ -22,6 +28,17 @@ from .access_policy import normalize_allowed_domains
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
 _SUBDOMAIN_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _ALLOWED_WORKABLE_SCOPES = ("r_jobs", "r_candidates", "w_candidates")
+_EMAIL_ADAPTER = TypeAdapter(EmailStr)
+
+
+def _normalized_optional_email(value: str | None, *, field_name: str) -> str | None:
+    raw = (value or "").strip().lower()
+    if not raw:
+        return None
+    try:
+        return str(_EMAIL_ADAPTER.validate_python(raw))
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=f"Invalid {field_name}") from exc
 
 
 def _is_workable_oauth_configured() -> bool:
@@ -46,12 +63,95 @@ def _resolved_workable_config(org: Organization) -> dict:
     return WorkableConfigBase(**{**_default_workable_config(), **raw}).model_dump()
 
 
+def _resolved_fireflies_config(org: Organization) -> FirefliesConfig:
+    owner_email = (getattr(org, "fireflies_owner_email", None) or "").strip() or None
+    invite_email = (getattr(org, "fireflies_invite_email", None) or "").strip() or None
+    has_api_key = bool((getattr(org, "fireflies_api_key_encrypted", None) or "").strip())
+    webhook_secret_configured = bool((getattr(org, "fireflies_webhook_secret", None) or "").strip())
+    return FirefliesConfig(
+        connected=bool(has_api_key and owner_email),
+        has_api_key=has_api_key,
+        webhook_secret_configured=webhook_secret_configured,
+        owner_email=owner_email,
+        invite_email=invite_email,
+        single_account_mode=bool(getattr(org, "fireflies_single_account_mode", True)),
+    )
+
+
+def _default_workspace_settings() -> dict:
+    return WorkspaceSettings().model_dump()
+
+
+def _resolved_workspace_settings(org: Organization) -> dict:
+    raw = org.workspace_settings if isinstance(org.workspace_settings, dict) else {}
+    return WorkspaceSettings(**{**_default_workspace_settings(), **raw}).model_dump()
+
+
+def _default_scoring_policy() -> dict:
+    return ScoringPolicy().model_dump()
+
+
+def _resolved_scoring_policy(org: Organization) -> dict:
+    raw = org.scoring_policy if isinstance(org.scoring_policy, dict) else {}
+    return ScoringPolicy(**{**_default_scoring_policy(), **raw}).model_dump()
+
+
+def _default_ai_tooling_config() -> dict:
+    return AiToolingConfig().model_dump()
+
+
+def _resolved_ai_tooling_config(org: Organization) -> dict:
+    raw = org.ai_tooling_config if isinstance(org.ai_tooling_config, dict) else {}
+    return AiToolingConfig(**{**_default_ai_tooling_config(), **raw}).model_dump()
+
+
+def _default_notification_preferences() -> dict:
+    return NotificationPreferences().model_dump()
+
+
+def _resolved_notification_preferences(org: Organization) -> dict:
+    raw = org.notification_preferences if isinstance(org.notification_preferences, dict) else {}
+    return NotificationPreferences(**{**_default_notification_preferences(), **raw}).model_dump()
+
+
 def _merge_workable_config(org: Organization, incoming: OrgUpdate) -> dict:
     base = _resolved_workable_config(org)
     if incoming.workable_config is None:
         return base
     updates = incoming.workable_config.model_dump(exclude_none=True)
     return WorkableConfigBase(**{**base, **updates}).model_dump()
+
+
+def _merge_workspace_settings(org: Organization, incoming: OrgUpdate) -> dict:
+    base = _resolved_workspace_settings(org)
+    if incoming.workspace_settings is None:
+        return base
+    updates = incoming.workspace_settings.model_dump(exclude_none=True)
+    return WorkspaceSettings(**{**base, **updates}).model_dump()
+
+
+def _merge_scoring_policy(org: Organization, incoming: OrgUpdate) -> dict:
+    base = _resolved_scoring_policy(org)
+    if incoming.scoring_policy is None:
+        return base
+    updates = incoming.scoring_policy.model_dump(exclude_none=True)
+    return ScoringPolicy(**{**base, **updates}).model_dump()
+
+
+def _merge_ai_tooling_config(org: Organization, incoming: OrgUpdate) -> dict:
+    base = _resolved_ai_tooling_config(org)
+    if incoming.ai_tooling_config is None:
+        return base
+    updates = incoming.ai_tooling_config.model_dump(exclude_none=True)
+    return AiToolingConfig(**{**base, **updates}).model_dump()
+
+
+def _merge_notification_preferences(org: Organization, incoming: OrgUpdate) -> dict:
+    base = _resolved_notification_preferences(org)
+    if incoming.notification_preferences is None:
+        return base
+    updates = incoming.notification_preferences.model_dump(exclude_none=True)
+    return NotificationPreferences(**{**base, **updates}).model_dump()
 
 
 def _workflow_v2_enabled_for_response(org: Organization) -> bool:
@@ -63,6 +163,12 @@ def _workflow_v2_enabled_for_response(org: Organization) -> bool:
 def _org_response_payload(org: Organization) -> OrgResponse:
     response = OrgResponse.model_validate(org)
     response.recruiter_workflow_v2_enabled = _workflow_v2_enabled_for_response(org)
+    response.workable_config = WorkableConfigBase(**_resolved_workable_config(org))
+    response.fireflies_config = _resolved_fireflies_config(org)
+    response.workspace_settings = WorkspaceSettings(**_resolved_workspace_settings(org))
+    response.scoring_policy = ScoringPolicy(**_resolved_scoring_policy(org))
+    response.ai_tooling_config = AiToolingConfig(**_resolved_ai_tooling_config(org))
+    response.notification_preferences = NotificationPreferences(**_resolved_notification_preferences(org))
     return response
 
 
@@ -103,6 +209,20 @@ def _parsed_scope_tokens(raw_scopes: str | None) -> list[str] | None:
     return normalized
 
 
+def _scope_tokens_for_storage(raw_scopes: str | None, *, fallback: list[str]) -> list[str]:
+    if raw_scopes is None:
+        return list(fallback)
+    tokens = [token.strip() for token in re.split(r"[,\s]+", raw_scopes) if token.strip()]
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for token in tokens:
+        if token not in _ALLOWED_WORKABLE_SCOPES or token in seen:
+            continue
+        normalized.append(token)
+        seen.add(token)
+    return normalized or list(fallback)
+
+
 @router.get("/me", response_model=OrgResponse)
 def get_my_org(
     db: Session = Depends(get_db),
@@ -121,6 +241,10 @@ def get_my_org(
         org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
     org.workable_config = _resolved_workable_config(org)
+    org.workspace_settings = _resolved_workspace_settings(org)
+    org.scoring_policy = _resolved_scoring_policy(org)
+    org.ai_tooling_config = _resolved_ai_tooling_config(org)
+    org.notification_preferences = _resolved_notification_preferences(org)
     return _org_response_payload(org)
 
 
@@ -136,6 +260,30 @@ def update_my_org(
     if data.name is not None:
         org.name = data.name
     org.workable_config = _merge_workable_config(org, data)
+    org.workspace_settings = _merge_workspace_settings(org, data)
+    org.scoring_policy = _merge_scoring_policy(org, data)
+    org.ai_tooling_config = _merge_ai_tooling_config(org, data)
+    org.notification_preferences = _merge_notification_preferences(org, data)
+    if data.fireflies_config is not None:
+        fireflies_updates = data.fireflies_config.model_dump(exclude_unset=True)
+        if "api_key" in fireflies_updates:
+            api_key = (fireflies_updates.get("api_key") or "").strip()
+            org.fireflies_api_key_encrypted = encrypt_text(api_key, settings.SECRET_KEY) if api_key else None
+        if "webhook_secret" in fireflies_updates:
+            webhook_secret = (fireflies_updates.get("webhook_secret") or "").strip()
+            org.fireflies_webhook_secret = webhook_secret or None
+        if "owner_email" in fireflies_updates:
+            org.fireflies_owner_email = _normalized_optional_email(
+                fireflies_updates.get("owner_email"),
+                field_name="fireflies owner email",
+            )
+        if "invite_email" in fireflies_updates:
+            org.fireflies_invite_email = _normalized_optional_email(
+                fireflies_updates.get("invite_email"),
+                field_name="fireflies invite email",
+            )
+        if "single_account_mode" in fireflies_updates and fireflies_updates.get("single_account_mode") is not None:
+            org.fireflies_single_account_mode = bool(fireflies_updates.get("single_account_mode"))
     if data.allowed_email_domains is not None:
         org.allowed_email_domains = normalize_allowed_domains(data.allowed_email_domains)
     if data.sso_enforced is not None:
@@ -173,7 +321,10 @@ def update_my_org(
     if getattr(org, "default_assessment_duration_minutes", None) is None:
         org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
-    org.workable_config = _resolved_workable_config(org)
+    org.workspace_settings = _resolved_workspace_settings(org)
+    org.scoring_policy = _resolved_scoring_policy(org)
+    org.ai_tooling_config = _resolved_ai_tooling_config(org)
+    org.notification_preferences = _resolved_notification_preferences(org)
     return _org_response_payload(org)
 
 
@@ -253,11 +404,26 @@ def connect_workable(
         _logging.getLogger("taali.organizations").exception("Workable OAuth failed")
         raise HTTPException(status_code=400, detail="Workable OAuth failed. Please try again.")
 
+    config = _resolved_workable_config(org)
+    scope_tokens = _scope_tokens_for_storage(
+        token_data.get("scope"),
+        fallback=_workable_oauth_scope(org).split(),
+    )
+    config["workflow_mode"] = "workable_hybrid"
+    config["sync_model"] = "scheduled_pull_only"
+    config["sync_scope"] = "open_jobs_active_candidates"
+    config["granted_scopes"] = scope_tokens
+    config["email_mode"] = (
+        "workable_preferred_fallback_manual"
+        if "w_candidates" in scope_tokens
+        else "manual_taali"
+    )
+
     org.workable_access_token = token_data.get("access_token")
     org.workable_refresh_token = token_data.get("refresh_token")
     org.workable_subdomain = token_data.get("subdomain", "")
     org.workable_connected = True
-    org.workable_config = _resolved_workable_config(org)
+    org.workable_config = WorkableConfigBase(**config).model_dump()
     try:
         db.commit()
     except Exception:
@@ -301,6 +467,7 @@ def connect_workable_token(
     config["workflow_mode"] = "workable_hybrid"
     config["sync_model"] = "scheduled_pull_only"
     config["sync_scope"] = "open_jobs_active_candidates"
+    config["granted_scopes"] = ["r_jobs", "r_candidates"] + ([] if data.read_only else ["w_candidates"])
     config["email_mode"] = (
         "manual_taali"
         if data.read_only

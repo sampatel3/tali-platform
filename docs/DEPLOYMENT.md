@@ -105,8 +105,7 @@ See [ENV_SETUP.md](./ENV_SETUP.md) for the full variable reference.
 
 Railway will detect the `railway.json` configuration and:
 1. Build with Nixpacks (auto-detects Python + `requirements.txt`)
-2. Run `alembic upgrade head` to apply database migrations
-3. Start the uvicorn server on the assigned `$PORT`
+2. Run the Railway bootstrap script to validate production env, wait for Postgres, apply Alembic migrations, and then start uvicorn on the assigned `$PORT`
 
 ### 5. Verify
 
@@ -135,6 +134,21 @@ Deploy worker after the service is created:
 
 ```bash
 RAILWAY_WORKER_SERVICE=<worker-service-name> ./scripts/railway/deploy_worker.sh
+```
+
+### Common crash causes
+
+If Railway is restart-looping during boot, the new bootstrap scripts now log the exact reason. The most common causes are:
+
+- `DATABASE_URL` still pointing at `localhost` because the PostgreSQL service was not attached/shared into the app service
+- `REDIS_URL` still pointing at `localhost` for the worker service
+- `SECRET_KEY` still using the insecure default while `FRONTEND_URL` is set to a real production domain
+- `ASSESSMENT_TERMINAL_ENABLED=false` or `ASSESSMENT_TERMINAL_DEFAULT_MODE` set to anything except `claude_cli_terminal`
+
+You can preflight the web service config locally from `backend/` with:
+
+```bash
+python -m app.scripts.railway_start --check-only
 ```
 
 ---

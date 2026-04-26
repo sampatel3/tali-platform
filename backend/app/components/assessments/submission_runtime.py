@@ -28,6 +28,7 @@ from ...domains.assessments_runtime.pipeline_service import (
     initialize_pipeline_event_if_missing,
     transition_stage,
 )
+from ...domains.assessments_runtime.role_support import refresh_application_score_cache
 from ...services.taali_scoring import (
     ROLE_FIT_WEIGHTS,
     TAALI_SCORING_RUBRIC_VERSION,
@@ -798,6 +799,7 @@ def submit_assessment_impl(
             reason="Assessment completed",
             metadata={"assessment_id": assessment.id, "completed_due_to_timeout": False},
         )
+        refresh_application_score_cache(application_row, db=db)
 
     try:
         db.commit()

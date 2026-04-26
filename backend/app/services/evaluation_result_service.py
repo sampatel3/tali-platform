@@ -7,6 +7,8 @@ from .evaluation_service import calculate_weighted_rubric_score
 
 
 ALLOWED_MANUAL_SCORES = {"excellent", "good", "poor"}
+ALLOWED_EVALUATION_DECISIONS = {"advance", "hold", "reject"}
+ALLOWED_EVALUATION_CONFIDENCE = {"low", "medium", "high"}
 
 
 def _to_evidence_list(value: Any) -> List[str]:
@@ -36,6 +38,21 @@ def _safe_weight(value: Any) -> float:
         return float(value or 0.0)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _normalized_choice(value: Any, allowed: set[str], label: str) -> Optional[str]:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized not in allowed:
+        allowed_values = ", ".join(sorted(allowed))
+        raise ValueError(f"{label} must be one of {allowed_values}")
+    return normalized
+
+
+def _normalized_rationale(value: Any) -> Optional[str]:
+    text = str(value or "").strip()
+    return text or None
 
 
 def _normalized_category_scores(
@@ -93,6 +110,18 @@ def build_evaluation_result(
         "completed_due_to_timeout": bool(completed_due_to_timeout),
         "category_scores": category_scores,
         "overall_score": _overall_score(category_scores, evaluation_rubric),
+        "decision": _normalized_choice(
+            body.get("decision"),
+            ALLOWED_EVALUATION_DECISIONS,
+            "decision",
+        ),
+        "rationale": _normalized_rationale(body.get("rationale")),
+        "confidence": _normalized_choice(
+            body.get("confidence"),
+            ALLOWED_EVALUATION_CONFIDENCE,
+            "confidence",
+        ),
+        "next_steps": _to_notes_list(body.get("next_steps")),
         "strengths": _to_notes_list(body.get("strengths")),
         "improvements": _to_notes_list(body.get("improvements")),
         "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -122,6 +151,18 @@ def normalize_stored_evaluation_result(
         "overall_score": raw.get("overall_score")
         if raw.get("overall_score") is not None
         else _overall_score(category_scores, evaluation_rubric),
+        "decision": _normalized_choice(
+            raw.get("decision"),
+            ALLOWED_EVALUATION_DECISIONS,
+            "decision",
+        ),
+        "rationale": _normalized_rationale(raw.get("rationale")),
+        "confidence": _normalized_choice(
+            raw.get("confidence"),
+            ALLOWED_EVALUATION_CONFIDENCE,
+            "confidence",
+        ),
+        "next_steps": _to_notes_list(raw.get("next_steps")),
         "strengths": _to_notes_list(raw.get("strengths")),
         "improvements": _to_notes_list(raw.get("improvements")),
         "updated_at": raw.get("updated_at"),

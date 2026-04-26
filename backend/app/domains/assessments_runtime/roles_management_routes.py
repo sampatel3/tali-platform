@@ -17,6 +17,7 @@ from ...platform.config import settings
 from ...platform.database import get_db
 from ...schemas.role import RoleCreate, RoleResponse, RoleTaskLinkRequest, RoleUpdate
 from ...services.document_service import process_document_upload
+from ...services.interview_support_service import build_role_interview_pack_templates
 from ...services.interview_focus_service import generate_interview_focus_sync
 from .role_support import get_role, role_to_response
 from .pipeline_service import role_pipeline_counts
@@ -53,6 +54,13 @@ def create_role(
         name=data.name.strip(),
         description=(data.description or None),
         additional_requirements=(data.additional_requirements or None),
+        screening_pack_template=(data.screening_pack_template.model_dump() if data.screening_pack_template else None),
+        tech_interview_pack_template=(data.tech_interview_pack_template.model_dump() if data.tech_interview_pack_template else None),
+        auto_reject_enabled=data.auto_reject_enabled,
+        auto_reject_threshold_100=data.auto_reject_threshold_100,
+        workable_actor_member_id=(data.workable_actor_member_id or None),
+        workable_disqualify_reason_id=(data.workable_disqualify_reason_id or None),
+        auto_reject_note_template=(data.auto_reject_note_template or None),
     )
     db.add(role)
     try:
@@ -196,6 +204,22 @@ def update_role(
         role.description = updates["description"] or None
     if "additional_requirements" in updates:
         role.additional_requirements = updates["additional_requirements"] or None
+    if "screening_pack_template" in updates:
+        template = updates["screening_pack_template"]
+        role.screening_pack_template = template.model_dump() if template else None
+    if "tech_interview_pack_template" in updates:
+        template = updates["tech_interview_pack_template"]
+        role.tech_interview_pack_template = template.model_dump() if template else None
+    if "auto_reject_enabled" in updates:
+        role.auto_reject_enabled = updates["auto_reject_enabled"]
+    if "auto_reject_threshold_100" in updates:
+        role.auto_reject_threshold_100 = updates["auto_reject_threshold_100"]
+    if "workable_actor_member_id" in updates:
+        role.workable_actor_member_id = updates["workable_actor_member_id"] or None
+    if "workable_disqualify_reason_id" in updates:
+        role.workable_disqualify_reason_id = updates["workable_disqualify_reason_id"] or None
+    if "auto_reject_note_template" in updates:
+        role.auto_reject_note_template = updates["auto_reject_note_template"] or None
     try:
         db.commit()
         db.refresh(role)
@@ -268,6 +292,9 @@ def upload_role_job_spec(
     if interview_focus:
         role.interview_focus = interview_focus
         role.interview_focus_generated_at = now
+        templates = build_role_interview_pack_templates(role)
+        role.screening_pack_template = templates.get("screening")
+        role.tech_interview_pack_template = templates.get("tech_stage_2")
 
     try:
         db.commit()
@@ -312,6 +339,9 @@ def regenerate_interview_focus(
     if interview_focus:
         role.interview_focus = interview_focus
         role.interview_focus_generated_at = now
+        templates = build_role_interview_pack_templates(role)
+        role.screening_pack_template = templates.get("screening")
+        role.tech_interview_pack_template = templates.get("tech_stage_2")
 
     try:
         db.commit()

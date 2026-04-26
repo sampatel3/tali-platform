@@ -110,10 +110,13 @@ export const CandidateResultsTab = ({
   benchmarksData = null,
   extraSections = [],
 }) => {
-  const assessment = candidate._raw || {};
-  const assessmentStatus = normalizeAssessmentStatus(assessment.status || candidate.status);
-  const bd = candidate.breakdown || {};
-  const catScores = getCategoryScores(candidate);
+  const safeCandidate = candidate || {};
+  const assessment = safeCandidate?._raw || {};
+  const assessmentStatus = normalizeAssessmentStatus(assessment.status || safeCandidate?.status);
+  const bd = safeCandidate?.breakdown || {};
+  const candidateName = safeCandidate?.name || 'Candidate';
+  const candidateResults = Array.isArray(safeCandidate?.results) ? safeCandidate.results : [];
+  const catScores = getCategoryScores(safeCandidate);
   const detailedScores = normalizeCategoryBucket(
     bd.detailedScores
       || assessment.score_breakdown?.detailed_scores
@@ -285,7 +288,7 @@ export const CandidateResultsTab = ({
                   <PolarGrid stroke="var(--taali-purple-soft)" />
                   <PolarAngleAxis dataKey="dimension" tick={{ fontSize: 11, fontFamily: 'var(--taali-font)', fill: 'var(--taali-muted)' }} />
                   <PolarRadiusAxis domain={[0, 10]} tick={{ fontSize: 10, fill: 'var(--taali-muted)' }} />
-                  <Radar name={candidate.name} dataKey="score" stroke="var(--taali-purple)" fill="var(--taali-purple)" fillOpacity={0.2} />
+                  <Radar name={candidateName} dataKey="score" stroke="var(--taali-purple)" fill="var(--taali-purple)" fillOpacity={0.2} />
                 </RadarChart>
               </ResponsiveContainer>
             </div>
@@ -375,10 +378,10 @@ export const CandidateResultsTab = ({
           );
         })}
 
-        {candidate.results.length > 0 ? (
+        {candidateResults.length > 0 ? (
           <div className="space-y-3">
             <div className="font-bold">Test results</div>
-            {candidate.results.map((r, i) => (
+            {candidateResults.map((r, i) => (
               <Panel key={i} className="flex items-start gap-3 bg-[var(--taali-success-soft)] p-4">
                 <CheckCircle size={20} className="mt-0.5 shrink-0 text-[var(--taali-purple)]" />
                 <div>

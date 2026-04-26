@@ -143,6 +143,10 @@ class AssessmentStart(BaseModel):
     token: str
     sandbox_id: str
     task: Dict[str, Any]
+    candidate_name: Optional[str] = None
+    organization_name: Optional[str] = None
+    expires_at: Optional[datetime] = None
+    invite_sent_at: Optional[datetime] = None
     claude_budget: Optional[Dict[str, Any]] = None
     time_remaining: int
     is_timer_paused: bool = False
@@ -151,20 +155,37 @@ class AssessmentStart(BaseModel):
     ai_mode: str = "claude_cli_terminal"
     terminal_mode: bool = False
     terminal_capabilities: Dict[str, Any] = Field(default_factory=dict)
+    repo_url: Optional[str] = None
+    branch_name: Optional[str] = None
+    clone_command: Optional[str] = None
 
 
 class AssessmentStartRequest(BaseModel):
     calibration_warmup_prompt: Optional[str] = Field(default=None, min_length=1, max_length=4000)
 
 
+class RepoFileSnapshotEntry(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+    content: str = Field(default="", max_length=500000)
+
+
 class CodeExecutionRequest(BaseModel):
     code: str = Field(min_length=1, max_length=100000)
+    selected_file_path: Optional[str] = Field(default=None, max_length=500)
+    repo_files: List[RepoFileSnapshotEntry] = Field(default_factory=list)
+
+
+class RepoFileSaveRequest(BaseModel):
+    path: str = Field(min_length=1, max_length=500)
+    content: str = Field(default="", max_length=500000)
 
 
 class ClaudeRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     conversation_history: List[Dict[str, Any]] = []
     code_context: Optional[str] = None  # Current editor content at time of prompt
+    selected_file_path: Optional[str] = Field(default=None, max_length=500)
+    repo_files: List[RepoFileSnapshotEntry] = Field(default_factory=list)
     paste_detected: bool = False  # Whether prompt was pasted
     browser_focused: bool = True  # Whether browser was in focus
     time_since_assessment_start_ms: Optional[int] = None  # Time since assessment start in ms
@@ -173,6 +194,8 @@ class ClaudeRequest(BaseModel):
 
 class SubmitRequest(BaseModel):
     final_code: str = Field(min_length=1, max_length=100000)
+    selected_file_path: Optional[str] = Field(default=None, max_length=500)
+    repo_files: List[RepoFileSnapshotEntry] = Field(default_factory=list)
     tab_switch_count: int = 0  # Total tab switches during assessment
 
 
@@ -185,3 +208,23 @@ class DemoAssessmentStartRequest(BaseModel):
     company_size: str = Field(min_length=1, max_length=100)
     assessment_track: str = Field(min_length=1, max_length=120)
     marketing_consent: bool = True
+
+
+class DemoBookingRequest(BaseModel):
+    full_name: str = Field(min_length=1, max_length=200)
+    position: Optional[str] = Field(default=None, max_length=200)
+    email: EmailStr
+    work_email: Optional[EmailStr] = None
+    company_name: str = Field(min_length=1, max_length=200)
+    company_size: str = Field(min_length=1, max_length=100)
+    marketing_consent: bool = True
+
+
+class DemoBookingResponse(BaseModel):
+    success: bool = True
+    candidate_id: int = Field(gt=0)
+    message: str = Field(
+        default="Thanks. We have your details and will reach out to schedule the walkthrough.",
+        min_length=1,
+        max_length=400,
+    )

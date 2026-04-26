@@ -51,9 +51,10 @@ const promptEmptyMessageForStatus = (status) => {
 };
 
 export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
-  const assessment = candidate._raw || {};
-  const assessmentStatus = normalizeAssessmentStatus(assessment.status || candidate.status);
+  const assessment = candidate?._raw || {};
+  const assessmentStatus = normalizeAssessmentStatus(assessment.status || candidate?.status);
   const promptEmptyMessage = promptEmptyMessageForStatus(assessmentStatus);
+  const promptList = Array.isArray(candidate?.promptsList) ? candidate.promptsList : [];
 
   return (
     <div className="space-y-4">
@@ -119,12 +120,12 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
       ) : null}
 
       <Panel className="p-3.5">
-        <div className="mb-4 font-bold">Prompt Log ({(candidate.promptsList || []).length} prompts)</div>
+        <div className="mb-4 font-bold">Prompt Log ({promptList.length} prompts)</div>
         <div className="mb-3 font-mono text-xs text-[var(--taali-muted)]">
           Clarity = clear, structured asks · Specificity = concrete context and references · Efficiency = prompt-to-action quality (all /10)
         </div>
         <div className="space-y-3">
-          {(candidate.promptsList || []).map((p, i) => {
+          {promptList.map((p, i) => {
             const perPrompt = assessment.prompt_analytics?.per_prompt_scores?.[i];
             return (
               <Card key={i} className="p-3">
@@ -163,13 +164,13 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
             );
           })}
 
-          {(candidate.promptsList || []).length === 0 ? (
+          {promptList.length === 0 ? (
             <Card className="py-8 text-center text-[var(--taali-muted)]">{promptEmptyMessage}</Card>
           ) : null}
         </div>
       </Panel>
 
-      {(candidate.promptsList || []).length > 0 && assessment.prompt_analytics ? (
+      {promptList.length > 0 && assessment.prompt_analytics ? (
         <Panel className="p-4">
           <div className="mb-3 font-bold">Prompt Statistics</div>
           <div className="grid grid-cols-2 gap-3 font-mono text-sm md:grid-cols-4">
@@ -285,7 +286,7 @@ export const CandidateCvFitTab = ({
 };
 
 export const CandidateCodeGitTab = ({ candidate }) => {
-  const assessment = candidate._raw || {};
+  const assessment = candidate?._raw || {};
   const gitEvidence = assessment.git_evidence || {};
   const headSha = gitEvidence.head_sha;
   const commits = gitEvidence.commits;

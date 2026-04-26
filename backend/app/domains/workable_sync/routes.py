@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Body, Depends, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -31,7 +32,7 @@ class _AdminClearSyncBody(BaseModel):
 
 
 class _SyncRequestBody(BaseModel):
-    mode: Literal["metadata", "full"] = "metadata"
+    mode: Literal["metadata", "full"] = "full"
     # Legacy compatibility: frontend may still send skip_cv.
     skip_cv: bool | None = None
     # Optional list of Workable job shortcodes/IDs to limit sync scope.
@@ -415,6 +416,62 @@ def workable_sync_jobs(
     return {"total": len(out), "jobs": out}
 
 
+@router.get("/members")
+def workable_members(
+    shortcode: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
+    org = _get_org_for_user(db, current_user)
+    _assert_workable_connected(org)
+    client = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
+    try:
+        members = client.list_members(shortcode=shortcode)
+    except Exception as exc:
+        logger.exception("Failed listing Workable members for org_id=%s: %s", org.id, exc)
+        raise HTTPException(status_code=502, detail="Failed to load Workable members.") from exc
+    return {"members": members}
+
+
+@router.get("/disqualification-reasons")
+def workable_disqualification_reasons(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
+    org = _get_org_for_user(db, current_user)
+    _assert_workable_connected(org)
+    client = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
+    try:
+        reasons = client.list_disqualification_reasons()
+    except Exception as exc:
+        logger.exception("Failed listing Workable disqualification reasons for org_id=%s: %s", org.id, exc)
+        raise HTTPException(status_code=502, detail="Failed to load Workable disqualification reasons.") from exc
+    return {"disqualification_reasons": reasons}
+
+
+@router.get("/stages")
+def workable_stages(
+    shortcode: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
+    org = _get_org_for_user(db, current_user)
+    _assert_workable_connected(org)
+    client = WorkableService(access_token=org.workable_access_token, subdomain=org.workable_subdomain)
+    try:
+        stages = client.list_job_stages(shortcode) if shortcode else client.list_stages()
+    except Exception as exc:
+        logger.exception("Failed listing Workable stages for org_id=%s: %s", org.id, exc)
+        raise HTTPException(status_code=502, detail="Failed to load Workable stages.") from exc
+    return {"stages": stages}
+
+
 @router.get("/sync/status")
 def workable_sync_status(
     run_id: int | None = Query(None, description="Optional sync run ID. Uses latest run when omitted."),
@@ -527,17 +584,26 @@ def run_workable_sync(
 
     existing = _latest_running_run_for_org(db, org.id)
     if existing is not None:
-        raise HTTPException(
-            status_code=409,
-            detail=f"A sync is already in progress (run_id={existing.id}). Check status below or try again in a few minutes.",
+        return JSONResponse(
+            status_code=202,
+            content={
+                "status": "already_running",
+                "run_id": existing.id,
+                "mode": existing.mode or "full",
+                "phase": existing.phase,
+                "message": (
+                    f"A sync is already in progress (run_id={existing.id}). "
+                    "Polling the existing background run instead of starting a new one."
+                ),
+                "execution_backend": "existing",
+            },
         )
 
-    requested_mode = ((body.mode if body is not None else "metadata") or "metadata").strip().lower()
+    org_config = org.workable_config if isinstance(org.workable_config, dict) else {}
+    configured_mode = str(org_config.get("default_sync_mode") or "full").strip().lower()
+    requested_mode = ((body.mode if body is not None else configured_mode) or configured_mode).strip().lower()
     if requested_mode not in {"metadata", "full"}:
-        requested_mode = "metadata"
-    if requested_mode == "full":
-        # Reserved in this cycle; execute metadata sync and keep response explicit.
-        requested_mode = "metadata"
+        requested_mode = configured_mode if configured_mode in {"metadata", "full"} else "full"
     selected_job_shortcodes = _normalize_selected_job_shortcodes(body.job_shortcodes if body is not None else None)
 
     run = WorkableSyncRun(

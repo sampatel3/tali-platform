@@ -59,6 +59,12 @@ const SkillChips = ({ title, items, badgeVariant = 'success', emptyLabel }) => (
   </div>
 );
 
+const formatDateTime = (value) => {
+  if (!value) return 'Not linked yet';
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? 'Not linked yet' : parsed.toLocaleString();
+};
+
 const RoleFitSummaryPanel = ({ reportModel }) => {
   const roleFitModel = reportModel?.roleFitModel || {};
   const strengths = buildRoleFitStrengths(roleFitModel);
@@ -159,9 +165,69 @@ const ProbeSummaryPanel = ({
   );
 };
 
+const FirefliesCapturePanel = ({ reportModel }) => {
+  const firefliesModel = reportModel?.firefliesModel || {};
+
+  if (!firefliesModel.shouldSurface) {
+    return null;
+  }
+
+  return (
+    <Panel className="p-4">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Fireflies capture</div>
+          <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">{firefliesModel.statusLabel}</div>
+        </div>
+        <Badge variant={firefliesModel.badgeVariant || 'muted'} className="font-mono text-[11px]">
+          {firefliesModel.linked ? 'Linked' : (firefliesModel.captureExpected ? 'Workable flow' : 'Optional')}
+        </Badge>
+      </div>
+
+      {firefliesModel.description ? (
+        <p className="mt-3 text-sm leading-6 text-[var(--taali-muted)]">{firefliesModel.description}</p>
+      ) : null}
+
+      <div className="mt-5 grid gap-4 lg:grid-cols-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Invite email</div>
+          <div className="mt-2 text-sm text-[var(--taali-text)]">{firefliesModel.inviteEmail || 'Not configured'}</div>
+        </div>
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Latest source</div>
+          <div className="mt-2 text-sm text-[var(--taali-text)]">{firefliesModel.latestSource || 'No transcript linked yet'}</div>
+        </div>
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Latest meeting</div>
+          <div className="mt-2 text-sm text-[var(--taali-text)]">{formatDateTime(firefliesModel.latestMeetingDate)}</div>
+        </div>
+      </div>
+
+      {firefliesModel.latestSummary ? (
+        <div className="mt-5 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] p-4">
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Latest transcript summary</div>
+          <p className="mt-2 text-sm leading-6 text-[var(--taali-text)]">{firefliesModel.latestSummary}</p>
+        </div>
+      ) : null}
+
+      {firefliesModel.latestProviderUrl ? (
+        <a
+          href={firefliesModel.latestProviderUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="mt-4 inline-flex text-sm font-medium text-[var(--taali-purple-hover)] underline-offset-2 hover:underline"
+        >
+          Open transcript
+        </a>
+      ) : null}
+    </Panel>
+  );
+};
+
 export const CandidateAssessmentSummaryView = ({
   reportModel,
   variant = 'page',
+  showIdentityTitle = true,
   onOpenInterviewGuidance = null,
   showInterviewGuidanceAction = false,
   showSupplementalPanels = true,
@@ -173,6 +239,7 @@ export const CandidateAssessmentSummaryView = ({
       model={reportModel}
       variant={variant}
       showInsights={false}
+      showIdentityTitle={showIdentityTitle}
       showRoleFitSection={false}
       showIntegritySection={false}
       showEvidenceSections={false}
@@ -181,13 +248,21 @@ export const CandidateAssessmentSummaryView = ({
     />
 
     {showSupplementalPanels ? (
-      <div className={cx('grid gap-4', variant === 'sheet' ? 'grid-cols-1' : 'xl:grid-cols-2')}>
+      <div
+        className={cx(
+          'grid gap-4',
+          variant === 'sheet'
+            ? 'grid-cols-1'
+            : (reportModel?.firefliesModel?.shouldSurface ? 'xl:grid-cols-3' : 'xl:grid-cols-2')
+        )}
+      >
         <RoleFitSummaryPanel reportModel={reportModel} />
         <ProbeSummaryPanel
           reportModel={reportModel}
           onOpenInterviewGuidance={onOpenInterviewGuidance}
           showInterviewGuidanceAction={showInterviewGuidanceAction}
         />
+        <FirefliesCapturePanel reportModel={reportModel} />
       </div>
     ) : null}
   </div>

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildAssessmentSummaryModel,
   buildRoleFitEvidenceModel,
+  buildStandingCandidateReportModel,
 } from './assessmentViewModels';
 
 describe('assessmentViewModels', () => {
@@ -121,5 +122,83 @@ describe('assessmentViewModels', () => {
     expect(summaryModel.heuristicSummary).toContain('Passed 5 of 6 tests');
     expect(summaryModel.heuristicSummary).toContain('First recruiter requirement gap: Direct production incident ownership');
     expect(summaryModel.heuristicSummary.toLowerCase()).not.toContain('processing');
+  });
+
+  it('derives an awaiting Fireflies state for workable applications without a linked transcript', () => {
+    const model = buildStandingCandidateReportModel({
+      application: {
+        source: 'workable',
+        cv_match_score: 81,
+        cv_match_details: {
+          score_scale: '0-100',
+          summary: 'Strong enough CV evidence to review before sending an assessment.',
+        },
+        screening_interview_summary: {
+          fireflies: {
+            status: 'awaiting_transcript',
+            configured: true,
+            capture_expected: true,
+            invite_email: 'taali@fireflies.ai',
+          },
+        },
+        interview_evidence_summary: {
+          fireflies: {
+            status: 'awaiting_transcript',
+            configured: true,
+            capture_expected: true,
+            invite_email: 'taali@fireflies.ai',
+          },
+        },
+      },
+    });
+
+    expect(model.firefliesModel.shouldSurface).toBe(true);
+    expect(model.firefliesModel.status).toBe('awaiting_transcript');
+    expect(model.firefliesModel.statusLabel).toBe('Awaiting Fireflies transcript');
+    expect(model.firefliesModel.inviteEmail).toBe('taali@fireflies.ai');
+  });
+
+  it('derives linked Fireflies transcript details from interview summaries', () => {
+    const model = buildStandingCandidateReportModel({
+      application: {
+        source: 'workable',
+        cv_match_score: 84,
+        cv_match_details: {
+          score_scale: '0-100',
+          summary: 'Strong backend role-fit evidence.',
+        },
+        screening_interview_summary: {
+          summary: 'Screening transcript confirmed strong backend delivery.',
+          latest_provider_url: 'https://fireflies.ai/view/ff-123',
+          fireflies: {
+            status: 'linked',
+            configured: true,
+            capture_expected: true,
+            invite_email: 'taali@fireflies.ai',
+            latest_summary: 'Screening transcript confirmed strong backend delivery.',
+            latest_provider_url: 'https://fireflies.ai/view/ff-123',
+            latest_meeting_date: '2026-01-14T12:00:00Z',
+            latest_source: 'fireflies',
+          },
+        },
+        interview_evidence_summary: {
+          fireflies: {
+            status: 'linked',
+            configured: true,
+            capture_expected: true,
+            invite_email: 'taali@fireflies.ai',
+            latest_summary: 'Screening transcript confirmed strong backend delivery.',
+            latest_provider_url: 'https://fireflies.ai/view/ff-123',
+            latest_meeting_date: '2026-01-14T12:00:00Z',
+            latest_source: 'fireflies',
+          },
+        },
+      },
+    });
+
+    expect(model.firefliesModel.status).toBe('linked');
+    expect(model.firefliesModel.statusLabel).toBe('Stage 1 Fireflies transcript linked');
+    expect(model.firefliesModel.latestSummary).toContain('strong backend delivery');
+    expect(model.firefliesModel.latestProviderUrl).toBe('https://fireflies.ai/view/ff-123');
   });
 });

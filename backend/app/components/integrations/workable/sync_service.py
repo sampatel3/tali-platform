@@ -16,17 +16,28 @@ from ....models.candidate_application import CandidateApplication
 from ....models.organization import Organization
 from ....models.role import Role
 from ....models.workable_sync_run import WorkableSyncRun
+from ....platform.config import settings
 from ....domains.assessments_runtime.pipeline_service import (
+    append_application_event,
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
     map_legacy_status_to_pipeline,
     normalize_pipeline_key,
 )
+from ....domains.assessments_runtime.role_support import refresh_application_score_cache
 from ....services.document_service import (
+    extract_text,
     sanitize_json_for_storage,
     sanitize_text_for_storage,
     save_file_locally,
 )
+from ....services.application_automation_service import run_auto_reject_if_needed
+from ....services.fit_matching_service import calculate_cv_job_match_sync
+from ....services.interview_support_service import (
+    build_role_interview_pack_templates,
+    refresh_application_interview_support,
+)
+from ....services.pre_screening_service import refresh_pre_screening_fields
 from .service import WorkableRateLimitError, WorkableService
 
 logger = logging.getLogger(__name__)
@@ -371,9 +382,100 @@ def _candidate_position(payload: dict, job_title: str | None = None) -> str | No
 
 
 def _rank_score_for_application(app: CandidateApplication) -> float | None:
+    if getattr(app, "pre_screen_score_100", None) is not None:
+        return app.pre_screen_score_100
     if app.workable_score is not None:
         return app.workable_score
     return app.cv_match_score
+
+
+def _normalize_cv_match_score_100(score: float | int | None, details: dict | None = None) -> float | None:
+    if score is None:
+        return None
+    try:
+        numeric = float(score)
+    except (TypeError, ValueError):
+        return None
+    if numeric < 0:
+        return None
+    scale = str((details or {}).get("score_scale") or "").strip().lower()
+    if "100" in scale:
+        normalized = numeric
+    elif numeric <= 10.0:
+        normalized = numeric * 10.0
+    else:
+        normalized = numeric
+    return round(max(0.0, min(100.0, normalized)), 1)
+
+
+def _normalize_cv_match_details(details: dict | None, *, final_score_100: float | None) -> dict | None:
+    payload = dict(details or {})
+    if final_score_100 is None:
+        return payload or None
+    payload.setdefault("score_scale", "0-100")
+    payload.setdefault("final_score_100", final_score_100)
+    return payload
+
+
+def _store_candidate_resume(
+    *,
+    app: CandidateApplication,
+    candidate: Candidate,
+    filename: str,
+    content: bytes,
+) -> bool:
+    if not content:
+        return False
+    ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
+    if ext not in {"pdf", "docx", "txt"}:
+        return False
+    extracted = sanitize_text_for_storage(extract_text(content, ext))
+    if not extracted:
+        return False
+    file_url = save_file_locally(
+        content=content,
+        directory="cv",
+        prefix=f"cv-{app.id or candidate.id}",
+        ext=ext,
+    )
+    now = _now()
+    app.cv_file_url = file_url
+    app.cv_filename = sanitize_text_for_storage(filename)
+    app.cv_text = extracted
+    app.cv_uploaded_at = now
+    candidate.cv_file_url = file_url
+    candidate.cv_filename = sanitize_text_for_storage(filename)
+    candidate.cv_text = extracted
+    candidate.cv_uploaded_at = now
+    return True
+
+
+def _compute_cv_match_for_application(app: CandidateApplication) -> bool:
+    role = app.role
+    cv_text = (app.cv_text or "").strip()
+    job_spec_text = ((role.job_spec_text if role else None) or "").strip()
+    if not cv_text or not job_spec_text or not settings.ANTHROPIC_API_KEY:
+        return False
+    result = calculate_cv_job_match_sync(
+        cv_text=cv_text,
+        job_spec_text=job_spec_text,
+        api_key=settings.ANTHROPIC_API_KEY,
+        model=settings.resolved_claude_scoring_model,
+        additional_requirements=(role.additional_requirements or "").strip() or None if role else None,
+    )
+    raw_details = result.get("match_details", {}) if isinstance(result, dict) else {}
+    normalized_score = _normalize_cv_match_score_100(
+        result.get("cv_job_match_score") if isinstance(result, dict) else None,
+        raw_details if isinstance(raw_details, dict) else None,
+    )
+    app.cv_match_score = normalized_score
+    app.cv_match_details = _normalize_cv_match_details(
+        raw_details if isinstance(raw_details, dict) else None,
+        final_score_100=normalized_score,
+    )
+    app.cv_match_scored_at = _now()
+    refresh_pre_screening_fields(app)
+    return True
 
 
 def _extract_candidate_fields(payload: dict) -> dict:
@@ -586,7 +688,7 @@ class WorkableSyncService:
         requested_mode = (mode or "metadata").strip().lower()
         if requested_mode not in {"metadata", "full"}:
             requested_mode = "metadata"
-        effective_mode = "metadata"  # Full mode is reserved in this cycle.
+        effective_mode = requested_mode
         selected_identifiers: set[str] = set()
         for value in selected_job_shortcodes or []:
             normalized = sanitize_text_for_storage(str(value or "").strip())
@@ -597,7 +699,6 @@ class WorkableSyncService:
             "run_id": run.id if run else None,
             "requested_mode": requested_mode,
             "mode": effective_mode,
-            "full_mode_reserved": requested_mode == "full",
             "full_resync": bool(full_resync),
             "phase": "listing_jobs",
             "jobs_total": 0,
@@ -716,12 +817,14 @@ class WorkableSyncService:
                                 candidate_ref=candidate_ref,
                                 now=now,
                                 run=run,
+                                mode=effective_mode,
                             )
                             summary["candidates_upserted"] += synced.get("candidate_upserted", 0)
                             summary["applications_upserted"] += synced.get("application_upserted", 0)
                         except WorkableSyncCancelled:
                             raise
                         except Exception as exc:
+                            db.rollback()
                             logger.exception("Failed syncing candidate for job_shortcode=%s", shortcode)
                             summary["errors"].append(str(exc))
                             final_status = "partial"
@@ -734,6 +837,7 @@ class WorkableSyncService:
                     summary["db_snapshot"] = self._build_db_snapshot(db, org)
                     self._persist_progress(db, org, run, summary)
                 except WorkableRateLimitError as exc:
+                    db.rollback()
                     logger.warning("Workable sync rate-limited; stopping early for org_id=%s", org.id)
                     summary["errors"].append(str(exc))
                     final_status = "partial"
@@ -741,6 +845,7 @@ class WorkableSyncService:
                 except WorkableSyncCancelled:
                     raise
                 except Exception as exc:
+                    db.rollback()
                     logger.exception("Failed syncing job for org_id=%s", org.id)
                     summary["errors"].append(str(exc))
                     final_status = "partial"
@@ -907,6 +1012,10 @@ class WorkableSyncService:
                 role.job_spec_uploaded_at = _now()
             except Exception:
                 logger.exception("Failed saving Workable job spec file for role_id=%s", role.id)
+        if not isinstance(role.screening_pack_template, dict) or not isinstance(role.tech_interview_pack_template, dict):
+            templates = build_role_interview_pack_templates(role)
+            role.screening_pack_template = templates.get("screening")
+            role.tech_interview_pack_template = templates.get("tech_stage_2")
         return role, created
 
     def _sync_candidate_for_role(
@@ -919,6 +1028,7 @@ class WorkableSyncService:
         candidate_ref: dict,
         now: datetime,
         run: WorkableSyncRun | None = None,
+        mode: str = "metadata",
     ) -> dict:
         if self._is_cancel_requested(db, org, run):
             raise WorkableSyncCancelled()
@@ -930,8 +1040,11 @@ class WorkableSyncService:
         if not candidate_id:
             return counters
 
-        # Use bulk payload directly -- no individual candidate fetch
         candidate_payload = candidate_ref
+        if mode == "full":
+            full_payload = self.client.get_candidate(candidate_id)
+            if isinstance(full_payload, dict) and full_payload:
+                candidate_payload = {**candidate_ref, **full_payload}
 
         if self._is_cancel_requested(db, org, run):
             raise WorkableSyncCancelled()
@@ -988,7 +1101,7 @@ class WorkableSyncService:
         candidate.position = _candidate_position(candidate_payload, role.name)
         candidate.workable_candidate_id = sanitize_text_for_storage(candidate_id)
         candidate.workable_data = sanitize_json_for_storage(candidate_payload)
-        candidate.workable_enriched = False
+        candidate.workable_enriched = mode == "full"
 
         # Extract rich profile fields from bulk payload
         extracted = _extract_candidate_fields(candidate_payload)
@@ -1030,6 +1143,7 @@ class WorkableSyncService:
         if created_application:
             app.status = sanitize_text_for_storage(str(stage or app.status or "applied"))
         ensure_pipeline_fields(app, source="sync" if created_application else "system")
+        db.flush()
         if created_application:
             initialize_pipeline_event_if_missing(
                 db,
@@ -1055,6 +1169,7 @@ class WorkableSyncService:
                 "sync_status": "success",
                 "run_id": run.id if run else None,
                 "source": "workable",
+                "mode": mode,
             }
         )
         app.last_synced_at = now
@@ -1080,6 +1195,51 @@ class WorkableSyncService:
         if self._is_cancel_requested(db, org, run):
             raise WorkableSyncCancelled()
 
+        if mode == "full":
+            if not (app.cv_text or "").strip() and (candidate.cv_text or "").strip():
+                app.cv_file_url = candidate.cv_file_url
+                app.cv_filename = candidate.cv_filename
+                app.cv_text = candidate.cv_text
+                app.cv_uploaded_at = candidate.cv_uploaded_at
+            if not (app.cv_text or "").strip():
+                downloaded = self.client.download_candidate_resume(candidate_payload)
+                if downloaded:
+                    filename, content = downloaded
+                    _store_candidate_resume(
+                        app=app,
+                        candidate=candidate,
+                        filename=filename,
+                        content=content,
+                    )
+            computed_match = False
+            if (app.cv_text or "").strip() and getattr(role, "job_spec_text", None):
+                computed_match = _compute_cv_match_for_application(app)
+            if computed_match or app.score_cached_at is None:
+                refresh_application_score_cache(app, db=db)
+            else:
+                refresh_pre_screening_fields(app)
+            refresh_application_interview_support(app)
+            auto_result = run_auto_reject_if_needed(
+                db=db,
+                org=org,
+                app=app,
+                role=role,
+                actor_type="sync",
+            )
+            if auto_result.get("performed"):
+                append_application_event(
+                    db,
+                    app=app,
+                    event_type="workable_auto_reject_applied",
+                    actor_type="sync",
+                    reason=str(auto_result.get("reason") or "Auto reject applied during full sync"),
+                    metadata={
+                        "pre_screen_score": auto_result.get("snapshot", {}).get("pre_screen_score"),
+                        "threshold_100": auto_result.get("config", {}).get("threshold_100"),
+                    },
+                )
+        else:
+            refresh_pre_screening_fields(app)
         app.rank_score = _rank_score_for_application(app)
         if not created_application:
             # Preserve local source-of-truth stage for existing applications.

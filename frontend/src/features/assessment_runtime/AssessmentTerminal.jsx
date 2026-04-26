@@ -1,5 +1,4 @@
 import React, { useEffect, useMemo, useRef } from 'react';
-import { Square } from 'lucide-react';
 import { Terminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -10,8 +9,6 @@ export const AssessmentTerminal = ({
   disabled = false,
   onInput,
   onResize,
-  onStop,
-  stopping = false,
   lightMode = false,
 }) => {
   const hostRef = useRef(null);
@@ -53,7 +50,7 @@ export const AssessmentTerminal = ({
     if (!hostRef.current || terminalRef.current) return;
 
     const term = new Terminal({
-      fontFamily: 'Menlo, Monaco, Consolas, "Courier New", monospace',
+      fontFamily: '"Geist Mono", "JetBrains Mono", Menlo, Monaco, Consolas, "Courier New", monospace',
       fontSize: 13,
       convertEol: true,
       cursorBlink: true,
@@ -166,9 +163,14 @@ export const AssessmentTerminal = ({
     <div className="flex h-full flex-col bg-[var(--taali-runtime-terminal-bg)] text-[var(--taali-runtime-terminal-text)]">
       <div className="flex items-center justify-between gap-3 border-b border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-terminal-header)] px-3 py-2">
         <div className="flex items-center gap-2">
-          <span className="font-mono text-xs font-bold uppercase tracking-wide">
-            Claude Code CLI
-          </span>
+          <div className="flex flex-col">
+            <span className="font-mono text-xs font-bold uppercase tracking-wide">
+              Claude Code CLI
+            </span>
+            <span className="text-[11px] text-[var(--taali-runtime-muted)]">
+              Repo shell for tests, commands, and the Claude session behind Ask Claude.
+            </span>
+          </div>
           <span className={`rounded-full border px-2 py-0.5 font-mono text-[11px] ${
             connected
               ? 'border-[var(--taali-success-border)] bg-[var(--taali-success-soft)] text-[var(--taali-success)]'
@@ -176,19 +178,6 @@ export const AssessmentTerminal = ({
           }`}>
             {connectionBadge}
           </span>
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            className="rounded-[var(--taali-radius-control)] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] px-2 py-1 font-mono text-[11px] text-[var(--taali-danger)] transition-colors hover:border-[var(--taali-danger)] disabled:opacity-50"
-            onClick={onStop}
-            disabled={stopping}
-          >
-            <span className="inline-flex items-center gap-1">
-              <Square size={10} />
-              {stopping ? 'Stopping...' : 'Stop'}
-            </span>
-          </button>
         </div>
       </div>
       <div

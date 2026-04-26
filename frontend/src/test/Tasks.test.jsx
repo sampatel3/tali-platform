@@ -161,7 +161,7 @@ const renderAppOnTasksPage = async () => {
 
   // Wait for Tasks page to load (lazy + API)
   await waitFor(() => {
-    expect(screen.getByText('Tasks', { selector: 'h1' })).toBeInTheDocument();
+    expect(screen.getByText(/Tasks the engineering team built for/i, { selector: 'h1' })).toBeInTheDocument();
   }, { timeout: 5000 });
 
   return result;
@@ -185,8 +185,8 @@ describe('TasksPage', () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
-      expect(screen.getByText('Tasks', { selector: 'h1' })).toBeInTheDocument();
-      expect(screen.getByText('Assessment task catalog')).toBeInTheDocument();
+      expect(screen.getByText(/Tasks the engineering team built for/i, { selector: 'h1' })).toBeInTheDocument();
+      expect(screen.getByText(/Read-only catalog/i)).toBeInTheDocument();
     }, { timeout: 5000 });
   });
 
@@ -213,9 +213,9 @@ describe('TasksPage', () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
-      expect(screen.getByText('MID')).toBeInTheDocument();
-      expect(screen.getByText('SENIOR')).toBeInTheDocument();
-      expect(screen.getByText('JUNIOR')).toBeInTheDocument();
+      expect(screen.getAllByText('mid').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('senior').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('junior').length).toBeGreaterThan(0);
     });
   });
 
@@ -223,9 +223,9 @@ describe('TasksPage', () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
-      expect(screen.getByText('45min')).toBeInTheDocument();
-      expect(screen.getByText('60min')).toBeInTheDocument();
-      expect(screen.getByText('30min')).toBeInTheDocument();
+      expect(screen.getByText('45m')).toBeInTheDocument();
+      expect(screen.getByText('60m')).toBeInTheDocument();
+      expect(screen.getByText('30m')).toBeInTheDocument();
     });
   });
 
@@ -236,7 +236,6 @@ describe('TasksPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('No tasks available')).toBeInTheDocument();
-      expect(screen.getByText('Create your first task to start evaluating candidates.')).toBeInTheDocument();
     });
   });
 
@@ -251,51 +250,45 @@ describe('TasksPage', () => {
   });
 
 
-  it('view task opens task overview modal with task details', async () => {
+  it('task preview opens as a full-page candidate preview link', async () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
       expect(screen.getByText('Async Pipeline Debugging')).toBeInTheDocument();
     });
 
-    const viewButtons = screen.getAllByTitle('View task');
-    fireEvent.click(viewButtons[0]);
-
-    await waitFor(() => {
-      expect(screen.getByText('Task Overview')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('Async Pipeline Debugging')).toBeInTheDocument();
-      expect(screen.getByDisplayValue('data_engineer')).toBeInTheDocument();
-      expect(screen.getByDisplayValue(/Compliance audit needs full history/)).toBeInTheDocument();
-    });
+    const previewLinks = screen.getAllByRole('link', { name: /Preview as candidate/i });
+    expect(previewLinks[0]).toHaveAttribute('target', '_blank');
+    expect(previewLinks[0]).toHaveAttribute('href', '/tasks/10/preview');
   });
 
-  it('task authoring actions are visible when authoring is enabled', async () => {
+  it('does not expose task authoring actions in the read-only library', async () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
       expect(screen.getByText('Async Pipeline Debugging')).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Create Task')).toBeInTheDocument();
-    expect(screen.queryAllByTitle('Edit task').length).toBeGreaterThan(0);
-    expect(screen.queryAllByTitle('Delete task').length).toBeGreaterThan(0);
+    expect(screen.queryByText('Create Task')).not.toBeInTheDocument();
+    expect(screen.queryAllByTitle('Edit task').length).toBe(0);
+    expect(screen.queryAllByTitle('Delete task').length).toBe(0);
   });
 
   it('shows task type badges', async () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
-      expect(screen.getByText('debugging')).toBeInTheDocument();
-      expect(screen.getByText('ai engineering')).toBeInTheDocument();
-      expect(screen.getByText('optimization')).toBeInTheDocument();
+      expect(screen.getAllByText('debugging').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('ai engineering').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('optimization').length).toBeGreaterThan(0);
     });
   });
 
-  it('template tasks show template label instead of edit/delete', async () => {
+  it('groups template tasks in the read-only catalog', async () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
-      expect(screen.getByText('template')).toBeInTheDocument();
+      expect(screen.getByText('Template Task')).toBeInTheDocument();
     });
   });
 });

@@ -1,46 +1,28 @@
-import React, { useState } from 'react';
-import { ArrowRight, Check } from 'lucide-react';
+import React, { useCallback, useMemo, useState } from 'react';
 
-import AssessmentPage from '../assessment_runtime/AssessmentPage';
-import { DEMO_ASSESSMENTS, DEFAULT_DEMO_ASSESSMENT_ID } from './demoAssessments';
-import { BrandLabel, Logo } from '../../shared/ui/Branding';
 import { assessments as assessmentsApi } from '../../shared/api';
-import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
-import {
-  Button,
-  Card,
-  Input,
-  Panel,
-  Select,
-} from '../../shared/ui/TaaliPrimitives';
+import { CandidateMiniNav, MarketingNav } from '../../shared/layout/TaaliLayout';
+import { PRODUCT_WALKTHROUGH_TASK } from './productWalkthroughModels';
 
 const initialForm = {
   fullName: '',
   position: '',
-  email: '',
   workEmail: '',
   company: '',
   companySize: '',
-  marketingConsent: false,
+  assessmentTrack: 'AI Engineer',
+  marketingConsent: true,
 };
+
+const companySizeOptions = ['1-10', '11-50', '51–200', '201–1,000', '1,000+'];
+const assessmentTracks = ['AI Engineer', 'Frontend Engineer', 'Backend Engineer', 'Data Engineer'];
 
 const requiredFieldLabels = {
   fullName: 'Full name',
-  position: 'Position',
-  email: 'Email',
   workEmail: 'Work email',
   company: 'Company',
   companySize: 'Company size',
 };
-
-const companySizeOptions = [
-  '1-10',
-  '11-50',
-  '51-200',
-  '201-500',
-  '501-2000',
-  '2000+',
-];
 
 const missingRequiredFields = (form) => (
   Object.entries(requiredFieldLabels)
@@ -48,226 +30,285 @@ const missingRequiredFields = (form) => (
     .map(([, label]) => label)
 );
 
+const scrollToWalkthrough = () => {
+  if (typeof document === 'undefined') return;
+  window.setTimeout(() => {
+    document.getElementById('demo-walkthrough')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 60);
+};
+
+const REPORT_SHOWCASE_TOKEN = 'demo-token';
+const REPORT_SHOWCASE_TABS = new Set(['overview', 'assessment', 'prep']);
+
 export const DemoExperiencePage = ({ onNavigate }) => {
   const [form, setForm] = useState(initialForm);
-  const [selectedAssessmentId, setSelectedAssessmentId] = useState(DEFAULT_DEMO_ASSESSMENT_ID);
   const [error, setError] = useState('');
-  const [loadingStart, setLoadingStart] = useState(false);
-  const [started, setStarted] = useState(false);
-  const [demoSession, setDemoSession] = useState(null);
-  const selectedAssessment = DEMO_ASSESSMENTS.find((assessment) => assessment.id === selectedAssessmentId) || DEMO_ASSESSMENTS[0];
-  const handleStart = async () => {
-    const missing = missingRequiredFields(form);
-    if (missing.length > 0) {
-      setError(`Please complete: ${missing.join(', ')}.`);
-      return;
-    }
-    setError('');
-    setLoadingStart(true);
-    try {
-      const res = await assessmentsApi.startDemo({
-        full_name: form.fullName.trim(),
-        position: form.position.trim(),
-        email: form.email.trim(),
-        work_email: form.workEmail.trim(),
-        company_name: form.company.trim(),
-        company_size: form.companySize,
-        assessment_track: selectedAssessmentId,
-        marketing_consent: Boolean(form.marketingConsent),
-      });
-      setDemoSession(res.data);
-      setStarted(true);
-      window.scrollTo(0, 0);
-    } catch (err) {
-      const detail = err?.response?.data?.detail;
-      setError(typeof detail === 'string' ? detail : 'Failed to start demo assessment.');
-    } finally {
-      setLoadingStart(false);
-    }
+  const [submittedLead, setSubmittedLead] = useState(null);
+  const [activePane, setActivePane] = useState('candidate');
+
+  const updateField = (field) => (event) => {
+    const value = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
+    setForm((prev) => ({ ...prev, [field]: value }));
   };
 
-  if (started && demoSession) {
-    return (
-      <AssessmentPage
-        token={demoSession.token}
-        startData={demoSession}
-        demoMode
-        demoProfile={form}
-        onDemoRestart={() => {
-          setStarted(false);
-          setDemoSession(null);
-          window.scrollTo(0, 0);
-        }}
-        onJoinTaali={() => onNavigate('register')}
-      />
-    );
-  }
+  const panes = useMemo(() => ({
+    candidate: {
+      key: 'candidate',
+      label: 'What candidates see',
+      urlLabel: 'taali.ai/assess/demo · candidate workspace',
+      src: '/assessment/live?demo=1&showcase=1',
+    },
+    report: {
+      key: 'report',
+      label: 'What hiring teams see',
+      urlLabel: 'taali.ai/c/demo · hiring team report',
+      src: `/c/demo?view=interview&k=${REPORT_SHOWCASE_TOKEN}&showcase=1`,
+    },
+  }), []);
+
+  const handleShowcaseFrameLoad = useCallback((pane) => (event) => {
+    const frame = event.currentTarget;
+    if (typeof window === 'undefined') return;
+
+    try {
+      const frameUrl = new URL(frame.contentWindow?.location?.href || '', window.location.origin);
+      const intendedUrl = new URL(pane.src, window.location.origin);
+      const sameRoute = frameUrl.pathname === intendedUrl.pathname;
+      let allowed = sameRoute;
+
+      if (pane.key === 'candidate') {
+        allowed = sameRoute
+          && frameUrl.searchParams.get('demo') === '1'
+          && frameUrl.searchParams.get('showcase') === '1';
+      }
+
+      if (pane.key === 'report') {
+        const tab = frameUrl.searchParams.get('tab') || 'overview';
+        allowed = sameRoute
+          && frameUrl.searchParams.get('view') === 'interview'
+          && frameUrl.searchParams.get('k') === REPORT_SHOWCASE_TOKEN
+          && frameUrl.searchParams.get('showcase') === '1'
+          && REPORT_SHOWCASE_TABS.has(tab);
+      }
+
+      if (!allowed) {
+        frame.src = pane.src;
+      }
+    } catch {
+      frame.src = pane.src;
+    }
+  }, []);
+
+  const handleSubmit = (event) => {
+    event.preventDefault();
+    const missingFields = missingRequiredFields(form);
+    if (missingFields.length > 0) {
+      setError(`Please complete: ${missingFields.join(', ')}.`);
+      return;
+    }
+
+    setError('');
+    const nextLead = {
+      fullName: form.fullName.trim(),
+      workEmail: form.workEmail.trim(),
+    };
+    setSubmittedLead(nextLead);
+    scrollToWalkthrough();
+
+    void assessmentsApi.requestDemo({
+      full_name: form.fullName.trim(),
+      position: form.position.trim() || null,
+      email: form.workEmail.trim(),
+      work_email: form.workEmail.trim(),
+      company_name: form.company.trim(),
+      company_size: form.companySize.trim(),
+      assessment_track: form.assessmentTrack,
+      marketing_consent: Boolean(form.marketingConsent),
+    }).catch(() => {
+      // The walkthrough is intentionally not blocked by lead-capture failures.
+    });
+  };
 
   return (
-    <div className="min-h-screen bg-[var(--taali-bg)] text-[var(--taali-text)]">
-      <nav className="taali-nav bg-[var(--taali-surface)]">
-        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-3 px-6 py-4">
-          <Logo onClick={() => onNavigate('landing')} />
-          <div className="flex flex-wrap items-center justify-end gap-2">
-            <Button type="button" variant="secondary" size="sm" className="font-mono" onClick={() => onNavigate('landing')}>
-              Back to landing
-            </Button>
-            <Button type="button" variant="primary" size="sm" className="font-mono" onClick={() => onNavigate('register')}>
-              Join TAALI
-            </Button>
-            <GlobalThemeToggle className="shrink-0" />
-          </div>
-        </div>
-      </nav>
+    <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
+      {!submittedLead ? (
+        <MarketingNav onNavigate={onNavigate} />
+      ) : (
+        <CandidateMiniNav label="Demo showcase · navigation locked" />
+      )}
 
-      <div className="mx-auto max-w-6xl px-6 py-10">
-        <Panel className="p-6">
-          <BrandLabel className="mb-2" toneClassName="text-[var(--taali-purple)]">TAALI Interactive Demo</BrandLabel>
-          <h1 className="text-4xl font-bold">Try a candidate assessment</h1>
-          <p className="mt-3 max-w-4xl font-mono text-sm text-[var(--taali-muted)]">
-            Complete this short intake, review the demo task, and run through the same assessment runtime candidates use.
-            At the end, you&apos;ll see a short TAALI profile summary.
-          </p>
-          <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
-            Note: this is a product demo and does not generate a full production report.
-          </p>
-        </Panel>
+      <main className="demo-wrap">
+        {!submittedLead ? (
+          <section className="demo-split step1">
+            <div className="demo-left">
+              <div className="pointer-events-none absolute inset-0 tally-bg-soft" />
+              <span className="eyebrow">
+                <span className="eyebrow-tag">taali.</span>
+                Product walkthrough
+              </span>
+              <h1>
+                See Taali <em>end to end.</em>
+              </h1>
+              <p className="lede">
+                Open the candidate workspace and the hiring-team report on this page. No fake provisioning, no live candidate launch, just the product flow.
+              </p>
+              <p className="lede-sub">
+                Built from the same surfaces candidates and recruiters use after sign in.
+              </p>
 
-        <div className="mt-6 grid gap-6 lg:grid-cols-[1.1fr_1fr]">
-          <Panel className="p-5">
-            <h2 className="text-2xl font-bold">Your details</h2>
-            <div className="mt-4 grid gap-3 md:grid-cols-2">
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Full name</span>
-                <Input
-                  value={form.fullName}
-                  onChange={(event) => setForm((prev) => ({ ...prev, fullName: event.target.value }))}
-                  placeholder="Jane Doe"
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Position</span>
-                <Input
-                  value={form.position}
-                  onChange={(event) => setForm((prev) => ({ ...prev, position: event.target.value }))}
-                  placeholder="Engineering Manager"
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Email</span>
-                <Input
-                  type="email"
-                  value={form.email}
-                  onChange={(event) => setForm((prev) => ({ ...prev, email: event.target.value }))}
-                  placeholder="jane@email.com"
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Work email</span>
-                <Input
-                  type="email"
-                  value={form.workEmail}
-                  onChange={(event) => setForm((prev) => ({ ...prev, workEmail: event.target.value }))}
-                  placeholder="jane@company.com"
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Company</span>
-                <Input
-                  value={form.company}
-                  onChange={(event) => setForm((prev) => ({ ...prev, company: event.target.value }))}
-                  placeholder="Acme Inc."
-                />
-              </label>
-              <label className="grid gap-1">
-                <span className="font-mono text-xs font-bold">Company size</span>
-                <Select
-                  value={form.companySize}
-                  onChange={(event) => setForm((prev) => ({ ...prev, companySize: event.target.value }))}
-                >
-                  <option value="">Select size</option>
-                  {companySizeOptions.map((option) => (
-                    <option key={option} value={option}>{option}</option>
-                  ))}
-                </Select>
-              </label>
-              <label className="col-span-2 flex items-start gap-3 rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] bg-[var(--taali-surface-subtle)] px-4 py-3 shadow-[var(--taali-shadow-soft)]">
-                <input
-                  type="checkbox"
-                  checked={Boolean(form.marketingConsent)}
-                  onChange={(event) => setForm((prev) => ({ ...prev, marketingConsent: event.target.checked }))}
-                  className="mt-0.5 h-4 w-4 rounded border-[var(--taali-border-soft)] accent-[var(--taali-purple)]"
-                />
-                <span className="font-mono text-xs text-[var(--taali-muted)]">
-                  Send me my demo results by email and occasional product updates (optional).
-                </span>
-              </label>
+              <div className="demo-preview">
+                <div className="label">Walkthrough task</div>
+                <h4>{PRODUCT_WALKTHROUGH_TASK.title}</h4>
+                <p>{PRODUCT_WALKTHROUGH_TASK.description}</p>
+                <div className="meta">
+                  <span>{PRODUCT_WALKTHROUGH_TASK.durationLabel}</span>
+                  <span>{PRODUCT_WALKTHROUGH_TASK.stack}</span>
+                  <span>{PRODUCT_WALKTHROUGH_TASK.tools}</span>
+                </div>
+              </div>
             </div>
-          </Panel>
 
-          <Panel className="p-5">
-            <h2 className="text-2xl font-bold">Demo assessment task</h2>
-            <p className="mt-2 font-mono text-xs text-[var(--taali-muted)]">
-              Pick the role-specific scenario you want to run. Each option opens the same candidate runtime with a different task brief.
-            </p>
-            <div className="mt-4 grid gap-3">
-              {DEMO_ASSESSMENTS.map((assessment) => {
-                const isSelected = assessment.id === selectedAssessmentId;
-                return (
-                  <button
-                    key={assessment.id}
-                    type="button"
-                    onClick={() => setSelectedAssessmentId(assessment.id)}
-                    className={`rounded-[var(--taali-radius-card)] border p-5 text-left shadow-[var(--taali-shadow-soft)] transition-all duration-150 ${
-                      isSelected
-                        ? 'border-[var(--taali-purple)] bg-[var(--taali-surface-subtle)] shadow-[0_18px_36px_rgba(157,0,255,0.14)]'
-                        : 'border-[var(--taali-border-soft)] bg-[var(--taali-surface)] hover:-translate-y-0.5 hover:border-[var(--taali-purple)]/40 hover:bg-[var(--taali-surface-subtle)]'
-                    }`}
-                    aria-pressed={isSelected}
-                  >
-                    <div className="flex items-start justify-between gap-3">
-                      <div>
-                        <h3 className="text-lg font-bold">{assessment.title}</h3>
-                        <p className="mt-1 font-mono text-sm leading-relaxed text-[var(--taali-muted)]">{assessment.description}</p>
-                      </div>
-                      {isSelected ? (
-                        <span className="inline-flex h-8 w-8 items-center justify-center rounded-full border border-[var(--taali-purple)]/25 bg-[linear-gradient(135deg,var(--taali-purple),var(--taali-purple-hover))] text-white shadow-[0_12px_24px_rgba(157,0,255,0.24)]">
-                          <Check size={14} />
-                        </span>
-                      ) : null}
-                    </div>
-                    <div className="mt-3 flex gap-2 font-mono text-xs text-[var(--taali-muted)]">
-                      <span>Duration: {assessment.durationLabel}</span>
-                      <span>•</span>
-                      <span>{assessment.difficulty}</span>
-                    </div>
+            <div className="demo-right">
+              <form className="demo-card" onSubmit={handleSubmit}>
+                <div className="kicker">01 · YOUR DETAILS</div>
+                <h2>
+                  Open the <em>walkthrough.</em>
+                </h2>
+                <p className="mb-7 text-sm text-[var(--mute)]">
+                  We&apos;ll use this to tailor the follow-up. The walkthrough opens immediately.
+                </p>
+
+                <div className="form-grid">
+                  <label className="field">
+                    <span className="k">Full name</span>
+                    <input value={form.fullName} placeholder="Jane Doe" onChange={updateField('fullName')} />
+                  </label>
+                  <label className="field">
+                    <span className="k">Position</span>
+                    <input value={form.position} placeholder="Engineering Manager" onChange={updateField('position')} />
+                  </label>
+                  <label className="field">
+                    <span className="k">Work email</span>
+                    <input type="email" value={form.workEmail} placeholder="jane@company.com" onChange={updateField('workEmail')} />
+                  </label>
+                  <label className="field">
+                    <span className="k">Company</span>
+                    <input value={form.company} placeholder="Acme Inc." onChange={updateField('company')} />
+                  </label>
+                  <label className="field">
+                    <span className="k">Company size</span>
+                    <select value={form.companySize} onChange={updateField('companySize')}>
+                      <option value="">Select...</option>
+                      {companySizeOptions.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span className="k">Track</span>
+                    <select value={form.assessmentTrack} onChange={updateField('assessmentTrack')}>
+                      {assessmentTracks.map((option) => (
+                        <option key={option} value={option}>{option}</option>
+                      ))}
+                    </select>
+                  </label>
+                </div>
+
+                <label className="optin">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(form.marketingConsent)}
+                    onChange={updateField('marketingConsent')}
+                  />
+                  <span>Email me a session report sample and occasional product updates.</span>
+                </label>
+
+                {error ? (
+                  <div className="mt-5 rounded-[14px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4 text-sm text-[var(--taali-danger)]">
+                    {error}
+                  </div>
+                ) : null}
+
+                <div className="mt-6">
+                  <button type="submit" className="btn btn-purple btn-lg w-full justify-center">
+                    Open walkthrough <span className="arrow">→</span>
                   </button>
-                );
-              })}
+                </div>
+                <div className="mt-5 text-center text-[13px] text-[var(--mute)]">
+                  Already know what you need?{' '}
+                  <button type="button" className="text-[var(--purple)]" onClick={() => onNavigate?.('login')}>
+                    Sign in
+                  </button>
+                </div>
+              </form>
             </div>
-          </Panel>
-        </div>
+          </section>
+        ) : (
+          <section id="demo-walkthrough" className="wt-wrap">
+            <div className="wt-head">
+              <div className="l">
+                <div className="kicker">01 · PRODUCT WALKTHROUGH</div>
+                <h2>
+                  What candidates and hiring teams <em>actually see.</em>
+                </h2>
+                <p>
+                  Thanks, {submittedLead.fullName.split(/\s+/)[0] || submittedLead.fullName}. The frames below are real app routes using deterministic demo data.
+                </p>
+              </div>
+              <div className="r">
+                <b>This walkthrough covers</b>
+                Candidate task brief, repo, editor, terminal, AI panel, and the panel-safe candidate report.
+              </div>
+            </div>
 
-        {error ? (
-          <Card className="mt-5 border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
-            <p className="font-mono text-sm text-[var(--taali-danger)]">{error}</p>
-          </Card>
-        ) : null}
+            <div className="wt-tabs" role="tablist" aria-label="Walkthrough views">
+              {Object.entries(panes).map(([key, pane], index) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={activePane === key ? 'active' : ''}
+                  onClick={() => setActivePane(key)}
+                >
+                  <span className="num">{index + 1}</span>
+                  {pane.label}
+                </button>
+              ))}
+            </div>
 
-        <div className="mt-6 flex flex-wrap items-center gap-3">
-          <Button type="button" variant="primary" size="lg" onClick={handleStart} disabled={loadingStart}>
-            {loadingStart ? 'Starting demo...' : (
-              <>
-                Start demo assessment
-                <ArrowRight size={16} />
-              </>
-            )}
-          </Button>
-          <Button type="button" variant="secondary" size="lg" onClick={() => onNavigate('register')}>
-            Join TAALI
-          </Button>
-        </div>
-      </div>
+            {Object.entries(panes).map(([key, pane]) => (
+              <div key={key} className={`wt-pane ${activePane === key ? 'active' : ''}`}>
+                <div className="wt-frame" data-pane={key}>
+                  <div className="wt-chrome">
+                    <span className="dots" aria-hidden="true"><i /><i /><i /></span>
+                    <span className="url"><span className="lock">●</span>{pane.urlLabel}</span>
+                    <span className="wt-locked-badge">Locked preview</span>
+                  </div>
+                  <div className="wt-stage">
+                    <iframe
+                      title={pane.label}
+                      src={pane.src}
+                      sandbox="allow-scripts allow-same-origin"
+                      referrerPolicy="no-referrer"
+                      onLoad={handleShowcaseFrameLoad(pane)}
+                    />
+                    <div className="wt-tip"><span className="dot" /> Interactive demo surface</div>
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            <div className="wt-foot">
+              <button type="button" className="exit" onClick={() => setSubmittedLead(null)}>← Back to form</button>
+              <div className="nav">
+                <button type="button" className="btn btn-outline btn-sm" onClick={() => onNavigate?.('landing')}>Read more about Taali</button>
+                <button type="button" className="btn btn-purple btn-sm" onClick={() => window.location.assign('mailto:hello@taali.ai?subject=Taali%20demo')}>Book a 20-min call</button>
+              </div>
+            </div>
+          </section>
+        )}
+      </main>
     </div>
   );
 };
+
+export default DemoExperiencePage;

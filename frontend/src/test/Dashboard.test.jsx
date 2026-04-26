@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Mock the API module
@@ -46,6 +46,8 @@ vi.mock('../shared/api', () => ({
   },
   roles: {
     list: vi.fn().mockResolvedValue({ data: [] }),
+    get: vi.fn().mockResolvedValue({ data: null }),
+    update: vi.fn(),
     listApplicationsGlobal: vi.fn().mockResolvedValue({ data: { items: [], total: 0, limit: 50, offset: 0 } }),
     listPipeline: vi.fn().mockResolvedValue({
       data: {
@@ -60,9 +62,15 @@ vi.mock('../shared/api', () => ({
         offset: 0,
       },
     }),
+    listApplications: vi.fn().mockResolvedValue({ data: [] }),
     getApplication: vi.fn(),
     listApplicationEvents: vi.fn().mockResolvedValue({ data: [] }),
     listTasks: vi.fn().mockResolvedValue({ data: [] }),
+    batchScoreStatus: vi.fn().mockResolvedValue({ data: { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false } }),
+    fetchCvsStatus: vi.fn().mockResolvedValue({ data: { status: 'idle', total: 0, fetched: 0, errors: 0 } }),
+    batchScore: vi.fn(),
+    fetchCvs: vi.fn(),
+    regenerateInterviewFocus: vi.fn(),
   },
   team: { list: vi.fn(), invite: vi.fn() },
   default: {
@@ -118,6 +126,7 @@ const mockUser = {
   email: 'admin@taali.ai',
   full_name: 'Admin User',
   organization_id: 1,
+  organization_name: 'Acme Labs',
   role: 'admin',
 };
 
@@ -205,6 +214,11 @@ const renderApp = () => {
   );
 };
 
+const renderAppAt = (path = '/assessments') => {
+  window.history.pushState({}, '', path);
+  return renderApp();
+};
+
 describe('AssessmentsPage', () => {
   beforeEach(() => {
     vi.clearAllMocks();
@@ -225,11 +239,11 @@ describe('AssessmentsPage', () => {
 
   it('renders loading state while fetching assessments', async () => {
     assessmentsApi.list.mockReturnValue(new Promise(() => {}));
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
-      expect(screen.getByText('Assessment Inbox')).toBeInTheDocument();
-    });
+      expect(screen.getByRole('heading', { name: 'Assessments' })).toBeInTheDocument();
+    }, { timeout: 5000 });
   });
 
   it('routes authenticated users to jobs hub when workflow v2 is enabled', async () => {
@@ -250,7 +264,7 @@ describe('AssessmentsPage', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Jobs' })).toBeInTheDocument();
-    });
+    }, { timeout: 5000 });
     expect(screen.queryByRole('heading', { name: 'Assessments' })).not.toBeInTheDocument();
   });
 
@@ -304,22 +318,113 @@ describe('AssessmentsPage', () => {
       },
     });
 
-    renderApp();
+    renderAppAt('/jobs');
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Jobs' })).toBeInTheDocument();
-    });
+    }, { timeout: 5000 });
 
-    fireEvent.click(screen.getByRole('button', { name: /^Candidates$/ }));
+    fireEvent.click(within(screen.getByRole('navigation')).getAllByRole('button', { name: /^Candidates$/ })[0]);
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Candidates' })).toBeInTheDocument();
       expect(screen.getByText('Global candidate directory across all roles and stages.')).toBeInTheDocument();
-    });
+    }, { timeout: 5000 });
     await waitFor(() => {
       expect(rolesApi.listApplicationsGlobal).toHaveBeenCalledWith(
         expect.objectContaining({ application_outcome: 'open' })
       );
+    });
+  });
+
+  it('passes the minimum pre-screen threshold through to the v2 candidates directory API', async () => {
+    organizationsApi.get.mockResolvedValue({
+      data: { id: 1, name: 'Acme Labs', recruiter_workflow_v2_enabled: true },
+    });
+    rolesApi.list.mockResolvedValue({
+      data: [{ id: 101, name: 'Backend Engineer' }],
+    });
+    rolesApi.listApplicationsGlobal.mockImplementation((params = {}) => {
+      const threshold = Number(params.min_pre_screen_score || 0);
+      const items = [
+        {
+          id: 601,
+          role_id: 101,
+          role_name: 'Backend Engineer',
+          candidate_name: 'Below Threshold',
+          candidate_email: 'below@example.com',
+          pipeline_stage: 'applied',
+          application_outcome: 'open',
+          pre_screen_score: 85.8,
+          taali_score: 85.8,
+          version: 1,
+          created_at: '2026-01-15T10:00:00Z',
+          pipeline_stage_updated_at: '2026-01-15T10:00:00Z',
+        },
+        {
+          id: 602,
+          role_id: 101,
+          role_name: 'Backend Engineer',
+          candidate_name: 'Above Threshold',
+          candidate_email: 'above@example.com',
+          pipeline_stage: 'applied',
+          application_outcome: 'open',
+          pre_screen_score: 91.4,
+          taali_score: 91.4,
+          version: 1,
+          created_at: '2026-01-15T10:00:00Z',
+          pipeline_stage_updated_at: '2026-01-15T10:00:00Z',
+        },
+      ].filter((item) => !threshold || item.pre_screen_score >= threshold);
+      return Promise.resolve({
+        data: {
+          items,
+          total: items.length,
+          limit: 50,
+          offset: 0,
+        },
+      });
+    });
+    rolesApi.getApplication.mockImplementation((applicationId) => Promise.resolve({
+      data: {
+        id: applicationId,
+        role_id: 101,
+        role_name: 'Backend Engineer',
+        candidate_name: applicationId === 602 ? 'Above Threshold' : 'Below Threshold',
+        candidate_email: applicationId === 602 ? 'above@example.com' : 'below@example.com',
+        pipeline_stage: 'applied',
+        application_outcome: 'open',
+        pre_screen_score: applicationId === 602 ? 91.4 : 85.8,
+        taali_score: applicationId === 602 ? 91.4 : 85.8,
+        version: 1,
+        created_at: '2026-01-15T10:00:00Z',
+        pipeline_stage_updated_at: '2026-01-15T10:00:00Z',
+      },
+    }));
+
+    renderAppAt('/jobs');
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Jobs' })).toBeInTheDocument();
+    });
+    fireEvent.click(within(screen.getByRole('navigation')).getAllByRole('button', { name: /^Candidates$/ })[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: 'Candidates' })).toBeInTheDocument();
+      expect(screen.getAllByText('Below Threshold').length).toBeGreaterThan(0);
+      expect(screen.getByText('Above Threshold')).toBeInTheDocument();
+    });
+
+    fireEvent.change(screen.getByPlaceholderText('0-100'), {
+      target: { value: '90' },
+    });
+
+    await waitFor(() => {
+      expect(rolesApi.listApplicationsGlobal).toHaveBeenLastCalledWith(
+        expect.objectContaining({ min_pre_screen_score: 90 })
+      );
+      expect(screen.queryAllByText('Below Threshold')).toHaveLength(0);
+      expect(screen.getAllByText('Above Threshold').length).toBeGreaterThan(0);
     });
   });
 
@@ -329,7 +434,18 @@ describe('AssessmentsPage', () => {
       data: { id: 1, name: 'Acme Labs', recruiter_workflow_v2_enabled: true },
     });
     rolesApi.list.mockResolvedValue({
-      data: [{ id: 101, name: 'Backend Engineer' }],
+      data: [{ id: 101, name: 'Backend Engineer', auto_reject_threshold_100: 60 }],
+    });
+    rolesApi.get.mockResolvedValue({
+      data: {
+        id: 101,
+        name: 'Backend Engineer',
+        source: 'manual',
+        additional_requirements: '',
+        auto_reject_threshold_100: 60,
+        stage_counts: { applied: 0, invited: 1, in_assessment: 0, review: 0 },
+        active_candidates_count: 1,
+      },
     });
     rolesApi.listPipeline.mockResolvedValue({
       data: {
@@ -358,6 +474,24 @@ describe('AssessmentsPage', () => {
         offset: 0,
       },
     });
+    rolesApi.listApplications.mockResolvedValue({
+      data: [
+        {
+          id: 501,
+          role_id: 101,
+          role_name: 'Backend Engineer',
+          candidate_name: 'Alice Johnson',
+          candidate_email: 'alice@example.com',
+          pipeline_stage: 'invited',
+          application_outcome: 'open',
+          pre_screen_score: 84.5,
+          taali_score: 84.5,
+          version: 2,
+          created_at: '2026-01-15T10:00:00Z',
+          pipeline_stage_updated_at: '2026-01-15T10:00:00Z',
+        },
+      ],
+    });
     rolesApi.getApplication.mockResolvedValue({
       data: {
         id: 501,
@@ -379,7 +513,9 @@ describe('AssessmentsPage', () => {
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Backend Engineer pipeline' })).toBeInTheDocument();
     });
-    expect(screen.getByDisplayValue('Backend Engineer')).toBeDisabled();
+    const roleField = screen.getByText('Role', { selector: 'span' }).closest('label');
+    expect(roleField).not.toBeNull();
+    expect(within(roleField).getByRole('button')).toBeDisabled();
     await waitFor(() => {
       const hasRoleScopedCall = rolesApi.listPipeline.mock.calls.some(
         ([roleId]) => Number(roleId) === 101
@@ -390,7 +526,7 @@ describe('AssessmentsPage', () => {
 
   it('renders dashboard heading with user name', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
@@ -400,17 +536,17 @@ describe('AssessmentsPage', () => {
 
   it('shows signed-in user and organization in the top-right nav', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getByText('Admin User')).toBeInTheDocument();
-      expect(screen.getByText('Acme Labs')).toBeInTheDocument();
-    });
+      expect(screen.getByText('ACME_LABS')).toBeInTheDocument();
+    }, { timeout: 5000 });
   });
 
   it('renders assessment list when data loads', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
@@ -421,7 +557,7 @@ describe('AssessmentsPage', () => {
 
   it('shows empty state when no assessments', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: [], total: 0 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getByText(/No assessments yet/)).toBeInTheDocument();
@@ -430,7 +566,7 @@ describe('AssessmentsPage', () => {
 
   it('renders stats cards', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getAllByText('Invited').length).toBeGreaterThanOrEqual(1);
@@ -442,7 +578,7 @@ describe('AssessmentsPage', () => {
 
   it('shows correct assessment count in stats', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getAllByText('1').length).toBeGreaterThanOrEqual(1);
@@ -452,16 +588,18 @@ describe('AssessmentsPage', () => {
 
   it('renders status filter dropdown', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
-      expect(screen.getByText('All statuses')).toBeInTheDocument();
+      const statusField = screen.getByText('Status', { selector: 'span' }).closest('label');
+      expect(statusField).not.toBeNull();
+      expect(within(statusField).getByRole('combobox')).toBeInTheDocument();
     });
   });
 
   it('filter by status re-fetches assessments', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getByText('Filters')).toBeInTheDocument();
@@ -480,7 +618,7 @@ describe('AssessmentsPage', () => {
 
   it('renders role names in the assessment inbox table', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getAllByText('Backend Engineer').length).toBeGreaterThanOrEqual(1);
@@ -490,7 +628,7 @@ describe('AssessmentsPage', () => {
 
   it('role filter re-fetches assessments with role_id', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getByText('Filters')).toBeInTheDocument();
@@ -524,7 +662,7 @@ describe('AssessmentsPage', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Alice Johnson')).toBeInTheDocument();
+      expect(screen.getAllByText('Alice Johnson').length).toBeGreaterThan(0);
       expect(screen.getByText('Role: Backend Engineer')).toBeInTheDocument();
       expect(screen.getByText('Application: applied')).toBeInTheDocument();
     });
@@ -554,10 +692,12 @@ describe('AssessmentsPage', () => {
 
   it('filter by task re-fetches assessments', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
-      expect(screen.getByText('All tasks')).toBeInTheDocument();
+      const taskField = screen.getByText('Task', { selector: 'span' }).closest('label');
+      expect(taskField).not.toBeNull();
+      expect(within(taskField).getByRole('combobox')).toBeInTheDocument();
     });
 
     const taskSelect = screen.getByDisplayValue('All tasks');
@@ -572,14 +712,16 @@ describe('AssessmentsPage', () => {
 
   it('does not render New Assessment button and points to Candidates page', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: [], total: 0 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getByRole('heading', { name: 'Assessments' })).toBeInTheDocument();
     });
 
     expect(screen.queryByText('New Assessment')).not.toBeInTheDocument();
-    expect(screen.getByText('No assessments yet. Create an assessment from the Candidates page.')).toBeInTheDocument();
+    expect(
+      await screen.findByText('No assessments yet. Create an assessment from the Candidates page.')
+    ).toBeInTheDocument();
   });
 
 
@@ -591,7 +733,7 @@ describe('AssessmentsPage', () => {
 
   it('shows candidate scores in the table', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getAllByText('85.0').length).toBeGreaterThanOrEqual(1);
@@ -601,7 +743,7 @@ describe('AssessmentsPage', () => {
 
   it('renders status badges for completed and in-progress', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       const completedBadges = screen.getAllByText('Completed');
@@ -613,7 +755,7 @@ describe('AssessmentsPage', () => {
 
   it('does not render export buttons on the assessments inbox', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.queryByText('Export CSV')).not.toBeInTheDocument();
@@ -623,7 +765,7 @@ describe('AssessmentsPage', () => {
 
   it('renders View results button for completed assessments', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       const viewButtons = screen.getAllByText('View results');
@@ -633,16 +775,16 @@ describe('AssessmentsPage', () => {
 
   it('renders In Progress button for in-progress assessments', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
-      expect(screen.getAllByText('In Progress').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText(/In progress/i).length).toBeGreaterThanOrEqual(1);
     });
   });
 
   it('does not render legacy recent notifications panel', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.queryByText('Recent Notifications')).not.toBeInTheDocument();
@@ -651,7 +793,7 @@ describe('AssessmentsPage', () => {
 
   it('renders table headers correctly', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getAllByText('Candidate').length).toBeGreaterThanOrEqual(1);
@@ -686,7 +828,7 @@ describe('AssessmentsPage', () => {
         total: 4,
       },
     });
-    renderApp();
+    renderAppAt('/assessments');
 
     await waitFor(() => {
       const copyButtons = screen.getAllByText('Copy link');

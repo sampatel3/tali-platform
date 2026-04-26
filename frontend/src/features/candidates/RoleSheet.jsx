@@ -30,6 +30,9 @@ export const RoleSheet = ({
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
   const [additionalRequirements, setAdditionalRequirements] = useState('');
+  const [autoRejectEnabled, setAutoRejectEnabled] = useState(false);
+  const [autoRejectThreshold100, setAutoRejectThreshold100] = useState('');
+  const [autoRejectNoteTemplate, setAutoRejectNoteTemplate] = useState('');
   const [jobSpecFile, setJobSpecFile] = useState(null);
   const [selectedTaskIds, setSelectedTaskIds] = useState([]);
   const [nameTouched, setNameTouched] = useState(false);
@@ -40,6 +43,9 @@ export const RoleSheet = ({
     setName(role?.name || '');
     setDescription(role?.description || '');
     setAdditionalRequirements(role?.additional_requirements || '');
+    setAutoRejectEnabled(Boolean(role?.auto_reject_enabled));
+    setAutoRejectThreshold100(role?.auto_reject_threshold_100 ?? '');
+    setAutoRejectNoteTemplate(role?.auto_reject_note_template || '');
     setJobSpecFile(null);
     setSelectedTaskIds((roleTasks || []).map((task) => Number(task.id)));
     setNameTouched(false);
@@ -97,6 +103,11 @@ export const RoleSheet = ({
                     name: name.trim(),
                     description: description.trim(),
                     additionalRequirements: additionalRequirements.trim() || undefined,
+                    autoRejectEnabled,
+                    autoRejectThreshold100: autoRejectEnabled && autoRejectThreshold100 !== ''
+                      ? Number(autoRejectThreshold100)
+                      : undefined,
+                    autoRejectNoteTemplate: autoRejectNoteTemplate.trim() || undefined,
                     jobSpecFile,
                     taskIds: selectedTaskIds,
                   });
@@ -178,6 +189,43 @@ export const RoleSheet = ({
               {additionalRequirementsChars.toLocaleString()}/{ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH.toLocaleString()} characters
             </span>
           </label>
+          <Card className="p-4">
+            <label className="flex items-center gap-2 text-sm font-semibold text-[var(--taali-text)]">
+              <input
+                type="checkbox"
+                checked={autoRejectEnabled}
+                onChange={(event) => setAutoRejectEnabled(event.target.checked)}
+              />
+              Enable role-level auto-reject override
+            </label>
+            <p className="mt-2 text-xs text-[var(--taali-muted)]">
+              Uses pre-screen score only. Leave disabled to inherit the organization-level Workable automation defaults.
+            </p>
+            {autoRejectEnabled ? (
+              <div className="mt-4 space-y-4">
+                <label className="block">
+                  <span className="mb-1 block text-sm font-semibold text-[var(--taali-text)]">Threshold (0-100)</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={autoRejectThreshold100}
+                    onChange={(event) => setAutoRejectThreshold100(event.target.value)}
+                    placeholder="e.g. 55"
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-sm font-semibold text-[var(--taali-text)]">Auto-reject note template</span>
+                  <Textarea
+                    value={autoRejectNoteTemplate}
+                    onChange={(event) => setAutoRejectNoteTemplate(event.target.value)}
+                    placeholder="Optional note appended when the candidate is auto-rejected in Workable."
+                    className="min-h-[90px]"
+                  />
+                </label>
+              </div>
+            ) : null}
+          </Card>
         </div>
       ) : null}
 

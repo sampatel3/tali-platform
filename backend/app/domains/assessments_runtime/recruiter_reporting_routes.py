@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from ...deps import get_current_user
 from ...models.assessment import Assessment, AssessmentStatus
+from ...models.candidate_application import CandidateApplication
 from ...models.user import User
 from ...platform.config import settings
 from ...platform.database import get_db
@@ -333,6 +334,8 @@ def generate_interview_debrief(
             joinedload(Assessment.candidate),
             joinedload(Assessment.task),
             joinedload(Assessment.role),
+            joinedload(Assessment.application).joinedload(CandidateApplication.interviews),
+            joinedload(Assessment.application).joinedload(CandidateApplication.organization),
         )
         .filter(
             Assessment.id == assessment_id,

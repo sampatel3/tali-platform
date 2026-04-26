@@ -57,12 +57,32 @@ class CandidateApplication(Base):
     cv_match_score = Column(Float, nullable=True)
     cv_match_details = Column(JSON, nullable=True)
     cv_match_scored_at = Column(DateTime(timezone=True), nullable=True)
+    pre_screen_score_100 = Column(Float, nullable=True)
+    requirements_fit_score_100 = Column(Float, nullable=True)
+    pre_screen_recommendation = Column(String, nullable=True)
+    pre_screen_evidence = Column(JSON, nullable=True)
+    auto_reject_state = Column(String, nullable=True)
+    auto_reject_reason = Column(Text, nullable=True)
+    auto_reject_triggered_at = Column(DateTime(timezone=True), nullable=True)
+    screening_pack = Column(JSON, nullable=True)
+    tech_interview_pack = Column(JSON, nullable=True)
+    screening_interview_summary = Column(JSON, nullable=True)
+    tech_interview_summary = Column(JSON, nullable=True)
+    interview_evidence_summary = Column(JSON, nullable=True)
+    taali_score_cache_100 = Column(Float, nullable=True)
+    assessment_score_cache_100 = Column(Float, nullable=True)
+    role_fit_score_cache_100 = Column(Float, nullable=True)
+    score_mode_cache = Column(String, nullable=True)
+    score_cached_at = Column(DateTime(timezone=True), nullable=True)
+    report_share_token = Column(String, nullable=True, unique=True, index=True)
+    report_share_created_at = Column(DateTime(timezone=True), nullable=True)
 
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 
     candidate = relationship("Candidate", back_populates="applications")
+    organization = relationship("Organization", back_populates="applications")
     role = relationship("Role", back_populates="applications")
     assessments = relationship("Assessment", back_populates="application")
     events = relationship(
@@ -70,4 +90,10 @@ class CandidateApplication(Base):
         back_populates="application",
         cascade="all, delete-orphan",
         order_by="CandidateApplicationEvent.created_at.desc()",
+    )
+    interviews = relationship(
+        "ApplicationInterview",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        order_by="ApplicationInterview.linked_at.desc()",
     )

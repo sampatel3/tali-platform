@@ -10,6 +10,59 @@ import {
   Textarea,
 } from '../../shared/ui/TaaliPrimitives';
 
+const DECISION_OPTIONS = [
+  { value: 'advance', label: 'Advance', description: 'Send to panel' },
+  { value: 'hold', label: 'Hold', description: 'Keep in pool' },
+  { value: 'reject', label: 'Reject', description: 'Send rejection' },
+];
+
+const CONFIDENCE_OPTIONS = [
+  { value: 'low', label: 'Low' },
+  { value: 'medium', label: 'Medium' },
+  { value: 'high', label: 'High' },
+];
+
+const NEXT_STEP_OPTIONS = [
+  'Schedule panel',
+  'Request references',
+  'Add to talent pool',
+  'Notify hiring manager',
+];
+
+const statusMeta = (status) => {
+  const normalized = String(status || '').trim().toLowerCase();
+  if (normalized === 'met' || normalized === 'strong') {
+    return {
+      label: 'Strong',
+      toneClass: 'text-[var(--taali-success)]',
+      barClass: 'bg-[var(--taali-success)]',
+      percent: 92,
+    };
+  }
+  if (normalized === 'partially_met' || normalized === 'partial' || normalized === 'meets') {
+    return {
+      label: 'Meets',
+      toneClass: 'text-[var(--taali-purple)]',
+      barClass: 'bg-[var(--taali-purple)]',
+      percent: 74,
+    };
+  }
+  if (normalized === 'missing' || normalized === 'not_met') {
+    return {
+      label: 'Gap',
+      toneClass: 'text-[var(--taali-warning)]',
+      barClass: 'bg-[var(--taali-warning)]',
+      percent: 38,
+    };
+  }
+  return {
+    label: 'Untested',
+    toneClass: 'text-[var(--taali-muted)]',
+    barClass: 'bg-[var(--taali-border)]',
+    percent: 44,
+  };
+};
+
 export const CandidateEvaluateTab = ({
   candidate,
   evaluationRubric = null,
@@ -25,11 +78,23 @@ export const CandidateEvaluateTab = ({
   setManualEvalImprovements,
   manualEvalSummary,
   setManualEvalSummary,
+  manualEvalDecision,
+  setManualEvalDecision,
+  manualEvalRationale,
+  setManualEvalRationale,
+  manualEvalConfidence,
+  setManualEvalConfidence,
+  manualEvalNextSteps,
+  setManualEvalNextSteps,
   manualEvalSaving,
   setManualEvalSaving,
   toLineList,
   toEvidenceTextareaValue,
   assessmentsApi,
+  roleFitCriteria = [],
+  recommendation = null,
+  recruiterSummary = '',
+  actionPanel = null,
   onFinalizeCandidateFeedback = () => {},
   finalizeFeedbackLoading = false,
   candidateFeedbackReady = false,
@@ -37,11 +102,11 @@ export const CandidateEvaluateTab = ({
   canFinalizeCandidateFeedback = false,
 }) => {
   const { showToast } = useToast();
-  const assessment = candidate._raw || {};
+  const assessment = candidate?._raw || {};
   const rubric = evaluationRubric || assessment.evaluation_rubric || {};
-  const categories = Object.entries(rubric).filter(([, v]) => v && typeof v === 'object');
+  const categories = Object.entries(rubric).filter(([, value]) => value && typeof value === 'object');
   const prompts = assessment.ai_prompts || [];
-  const normalizedStatus = String(assessment.status || candidate.status || '').toLowerCase();
+  const normalizedStatus = String(assessment.status || candidate?.status || '').toLowerCase();
   const promptEmptyMessage = (() => {
     if (normalizedStatus.includes('progress')) return 'Assessment in progress — prompt evidence will appear as activity is captured.';
     if (normalizedStatus.includes('complete') || normalizedStatus.includes('timeout')) {
@@ -52,6 +117,15 @@ export const CandidateEvaluateTab = ({
     }
     return 'No prompt evidence is available for this assessment yet.';
   })();
+
+  const toggleNextStep = (step) => {
+    setManualEvalNextSteps((previous) => {
+      const next = Array.isArray(previous) ? previous : [];
+      return next.includes(step)
+        ? next.filter((item) => item !== step)
+        : [...next, step];
+    });
+  };
 
   const handleSaveManualEval = async () => {
     if (!assessmentId) return;
@@ -69,14 +143,18 @@ export const CandidateEvaluateTab = ({
     setManualEvalSaving(true);
     try {
       const res = await assessmentsApi.updateManualEvaluation(assessmentId, {
+        decision: manualEvalDecision || null,
+        rationale: String(manualEvalRationale || '').trim() || null,
+        confidence: manualEvalConfidence || null,
+        next_steps: Array.isArray(manualEvalNextSteps) ? manualEvalNextSteps : [],
         category_scores: payloadScores,
         strengths: toLineList(manualEvalStrengths),
         improvements: toLineList(manualEvalImprovements),
       });
       const saved = res.data?.evaluation_result || res.data?.manual_evaluation;
-      if (saved?.category_scores) {
+      if (saved && typeof saved === 'object') {
         const normalized = {};
-        Object.entries(saved.category_scores).forEach(([key, value]) => {
+        Object.entries(saved.category_scores || {}).forEach(([key, value]) => {
           const item = value && typeof value === 'object' ? value : {};
           normalized[key] = {
             score: item.score || '',
@@ -84,6 +162,10 @@ export const CandidateEvaluateTab = ({
           };
         });
         setManualEvalScores(normalized);
+        setManualEvalDecision(saved.decision || '');
+        setManualEvalRationale(saved.rationale || '');
+        setManualEvalConfidence(saved.confidence || '');
+        setManualEvalNextSteps(Array.isArray(saved.next_steps) ? saved.next_steps : []);
         setManualEvalStrengths(Array.isArray(saved.strengths) ? saved.strengths.join('\n') : '');
         setManualEvalImprovements(Array.isArray(saved.improvements) ? saved.improvements.join('\n') : '');
         setManualEvalSummary(saved);
@@ -142,6 +224,180 @@ export const CandidateEvaluateTab = ({
         </Card>
       ) : null}
 
+      <div className="grid gap-4 xl:grid-cols-[minmax(0,1.45fr)_340px]">
+        <Panel className="bg-[var(--taali-surface-muted)] p-5">
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Your evaluation</div>
+          <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">Record your decision.</div>
+          <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
+            This recruiter evaluation stays attached to the candidate report and becomes the internal source of truth.
+          </p>
+
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            {DECISION_OPTIONS.map((option) => {
+              const active = manualEvalDecision === option.value;
+              return (
+                <button
+                  key={option.value}
+                  type="button"
+                  className={`rounded-[var(--taali-radius-card)] border px-4 py-4 text-left transition ${
+                    active
+                      ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)] text-[var(--taali-purple)]'
+                      : 'border-[var(--taali-border)] bg-[var(--taali-surface)] text-[var(--taali-text)]'
+                  }`}
+                  onClick={() => setManualEvalDecision(option.value)}
+                >
+                  <div className="font-mono text-[10px] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
+                    {active ? 'Selected' : 'Decision'}
+                  </div>
+                  <div className="mt-2 text-lg font-semibold">{option.label}</div>
+                  <div className="mt-1 text-xs text-[var(--taali-muted)]">{option.description}</div>
+                </button>
+              );
+            })}
+          </div>
+
+          <div className="mt-5">
+            <label className="mb-2 block font-mono text-[10.5px] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
+              Your rationale
+            </label>
+            <Textarea
+              className="min-h-[120px] text-sm"
+              placeholder="Why are you advancing, holding, or rejecting this candidate?"
+              value={manualEvalRationale}
+              onChange={(event) => setManualEvalRationale(event.target.value)}
+            />
+          </div>
+
+          <div className="mt-5">
+            <div className="mb-2 font-mono text-[10.5px] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
+              Confidence
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {CONFIDENCE_OPTIONS.map((option) => {
+                const active = manualEvalConfidence === option.value;
+                return (
+                  <button
+                    key={option.value}
+                    type="button"
+                    className={`rounded-full border px-3 py-2 text-sm transition ${
+                      active
+                        ? 'border-[var(--taali-purple)] bg-[var(--taali-purple)] text-white'
+                        : 'border-[var(--taali-border)] bg-[var(--taali-surface)] text-[var(--taali-text)]'
+                    }`}
+                    onClick={() => setManualEvalConfidence(option.value)}
+                  >
+                    {option.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-5">
+            <div className="mb-2 font-mono text-[10.5px] uppercase tracking-[0.1em] text-[var(--taali-muted)]">
+              Next steps
+            </div>
+            <div className="grid gap-2 md:grid-cols-2">
+              {NEXT_STEP_OPTIONS.map((option) => {
+                const active = Array.isArray(manualEvalNextSteps) && manualEvalNextSteps.includes(option);
+                return (
+                  <label
+                    key={option}
+                    className={`flex cursor-pointer items-center gap-2 rounded-full border px-3 py-2 text-sm transition ${
+                      active
+                        ? 'border-[var(--taali-purple)] bg-[var(--taali-purple-soft)] text-[var(--taali-purple)]'
+                        : 'border-[var(--taali-border)] bg-[var(--taali-surface)] text-[var(--taali-text)]'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={active}
+                      onChange={() => toggleNextStep(option)}
+                      className="h-4 w-4"
+                    />
+                    <span>{option}</span>
+                  </label>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="mt-5 flex flex-wrap justify-end gap-2">
+            <Button
+              type="button"
+              variant="secondary"
+              onClick={handleSaveManualEval}
+              disabled={manualEvalSaving}
+            >
+              {manualEvalSaving ? 'Saving...' : 'Save draft'}
+            </Button>
+            <Button
+              type="button"
+              variant="primary"
+              onClick={handleSaveManualEval}
+              disabled={manualEvalSaving}
+            >
+              {manualEvalSaving ? 'Saving...' : 'Submit evaluation'}
+            </Button>
+          </div>
+        </Panel>
+
+        <Panel className="p-5">
+          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role criteria</div>
+          <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">Rate how the candidate meets each must-have.</div>
+          <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
+            TAALI keeps the underlying role-fit evidence beside the recruiter decision.
+          </p>
+
+          <div className="mt-5 space-y-4">
+            {roleFitCriteria.length ? roleFitCriteria.map((criterion, index) => {
+              const meta = statusMeta(criterion?.status);
+              return (
+                <div key={`${criterion?.requirement || 'criterion'}-${index}`}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="text-sm font-semibold text-[var(--taali-text)]">
+                      {criterion?.requirement || `Criterion ${index + 1}`}
+                    </div>
+                    <div className={`text-xs font-semibold ${meta.toneClass}`}>{meta.label}</div>
+                  </div>
+                  <div className="mt-2 h-2 rounded-full bg-[var(--taali-border)]/70">
+                    <div
+                      className={`h-2 rounded-full ${meta.barClass}`}
+                      style={{ width: `${meta.percent}%` }}
+                    />
+                  </div>
+                  {criterion?.evidence ? (
+                    <p className="mt-2 text-xs leading-5 text-[var(--taali-muted)]">
+                      Evidence: {criterion.evidence}
+                    </p>
+                  ) : null}
+                </div>
+              );
+            }) : (
+              <p className="text-sm text-[var(--taali-muted)]">
+                No role criteria were attached to this candidate yet.
+              </p>
+            )}
+          </div>
+
+          {(recommendation?.label || recruiterSummary) ? (
+            <div className="mt-5 rounded-[var(--taali-radius-card)] border border-[var(--taali-purple)]/25 bg-[var(--taali-purple-soft)] p-4">
+              <div className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--taali-purple)]">
+                Taali recommends
+              </div>
+              <div className="mt-2 text-sm font-semibold text-[var(--taali-text)]">
+                {recommendation?.label || 'Review evidence'}
+              </div>
+              {recruiterSummary ? (
+                <p className="mt-2 text-sm leading-6 text-[var(--taali-text)]">{recruiterSummary}</p>
+              ) : null}
+            </div>
+          ) : null}
+
+          {actionPanel ? <div className="mt-5">{actionPanel}</div> : null}
+        </Panel>
+      </div>
+
       <Panel className="bg-[var(--taali-surface-muted)] p-4">
         <div className="mb-2 font-mono text-xs font-bold text-gray-600">Manual rubric evaluation (excellent / good / poor). Add evidence per category.</div>
 
@@ -182,9 +438,9 @@ export const CandidateEvaluateTab = ({
                   <div className="grid grid-cols-1 gap-2">
                     <Select
                       value={current.score || ''}
-                      onChange={(e) => setManualEvalScores((prev) => ({
-                        ...prev,
-                        [key]: { ...prev[key], score: e.target.value },
+                      onChange={(event) => setManualEvalScores((previous) => ({
+                        ...previous,
+                        [key]: { ...previous[key], score: event.target.value },
                       }))}
                       className="font-mono text-sm"
                     >
@@ -197,33 +453,25 @@ export const CandidateEvaluateTab = ({
                       className="min-h-[70px] font-mono text-xs"
                       placeholder="Evidence (required for this category)"
                       value={current.evidence ?? ''}
-                      onChange={(e) => setManualEvalScores((prev) => ({
-                        ...prev,
-                        [key]: { ...prev[key], evidence: e.target.value },
+                      onChange={(event) => setManualEvalScores((previous) => ({
+                        ...previous,
+                        [key]: { ...previous[key], evidence: event.target.value },
                       }))}
                     />
                   </div>
                 </Card>
               );
             })}
-            <Button
-              type="button"
-              variant="primary"
-              onClick={handleSaveManualEval}
-              disabled={manualEvalSaving}
-            >
-              {manualEvalSaving ? 'Saving...' : 'Save manual evaluation'}
-            </Button>
           </>
         )}
       </Panel>
 
       {canFinalizeCandidateFeedback ? (
-        <Panel className="p-4 bg-[var(--taali-purple-soft)] border-[var(--taali-purple)]">
+        <Panel className="border-[var(--taali-purple)] bg-[var(--taali-purple-soft)] p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="font-mono text-xs font-bold text-[var(--taali-text)]">Candidate Feedback Report</div>
-              <div className="text-xs text-[var(--taali-muted)] mt-1">
+              <div className="mt-1 text-xs text-[var(--taali-muted)]">
                 {candidateFeedbackReady
                   ? `Candidate feedback is finalized${candidateFeedbackSentAt ? ` and email sent on ${new Date(candidateFeedbackSentAt).toLocaleString()}` : ''}.`
                   : 'Finalize review to generate and email the candidate report.'}
@@ -255,7 +503,7 @@ export const CandidateEvaluateTab = ({
               className="min-h-[90px] font-mono text-xs"
               placeholder="Strong debugging discipline"
               value={manualEvalStrengths}
-              onChange={(e) => setManualEvalStrengths(e.target.value)}
+              onChange={(event) => setManualEvalStrengths(event.target.value)}
             />
           </div>
           <div>
@@ -264,7 +512,7 @@ export const CandidateEvaluateTab = ({
               className="min-h-[90px] font-mono text-xs"
               placeholder="Add stronger edge-case tests"
               value={manualEvalImprovements}
-              onChange={(e) => setManualEvalImprovements(e.target.value)}
+              onChange={(event) => setManualEvalImprovements(event.target.value)}
             />
           </div>
         </div>
@@ -276,15 +524,18 @@ export const CandidateEvaluateTab = ({
           <p className="font-mono text-sm text-gray-500">{promptEmptyMessage}</p>
         ) : (
           <div className="max-h-64 space-y-2 overflow-y-auto">
-            {prompts.map((p, i) => (
-              <Card key={i} className="bg-[var(--taali-surface)] p-2">
-                <div className="mb-1 font-mono text-xs text-gray-600">Prompt {i + 1}</div>
+            {prompts.map((prompt, index) => (
+              <Card key={index} className="bg-[var(--taali-surface)] p-2">
+                <div className="mb-1 font-mono text-xs text-gray-600">Prompt {index + 1}</div>
                 <div className="font-mono text-xs text-gray-800">
-                  {(typeof p.message === 'string' ? p.message : (p.message?.content ?? JSON.stringify(p.message)) || '').slice(0, 200)}...
+                  {(typeof prompt.message === 'string'
+                    ? prompt.message
+                    : (prompt.message?.content ?? JSON.stringify(prompt.message)) || '').slice(0, 200)}
+                  ...
                 </div>
-                {p.response ? (
+                {prompt.response ? (
                   <div className="mt-1 font-mono text-xs text-gray-500">
-                    Response: {(typeof p.response === 'string' ? p.response : '').slice(0, 150)}...
+                    Response: {(typeof prompt.response === 'string' ? prompt.response : '').slice(0, 150)}...
                   </div>
                 ) : null}
               </Card>

@@ -7,7 +7,7 @@ import {
 } from '../../lib/themePreference';
 import { ThemeModeToggle } from './ThemeModeToggle';
 
-export const GlobalThemeToggle = ({ className = '' }) => {
+export const GlobalThemeToggle = ({ className = '', appearance = 'dual' }) => {
   const [darkMode, setDarkMode] = useState(() => readDarkModePreference());
 
   useEffect(() => {
@@ -29,6 +29,7 @@ export const GlobalThemeToggle = ({ className = '' }) => {
       ariaLabel={`Theme toggle. Current mode is ${darkMode ? 'dark' : 'light'}.`}
       title={`Switch to ${targetModeLabel} mode`}
       className={className}
+      appearance={appearance}
     />
   );
 };

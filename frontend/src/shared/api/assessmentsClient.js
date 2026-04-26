@@ -13,10 +13,15 @@ export const assessments = {
   get: (id) => api.get(`/assessments/${id}`),
   create: (data) => api.post('/assessments/', data),
   startDemo: (data) => api.post('/assessments/demo/start', data),
+  requestDemo: (data) => api.post('/assessments/demo/request', data),
   preview: (token) => api.get(`/assessments/token/${token}/preview`),
   start: (token, data = {}) => api.post(`/assessments/token/${token}/start`, data),
-  execute: (id, code, assessmentToken) =>
-    api.post(`/assessments/${id}/execute`, { code }, {
+  execute: (id, payload, assessmentToken) =>
+    api.post(`/assessments/${id}/execute`, typeof payload === 'string' ? { code: payload } : payload, {
+      headers: { 'X-Assessment-Token': assessmentToken },
+    }),
+  saveRepoFile: (id, payload, assessmentToken) =>
+    api.post(`/assessments/${id}/repo-file`, payload, {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
   terminalStatus: (id, assessmentToken) =>
@@ -32,10 +37,16 @@ export const assessments = {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
   terminalWsUrl: (id, assessmentToken) => buildTerminalWsUrl(id, assessmentToken),
-  submit: (id, finalCode, assessmentToken, metadata = {}) =>
-    api.post(`/assessments/${id}/submit`, { final_code: finalCode, ...metadata }, {
+  submit: (id, payloadOrFinalCode, assessmentToken, metadata = {}) =>
+    api.post(
+      `/assessments/${id}/submit`,
+      typeof payloadOrFinalCode === 'string'
+        ? { final_code: payloadOrFinalCode, ...metadata }
+        : { ...(payloadOrFinalCode || {}), ...metadata },
+      {
       headers: { 'X-Assessment-Token': assessmentToken },
-    }),
+      },
+    ),
   remove: (id) => api.delete(`/assessments/${id}`),
   resend: (id) => api.post(`/assessments/${id}/resend`),
   postToWorkable: (id) => api.post(`/assessments/${id}/post-to-workable`),

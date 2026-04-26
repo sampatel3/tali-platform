@@ -15,6 +15,7 @@ from .platform.brand import BRAND_APP_DESCRIPTION, BRAND_NAME
 from .platform.config import settings
 from .platform.logging import setup_logging
 from .platform.middleware import RequestLoggingMiddleware, RateLimitMiddleware, EnterpriseAccessMiddleware
+from .platform.startup_validation import collect_startup_failures, is_production_like
 
 # Set up logging
 logger = setup_logging()
@@ -22,27 +23,10 @@ logger = setup_logging()
 # ---------------------------------------------------------------------------
 # Production safety: fail-fast if SECRET_KEY is the insecure default
 # ---------------------------------------------------------------------------
-_INSECURE_DEFAULTS = {"dev-secret-key-change-in-production", "changeme", "secret", ""}
-_is_production = bool(settings.SENTRY_DSN) or "localhost" not in settings.FRONTEND_URL
-if _is_production and settings.SECRET_KEY in _INSECURE_DEFAULTS:
-    raise RuntimeError(
-        "CRITICAL: SECRET_KEY is set to an insecure default. "
-        "Set a strong SECRET_KEY in your .env before running in production."
-    )
-
-# ---------------------------------------------------------------------------
-# Claude/assessment runtime policy enforcement
-# ---------------------------------------------------------------------------
-# CLAUDE_MODEL defaults to claude-3-5-haiku-latest in config; no startup check needed.
-if not settings.ASSESSMENT_TERMINAL_ENABLED:
-    raise RuntimeError(
-        "CRITICAL: ASSESSMENT_TERMINAL_ENABLED must be true. "
-        "Assessments are terminal-only (Claude CLI) in production mode."
-    )
-if (settings.ASSESSMENT_TERMINAL_DEFAULT_MODE or "").strip().lower() != "claude_cli_terminal":
-    raise RuntimeError(
-        "CRITICAL: ASSESSMENT_TERMINAL_DEFAULT_MODE must be claude_cli_terminal."
-    )
+_is_production = is_production_like(settings)
+_startup_failures = collect_startup_failures(settings)
+if _startup_failures:
+    raise RuntimeError(_startup_failures[0])
 
 # ---------------------------------------------------------------------------
 # Disable interactive API docs in production (information disclosure)

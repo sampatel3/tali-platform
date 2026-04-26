@@ -5,10 +5,20 @@ const AuthContext = createContext(null);
 
 export function AuthProvider({ children }) {
   const [user, setUser] = useState(() => {
+    const token = localStorage.getItem('taali_access_token');
+    if (!token) {
+      localStorage.removeItem('taali_user');
+      return null;
+    }
     const saved = localStorage.getItem('taali_user');
-    return saved ? JSON.parse(saved) : null;
+    try {
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      localStorage.removeItem('taali_user');
+      return null;
+    }
   });
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(() => Boolean(localStorage.getItem('taali_access_token')));
 
   const isAuthenticated = !!user;
 
@@ -43,24 +53,36 @@ export function AuthProvider({ children }) {
     return () => window.removeEventListener('auth:logout', handleLogout);
   }, []);
 
-  // Validate token on mount
+  // Validate token on mount, even when a cached user exists.
   useEffect(() => {
     const token = localStorage.getItem('taali_access_token');
-    if (token && !user) {
-      setLoading(true);
-      authApi.me()
-        .then(({ data }) => {
-          setUser(data);
-          localStorage.setItem('taali_user', JSON.stringify(data));
-        })
-        .catch(() => {
-          localStorage.removeItem('taali_access_token');
-          localStorage.removeItem('taali_user');
-          setUser(null);
-        })
-        .finally(() => setLoading(false));
+    if (!token) {
+      localStorage.removeItem('taali_user');
+      setUser(null);
+      setLoading(false);
+      return;
     }
+    setLoading(true);
+    authApi.me()
+      .then(({ data }) => {
+        setUser(data);
+        localStorage.setItem('taali_user', JSON.stringify(data));
+      })
+      .catch(() => {
+        localStorage.removeItem('taali_access_token');
+        localStorage.removeItem('taali_user');
+        setUser(null);
+      })
+      .finally(() => setLoading(false));
   }, []);
+
+  // If token disappears while state still has a user, force logout state sync.
+  useEffect(() => {
+    const token = localStorage.getItem('taali_access_token');
+    if (!token && user) {
+      setUser(null);
+    }
+  }, [user]);
 
   return (
     <AuthContext.Provider value={{ user, isAuthenticated, loading, login, register, logout }}>

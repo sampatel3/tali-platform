@@ -1,11 +1,10 @@
 import React, { useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { AlertTriangle, CheckCircle, Mail } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../shared/api';
-import { BRAND } from '../../config/brand';
-import { Logo } from '../../shared/ui/Branding';
-import { Button, Input, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { SignInLayout, AuthCard } from './AuthLayout';
 
 const LOGIN_ERROR_MESSAGES = {
   LOGIN_BAD_CREDENTIALS: 'Incorrect email or password. Please try again.',
@@ -20,6 +19,14 @@ const getLoginErrorMessage = (err) => {
     const normalizedDetail = detail.trim();
     const mappedMessage = LOGIN_ERROR_MESSAGES[normalizedDetail.toUpperCase()];
     return mappedMessage || normalizedDetail;
+  }
+
+  if (err?.code === 'ERR_NETWORK' || message === 'Network Error') {
+    return 'Unable to reach the Taali API. Please refresh and try again.';
+  }
+
+  if (err?.response?.status === 404 || err?.response?.status === 502 || err?.response?.status === 503) {
+    return 'Unable to reach the Taali API. Please try again in a moment.';
   }
 
   if (Array.isArray(detail) && detail.length > 0) {
@@ -39,8 +46,19 @@ const getLoginErrorMessage = (err) => {
   return 'Unable to sign in. Please try again.';
 };
 
+const resolveSafeNextPath = (rawValue) => {
+  if (typeof rawValue !== 'string') return '';
+  const nextPath = rawValue.trim();
+  if (!nextPath.startsWith('/') || nextPath.startsWith('//') || nextPath.includes('://')) {
+    return '';
+  }
+  return nextPath;
+};
+
 export const LoginPage = ({ onNavigate }) => {
   const { login } = useAuth();
+  const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -59,7 +77,12 @@ export const LoginPage = ({ onNavigate }) => {
     setLoading(true);
     try {
       await login(email, password);
-      onNavigate('dashboard');
+      const nextPath = resolveSafeNextPath(searchParams.get('next'));
+      if (nextPath) {
+        navigate(nextPath, { replace: true });
+      } else {
+        onNavigate('dashboard');
+      }
     } catch (err) {
       const status = err.response?.status;
       const rawDetail = err.response?.data?.detail;
@@ -110,124 +133,117 @@ export const LoginPage = ({ onNavigate }) => {
   };
 
   return (
-    <div className="min-h-screen bg-[var(--taali-surface)] flex flex-col">
-      <nav className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface)]">
-        <div className="max-w-7xl mx-auto px-6 py-4">
-          <Logo onClick={() => onNavigate('landing')} />
-        </div>
-      </nav>
-      <div className="flex-1 flex items-center justify-center p-6">
-        <div className="w-full max-w-md">
-          {error && (
-            <div className="mb-6 border-2 border-[var(--taali-danger)] bg-[var(--taali-danger-soft)] p-4">
-              <div className="flex items-start gap-3">
-                <AlertTriangle size={18} className="text-[var(--taali-danger)] mt-0.5 flex-shrink-0" />
-                <div>
-                  <p className="text-sm font-semibold text-[var(--taali-danger)]">Sign-in failed</p>
-                  <p className="text-sm text-[var(--taali-text)]">{error}</p>
-                </div>
-              </div>
-              {needsVerification && (
-                <Button
-                  variant="danger"
-                  className="mt-3 w-full"
-                  onClick={handleResendVerification}
-                  disabled={resending}
-                >
-                  {resending ? <><Spinner size={14} /> Sending...</> : resent ? <><CheckCircle size={14} /> Verification email sent!</> : <><Mail size={14} /> Resend verification email</>}
-                </Button>
-              )}
-            </div>
-          )}
-          <div className="border-2 border-[var(--taali-border)] p-8 bg-[var(--taali-surface)]">
-            <h2 className="text-3xl font-bold mb-2">Sign In</h2>
-            <p className="text-sm text-[var(--taali-muted)] mb-8">Access your {BRAND.name} dashboard</p>
-            <div className="space-y-4">
+    <SignInLayout onNavigate={onNavigate}>
+      <AuthCard kicker="01 · SIGN IN" title={<>Sign in<em>.</em></>} subtitle="Access your TAALI dashboard.">
+        {error ? (
+          <div className="mb-5 rounded-[14px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
+            <div className="flex items-start gap-3">
+              <AlertTriangle size={18} className="mt-0.5 shrink-0 text-[var(--taali-danger)]" />
               <div>
-                <label className="block font-mono text-sm mb-1">Email</label>
-                <Input
-                  type="email"
-                  placeholder="you@company.com"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                />
+                <p className="text-sm font-semibold text-[var(--taali-danger)]">Sign-in failed</p>
+                <p className="mt-1 text-sm text-[var(--ink)]">{error}</p>
               </div>
-              <div>
-                <label className="block font-mono text-sm mb-1">Password</label>
-                <Input
-                  type="password"
-                  placeholder="••••••••"
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-                />
-              </div>
-              <Button
-                variant="primary"
-                className="w-full mt-4"
-                onClick={handleLogin}
-                disabled={loading}
-              >
-                {loading ? <><Spinner size={18} /> Signing in...</> : 'Sign In'}
-              </Button>
             </div>
-            <div className="my-5 flex items-center gap-3">
-              <div className="h-px flex-1 bg-[var(--taali-border)]" />
-              <span className="font-mono text-xs text-[var(--taali-muted)]">or</span>
-              <div className="h-px flex-1 bg-[var(--taali-border)]" />
-            </div>
-            <Button
-              variant="secondary"
-              className="w-full"
-              onClick={() => {
-                setShowSsoInput((prev) => !prev);
-                setSsoMessage('');
-              }}
-            >
-              Sign in with SSO
-            </Button>
-            {showSsoInput ? (
-              <div className="mt-3 space-y-2">
-                <Input
-                  type="email"
-                  placeholder="you@company.com"
-                  value={ssoEmail}
-                  onChange={(event) => setSsoEmail(event.target.value)}
-                />
-                <Button
-                  variant="secondary"
-                  className="w-full"
-                  onClick={handleSsoCheck}
-                  disabled={ssoChecking}
-                >
-                  {ssoChecking ? <><Spinner size={14} /> Checking SSO...</> : 'Continue to SSO'}
-                </Button>
-                {ssoMessage ? (
-                  <p className="text-xs text-[var(--taali-muted)]">{ssoMessage}</p>
-                ) : null}
-              </div>
-            ) : null}
-            <div className="mt-6 text-center space-y-2">
+            {needsVerification ? (
               <button
                 type="button"
-                className="text-sm hover:underline text-[var(--taali-purple)]"
-                onClick={() => onNavigate('forgot-password')}
+                className="btn btn-outline mt-3 w-full justify-center"
+                onClick={handleResendVerification}
+                disabled={resending}
               >
-                Forgot password?
+                {resending ? 'Sending...' : resent ? (
+                  <>
+                    <CheckCircle size={14} />
+                    Verification email sent
+                  </>
+                ) : (
+                  <>
+                    <Mail size={14} />
+                    Resend verification email
+                  </>
+                )}
               </button>
-              <div>
-                <span className="text-sm text-[var(--taali-muted)]">No account? </span>
-                <button
-                  className="text-sm font-bold hover:underline text-[var(--taali-purple)]"
-                  onClick={() => onNavigate('register')}
-                >
-                  Register
-                </button>
-              </div>
-            </div>
+            ) : null}
           </div>
+        ) : null}
+
+        <div className="space-y-4">
+          <label className="field">
+            <span className="k">Work email</span>
+            <input
+              type="email"
+              placeholder="you@company.com"
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+            />
+          </label>
+          <label className="field">
+            <span className="k">Password</span>
+            <input
+              type="password"
+              placeholder="••••••••"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+            />
+          </label>
         </div>
-      </div>
-    </div>
+
+        <div className="mt-6">
+          <button type="button" className="btn btn-purple w-full justify-center py-[13px] text-[14.5px]" onClick={handleLogin} disabled={loading}>
+            {loading ? 'Signing in...' : <>Sign in <span className="arrow">→</span></>}
+          </button>
+        </div>
+
+        <div className="my-5 flex items-center gap-3 font-[var(--font-mono)] text-[11.5px] uppercase tracking-[0.1em] text-[var(--mute-2)]">
+          <div className="h-px flex-1 bg-[var(--line)]" />
+          <span>or</span>
+          <div className="h-px flex-1 bg-[var(--line)]" />
+        </div>
+
+        <button
+          type="button"
+          className="flex w-full items-center justify-center gap-2 rounded-[10px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-3 text-sm font-medium text-[var(--ink)] transition-colors hover:border-[var(--ink)]"
+          onClick={() => {
+            setShowSsoInput((prev) => !prev);
+            setSsoMessage('');
+          }}
+        >
+          Sign in with SSO
+        </button>
+
+        {showSsoInput ? (
+          <div className="mt-3 space-y-2">
+            <input
+              type="email"
+              className="w-full rounded-[10px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-3 text-sm"
+              placeholder="you@company.com"
+              value={ssoEmail}
+              onChange={(event) => setSsoEmail(event.target.value)}
+            />
+            <button
+              type="button"
+              className="btn btn-outline w-full justify-center"
+              onClick={handleSsoCheck}
+              disabled={ssoChecking}
+            >
+              {ssoChecking ? 'Checking SSO...' : 'Continue to SSO'}
+            </button>
+            {ssoMessage ? <p className="text-xs text-[var(--mute)]">{ssoMessage}</p> : null}
+          </div>
+        ) : null}
+
+        <div className="mt-6 text-center text-[13px] text-[var(--mute)]">
+          <button type="button" className="text-[var(--purple)] hover:underline" onClick={() => onNavigate('forgot-password')}>
+            Forgot password?
+          </button>
+          <span> · </span>
+          No account?{' '}
+          <button type="button" className="font-medium text-[var(--purple)] hover:underline" onClick={() => onNavigate('register')}>
+            Request access
+          </button>
+        </div>
+      </AuthCard>
+    </SignInLayout>
   );
 };

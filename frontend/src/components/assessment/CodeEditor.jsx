@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Editor from '@monaco-editor/react';
-import { Play, Save } from 'lucide-react';
+import { FileText, Play, Save, TerminalSquare } from 'lucide-react';
 
 export default function CodeEditor({
   initialCode = '',
@@ -8,10 +8,13 @@ export default function CodeEditor({
   onChange: onControlledChange,
   onExecute,
   onSave,
+  onOpenTerminal,
   language = 'python',
   filename = 'pipeline.py',
   disabled = false,
+  saving = false,
   lightMode = false,
+  showTerminalAction = false,
 }) {
   const isControlled = controlledValue !== undefined;
   const [internalCode, setInternalCode] = useState(initialCode);
@@ -22,7 +25,7 @@ export default function CodeEditor({
     if (isControlled && controlledValue !== code) {
       setInternalCode(controlledValue);
     }
-  }, [isControlled, controlledValue]);
+  }, [isControlled, controlledValue, code]);
 
   const handleEditorDidMount = (editor) => {
     editorRef.current = editor;
@@ -43,34 +46,51 @@ export default function CodeEditor({
   };
 
   const handleSave = () => {
-    if (disabled) return;
+    if (disabled || saving) return;
     const currentCode = editorRef.current?.getValue() || code;
     onSave?.(currentCode);
   };
 
   return (
-    <div className="h-full flex flex-col">
-      <div className="flex items-center justify-between border-b border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel)] px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span className="max-w-[36ch] truncate font-mono text-sm text-[var(--taali-runtime-text)]">{filename}</span>
-          <span className="font-mono text-[11px] uppercase tracking-wide text-[var(--taali-runtime-muted)]">{language}</span>
+    <div className="flex h-full flex-col bg-[var(--bg-2)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
+        <div className="min-w-0 flex items-center gap-2 text-[13px] text-[var(--ink-2)]">
+          <FileText size={13} />
+          <span className="truncate font-mono">{filename}</span>
+          <span className="rounded bg-[var(--bg-3)] px-2 py-0.5 font-mono text-[10px] uppercase tracking-[0.08em] text-[var(--mute)]">
+            {language}
+          </span>
         </div>
-        <div className="flex items-center gap-2">
+
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={handleSave}
+            disabled={disabled || saving}
+            className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[12px] font-medium text-[var(--mute)] transition-colors hover:border-[var(--ink)] hover:text-[var(--ink)] disabled:opacity-50"
+          >
+            <Save size={12} />
+            {saving ? 'Saving...' : 'Save'}
+          </button>
+          {showTerminalAction ? (
+            <button
+              type="button"
+              onClick={onOpenTerminal}
+              disabled={disabled}
+              className="inline-flex items-center gap-1.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3 py-1.5 text-[12px] font-medium text-[var(--ink-2)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)] disabled:opacity-50"
+            >
+              <TerminalSquare size={12} />
+              Run tests
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={handleRun}
             disabled={disabled}
-            className="flex items-center gap-1.5 rounded-[var(--taali-radius-control)] border border-[var(--taali-purple)] bg-[var(--taali-purple)] px-3 py-1.5 font-mono text-xs font-bold text-white transition-colors hover:bg-[var(--taali-purple-hover)] disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-full bg-[var(--purple)] px-3 py-1.5 text-[12px] font-medium text-white transition-colors hover:bg-[var(--purple-2)] disabled:opacity-50"
           >
-            <Play size={12} /> Run
-          </button>
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={disabled}
-            className="flex items-center gap-1.5 rounded-[var(--taali-radius-control)] border border-[var(--taali-runtime-border)] bg-[var(--taali-runtime-panel-alt)] px-3 py-1.5 font-mono text-xs font-bold text-[var(--taali-runtime-text)] transition-colors hover:border-[var(--taali-purple)] hover:text-[var(--taali-purple)] disabled:opacity-50"
-          >
-            <Save size={12} /> Save
+            <Play size={12} fill="currentColor" />
+            Run
           </button>
         </div>
       </div>
@@ -89,7 +109,7 @@ export default function CodeEditor({
             tabSize: 4,
             scrollBeyondLastLine: false,
             automaticLayout: true,
-            padding: { top: 12 },
+            padding: { top: 14 },
             lineNumbers: 'on',
             renderLineHighlight: 'line',
             cursorBlinking: 'smooth',

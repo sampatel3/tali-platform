@@ -14,9 +14,14 @@ Thumbs.db
 # Dependencies
 node_modules/
 __pycache__/
+*.py[cod]
+.pytest_cache/
 venv/
 .venv/
 .vercel
+.claude/
+dist/
+build/
 
 # Ralph config (may contain API key)
 .cursor/ralph-config.json

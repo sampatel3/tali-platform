@@ -25,6 +25,7 @@ const SOCIAL_ICONS = {
 const CV_SECTION_HEADERS = /^(Professional\s+)?Experience|Work\s+(?:History|Experience)|Education|Skills|Summary|Objective|Qualifications|Certifications|Projects|Achievements|Languages$/i;
 
 const modeMeta = (mode) => {
+  if (mode === 'workable_pre_screen') return { label: 'Workable pre-screen', variant: 'info' };
   if (mode === 'assessment_plus_role_fit' || mode === 'assessment_plus_cv') return { label: 'Assessment + Role fit', variant: 'purple' };
   if (mode === 'assessment_only_fallback') return { label: 'Assessment only', variant: 'warning' };
   if (mode === 'pending') return { label: 'Pending', variant: 'muted' };
@@ -77,11 +78,11 @@ export function CandidateCvSidebar({ open, application, onClose, onFetchCvFromWo
   const socials = Array.isArray(data?.candidate_social_profiles) ? data.candidate_social_profiles : [];
   const skills = Array.isArray(data?.candidate_skills) ? data.candidate_skills : [];
   const candidateLocation = trimOrUndefined(data?.candidate_location);
-  const taaliScore = data?.score_summary?.taali_score ?? data?.taali_score ?? data?.cv_match_score ?? null;
-  const taaliScoreDetails = data?.score_summary?.taali_score != null || data?.taali_score != null
+  const taaliScore = data?.pre_screen_score ?? data?.score_summary?.taali_score ?? data?.taali_score ?? data?.cv_match_score ?? null;
+  const taaliScoreDetails = data?.pre_screen_score != null || data?.score_summary?.taali_score != null || data?.taali_score != null
     ? { score_scale: '0-100' }
     : data?.cv_match_details;
-  const mode = modeMeta(data?.score_mode || data?.score_summary?.mode);
+  const mode = modeMeta(data?.pre_screen_score != null ? 'workable_pre_screen' : (data?.score_mode || data?.score_summary?.mode));
 
   const footer = data?.cv_text ? (
     <div className="flex flex-wrap items-center justify-between gap-2 text-sm text-[var(--taali-muted)]">
