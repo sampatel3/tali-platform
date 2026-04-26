@@ -174,6 +174,16 @@ class Settings(BaseSettings):
     # Default calibration prompt (used when task has no custom calibration_prompt)
     DEFAULT_CALIBRATION_PROMPT: str = "Ask Claude to help you write a Python function that reverses a string. Show your approach to working with AI assistance."
 
+    # cv_match_v3.0 cutover flag (Phase 10 of the production-grade upgrade).
+    # When True, cv_score_orchestrator routes scoring through
+    # `app.cv_matching.runner.run_cv_match` instead of the legacy v3/v4
+    # `fit_matching_service` calls. Default off — flip to True in dev/staging
+    # first, monitor traces via `/admin/cv-match/traces`, then promote.
+    USE_CV_MATCH_V3: bool = False
+    # Optional path to write cv_match telemetry rows (one JSON line per call).
+    # Empty string = ring-buffer-only (admin route reads from memory).
+    CV_MATCH_TRACE_LOG_PATH: str = ""
+
     # MVP feature flags (default to MVP-safe behavior)
     MVP_DISABLE_STRIPE: bool = True
     MVP_DISABLE_LEMON: bool = True

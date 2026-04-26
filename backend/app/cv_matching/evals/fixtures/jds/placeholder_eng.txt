@@ -1,0 +1,31 @@
+Job Specification — Senior Data Engineer (synthetic placeholder)
+
+About the role
+--------------
+We are hiring a Senior Data Engineer to build and operate the data
+platform powering our lending products. You will own pipelines from
+ingestion through serving, partner closely with the analytics team, and
+mentor mid-level engineers.
+
+Responsibilities
+----------------
+- Design, build, and operate batch and streaming data pipelines on AWS.
+- Migrate legacy ETL onto modern stacks (Spark, Glue, dbt).
+- Define data quality SLAs; instrument observability for pipelines.
+- Mentor mid-level data engineers; review designs and code.
+
+Must-haves
+----------
+- 5+ years building data pipelines on AWS (Glue, EMR, or Kinesis).
+- Strong Python and SQL.
+- Experience operating Spark in production.
+
+Nice-to-haves
+-------------
+- Banking or financial services experience.
+- Familiarity with dbt and modern data warehousing patterns.
+- AWS certification.
+
+Location
+--------
+Dubai-based (hybrid, 3 days in-office).
