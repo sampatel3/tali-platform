@@ -93,28 +93,28 @@ export const ThemeToggleButton = ({ title = 'Toggle theme' }) => {
 
 const AppUser = ({ onNavigate }) => {
   const { user, logout } = useAuth();
-  const [orgName, setOrgName] = useState(() => resolveOrgName(user));
+  const fallbackOrgName = resolveOrgName(user);
+  const [orgName, setOrgName] = useState(() => fallbackOrgName);
   const displayName = resolveUserName(user);
-  const orgLabel = formatHeaderOrgLabel(orgName || 'Taali', 'Taali');
-  const initials = useMemo(() => initialsFor(displayName, orgName), [displayName, orgName]);
+  const displayOrgName = orgName || fallbackOrgName || 'Taali';
+  const orgLabel = formatHeaderOrgLabel(displayOrgName, 'Taali');
+  const initials = useMemo(() => initialsFor(displayName, displayOrgName), [displayName, displayOrgName]);
 
   useEffect(() => {
-    const nextOrgName = resolveOrgName(user);
-    if (nextOrgName) {
-      setOrgName(nextOrgName);
-      return;
-    }
-
     let cancelled = false;
+    setOrgName(fallbackOrgName);
+
+    if (!user) return undefined;
+
     const loadOrg = async () => {
       try {
         const res = await organizationsApi.get();
         if (!cancelled) {
           const resolved = String(res?.data?.name || '').trim();
-          if (resolved) setOrgName(resolved);
+          setOrgName(resolved || fallbackOrgName || 'Taali');
         }
       } catch {
-        if (!cancelled) setOrgName('Taali');
+        if (!cancelled) setOrgName(fallbackOrgName || 'Taali');
       }
     };
 
@@ -122,13 +122,13 @@ const AppUser = ({ onNavigate }) => {
     return () => {
       cancelled = true;
     };
-  }, [user]);
+  }, [fallbackOrgName, user?.id, user?.organization_id]);
 
   return (
     <div className="app-user">
       <div className="name hidden sm:block">
-        <div className="n">{displayName}</div>
-        <div className="sub">{orgLabel}</div>
+        <div className="n" title={displayName}>{displayName}</div>
+        <div className="sub" title={displayOrgName}>{orgLabel}</div>
       </div>
       <div className="app-avatar" aria-hidden="true">{initials}</div>
       <button

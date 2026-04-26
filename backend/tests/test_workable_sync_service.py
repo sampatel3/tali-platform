@@ -81,6 +81,24 @@ class TestFormatJobSpecFromApi:
         assert "# Data Engineer" in out
         assert "Full text here" in out
 
+    def test_description_and_full_description_are_deduped(self):
+        job = {
+            "title": "Portfolio Lead",
+            "description": "<p>DeepLight AI builds enterprise data systems.</p>",
+            "full_description": (
+                "<p>DeepLight AI builds enterprise data systems.</p>"
+                "<p>Lead delivery governance across strategic programs.</p>"
+            ),
+            "requirements": "<ul><li>Own financial forecasting.</li></ul>",
+            "benefits": "<p>Hybrid working.</p>",
+        }
+        out = _format_job_spec_from_api(job)
+        assert "## Description" in out
+        assert "## Requirements" in out
+        assert "## Benefits" in out
+        assert "Full Description" not in out
+        assert out.count("DeepLight AI builds enterprise data systems.") == 1
+
     def test_location_dict_formatted_not_raw(self):
         job = {
             "title": "GenAI Engineer",

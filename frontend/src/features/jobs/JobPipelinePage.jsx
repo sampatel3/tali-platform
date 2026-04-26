@@ -146,6 +146,7 @@ const WORKABLE_SECTION_LABELS = [
   'candidate requirements',
   'description',
   'experience',
+  'full description',
   'job description',
   'key responsibilities',
   'must have',
@@ -161,6 +162,35 @@ const WORKABLE_SECTION_LABELS = [
   'your responsibilities',
 ];
 
+const SPEC_SECTION_ORDER = ['Description', 'Requirements', 'Benefits'];
+
+const SPEC_SECTION_ALIASES = new Map([
+  ['about', 'Description'],
+  ['about the role', 'Description'],
+  ['description', 'Description'],
+  ['full description', 'Description'],
+  ['job description', 'Description'],
+  ['overview', 'Description'],
+  ['role overview', 'Description'],
+  ['candidate profile', 'Requirements'],
+  ['candidate requirements', 'Requirements'],
+  ['experience', 'Requirements'],
+  ['key responsibilities', 'Requirements'],
+  ['must have', 'Requirements'],
+  ['nice to have', 'Requirements'],
+  ['qualifications', 'Requirements'],
+  ['requirements', 'Requirements'],
+  ['responsibilities', 'Requirements'],
+  ['skills', 'Requirements'],
+  ['what you bring', 'Requirements'],
+  ['who you are', 'Requirements'],
+  ['you will', 'Requirements'],
+  ['your responsibilities', 'Requirements'],
+  ['benefits', 'Benefits'],
+  ['perks', 'Benefits'],
+  ['what we offer', 'Benefits'],
+]);
+
 const stripMarkdownSyntax = (value = '') => String(value || '')
   .replace(/^#{1,6}\s+/gm, '')
   .replace(/\*\*([^*]+)\*\*/g, '$1')
@@ -172,6 +202,8 @@ const normalizeSectionTitle = (value = '') => stripMarkdownSyntax(value)
   .replace(/[:：]+$/g, '')
   .replace(/\s+/g, ' ')
   .trim();
+
+const canonicalSpecSectionTitle = (value = '') => SPEC_SECTION_ALIASES.get(normalizeSectionTitle(value).toLowerCase()) || '';
 
 const isLikelySectionTitle = (value = '') => {
   const label = normalizeSectionTitle(value);
@@ -197,7 +229,7 @@ const splitKnownSectionHeading = (headingText = '') => {
 
   const title = cleanHeading.slice(0, match.label.length).trim();
   const rest = cleanHeading.slice(match.label.length).trim();
-  return { title, rest };
+  return { title: canonicalSpecSectionTitle(title) || title, rest };
 };
 
 const truncateSentence = (value = '', maxLength = 430) => {
@@ -222,6 +254,41 @@ const expandSpecLine = (line = '') => String(line || '')
   .split('\n')
   .map((entry) => entry.trim())
   .filter(Boolean);
+
+const isSpecMetadataLine = (line = '') => {
+  const text = stripMarkdownSyntax(line).trim().toLowerCase();
+  return /^(location|department|employment type|employment|apply|application|application url|job application|state|full title|title)\s*:/.test(text);
+};
+
+const specContentKey = (value = '') => stripMarkdownSyntax(value)
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ')
+  .trim();
+
+const canonicalizeSpecSections = (sections = []) => {
+  const buckets = {
+    Description: [],
+    Requirements: [],
+    Benefits: [],
+  };
+  const seen = new Set();
+
+  sections.forEach((section) => {
+    const title = canonicalSpecSectionTitle(section.title) || 'Description';
+    section.lines.forEach((line) => {
+      if (!line || isSpecMetadataLine(line)) return;
+      const key = specContentKey(line);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      buckets[title].push(line);
+    });
+  });
+
+  return SPEC_SECTION_ORDER.map((title) => ({
+    title,
+    lines: buckets[title],
+  })).filter((section) => section.lines.length);
+};
 
 const parseJobSpec = (raw = '', roleName = '') => {
   const normalized = normalizeSpecText(raw);
@@ -258,8 +325,14 @@ const parseJobSpec = (raw = '', roleName = '') => {
         return;
       }
 
-      currentSection = { title: splitKnownHeading?.title || normalizeSectionTitle(headingText) || 'Description', lines: [] };
-      sections.push(currentSection);
+      const canonicalHeadingTitle = canonicalSpecSectionTitle(headingText);
+      if (canonicalHeadingTitle) {
+        currentSection = { title: canonicalHeadingTitle, lines: [] };
+        sections.push(currentSection);
+        return;
+      }
+
+      ensureSection('Description').lines.push(`**${normalizeSectionTitle(headingText) || 'Role detail'}**`);
       return;
     }
 
@@ -272,9 +345,16 @@ const parseJobSpec = (raw = '', roleName = '') => {
         meta[key] = stripMarkdownSyntax(content);
         return;
       }
-      if (isLikelySectionTitle(label)) {
-        currentSection = { title: label, lines: content ? [content] : [] };
+      const canonicalLabel = canonicalSpecSectionTitle(label);
+      if (canonicalLabel) {
+        currentSection = { title: canonicalLabel, lines: content ? [content] : [] };
         sections.push(currentSection);
+        return;
+      }
+      if (isLikelySectionTitle(label)) {
+        ensureSection(currentSection?.title || 'Description').lines.push(
+          content ? `**${label}** ${content}` : `**${label}**`
+        );
         return;
       }
     }
@@ -286,9 +366,16 @@ const parseJobSpec = (raw = '', roleName = '') => {
         meta[key] = stripMarkdownSyntax(metaMatch[2]);
         return;
       }
-      if (isLikelySectionTitle(metaMatch[1])) {
-        currentSection = { title: normalizeSectionTitle(metaMatch[1]), lines: [metaMatch[2].trim()] };
+      const label = normalizeSectionTitle(metaMatch[1]);
+      const content = metaMatch[2].trim();
+      const canonicalLabel = canonicalSpecSectionTitle(label);
+      if (canonicalLabel) {
+        currentSection = { title: canonicalLabel, lines: [content] };
         sections.push(currentSection);
+        return;
+      }
+      if (isLikelySectionTitle(label)) {
+        ensureSection(currentSection?.title || 'Description').lines.push(`**${label}** ${content}`);
         return;
       }
     }
@@ -301,12 +388,13 @@ const parseJobSpec = (raw = '', roleName = '') => {
 
   const cleanedSections = sections
     .map((section) => ({
-      title: normalizeSectionTitle(section.title) || 'Description',
+      title: canonicalSpecSectionTitle(section.title) || normalizeSectionTitle(section.title) || 'Description',
       lines: section.lines.flatMap(expandSpecLine),
     }))
     .filter((section) => section.lines.some((line) => stripMarkdownSyntax(line)));
 
-  const descriptionSection = cleanedSections.find((section) => /description|about/i.test(section.title)) || cleanedSections[0];
+  const canonicalSections = canonicalizeSpecSections(cleanedSections);
+  const descriptionSection = canonicalSections.find((section) => section.title === 'Description') || canonicalSections[0];
   const summarySource = descriptionSection?.lines.find((line) => !/^[-•]\s+/.test(line)) || descriptionSection?.lines[0] || '';
   const fallbackSummary = roleName
     ? `${roleName} keeps recruiter scoring, threshold tuning, and candidate movement in one place.`
@@ -316,7 +404,7 @@ const parseJobSpec = (raw = '', roleName = '') => {
     title,
     meta,
     summary: truncateSentence(summarySource || fallbackSummary),
-    sections: cleanedSections,
+    sections: canonicalSections,
   };
 };
 
@@ -880,7 +968,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             <div className="role-desc-main">
               <p className="role-desc-summary">
                 <b>{role?.name || 'This role'}</b> keeps recruiter scoring, threshold tuning, and candidate movement in one place.
-                {roleSummary ? ` ${roleSummary}` : ' Use this workspace to keep CV scoring current and move candidates from screening into decision-ready review.'}
+                {!detailsExpanded && roleSummary ? ` ${roleSummary}` : ' Use this workspace to keep CV scoring current and move candidates from screening into decision-ready review.'}
               </p>
 
               <button

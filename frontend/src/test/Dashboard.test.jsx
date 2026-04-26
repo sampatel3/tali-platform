@@ -544,6 +544,26 @@ describe('AssessmentsPage', () => {
     }, { timeout: 5000 });
   });
 
+  it('refreshes stale top-right organization names from the organization endpoint', async () => {
+    const staleUser = {
+      ...mockUser,
+      full_name: 'Sam Patel',
+      organization_name: 'DEEPLIGHT_AI',
+    };
+    localStorage.setItem('taali_user', JSON.stringify(staleUser));
+    auth.me.mockResolvedValue({ data: staleUser });
+    organizationsApi.get.mockResolvedValue({ data: { id: 1, name: 'Taali' } });
+    assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
+
+    renderAppAt('/assessments');
+
+    await waitFor(() => {
+      expect(screen.getByText('Sam Patel')).toBeInTheDocument();
+      expect(screen.getByText('TAALI')).toBeInTheDocument();
+      expect(screen.queryByText('DEEPLIGHT_AI')).not.toBeInTheDocument();
+    }, { timeout: 5000 });
+  });
+
   it('renders assessment list when data loads', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
     renderAppAt('/assessments');

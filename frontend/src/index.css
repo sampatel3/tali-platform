@@ -277,29 +277,48 @@ html[data-theme="dark"] {
 .app-user {
   display: flex;
   align-items: center;
-  gap: 12px;
+  min-height: 40px;
+  gap: 10px;
 }
 
 .app-user .name {
+  display: flex;
+  min-height: 36px;
+  max-width: 180px;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
   text-align: right;
   font-size: 13px;
   line-height: 1.1;
 }
 
 .app-user .name .n {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   font-weight: 600;
+  line-height: 1.15;
 }
 
 .app-user .name .sub {
+  max-width: 100%;
+  margin-top: 3px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--mute);
   font-family: var(--font-mono);
   font-size: 11.5px;
   letter-spacing: 0.08em;
+  line-height: 1.1;
 }
 
 .app-avatar {
   width: 36px;
   height: 36px;
+  flex: 0 0 36px;
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -307,18 +326,26 @@ html[data-theme="dark"] {
   color: var(--purple);
   font-size: 13px;
   font-weight: 600;
+  line-height: 1;
 }
 
 .icon-btn {
   width: 36px;
   height: 36px;
+  flex: 0 0 36px;
   border-radius: 50%;
   display: grid;
   place-items: center;
+  padding: 0;
   border: 1px solid var(--line);
   background: var(--bg-2);
   color: var(--ink-2);
+  line-height: 1;
   transition: border-color 0.15s, color 0.15s, transform 0.08s;
+}
+
+.icon-btn svg {
+  display: block;
 }
 
 .icon-btn:hover {

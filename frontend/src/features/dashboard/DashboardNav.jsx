@@ -45,28 +45,27 @@ export const DashboardNav = ({ currentPage, onNavigate, workflowV2Enabled = fals
   const [mobileOpen, setMobileOpen] = useState(false);
 
   useEffect(() => {
-    setResolvedOrgName(fallbackOrgName);
-  }, [fallbackOrgName]);
-
-  useEffect(() => {
-    if (!user || fallbackOrgName) return;
     let cancelled = false;
+    setResolvedOrgName(fallbackOrgName);
+
+    if (!user) return undefined;
+
     const loadOrganizationName = async () => {
       try {
         const response = await organizationsApi.get();
         const orgName = (response?.data?.name || '').trim();
-        if (!cancelled && orgName) {
-          setResolvedOrgName(orgName);
+        if (!cancelled) {
+          setResolvedOrgName(orgName || fallbackOrgName || 'No company');
         }
       } catch {
-        // Ignore organization lookup failures and keep the fallback label.
+        if (!cancelled) setResolvedOrgName(fallbackOrgName || 'No company');
       }
     };
     void loadOrganizationName();
     return () => {
       cancelled = true;
     };
-  }, [fallbackOrgName, user]);
+  }, [fallbackOrgName, user?.id, user?.organization_id]);
 
   const orgName = resolvedOrgName || 'No company';
   const orgLabel = formatHeaderOrgLabel(orgName);
@@ -120,8 +119,8 @@ export const DashboardNav = ({ currentPage, onNavigate, workflowV2Enabled = fals
 
         <div className="app-user">
           <div className="name desktop-only">
-            <div className="n">{displayName}</div>
-            <div className="sub">{orgLabel}</div>
+            <div className="n" title={displayName}>{displayName}</div>
+            <div className="sub" title={orgName}>{orgLabel}</div>
           </div>
           <div className="app-avatar desktop-only">{initials}</div>
           <div className="mobile-page-pill mobile-only">{activeNavItem?.label || 'Menu'}</div>
@@ -146,8 +145,8 @@ export const DashboardNav = ({ currentPage, onNavigate, workflowV2Enabled = fals
         <div className="dashboard-nav-mobile" role="menu">
           <div className="dashboard-nav-mobile-user">
             <div>
-              <div className="n">{displayName}</div>
-              <div className="sub">{orgLabel}</div>
+              <div className="n" title={displayName}>{displayName}</div>
+              <div className="sub" title={orgName}>{orgLabel}</div>
             </div>
             <div className="app-avatar">{initials}</div>
           </div>

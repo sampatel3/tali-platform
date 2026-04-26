@@ -139,7 +139,7 @@ describe('JobPipelinePage', () => {
       data: {
         ...baseRole,
         name: 'Portfolio Lead and Business Manager',
-        description: '# Portfolio Lead and Business Manager **Location:** Dubai, United Arab Emirates **Employment type:** Full-time **Application:** https://deeplight.workable.com/jobs/5757335/candidates/new **State:** published **Full title:** Portfolio Lead and Business Manager - DL88 ## Description DeepLight AI is a specialist AI and data consultancy dedicated to transforming the regional corporate landscape. **Your responsibilities within this role will include:** - Financial & Resource Management: own forecasting and budgets. **Candidate Requirements:** - Leadership in AI transformation. **What we offer:** Growth with a senior team.',
+        description: '# Portfolio Lead and Business Manager **Location:** Dubai, United Arab Emirates **Employment type:** Full-time **Application:** https://deeplight.workable.com/jobs/5757335/candidates/new **State:** published **Full title:** Portfolio Lead and Business Manager - DL88 ## Description DeepLight AI is a specialist AI and data consultancy dedicated to transforming the regional corporate landscape. ## Full Description DeepLight AI is a specialist AI and data consultancy dedicated to transforming the regional corporate landscape. **Your responsibilities within this role will include:** - Financial & Resource Management: own forecasting and budgets. **Candidate Requirements:** - Leadership in AI transformation. **What we offer:** Growth with a senior team.',
       },
     });
 
@@ -154,12 +154,22 @@ describe('JobPipelinePage', () => {
 
     expect(screen.getByText(/Workable ingested job spec/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /Open source posting/i })).toHaveAttribute('href', 'https://deeplight.workable.com/jobs/5757335/candidates/new');
-    expect(screen.getAllByText(/DeepLight AI is a specialist AI and data consultancy/i).length).toBeGreaterThan(0);
+    const querySectionTitle = (label) => screen.queryByText((_, element) => (
+      element?.classList?.contains('role-sec-title') && element.textContent.includes(label)
+    ));
+    const sectionTitle = (label) => screen.getByText((_, element) => (
+      element?.classList?.contains('role-sec-title') && element.textContent.includes(label)
+    ));
+    expect(sectionTitle('Description')).toBeInTheDocument();
+    expect(sectionTitle('Requirements')).toBeInTheDocument();
+    expect(sectionTitle('Benefits')).toBeInTheDocument();
+    expect(screen.getAllByText(/DeepLight AI is a specialist AI and data consultancy/i)).toHaveLength(1);
     expect(screen.getByText(/Your responsibilities within this role will include/i)).toBeInTheDocument();
     expect(screen.getByText(/Financial & Resource Management/i)).toBeInTheDocument();
-    expect(screen.getByText(/Candidate Requirements/i)).toBeInTheDocument();
+    expect(querySectionTitle('Full Description')).not.toBeInTheDocument();
+    expect(querySectionTitle('Candidate Requirements')).not.toBeInTheDocument();
     expect(screen.getByText(/Leadership in AI transformation/i)).toBeInTheDocument();
-    expect(screen.getByText(/What we offer/i)).toBeInTheDocument();
+    expect(querySectionTitle('What we offer')).not.toBeInTheDocument();
   });
 
   it('saves recruiter criteria from the explicit edit flow', async () => {

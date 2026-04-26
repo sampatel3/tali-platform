@@ -195,6 +195,11 @@ def _format_location(value) -> str | None:
     return None
 
 
+def _job_spec_block_key(value: str) -> str:
+    """Canonical key for duplicate Workable section blocks."""
+    return re.sub(r"[^a-z0-9]+", " ", (value or "").lower()).strip()
+
+
 def _format_job_spec_from_api(job_data: dict) -> str:
     """Build a well-formatted job spec string from Workable job API data.
     Handles: list response (minimal), job details response ({job: {...}}), or flat dict.
@@ -264,15 +269,41 @@ def _format_job_spec_from_api(job_data: dict) -> str:
             lines.append(f"**{label}:** {value}")
     lines.append("")
 
-    # Description/requirements: extract from dict or string, always _strip_html
-    for key in ("description", "full_description", "requirements", "benefits"):
+    section_content = {
+        "Description": [],
+        "Requirements": [],
+        "Benefits": [],
+    }
+    seen_blocks: set[str] = set()
+
+    # Description/full_description are the same user-facing section. Workable can
+    # return both, and full_description often repeats the short description.
+    for key, label in (
+        ("description", "Description"),
+        ("full_description", "Description"),
+        ("requirements", "Requirements"),
+        ("benefits", "Benefits"),
+    ):
         raw = merged.get(key)
         value = _extract_html_or_text(raw)
         if value:
-            label = key.replace("_", " ").title()
+            cleaned = _strip_html(value)
+            unique_blocks = []
+            for block in re.split(r"\n{2,}", cleaned):
+                block = block.strip()
+                key_for_block = _job_spec_block_key(block)
+                if not block or key_for_block in seen_blocks:
+                    continue
+                seen_blocks.add(key_for_block)
+                unique_blocks.append(block)
+            if unique_blocks:
+                section_content[label].append("\n\n".join(unique_blocks))
+
+    for label in ("Description", "Requirements", "Benefits"):
+        if section_content[label]:
             lines.append(f"## {label}")
             lines.append("")
-            lines.append(_strip_html(value))
+            lines.append("\n\n".join(section_content[label]))
             lines.append("")
 
     result = "\n".join(lines).strip()
