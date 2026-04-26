@@ -45,6 +45,10 @@ export const roles = {
     `/roles/${roleId}/applications/score-selected`,
     { application_ids: applicationIds, force: options.force === true },
   ),
+  fetchCvsSelected: (roleId, applicationIds) => api.post(
+    `/roles/${roleId}/applications/fetch-cvs-selected`,
+    { application_ids: applicationIds },
+  ),
   refreshInterviewSupportBulk: (roleId, applicationIds) => api.post(
     `/roles/${roleId}/applications/refresh-interview-support-bulk`,
     { application_ids: applicationIds },
