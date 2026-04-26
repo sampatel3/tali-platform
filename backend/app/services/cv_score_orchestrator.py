@@ -419,7 +419,7 @@ def _execute_scoring_v3(
             )
 
     output = run_cv_match(cv_text, job_spec_text, requirements)
-    job.cache_hit = "hit" if output.trace_id and getattr(output, "trace_id", "") else "miss"
+    job.cache_hit = "hit" if getattr(output, "cache_hit", False) else "miss"
 
     if output.scoring_status == ScoringStatus.FAILED:
         job.status = SCORE_JOB_ERROR
