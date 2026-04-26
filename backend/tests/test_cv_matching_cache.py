@@ -256,12 +256,16 @@ def test_runner_caches_and_reuses(db, monkeypatch):
     assert out2.scoring_status == ScoringStatus.OK
     # No new call — second run hit the cache.
     assert len(client.messages.calls) == 1
-    # Outputs are identical except for trace_id (each call gets its own).
+    # Outputs are identical except for trace_id (each call gets its own)
+    # and cache_hit (the second run sets it to True).
     a = out1.model_dump()
     b = out2.model_dump()
-    a.pop("trace_id")
-    b.pop("trace_id")
+    for key in ("trace_id", "cache_hit"):
+        a.pop(key)
+        b.pop(key)
     assert a == b
+    assert out1.cache_hit is False
+    assert out2.cache_hit is True
 
 
 def test_runner_skip_cache_bypasses(db, monkeypatch):

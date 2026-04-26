@@ -151,3 +151,4 @@ class CVMatchOutput(BaseModel):
     error_reason: str = ""
     model_version: str = ""
     trace_id: str = ""
+    cache_hit: bool = False

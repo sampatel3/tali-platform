@@ -49,7 +49,11 @@ logger = logging.getLogger("taali.cv_match.runner")
 # --- Cost discipline constants ---------------------------------------------
 
 INPUT_TOKEN_CEILING = 3500
-OUTPUT_TOKEN_CEILING = 1500
+# Output ceiling: 1500 was the handover spec but real Haiku 4.5 outputs
+# truncate mid-JSON for typical 5-requirement assessments (~5KB JSON).
+# Bumped to 4096 — still well under Haiku's per-call max and the marginal
+# cost is ~$0.0008 per call. Empirical fix.
+OUTPUT_TOKEN_CEILING = 4096
 MAX_RETRIES = 1  # exactly one retry on validation failure
 TEMPERATURE = 0.0
 
@@ -97,12 +101,18 @@ def _strip_json_fences(raw: str) -> str:
 
 
 def _count_input_tokens(client, prompt: str, system: str) -> int:
-    """Count tokens via the Anthropic SDK; ``client.messages.count_tokens``.
+    """Count tokens via the Anthropic SDK if available.
 
-    Fails open: if the SDK call errors (older SDK, network), returns 0 so
-    we don't block on a counting failure. The ceiling check below still
-    catches gross overruns via the API's own error if the prompt is huge.
+    ``client.messages.count_tokens`` was added in anthropic SDK 0.39+. On
+    older SDKs the attribute doesn't exist; we fail open with a heuristic
+    estimate based on character count (~4 chars/token for English).
+
+    Anthropic enforces input limits server-side too — this is just for the
+    fail-loud token-ceiling guard. A loose estimate is fine.
     """
+    if not hasattr(client.messages, "count_tokens"):
+        # Heuristic fallback for SDKs that don't expose count_tokens.
+        return (len(prompt) + len(system)) // 4
     try:
         result = client.messages.count_tokens(
             model=MODEL_VERSION,
@@ -112,7 +122,7 @@ def _count_input_tokens(client, prompt: str, system: str) -> int:
         return int(getattr(result, "input_tokens", 0) or 0)
     except Exception as exc:  # pragma: no cover — defensive
         logger.warning("Token counting failed: %s", exc)
-        return 0
+        return (len(prompt) + len(system)) // 4
 
 
 def _failed_output(
@@ -272,7 +282,7 @@ def run_cv_match(
         if cached is not None:
             ctx.cache_hit = True
             cached_with_trace = cached.model_copy(
-                update={"trace_id": ctx.trace_id}
+                update={"trace_id": ctx.trace_id, "cache_hit": True}
             )
             telemetry_module.emit_trace(ctx, final_status=cached_with_trace.scoring_status)
             return cached_with_trace
