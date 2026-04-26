@@ -129,3 +129,50 @@ export const renderPrimaryScoreCell = (application) => {
   if (!application?.cv_filename) return '—';
   return 'Pending';
 };
+
+// ---------------------------------------------------------------------------
+// CV match details resolution + per-requirement evidence extraction
+//
+// Three prompt versions can write into the candidate-application JSON blob,
+// each with a different field name:
+//   - cv_match_v3.0  → application.cv_match_details          (current)
+//   - cv_match_v4    → application.cv_job_match_details      (legacy)
+//   - free-text v3   → application.cv_job_match_details with `evidence` instead of `cv_quote`/`evidence_quote`
+//
+// These helpers normalize over all three so the candidate page renders
+// correctly during cutover. Pure functions; tested in candidatesUiUtils.test.js.
+// ---------------------------------------------------------------------------
+
+export const resolveCvMatchDetails = ({
+  application,
+  completedAssessment,
+  fallback,
+} = {}) => {
+  const empty = {};
+  const candidate = (
+    completedAssessment?.cv_job_match_details
+    || application?.cv_match_details                  // v3 (current)
+    || application?.cv_job_match_details              // v4 / legacy
+    || fallback
+    || empty
+  );
+  return candidate && typeof candidate === 'object' ? candidate : empty;
+};
+
+export const extractRequirementEvidence = (item) => {
+  if (!item || typeof item !== 'object') return '';
+  return String(
+    item.evidence_quote
+    || item.cv_quote
+    || item.evidence
+    || ''
+  ).trim();
+};
+
+export const extractRequirementKey = (item, fallbackIndex = 0) => {
+  if (!item) return String(fallbackIndex);
+  if (item.requirement_id != null) return String(item.requirement_id);
+  if (item.criterion_id != null) return String(item.criterion_id);
+  const label = (item.requirement || '').toString();
+  return label ? `${label}-${fallbackIndex}` : String(fallbackIndex);
+};

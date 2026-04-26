@@ -13,6 +13,7 @@ from .role_criterion import (
     RoleCriterion,
 )
 from .cv_match_override import CvMatchOverride
+from .cv_parse_cache import CvParseCache
 from .cv_score_cache import CvScoreCache
 from .cv_score_job import (
     CvScoreJob,
@@ -44,6 +45,7 @@ __all__ = [
     "CRITERION_SOURCE_DERIVED",
     "CRITERION_SOURCE_RECRUITER_CONSTRAINT",
     "CvMatchOverride",
+    "CvParseCache",
     "CvScoreCache",
     "CvScoreJob",
     "SCORE_JOB_PENDING",

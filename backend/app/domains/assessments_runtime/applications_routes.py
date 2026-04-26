@@ -1833,6 +1833,24 @@ def _try_fetch_cv_from_workable(
         app.workable_score = normalized_score
         app.workable_score_source = score_source
 
+    # Best-effort CV section parsing (Haiku 4.5). Failure here doesn't
+    # prevent the CV fetch from succeeding — the candidate page falls
+    # back to raw text rendering when cv_sections is null or
+    # parse_failed=True.
+    try:
+        from ...cv_parsing import parse_cv
+
+        parsed = parse_cv(extracted)
+        sections_blob = parsed.model_dump(mode="json")
+        app.cv_sections = sections_blob
+        if candidate:
+            candidate.cv_sections = sections_blob
+    except Exception:
+        logger.exception(
+            "CV section parsing failed for application_id=%s — falling back to raw text",
+            app.id,
+        )
+
     return True
 
 
