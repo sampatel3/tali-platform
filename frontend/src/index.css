@@ -563,6 +563,12 @@ html[data-theme="dark"] {
   display: none;
 }
 
+.app-user .app-avatar.desktop-only,
+.app-user .icon-btn.desktop-only {
+  display: grid;
+  place-items: center;
+}
+
 .app-user .name.desktop-only {
   display: flex;
   flex-direction: column;

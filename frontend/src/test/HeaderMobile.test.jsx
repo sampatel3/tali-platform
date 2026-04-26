@@ -22,6 +22,22 @@ vi.mock('../shared/api', () => ({
 import { DashboardNav } from '../features/dashboard/DashboardNav';
 
 describe('DashboardNav mobile header', () => {
+  it('keeps desktop avatar and icon buttons on the same centered circle grid', () => {
+    render(
+      <DashboardNav
+        currentPage="jobs"
+        onNavigate={vi.fn()}
+        workflowV2Enabled
+      />
+    );
+
+    const avatar = document.querySelector('.app-user .app-avatar.desktop-only');
+    const signOutButton = screen.getByTitle('Sign out');
+
+    expect(avatar).toHaveClass('app-avatar', 'desktop-only');
+    expect(signOutButton).toHaveClass('icon-btn', 'desktop-only');
+  });
+
   it('opens a compact menu with the production app tabs and preserves active state', () => {
     const onNavigate = vi.fn();
 
