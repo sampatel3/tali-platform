@@ -32,4 +32,12 @@ export const candidates = {
   },
   downloadDocument: (candidateId, docType) =>
     api.get(`/candidates/${candidateId}/documents/${docType}`, { responseType: 'blob' }),
+
+  // cv_match_v3.0 override capture (Phase 9). Stub-only — UI not yet built.
+  // payload: {
+  //   application_id, original_trace_id?, original_recommendation?,
+  //   override_recommendation, original_score?, recruiter_notes?
+  // }
+  cvMatchOverride: (candidateId, payload) =>
+    api.post(`/candidates/${candidateId}/cv-match-override`, payload),
 };

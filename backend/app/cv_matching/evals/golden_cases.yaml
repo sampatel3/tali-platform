@@ -1,0 +1,35 @@
+# Golden CV match cases — keyed on real Taali/DeepLight hires.
+#
+# This file is intentionally seeded with one synthetic placeholder so the
+# harness runs end-to-end before Sam adds real fixtures (real names and
+# contact details removed; case_id ↔ person mapping kept outside the repo).
+#
+# Each case asserts on three checks:
+#   - recommendation in expected set
+#   - role_fit_score in range
+#   - all must_meet_requirements have status=met
+#
+# When in doubt, prefer wide ranges and small must-meet lists. The point is
+# regression detection, not pinning every score to a specific number.
+
+- case_id: placeholder_eng_001
+  cv_file: fixtures/cvs/placeholder_eng.txt
+  jd_file: fixtures/jds/placeholder_eng.txt
+  additional_requirements:
+    - id: req_1
+      requirement: "5+ years building data pipelines on AWS"
+      priority: must_have
+      evidence_hints: ["AWS", "data pipeline", "ETL", "Glue"]
+    - id: req_2
+      requirement: "Strong Python and SQL"
+      priority: must_have
+      evidence_hints: ["Python", "SQL"]
+    - id: req_3
+      requirement: "Banking or financial services experience"
+      priority: strong_preference
+      acceptable_alternatives: ["fintech", "regulated industry"]
+  expected:
+    recommendation_in: [yes, strong_yes]
+    role_fit_score_range: [60, 100]
+    must_meet_requirements: [req_1, req_2]
+    hiring_manager_notes: "Synthetic placeholder. Replace with real hire fixtures."

@@ -241,7 +241,14 @@ def _execute_scoring(
 
     Updates ``application.cv_match_score`` / ``cv_match_details`` and the
     ``job`` row in place. Call inside a session that the caller will commit.
+
+    Branches on ``settings.USE_CV_MATCH_V3``: when True, routes to the
+    cv_match_v3.0 module for grounded, retried, schema-validated scoring.
     """
+    if settings.USE_CV_MATCH_V3:
+        _execute_scoring_v3(db, application=application, job=job)
+        return
+
     role = application.role
     cv_text = (application.cv_text or "").strip()
     job_spec_text = ((role.job_spec_text if role else None) or "").strip()
@@ -344,6 +351,91 @@ def _execute_scoring(
 
     application.cv_match_score = normalized_score
     application.cv_match_details = match_details or None
+    application.cv_match_scored_at = datetime.now(timezone.utc)
+    job.status = SCORE_JOB_DONE
+    job.finished_at = datetime.now(timezone.utc)
+
+
+def _execute_scoring_v3(
+    db: Session,
+    *,
+    application: CandidateApplication,
+    job: CvScoreJob,
+) -> None:
+    """Score one application via the cv_match_v3.0 pipeline.
+
+    Translates recruiter ``role_criteria`` into ``RequirementInput`` objects,
+    invokes ``app.cv_matching.runner.run_cv_match`` (which manages its own
+    cache via the shared ``cv_score_cache`` table), and writes the result
+    into ``application.cv_match_details`` / ``cv_match_score``.
+
+    Failure handling: ``run_cv_match`` never raises — it returns a
+    ``CVMatchOutput`` with ``scoring_status="failed"`` and an error reason.
+    We surface that as the same ``job.error_message`` shape the legacy path
+    uses, so the UI's "score_status" badge keeps working.
+    """
+    from ..cv_matching import (
+        MODEL_VERSION as V3_MODEL_VERSION,
+        PROMPT_VERSION as V3_PROMPT_VERSION,
+        Priority as V3Priority,
+        RequirementInput,
+        ScoringStatus,
+    )
+    from ..cv_matching.runner import run_cv_match
+
+    role = application.role
+    cv_text = (application.cv_text or "").strip()
+    job_spec_text = ((role.job_spec_text if role else None) or "").strip()
+    job.started_at = datetime.now(timezone.utc)
+    job.status = SCORE_JOB_RUNNING
+    job.prompt_version = V3_PROMPT_VERSION
+    job.model = V3_MODEL_VERSION
+
+    if not cv_text or not job_spec_text:
+        job.status = SCORE_JOB_ERROR
+        job.error_message = "missing_inputs"
+        job.finished_at = datetime.now(timezone.utc)
+        application.cv_match_score = None
+        application.cv_match_details = {"error": "Missing CV or job spec text"}
+        application.cv_match_scored_at = None
+        return
+
+    # Translate role_criterion rows into RequirementInput. The legacy v4
+    # pathway uses integer criterion_ids; v3 uses string ids, so we prefix.
+    requirements: list[RequirementInput] = []
+    if role is not None:
+        for c in sorted(role.criteria or [], key=lambda c: getattr(c, "ordering", 0)):
+            if getattr(c, "deleted_at", None) is not None:
+                continue
+            priority = (
+                V3Priority.MUST_HAVE if bool(c.must_have) else V3Priority.STRONG_PREFERENCE
+            )
+            requirements.append(
+                RequirementInput(
+                    id=f"crit_{int(c.id)}",
+                    requirement=str(c.text or "").strip(),
+                    priority=priority,
+                )
+            )
+
+    output = run_cv_match(cv_text, job_spec_text, requirements)
+    job.cache_hit = "hit" if output.trace_id and getattr(output, "trace_id", "") else "miss"
+
+    if output.scoring_status == ScoringStatus.FAILED:
+        job.status = SCORE_JOB_ERROR
+        job.error_message = f"v3_failed: {output.error_reason}"[:500]
+        job.finished_at = datetime.now(timezone.utc)
+        application.cv_match_score = None
+        application.cv_match_details = {
+            "error": output.error_reason or "cv_match_v3.0 failed",
+            "scoring_version": V3_PROMPT_VERSION,
+            "trace_id": output.trace_id,
+        }
+        application.cv_match_scored_at = None
+        return
+
+    application.cv_match_score = output.role_fit_score
+    application.cv_match_details = output.model_dump(mode="json")
     application.cv_match_scored_at = datetime.now(timezone.utc)
     job.status = SCORE_JOB_DONE
     job.finished_at = datetime.now(timezone.utc)

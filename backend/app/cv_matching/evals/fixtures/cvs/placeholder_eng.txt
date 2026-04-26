@@ -1,0 +1,35 @@
+Senior Data Engineer — Placeholder CV (synthetic)
+
+Summary
+-------
+Senior data engineer with 7 years of experience building production data
+pipelines on AWS. Strong Python and SQL. Led migration of legacy Hadoop
+batch jobs to Spark on EMR at a regional bank. Comfortable owning
+end-to-end data products from ingestion to dashboards.
+
+Experience
+----------
+2022–present  Senior Data Engineer, Regional Bank (UAE)
+  - Built and operated 30+ data pipelines on AWS Glue, Step Functions,
+    and Athena. Reduced overnight batch latency by 40%.
+  - Owned the Spark on EMR platform: migrated 12 legacy Hadoop jobs.
+  - Implemented dbt models for the lending domain.
+  - Stack: Python, SQL, AWS Glue, EMR, Airflow, dbt, Snowflake.
+
+2018–2022    Data Engineer, Careem
+  - Designed and operated streaming pipelines (Kinesis, Spark Structured
+    Streaming) for ride-hailing telemetry.
+  - Built feature stores in Redshift; partnered with ML team on training
+    data quality.
+  - Stack: Python, SQL, AWS Kinesis, Spark, Redshift, Airflow.
+
+Skills
+------
+Languages: Python (expert), SQL (expert), Scala (working).
+Cloud: AWS (Glue, EMR, Kinesis, Athena, Step Functions, S3).
+Frameworks: Spark, Airflow, dbt, Pandas.
+Domain: financial services, ride-hailing, regulated data.
+
+Education
+---------
+B.Eng., Computer Science.
