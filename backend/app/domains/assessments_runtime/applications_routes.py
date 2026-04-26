@@ -67,7 +67,11 @@ from ...services.fireflies_service import (
     attach_fireflies_match_metadata,
     normalized_transcript_bundle,
 )
-from ...services.fit_matching_service import calculate_cv_job_match_sync
+from ...services.cv_score_orchestrator import (
+    enqueue_score,
+    latest_score_status,
+    mark_role_scores_stale,
+)
 from ...services.interview_support_service import refresh_application_interview_support
 from ...services.pre_screening_service import refresh_pre_screening_fields
 from ...services.workable_actions_service import (
@@ -272,78 +276,14 @@ def _report_filename_part(value: str, fallback: str) -> str:
     return cleaned or fallback
 
 
-def _normalize_cv_match_score_100(score: float | int | None, details: dict | None = None) -> float | None:
-    if score is None:
-        return None
-    try:
-        numeric = float(score)
-    except (TypeError, ValueError):
-        return None
-    if numeric < 0:
-        return None
-    scale = str((details or {}).get("score_scale") or "").strip().lower()
-    if "100" in scale:
-        normalized = numeric
-    elif numeric <= 10:
-        normalized = numeric * 10.0
-    else:
-        normalized = numeric
-    return round(max(0.0, min(100.0, normalized)), 1)
-
-
-def _normalize_cv_match_details(details: dict | None, *, final_score_100: float | None) -> dict | None:
-    payload = dict(details or {})
-    if final_score_100 is None:
-        return payload or None
-    payload.setdefault("score_scale", "0-100")
-    payload.setdefault("final_score_100", final_score_100)
-    return payload
-
-
 def _refresh_rank_score(app: CandidateApplication) -> None:
     refresh_pre_screening_fields(app)
 
 
-def _compute_cv_match_for_application(app: CandidateApplication, *, reset_if_unavailable: bool) -> bool:
-    """Compute and persist CV-to-job-spec fit score on a role application."""
-    role = app.role
-    cv_text = (app.cv_text or "").strip()
-    job_spec_text = ((role.job_spec_text if role else None) or "").strip()
-
-    if not cv_text or not job_spec_text:
-        if reset_if_unavailable:
-            app.cv_match_score = None
-            app.cv_match_details = None
-            app.cv_match_scored_at = None
-        return False
-
-    if not settings.ANTHROPIC_API_KEY:
-        if reset_if_unavailable:
-            app.cv_match_score = None
-            app.cv_match_details = {"error": "CV match unavailable: Anthropic API key is not configured"}
-            app.cv_match_scored_at = None
-        return False
-
-    result = calculate_cv_job_match_sync(
-        cv_text=cv_text,
-        job_spec_text=job_spec_text,
-        api_key=settings.ANTHROPIC_API_KEY,
-        model=settings.resolved_claude_scoring_model,
-        additional_requirements=(role.additional_requirements or "").strip() or None,
-    )
-    raw_details = result.get("match_details", {}) if isinstance(result, dict) else {}
-    normalized_score = _normalize_cv_match_score_100(
-        result.get("cv_job_match_score") if isinstance(result, dict) else None,
-        raw_details if isinstance(raw_details, dict) else None,
-    )
-    app.cv_match_score = normalized_score
-    app.cv_match_details = _normalize_cv_match_details(
-        raw_details if isinstance(raw_details, dict) else None,
-        final_score_100=normalized_score,
-    )
-    app.cv_match_scored_at = datetime.now(timezone.utc)
-    _refresh_rank_score(app)
-    return True
+# Scoring is owned by services.cv_score_orchestrator. Routes call
+# enqueue_score(db, app); inline (MVP_DISABLE_CELERY) and Celery paths share
+# the same _execute_scoring body. The legacy _compute_cv_match_for_application
+# helper that lived here was deleted in the move to async + cached scoring.
 
 
 def _latest_active_assessment_for_application(app: CandidateApplication, db: Session) -> Assessment | None:
@@ -742,6 +682,7 @@ def list_role_applications(
             joinedload(CandidateApplication.organization),
             joinedload(CandidateApplication.role),
             joinedload(CandidateApplication.interviews),
+            joinedload(CandidateApplication.score_jobs),
             joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
         )
         .filter(
@@ -778,10 +719,12 @@ def list_role_applications(
     for app in apps:
         score_inputs_changed = False
         try:
+            # Enqueue scoring instead of blocking the listing on a Claude call.
+            # Frontend reads `score_status` to know whether to show pending UI.
             if app.cv_match_score is None and app.cv_text:
-                score_inputs_changed = _compute_cv_match_for_application(app, reset_if_unavailable=False) or score_inputs_changed
+                enqueue_score(db, app)
             old_rank = app.rank_score
-            if score_inputs_changed or old_rank is None:
+            if old_rank is None:
                 _refresh_rank_score(app)
                 if app.rank_score != old_rank:
                     score_inputs_changed = True
@@ -1628,20 +1571,14 @@ def upload_application_cv(
         app.candidate.cv_filename = result["filename"]
         app.candidate.cv_text = sanitize_text_for_storage(result["extracted_text"])
         app.candidate.cv_uploaded_at = now
+    # Reset any prior score so the UI shows pending until the job completes.
+    app.cv_match_score = None
+    app.cv_match_details = None
+    app.cv_match_scored_at = None
     try:
-        _compute_cv_match_for_application(app, reset_if_unavailable=True)
-    except Exception as e:
-        err_msg = str(e)
-        logger.exception("Failed to compute cv_match_score for application_id=%s: %s", app.id, err_msg)
-        app.cv_match_score = None
-        hint = "Verify CLAUDE_MODEL is valid (use Claude Haiku)."
-        if "404" in err_msg or "not found" in err_msg.lower():
-            hint = (
-                "Configured model was not found. Keep CLAUDE_MODEL on Haiku; "
-                "backend now retries supported Haiku fallbacks automatically."
-            )
-        app.cv_match_details = {"error": err_msg[:300], "hint": hint}
-        app.cv_match_scored_at = None
+        enqueue_score(db, app, force=True)
+    except Exception:
+        logger.exception("Failed to enqueue CV match scoring for application_id=%s", app.id)
     _refresh_rank_score(app)
     refresh_application_score_cache(app, db=db)
     refresh_application_interview_support(app)
@@ -1704,24 +1641,16 @@ def generate_taali_cv_ai(
         if not fetched:
             raise HTTPException(status_code=404, detail="No resume found on the Workable candidate profile")
 
+    app.cv_match_score = None
+    app.cv_match_details = None
+    app.cv_match_scored_at = None
     try:
-        _compute_cv_match_for_application(app, reset_if_unavailable=True)
-    except Exception as e:
-        err_msg = str(e)
-        logger.exception("Failed to compute cv_match_score for application_id=%s: %s", app.id, err_msg)
-        app.cv_match_score = None
-        hint = "Verify CLAUDE_MODEL is valid (use Claude Haiku)."
-        if "404" in err_msg or "not found" in err_msg.lower():
-            hint = (
-                "Configured model was not found. Keep CLAUDE_MODEL on Haiku; "
-                "backend now retries supported Haiku fallbacks automatically."
-            )
-        app.cv_match_details = {"error": err_msg[:300], "hint": hint}
-        app.cv_match_scored_at = None
+        enqueue_score(db, app, force=True)
+    except Exception:
+        logger.exception("Failed to enqueue CV match scoring for application_id=%s", app.id)
     _refresh_rank_score(app)
     refresh_application_score_cache(app, db=db)
     refresh_application_interview_support(app)
-    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if org:
         run_auto_reject_if_needed(
             db=db,
@@ -1945,24 +1874,12 @@ def _run_batch_score(role_id: int, org_id: int, *, include_scored: bool = False)
                     progress["scored"] = idx + 1
                     continue
 
-                result = calculate_cv_job_match_sync(
-                    cv_text=cv_text,
-                    job_spec_text=job_spec_text,
-                    api_key=settings.ANTHROPIC_API_KEY,
-                    model=settings.resolved_claude_scoring_model,
-                    additional_requirements=(role.additional_requirements or "").strip() or None,
-                )
-                raw_details = result.get("match_details", {}) if isinstance(result, dict) else {}
-                normalized_score = _normalize_cv_match_score_100(
-                    result.get("cv_job_match_score") if isinstance(result, dict) else None,
-                    raw_details if isinstance(raw_details, dict) else None,
-                )
-                app.cv_match_score = normalized_score
-                app.cv_match_details = _normalize_cv_match_details(
-                    raw_details if isinstance(raw_details, dict) else None,
-                    final_score_100=normalized_score,
-                )
-                app.cv_match_scored_at = datetime.now(timezone.utc)
+                # Route through the orchestrator: cache hits skip Claude, misses
+                # call v4 (with criteria) or v3 (without). Inline path keeps the
+                # legacy thread-loop behaviour intact when Celery is disabled.
+                job = enqueue_score(db, app, force=include_scored)
+                if job is not None and job.status == "error":
+                    progress["errors"] = progress.get("errors", 0) + 1
                 _refresh_rank_score(app)
                 refresh_application_score_cache(app, db=db)
                 refresh_application_interview_support(app)
@@ -2060,13 +1977,19 @@ def batch_score_role(
         "include_scored": bool(include_scored),
     }
 
-    thread = threading.Thread(
-        target=_run_batch_score,
-        args=(role_id, current_user.organization_id),
-        kwargs={"include_scored": include_scored},
-        daemon=True,
-    )
-    thread.start()
+    if settings.MVP_DISABLE_CELERY:
+        # Inline path keeps tests + dev environments working without a broker.
+        thread = threading.Thread(
+            target=_run_batch_score,
+            args=(role_id, current_user.organization_id),
+            kwargs={"include_scored": include_scored},
+            daemon=True,
+        )
+        thread.start()
+    else:
+        from ...tasks.scoring_tasks import batch_score_role
+
+        batch_score_role.delay(role_id, include_scored=include_scored)
 
     return {
         "status": "started",

@@ -14,6 +14,10 @@ from sqlalchemy.orm import Session
 
 from ..models.assessment import Assessment, AssessmentStatus
 from ..models.candidate_application import CandidateApplication
+from .candidate_interview_kit import (
+    build_candidate_interview_kit_for_application,
+    build_candidate_interview_kit_from_details,
+)
 from .document_service import load_stored_document_bytes
 from .interview_support_service import refresh_application_interview_support
 from .taali_scoring import compute_role_fit_score, compute_taali_score
@@ -1794,6 +1798,7 @@ def build_client_assessment_report_payload(
         "requirements_coverage": details.get("requirements_coverage") if isinstance(details.get("requirements_coverage"), dict) else {},
         "requirements_assessment": requirements,
         "first_requirement_gap": first_requirement_gap,
+        "candidate_interview_kit": build_candidate_interview_kit_from_details(details),
         "integrity_note": _client_report_integrity_note(assessment, score_breakdown),
         "score_formula_version": score_breakdown.get("score_formula_version"),
         "cv_filename": (
@@ -2025,6 +2030,7 @@ def build_client_application_report_payload(
         "requirements_coverage": requirements_coverage,
         "requirements_assessment": requirements,
         "first_requirement_gap": first_requirement_gap,
+        "candidate_interview_kit": build_candidate_interview_kit_for_application(application),
         "integrity_note": "No completed assessment exists yet; this export is based on CV and recruiter role-fit evidence.",
         "score_formula_version": "taali_v3_role_fit_blended",
         "cv_filename": (

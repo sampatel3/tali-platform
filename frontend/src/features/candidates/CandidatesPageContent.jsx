@@ -269,6 +269,22 @@ export const CandidatesPage = ({
     loadRoleContext(selectedRoleId);
   }, [selectedRoleId, loadRoleContext]);
 
+  // Auto-poll the listing while any visible application has an in-flight
+  // scoring job. Stops as soon as every score_status settles to done/error/
+  // stale or the user changes role.
+  useEffect(() => {
+    if (!selectedRoleId) return undefined;
+    const hasInflight = roleApplications.some((app) => {
+      const status = app?.score_status;
+      return status === 'pending' || status === 'running';
+    });
+    if (!hasInflight) return undefined;
+    const handle = setInterval(() => {
+      loadRoleContext(selectedRoleId);
+    }, 8000);
+    return () => clearInterval(handle);
+  }, [selectedRoleId, roleApplications, loadRoleContext]);
+
   useEffect(() => {
     if (statusFilter === 'all') return;
     const hasSelectedStatus = roleApplications.some(

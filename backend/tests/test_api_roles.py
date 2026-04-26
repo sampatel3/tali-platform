@@ -626,23 +626,25 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
             "text_preview": "Python SQL backend API",
         },
     )
-    monkeypatch.setattr(
-        applications_routes,
-        "calculate_cv_job_match_sync",
-        lambda **_: {
-            "cv_job_match_score": 84,
-            "skills_match": 80,
-            "experience_relevance": 88,
-            "match_details": {
-                "summary": "Strong API and SQL alignment.",
-                "score_scale": "0-100",
-                "score_rationale_bullets": [
-                    "Composite fit 84/100 from strong API skills and relevant backend delivery.",
-                    "Recruiter requirements coverage: 2/3 met, 1 partial, 0 missing.",
-                ],
-            },
+    # Scoring now runs through cv_score_orchestrator (Celery-disabled in tests
+    # makes it execute inline). Patch the orchestrator's reference so both v3
+    # and v4 paths return the stub.
+    from app.services import cv_score_orchestrator
+    stub_result = {
+        "cv_job_match_score": 84,
+        "skills_match": 80,
+        "experience_relevance": 88,
+        "match_details": {
+            "summary": "Strong API and SQL alignment.",
+            "score_scale": "0-100",
+            "score_rationale_bullets": [
+                "Composite fit 84/100 from strong API skills and relevant backend delivery.",
+                "Recruiter requirements coverage: 2/3 met, 1 partial, 0 missing.",
+            ],
         },
-    )
+    }
+    monkeypatch.setattr(cv_score_orchestrator, "calculate_cv_job_match_sync", lambda **_: stub_result)
+    monkeypatch.setattr(cv_score_orchestrator, "calculate_cv_job_match_v4_sync", lambda **_: stub_result)
 
     cv_file = {"file": ("resume.pdf", io.BytesIO(b"%PDF-1.4 python sql backend api"), "application/pdf")}
     upload_resp = client.post(f"/api/v1/applications/{app['id']}/upload-cv", files=cv_file, headers=headers)

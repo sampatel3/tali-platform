@@ -10,7 +10,13 @@ import {
   TableShell,
 } from '../../shared/ui/TaaliPrimitives';
 import { TableRowSkeleton } from '../../shared/ui/Skeletons';
-import { formatCvScore100, formatDateTime, statusVariant } from './candidatesUiUtils';
+import {
+  formatCvScore100,
+  formatDateTime,
+  getPrimaryScorePayload,
+  renderPrimaryScoreCell,
+  statusVariant,
+} from './candidatesUiUtils';
 import { CandidateScoreRing } from './CandidateScoreRing';
 
 const COLUMN_STORAGE_KEY = 'taali_candidates_table_columns_v2';
@@ -68,30 +74,7 @@ const renderModeLabel = (application) => {
   return 'Role fit only';
 };
 
-const getPrimaryScorePayload = (application) => {
-  if (typeof application.pre_screen_score === 'number') {
-    return { score: application.pre_screen_score, details: { score_scale: '0-100' } };
-  }
-  if (typeof application.taali_score === 'number') {
-    return { score: application.taali_score, details: { score_scale: '0-100' } };
-  }
-  if (typeof application.score_summary?.taali_score === 'number') {
-    return { score: application.score_summary.taali_score, details: { score_scale: '0-100' } };
-  }
-  if (typeof application.cv_match_score === 'number') {
-    return { score: application.cv_match_score, details: application.cv_match_details };
-  }
-  return { score: null, details: null };
-};
-
-const renderPrimaryScore = (application) => {
-  const payload = getPrimaryScorePayload(application);
-  if (typeof payload.score === 'number') {
-    return formatCvScore100(payload.score, payload.details);
-  }
-  if (!application.cv_filename) return '—';
-  return 'Pending';
-};
+const renderPrimaryScore = renderPrimaryScoreCell;
 
 const columnLabel = (column) => ({
   candidate: 'Candidate',
@@ -130,6 +113,8 @@ export const CandidatesTable = ({
   onCreateAssessment,
   onUploadCv,
   uploadingCvId,
+  onGenerateTaaliCvAi,
+  generatingTaaliId,
 }) => {
   const [composerApplicationId, setComposerApplicationId] = useState(null);
   const [taskByApplication, setTaskByApplication] = useState({});
@@ -551,6 +536,12 @@ export const CandidatesTable = ({
 
                       if (column === 'taali_ai') {
                         const scorePayload = getPrimaryScorePayload(application);
+                        const scoreStatus = application?.score_status;
+                        const needsRescore = scoreStatus === 'stale' || scoreStatus === 'error';
+                        const rescoreInFlight =
+                          Number(generatingTaaliId) === Number(application.id)
+                          || scoreStatus === 'pending'
+                          || scoreStatus === 'running';
                         return (
                           <td key={column} className="px-3 py-2">
                             <div className="flex flex-col items-center gap-2 text-center">
@@ -564,6 +555,19 @@ export const CandidatesTable = ({
                               <div className="max-w-[80px] text-[11px] leading-4 text-[var(--taali-muted)]" title={renderPrimaryScore(application)}>
                                 {renderModeLabel(application)}
                               </div>
+                              {needsRescore && onGenerateTaaliCvAi && application.cv_filename ? (
+                                <button
+                                  type="button"
+                                  className="text-[10px] font-semibold uppercase tracking-wide text-[var(--taali-purple)] underline-offset-2 hover:underline disabled:opacity-50"
+                                  disabled={rescoreInFlight}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    onGenerateTaaliCvAi(application);
+                                  }}
+                                >
+                                  {rescoreInFlight ? 'Scoring…' : 'Rescore'}
+                                </button>
+                              ) : null}
                             </div>
                           </td>
                         );

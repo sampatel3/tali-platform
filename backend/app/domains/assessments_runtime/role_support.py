@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session, joinedload
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
-from ...schemas.role import ApplicationResponse, RoleResponse
+from ...schemas.role import ApplicationResponse, RoleCriterionResponse, RoleResponse
 from ...services.interview_support_service import (
     build_role_interview_pack_templates,
     refresh_application_interview_support,
@@ -147,12 +147,25 @@ def role_to_response(
         if isinstance(role.tech_interview_pack_template, dict)
         else role_templates.get("tech_stage_2")
     )
+    loaded_criteria = _loaded_relationship_items(role, "criteria")
+    if loaded_criteria is None:
+        # Bounded fan-out (≤32 per role) makes lazy load acceptable here.
+        try:
+            loaded_criteria = list(role.criteria or [])
+        except Exception:
+            loaded_criteria = []
+    criteria = [
+        RoleCriterionResponse.model_validate(c)
+        for c in loaded_criteria
+        if getattr(c, "deleted_at", None) is None
+    ]
     return RoleResponse(
         id=role.id,
         organization_id=role.organization_id,
         name=role.name,
         description=role.description,
         additional_requirements=role.additional_requirements,
+        criteria=criteria,
         source=role.source,
         workable_job_id=role.workable_job_id,
         job_spec_filename=role.job_spec_filename,
@@ -616,6 +629,20 @@ def _assessment_history_for_application(app: CandidateApplication) -> list[dict[
     ]
 
 
+def _latest_score_job_status(app: CandidateApplication) -> str | None:
+    """Read latest CvScoreJob.status from the eagerly-loaded relationship.
+
+    Returns ``None`` if the job log isn't loaded (e.g. detached instance).
+    Avoids triggering a lazy DB query so list endpoints stay free of N+1.
+    """
+    loaded = _loaded_relationship_items(app, "score_jobs")
+    if not loaded:
+        return None
+    # The relationship is ordered by queued_at desc, so [0] is freshest.
+    latest = loaded[0]
+    return getattr(latest, "status", None)
+
+
 def application_to_response(
     app: CandidateApplication,
     *,
@@ -628,6 +655,7 @@ def application_to_response(
     cv_match_details = dict(raw_details)
     if cv_match_score is not None and "score_scale" not in cv_match_details:
         cv_match_details["score_scale"] = "0-100"
+    score_status = _latest_score_job_status(app)
     score_summary = score_summary_from_cache(app) if use_cached_score_summary else _score_summary_for_application(app)
     pre_screen = pre_screen_snapshot(app)
     interview_support = refresh_application_interview_support(
@@ -684,6 +712,7 @@ def application_to_response(
         cv_match_score=cv_match_score,
         cv_match_details=cv_match_details or None,
         cv_match_scored_at=app.cv_match_scored_at,
+        score_status=score_status,
         source=app.source,
         workable_candidate_id=app.workable_candidate_id,
         workable_stage=app.workable_stage,

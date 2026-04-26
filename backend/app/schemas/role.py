@@ -84,12 +84,24 @@ class RoleUpdate(BaseModel):
     auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
 
 
+class RoleCriterionResponse(BaseModel):
+    id: int
+    source: Literal["recruiter", "derived_from_spec", "recruiter_constraint"]
+    ordering: int
+    weight: float
+    must_have: bool
+    text: str
+
+    model_config = {"from_attributes": True}
+
+
 class RoleResponse(BaseModel):
     id: int
     organization_id: int
     name: str
     description: Optional[str] = None
     additional_requirements: Optional[str] = None
+    criteria: list[RoleCriterionResponse] = Field(default_factory=list)
     source: Optional[str] = "manual"
     workable_job_id: Optional[str] = None
     job_spec_filename: Optional[str] = None
@@ -166,6 +178,7 @@ class ApplicationResponse(BaseModel):
     cv_match_score: Optional[float] = None
     cv_match_details: Optional[dict] = None
     cv_match_scored_at: Optional[datetime] = None
+    score_status: Optional[Literal["pending", "running", "done", "error", "stale"]] = None
     source: Optional[str] = "manual"
     workable_candidate_id: Optional[str] = None
     workable_stage: Optional[str] = None

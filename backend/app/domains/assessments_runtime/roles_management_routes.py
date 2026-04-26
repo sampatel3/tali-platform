@@ -19,6 +19,12 @@ from ...schemas.role import RoleCreate, RoleResponse, RoleTaskLinkRequest, RoleU
 from ...services.document_service import process_document_upload
 from ...services.interview_support_service import build_role_interview_pack_templates
 from ...services.interview_focus_service import generate_interview_focus_sync
+from ...services.cv_score_orchestrator import mark_role_scores_stale
+from ...services.role_criteria_service import (
+    sync_all_criteria,
+    sync_derived_criteria,
+    sync_recruiter_criteria,
+)
 from .role_support import get_role, role_to_response
 from .pipeline_service import role_pipeline_counts
 
@@ -64,6 +70,8 @@ def create_role(
     )
     db.add(role)
     try:
+        db.flush()
+        sync_all_criteria(db, role)
         db.commit()
         db.refresh(role)
     except Exception:
@@ -202,7 +210,8 @@ def update_role(
         role.name = updates["name"].strip()
     if "description" in updates:
         role.description = updates["description"] or None
-    if "additional_requirements" in updates:
+    recruiter_criteria_changed = "additional_requirements" in updates
+    if recruiter_criteria_changed:
         role.additional_requirements = updates["additional_requirements"] or None
     if "screening_pack_template" in updates:
         template = updates["screening_pack_template"]
@@ -221,6 +230,9 @@ def update_role(
     if "auto_reject_note_template" in updates:
         role.auto_reject_note_template = updates["auto_reject_note_template"] or None
     try:
+        if recruiter_criteria_changed:
+            sync_recruiter_criteria(db, role)
+            mark_role_scores_stale(db, role.id)
         db.commit()
         db.refresh(role)
     except Exception:
@@ -297,6 +309,8 @@ def upload_role_job_spec(
         role.tech_interview_pack_template = templates.get("tech_stage_2")
 
     try:
+        sync_derived_criteria(db, role)
+        mark_role_scores_stale(db, role.id)
         db.commit()
         db.refresh(role)
     except Exception:

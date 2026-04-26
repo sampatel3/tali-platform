@@ -32,7 +32,13 @@ from ....services.document_service import (
     save_file_locally,
 )
 from ....services.application_automation_service import run_auto_reject_if_needed
-from ....services.fit_matching_service import calculate_cv_job_match_sync
+from ....services.cv_score_orchestrator import enqueue_score
+from ....services.fit_matching_service import (
+    CvMatchValidationError,
+    calculate_cv_job_match_sync,
+    calculate_cv_job_match_v4_sync,
+)
+from ....services.spec_normalizer import normalize_spec
 from ....services.interview_support_service import (
     build_role_interview_pack_templates,
     refresh_application_interview_support,
@@ -487,13 +493,45 @@ def _compute_cv_match_for_application(app: CandidateApplication) -> bool:
     job_spec_text = ((role.job_spec_text if role else None) or "").strip()
     if not cv_text or not job_spec_text or not settings.ANTHROPIC_API_KEY:
         return False
-    result = calculate_cv_job_match_sync(
-        cv_text=cv_text,
-        job_spec_text=job_spec_text,
-        api_key=settings.ANTHROPIC_API_KEY,
-        model=settings.resolved_claude_scoring_model,
-        additional_requirements=(role.additional_requirements or "").strip() or None if role else None,
-    )
+
+    criteria_payload: list[dict] = []
+    if role is not None:
+        try:
+            for c in sorted(role.criteria or [], key=lambda c: getattr(c, "ordering", 0)):
+                if getattr(c, "deleted_at", None) is not None:
+                    continue
+                criteria_payload.append(
+                    {
+                        "id": int(c.id),
+                        "text": str(c.text or "").strip(),
+                        "must_have": bool(c.must_have),
+                        "source": str(c.source or "recruiter"),
+                    }
+                )
+        except Exception:
+            criteria_payload = []
+
+    if criteria_payload:
+        spec = normalize_spec(job_spec_text)
+        try:
+            result = calculate_cv_job_match_v4_sync(
+                cv_text=cv_text,
+                role_criteria=criteria_payload,
+                spec_description=spec.description,
+                spec_requirements=spec.requirements,
+                api_key=settings.ANTHROPIC_API_KEY,
+                model=settings.resolved_claude_scoring_model,
+            )
+        except CvMatchValidationError:
+            return False
+    else:
+        result = calculate_cv_job_match_sync(
+            cv_text=cv_text,
+            job_spec_text=job_spec_text,
+            api_key=settings.ANTHROPIC_API_KEY,
+            model=settings.resolved_claude_scoring_model,
+            additional_requirements=(role.additional_requirements or "").strip() or None if role else None,
+        )
     raw_details = result.get("match_details", {}) if isinstance(result, dict) else {}
     normalized_score = _normalize_cv_match_score_100(
         result.get("cv_job_match_score") if isinstance(result, dict) else None,
@@ -1244,7 +1282,11 @@ class WorkableSyncService:
                     )
             computed_match = False
             if (app.cv_text or "").strip() and getattr(role, "job_spec_text", None):
-                computed_match = _compute_cv_match_for_application(app)
+                # Enqueue through the orchestrator so workable-driven scoring
+                # benefits from the same cache + job log as recruiter actions.
+                # When MVP_DISABLE_CELERY, this runs inline within `db`.
+                job = enqueue_score(db, app)
+                computed_match = job is not None and job.status == "done"
             if computed_match or app.score_cached_at is None:
                 refresh_application_score_cache(app, db=db)
             else:

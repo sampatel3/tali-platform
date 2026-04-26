@@ -88,3 +88,44 @@ export const formatCvScore100 = (score, details = null) => {
 export const cvScoreColor = (score, details = null) => {
   return scoreTone100(toCvScore100(score, details));
 };
+
+// Picks the best primary score for a row. Returns { score, details } where
+// score is null when nothing is available. Mirrors the candidate-table cell
+// resolution: pre-screen > taali > cv_match.
+export const getPrimaryScorePayload = (application) => {
+  if (!application) return { score: null, details: null };
+  if (typeof application.pre_screen_score === 'number') {
+    return { score: application.pre_screen_score, details: { score_scale: '0-100' } };
+  }
+  if (typeof application.taali_score === 'number') {
+    return { score: application.taali_score, details: { score_scale: '0-100' } };
+  }
+  if (typeof application.score_summary?.taali_score === 'number') {
+    return { score: application.score_summary.taali_score, details: { score_scale: '0-100' } };
+  }
+  if (typeof application.cv_match_score === 'number') {
+    return { score: application.cv_match_score, details: application.cv_match_details };
+  }
+  return { score: null, details: null };
+};
+
+// Renders the cell text shown in the "Pre-screen" column. Active scoring
+// jobs (pending/running) take precedence over a stale prior score so the
+// recruiter visibly sees an in-flight rescore rather than an old number.
+export const renderPrimaryScoreCell = (application) => {
+  const payload = getPrimaryScorePayload(application);
+  const status = application?.score_status;
+  if (status === 'pending' || status === 'running') {
+    return 'Scoring…';
+  }
+  if (typeof payload.score === 'number') {
+    if (status === 'stale') {
+      return `${formatCvScore100(payload.score, payload.details)} · out of date`;
+    }
+    return formatCvScore100(payload.score, payload.details);
+  }
+  if (status === 'error') return 'Score error';
+  if (status === 'stale') return 'Out of date';
+  if (!application?.cv_filename) return '—';
+  return 'Pending';
+};

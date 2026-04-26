@@ -22,7 +22,12 @@ from ...models.task import Task
 from ...models.user import User
 from ...platform.request_context import get_request_id
 from ...services.candidate_feedback_engine import build_candidate_feedback_payload
-from ...services.fit_matching_service import calculate_cv_job_match_sync
+from ...services.fit_matching_service import (
+    CvMatchValidationError,
+    calculate_cv_job_match_sync,
+    calculate_cv_job_match_v4_sync,
+)
+from ...services.spec_normalizer import normalize_spec
 from ...domains.assessments_runtime.pipeline_service import (
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
@@ -490,12 +495,49 @@ def submit_assessment_impl(
         job_spec_text = role_job_spec_text or (candidate.job_spec_text if candidate else None)
 
         if cv_text and job_spec_text and settings_obj.ANTHROPIC_API_KEY:
-            cv_match_result = calculate_cv_job_match_sync(
-                cv_text=cv_text,
-                job_spec_text=job_spec_text,
-                api_key=settings_obj.ANTHROPIC_API_KEY,
-                model=settings_obj.resolved_claude_scoring_model,
-            )
+            role_for_criteria = locals().get("role_row")
+            criteria_payload: list[dict] = []
+            if role_for_criteria is not None:
+                try:
+                    for c in sorted(role_for_criteria.criteria or [], key=lambda c: getattr(c, "ordering", 0)):
+                        if getattr(c, "deleted_at", None) is not None:
+                            continue
+                        criteria_payload.append(
+                            {
+                                "id": int(c.id),
+                                "text": str(c.text or "").strip(),
+                                "must_have": bool(c.must_have),
+                                "source": str(c.source or "recruiter"),
+                            }
+                        )
+                except Exception:
+                    criteria_payload = []
+            if criteria_payload:
+                spec = normalize_spec(job_spec_text)
+                try:
+                    cv_match_result = calculate_cv_job_match_v4_sync(
+                        cv_text=cv_text,
+                        role_criteria=criteria_payload,
+                        spec_description=spec.description,
+                        spec_requirements=spec.requirements,
+                        api_key=settings_obj.ANTHROPIC_API_KEY,
+                        model=settings_obj.resolved_claude_scoring_model,
+                    )
+                except CvMatchValidationError as exc:
+                    scoring_errors.append({"component": "cv_job_match", "error": exc.reason})
+            else:
+                additional = (
+                    str(role_for_criteria.additional_requirements or "").strip() or None
+                    if role_for_criteria is not None
+                    else None
+                )
+                cv_match_result = calculate_cv_job_match_sync(
+                    cv_text=cv_text,
+                    job_spec_text=job_spec_text,
+                    api_key=settings_obj.ANTHROPIC_API_KEY,
+                    model=settings_obj.resolved_claude_scoring_model,
+                    additional_requirements=additional,
+                )
         elif candidate and (not cv_text or not job_spec_text):
             scoring_errors.append(
                 {"component": "cv_job_match", "error": "Missing CV or job spec text — fit scoring skipped"}

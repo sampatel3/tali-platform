@@ -47,3 +47,9 @@ class Role(Base):
     tasks = relationship("Task", secondary=role_tasks)
     applications = relationship("CandidateApplication", back_populates="role", cascade="all, delete-orphan")
     assessments = relationship("Assessment", back_populates="role")
+    criteria = relationship(
+        "RoleCriterion",
+        back_populates="role",
+        cascade="all, delete-orphan",
+        order_by="RoleCriterion.ordering",
+    )

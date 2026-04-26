@@ -6,6 +6,22 @@ from .candidate_application import CandidateApplication
 from .candidate_application_event import CandidateApplicationEvent
 from .application_interview import ApplicationInterview
 from .role import Role, role_tasks
+from .role_criterion import (
+    CRITERION_SOURCE_DERIVED,
+    CRITERION_SOURCE_RECRUITER,
+    CRITERION_SOURCE_RECRUITER_CONSTRAINT,
+    RoleCriterion,
+)
+from .cv_score_cache import CvScoreCache
+from .cv_score_job import (
+    CvScoreJob,
+    SCORE_JOB_DONE,
+    SCORE_JOB_ERROR,
+    SCORE_JOB_PENDING,
+    SCORE_JOB_RUNNING,
+    SCORE_JOB_STALE,
+    SCORE_JOB_STATUSES,
+)
 from .task import Task
 from .session import AssessmentSession
 from .billing_credit_ledger import BillingCreditLedger
@@ -22,6 +38,18 @@ __all__ = [
     "ApplicationInterview",
     "Role",
     "role_tasks",
+    "RoleCriterion",
+    "CRITERION_SOURCE_RECRUITER",
+    "CRITERION_SOURCE_DERIVED",
+    "CRITERION_SOURCE_RECRUITER_CONSTRAINT",
+    "CvScoreCache",
+    "CvScoreJob",
+    "SCORE_JOB_PENDING",
+    "SCORE_JOB_RUNNING",
+    "SCORE_JOB_DONE",
+    "SCORE_JOB_ERROR",
+    "SCORE_JOB_STALE",
+    "SCORE_JOB_STATUSES",
     "Task",
     "AssessmentSession",
     "BillingCreditLedger",

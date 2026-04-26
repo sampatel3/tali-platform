@@ -97,3 +97,9 @@ class CandidateApplication(Base):
         cascade="all, delete-orphan",
         order_by="ApplicationInterview.linked_at.desc()",
     )
+    score_jobs = relationship(
+        "CvScoreJob",
+        back_populates="application",
+        cascade="all, delete-orphan",
+        order_by="CvScoreJob.queued_at.desc()",
+    )

@@ -1141,3 +1141,442 @@ def _build_usage_ledger(*, response: Any, model: str) -> Dict[str, Any]:
         "tokens_used": safe_input + safe_output,
         "request_cost_usd": round(float(request_cost_usd), 6),
     }
+
+
+# ---------------------------------------------------------------------------
+# cv_match_v4 — structured criteria + verifiable evidence
+#
+# This entry point replaces v3 for any role that has structured RoleCriterion
+# rows (which today is every role, since recruiter requirements get sync'd on
+# create/update). v3 remains as the fallback for any historical row that
+# doesn't have criteria yet, and old cv_match_details blobs marked
+# scoring_version="cv_fit_v3_evidence_enriched" remain readable as-is.
+#
+# Contract differences vs v3:
+#   - Each requirements_assessment entry is keyed by the recruiter's
+#     criterion_id, not by free-text rephrasing.
+#   - Per-criterion: status, confidence (0-1), cv_quote (verbatim ≤200 chars
+#     or null), evidence_type, blocker, risk_level, screening_recommendation,
+#     interview_probe.
+#   - Quotes are verified against the CV text post-call; unverifiable quotes
+#     are dropped and evidence_type forced to "absent" rather than the v3
+#     keyword-backfill behaviour that could fabricate grounding.
+# ---------------------------------------------------------------------------
+
+CV_MATCH_V4_PROMPT_VERSION = "cv_match_v4"
+_CV_MATCH_V4_MAX_CV_CHARS = 8000
+_CV_MATCH_V4_MAX_OUTPUT_TOKENS = 3000
+_CV_MATCH_V4_QUOTE_MAX_CHARS = 200
+
+_V4_STATUSES = {"met", "partially_met", "missing", "unknown"}
+_V4_EVIDENCE_TYPES = {"explicit", "implied", "absent", "contradicted"}
+_V4_RISK_LEVELS = {"low", "med", "high"}
+_V4_SCREENING_RECOMMENDATIONS = {"advance", "borderline", "reject"}
+_V4_RECOMMENDATIONS = {"strong_yes", "yes", "lean_no", "no"}
+
+CV_MATCH_V4_PROMPT = """Score this candidate against the recruiter's structured criteria.
+
+CV:
+{cv_text}
+
+Job specification (description):
+{spec_description}
+
+Job specification (requirements section):
+{spec_requirements}
+
+Scoring criteria (you MUST return one requirements_assessment entry per criterion, keyed by criterion_id):
+{criteria_block}
+
+Return ONLY a single valid JSON object with EXACTLY this shape (no markdown, no commentary):
+{{
+  "overall_match_score": <0-100>,
+  "skills_match_score": <0-100>,
+  "experience_relevance_score": <0-100>,
+  "requirements_match_score": <0-100>,
+  "recommendation": "strong_yes|yes|lean_no|no",
+  "summary": "2-3 sentence summary of fit",
+  "matching_skills": ["skill1", "skill2"],
+  "missing_skills": ["skill1", "skill2"],
+  "experience_highlights": ["highlight 1", "highlight 2"],
+  "concerns": ["concern 1", "concern 2"],
+  "requirements_assessment": [
+    {{
+      "criterion_id": <integer matching one of the supplied criterion_ids>,
+      "status": "met|partially_met|missing|unknown",
+      "confidence": <number between 0.0 and 1.0>,
+      "cv_quote": "<verbatim ≤200 chars from the CV or null>",
+      "evidence_type": "explicit|implied|absent|contradicted",
+      "blocker": <true if this gap should stop the candidate progressing>,
+      "risk_level": "low|med|high",
+      "screening_recommendation": "advance|borderline|reject",
+      "interview_probe": "one specific question the recruiter should ask to confirm or close this gap"
+    }}
+  ]
+}}
+
+Rules:
+1) Return EXACTLY one requirements_assessment entry for each supplied criterion. No extras, no omissions.
+2) `criterion_id` MUST be one of the integers supplied in the criteria block.
+3) `cv_quote` MUST be a verbatim substring copied from the CV above. If you cannot find a directly quotable sentence or phrase that supports your status, set cv_quote to null and evidence_type to "absent". Never paraphrase into the cv_quote field.
+4) Set blocker=true only for must_have criteria that are missing or contradicted.
+5) Be evidence-based; do not invent experience that is not in the CV.
+6) Use the full 0-100 scale: 50 baseline, 70+ good, 85+ strong. If a must_have is missing or contradicted, reduce overall_match_score materially.
+"""
+
+
+class CvMatchValidationError(RuntimeError):
+    """Raised when the v4 Claude response cannot be parsed or validated.
+
+    Carries the raw text and the validation reason so the caller can persist
+    a useful error in cv_match_details rather than swallowing the failure.
+    """
+
+    def __init__(self, reason: str, *, raw_text: str | None = None) -> None:
+        super().__init__(reason)
+        self.reason = reason
+        self.raw_text = raw_text
+
+
+def _format_criteria_block(criteria: list[dict]) -> str:
+    if not criteria:
+        return "(none — recruiter has not defined any criteria for this role)"
+    lines = []
+    for c in criteria:
+        flag = " [must_have]" if c.get("must_have") else ""
+        source = c.get("source") or "recruiter"
+        lines.append(f'- criterion_id={int(c["id"])} ({source}){flag}: {str(c["text"]).strip()}')
+    return "\n".join(lines)
+
+
+def _normalize_quote_for_match(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip().lower())
+
+
+def _verify_quote_in_cv(quote: str | None, cv_text: str) -> str | None:
+    """Return the (possibly truncated) verbatim quote if it is present in the CV.
+
+    Case-insensitive, whitespace-tolerant substring check. Returns None if
+    the quote is empty or cannot be located, signalling that the caller
+    should mark evidence_type="absent" rather than display fabricated text.
+    """
+    if not quote:
+        return None
+    candidate = str(quote).strip()
+    if not candidate:
+        return None
+    if len(candidate) > _CV_MATCH_V4_QUOTE_MAX_CHARS:
+        candidate = candidate[:_CV_MATCH_V4_QUOTE_MAX_CHARS].rstrip()
+    haystack = _normalize_quote_for_match(cv_text)
+    needle = _normalize_quote_for_match(candidate)
+    if not needle or needle not in haystack:
+        return None
+    return candidate
+
+
+def _coerce_v4_assessment_entry(
+    raw: Any,
+    *,
+    criteria_by_id: dict[int, dict],
+    cv_text: str,
+) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise CvMatchValidationError("requirements_assessment entry is not an object")
+
+    raw_id = raw.get("criterion_id")
+    try:
+        criterion_id = int(raw_id)
+    except (TypeError, ValueError):
+        raise CvMatchValidationError(f"criterion_id is not an integer: {raw_id!r}")
+    if criterion_id not in criteria_by_id:
+        raise CvMatchValidationError(f"criterion_id={criterion_id} is not one of the supplied criteria")
+
+    status = str(raw.get("status") or "").strip().lower()
+    if status not in _V4_STATUSES:
+        raise CvMatchValidationError(f"status {status!r} not in {sorted(_V4_STATUSES)}")
+
+    try:
+        confidence = float(raw.get("confidence"))
+    except (TypeError, ValueError):
+        raise CvMatchValidationError("confidence is not numeric")
+    confidence = max(0.0, min(1.0, confidence))
+
+    evidence_type = str(raw.get("evidence_type") or "").strip().lower()
+    if evidence_type not in _V4_EVIDENCE_TYPES:
+        raise CvMatchValidationError(f"evidence_type {evidence_type!r} not in {sorted(_V4_EVIDENCE_TYPES)}")
+
+    raw_quote = raw.get("cv_quote")
+    verified_quote = _verify_quote_in_cv(raw_quote, cv_text)
+    if raw_quote and verified_quote is None:
+        # Model claimed a quote that isn't in the CV — drop it and force
+        # evidence_type=absent rather than display fabricated grounding.
+        evidence_type = "absent"
+
+    blocker = bool(raw.get("blocker"))
+    must_have = bool(criteria_by_id[criterion_id].get("must_have"))
+    if blocker and not must_have:
+        # Only must_have criteria can be blockers — silently downgrade.
+        blocker = False
+
+    risk_level = str(raw.get("risk_level") or "").strip().lower()
+    if risk_level not in _V4_RISK_LEVELS:
+        raise CvMatchValidationError(f"risk_level {risk_level!r} not in {sorted(_V4_RISK_LEVELS)}")
+
+    screening = str(raw.get("screening_recommendation") or "").strip().lower()
+    if screening not in _V4_SCREENING_RECOMMENDATIONS:
+        raise CvMatchValidationError(
+            f"screening_recommendation {screening!r} not in {sorted(_V4_SCREENING_RECOMMENDATIONS)}"
+        )
+
+    probe = _safe_string(raw.get("interview_probe"), max_chars=300)
+
+    return {
+        "criterion_id": criterion_id,
+        "criterion_text": criteria_by_id[criterion_id]["text"],
+        "criterion_source": criteria_by_id[criterion_id].get("source") or "recruiter",
+        "must_have": must_have,
+        "status": status,
+        "confidence": round(confidence, 3),
+        "cv_quote": verified_quote,
+        "evidence_type": evidence_type,
+        "blocker": blocker,
+        "risk_level": risk_level,
+        "screening_recommendation": screening,
+        "interview_probe": probe,
+    }
+
+
+def _validate_v4_payload(
+    payload: Any,
+    *,
+    criteria: list[dict],
+    cv_text: str,
+) -> dict[str, Any]:
+    if not isinstance(payload, dict):
+        raise CvMatchValidationError("response is not a JSON object")
+
+    criteria_by_id = {int(c["id"]): c for c in criteria}
+    raw_assessments = payload.get("requirements_assessment")
+    if not isinstance(raw_assessments, list):
+        raise CvMatchValidationError("requirements_assessment is missing or not a list")
+
+    seen_ids: set[int] = set()
+    assessments: list[dict[str, Any]] = []
+    for entry in raw_assessments:
+        coerced = _coerce_v4_assessment_entry(entry, criteria_by_id=criteria_by_id, cv_text=cv_text)
+        if coerced["criterion_id"] in seen_ids:
+            raise CvMatchValidationError(
+                f"criterion_id={coerced['criterion_id']} appears more than once in requirements_assessment"
+            )
+        seen_ids.add(coerced["criterion_id"])
+        assessments.append(coerced)
+
+    missing_ids = set(criteria_by_id.keys()) - seen_ids
+    if missing_ids:
+        raise CvMatchValidationError(
+            f"requirements_assessment is missing entries for criterion_ids={sorted(missing_ids)}"
+        )
+
+    overall = _score_to_100(payload.get("overall_match_score"))
+    skills = _score_to_100(payload.get("skills_match_score"))
+    experience = _score_to_100(payload.get("experience_relevance_score"))
+    requirements = _score_to_100(payload.get("requirements_match_score"))
+    if overall is None:
+        raise CvMatchValidationError("overall_match_score is missing or not numeric")
+
+    recommendation = str(payload.get("recommendation") or "").strip().lower()
+    if recommendation not in _V4_RECOMMENDATIONS:
+        raise CvMatchValidationError(
+            f"recommendation {recommendation!r} not in {sorted(_V4_RECOMMENDATIONS)}"
+        )
+
+    return {
+        "overall_match_score": overall,
+        "skills_match_score": skills,
+        "experience_relevance_score": experience,
+        "requirements_match_score": requirements,
+        "recommendation": recommendation,
+        "summary": _safe_string(payload.get("summary"), max_chars=600),
+        "matching_skills": _safe_string_list(payload.get("matching_skills")),
+        "missing_skills": _safe_string_list(payload.get("missing_skills")),
+        "experience_highlights": _safe_string_list(payload.get("experience_highlights")),
+        "concerns": _safe_string_list(payload.get("concerns")),
+        "requirements_assessment": assessments,
+    }
+
+
+def _parse_v4_json(raw_text: str) -> Any:
+    try:
+        return json.loads(raw_text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{[\s\S]*\}", raw_text or "")
+        if not match:
+            raise CvMatchValidationError("response did not contain a JSON object", raw_text=raw_text)
+        try:
+            return json.loads(match.group())
+        except json.JSONDecodeError as exc:
+            raise CvMatchValidationError(f"JSON parse failed after extraction: {exc}", raw_text=raw_text)
+
+
+def _v4_requirements_coverage(assessments: list[dict[str, Any]]) -> dict[str, int]:
+    counts = {"met": 0, "partially_met": 0, "missing": 0, "unknown": 0}
+    for entry in assessments:
+        status = entry.get("status")
+        if status in counts:
+            counts[status] += 1
+    return counts
+
+
+def _v4_call_claude(
+    *,
+    client: Any,
+    prompt: str,
+    resolved_model: str,
+) -> tuple[Any, str]:
+    response = None
+    model_used = resolved_model
+    last_model_error: Exception | None = None
+    for candidate_model in candidate_models_for(resolved_model):
+        try:
+            response = client.messages.create(
+                model=candidate_model,
+                max_tokens=_CV_MATCH_V4_MAX_OUTPUT_TOKENS,
+                system="You are an expert recruiter. Respond ONLY with a single valid JSON object.",
+                messages=[{"role": "user", "content": prompt}],
+            )
+            model_used = candidate_model
+            if candidate_model != resolved_model:
+                logger.warning(
+                    "Fell back to Claude model=%s after primary model=%s was unavailable",
+                    candidate_model,
+                    resolved_model,
+                )
+            break
+        except Exception as exc:
+            if is_model_not_found_error(exc):
+                last_model_error = exc
+                logger.warning(
+                    "Claude model unavailable for cv_match_v4 (model=%s): %s",
+                    candidate_model,
+                    exc,
+                )
+                continue
+            raise
+    if response is None:
+        if last_model_error is not None:
+            raise last_model_error
+        raise RuntimeError("Claude call failed before receiving a response")
+    return response, model_used
+
+
+def calculate_cv_job_match_v4_sync(
+    *,
+    cv_text: str,
+    role_criteria: list[dict],
+    spec_description: str,
+    spec_requirements: str,
+    api_key: str,
+    model: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Score a CV against structured role criteria with verifiable evidence.
+
+    Returns the same outer shape as ``calculate_cv_job_match_sync``
+    (``cv_job_match_score``, ``match_details``) so the callers can treat the
+    two versions interchangeably; ``match_details["scoring_version"]`` is set
+    to ``cv_match_v4`` to mark the row format.
+    """
+    if not cv_text:
+        return {
+            "cv_job_match_score": None,
+            "match_details": {"error": "Missing CV text", "scoring_version": CV_MATCH_V4_PROMPT_VERSION},
+        }
+    if not role_criteria:
+        return {
+            "cv_job_match_score": None,
+            "match_details": {
+                "error": "No structured criteria — falling back to v3 path expected",
+                "scoring_version": CV_MATCH_V4_PROMPT_VERSION,
+            },
+        }
+
+    from anthropic import Anthropic
+
+    client = Anthropic(api_key=api_key)
+    cv_truncated = cv_text[:_CV_MATCH_V4_MAX_CV_CHARS]
+    prompt = CV_MATCH_V4_PROMPT.format(
+        cv_text=cv_truncated,
+        spec_description=(spec_description or "(none)").strip(),
+        spec_requirements=(spec_requirements or "(none)").strip(),
+        criteria_block=_format_criteria_block(role_criteria),
+    )
+    resolved_model = (model or settings.resolved_claude_scoring_model).strip()
+
+    logger.info(
+        "Running cv_match_v4 (cv_chars=%d, criteria=%d, model=%s)",
+        len(cv_truncated),
+        len(role_criteria),
+        resolved_model,
+    )
+
+    last_error: CvMatchValidationError | None = None
+    response = None
+    model_used = resolved_model
+    validated: dict[str, Any] | None = None
+    for attempt in range(2):
+        response, model_used = _v4_call_claude(
+            client=client, prompt=prompt, resolved_model=resolved_model
+        )
+        raw_text = response.content[0].text if response.content else ""
+        try:
+            payload = _parse_v4_json(raw_text)
+            validated = _validate_v4_payload(payload, criteria=role_criteria, cv_text=cv_text)
+            break
+        except CvMatchValidationError as exc:
+            last_error = exc
+            logger.warning(
+                "cv_match_v4 validation failed on attempt %d: %s",
+                attempt + 1,
+                exc.reason,
+            )
+
+    if validated is None:
+        assert last_error is not None
+        raise last_error
+
+    usage_ledger = _build_usage_ledger(response=response, model=model_used)
+    coverage = _v4_requirements_coverage(validated["requirements_assessment"])
+    must_have_blocked = any(
+        a["blocker"] and a["status"] in {"missing", "unknown"}
+        for a in validated["requirements_assessment"]
+    )
+
+    final_score = validated["overall_match_score"]
+    if must_have_blocked:
+        # Hard cap: any unblocked must-have caps overall at 49 to keep the
+        # score below the "good fit" 50 baseline.
+        final_score = min(final_score, 49.0)
+
+    match_details = {
+        "scoring_version": CV_MATCH_V4_PROMPT_VERSION,
+        "model_overall_score_100": validated["overall_match_score"],
+        "model_skills_score_100": validated["skills_match_score"],
+        "model_experience_score_100": validated["experience_relevance_score"],
+        "model_requirements_score_100": validated["requirements_match_score"],
+        "final_score_100": round(final_score, 1),
+        "recommendation": validated["recommendation"],
+        "summary": validated["summary"],
+        "matching_skills": validated["matching_skills"],
+        "missing_skills": validated["missing_skills"],
+        "experience_highlights": validated["experience_highlights"],
+        "concerns": validated["concerns"],
+        "requirements_assessment": validated["requirements_assessment"],
+        "requirements_coverage": coverage,
+        "must_have_blocked": must_have_blocked,
+        "score_scale": "0-100",
+        "_claude_usage": usage_ledger,
+    }
+
+    return {
+        "cv_job_match_score": match_details["final_score_100"],
+        "match_details": match_details,
+    }

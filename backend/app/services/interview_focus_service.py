@@ -194,7 +194,9 @@ def _normalize_focus(payload: Dict[str, Any]) -> Dict[str, Any]:
             if len(normalized_questions) == 3:
                 break
 
-    if len(normalized_questions) < 3:
+    role_specific_count = len(normalized_questions)
+    fallback_used = role_specific_count < 3
+    if fallback_used:
         for item in _DEFAULT_QUESTIONS:
             if len(normalized_questions) == 3:
                 break
@@ -202,11 +204,21 @@ def _normalize_focus(payload: Dict[str, Any]) -> Dict[str, Any]:
                 continue
             normalized_questions.append(item)
 
+    if role_specific_count >= 3:
+        quality_status = "ok"
+    elif role_specific_count > 0:
+        quality_status = "partial"
+    else:
+        quality_status = "failed"
+
     return {
         "role_summary": summary
         or "Focus manual screening on ownership, depth of execution, and demonstrated role fit.",
         "manual_screening_triggers": triggers,
         "questions": normalized_questions[:3],
+        "quality_status": quality_status,
+        "fallback_used": fallback_used,
+        "role_specific_question_count": role_specific_count,
     }
 
 
