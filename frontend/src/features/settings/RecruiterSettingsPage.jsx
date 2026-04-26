@@ -253,6 +253,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [emailTemplatePreview, setEmailTemplatePreview] = useState(DEFAULT_INVITE_TEMPLATE);
   const [apiSaving, setApiSaving] = useState(false);
+  const [defaultAdditionalRequirements, setDefaultAdditionalRequirements] = useState('');
+  const [defaultRequirementsSaving, setDefaultRequirementsSaving] = useState(false);
   const [firefliesForm, setFirefliesForm] = useState(DEFAULT_FIRELIES_FORM);
   const [firefliesSaving, setFirefliesSaving] = useState(false);
   const [firefliesHasApiKey, setFirefliesHasApiKey] = useState(false);
@@ -485,6 +487,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setEmailTemplatePreview(
       String(orgData.invite_email_template || '').trim() || DEFAULT_INVITE_TEMPLATE
     );
+    setDefaultAdditionalRequirements(String(orgData.default_additional_requirements || ''));
     const firefliesConfig = orgData.fireflies_config || {};
     setFirefliesForm({
       apiKey: '',
@@ -685,6 +688,23 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       showToast(getErrorMessage(error, 'Failed to save API key settings.'), 'error');
     } finally {
       setApiSaving(false);
+    }
+  };
+
+  const handleSaveDefaultRequirements = async () => {
+    setDefaultRequirementsSaving(true);
+    const payload = {
+      default_additional_requirements:
+        String(defaultAdditionalRequirements || '').trim() || null,
+    };
+    try {
+      const res = await orgsApi.update(payload);
+      setOrgData((prev) => ({ ...(prev || {}), ...(res?.data || {}) }));
+      showToast('Default scoring criteria saved.', 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to save default scoring criteria.'), 'error');
+    } finally {
+      setDefaultRequirementsSaving(false);
     }
   };
 
@@ -1103,9 +1123,52 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 <SectionPanel
                   id="scoring"
                   title="Scoring policy"
-                  subtitle="Turn scoring dimensions on or off for this workspace."
+                  subtitle="Default CV scoring criteria and assessment scoring dimensions."
                 >
-                  <div className="settings-toggle-list">
+                  <div className="settings-subgrid">
+                    <div className="settings-subcard">
+                      <div className="settings-subcard-head">
+                        <div>
+                          <h3>Default scoring criteria</h3>
+                          <p>
+                            Auto-applied to every newly imported or created role. Recruiters can override per role from the role pipeline page.
+                          </p>
+                        </div>
+                      </div>
+                      <label className="field">
+                        <span className="k">Criteria (used by AI when scoring CVs)</span>
+                        <textarea
+                          rows={8}
+                          value={defaultAdditionalRequirements}
+                          onChange={(event) => setDefaultAdditionalRequirements(event.target.value)}
+                          placeholder={`One requirement per line. Prefix with the priority so the AI weighs it correctly.
+
+Examples:
+Must have: 5+ years building data pipelines on AWS
+Preferred: Banking or fintech background
+Nice to have: AWS Solutions Architect certification
+Constraint: Based in UAE (no remote)
+Disqualifying: No experience with regulated financial data`}
+                          maxLength={12000}
+                        />
+                      </label>
+                      <div className="settings-save-row">
+                        <div className="settings-inline-note">
+                          Existing roles keep their current criteria. New roles inherit this list when imported from Workable or created manually.
+                        </div>
+                        <button
+                          type="button"
+                          className="btn btn-purple btn-sm"
+                          onClick={handleSaveDefaultRequirements}
+                          disabled={defaultRequirementsSaving}
+                        >
+                          {defaultRequirementsSaving ? 'Saving...' : 'Save default criteria'}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="settings-toggle-list settings-top-gap">
                     <ToggleCard
                       title="Prompt quality"
                       description="Reward scoped, single-decision prompts. Penalize vague requests."

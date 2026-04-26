@@ -1040,11 +1040,17 @@ class WorkableSyncService:
             )
         created = False
         if not role:
+            # Seed additional_requirements from the org-wide default. Workable
+            # itself doesn't supply scoring criteria, so on import every
+            # newly-created role inherits the recruiter's default. Existing
+            # roles (re-sync) keep whatever they already have.
+            org_default = (getattr(org, "default_additional_requirements", None) or "").strip() or None
             role = Role(
                 organization_id=org.id,
                 source="workable",
                 workable_job_id=job_id or None,
                 name=title,
+                additional_requirements=org_default,
             )
             db.add(role)
             created = True

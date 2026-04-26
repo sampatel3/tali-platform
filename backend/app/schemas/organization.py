@@ -134,6 +134,7 @@ class OrgResponse(BaseModel):
     credits_balance: int = 0
     default_assessment_duration_minutes: int = 30
     invite_email_template: Optional[str] = None
+    default_additional_requirements: Optional[str] = None
     workspace_settings: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
     scoring_policy: ScoringPolicy = Field(default_factory=ScoringPolicy)
     ai_tooling_config: AiToolingConfig = Field(default_factory=AiToolingConfig)
@@ -163,6 +164,7 @@ class OrgUpdate(BaseModel):
     candidate_feedback_enabled: Optional[bool] = None
     default_assessment_duration_minutes: Optional[int] = Field(default=None, ge=15, le=180)
     invite_email_template: Optional[str] = Field(default=None, max_length=10000)
+    default_additional_requirements: Optional[str] = Field(default=None, max_length=12000)
 
 
 class WorkableConnect(BaseModel):
