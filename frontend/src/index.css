@@ -2696,9 +2696,16 @@ html[data-theme="dark"] {
   color: var(--bg);
 }
 
+.pipeline-invite-hint {
+  max-width: 320px;
+  color: var(--mute);
+  font-size: 12.5px;
+  line-height: 1.35;
+}
+
 .pipeline-layout {
   display: grid;
-  grid-template-columns: 1fr 340px;
+  grid-template-columns: 1fr;
   gap: 20px;
   align-items: start;
 }
@@ -2762,8 +2769,7 @@ html[data-theme="dark"] {
   text-decoration: none;
 }
 
-.kanban-card:hover,
-.kanban-card.active {
+.kanban-card:hover {
   border-color: color-mix(in oklab, var(--purple) 40%, var(--line));
   background: color-mix(in oklab, var(--purple) 5%, var(--bg));
 }
@@ -3730,95 +3736,6 @@ html[data-theme="dark"] {
 
 .candidate-triage-foot .grow {
   flex: 1;
-}
-
-.candidate-triage-side-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 80;
-  background: color-mix(in oklab, #1a1320 35%, transparent);
-  backdrop-filter: blur(2px);
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 0.2s;
-}
-
-.candidate-triage-side-overlay.open {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.candidate-triage-side-panel {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 81;
-  display: flex;
-  width: 480px;
-  max-width: 92vw;
-  flex-direction: column;
-  overflow-y: auto;
-  border-left: 3px solid var(--purple);
-  background: var(--bg-2);
-  box-shadow: -16px 0 48px -8px color-mix(in oklab, var(--purple) 18%, transparent);
-  transform: translateX(100%);
-  transition: transform 0.26s cubic-bezier(0.2, 0.7, 0.2, 1);
-}
-
-.candidate-triage-side-panel.open {
-  transform: translateX(0);
-  animation: candidate-triage-side-in 0.26s cubic-bezier(0.2, 0.7, 0.2, 1);
-}
-
-@keyframes candidate-triage-side-in {
-  from {
-    transform: translateX(100%);
-  }
-  to {
-    transform: translateX(0);
-  }
-}
-
-.candidate-triage-side {
-  min-height: 100%;
-  background: var(--bg-2);
-}
-
-.candidate-triage-side .candidate-triage-grid {
-  display: flex;
-  min-height: 100vh;
-  flex-direction: column;
-  gap: 18px;
-  padding: 22px 26px 18px;
-}
-
-.candidate-triage-side .candidate-triage-identity {
-  margin: -22px -26px 0;
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in oklab, var(--purple) 4%, var(--bg-2));
-  padding: 22px 26px 18px;
-}
-
-.candidate-triage-side .candidate-triage-scores {
-  margin-top: 18px;
-}
-
-.candidate-triage-side .candidate-triage-stage-seg {
-  width: 100%;
-  flex-wrap: wrap;
-}
-
-.candidate-triage-side .candidate-triage-stage-seg button {
-  flex: 1;
-}
-
-.candidate-triage-side .candidate-triage-foot {
-  margin-top: auto;
-  padding-bottom: 0;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.04em;
 }
 
 .c-hero {

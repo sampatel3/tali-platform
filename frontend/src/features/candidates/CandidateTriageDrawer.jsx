@@ -1,7 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ExternalLink,
-  FileText,
   Loader2,
   Send,
   X,
@@ -77,7 +76,6 @@ export function CandidateTriageDrawer({
   onClose = null,
   onMoveStage,
   onSendAssessment,
-  onOpenCv,
   onViewFullReport,
   onReject,
 }) {
@@ -232,14 +230,6 @@ export function CandidateTriageDrawer({
                 <ExternalLink size={13} />
                 View full report
               </a>
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => onOpenCv?.(application)}
-              >
-                <FileText size={13} />
-                Open CV
-              </button>
               <span className="candidate-triage-action-spacer" />
               <button
                 type="button"
@@ -273,38 +263,6 @@ export function CandidateTriageDrawer({
         </div>
       </div>
     </div>
-  );
-}
-
-export function CandidateTriageSidePanel({
-  open,
-  application,
-  onClose,
-  ...drawerProps
-}) {
-  useEffect(() => {
-    if (!open) return undefined;
-    const handleKeyDown = (event) => {
-      if (event.key === 'Escape') onClose?.();
-    };
-    document.addEventListener('keydown', handleKeyDown);
-    return () => document.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, open]);
-
-  if (!open || !application) return null;
-
-  return (
-    <>
-      <div className="candidate-triage-side-overlay open" onClick={onClose} />
-      <aside className="candidate-triage-side-panel open" role="dialog" aria-modal="true" aria-label="Candidate triage drawer">
-        <CandidateTriageDrawer
-          {...drawerProps}
-          application={application}
-          mode="side"
-          onClose={onClose}
-        />
-      </aside>
-    </>
   );
 }
 

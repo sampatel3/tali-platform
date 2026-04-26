@@ -18,7 +18,6 @@ import {
 } from '../../shared/ui/TaaliPrimitives';
 import { getErrorMessage } from './candidatesUiUtils';
 import { CandidateSheet } from './CandidateSheet';
-import { CandidateCvSidebar } from './CandidateCvSidebar';
 import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
 import {
   CandidateTriageDrawer,
@@ -359,8 +358,6 @@ export const CandidatesDirectoryPage = ({
   const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
   const [candidateSheetError, setCandidateSheetError] = useState('');
   const [addingCandidate, setAddingCandidate] = useState(false);
-
-  const [cvSidebarApplicationId, setCvSidebarApplicationId] = useState(null);
 
   const applications = useMemo(() => (
     Array.isArray(applicationsPayload.items) ? applicationsPayload.items : []
@@ -1042,12 +1039,6 @@ export const CandidatesDirectoryPage = ({
     }
   };
 
-  const openCvSidebar = async (application) => {
-    if (!application?.id) return;
-    await loadApplicationDetail(application.id, { includeCvText: true });
-    setCvSidebarApplicationId(application.id);
-  };
-
   // Per-candidate Score / Rescore — calls the orchestrator (cache hits make
   // unchanged candidates instant; misses run cv_match_v4 in the background).
   const [generatingTaaliId, setGeneratingTaaliId] = useState(null);
@@ -1058,12 +1049,14 @@ export const CandidatesDirectoryPage = ({
       const res = await rolesApi.generateTaaliCvAi(application.id);
       const updated = res?.data;
       if (updated && updated.id) upsertApplicationInCache(updated);
+      showToast('CV scoring started.', 'success');
+      await loadApplications({ preferredApplicationId: application.id });
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to score candidate.'), 'error');
     } finally {
       setGeneratingTaaliId(null);
     }
-  }, [rolesApi, showToast, upsertApplicationInCache]);
+  }, [loadApplications, rolesApi, showToast, upsertApplicationInCache]);
 
   // Per-application Refresh interview guidance — re-derives the screening
   // pack, summaries, and the cv_match_v4-derived candidate kit. No Claude call.
@@ -1729,7 +1722,6 @@ export const CandidatesDirectoryPage = ({
                             onClose={() => setSelectedApplicationId(null)}
                             onMoveStage={moveApplicationStage}
                             onSendAssessment={handleTriageSendAssessment}
-                            onOpenCv={openCvSidebar}
                             onViewFullReport={viewFullPage}
                             onReject={rejectApplicationFromDrawer}
                           />
@@ -1822,16 +1814,6 @@ export const CandidatesDirectoryPage = ({
         error={candidateSheetError}
         onClose={() => setCandidateSheetOpen(false)}
         onSubmit={handleCandidateSubmit}
-      />
-
-      <CandidateCvSidebar
-        open={Boolean(cvSidebarApplicationId)}
-        application={
-          cvSidebarApplicationId
-            ? (applicationDetailsById[String(cvSidebarApplicationId)] || applications.find((item) => Number(item.id) === Number(cvSidebarApplicationId)) || null)
-            : null
-        }
-        onClose={() => setCvSidebarApplicationId(null)}
       />
 
       <RetakeAssessmentDialog

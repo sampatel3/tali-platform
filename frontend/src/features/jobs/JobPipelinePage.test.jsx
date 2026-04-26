@@ -83,13 +83,16 @@ const baseApplications = [
   },
 ];
 
-const renderPipeline = () => render(
-  <MemoryRouter initialEntries={['/jobs/101']}>
-    <Routes>
-      <Route path="/jobs/:roleId" element={<JobPipelinePage onNavigate={vi.fn()} />} />
-    </Routes>
-  </MemoryRouter>
-);
+const renderPipeline = ({ onNavigate = vi.fn() } = {}) => ({
+  onNavigate,
+  ...render(
+    <MemoryRouter initialEntries={['/jobs/101']}>
+      <Routes>
+        <Route path="/jobs/:roleId" element={<JobPipelinePage onNavigate={onNavigate} />} />
+      </Routes>
+    </MemoryRouter>
+  ),
+});
 
 describe('JobPipelinePage', () => {
   beforeEach(() => {
@@ -128,6 +131,19 @@ describe('JobPipelinePage', () => {
     await waitFor(() => {
       expect(within(reviewCard).getByText('64')).toBeInTheDocument();
     });
+  });
+
+  it('opens the full report directly from kanban cards', async () => {
+    const onNavigate = vi.fn();
+    renderPipeline({ onNavigate });
+
+    const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
+    expect(appliedCard).toHaveAttribute('href', '/candidates/1');
+
+    fireEvent.click(appliedCard);
+
+    expect(onNavigate).toHaveBeenCalledWith('candidate-report', { candidateApplicationId: 1 });
+    expect(screen.queryByText(/Send Taali assessment/i)).not.toBeInTheDocument();
   });
 
   it('formats Workable job specs instead of showing flattened markdown', async () => {

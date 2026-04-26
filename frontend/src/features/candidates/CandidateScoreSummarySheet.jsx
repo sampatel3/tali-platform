@@ -88,7 +88,6 @@ export function CandidateScoreSummarySheet({
   onClose,
   onLaunchAssessment,
   onOpenRetakeDialog,
-  onOpenCvSidebar,
   onViewFullPage,
   onRefreshInterviewGuidance,
   refreshingInterviewGuidance = false,
@@ -105,7 +104,6 @@ export function CandidateScoreSummarySheet({
   }, [open, roleTasks]);
 
   const scoreSummary = application?.score_summary || {};
-  const hasCv = Boolean(application?.cv_filename || application?.cv_text);
   const reportModel = buildStandingCandidateReportModel({
     application,
     completedAssessment,
@@ -173,11 +171,6 @@ export function CandidateScoreSummarySheet({
         >
           View full page
         </Button>
-        {hasCv ? (
-          <Button type="button" variant="secondary" onClick={() => onOpenCvSidebar?.(application)}>
-            View CV
-          </Button>
-        ) : null}
         {onRefreshInterviewGuidance ? (
           <Button
             type="button"

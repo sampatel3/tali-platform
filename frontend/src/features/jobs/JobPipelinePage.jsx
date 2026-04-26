@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   ArrowLeft,
-  ArrowRight,
   BriefcaseBusiness,
   Check,
   ChevronDown,
@@ -22,12 +21,8 @@ import {
   Textarea,
 } from '../../shared/ui/TaaliPrimitives';
 import { CandidateSheet } from '../candidates/CandidateSheet';
-import { CandidateCvSidebar } from '../candidates/CandidateCvSidebar';
 import { CandidatesDirectoryPage } from '../candidates/CandidatesDirectoryPage';
-import {
-  CandidateTriageSidePanel,
-  candidateReportHref,
-} from '../candidates/CandidateTriageDrawer';
+import { candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { RoleSheet } from '../candidates/RoleSheet';
 import { getErrorMessage, trimOrUndefined } from '../candidates/candidatesUiUtils';
 
@@ -65,10 +60,6 @@ const buildApplicationTitle = (application) => (
   || `Candidate #${application?.candidate_id || application?.id || '—'}`
 );
 
-const buildIdempotencyKey = (eventType, applicationId, version) => (
-  `v2-${eventType}-${applicationId}-${version || 'na'}-${Date.now()}`
-);
-
 const resolveAssessmentId = (application) => (
   application?.score_summary?.assessment_id
   || application?.valid_assessment_id
@@ -80,13 +71,6 @@ const resolveOptionalPercent = (value) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return null;
   return Math.max(0, Math.min(100, Math.round(numeric)));
-};
-
-const isVersionConflictError = (error) => {
-  const status = Number(error?.response?.status || 0);
-  if (status !== 409) return false;
-  const detail = String(error?.response?.data?.detail || '').toLowerCase();
-  return detail.includes('version mismatch');
 };
 
 const resolvePipelineReviewScore = (application) => {
@@ -647,13 +631,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [candidateSheetError, setCandidateSheetError] = useState('');
   const [savingRoleSheet, setSavingRoleSheet] = useState(false);
   const [addingCandidate, setAddingCandidate] = useState(false);
-  const [triageApplicationId, setTriageApplicationId] = useState(null);
-  const [applicationDetailsById, setApplicationDetailsById] = useState({});
-  const [loadingDetailId, setLoadingDetailId] = useState(null);
-  const [cvSidebarApplicationId, setCvSidebarApplicationId] = useState(null);
-  const [updatingStageId, setUpdatingStageId] = useState(null);
-  const [updatingOutcomeId, setUpdatingOutcomeId] = useState(null);
-  const [creatingAssessmentId, setCreatingAssessmentId] = useState(null);
 
   const loadRoleWorkspace = useCallback(async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -759,13 +736,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const activeApplications = useMemo(() => (
     roleApplications.filter((application) => application?.application_outcome === 'open')
   ), [roleApplications]);
-
-  const triageApplication = useMemo(() => {
-    if (!triageApplicationId) return null;
-    const fromList = roleApplications.find((application) => Number(application.id) === Number(triageApplicationId)) || null;
-    const detail = applicationDetailsById[String(triageApplicationId)];
-    return fromList || detail ? { ...(fromList || {}), ...(detail || {}) } : null;
-  }, [applicationDetailsById, roleApplications, triageApplicationId]);
 
   const unscoredApplications = useMemo(() => (
     activeApplications.filter((application) => application?.cv_match_score == null)
@@ -1056,198 +1026,25 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     document.getElementById('role-scoring-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
   };
 
-  const upsertRoleApplication = useCallback((updatedApplication) => {
-    if (!updatedApplication?.id) return;
-    setRoleApplications((current) => current.map((application) => (
-      Number(application.id) === Number(updatedApplication.id)
-        ? { ...application, ...updatedApplication }
-        : application
-    )));
-    setApplicationDetailsById((current) => ({
-      ...current,
-      [String(updatedApplication.id)]: {
-        ...(current[String(updatedApplication.id)] || {}),
-        ...updatedApplication,
-      },
-    }));
-  }, []);
-
-  const removeRoleApplication = useCallback((applicationId) => {
-    setRoleApplications((current) => current.filter((application) => Number(application.id) !== Number(applicationId)));
-  }, []);
-
-  const loadApplicationDetail = useCallback(async (applicationId, { includeCvText = false, force = false } = {}) => {
-    if (!applicationId || !rolesApi?.getApplication) return null;
-    const key = String(applicationId);
-    const cached = applicationDetailsById[key];
-    if (!force && cached && (!includeCvText || cached.cv_text)) return cached;
-    setLoadingDetailId(Number(applicationId));
-    try {
-      const res = await rolesApi.getApplication(Number(applicationId), {
-        params: { include_cv_text: includeCvText },
-      });
-      const detail = res?.data || null;
-      if (detail) upsertRoleApplication(detail);
-      return detail;
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to load candidate details.'), 'error');
-      return null;
-    } finally {
-      setLoadingDetailId((current) => (
-        Number(current) === Number(applicationId) ? null : current
-      ));
-    }
-  }, [applicationDetailsById, rolesApi, showToast, upsertRoleApplication]);
-
-  useEffect(() => {
-    if (!triageApplicationId) return;
-    void loadApplicationDetail(triageApplicationId, { includeCvText: false });
-  }, [loadApplicationDetail, triageApplicationId]);
-
-  const openCvSidebar = useCallback(async (application) => {
-    if (!application?.id) return;
-    await loadApplicationDetail(application.id, { includeCvText: true });
-    setCvSidebarApplicationId(application.id);
-  }, [loadApplicationDetail]);
-
-  const viewFullPage = useCallback((application) => {
+  const viewCandidateReport = useCallback((application) => {
     if (!application?.id) return;
     onNavigate('candidate-report', { candidateApplicationId: application.id });
   }, [onNavigate]);
 
-  const openCandidateReportInNewTab = useCallback((application) => {
-    if (!application?.id || typeof window === 'undefined') return;
-    window.open(candidateReportHref(application), '_blank', 'noopener,noreferrer');
-  }, []);
-
-  const isInteractiveCardTarget = (target) => (
-    target instanceof Element
-    && Boolean(target.closest('input, button, a, select, textarea, label'))
-  );
-
-  const handlePipelineCardClick = useCallback((event, application) => {
-    if (isInteractiveCardTarget(event.target)) return;
-    if (event.metaKey || event.ctrlKey) {
-      openCandidateReportInNewTab(application);
+  const handlePipelineReportClick = useCallback((event, application) => {
+    if (
+      event.defaultPrevented
+      || event.metaKey
+      || event.ctrlKey
+      || event.shiftKey
+      || event.altKey
+      || event.button !== 0
+    ) {
       return;
     }
-    setTriageApplicationId((current) => (
-      Number(current) === Number(application.id) ? null : Number(application.id)
-    ));
-  }, [openCandidateReportInNewTab]);
-
-  const handlePipelineCardAuxClick = useCallback((event, application) => {
-    if (event.button !== 1 || isInteractiveCardTarget(event.target)) return;
     event.preventDefault();
-    openCandidateReportInNewTab(application);
-  }, [openCandidateReportInNewTab]);
-
-  const handlePipelineCardKeyDown = useCallback((event, application) => {
-    if (event.key !== 'Enter' && event.key !== ' ') return;
-    if (isInteractiveCardTarget(event.target)) return;
-    event.preventDefault();
-    setTriageApplicationId((current) => (
-      Number(current) === Number(application.id) ? null : Number(application.id)
-    ));
-  }, []);
-
-  const moveApplicationStage = useCallback(async (application, nextStage) => {
-    if (!application?.id || !nextStage) return;
-    if (application.application_outcome !== 'open') {
-      showToast('Re-open candidate outcome before moving stage.', 'error');
-      return;
-    }
-    if (String(nextStage) === String(application.pipeline_stage || 'applied')) return;
-    const previousApplication = { ...application };
-    setUpdatingStageId(application.id);
-    upsertRoleApplication({
-      ...application,
-      pipeline_stage: nextStage,
-      pipeline_stage_updated_at: new Date().toISOString(),
-    });
-    try {
-      const res = await rolesApi.updateApplicationStage(application.id, {
-        pipeline_stage: nextStage,
-        expected_version: application.version,
-        reason: 'Updated from job pipeline drawer',
-        idempotency_key: buildIdempotencyKey('stage', application.id, application.version),
-      });
-      if (res?.data) upsertRoleApplication(res.data);
-      showToast('Pipeline stage updated.', 'success');
-    } catch (error) {
-      upsertRoleApplication(previousApplication);
-      if (isVersionConflictError(error)) {
-        showToast('Candidate changed in another session. Refreshing latest pipeline.', 'error');
-        await loadRoleWorkspace();
-        return;
-      }
-      showToast(getErrorMessage(error, 'Failed to update pipeline stage.'), 'error');
-    } finally {
-      setUpdatingStageId(null);
-    }
-  }, [loadRoleWorkspace, rolesApi, showToast, upsertRoleApplication]);
-
-  const rejectApplication = useCallback(async (application) => {
-    if (!application?.id) return;
-    if (application.application_outcome !== 'open') {
-      showToast('Candidate is already closed.', 'info');
-      return;
-    }
-    setUpdatingOutcomeId(application.id);
-    try {
-      const res = await rolesApi.updateApplicationOutcome(application.id, {
-        application_outcome: 'rejected',
-        expected_version: application.version,
-        reason: 'Rejected from job pipeline drawer',
-        idempotency_key: buildIdempotencyKey('triage-reject', application.id, application.version),
-      });
-      if (res?.data) upsertRoleApplication(res.data);
-      removeRoleApplication(application.id);
-      setTriageApplicationId(null);
-      showToast('Candidate rejected.', 'success');
-    } catch (error) {
-      if (isVersionConflictError(error)) {
-        showToast('Candidate changed in another session. Refreshing latest pipeline.', 'error');
-        await loadRoleWorkspace();
-        return;
-      }
-      showToast(getErrorMessage(error, 'Failed to reject candidate.'), 'error');
-    } finally {
-      setUpdatingOutcomeId(null);
-    }
-  }, [loadRoleWorkspace, removeRoleApplication, rolesApi, showToast, upsertRoleApplication]);
-
-  const sendAssessmentFromDrawer = useCallback(async (application, taskId) => {
-    if (!application?.id || !taskId) return;
-    setCreatingAssessmentId(application.id);
-    try {
-      const hasAssessment = Boolean(resolveAssessmentId(application));
-      const res = hasAssessment
-        ? await rolesApi.retakeAssessment(application.id, {
-          task_id: Number(taskId),
-          duration_minutes: 30,
-          void_reason: 'Retake requested from job pipeline drawer',
-        })
-        : await rolesApi.createAssessment(application.id, {
-          task_id: Number(taskId),
-          duration_minutes: 30,
-        });
-      if (res?.data?.application) upsertRoleApplication(res.data.application);
-      await loadRoleWorkspace();
-      showToast(hasAssessment ? 'Retake assessment created.' : 'Assessment invite sent.', 'success');
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to send assessment.'), 'error');
-    } finally {
-      setCreatingAssessmentId(null);
-    }
-  }, [loadRoleWorkspace, rolesApi, showToast, upsertRoleApplication]);
-
-  const triageActivityLabel = useMemo(() => {
-    const date = triageApplication?.pipeline_stage_updated_at
-      || triageApplication?.updated_at
-      || triageApplication?.created_at;
-    return date ? `Last activity ${formatRelativeShort(date)}` : '';
-  }, [triageApplication?.created_at, triageApplication?.pipeline_stage_updated_at, triageApplication?.updated_at]);
+    viewCandidateReport(application);
+  }, [viewCandidateReport]);
 
   const handleRegenerateInterviewFocus = async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1621,8 +1418,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           <div className="row">
             <div className="filter-chip"><span className="mono">Filter</span> · All stages</div>
             <div className="filter-chip"><span className="mono">Sort</span> · Composite</div>
+            <div className="pipeline-invite-hint">Use the candidates table to select a candidate and send a Taali assessment.</div>
             <button type="button" className="btn btn-outline btn-sm" onClick={() => setActiveView('table')}>
-              Bulk invite
+              Open candidates table
             </button>
           </div>
         </div>
@@ -1642,15 +1440,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     {visibleItems.map((application) => {
                       const cardSignal = resolvePipelineCardSignal(application);
                       return (
-                        <div
+                        <a
                           key={application.id}
-                          className={`kanban-card text-left ${Number(triageApplicationId) === Number(application.id) ? 'active' : ''}`}
-                          role="button"
-                          tabIndex={0}
-                          aria-expanded={Number(triageApplicationId) === Number(application.id)}
-                          onClick={(event) => handlePipelineCardClick(event, application)}
-                          onAuxClick={(event) => handlePipelineCardAuxClick(event, application)}
-                          onKeyDown={(event) => handlePipelineCardKeyDown(event, application)}
+                          className="kanban-card text-left"
+                          href={candidateReportHref(application)}
+                          onClick={(event) => handlePipelineReportClick(event, application)}
                         >
                           <div className="cc-top">
                             <div className="av">{buildApplicationTitle(application).slice(0, 2).toUpperCase()}</div>
@@ -1670,7 +1464,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             <span>{formatRelativeShort(application?.created_at || application?.updated_at)}</span>
                             <span>{resolvePipelineCardFooterStatus(application)}</span>
                           </div>
-                        </div>
+                        </a>
                       );
                     })}
                     {hiddenCount > 0 ? (
@@ -1809,33 +1603,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           error={candidateSheetError}
           onClose={() => setCandidateSheetOpen(false)}
           onSubmit={handleCandidateSubmit}
-        />
-
-        <CandidateTriageSidePanel
-          open={Boolean(triageApplication)}
-          application={triageApplication}
-          roleTasks={roleTasks}
-          activityLabel={triageActivityLabel}
-          loadingActivity={loadingDetailId === Number(triageApplicationId)}
-          stageBusy={updatingStageId === Number(triageApplicationId)}
-          assessmentBusy={creatingAssessmentId === Number(triageApplicationId)}
-          rejectBusy={updatingOutcomeId === Number(triageApplicationId)}
-          onClose={() => setTriageApplicationId(null)}
-          onMoveStage={moveApplicationStage}
-          onSendAssessment={sendAssessmentFromDrawer}
-          onOpenCv={openCvSidebar}
-          onViewFullReport={viewFullPage}
-          onReject={rejectApplication}
-        />
-
-        <CandidateCvSidebar
-          open={Boolean(cvSidebarApplicationId)}
-          application={
-            cvSidebarApplicationId
-              ? (applicationDetailsById[String(cvSidebarApplicationId)] || roleApplications.find((item) => Number(item.id) === Number(cvSidebarApplicationId)) || null)
-              : null
-          }
-          onClose={() => setCvSidebarApplicationId(null)}
         />
       </div>
     </div>

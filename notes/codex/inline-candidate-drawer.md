@@ -9,9 +9,10 @@ as the destination for timeline, transcripts, and scoring depth.
 | Surface | Anchoring | Reason |
 | --- | --- | --- |
 | `candidates.html` / candidates directory | Inline beneath the clicked row | Table rows have enough width for the drawer to read as part of the row. |
-| `job-pipeline.html` / kanban | Right-side slide-out panel with overlay | Kanban columns are too narrow for inline expansion. |
+| `job-pipeline.html` / kanban | Direct link to the full report | Kanban cards are compact status objects; selection should move straight to the report. |
 
-Both anchorings share the same content and action set.
+The candidates directory drawer is the triage sidecar. The kanban is a quick
+pipeline overview that hands off to the full report for candidate depth.
 
 ## Drawer Content
 
@@ -19,7 +20,7 @@ Both anchorings share the same content and action set.
 - Three score cards: pre-screen, Taali, Workable.
 - Stage segmented control wired to `MoveApplicationStage`.
 - Send Taali assessment with task picker wired to `AssessmentFromApplicationCreate`.
-- Other actions: View full report, Open CV, Reject.
+- Other actions: View full report, Reject.
 - Last activity and import/source footer.
 
 ## Backend Wiring
@@ -35,9 +36,10 @@ backend contract unless the API is migrated first.
 ## Interaction Rules
 
 - Keep a single candidate drawer open at a time.
-- Row/card click toggles the drawer.
+- Candidate directory row click toggles the inline drawer.
+- Kanban card click opens the full report directly.
 - Cmd/Ctrl/middle-click opens the full report in a new tab.
 - Clicks on interactive children do not toggle the drawer.
-- Esc closes the open drawer or side panel.
-- Enter/Space on a focused row/card toggles the drawer.
+- Esc closes the open drawer.
+- Enter/Space on a focused candidate directory row toggles the drawer.
 - Reject uses a two-step inline confirmation: `Reject` then `Confirm reject`.

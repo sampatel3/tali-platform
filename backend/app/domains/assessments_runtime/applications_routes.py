@@ -1621,6 +1621,7 @@ def generate_taali_cv_ai(
     role = app.role
     if not role or not role_has_job_spec(role):
         raise HTTPException(status_code=400, detail="Upload job spec before generating TAALI score")
+    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
 
     # If the candidate already has a CV stored, reuse it.
     if (not (app.cv_text or "").strip()) and app.candidate and (app.candidate.cv_text or "").strip():
@@ -1630,7 +1631,6 @@ def generate_taali_cv_ai(
         app.cv_uploaded_at = app.candidate.cv_uploaded_at
 
     if not (app.cv_text or "").strip():
-        org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
         if not org or not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
             raise HTTPException(status_code=400, detail="No CV found for this application (and Workable is not connected)")
         candidate_id = str(app.workable_candidate_id or "").strip()
@@ -1645,9 +1645,21 @@ def generate_taali_cv_ai(
     app.cv_match_details = None
     app.cv_match_scored_at = None
     try:
-        enqueue_score(db, app, force=True)
-    except Exception:
+        job = enqueue_score(db, app, force=True)
+    except Exception as exc:
         logger.exception("Failed to enqueue CV match scoring for application_id=%s", app.id)
+        raise HTTPException(status_code=500, detail="Failed to enqueue CV scoring") from exc
+    if job is None:
+        raise HTTPException(
+            status_code=400,
+            detail="CV scoring could not start. Confirm the candidate has CV text, the role has a job spec, and scoring is configured.",
+        )
+    if str(getattr(job, "status", "")).lower() == "error":
+        detail = (getattr(job, "error_message", "") or "").strip()
+        raise HTTPException(
+            status_code=500,
+            detail=f"CV scoring failed: {detail}" if detail else "CV scoring failed",
+        )
     _refresh_rank_score(app)
     refresh_application_score_cache(app, db=db)
     refresh_application_interview_support(app)

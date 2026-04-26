@@ -26,10 +26,6 @@ vi.mock('../../shared/api', () => ({
   },
 }));
 
-vi.mock('./CandidateCvSidebar', () => ({
-  CandidateCvSidebar: () => null,
-}));
-
 vi.mock('./CandidateScoreSummarySheet', () => ({
   CandidateScoreSummarySheet: () => null,
 }));
