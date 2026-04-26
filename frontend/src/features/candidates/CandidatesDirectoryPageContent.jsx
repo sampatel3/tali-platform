@@ -793,6 +793,20 @@ export const CandidatesDirectoryPage = ({
     loadApplications();
   }, [loadApplications]);
 
+  // Auto-poll while any visible application has an in-flight scoring job.
+  // Stops as soon as every score_status settles to done/error/stale.
+  useEffect(() => {
+    const hasInflight = applications.some((app) => {
+      const status = app?.score_status;
+      return status === 'pending' || status === 'running';
+    });
+    if (!hasInflight) return undefined;
+    const handle = setInterval(() => {
+      loadApplications({ preferredApplicationId: selectedApplicationId || null });
+    }, 8000);
+    return () => clearInterval(handle);
+  }, [applications, loadApplications, selectedApplicationId]);
+
   useEffect(() => {
     if (!selectedApplicationId) return;
     let cancelled = false;
