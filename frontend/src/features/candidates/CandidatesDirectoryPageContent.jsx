@@ -1098,20 +1098,30 @@ export const CandidatesDirectoryPage = ({
     try {
       let totalEnqueued = 0;
       let totalSkipped = 0;
+      let totalNotEligible = 0;
       for (const [roleId, applicationIds] of byRole) {
         const res = await rolesApi.scoreSelected(roleId, applicationIds);
         const data = res?.data || {};
         totalEnqueued += Number(data.enqueued || 0);
         totalSkipped += Number(data.skipped_unchanged || 0);
+        totalNotEligible += Number(data.not_eligible || 0);
       }
-      if (totalEnqueued === 0 && totalSkipped > 0) {
+      if (totalEnqueued > 0) {
+        const skippedSuffix = totalSkipped > 0 ? `; ${totalSkipped} already up to date` : '';
+        const notEligibleSuffix = totalNotEligible > 0
+          ? `; ${totalNotEligible} skipped (no CV on file — try Fetch CVs first)`
+          : '';
+        showToast(`Scoring ${totalEnqueued} candidate(s)${skippedSuffix}${notEligibleSuffix}.`, 'success');
+        loadApplications({});
+      } else if (totalNotEligible > 0) {
+        showToast(
+          `No CV on file for ${totalNotEligible} candidate(s). Run Fetch CVs from Workable first, then re-score.`,
+          'info',
+        );
+      } else if (totalSkipped > 0) {
         showToast(`No changes since last score — ${totalSkipped} candidate(s) already up to date.`, 'info');
       } else {
-        showToast(
-          `Scoring ${totalEnqueued} candidate(s)${totalSkipped > 0 ? `; ${totalSkipped} already up to date` : ''}.`,
-          'success',
-        );
-        loadApplications({});
+        showToast('Nothing to score for the selected candidates.', 'info');
       }
     } catch (err) {
       showToast(getErrorMessage(err, 'Failed to score selected candidates.'), 'error');
