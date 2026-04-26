@@ -291,6 +291,9 @@ def update_my_org(
     if data.invite_email_template is not None:
         template = (data.invite_email_template or "").strip()
         org.invite_email_template = template or None
+    if data.default_additional_requirements is not None:
+        default_reqs = (data.default_additional_requirements or "").strip()
+        org.default_additional_requirements = default_reqs or None
     if org.saml_enabled and not org.saml_metadata_url:
         raise HTTPException(status_code=400, detail="saml_metadata_url is required when saml_enabled is true")
     try:

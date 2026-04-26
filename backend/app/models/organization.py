@@ -33,6 +33,10 @@ class Organization(Base):
     credits_balance = Column(Integer, default=0)
     default_assessment_duration_minutes = Column(Integer, default=30, nullable=False)
     invite_email_template = Column(Text, nullable=True)
+    # Org-wide default for the per-role additional_requirements field used by
+    # CV scoring. Auto-copied into role.additional_requirements on role
+    # create (manual + Workable import) when the role's own value is empty.
+    default_additional_requirements = Column(Text, nullable=True)
     workspace_settings = Column(JSON, nullable=True)
     scoring_policy = Column(JSON, nullable=True)
     ai_tooling_config = Column(JSON, nullable=True)

@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 from ...deps import get_current_user
 from ...models.assessment import Assessment
 from ...models.candidate_application import CandidateApplication
+from ...models.organization import Organization
 from ...models.role import Role
 from ...models.task import Task
 from ...models.user import User
@@ -55,11 +56,31 @@ def create_role(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # Fall back to the org-wide default scoring criteria when the create
+    # request doesn't supply its own. Recruiters can edit the role's
+    # additional_requirements afterwards; the default is a starting point,
+    # not a binding link.
+    requested_reqs = (data.additional_requirements or "").strip() or None
+    if requested_reqs is None:
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == current_user.organization_id)
+            .first()
+        )
+        org_default = (
+            (getattr(org, "default_additional_requirements", None) or "").strip()
+            if org is not None
+            else ""
+        )
+        effective_reqs = org_default or None
+    else:
+        effective_reqs = requested_reqs
+
     role = Role(
         organization_id=current_user.organization_id,
         name=data.name.strip(),
         description=(data.description or None),
-        additional_requirements=(data.additional_requirements or None),
+        additional_requirements=effective_reqs,
         screening_pack_template=(data.screening_pack_template.model_dump() if data.screening_pack_template else None),
         tech_interview_pack_template=(data.tech_interview_pack_template.model_dump() if data.tech_interview_pack_template else None),
         auto_reject_enabled=data.auto_reject_enabled,
