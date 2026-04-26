@@ -2,9 +2,6 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowRight,
-  ArrowUpDown,
-  CheckCircle2,
-  CircleDot,
   RefreshCw,
   Search,
 } from 'lucide-react';
@@ -19,14 +16,16 @@ import {
   Sheet,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
-import { formatDateTime, getErrorMessage } from './candidatesUiUtils';
+import { getErrorMessage } from './candidatesUiUtils';
 import { CandidateSheet } from './CandidateSheet';
 import { CandidateCvSidebar } from './CandidateCvSidebar';
-import { CandidateScoreSummarySheet } from './CandidateScoreSummarySheet';
 import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
 import {
+  CandidateTriageDrawer,
+  candidateReportHref,
+} from './CandidateTriageDrawer';
+import {
   CandidateAvatar,
-  WorkableScorePip,
   WorkableTagSm,
   formatRelativeDateTime,
 } from '../../shared/ui/RecruiterDesignPrimitives';
@@ -105,12 +104,6 @@ const resolveOptionalPercent = (value) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return null;
   return Math.max(0, Math.min(100, Math.round(numeric)));
-};
-
-const formatScoreCell = (value) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '—';
-  return `${Math.round(numeric)}/100`;
 };
 
 const isVersionConflictError = (error) => {
@@ -229,25 +222,6 @@ const workableOutcomeSyncAction = (application, targetOutcome) => {
   return null;
 };
 
-const buildOutcomeChangeConfirmationMessage = (application, targetOutcome) => {
-  const syncAction = workableOutcomeSyncAction(application, targetOutcome);
-  if (!syncAction) return '';
-  const candidateLabel = applicationDisplayName(application);
-  if (syncAction === 'reject') {
-    return [
-      `Reject ${candidateLabel}?`,
-      '',
-      'This candidate is linked to Workable, so TAALI will also disqualify them in Workable.',
-      "Any rejection email will come from Workable's disqualification automation/template.",
-    ].join('\n');
-  }
-  return [
-    `Reopen ${candidateLabel}?`,
-    '',
-    'This candidate is linked to Workable, so TAALI will also revert the Workable disqualification.',
-  ].join('\n');
-};
-
 const buildBulkRejectConfirmationMessage = (applications) => {
   const selectedCount = Array.isArray(applications) ? applications.length : 0;
   const workableLinkedCount = (applications || []).filter((application) => workableOutcomeSyncAction(application, 'rejected') === 'reject').length;
@@ -326,13 +300,12 @@ export const CandidatesDirectoryPage = ({
   useRolePipelineEndpoint = false,
   navCurrentPage = 'candidates',
   title = 'Candidates',
-  subtitle = 'Every person across every role, scored and filterable. Click a row to open their assessment report.',
+  subtitle = 'Every person across every role, scored and filterable. Click a row to triage; Cmd/Ctrl-click opens the full report.',
   prelude = null,
   externalRefreshKey = 0,
   embedded = false,
 }) => {
   const rolesApi = apiClient.roles;
-  const assessmentsApi = apiClient.assessments;
   const { showToast } = useToast();
   const lockedRoleValue = lockRoleId != null && String(lockRoleId).trim() ? String(lockRoleId).trim() : null;
   const defaultRoleFilter = lockedRoleValue
@@ -372,16 +345,13 @@ export const CandidatesDirectoryPage = ({
   const [loadingEventsId, setLoadingEventsId] = useState(null);
   const [roleTasksByRoleId, setRoleTasksByRoleId] = useState({});
 
-  const [pendingStage, setPendingStage] = useState('');
-  const [pendingOutcome, setPendingOutcome] = useState('');
-  const [updatingStage, setUpdatingStage] = useState(false);
-  const [updatingOutcome, setUpdatingOutcome] = useState(false);
+  const [updatingStageId, setUpdatingStageId] = useState(null);
+  const [updatingOutcomeId, setUpdatingOutcomeId] = useState(null);
   const [selectedApplicationIds, setSelectedApplicationIds] = useState([]);
   const [bulkRejecting, setBulkRejecting] = useState(false);
   const [bulkRejectProgress, setBulkRejectProgress] = useState(null);
   const [bulkRejectSummary, setBulkRejectSummary] = useState(null);
 
-  const [selectedTaskId, setSelectedTaskId] = useState('');
   const [creatingAssessmentId, setCreatingAssessmentId] = useState(null);
   const [retakeDialogState, setRetakeDialogState] = useState({ applicationId: null, defaultTaskId: '' });
   const [inviteRolePickerOpen, setInviteRolePickerOpen] = useState(false);
@@ -391,9 +361,6 @@ export const CandidatesDirectoryPage = ({
   const [addingCandidate, setAddingCandidate] = useState(false);
 
   const [cvSidebarApplicationId, setCvSidebarApplicationId] = useState(null);
-  const [scoreSheetApplicationId, setScoreSheetApplicationId] = useState(null);
-  const [assessmentDetailsById, setAssessmentDetailsById] = useState({});
-  const [loadingAssessmentId, setLoadingAssessmentId] = useState(null);
 
   const applications = useMemo(() => (
     Array.isArray(applicationsPayload.items) ? applicationsPayload.items : []
@@ -442,18 +409,9 @@ export const CandidatesDirectoryPage = ({
     eventsByApplicationId[String(selectedApplication?.id)] || []
   ), [eventsByApplicationId, selectedApplication?.id]);
 
-  const selectedRoleApplicationCount = useMemo(() => (
-    selectedApplication ? Number(roleApplicationsByCandidateKey[candidateApplicationKey(selectedApplication)] || 1) : 1
-  ), [roleApplicationsByCandidateKey, selectedApplication]);
-
   const selectedRoleTasks = useMemo(() => (
     roleTasksByRoleId[String(selectedApplication?.role_id)] || []
   ), [roleTasksByRoleId, selectedApplication?.role_id]);
-
-  const selectedAssessmentId = useMemo(() => resolveAssessmentId(selectedApplication), [selectedApplication]);
-  const selectedCompletedAssessment = useMemo(() => (
-    selectedAssessmentId ? (assessmentDetailsById[String(selectedAssessmentId)] || null) : null
-  ), [assessmentDetailsById, selectedAssessmentId]);
 
   const totalPages = Math.max(1, Math.ceil(Number(applicationsPayload.total || 0) / PAGE_SIZE));
   const currentPage = Math.min(page, totalPages - 1);
@@ -694,7 +652,7 @@ export const CandidatesDirectoryPage = ({
       setSelectedApplicationId((current) => {
         const target = preferredApplicationId != null ? Number(preferredApplicationId) : Number(current);
         if (target && items.some((item) => Number(item.id) === target)) return target;
-        return items.length > 0 ? Number(items[0].id) : null;
+        return null;
       });
     } catch (error) {
       setApplicationsPayload({ items: [], total: 0, limit: PAGE_SIZE, offset: 0 });
@@ -755,28 +713,6 @@ export const CandidatesDirectoryPage = ({
       ));
     }
   }, [rolesApi, showToast]);
-
-  const loadCompletedAssessment = useCallback(async (assessmentId, { force = false } = {}) => {
-    if (!assessmentId) return null;
-    const key = String(assessmentId);
-    if (!force && assessmentDetailsById[key]) return assessmentDetailsById[key];
-    setLoadingAssessmentId(Number(assessmentId));
-    try {
-      const res = await assessmentsApi.get(Number(assessmentId));
-      const detail = res?.data || null;
-      if (detail) {
-        setAssessmentDetailsById((prev) => ({ ...prev, [key]: detail }));
-      }
-      return detail;
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to load completed assessment.'), 'error');
-      return null;
-    } finally {
-      setLoadingAssessmentId((current) => (
-        Number(current) === Number(assessmentId) ? null : current
-      ));
-    }
-  }, [assessmentDetailsById, assessmentsApi, showToast]);
 
   const refreshAll = useCallback(async () => {
     await Promise.all([
@@ -850,27 +786,6 @@ export const CandidatesDirectoryPage = ({
     setSelectedApplicationIds((current) => current.filter((value) => visibleRejectableIds.has(Number(value))));
   }, [applications]);
 
-  useEffect(() => {
-    if (!selectedApplication) {
-      setPendingStage('');
-      setPendingOutcome('');
-      setSelectedTaskId('');
-      return;
-    }
-    setPendingStage(selectedApplication.pipeline_stage || 'applied');
-    setPendingOutcome(selectedApplication.application_outcome || 'open');
-
-    const tasks = roleTasksByRoleId[String(selectedApplication.role_id)] || [];
-    if (tasks.length === 1) {
-      setSelectedTaskId(String(tasks[0].id));
-      return;
-    }
-    if (tasks.some((task) => String(task.id) === String(selectedTaskId))) {
-      return;
-    }
-    setSelectedTaskId('');
-  }, [roleTasksByRoleId, selectedApplication, selectedTaskId]);
-
   const refreshAfterConflict = useCallback(async (applicationId) => {
     const targetId = Number(applicationId || selectedApplicationId || 0);
     await loadApplications({ preferredApplicationId: targetId || null });
@@ -886,42 +801,6 @@ export const CandidatesDirectoryPage = ({
     loadApplications,
     selectedApplicationId,
   ]);
-
-  const applyStageUpdate = async () => {
-    if (!selectedApplication || !pendingStage) return;
-    if (selectedApplication.application_outcome !== 'open') {
-      showToast('Re-open candidate outcome before moving stage.', 'error');
-      return;
-    }
-    if (pendingStage === selectedApplication.pipeline_stage) return;
-    setUpdatingStage(true);
-    try {
-      const res = await rolesApi.updateApplicationStage(selectedApplication.id, {
-        pipeline_stage: pendingStage,
-        expected_version: selectedApplication.version,
-        reason: 'Updated from candidates directory',
-        idempotency_key: buildIdempotencyKey('stage', selectedApplication.id, selectedApplication.version),
-      });
-      const updated = res?.data || null;
-      if (updated) {
-        upsertApplicationInCache(updated);
-        setPendingStage(updated.pipeline_stage);
-        setPendingOutcome(updated.application_outcome);
-      }
-      showToast('Pipeline stage updated.', 'success');
-      await loadApplications({ preferredApplicationId: selectedApplication.id });
-      await loadApplicationEvents(selectedApplication.id);
-    } catch (error) {
-      if (isVersionConflictError(error)) {
-        showToast('Candidate changed in another session. Refreshed latest data.', 'error');
-        await refreshAfterConflict(selectedApplication.id);
-        return;
-      }
-      showToast(getErrorMessage(error, 'Failed to update pipeline stage.'), 'error');
-    } finally {
-      setUpdatingStage(false);
-    }
-  };
 
   const requestConfirmation = useCallback((message) => {
     if (!message) return true;
@@ -946,40 +825,109 @@ export const CandidatesDirectoryPage = ({
     const updated = res?.data || null;
     if (updated) {
       upsertApplicationInCache(updated);
-      if (Number(application.id) === Number(selectedApplicationId)) {
-        setPendingStage(updated.pipeline_stage);
-        setPendingOutcome(updated.application_outcome);
-      }
     }
     return updated;
-  }, [rolesApi, selectedApplicationId, upsertApplicationInCache]);
+  }, [rolesApi, upsertApplicationInCache]);
 
-  const applyOutcomeUpdate = async () => {
-    if (!selectedApplication || !pendingOutcome) return;
-    if (pendingOutcome === selectedApplication.application_outcome) return;
-    const confirmationMessage = buildOutcomeChangeConfirmationMessage(selectedApplication, pendingOutcome);
-    if (!requestConfirmation(confirmationMessage)) return;
-    setUpdatingOutcome(true);
+  const removeApplicationFromVisibleList = useCallback((application) => {
+    const stageKey = String(application?.pipeline_stage || '').toLowerCase();
+    setApplicationsPayload((prev) => ({
+      ...prev,
+      total: Math.max(0, Number(prev.total || 0) - 1),
+      items: (Array.isArray(prev.items) ? prev.items : []).filter((item) => Number(item.id) !== Number(application.id)),
+    }));
+    setSelectedApplicationIds((current) => current.filter((value) => Number(value) !== Number(application.id)));
+    setStageCounts((prev) => ({
+      ...prev,
+      all: Math.max(0, Number(prev.all || 0) - 1),
+      ...(stageKey && Object.prototype.hasOwnProperty.call(prev, stageKey)
+        ? { [stageKey]: Math.max(0, Number(prev[stageKey] || 0) - 1) }
+        : {}),
+    }));
+  }, []);
+
+  const moveApplicationStage = useCallback(async (application, nextStage) => {
+    if (!application?.id || !nextStage) return;
+    if (application.application_outcome !== 'open') {
+      showToast('Re-open candidate outcome before moving stage.', 'error');
+      return;
+    }
+    if (String(nextStage) === String(application.pipeline_stage || 'applied')) return;
+
+    const previousApplication = { ...application };
+    setUpdatingStageId(application.id);
+    upsertApplicationInCache({
+      ...application,
+      pipeline_stage: nextStage,
+      pipeline_stage_updated_at: new Date().toISOString(),
+    });
     try {
-      const updated = await submitOutcomeUpdate(selectedApplication, pendingOutcome);
+      const res = await rolesApi.updateApplicationStage(application.id, {
+        pipeline_stage: nextStage,
+        expected_version: application.version,
+        reason: 'Updated from candidate triage drawer',
+        idempotency_key: buildIdempotencyKey('stage', application.id, application.version),
+      });
+      const updated = res?.data || null;
       if (updated) {
-        setPendingStage(updated.pipeline_stage);
-        setPendingOutcome(updated.application_outcome);
+        upsertApplicationInCache(updated);
       }
-      showToast('Candidate outcome updated.', 'success');
-      await loadApplications({ preferredApplicationId: selectedApplication.id });
-      await loadApplicationEvents(selectedApplication.id);
+      showToast('Pipeline stage updated.', 'success');
+      await loadApplicationEvents(application.id);
+    } catch (error) {
+      upsertApplicationInCache(previousApplication);
+      if (isVersionConflictError(error)) {
+        showToast('Candidate changed in another session. Refreshed latest data.', 'error');
+        await refreshAfterConflict(application.id);
+        return;
+      }
+      showToast(getErrorMessage(error, 'Failed to update pipeline stage.'), 'error');
+    } finally {
+      setUpdatingStageId(null);
+    }
+  }, [
+    loadApplicationEvents,
+    refreshAfterConflict,
+    rolesApi,
+    showToast,
+    upsertApplicationInCache,
+  ]);
+
+  const rejectApplicationFromDrawer = useCallback(async (application) => {
+    if (!application?.id) return;
+    if (application.application_outcome !== 'open') {
+      showToast('Candidate is already closed.', 'info');
+      return;
+    }
+    setUpdatingOutcomeId(application.id);
+    try {
+      const updated = await submitOutcomeUpdate(application, 'rejected', {
+        reason: 'Rejected from candidate triage drawer',
+        idempotencyPrefix: 'triage-reject',
+      });
+      showToast('Candidate rejected.', 'success');
+      setSelectedApplicationId(null);
+      if (rolePipelineMode || effectiveOutcomeFilters.includes('open')) {
+        removeApplicationFromVisibleList(updated || application);
+      }
     } catch (error) {
       if (isVersionConflictError(error)) {
         showToast('Candidate changed in another session. Refreshed latest data.', 'error');
-        await refreshAfterConflict(selectedApplication.id);
+        await refreshAfterConflict(application.id);
         return;
       }
-      showToast(getErrorMessage(error, 'Failed to update candidate outcome.'), 'error');
+      showToast(getErrorMessage(error, 'Failed to reject candidate.'), 'error');
     } finally {
-      setUpdatingOutcome(false);
+      setUpdatingOutcomeId(null);
     }
-  };
+  }, [
+    effectiveOutcomeFilters,
+    refreshAfterConflict,
+    removeApplicationFromVisibleList,
+    rolePipelineMode,
+    showToast,
+    submitOutcomeUpdate,
+  ]);
 
   const toggleApplicationSelection = useCallback((applicationId) => {
     setSelectedApplicationIds((current) => {
@@ -1098,16 +1046,6 @@ export const CandidatesDirectoryPage = ({
     if (!application?.id) return;
     await loadApplicationDetail(application.id, { includeCvText: true });
     setCvSidebarApplicationId(application.id);
-  };
-
-  const openScoreSheet = async (application) => {
-    if (!application?.id) return;
-    const detail = await loadApplicationDetail(application.id, { includeCvText: false });
-    const assessmentId = resolveAssessmentId(detail || application);
-    if (assessmentId) {
-      await loadCompletedAssessment(assessmentId);
-    }
-    setScoreSheetApplicationId(application.id);
   };
 
   // Per-candidate Score / Rescore — calls the orchestrator (cache hits make
@@ -1235,7 +1173,6 @@ export const CandidatesDirectoryPage = ({
   const headerSubtitle = rolePipelineMode
     ? 'Active candidates for this role across applied, invited, in assessment, and review.'
     : subtitle;
-  const selectedOutcomeSyncAction = workableOutcomeSyncAction(selectedApplication, pendingOutcome);
   const activeStageSegment = effectiveStageFilters.length === 1 ? effectiveStageFilters[0] : 'all';
   const segmentOptions = [
     { value: 'all', label: `All · ${stageCounts.all || applicationsPayload.total || 0}` },
@@ -1318,6 +1255,80 @@ export const CandidatesDirectoryPage = ({
       setAddingCandidate(false);
     }
   };
+
+  const selectedActivityLabel = useMemo(() => {
+    if (selectedEvents.length > 0) {
+      const latestEvent = selectedEvents[0];
+      const formatted = formatTimelineEvent(latestEvent);
+      return `${formatRelativeDateTime(latestEvent.created_at)} · ${formatted.title}`;
+    }
+    const fallbackDate = selectedApplication?.pipeline_stage_updated_at
+      || selectedApplication?.updated_at
+      || selectedApplication?.created_at;
+    return fallbackDate ? `Last activity ${formatRelativeDateTime(fallbackDate)}` : '';
+  }, [selectedApplication?.created_at, selectedApplication?.pipeline_stage_updated_at, selectedApplication?.updated_at, selectedEvents]);
+
+  const handleTriageSendAssessment = useCallback((application, taskId) => {
+    if (!application?.id || !taskId) return;
+    if (resolveAssessmentId(application)) {
+      setRetakeDialogState({
+        applicationId: application.id,
+        defaultTaskId: String(taskId),
+      });
+      return;
+    }
+    void createOrRetakeAssessment(application, taskId, { retake: false });
+  }, []);
+
+  const openCandidateReportInNewTab = useCallback((application) => {
+    if (!application?.id || typeof window === 'undefined') return;
+    window.open(candidateReportHref(application), '_blank', 'noopener,noreferrer');
+  }, []);
+
+  const isInteractiveRowTarget = (target) => (
+    target instanceof Element
+    && Boolean(target.closest('input, button, a, select, textarea, label'))
+  );
+
+  const toggleApplicationDrawer = useCallback((application) => {
+    if (!application?.id) return;
+    setSelectedApplicationId((current) => (
+      Number(current) === Number(application.id) ? null : Number(application.id)
+    ));
+  }, []);
+
+  const handleCandidateRowClick = useCallback((event, application) => {
+    if (isInteractiveRowTarget(event.target)) return;
+    if (event.metaKey || event.ctrlKey) {
+      openCandidateReportInNewTab(application);
+      return;
+    }
+    toggleApplicationDrawer(application);
+  }, [openCandidateReportInNewTab, toggleApplicationDrawer]);
+
+  const handleCandidateRowAuxClick = useCallback((event, application) => {
+    if (event.button !== 1 || isInteractiveRowTarget(event.target)) return;
+    event.preventDefault();
+    openCandidateReportInNewTab(application);
+  }, [openCandidateReportInNewTab]);
+
+  const handleCandidateRowKeyDown = useCallback((event, application) => {
+    if (event.key !== 'Enter' && event.key !== ' ') return;
+    if (isInteractiveRowTarget(event.target)) return;
+    event.preventDefault();
+    toggleApplicationDrawer(application);
+  }, [toggleApplicationDrawer]);
+
+  useEffect(() => {
+    if (!selectedApplicationId) return undefined;
+    const handleKeyDown = (event) => {
+      if (event.key === 'Escape') {
+        setSelectedApplicationId(null);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [selectedApplicationId]);
 
   return (
     <div>
@@ -1579,125 +1590,152 @@ export const CandidatesDirectoryPage = ({
                   const statusChip = getStatusChip(application);
                   const belowThreshold = Number.isFinite(thresholdRoleValue) && Number.isFinite(Number(preScreenScore)) && Number(preScreenScore) < thresholdRoleValue;
                   return (
-                    <div
-                      key={application.id}
-                      className={`cand-row ${selected ? 'selected' : ''} ${belowThreshold ? 'below' : ''}`}
-                    >
-                      <div>
-                        <input
-                          type="checkbox"
-                          aria-label={`Select ${applicationDisplayName(application)}`}
-                          checked={selectedApplicationIdSet.has(Number(application.id))}
-                          disabled={!selectableForBulkReject || bulkRejecting}
-                          onChange={() => toggleApplicationSelection(application.id)}
-                        />
-                      </div>
+                    <React.Fragment key={application.id}>
+                      <div
+                        className={`cand-row ${selected ? 'selected' : ''} ${belowThreshold ? 'below' : ''}`}
+                        role="button"
+                        tabIndex={0}
+                        aria-expanded={selected}
+                        aria-controls={selected ? `candidate-triage-${application.id}` : undefined}
+                        onClick={(event) => handleCandidateRowClick(event, application)}
+                        onAuxClick={(event) => handleCandidateRowAuxClick(event, application)}
+                        onKeyDown={(event) => handleCandidateRowKeyDown(event, application)}
+                      >
+                        <div>
+                          <input
+                            type="checkbox"
+                            aria-label={`Select ${applicationDisplayName(application)}`}
+                            checked={selectedApplicationIdSet.has(Number(application.id))}
+                            disabled={!selectableForBulkReject || bulkRejecting}
+                            onChange={() => toggleApplicationSelection(application.id)}
+                          />
+                        </div>
 
-                      <button type="button" className="c-name text-left" onClick={() => setSelectedApplicationId(Number(application.id))}>
-                        <CandidateAvatar
-                          name={application.candidate_name || application.candidate_email}
-                          imageUrl={application.candidate_image_url}
-                          size={34}
-                        />
-                        <div className="min-w-0">
-                          <div className="n">
-                            {application.candidate_name || application.candidate_email}
-                            {application.workable_sourced ? <WorkableTagSm className="ml-2" /> : null}
-                          </div>
-                          <div className="e">{application.candidate_email}</div>
-                          {belowThreshold ? (
-                            <div className="below-pill">
-                              <AlertCircle size={8} />
-                              Below threshold
+                        <div className="c-name text-left">
+                          <CandidateAvatar
+                            name={application.candidate_name || application.candidate_email}
+                            imageUrl={application.candidate_image_url}
+                            size={34}
+                          />
+                          <div className="min-w-0">
+                            <div className="n">
+                              {application.candidate_name || application.candidate_email}
+                              {application.workable_sourced ? <WorkableTagSm className="ml-2" /> : null}
                             </div>
-                          ) : null}
+                            <div className="e">{application.candidate_email}</div>
+                            {belowThreshold ? (
+                              <div className="below-pill">
+                                <AlertCircle size={8} />
+                                Below threshold
+                              </div>
+                            ) : null}
+                          </div>
                         </div>
-                      </button>
 
-                      <div className="c-role">
-                        {application.role_name || application.candidate_position || 'Role'}
-                        <div className="r-meta">
-                          {application.candidate_location || 'Location not captured'}
-                          {roleApplicationCount > 1 ? ` · ${roleApplicationCount} applications` : ''}
+                        <div className="c-role">
+                          {application.role_name || application.candidate_position || 'Role'}
+                          <div className="r-meta">
+                            {application.candidate_location || 'Location not captured'}
+                            {roleApplicationCount > 1 ? ` · ${roleApplicationCount} applications` : ''}
+                          </div>
                         </div>
-                      </div>
 
-                      <div className="c-cv" title={preScreenScore == null ? 'Not scored yet' : `${Math.round(Number(preScreenScore))}%`}>
-                        <span className={`pct ${cvTone}`}>
-                          {(() => {
+                        <div className="c-cv" title={preScreenScore == null ? 'Not scored yet' : `${Math.round(Number(preScreenScore))}%`}>
+                          <span className={`pct ${cvTone}`}>
+                            {(() => {
+                              const status = application?.score_status;
+                              if (status === 'pending' || status === 'running') return 'Scoring…';
+                              if (preScreenScore == null) {
+                                if (status === 'error') return 'Error';
+                                if (status === 'stale') return 'Stale';
+                                return '—';
+                              }
+                              const formatted = `${Math.round(Number(preScreenScore))}%`;
+                              return status === 'stale' ? `${formatted} · stale` : formatted;
+                            })()}
+                          </span>
+                          <div className="meter">
+                            <i className={cvTone} style={{ width: `${Math.max(0, Math.min(100, Number(preScreenScore || 0)))}%` }} />
+                            {hasThresholdRoleValue ? (
+                              <span className="thr" style={{ left: `${Math.max(0, Math.min(100, thresholdRoleValue))}%` }} />
+                            ) : null}
+                          </div>
+                          {rolesApi?.generateTaaliCvAi && application.cv_filename ? (() => {
                             const status = application?.score_status;
-                            if (status === 'pending' || status === 'running') return 'Scoring…';
-                            if (preScreenScore == null) {
-                              if (status === 'error') return 'Error';
-                              if (status === 'stale') return 'Stale';
-                              return '—';
-                            }
-                            const formatted = `${Math.round(Number(preScreenScore))}%`;
-                            return status === 'stale' ? `${formatted} · stale` : formatted;
-                          })()}
-                        </span>
-                        <div className="meter">
-                          <i className={cvTone} style={{ width: `${Math.max(0, Math.min(100, Number(preScreenScore || 0)))}%` }} />
-                          {hasThresholdRoleValue ? (
-                            <span className="thr" style={{ left: `${Math.max(0, Math.min(100, thresholdRoleValue))}%` }} />
+                            const inFlight =
+                              Number(generatingTaaliId) === Number(application.id)
+                              || status === 'pending'
+                              || status === 'running';
+                            const label = inFlight
+                              ? 'Scoring…'
+                              : status === 'error'
+                                ? 'Retry'
+                                : (status === 'stale' || preScreenScore != null)
+                                  ? 'Rescore'
+                                  : 'Score';
+                            return (
+                              <button
+                                type="button"
+                                className="cv-rescore-link"
+                                disabled={inFlight}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleGenerateTaaliCvAi(application);
+                                }}
+                                title="Score this candidate's CV match"
+                              >
+                                {label}
+                              </button>
+                            );
+                          })() : null}
+                        </div>
+
+                        <div className={`c-score ${Number(taaliScore) >= 80 ? 'high' : Number(taaliScore) >= 60 ? 'mid' : Number.isFinite(Number(taaliScore)) ? 'low' : ''}`}>
+                          {taaliScore != null ? Math.round(Number(taaliScore)) : <span className="dash">—</span>}
+                          {taaliScore != null ? <span className="dash">/100</span> : null}
+                          {application.workable_score_raw != null && taaliScore != null ? (
+                            <span className="wk-pip">WK <b>{Math.round(Number(application.workable_score_raw))}</b></span>
                           ) : null}
                         </div>
-                        {rolesApi?.generateTaaliCvAi && application.cv_filename ? (() => {
-                          const status = application?.score_status;
-                          const inFlight =
-                            Number(generatingTaaliId) === Number(application.id)
-                            || status === 'pending'
-                            || status === 'running';
-                          const label = inFlight
-                            ? 'Scoring…'
-                            : status === 'error'
-                              ? 'Retry'
-                              : (status === 'stale' || preScreenScore != null)
-                                ? 'Rescore'
-                                : 'Score';
-                          return (
-                            <button
-                              type="button"
-                              className="cv-rescore-link"
-                              disabled={inFlight}
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                handleGenerateTaaliCvAi(application);
-                              }}
-                              title="Score this candidate's CV match"
-                            >
-                              {label}
-                            </button>
-                          );
-                        })() : null}
-                      </div>
 
-                      <div className={`c-score ${Number(taaliScore) >= 80 ? 'high' : Number(taaliScore) >= 60 ? 'mid' : Number.isFinite(Number(taaliScore)) ? 'low' : ''}`}>
-                        {taaliScore != null ? Math.round(Number(taaliScore)) : <span className="dash">—</span>}
-                        {taaliScore != null ? <span className="dash">/100</span> : null}
-                        {application.workable_score_raw != null && taaliScore != null ? (
-                          <span className="wk-pip">WK <b>{Math.round(Number(application.workable_score_raw))}</b></span>
-                        ) : null}
-                      </div>
+                        <div>
+                          <span className={`candidate-ai-pill ${aiSignal.tone}`}>
+                            {aiSignal.label}{aiSignal.suffix ? ` · ${aiSignal.suffix}` : ''}
+                          </span>
+                        </div>
 
-                      <div>
-                        <span className={`candidate-ai-pill ${aiSignal.tone}`}>
-                          {aiSignal.label}{aiSignal.suffix ? ` · ${aiSignal.suffix}` : ''}
-                        </span>
-                      </div>
+                        <div>
+                          <span className={`chip ${hireSignal.tone}`}>{hireSignal.label}</span>
+                        </div>
 
-                      <div>
-                        <span className={`chip ${hireSignal.tone}`}>{hireSignal.label}</span>
-                      </div>
+                        <div className={`candidate-status-chip ${statusChip.tone}`}>
+                          <span className="dot" />{statusChip.label}
+                        </div>
 
-                      <div className={`candidate-status-chip ${statusChip.tone}`}>
-                        <span className="dot" />{statusChip.label}
+                        <div className="candidate-submitted-cell">
+                          <span className="c-time">{formatRelativeDateTime(updatedAt)}</span>
+                        </div>
                       </div>
-
-                      <div className="candidate-submitted-cell">
-                        <span className="c-time">{formatRelativeDateTime(updatedAt)}</span>
-                      </div>
-                    </div>
+                      {selected ? (
+                        <div id={`candidate-triage-${application.id}`}>
+                          <CandidateTriageDrawer
+                            application={selectedApplication || application}
+                            roleTasks={selectedRoleTasks}
+                            activityLabel={selectedActivityLabel}
+                            loadingActivity={loadingEventsId === application.id}
+                            stageBusy={updatingStageId === application.id}
+                            assessmentBusy={creatingAssessmentId === application.id}
+                            rejectBusy={updatingOutcomeId === application.id}
+                            onClose={() => setSelectedApplicationId(null)}
+                            onMoveStage={moveApplicationStage}
+                            onSendAssessment={handleTriageSendAssessment}
+                            onOpenCv={openCvSidebar}
+                            onViewFullReport={viewFullPage}
+                            onReject={rejectApplicationFromDrawer}
+                          />
+                        </div>
+                      ) : null}
+                    </React.Fragment>
                   );
                 })}
               </div>
@@ -1731,255 +1769,6 @@ export const CandidatesDirectoryPage = ({
               )}
             </div>
 
-            {selectedApplication ? (
-              <Panel className="candidate-decision-pane h-fit p-4">
-                <div className="space-y-4">
-                  <div
-                    className="overflow-hidden rounded-[20px] border border-[var(--taali-line)] p-4"
-                    style={{
-                      background:
-                        'radial-gradient(circle at top right, rgba(45,140,255,0.12), transparent 26%), linear-gradient(155deg, rgba(255,255,255,0.98), rgba(245,241,255,0.94))',
-                    }}
-                  >
-                    <div className="flex items-start gap-3">
-                      <CandidateAvatar
-                        name={selectedApplication.candidate_name || selectedApplication.candidate_email}
-                        imageUrl={selectedApplication.candidate_image_url}
-                        size={44}
-                      />
-                      <div className="min-w-0">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <p className="text-base font-semibold text-[var(--taali-text)]">
-                            {selectedApplication.candidate_name || selectedApplication.candidate_email}
-                          </p>
-                          {selectedApplication.workable_sourced ? <WorkableTagSm /> : null}
-                        </div>
-                        <p className="text-xs text-[var(--taali-muted)]">{selectedApplication.candidate_email}</p>
-                        <p className="text-xs text-[var(--taali-muted)]">
-                          {selectedApplication.role_name || selectedApplication.candidate_position || 'Role'}
-                        </p>
-                      </div>
-                    </div>
-
-                    {selectedApplication.candidate_headline ? (
-                      <p className="mt-3 text-xs text-[var(--taali-muted)]">{selectedApplication.candidate_headline}</p>
-                    ) : null}
-                    {selectedApplication.candidate_location ? (
-                      <p className="mt-1 text-xs text-[var(--taali-muted)]">{selectedApplication.candidate_location}</p>
-                    ) : null}
-                    {selectedRoleApplicationCount > 1 ? (
-                      <p className="mt-2 text-[11px] text-[var(--taali-muted)]">
-                        This candidate has {selectedRoleApplicationCount} role applications in the current results.
-                      </p>
-                    ) : null}
-                    {selectedApplication.candidate_summary ? (
-                      <p className="mt-3 line-clamp-3 text-xs text-[var(--taali-muted)]">
-                        {selectedApplication.candidate_summary}
-                      </p>
-                    ) : null}
-
-                    <div className="mt-4 grid grid-cols-3 gap-2">
-                      <div className="rounded-[16px] border border-[var(--taali-line)] bg-[var(--taali-surface-elevated)] px-3 py-3">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Pre-screen</div>
-                        <div className="mt-1 font-mono text-sm font-semibold text-[var(--taali-text)]">
-                          {formatScoreCell(resolvePreScreenScore(selectedApplication))}
-                        </div>
-                      </div>
-                      <div className="rounded-[16px] border border-[var(--taali-line)] bg-[var(--taali-surface-elevated)] px-3 py-3">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Taali</div>
-                        <div className="mt-1 font-mono text-sm font-semibold text-[var(--taali-text)]">
-                          {formatScoreCell(resolveTaaliScore(selectedApplication))}
-                        </div>
-                      </div>
-                      <div className="rounded-[16px] border border-[var(--taali-line)] bg-[var(--taali-surface-elevated)] px-3 py-3">
-                        <div className="text-[10px] font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Workable</div>
-                        <div className="mt-1 flex items-center gap-2">
-                          {selectedApplication.workable_score_raw != null ? (
-                            <WorkableScorePip value={selectedApplication.workable_score_raw} />
-                          ) : (
-                            <span className="font-mono text-sm font-semibold text-[var(--taali-text)]">—</span>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid gap-3 md:grid-cols-2">
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Stage</span>
-                      <div className="flex items-center gap-2">
-                        <Select
-                          aria-label="Candidate stage"
-                          value={pendingStage}
-                          onChange={(event) => setPendingStage(event.target.value)}
-                          disabled={selectedApplication.application_outcome !== 'open'}
-                        >
-                          {STAGE_OPTIONS.filter((item) => item.value !== 'all').map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </Select>
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="secondary"
-                          onClick={applyStageUpdate}
-                          disabled={updatingStage || pendingStage === selectedApplication.pipeline_stage}
-                        >
-                          <ArrowUpDown size={12} />
-                          {updatingStage ? 'Updating...' : 'Move'}
-                        </Button>
-                      </div>
-                    </label>
-
-                    <label className="block">
-                      <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Outcome</span>
-                      <div className="flex items-center gap-2">
-                        <Select aria-label="Candidate outcome" value={pendingOutcome} onChange={(event) => setPendingOutcome(event.target.value)}>
-                          {OUTCOME_OPTIONS.map((option) => (
-                            <option key={option.value} value={option.value}>{option.label}</option>
-                          ))}
-                        </Select>
-                        <Button
-                          type="button"
-                          size="xs"
-                          variant="secondary"
-                          onClick={applyOutcomeUpdate}
-                          disabled={updatingOutcome || pendingOutcome === selectedApplication.application_outcome}
-                        >
-                          <CheckCircle2 size={12} />
-                          {updatingOutcome ? 'Saving...' : 'Apply'}
-                        </Button>
-                      </div>
-                      {selectedOutcomeSyncAction === 'reject' ? (
-                        <p className="mt-2 text-[11px] text-[var(--taali-muted)]">
-                          Rejecting this Workable-linked candidate will also disqualify them in Workable. Any rejection email is sent by Workable&apos;s disqualification automation/template.
-                        </p>
-                      ) : null}
-                      {selectedOutcomeSyncAction === 'reopen' ? (
-                        <p className="mt-2 text-[11px] text-[var(--taali-muted)]">
-                          Reopening this Workable-linked candidate will also revert the Workable disqualification.
-                        </p>
-                      ) : null}
-                    </label>
-                  </div>
-
-                  <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] p-3">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Actions</p>
-                    <div className="space-y-2">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Select
-                          value={selectedTaskId}
-                          onChange={(event) => setSelectedTaskId(event.target.value)}
-                          className="min-w-[220px]"
-                        >
-                          <option value="">Select task...</option>
-                          {selectedRoleTasks.map((task) => (
-                            <option key={task.id} value={task.id}>{task.name}</option>
-                          ))}
-                        </Select>
-                        <Button
-                          type="button"
-                          variant="primary"
-                          size="sm"
-                          disabled={!selectedTaskId || creatingAssessmentId === selectedApplication.id}
-                          onClick={() => {
-                            if (resolveAssessmentId(selectedApplication)) {
-                              setRetakeDialogState({
-                                applicationId: selectedApplication.id,
-                                defaultTaskId: selectedTaskId,
-                              });
-                              return;
-                            }
-                            createOrRetakeAssessment(selectedApplication, selectedTaskId, { retake: false });
-                          }}
-                        >
-                          {creatingAssessmentId === selectedApplication.id
-                            ? 'Creating...'
-                            : (resolveAssessmentId(selectedApplication) ? 'Retake assessment' : 'Send assessment')}
-                        </Button>
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => openScoreSheet(selectedApplication)}
-                        >
-                          Open summary
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => openCvSidebar(selectedApplication)}
-                        >
-                          Open CV
-                        </Button>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="sm"
-                          onClick={() => viewFullPage(selectedApplication, selectedAssessmentId)}
-                        >
-                          Open standing report
-                        </Button>
-                        {selectedAssessmentId ? (
-                          <Button
-                            type="button"
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => onNavigate('candidate-detail', { candidateDetailAssessmentId: selectedAssessmentId })}
-                          >
-                            Open candidate detail
-                          </Button>
-                        ) : null}
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border-soft)] p-3">
-                    <p className="mb-2 text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Timeline</p>
-                    {loadingEventsId === selectedApplication.id ? (
-                      <div className="flex items-center gap-2 text-xs text-[var(--taali-muted)]">
-                        <Spinner size={14} />
-                        Loading events...
-                      </div>
-                    ) : selectedEvents.length > 0 ? (
-                      <div className="space-y-2">
-                        {selectedEvents.map((event) => {
-                          const formatted = formatTimelineEvent(event);
-                          return (
-                            <div key={event.id} className="rounded-[var(--taali-radius-control)] border border-[var(--taali-border-soft)] p-2">
-                              <div className="flex items-center gap-2 text-[11px] text-[var(--taali-muted)]">
-                                <CircleDot size={11} />
-                                {formatDateTime(event.created_at)}
-                              </div>
-                              <p className="mt-1 text-xs font-semibold text-[var(--taali-text)]">
-                                {formatted.title}
-                              </p>
-                              <p className="mt-0.5 text-xs text-[var(--taali-muted)]">
-                                {formatted.detail}
-                              </p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <div className="flex items-center gap-2 text-xs text-[var(--taali-muted)]">
-                        <AlertCircle size={12} />
-                        No activity yet.
-                      </div>
-                    )}
-                  </div>
-
-                  {loadingDetailId === selectedApplication.id && (
-                    <div className="text-xs text-[var(--taali-muted)]">
-                      <span className="inline-flex items-center gap-2"><Spinner size={12} />Refreshing candidate details...</span>
-                    </div>
-                  )}
-                </div>
-              </Panel>
-            ) : null}
           </div>
         )}
       </div>
@@ -2043,35 +1832,6 @@ export const CandidatesDirectoryPage = ({
             : null
         }
         onClose={() => setCvSidebarApplicationId(null)}
-      />
-
-      <CandidateScoreSummarySheet
-        open={Boolean(scoreSheetApplicationId)}
-        loading={loadingDetailId === Number(scoreSheetApplicationId)}
-        application={
-          scoreSheetApplicationId
-            ? (applicationDetailsById[String(scoreSheetApplicationId)] || applications.find((item) => Number(item.id) === Number(scoreSheetApplicationId)) || null)
-            : null
-        }
-        completedAssessment={selectedCompletedAssessment}
-        completedAssessmentLoading={loadingAssessmentId === Number(selectedAssessmentId)}
-        roleTasks={selectedRoleTasks}
-        creatingAssessmentId={creatingAssessmentId}
-        onClose={() => setScoreSheetApplicationId(null)}
-        onLaunchAssessment={(application, taskId) => createOrRetakeAssessment(application, taskId, { retake: false })}
-        onOpenRetakeDialog={(application, taskId) => {
-          setRetakeDialogState({
-            applicationId: application?.id || null,
-            defaultTaskId: String(taskId || ''),
-          });
-        }}
-        onOpenCvSidebar={openCvSidebar}
-        onViewFullPage={viewFullPage}
-        onRefreshInterviewGuidance={rolesApi?.refreshInterviewSupport ? handleRefreshInterviewGuidance : null}
-        refreshingInterviewGuidance={
-          scoreSheetApplicationId != null
-          && Number(refreshingInterviewGuidanceId) === Number(scoreSheetApplicationId)
-        }
       />
 
       <RetakeAssessmentDialog

@@ -181,30 +181,30 @@ describe('CandidatesDirectoryPage', () => {
     expect(showToast).toHaveBeenCalledWith('Bulk reject finished. 1/2 updated, 1 failed.', 'error');
   }, 10000);
 
-  it('confirms before rejecting a Workable-linked candidate from the detail pane', async () => {
+  it('rejects a Workable-linked candidate from the inline drawer with two-step confirmation', async () => {
     render(<CandidatesDirectoryPage onNavigate={vi.fn()} />);
 
-    await screen.findAllByText('Alice Workable');
-    await waitFor(() => {
-      expect(screen.getByLabelText('Candidate outcome')).toBeInTheDocument();
-    });
+    const aliceName = await screen.findByText('Alice Workable');
+    const aliceRow = aliceName.closest('[role="button"]');
+    expect(aliceRow).toBeTruthy();
 
-    fireEvent.change(screen.getByLabelText('Candidate outcome'), {
-      target: { value: 'rejected' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Apply' }));
+    fireEvent.click(aliceRow);
 
-    expect(confirmMock).toHaveBeenCalledWith(expect.stringContaining('TAALI will also disqualify them in Workable.'));
+    expect(await screen.findByText('Send Taali assessment')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm reject' }));
+
+    expect(confirmMock).not.toHaveBeenCalled();
 
     await waitFor(() => {
       expect(apiClient.roles.updateApplicationOutcome).toHaveBeenCalledWith(
         1,
         expect.objectContaining({
           application_outcome: 'rejected',
-          reason: 'Updated from candidates directory',
+          reason: 'Rejected from candidate triage drawer',
         })
       );
     });
-    expect(showToast).toHaveBeenCalledWith('Candidate outcome updated.', 'success');
+    expect(showToast).toHaveBeenCalledWith('Candidate rejected.', 'success');
   });
 });

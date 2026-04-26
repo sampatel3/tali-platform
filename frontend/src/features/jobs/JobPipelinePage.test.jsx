@@ -116,8 +116,8 @@ describe('JobPipelinePage', () => {
   it('shows stage-aware card signals instead of pre-screen scores in early stages', async () => {
     renderPipeline();
 
-    const appliedCard = (await screen.findByText('Sam Patel')).closest('button');
-    const reviewCard = (await screen.findByText('Priya Anand')).closest('button');
+    const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
+    const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
 
     expect(appliedCard).toBeTruthy();
     expect(reviewCard).toBeTruthy();
