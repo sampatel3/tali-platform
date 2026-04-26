@@ -154,15 +154,8 @@ def _merge_notification_preferences(org: Organization, incoming: OrgUpdate) -> d
     return NotificationPreferences(**{**base, **updates}).model_dump()
 
 
-def _workflow_v2_enabled_for_response(org: Organization) -> bool:
-    if settings.RECRUITER_WORKFLOW_V2_FORCE_OFF:
-        return False
-    return bool(getattr(org, "recruiter_workflow_v2_enabled", False))
-
-
 def _org_response_payload(org: Organization) -> OrgResponse:
     response = OrgResponse.model_validate(org)
-    response.recruiter_workflow_v2_enabled = _workflow_v2_enabled_for_response(org)
     response.workable_config = WorkableConfigBase(**_resolved_workable_config(org))
     response.fireflies_config = _resolved_fireflies_config(org)
     response.workspace_settings = WorkspaceSettings(**_resolved_workspace_settings(org))
@@ -235,8 +228,6 @@ def get_my_org(
         raise HTTPException(status_code=404, detail="Organization not found")
     if getattr(org, "candidate_feedback_enabled", None) is None:
         org.candidate_feedback_enabled = True
-    if getattr(org, "recruiter_workflow_v2_enabled", None) is None:
-        org.recruiter_workflow_v2_enabled = False
     if getattr(org, "default_assessment_duration_minutes", None) is None:
         org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))
@@ -295,8 +286,6 @@ def update_my_org(
         org.saml_metadata_url = metadata_url or None
     if data.candidate_feedback_enabled is not None:
         org.candidate_feedback_enabled = bool(data.candidate_feedback_enabled)
-    if data.recruiter_workflow_v2_enabled is not None:
-        org.recruiter_workflow_v2_enabled = bool(data.recruiter_workflow_v2_enabled)
     if data.default_assessment_duration_minutes is not None:
         org.default_assessment_duration_minutes = int(data.default_assessment_duration_minutes)
     if data.invite_email_template is not None:
@@ -312,8 +301,6 @@ def update_my_org(
         raise HTTPException(status_code=500, detail="Failed to update organization")
     if getattr(org, "candidate_feedback_enabled", None) is None:
         org.candidate_feedback_enabled = True
-    if getattr(org, "recruiter_workflow_v2_enabled", None) is None:
-        org.recruiter_workflow_v2_enabled = False
     if getattr(org, "default_assessment_duration_minutes", None) is None:
         org.default_assessment_duration_minutes = 30
     org.allowed_email_domains = normalize_allowed_domains(getattr(org, "allowed_email_domains", None))

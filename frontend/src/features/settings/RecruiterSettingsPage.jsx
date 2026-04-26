@@ -1283,12 +1283,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       checked={accessForm.candidateFeedbackEnabled}
                       onChange={(value) => setAccessForm((prev) => ({ ...prev, candidateFeedbackEnabled: value }))}
                     />
-                    <ToggleCard
-                      title="Recruiter workflow v2"
-                      description="Keep the jobs, candidates, and reporting routes on the new recruiter shell."
-                      checked={accessForm.recruiterWorkflowV2Enabled}
-                      onChange={(value) => setAccessForm((prev) => ({ ...prev, recruiterWorkflowV2Enabled: value }))}
-                    />
                   </div>
                   <div className="row-form settings-top-gap">
                     <label className="field">

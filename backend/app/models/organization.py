@@ -46,7 +46,6 @@ class Organization(Base):
     saml_enabled = Column(Boolean, default=False)
     saml_metadata_url = Column(String, nullable=True)
     candidate_feedback_enabled = Column(Boolean, default=True, nullable=False)
-    recruiter_workflow_v2_enabled = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
 

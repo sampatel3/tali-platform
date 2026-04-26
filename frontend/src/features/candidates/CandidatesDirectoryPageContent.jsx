@@ -1096,6 +1096,115 @@ export const CandidatesDirectoryPage = ({
     setScoreSheetApplicationId(application.id);
   };
 
+  // Per-candidate Score / Rescore — calls the orchestrator (cache hits make
+  // unchanged candidates instant; misses run cv_match_v4 in the background).
+  const [generatingTaaliId, setGeneratingTaaliId] = useState(null);
+  const handleGenerateTaaliCvAi = useCallback(async (application) => {
+    if (!rolesApi?.generateTaaliCvAi || !application?.id) return;
+    setGeneratingTaaliId(application.id);
+    try {
+      const res = await rolesApi.generateTaaliCvAi(application.id);
+      const updated = res?.data;
+      if (updated && updated.id) upsertApplicationInCache(updated);
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to score candidate.'), 'error');
+    } finally {
+      setGeneratingTaaliId(null);
+    }
+  }, [rolesApi, showToast, upsertApplicationInCache]);
+
+  // Per-application Refresh interview guidance — re-derives the screening
+  // pack, summaries, and the cv_match_v4-derived candidate kit. No Claude call.
+  const [refreshingInterviewGuidanceId, setRefreshingInterviewGuidanceId] = useState(null);
+  const handleRefreshInterviewGuidance = useCallback(async (application) => {
+    if (!rolesApi?.refreshInterviewSupport || !application?.id) return;
+    setRefreshingInterviewGuidanceId(application.id);
+    try {
+      const res = await rolesApi.refreshInterviewSupport(application.id);
+      const updated = res?.data;
+      if (updated && updated.id) upsertApplicationInCache(updated);
+      showToast('Interview guidance refreshed.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to refresh interview guidance.'), 'error');
+    } finally {
+      setRefreshingInterviewGuidanceId(null);
+    }
+  }, [rolesApi, showToast, upsertApplicationInCache]);
+
+  // Bulk Score selected — only enqueues candidates whose inputs have changed
+  // since their last score (the orchestrator caches the rest as no-ops).
+  const [bulkScoreInFlight, setBulkScoreInFlight] = useState(false);
+  const handleScoreSelected = useCallback(async () => {
+    const ids = Array.from(selectedApplicationIdSet).map(Number);
+    if (ids.length === 0) return;
+    // The bulk endpoint is per-role, but selection can span roles in this view.
+    // Group by role_id and call once per role.
+    const byRole = new Map();
+    for (const app of applications) {
+      const id = Number(app?.id);
+      if (!ids.includes(id)) continue;
+      const roleId = app?.role_id;
+      if (!roleId) continue;
+      if (!byRole.has(roleId)) byRole.set(roleId, []);
+      byRole.get(roleId).push(id);
+    }
+    if (byRole.size === 0 || !rolesApi?.scoreSelected) return;
+    setBulkScoreInFlight(true);
+    try {
+      let totalEnqueued = 0;
+      let totalSkipped = 0;
+      for (const [roleId, applicationIds] of byRole) {
+        const res = await rolesApi.scoreSelected(roleId, applicationIds);
+        const data = res?.data || {};
+        totalEnqueued += Number(data.enqueued || 0);
+        totalSkipped += Number(data.skipped_unchanged || 0);
+      }
+      if (totalEnqueued === 0 && totalSkipped > 0) {
+        showToast(`No changes since last score — ${totalSkipped} candidate(s) already up to date.`, 'info');
+      } else {
+        showToast(
+          `Scoring ${totalEnqueued} candidate(s)${totalSkipped > 0 ? `; ${totalSkipped} already up to date` : ''}.`,
+          'success',
+        );
+        loadApplications({});
+      }
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to score selected candidates.'), 'error');
+    } finally {
+      setBulkScoreInFlight(false);
+    }
+  }, [selectedApplicationIdSet, applications, rolesApi, showToast, loadApplications]);
+
+  const [bulkGuidanceInFlight, setBulkGuidanceInFlight] = useState(false);
+  const handleRefreshGuidanceSelected = useCallback(async () => {
+    const ids = Array.from(selectedApplicationIdSet).map(Number);
+    if (ids.length === 0 || !rolesApi?.refreshInterviewSupportBulk) return;
+    const byRole = new Map();
+    for (const app of applications) {
+      const id = Number(app?.id);
+      if (!ids.includes(id)) continue;
+      const roleId = app?.role_id;
+      if (!roleId) continue;
+      if (!byRole.has(roleId)) byRole.set(roleId, []);
+      byRole.get(roleId).push(id);
+    }
+    if (byRole.size === 0) return;
+    setBulkGuidanceInFlight(true);
+    try {
+      let totalRefreshed = 0;
+      for (const [roleId, applicationIds] of byRole) {
+        const res = await rolesApi.refreshInterviewSupportBulk(roleId, applicationIds);
+        totalRefreshed += Number(res?.data?.refreshed || 0);
+      }
+      showToast(`Refreshed interview guidance for ${totalRefreshed} candidate(s).`, 'success');
+      loadApplications({});
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to refresh interview guidance.'), 'error');
+    } finally {
+      setBulkGuidanceInFlight(false);
+    }
+  }, [selectedApplicationIdSet, applications, rolesApi, showToast, loadApplications]);
+
   const viewFullPage = (application, assessmentId) => {
     if (!application) return;
     onNavigate('candidate-report', { candidateApplicationId: application.id });
@@ -1344,11 +1453,29 @@ export const CandidatesDirectoryPage = ({
           </div>
         ) : null}
 
-        <div className={`candidate-bulk-bar ${selectedRejectableApplications.length > 0 ? 'on' : ''}`}>
-          <span className="count">{selectedRejectableApplications.length} selected</span>
+        <div className={`candidate-bulk-bar ${selectedApplicationIds.length > 0 ? 'on' : ''}`}>
+          <span className="count">{selectedApplicationIds.length} selected</span>
           <span className="label">{bulkBarLabel}</span>
-          <button type="button" disabled title="Inline bulk notes are not wired on this surface yet.">Add note</button>
-          <button type="button" disabled title="Bulk stage moves are not wired on this surface yet.">Move stage</button>
+          {rolesApi?.scoreSelected ? (
+            <button
+              type="button"
+              onClick={handleScoreSelected}
+              disabled={selectedApplicationIds.length === 0 || bulkScoreInFlight}
+              title="Re-score CV match for selected candidates (cache hits make unchanged ones instant)"
+            >
+              {bulkScoreInFlight ? 'Scoring…' : `Score selected (${selectedApplicationIds.length})`}
+            </button>
+          ) : null}
+          {rolesApi?.refreshInterviewSupportBulk ? (
+            <button
+              type="button"
+              onClick={handleRefreshGuidanceSelected}
+              disabled={selectedApplicationIds.length === 0 || bulkGuidanceInFlight}
+              title="Refresh interview guidance kit + screening pack for selected candidates (no extra Claude call)"
+            >
+              {bulkGuidanceInFlight ? 'Refreshing…' : `Refresh interview guidance (${selectedApplicationIds.length})`}
+            </button>
+          ) : null}
           <button type="button" onClick={() => setSelectedApplicationIds([])}>Clear</button>
           <button type="button" className="danger" onClick={handleBulkRejectSelected} disabled={selectedRejectableApplications.length === 0 || bulkRejecting}>
             {selectedRejectableApplications.length > 0
@@ -1482,13 +1609,53 @@ export const CandidatesDirectoryPage = ({
                       </div>
 
                       <div className="c-cv" title={preScreenScore == null ? 'Not scored yet' : `${Math.round(Number(preScreenScore))}%`}>
-                        <span className={`pct ${cvTone}`}>{preScreenScore == null ? '—' : `${Math.round(Number(preScreenScore))}%`}</span>
+                        <span className={`pct ${cvTone}`}>
+                          {(() => {
+                            const status = application?.score_status;
+                            if (status === 'pending' || status === 'running') return 'Scoring…';
+                            if (preScreenScore == null) {
+                              if (status === 'error') return 'Error';
+                              if (status === 'stale') return 'Stale';
+                              return '—';
+                            }
+                            const formatted = `${Math.round(Number(preScreenScore))}%`;
+                            return status === 'stale' ? `${formatted} · stale` : formatted;
+                          })()}
+                        </span>
                         <div className="meter">
                           <i className={cvTone} style={{ width: `${Math.max(0, Math.min(100, Number(preScreenScore || 0)))}%` }} />
                           {hasThresholdRoleValue ? (
                             <span className="thr" style={{ left: `${Math.max(0, Math.min(100, thresholdRoleValue))}%` }} />
                           ) : null}
                         </div>
+                        {rolesApi?.generateTaaliCvAi && application.cv_filename ? (() => {
+                          const status = application?.score_status;
+                          const inFlight =
+                            Number(generatingTaaliId) === Number(application.id)
+                            || status === 'pending'
+                            || status === 'running';
+                          const label = inFlight
+                            ? 'Scoring…'
+                            : status === 'error'
+                              ? 'Retry'
+                              : (status === 'stale' || preScreenScore != null)
+                                ? 'Rescore'
+                                : 'Score';
+                          return (
+                            <button
+                              type="button"
+                              className="cv-rescore-link"
+                              disabled={inFlight}
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleGenerateTaaliCvAi(application);
+                              }}
+                              title="Score this candidate's CV match"
+                            >
+                              {label}
+                            </button>
+                          );
+                        })() : null}
                       </div>
 
                       <div className={`c-score ${Number(taaliScore) >= 80 ? 'high' : Number(taaliScore) >= 60 ? 'mid' : Number.isFinite(Number(taaliScore)) ? 'low' : ''}`}>
@@ -1886,6 +2053,11 @@ export const CandidatesDirectoryPage = ({
         }}
         onOpenCvSidebar={openCvSidebar}
         onViewFullPage={viewFullPage}
+        onRefreshInterviewGuidance={rolesApi?.refreshInterviewSupport ? handleRefreshInterviewGuidance : null}
+        refreshingInterviewGuidance={
+          scoreSheetApplicationId != null
+          && Number(refreshingInterviewGuidanceId) === Number(scoreSheetApplicationId)
+        }
       />
 
       <RetakeAssessmentDialog

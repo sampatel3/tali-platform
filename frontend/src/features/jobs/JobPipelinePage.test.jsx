@@ -28,10 +28,6 @@ vi.mock('../candidates/CandidateSheet', () => ({
   CandidateSheet: () => null,
 }));
 
-vi.mock('../candidates/RoleSheet', () => ({
-  RoleSheet: () => null,
-}));
-
 vi.mock('../candidates/CandidatesDirectoryPage', () => ({
   CandidatesDirectoryPage: () => null,
 }));

@@ -143,7 +143,6 @@ class OrgResponse(BaseModel):
     saml_enabled: bool = False
     saml_metadata_url: Optional[str] = None
     candidate_feedback_enabled: bool = True
-    recruiter_workflow_v2_enabled: bool = False
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -162,7 +161,6 @@ class OrgUpdate(BaseModel):
     saml_enabled: Optional[bool] = None
     saml_metadata_url: Optional[str] = None
     candidate_feedback_enabled: Optional[bool] = None
-    recruiter_workflow_v2_enabled: Optional[bool] = None
     default_assessment_duration_minutes: Optional[int] = Field(default=None, ge=15, le=180)
     invite_email_template: Optional[str] = Field(default=None, max_length=10000)
 

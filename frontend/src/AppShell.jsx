@@ -54,9 +54,6 @@ const LazyAssessmentResultsPage = lazy(() =>
 const AssessmentsPage = lazy(() =>
   import('./features/assessments/AssessmentsPage').then((m) => ({ default: m.AssessmentsPage }))
 );
-const CandidatesPage = lazy(() =>
-  import('./features/candidates/CandidatesPage').then((m) => ({ default: m.CandidatesPage }))
-);
 const CandidatesDirectoryPage = lazy(() =>
   import('./features/candidates/CandidatesDirectoryPage').then((m) => ({ default: m.CandidatesDirectoryPage }))
 );
@@ -122,19 +119,15 @@ function AppContent() {
   const location = useLocation();
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const forceRecruiterWorkflowV2 = String(import.meta.env.VITE_RECRUITER_WORKFLOW_V2_FORCE || '')
-    .trim()
-    .toLowerCase() === 'true';
-
   const [selectedCandidate, setSelectedCandidate] = useState(null);
   const [candidateDetailBackTo, setCandidateDetailBackTo] = useState({ page: 'assessments', label: 'Back to Assessments' });
   const [loadingCandidateDetail, setLoadingCandidateDetail] = useState(false);
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
-  const [workflowV2Enabled, setWorkflowV2Enabled] = useState(false);
-  const [workflowModeReady, setWorkflowModeReady] = useState(false);
 
-  const effectiveWorkflowV2Enabled = forceRecruiterWorkflowV2 || workflowV2Enabled;
-  const defaultRecruiterRoute = effectiveWorkflowV2Enabled ? '/jobs' : '/assessments';
+  // Workflow v2 is the only recruiter workflow now. The legacy v1 paths
+  // (CandidatesPageContent, /assessments-as-home) were removed; git history
+  // has them if rollback is ever needed.
+  const defaultRecruiterRoute = '/jobs';
   const nextRedirectPath = useMemo(
     () => resolveSafeNextPath(searchParams.get('next')),
     [searchParams]
@@ -197,50 +190,16 @@ function AppContent() {
     setStartedAssessmentData(null);
   }, [activeAssessmentToken]);
 
-  useEffect(() => {
-    if (!isAuthenticated) {
-      setWorkflowV2Enabled(false);
-      setWorkflowModeReady(true);
-      return;
-    }
-    setWorkflowModeReady(false);
-    if (!organizationsApi?.get) {
-      setWorkflowV2Enabled(false);
-      setWorkflowModeReady(true);
-      return;
-    }
-    const request = organizationsApi.get();
-    if (!request || typeof request.then !== 'function') {
-      setWorkflowV2Enabled(false);
-      setWorkflowModeReady(true);
-      return;
-    }
-    let cancelled = false;
-    request
-      .then((res) => {
-        if (cancelled) return;
-        setWorkflowV2Enabled(Boolean(res?.data?.recruiter_workflow_v2_enabled));
-        setWorkflowModeReady(true);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setWorkflowV2Enabled(false);
-        setWorkflowModeReady(true);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [isAuthenticated]);
+  // Workflow-mode probe removed — v2 is the only path; nothing to fetch.
 
   useEffect(() => {
     if (
       isAuthenticated
-      && workflowModeReady
       && ['/', '/login', '/forgot-password'].includes(location.pathname)
     ) {
       navigate(location.pathname === '/login' && nextRedirectPath ? nextRedirectPath : defaultRecruiterRoute, { replace: true });
     }
-  }, [defaultRecruiterRoute, isAuthenticated, location.pathname, navigate, nextRedirectPath, workflowModeReady]);
+  }, [defaultRecruiterRoute, isAuthenticated, location.pathname, navigate, nextRedirectPath]);
 
   useEffect(() => {
     if (
@@ -276,7 +235,7 @@ function AppContent() {
       roleId: Object.prototype.hasOwnProperty.call(options, 'roleId')
         ? options.roleId
         : null,
-      workflowV2Enabled: effectiveWorkflowV2Enabled,
+      workflowV2Enabled: true,
     });
 
     if (nextPath) {
@@ -345,7 +304,7 @@ function AppContent() {
       <Loader2 size={28} className="animate-spin" style={{ color: '#9D00FF' }} />
     </div>
   );
-  const workflowModeLoading = isAuthenticated && !workflowModeReady;
+  // workflowModeLoading removed — there is no per-org workflow probe anymore.
 
   const CandidateWelcomeRoute = () => {
     const { token } = useParams();
@@ -403,7 +362,7 @@ function AppContent() {
   const DashboardNavWithMode = (props) => (
     <DashboardNav
       {...props}
-      workflowV2Enabled={effectiveWorkflowV2Enabled}
+      workflowV2Enabled
     />
   );
 
@@ -427,42 +386,32 @@ function AppContent() {
 
       <Route
         path="/dashboard"
-        element={workflowModeLoading
-          ? lazyFallback
-          : <Navigate replace to={defaultRecruiterRoute} />}
+        element={<Navigate replace to={defaultRecruiterRoute} />}
       />
 
       <Route
         path="/jobs"
-        element={workflowModeLoading
-          ? lazyFallback
-          : (effectiveWorkflowV2Enabled ? (
-            <Suspense fallback={lazyFallback}>
-              <JobsPage
-                onNavigate={navigateToPage}
-                NavComponent={DashboardNavWithMode}
-              />
-            </Suspense>
-          ) : (
-            <Navigate replace to="/assessments" />
-          ))}
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <JobsPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
       />
 
       <Route
         path="/jobs/:roleId"
-        element={workflowModeLoading
-          ? lazyFallback
-          : (effectiveWorkflowV2Enabled ? (
-            <Suspense fallback={lazyFallback}>
-              <JobPipelinePage
-                onNavigate={navigateToPage}
-                onViewCandidate={(candidate) => navigateToCandidate(candidate, 'jobs')}
-                NavComponent={DashboardNavWithMode}
-              />
-            </Suspense>
-          ) : (
-            <Navigate replace to="/assessments" />
-          ))}
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <JobPipelinePage
+              onNavigate={navigateToPage}
+              onViewCandidate={(candidate) => navigateToCandidate(candidate, 'jobs')}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
       />
 
       <Route
@@ -482,24 +431,14 @@ function AppContent() {
 
       <Route
         path="/candidates"
-        element={workflowModeLoading
-          ? lazyFallback
-          : (effectiveWorkflowV2Enabled ? (
-            <Suspense fallback={lazyFallback}>
-              <CandidatesDirectoryPage
-                onNavigate={navigateToPage}
-                NavComponent={DashboardNavWithMode}
-              />
-            </Suspense>
-          ) : (
-            <Suspense fallback={lazyFallback}>
-              <CandidatesPage
-                onNavigate={navigateToPage}
-                onViewCandidate={(candidate) => navigateToCandidate(candidate, 'candidates')}
-                NavComponent={DashboardNavWithMode}
-              />
-            </Suspense>
-          ))}
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <CandidatesDirectoryPage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
+        )}
       />
 
       <Route
