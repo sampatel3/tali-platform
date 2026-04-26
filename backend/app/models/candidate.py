@@ -41,6 +41,8 @@ class Candidate(Base):
     cv_filename = Column(String, nullable=True)
     cv_text = Column(Text, nullable=True)
     cv_uploaded_at = Column(DateTime(timezone=True), nullable=True)
+    # Parsed CV sections (cv_parsing module). Mirrors candidate_applications.cv_sections.
+    cv_sections = Column(JSON, nullable=True)
 
     # Job specification (uploaded by recruiter)
     job_spec_file_url = Column(String, nullable=True)

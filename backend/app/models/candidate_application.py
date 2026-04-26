@@ -54,6 +54,9 @@ class CandidateApplication(Base):
     cv_filename = Column(String, nullable=True)
     cv_text = Column(Text, nullable=True)
     cv_uploaded_at = Column(DateTime(timezone=True), nullable=True)
+    # Parsed CV sections (cv_parsing module). Populated after _try_fetch_cv_from_workable
+    # extracts text. Shape: ParsedCV in app/cv_parsing/schemas.py.
+    cv_sections = Column(JSON, nullable=True)
     cv_match_score = Column(Float, nullable=True)
     cv_match_details = Column(JSON, nullable=True)
     cv_match_scored_at = Column(DateTime(timezone=True), nullable=True)

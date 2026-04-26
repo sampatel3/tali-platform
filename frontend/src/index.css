@@ -5669,3 +5669,119 @@ body.interview-view .page {
     height: 40px;
   }
 }
+
+/* ---- CV viewer (CandidateStandingReportPage CV tab) ---- */
+.cv-viewer {
+  margin-bottom: 16px;
+  padding: 16px;
+  border: 1px solid var(--taali-border);
+  border-radius: 12px;
+  background: var(--taali-surface);
+}
+.cv-viewer.empty {
+  background: var(--taali-surface-soft, var(--taali-surface));
+  border-style: dashed;
+}
+.cv-viewer-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+.cv-viewer-head .sub {
+  font-size: 12px;
+  color: var(--taali-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cv-viewer-head .headline {
+  font-size: 16px;
+  font-weight: 600;
+  margin-top: 2px;
+}
+.cv-viewer .muted-xs {
+  font-size: 12px;
+  color: var(--taali-muted);
+  margin-top: 2px;
+}
+.cv-viewer-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.cv-viewer-error {
+  margin-top: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  background: var(--taali-danger-soft);
+  color: var(--taali-danger);
+  font-size: 13px;
+}
+.cv-viewer-frame {
+  margin-top: 12px;
+}
+.cv-viewer-empty-body {
+  margin-top: 8px;
+  font-size: 13px;
+  color: var(--taali-muted);
+}
+.cv-sections {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px solid var(--taali-border);
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.cv-section h4 {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--taali-muted);
+}
+.cv-section p {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.cv-section ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+.cv-section ul li + li { margin-top: 4px; }
+.cv-experience-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.cv-experience-card {
+  padding: 12px;
+  border: 1px solid var(--taali-border);
+  border-radius: 8px;
+  background: var(--taali-surface);
+}
+.cv-experience-head {
+  font-size: 14px;
+  margin-bottom: 4px;
+}
+.cv-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.cv-chip {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--taali-surface-soft, var(--taali-bg-soft, #f3f3f7));
+  border: 1px solid var(--taali-border);
+  font-size: 12px;
+}
+.cv-section-headline {
+  font-size: 14px;
+  color: var(--taali-text);
+}

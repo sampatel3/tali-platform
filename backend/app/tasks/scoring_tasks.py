@@ -85,11 +85,22 @@ def score_application_job(self, application_id: int) -> dict:
 def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
     """Fan out per-application scoring jobs for every application under a role.
 
-    Replaces the legacy ``threading.Thread`` batch loop in applications_routes.
-    Each application gets its own ``score_application_job``, queued in
-    parallel rather than processed serially in a single thread.
+    For Workable-imported applications missing ``cv_text``, the CV is fetched
+    from Workable inline before per-app score tasks are dispatched. Without
+    this, ``enqueue_score`` returns None for missing-CV apps and they're
+    silently dropped from the batch — which is exactly what was happening
+    in production before this fix (counted 1/600 because only 1 app had a
+    CV pre-fetched).
+
+    The fetch is sequential (~3-5s per Workable candidate). Per-app
+    scoring then fans out to parallel ``score_application_job`` tasks. For
+    600 candidates the fetch loop takes ~30-50 min; scoring runs in the
+    background after that.
     """
+    from sqlalchemy.orm import joinedload
+
     from ..models.candidate_application import CandidateApplication
+    from ..models.organization import Organization
     from ..models.role import Role
     from ..platform.database import SessionLocal
     from ..services.cv_score_orchestrator import enqueue_score
@@ -100,8 +111,15 @@ def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
         if role is None:
             return {"status": "missing_role", "role_id": role_id}
 
+        org = (
+            db.query(Organization)
+            .filter(Organization.id == role.organization_id)
+            .first()
+        )
+
         query = (
             db.query(CandidateApplication)
+            .options(joinedload(CandidateApplication.candidate))
             .filter(
                 CandidateApplication.role_id == role_id,
                 CandidateApplication.organization_id == role.organization_id,
@@ -111,12 +129,69 @@ def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
         if not include_scored:
             query = query.filter(CandidateApplication.cv_match_score.is_(None))
 
+        apps = query.all()
+
+        # 1. Fetch missing CVs (Workable apps + candidate-level fallback).
+        # Lazy import to avoid circular dependency: applications_routes
+        # imports services, so we can't import it at module load.
+        try:
+            from ..domains.assessments_runtime.applications_routes import (
+                _try_fetch_cv_from_workable,
+            )
+        except Exception as exc:  # pragma: no cover — defensive
+            logger.exception("Failed to import _try_fetch_cv_from_workable: %s", exc)
+            _try_fetch_cv_from_workable = None  # type: ignore[assignment]
+
+        fetched = 0
+        fetch_failures = 0
+        for app in apps:
+            if (app.cv_text or "").strip():
+                continue
+            try:
+                # Candidate-level CV already extracted? Promote it.
+                if app.candidate and (app.candidate.cv_text or "").strip():
+                    app.cv_file_url = app.candidate.cv_file_url
+                    app.cv_filename = app.candidate.cv_filename
+                    app.cv_text = app.candidate.cv_text
+                    app.cv_uploaded_at = app.candidate.cv_uploaded_at
+                    fetched += 1
+                elif (
+                    (app.source or "") == "workable"
+                    and org is not None
+                    and _try_fetch_cv_from_workable is not None
+                ):
+                    if _try_fetch_cv_from_workable(app, app.candidate, db, org):
+                        fetched += 1
+                    else:
+                        fetch_failures += 1
+            except Exception:
+                logger.exception(
+                    "Batch CV fetch failed for application_id=%s", app.id
+                )
+                fetch_failures += 1
+        try:
+            db.commit()
+        except Exception:
+            logger.exception("Failed to commit batch CV fetch results")
+            db.rollback()
+
+        # 2. Re-load apps so the freshly-set cv_text is visible. Not strictly
+        # necessary since we kept the same session, but the commit may have
+        # expired some attributes — explicit refresh is cheap.
+        apps = query.all()
+
         enqueued = 0
-        for app in query.all():
+        for app in apps:
             job = enqueue_score(db, app, force=include_scored)
             if job is not None:
                 enqueued += 1
         db.commit()
-        return {"status": "enqueued", "role_id": role_id, "count": enqueued}
+        return {
+            "status": "enqueued",
+            "role_id": role_id,
+            "count": enqueued,
+            "fetched": fetched,
+            "fetch_failures": fetch_failures,
+        }
     finally:
         db.close()
