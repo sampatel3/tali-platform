@@ -23,6 +23,7 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.application_interview import ApplicationInterview
+from ...models.cv_score_job import CvScoreJob, SCORE_JOB_ERROR
 from ...models.organization import Organization
 from ...models.role import Role
 from ...models.task import Task
@@ -2029,6 +2030,10 @@ def batch_score_role(
         "errors": 0,
         "status": "running",
         "include_scored": bool(include_scored),
+        # Wall-clock anchor for the DB-backed progress poll. Without
+        # this, the status endpoint can't tell which cv_score_jobs rows
+        # belong to *this* batch (vs. earlier ones for the same role).
+        "started_at": datetime.now(timezone.utc),
     }
 
     if settings.MVP_DISABLE_CELERY:
@@ -2285,14 +2290,56 @@ def batch_score_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Poll batch scoring progress for a role."""
+    """Poll batch scoring progress for a role.
+
+    Reads counts from the DB (cv_score_jobs + candidate_applications) so
+    Celery-driven batches surface real progress. The previous version
+    only read from an in-process dict that the worker can't update,
+    leaving the recruiter stuck looking at "0/N scored" forever.
+    """
     get_role(role_id, current_user.organization_id, db)
     progress = _batch_score_progress.get(role_id, {})
+    total = int(progress.get("total", 0) or 0)
+    started_at = progress.get("started_at")
+
+    scored = 0
+    errors = 0
+    if total > 0 and started_at is not None:
+        # Count terminal-state jobs for this role since the batch began.
+        # `cv_match_scored_at` is set by `_execute_scoring(_v3)` on success;
+        # `cv_score_jobs.status='error'` covers the failure path.
+        scored = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.role_id == role_id,
+                CandidateApplication.organization_id == current_user.organization_id,
+                CandidateApplication.deleted_at.is_(None),
+                CandidateApplication.cv_match_scored_at >= started_at,
+            )
+            .count()
+        )
+        errors = (
+            db.query(CvScoreJob)
+            .filter(
+                CvScoreJob.role_id == role_id,
+                CvScoreJob.status == SCORE_JOB_ERROR,
+                CvScoreJob.finished_at >= started_at,
+            )
+            .count()
+        )
+
+    # Mark completed when every targeted application has a terminal state.
+    status = progress.get("status", "idle")
+    if total > 0 and (scored + errors) >= total and status == "running":
+        status = "completed"
+        progress["status"] = status
+        _batch_score_progress[role_id] = progress
+
     return {
-        "status": progress.get("status", "idle"),
-        "total": progress.get("total", 0),
-        "scored": progress.get("scored", 0),
-        "errors": progress.get("errors", 0),
+        "status": status,
+        "total": total,
+        "scored": scored,
+        "errors": errors,
         "include_scored": bool(progress.get("include_scored")),
     }
 
