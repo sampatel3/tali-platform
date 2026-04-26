@@ -234,7 +234,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [accessForm, setAccessForm] = useState({
     allowedEmailDomains: '',
     candidateFeedbackEnabled: true,
-    recruiterWorkflowV2Enabled: true,
   });
   const [accessSaving, setAccessSaving] = useState(false);
   const [ssoForm, setSsoForm] = useState({
@@ -477,7 +476,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setAccessForm({
       allowedEmailDomains: Array.isArray(orgData.allowed_email_domains) ? orgData.allowed_email_domains.join(', ') : '',
       candidateFeedbackEnabled: orgData.candidate_feedback_enabled !== false,
-      recruiterWorkflowV2Enabled: Boolean(orgData.recruiter_workflow_v2_enabled),
     });
     setSsoForm({
       ssoEnforced: Boolean(orgData.sso_enforced),
@@ -632,7 +630,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       const res = await orgsApi.update({
         allowed_email_domains: domains,
         candidate_feedback_enabled: Boolean(accessForm.candidateFeedbackEnabled),
-        recruiter_workflow_v2_enabled: Boolean(accessForm.recruiterWorkflowV2Enabled),
       });
       setOrgData(res?.data || null);
       showToast('Roles and access settings saved.', 'success');

@@ -21,7 +21,7 @@ const pickOrganizationName = (user) => String(
   || ''
 ).trim();
 
-const NAV_ITEMS_V2 = [
+const NAV_ITEMS = [
   { id: 'jobs', label: 'Jobs' },
   { id: 'candidates', label: 'Candidates' },
   { id: 'tasks', label: 'Tasks' },
@@ -29,15 +29,7 @@ const NAV_ITEMS_V2 = [
   { id: 'settings', label: 'Settings' },
 ];
 
-const NAV_ITEMS_LEGACY = [
-  { id: 'assessments', label: 'Assessments' },
-  { id: 'candidates', label: 'Candidates' },
-  { id: 'tasks', label: 'Tasks' },
-  { id: 'reporting', label: 'Reporting' },
-  { id: 'settings', label: 'Settings' },
-];
-
-export const DashboardNav = ({ currentPage, onNavigate, workflowV2Enabled = false }) => {
+export const DashboardNav = ({ currentPage, onNavigate }) => {
   const { user, logout } = useAuth();
   const userName = pickUserName(user);
   const fallbackOrgName = normalizeHeaderOrgName(pickOrganizationName(user), 'No company');
@@ -69,17 +61,17 @@ export const DashboardNav = ({ currentPage, onNavigate, workflowV2Enabled = fals
 
   const orgName = normalizeHeaderOrgName(resolvedOrgName || fallbackOrgName, 'No company');
   const orgLabel = formatHeaderOrgLabel(orgName, 'No company');
-  const navItems = workflowV2Enabled ? NAV_ITEMS_V2 : NAV_ITEMS_LEGACY;
-  const homePage = workflowV2Enabled ? 'jobs' : 'assessments';
+  const navItems = NAV_ITEMS;
+  const homePage = 'jobs';
   const displayName = userName || 'User';
   const initials = useMemo(() => {
     const seed = `${displayName} ${orgName}`.trim();
     const letters = seed.split(/\s+/).filter(Boolean).map((word) => word[0]).join('');
     return letters.slice(0, 2).toUpperCase() || 'U';
   }, [displayName, orgName]);
-  const resolvedCurrentPage = workflowV2Enabled && currentPage === 'assessments'
-    ? 'candidates'
-    : currentPage;
+  // Map the legacy "assessments" current-page identifier to the canonical
+  // "candidates" tab so deep links from outside the app land on a real nav item.
+  const resolvedCurrentPage = currentPage === 'assessments' ? 'candidates' : currentPage;
   const activeNavItem = navItems.find((item) => item.id === resolvedCurrentPage) || navItems[0];
 
   const handleLogout = () => {

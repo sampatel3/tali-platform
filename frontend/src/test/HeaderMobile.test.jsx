@@ -27,7 +27,6 @@ describe('DashboardNav mobile header', () => {
       <DashboardNav
         currentPage="jobs"
         onNavigate={vi.fn()}
-        workflowV2Enabled
       />
     );
 
@@ -45,7 +44,6 @@ describe('DashboardNav mobile header', () => {
       <DashboardNav
         currentPage="tasks"
         onNavigate={onNavigate}
-        workflowV2Enabled
       />
     );
 

@@ -57,7 +57,6 @@ const baseOrgData = {
   default_assessment_duration_minutes: 30,
   invite_email_template: 'Hi {{candidate_name}}, your TAALI assessment is ready: {{assessment_link}}',
   candidate_feedback_enabled: true,
-  recruiter_workflow_v2_enabled: true,
   allowed_email_domains: [],
   sso_enforced: false,
   saml_enabled: false,

@@ -25,7 +25,7 @@ vi.mock('../shared/api', () => ({
   },
   billing: { usage: vi.fn(), costs: vi.fn(), credits: vi.fn(), createCheckoutSession: vi.fn() },
   organizations: {
-    get: vi.fn().mockResolvedValue({ data: { workable_connected: false, recruiter_workflow_v2_enabled: false } }),
+    get: vi.fn().mockResolvedValue({ data: { workable_connected: false } }),
     update: vi.fn(),
   },
   analytics: { get: vi.fn().mockResolvedValue({ data: {} }) },

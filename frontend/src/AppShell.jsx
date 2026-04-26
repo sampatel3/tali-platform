@@ -235,7 +235,6 @@ function AppContent() {
       roleId: Object.prototype.hasOwnProperty.call(options, 'roleId')
         ? options.roleId
         : null,
-      workflowV2Enabled: true,
     });
 
     if (nextPath) {
@@ -359,12 +358,9 @@ function AppContent() {
     );
   };
 
-  const DashboardNavWithMode = (props) => (
-    <DashboardNav
-      {...props}
-      workflowV2Enabled
-    />
-  );
+  // Thin wrapper preserved so route-level <DashboardNav /> usage stays
+  // consistent if we add cross-cutting props later (e.g. environment banners).
+  const DashboardNavWithMode = (props) => <DashboardNav {...props} />;
 
   return (
     <>
