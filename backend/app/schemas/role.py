@@ -231,6 +231,7 @@ class ApplicationDetailResponse(ApplicationResponse):
     cv_text: Optional[str] = None
     assessment_preview: Optional[dict[str, Any]] = None
     assessment_history: list[dict[str, Any]] = Field(default_factory=list)
+    candidate_interview_kit: Optional[dict[str, Any]] = None
 
 
 class ApplicationReportShareLinkResponse(BaseModel):

@@ -759,6 +759,8 @@ def application_to_response(
 
 
 def application_detail_payload(app: CandidateApplication, *, include_cv_text: bool) -> dict[str, Any]:
+    from ...services.candidate_interview_kit import build_candidate_interview_kit_for_application
+
     data = application_to_response(app)
     payload = data.model_dump()
     if include_cv_text:
@@ -770,6 +772,7 @@ def application_detail_payload(app: CandidateApplication, *, include_cv_text: bo
         payload["cv_text"] = None
     payload["assessment_preview"] = _assessment_preview_for_application(app)
     payload["assessment_history"] = _assessment_history_for_application(app)
+    payload["candidate_interview_kit"] = build_candidate_interview_kit_for_application(app)
     return payload
 
 

@@ -742,6 +742,30 @@ export const CandidatesPage = ({
     }
   }, [rolesApi, showToast]);
 
+  const [refreshingInterviewGuidanceId, setRefreshingInterviewGuidanceId] = useState(null);
+  const handleRefreshInterviewGuidance = useCallback(async (application) => {
+    if (!rolesApi?.refreshInterviewSupport || !application?.id) return;
+    setRefreshingInterviewGuidanceId(application.id);
+    try {
+      const res = await rolesApi.refreshInterviewSupport(application.id);
+      const updated = res?.data;
+      if (updated && updated.id) {
+        setRoleApplications((prev) =>
+          prev.map((app) => (Number(app.id) === Number(updated.id) ? { ...app, ...updated } : app))
+        );
+        setApplicationDetailsById((prev) => ({
+          ...prev,
+          [String(updated.id)]: { ...(prev[String(updated.id)] || {}), ...updated },
+        }));
+      }
+      showToast('Interview guidance refreshed.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to refresh interview guidance.'), 'error');
+    } finally {
+      setRefreshingInterviewGuidanceId(null);
+    }
+  }, [rolesApi, showToast]);
+
   const handleFetchCvs = useCallback(async () => {
     if (!rolesApi?.fetchCvs || !selectedRoleId) return;
     try {
@@ -1188,6 +1212,11 @@ export const CandidatesPage = ({
         onOpenCvSidebar={handleOpenCvSidebar}
         onViewFullPage={handleOpenFullCandidatePage}
         onViewResults={openAssessmentResults}
+        onRefreshInterviewGuidance={rolesApi?.refreshInterviewSupport ? handleRefreshInterviewGuidance : null}
+        refreshingInterviewGuidance={
+          selectedScoreApplication?.id != null
+          && Number(refreshingInterviewGuidanceId) === Number(selectedScoreApplication.id)
+        }
       />
 
       <CandidateCvSidebar

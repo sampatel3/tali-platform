@@ -1,10 +1,81 @@
 import React, { useEffect, useState } from 'react';
+import { Loader2, RefreshCw } from 'lucide-react';
 
-import { Button, Panel, Select, Sheet, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { Badge, Button, Panel, Select, Sheet, Spinner } from '../../shared/ui/TaaliPrimitives';
 import { buildStandingCandidateReportModel } from './assessmentViewModels';
 import { CandidateAssessmentSummaryView } from './CandidateAssessmentSummaryView';
 import { CandidateSidebarHeader } from './CandidateSidebarHeader';
 import { formatDateTime } from './candidatesUiUtils';
+
+function CandidateInterviewKitSection({ kit }) {
+  if (!kit) return null;
+  const knockouts = Array.isArray(kit.knockout_checks) ? kit.knockout_checks : [];
+  const probes = Array.isArray(kit.priority_probes) ? kit.priority_probes : [];
+  if (knockouts.length === 0 && probes.length === 0) return null;
+
+  return (
+    <Panel className="space-y-3 p-4">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-[var(--taali-text)]">Candidate-specific interview guidance</p>
+          <p className="text-[11px] text-[var(--taali-muted)]">Derived from CV scoring evidence — no extra Claude call.</p>
+        </div>
+        <Badge variant="muted" className="font-mono text-[11px]">
+          {kit.summary?.total_criteria ?? 0} criteria
+        </Badge>
+      </div>
+
+      {knockouts.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--taali-danger)]">
+            Knockout checks ({knockouts.length})
+          </p>
+          {knockouts.map((item) => (
+            <KitItemCard key={`knockout-${item.criterion_id}`} item={item} tone="danger" />
+          ))}
+        </div>
+      ) : null}
+
+      {probes.length > 0 ? (
+        <div className="space-y-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-[var(--taali-warning)]">
+            Priority probes ({probes.length})
+          </p>
+          {probes.map((item) => (
+            <KitItemCard key={`probe-${item.criterion_id}`} item={item} tone="warning" />
+          ))}
+        </div>
+      ) : null}
+    </Panel>
+  );
+}
+
+function KitItemCard({ item, tone }) {
+  const borderClass = tone === 'danger'
+    ? 'border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)]'
+    : 'border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)]';
+  return (
+    <div className={`rounded border ${borderClass} px-3 py-2`}>
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm font-semibold text-[var(--taali-text)]">{item.criterion_text}</p>
+        <Badge variant="muted" className="font-mono text-[10px]">
+          {item.status}
+          {typeof item.confidence === 'number' ? ` · ${Math.round(item.confidence * 100)}%` : ''}
+        </Badge>
+      </div>
+      {item.interview_probe ? (
+        <p className="mt-1 text-xs text-[var(--taali-text)]">
+          <span className="font-semibold">Ask:</span> {item.interview_probe}
+        </p>
+      ) : null}
+      {item.cv_quote ? (
+        <p className="mt-1 text-[11px] italic text-[var(--taali-muted)]">
+          “{item.cv_quote}”
+        </p>
+      ) : null}
+    </div>
+  );
+}
 
 export function CandidateScoreSummarySheet({
   open,
@@ -19,6 +90,8 @@ export function CandidateScoreSummarySheet({
   onOpenRetakeDialog,
   onOpenCvSidebar,
   onViewFullPage,
+  onRefreshInterviewGuidance,
+  refreshingInterviewGuidance = false,
 }) {
   const [selectedTask, setSelectedTask] = useState('');
 
@@ -105,6 +178,22 @@ export function CandidateScoreSummarySheet({
             View CV
           </Button>
         ) : null}
+        {onRefreshInterviewGuidance ? (
+          <Button
+            type="button"
+            variant="secondary"
+            disabled={refreshingInterviewGuidance}
+            onClick={() => onRefreshInterviewGuidance(application)}
+            title="Re-derive interview kit + screening pack from current scoring data (no Claude call)"
+          >
+            {refreshingInterviewGuidance ? (
+              <Loader2 size={14} className="animate-spin" />
+            ) : (
+              <RefreshCw size={14} />
+            )}
+            <span className="ml-1">{refreshingInterviewGuidance ? 'Refreshing' : 'Refresh interview guidance'}</span>
+          </Button>
+        ) : null}
       </div>
     </div>
   ) : (
@@ -136,6 +225,8 @@ export function CandidateScoreSummarySheet({
               Refreshing completed assessment detail...
             </div>
           ) : null}
+
+          <CandidateInterviewKitSection kit={application?.candidate_interview_kit} />
 
           <CandidateAssessmentSummaryView reportModel={reportModel} variant="sheet" />
         </div>

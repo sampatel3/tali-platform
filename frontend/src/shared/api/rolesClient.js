@@ -40,6 +40,7 @@ export const roles = {
   createManualInterview: (applicationId, data) => api.post(`/applications/${applicationId}/interviews`, data),
   linkFirefliesInterview: (applicationId, data) => api.post(`/applications/${applicationId}/interviews/fireflies-link`, data),
   generateTaaliCvAi: (applicationId) => api.post(`/applications/${applicationId}/generate-taali-cv-ai`),
+  refreshInterviewSupport: (applicationId) => api.post(`/applications/${applicationId}/refresh-interview-support`),
   enrichApplication: (applicationId) => api.post(`/applications/${applicationId}/enrich`),
   batchScore: (roleId, options = {}) => api.post(
     `/roles/${roleId}/batch-score`,

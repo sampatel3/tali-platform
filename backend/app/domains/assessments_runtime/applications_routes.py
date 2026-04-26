@@ -1668,13 +1668,37 @@ def generate_taali_cv_ai(
         raise HTTPException(status_code=500, detail="Failed to generate TAALI score")
 
     app = get_application(app.id, current_user.organization_id, db)
-    data = application_to_response(app)
-    payload = data.model_dump()
-    cv = (app.cv_text or "").strip()
-    if not cv and app.candidate:
-        cv = (app.candidate.cv_text or "").strip()
-    payload["cv_text"] = cv or None
-    return ApplicationDetailResponse(**payload)
+    return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=True))
+
+
+@router.post(
+    "/applications/{application_id}/refresh-interview-support",
+    response_model=ApplicationDetailResponse,
+)
+def refresh_application_interview_guidance(
+    application_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-derive deterministic per-application interview guidance.
+
+    Refreshes the screening pack, tech interview pack, screening / tech
+    interview summaries, interview evidence summary, AND the candidate
+    interview kit (computed from cv_match_v4 data). No Claude call — this
+    is pure aggregation of existing scoring + transcript data. Persists the
+    updated columns so downstream report builders see the fresh values.
+    """
+    app = get_application(application_id, current_user.organization_id, db)
+    refresh_application_interview_support(
+        app, organization=getattr(app, "organization", None)
+    )
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to refresh interview guidance")
+    app = get_application(app.id, current_user.organization_id, db)
+    return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=True))
 
 
 # ---------------------------------------------------------------------------
