@@ -11,10 +11,10 @@ import { MarketingNav, TaaliLogo } from '../../shared/layout/TaaliLayout';
 const containerClass = 'mx-auto max-w-[1360px] px-6 md:px-10 xl:px-16';
 
 const heroSignals = [
-  { label: 'Prompt quality', width: '62%' },
-  { label: 'Error recovery', width: '74%' },
-  { label: 'Context utilization', width: '55%' },
-  { label: 'Independence', width: '68%' },
+  { label: 'Prompt quality', width: '91%', value: '9.1' },
+  { label: 'Error recovery', width: '78%', value: '7.8' },
+  { label: 'Context utilization', width: '86%', value: '8.6' },
+  { label: 'Independence', width: '72%', value: '7.2' },
 ];
 
 const dashboardCandidates = [
@@ -157,13 +157,13 @@ const SectionHeading = ({ kicker, title, copy, children = null }) => (
   </div>
 );
 
-const HeroSignalRow = ({ label, width }) => (
-  <div className="grid grid-cols-[140px_1fr_32px] items-center gap-3 text-[13.5px]">
+const HeroSignalRow = ({ label, width, value }) => (
+  <div className="grid grid-cols-[140px_1fr_38px] items-center gap-3 text-[13.5px]">
     <span className="text-[var(--ink-2)]">{label}</span>
-    <div className="h-2 rounded-full bg-[var(--bg-3)]">
-      <div className="h-full rounded-full bg-[var(--bg-3)]" style={{ width }} />
+    <div className="h-1.5 overflow-hidden rounded-full bg-[var(--bg-3)]">
+      <div className="h-full rounded-full bg-gradient-to-r from-[var(--purple-2)] to-[var(--purple)]" style={{ width }} />
     </div>
-    <span className="text-right text-[var(--mute)]">—</span>
+    <span className="text-right font-[var(--font-mono)] text-[var(--ink)]">{value}</span>
   </div>
 );
 
@@ -205,81 +205,93 @@ export const LandingPage = ({ onNavigate }) => {
           <div>
             <span className="eyebrow">
               <span className="eyebrow-tag">NEW</span>
-              AI-tool proficiency scoring - now live
+              Six-axis AI-collaboration scoring - now live
               <span className="text-[var(--mute-2)]">→</span>
             </span>
             <h1 className="h-display mt-6 text-[clamp(56px,7.3vw,108px)] leading-[0.94]">
-              Hire engineers who can actually <em>ship</em> with AI<span className="text-[var(--purple)]">.</span>
+              Stop hiring engineers who can&apos;t <em>ship</em> with AI<span className="text-[var(--purple)]">.</span>
             </h1>
             <p className="mt-5 max-w-[560px] text-[19px] leading-[1.55] text-[var(--mute)]">
-              Taali is the only technical assessment platform that measures how candidates <em>use</em> AI tools to solve real engineering problems - not just whether they can code without them.
+              Your candidates will pair with AI tools on day one. Taali is the only assessment platform that scores <em>how they actually use them</em> - six dimensions, evidence-linked, calibrated to your team&apos;s bar.
             </p>
             <div className="mt-9 flex flex-wrap gap-3">
               <button type="button" className="btn btn-primary btn-lg" onClick={() => onNavigate('demo')}>
-                Book a demo <span className="arrow">→</span>
+                Try the walkthrough <span className="arrow">→</span>
               </button>
-              <button type="button" className="btn btn-outline btn-lg" onClick={() => onNavigate('demo')}>
-                See the product
+              <button
+                type="button"
+                className="btn btn-outline btn-lg"
+                onClick={() => {
+                  window.location.href = '/c/demo?view=interview&k=demo-token&showcase=1';
+                }}
+              >
+                See a sample report
               </button>
             </div>
-            <div className="mt-10 flex items-center gap-5 text-[13px] text-[var(--mute)]">
-              <div className="flex">
-                {['#E9DDFE', '#FFD1B8', '#C8F169', '#CDE0FF'].map((color, index) => (
-                  <div
-                    key={color}
-                    className="h-7 w-7 rounded-full border border-[var(--bg)]"
-                    style={{ marginLeft: index === 0 ? 0 : -8, background: color }}
-                  />
-                ))}
+            <div className="mt-14 flex max-w-[520px] items-start gap-3 rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-4 text-[13.5px] leading-[1.55] text-[var(--mute)] shadow-[var(--shadow-sm)]">
+              <div className="grid h-7 w-7 shrink-0 place-items-center rounded-[8px] bg-[color-mix(in_oklab,var(--purple)_14%,var(--bg))] text-[var(--purple)]">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M12 2 L4 6 v6 c0 5 3.5 8 8 10 4.5-2 8-5 8-10 V6 z" />
+                  <path d="M9 12 l2 2 4-4" />
+                </svg>
               </div>
               <div>
-                Built for hiring teams evaluating engineers who already work with AI every day.
+                Built for engineering teams running <b className="text-[var(--ink)]">50+ technical interviews a year</b>. Real tasks, real AI tools, evidence-linked scoring.
               </div>
             </div>
           </div>
 
           <div className="rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] p-5 shadow-[var(--shadow-lg)]">
-            <div className="mb-4 flex items-center justify-between border-b border-dashed border-[var(--line)] px-2 pb-4">
-              <div className="flex gap-1 font-[var(--font-mono)] text-xs text-[var(--mute)]">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-dashed border-[var(--line)] px-2 pb-4">
+              <div className="flex flex-wrap gap-1 font-[var(--font-mono)] text-xs text-[var(--mute)]">
                 <span className="rounded-[8px] bg-[var(--bg-3)] px-3 py-1.5 text-[var(--ink)]">Overview</span>
-                <span className="px-3 py-1.5">Signals</span>
-                <span className="px-3 py-1.5">Recording</span>
-                <span className="px-3 py-1.5">Notes</span>
+                <span className="px-3 py-1.5">Assessment</span>
+                <span className="px-3 py-1.5">Interview prep</span>
               </div>
-              <div className="font-[var(--font-mono)] text-[10px] uppercase tracking-[0.12em] text-[var(--mute)]">
-                Illustrative · what a report looks like
+              <div className="flex shrink-0 items-center gap-2 font-[var(--font-mono)] text-xs text-[var(--ink-2)]">
+                <span className="h-2 w-2 rounded-full bg-[var(--green)] shadow-[0_0_0_3px_color-mix(in_oklab,var(--green)_25%,transparent)]" />
+                <span>Maya Chen</span>
               </div>
             </div>
 
-            <div className="grid grid-cols-[auto_1fr_auto] items-center gap-4 rounded-[var(--radius)] bg-[var(--bg)] p-5">
+            <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4 rounded-[var(--radius)] bg-[var(--bg)] p-5 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
               <div className="relative grid h-[72px] w-[72px] place-items-center">
                 <svg width="72" height="72" viewBox="0 0 72 72" className="absolute inset-0 -rotate-90">
                   <circle cx="36" cy="36" r="30" fill="none" stroke="var(--bg-3)" strokeWidth="6" />
-                  <circle cx="36" cy="36" r="30" fill="none" stroke="var(--purple)" strokeWidth="6" strokeLinecap="round" strokeDasharray="188.4" strokeDashoffset="56" strokeOpacity="0.55" />
+                  <circle cx="36" cy="36" r="30" fill="none" stroke="var(--purple)" strokeWidth="6" strokeLinecap="round" strokeDasharray="188.4" strokeDashoffset="34" />
                 </svg>
-                <span className="font-[var(--font-display)] text-[18px] leading-none text-[var(--mute)]">—</span>
+                <span className="font-[var(--font-display)] text-2xl leading-none text-[var(--ink)]">8.2</span>
               </div>
-              <div>
-                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">Composite score · per role</div>
-                <div className="mt-1 text-[17px] font-semibold">A six-axis read on every session</div>
-                <div className="mt-1 text-[13px] text-[var(--mute)]">Calibrated against your team&apos;s bar, not ours.</div>
+              <div className="min-w-0">
+                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">Composite · vs your team&apos;s bar</div>
+                <div className="mt-1 text-[17px] font-semibold">Strong hire - recommend on-site</div>
+                <div className="mt-1 text-[13px] text-[var(--mute)]">Top 12% of 47 candidates for this role · scored against your rubric</div>
               </div>
-              <div className="rounded-full border border-dashed border-[var(--line)] px-3 py-1.5 font-[var(--font-mono)] text-xs text-[var(--mute)]">
-                Verdict
+              <div className="col-span-2 w-fit rounded-full bg-[color-mix(in_oklab,var(--green)_18%,transparent)] px-3 py-1.5 font-[var(--font-mono)] text-xs text-[var(--green)] sm:col-span-1">
+                Strong hire
               </div>
             </div>
 
             <div className="mt-4 grid gap-3">
               {heroSignals.map((signal) => (
-                <HeroSignalRow key={signal.label} label={signal.label} width={signal.width} />
+                <HeroSignalRow key={signal.label} label={signal.label} width={signal.width} value={signal.value} />
               ))}
             </div>
 
             <div className="mt-4 flex gap-3 rounded-[var(--radius)] border border-dashed border-[color-mix(in_oklab,var(--purple)_28%,var(--line))] bg-[color-mix(in_oklab,var(--purple)_8%,var(--bg-2))] p-4 text-[13.5px] leading-6 text-[var(--ink-2)]">
-              <div className="grid h-7 w-7 shrink-0 place-items-center rounded-[8px] bg-[var(--purple)] text-[var(--taali-inverse-text)]">AI</div>
+              <div className="grid h-7 w-7 shrink-0 place-items-center rounded-[8px] bg-[var(--purple)] text-[var(--taali-inverse-text)]">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
+                  <path d="M12 2 L14 10 L22 12 L14 14 L12 22 L10 14 L2 12 L10 10 Z" />
+                </svg>
+              </div>
               <div>
-                <b className="block text-[var(--ink)]">What the AI-collab read tells you</b>
-                Where the candidate delegated, where they owned the work, and how they handled an incorrect suggestion. Evidence-linked, prompt by prompt.
+                <b className="block text-[var(--ink)]">Evidence · prompt 14 of 23</b>
+                <span className="my-1 block leading-[1.5] text-[var(--ink)] italic">
+                  &quot;Before I implement, can you show me where the existing eval-gate is wired so I don&apos;t duplicate the abstraction?&quot;
+                </span>
+                <span className="block font-[var(--font-mono)] text-[11px] tracking-[0.02em] text-[var(--purple)]">
+                  → scored 9.4 on prompt quality · context-aware, ownership signal
+                </span>
               </div>
             </div>
           </div>
