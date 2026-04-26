@@ -205,14 +205,14 @@ export const LandingPage = ({ onNavigate }) => {
           <div>
             <span className="eyebrow">
               <span className="eyebrow-tag">NEW</span>
-              Six-axis AI-collaboration scoring - now live
+              Six-axis AI-collaboration scoring — now live
               <span className="text-[var(--mute-2)]">→</span>
             </span>
             <h1 className="h-display mt-6 text-[clamp(56px,7.3vw,108px)] leading-[0.94]">
-              Stop hiring engineers who can&apos;t <em>ship</em> with AI<span className="text-[var(--purple)]">.</span>
+              Hire engineers who can <em>ship</em> with AI<span className="text-[var(--purple)]">.</span>
             </h1>
             <p className="mt-5 max-w-[560px] text-[19px] leading-[1.55] text-[var(--mute)]">
-              Your candidates will pair with AI tools on day one. Taali is the only assessment platform that scores <em>how they actually use them</em> - six dimensions, evidence-linked, calibrated to your team&apos;s bar.
+              Your candidates will pair with AI tools on day one. Taali is the only assessment platform that scores <em>how they actually use them</em> — six dimensions, evidence-linked, calibrated to your team&apos;s bar.
             </p>
             <div className="mt-9 flex flex-wrap gap-3">
               <button type="button" className="btn btn-primary btn-lg" onClick={() => onNavigate('demo')}>
