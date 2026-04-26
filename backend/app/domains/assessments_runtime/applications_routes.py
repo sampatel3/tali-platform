@@ -2024,6 +2024,143 @@ def batch_score_role(
     }
 
 
+@router.post("/roles/{role_id}/applications/score-selected")
+def score_selected_applications(
+    role_id: int,
+    payload: dict = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Enqueue CV scoring for a specific list of application IDs.
+
+    Body: ``{"application_ids": [1, 2, 3], "force": false}``
+
+    Default behaviour (force=false): skip applications whose inputs haven't
+    changed — the cache layer guarantees a no-op for those, but explicitly
+    skipping done rows avoids creating churn in the cv_score_jobs log.
+    Pass force=true to re-enqueue even when score_status is done; the
+    orchestrator still hits the cache, so this is cheap.
+    """
+    payload = payload or {}
+    raw_ids = payload.get("application_ids") or []
+    force = bool(payload.get("force"))
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(status_code=400, detail="application_ids is required")
+    try:
+        application_ids = [int(x) for x in raw_ids]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="application_ids must be integers")
+
+    get_role(role_id, current_user.organization_id, db)
+    apps = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id.in_(application_ids),
+            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.role_id == role_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .all()
+    )
+
+    enqueued = 0
+    skipped = 0
+    not_eligible = 0
+    for app in apps:
+        # Skip done rows on default runs — cache would no-op anyway, but this
+        # keeps the cv_score_jobs log clean and respects "only rescore on
+        # change" semantics.
+        if (
+            not force
+            and app.cv_match_score is not None
+            and (latest_score_status(db, app.id) == "done")
+        ):
+            skipped += 1
+            continue
+        job = enqueue_score(db, app, force=force)
+        if job is None:
+            not_eligible += 1
+        else:
+            enqueued += 1
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to enqueue scoring jobs")
+
+    return {
+        "status": "enqueued",
+        "requested": len(application_ids),
+        "enqueued": enqueued,
+        "skipped_unchanged": skipped,
+        "not_eligible": not_eligible,
+    }
+
+
+@router.post("/roles/{role_id}/applications/refresh-interview-support-bulk")
+def refresh_interview_support_bulk(
+    role_id: int,
+    payload: dict = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Refresh deterministic per-application interview guidance for many applications.
+
+    Body: ``{"application_ids": [1, 2, 3]}``
+
+    No Claude calls — pure aggregation of existing scoring + transcript data.
+    Each application gets its screening_pack, tech_interview_pack, summaries,
+    interview_evidence_summary, and the v4-derived candidate_interview_kit
+    re-derived and persisted.
+    """
+    payload = payload or {}
+    raw_ids = payload.get("application_ids") or []
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(status_code=400, detail="application_ids is required")
+    try:
+        application_ids = [int(x) for x in raw_ids]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="application_ids must be integers")
+
+    get_role(role_id, current_user.organization_id, db)
+    apps = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id.in_(application_ids),
+            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.role_id == role_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .all()
+    )
+
+    refreshed = 0
+    for app in apps:
+        try:
+            refresh_application_interview_support(
+                app, organization=getattr(app, "organization", None)
+            )
+            refreshed += 1
+        except Exception:
+            logger.exception(
+                "Failed to refresh interview support for application_id=%s",
+                app.id,
+            )
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to refresh interview support")
+
+    return {
+        "status": "refreshed",
+        "requested": len(application_ids),
+        "refreshed": refreshed,
+    }
+
+
 @router.get("/roles/{role_id}/batch-score/status")
 def batch_score_status(
     role_id: int,

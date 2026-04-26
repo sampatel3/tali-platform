@@ -569,9 +569,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               <Mail size={14} />
               Email to panel
             </button>
-            <button type="button" className="btn btn-purple btn-sm" onClick={handleDownloadReport} disabled={busyAction !== ''}>
-              {busyAction === 'report' ? 'Downloading…' : 'Download PDF'}
-            </button>
+            {/* Download PDF removed — the shareable web link above is the canonical report. */}
           </div>
         </div>
         {shareState.error ? <p className="mt-3 text-xs text-[var(--taali-danger)]">{shareState.error}</p> : null}
@@ -674,7 +672,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             </div>
 
             <div className="report-card" data-internal-only>
-              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Report actions</div>
+              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Quick links</div>
               <div className="mt-3 space-y-2">
                 {canOpenAssessmentDetail ? (
                   <Button
@@ -688,28 +686,18 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                     <ExternalLink size={14} />
                   </Button>
                 ) : null}
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="w-full justify-between"
-                  onClick={handleDownloadReport}
-                  disabled={busyAction !== ''}
-                >
-                  Download PDF
-                  <ExternalLink size={14} />
-                </Button>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="w-full justify-between"
-                  onClick={() => handleDownloadCandidateDoc('cv')}
-                  disabled={!application?.candidate_id}
-                >
-                  Download CV
-                  <ExternalLink size={14} />
-                </Button>
+                {application?.workable_profile_url ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    className="w-full justify-between"
+                    onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
+                  >
+                    View on Workable
+                    <ExternalLink size={14} />
+                  </Button>
+                ) : null}
               </div>
             </div>
 
@@ -811,9 +799,15 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               <div className="sub">CV & role match</div>
               <div className="headline">{cvMatchDetails?.summary || 'Role-fit evidence is available from the candidate application and assessment context.'}</div>
             </div>
-            <button type="button" className="btn btn-outline btn-sm" onClick={() => handleDownloadCandidateDoc('cv')} disabled={!application?.candidate_id}>
-              Download CV
-            </button>
+            {application?.workable_profile_url ? (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
+              >
+                View on Workable
+              </button>
+            ) : null}
           </div>
           <div className="match-grid">
             <div className="match-col matched">

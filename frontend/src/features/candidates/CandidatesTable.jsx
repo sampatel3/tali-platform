@@ -115,7 +115,15 @@ export const CandidatesTable = ({
   uploadingCvId,
   onGenerateTaaliCvAi,
   generatingTaaliId,
+  selectedApplicationIds = [],
+  onToggleApplicationSelected,
+  onToggleAllVisibleSelected,
+  onScoreSelected,
+  onRefreshGuidanceSelected,
+  bulkScoreInFlight = false,
+  bulkGuidanceInFlight = false,
 }) => {
+  const selectedSet = useMemo(() => new Set(selectedApplicationIds.map(Number)), [selectedApplicationIds]);
   const [composerApplicationId, setComposerApplicationId] = useState(null);
   const [taskByApplication, setTaskByApplication] = useState({});
   const [columnsOpen, setColumnsOpen] = useState(false);
@@ -283,14 +291,74 @@ export const CandidatesTable = ({
     { key: 'source', label: 'Source' },
   ];
 
+  const visibleSelectableIds = filtered.map((a) => Number(a.id));
+  const selectedVisibleCount = visibleSelectableIds.filter((id) => selectedSet.has(id)).length;
+  const allVisibleSelected = visibleSelectableIds.length > 0 && selectedVisibleCount === visibleSelectableIds.length;
+  const someVisibleSelected = selectedVisibleCount > 0 && !allVisibleSelected;
+
   return (
     <div className="space-y-1.5">
+      {selectedSet.size > 0 ? (
+        <div className="flex flex-wrap items-center justify-between gap-2 rounded border border-[var(--taali-purple)] bg-[var(--taali-purple-soft,rgba(125,86,243,0.08))] px-3 py-2 text-sm">
+          <span className="font-semibold text-[var(--taali-text)]">
+            {selectedSet.size} selected
+          </span>
+          <div className="flex flex-wrap gap-2">
+            {onScoreSelected ? (
+              <Button
+                type="button"
+                variant="primary"
+                size="xs"
+                disabled={bulkScoreInFlight}
+                onClick={() => onScoreSelected(Array.from(selectedSet))}
+                title="Re-score CV match for selected candidates (cache hits make unchanged ones instant)"
+              >
+                {bulkScoreInFlight ? 'Scoring…' : `Score selected (${selectedSet.size})`}
+              </Button>
+            ) : null}
+            {onRefreshGuidanceSelected ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="xs"
+                disabled={bulkGuidanceInFlight}
+                onClick={() => onRefreshGuidanceSelected(Array.from(selectedSet))}
+                title="Refresh interview guidance kit + screening pack for selected candidates (no extra Claude call)"
+              >
+                {bulkGuidanceInFlight ? 'Refreshing…' : `Refresh interview guidance (${selectedSet.size})`}
+              </Button>
+            ) : null}
+            <Button
+              type="button"
+              variant="ghost"
+              size="xs"
+              onClick={() => onToggleAllVisibleSelected?.([])}
+            >
+              Clear
+            </Button>
+          </div>
+        </div>
+      ) : null}
       <div className="relative flex flex-wrap items-center justify-between gap-2 px-1">
-        <p className="text-xs text-[var(--taali-muted)]">
-          {filtered.length}
-          {' '}
-          candidate{filtered.length === 1 ? '' : 's'}
-        </p>
+        <div className="flex items-center gap-3">
+          {onToggleAllVisibleSelected ? (
+            <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-[var(--taali-muted)]">
+              <input
+                type="checkbox"
+                ref={(node) => { if (node) node.indeterminate = someVisibleSelected; }}
+                checked={allVisibleSelected}
+                onChange={() => onToggleAllVisibleSelected(allVisibleSelected ? [] : visibleSelectableIds)}
+                aria-label="Select all visible candidates"
+              />
+              Select all visible
+            </label>
+          ) : null}
+          <p className="text-xs text-[var(--taali-muted)]">
+            {filtered.length}
+            {' '}
+            candidate{filtered.length === 1 ? '' : 's'}
+          </p>
+        </div>
         <Button type="button" variant="ghost" size="xs" onClick={() => setColumnsOpen((prev) => !prev)}>
           Columns
         </Button>
@@ -405,12 +473,25 @@ export const CandidatesTable = ({
                   <tr className="group align-top border-b border-[var(--taali-border)] transition-colors hover:bg-[var(--taali-surface-hover,rgba(0,0,0,0.04))]">
                     {visibleColumnOrder.map((column) => {
                       if (column === 'candidate') {
+                        const isSelected = selectedSet.has(Number(application.id));
                         return (
                           <td
                             key={column}
                             className="sticky left-0 z-10 bg-[var(--taali-surface)] px-3 py-2 text-sm group-hover:bg-[var(--taali-surface-hover,rgba(0,0,0,0.04))]"
                           >
                             <div className="flex items-start gap-2.5">
+                              {onToggleApplicationSelected ? (
+                                <input
+                                  type="checkbox"
+                                  className="mt-1.5 cursor-pointer"
+                                  checked={isSelected}
+                                  onChange={(event) => {
+                                    event.stopPropagation();
+                                    onToggleApplicationSelected(Number(application.id), event.target.checked);
+                                  }}
+                                  aria-label={`Select ${application.candidate_name || application.candidate_email || 'candidate'}`}
+                                />
+                              ) : null}
                               <CandidateAvatar
                                 name={application.candidate_name}
                                 imageUrl={application.candidate_image_url}

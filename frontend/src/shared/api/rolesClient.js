@@ -41,6 +41,14 @@ export const roles = {
   linkFirefliesInterview: (applicationId, data) => api.post(`/applications/${applicationId}/interviews/fireflies-link`, data),
   generateTaaliCvAi: (applicationId) => api.post(`/applications/${applicationId}/generate-taali-cv-ai`),
   refreshInterviewSupport: (applicationId) => api.post(`/applications/${applicationId}/refresh-interview-support`),
+  scoreSelected: (roleId, applicationIds, options = {}) => api.post(
+    `/roles/${roleId}/applications/score-selected`,
+    { application_ids: applicationIds, force: options.force === true },
+  ),
+  refreshInterviewSupportBulk: (roleId, applicationIds) => api.post(
+    `/roles/${roleId}/applications/refresh-interview-support-bulk`,
+    { application_ids: applicationIds },
+  ),
   enrichApplication: (applicationId) => api.post(`/applications/${applicationId}/enrich`),
   batchScore: (roleId, options = {}) => api.post(
     `/roles/${roleId}/batch-score`,

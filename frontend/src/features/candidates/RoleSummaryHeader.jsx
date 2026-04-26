@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { BriefcaseBusiness, ChevronDown, ChevronUp, FileText, Loader2, RefreshCw, Sparkles, Download, Lock } from 'lucide-react';
+import { BriefcaseBusiness, ChevronDown, ChevronUp, FileText, Loader2, Sparkles, Download } from 'lucide-react';
 
 import {
   Badge,
@@ -17,17 +17,9 @@ export const RoleSummaryHeader = ({
   onBatchScore,
   onFetchCvs,
   fetchCvsProgress,
-  onRegenerateInterviewFocus,
-  interviewFocusGenerating = false,
 }) => {
   if (!role) return null;
-  const focus = role.interview_focus || null;
-  const focusQuestions = Array.isArray(focus?.questions) ? focus.questions.slice(0, 3) : [];
-  const focusTriggers = Array.isArray(focus?.manual_screening_triggers) ? focus.manual_screening_triggers : [];
-  const hasInterviewFocus = focusQuestions.length > 0;
-  const [focusExpanded, setFocusExpanded] = useState(true);
   const [specExpanded, setSpecExpanded] = useState(false);
-  const focusPanelId = `interview-focus-panel-${role.id || 'active'}`;
   const specPanelId = `role-spec-panel-${role.id || 'active'}`;
 
   /** Strip HTML to plain text (for preview). */
@@ -93,7 +85,6 @@ export const RoleSummaryHeader = ({
       : 'Not uploaded');
 
   useEffect(() => {
-    setFocusExpanded(true);
     setSpecExpanded(Boolean(hasSpecContent || hasAdditionalRequirements));
   }, [role.id, hasSpecContent, hasAdditionalRequirements]);
 
@@ -235,131 +226,9 @@ export const RoleSummaryHeader = ({
         </div>
       </Card>
 
-      {hasInterviewFocus ? (
-        <Card className="mt-3 p-3.5">
-          <div className="flex w-full items-start justify-between gap-3">
-            <button
-              type="button"
-              className="flex flex-1 items-start justify-between gap-3 text-left"
-              aria-expanded={focusExpanded}
-              aria-controls={focusPanelId}
-              onClick={() => setFocusExpanded((prev) => !prev)}
-            >
-              <div>
-                <p className="text-sm font-semibold text-[var(--taali-text)]">Interview focus</p>
-                <p className="text-[11px] text-[var(--taali-muted)]">Manual screening pointers from the job spec.</p>
-              </div>
-              <div className="flex items-center gap-2 text-[11px] text-[var(--taali-muted)]">
-                {role.interview_focus_generated_at ? (
-                  <span className="text-[11px] text-[var(--taali-muted)]">
-                    Updated {new Date(role.interview_focus_generated_at).toLocaleDateString()}
-                  </span>
-                ) : null}
-                <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--taali-text)]">
-                  {focusExpanded ? 'Collapse' : 'Expand'}
-                  {focusExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-                </span>
-              </div>
-            </button>
-            {onRegenerateInterviewFocus ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="xs"
-                disabled={interviewFocusGenerating}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onRegenerateInterviewFocus();
-                }}
-                title="Regenerate interview focus pointers and screening pack"
-              >
-                {interviewFocusGenerating ? (
-                  <Loader2 size={12} className="animate-spin" />
-                ) : (
-                  <RefreshCw size={12} />
-                )}
-                <span className="ml-1">{interviewFocusGenerating ? 'Generating' : 'Regenerate'}</span>
-              </Button>
-            ) : null}
-          </div>
-
-          {focusExpanded ? (
-            <div id={focusPanelId}>
-              {focus?.role_summary ? (
-                <p className="mt-2 text-sm text-[var(--taali-text)]">{focus.role_summary}</p>
-              ) : null}
-
-              {focusTriggers.length > 0 ? (
-                <div className="mt-2.5 flex flex-wrap gap-1.5">
-                  {focusTriggers.map((trigger) => (
-                    <Badge key={trigger} variant="muted">{trigger}</Badge>
-                  ))}
-                </div>
-              ) : null}
-
-              <div className="mt-2.5 space-y-2">
-                {focusQuestions.map((item, index) => (
-                  <Card key={`${item.question}-${index}`} className="border-[var(--taali-border-soft)] bg-[var(--taali-surface-warm)] px-3 py-2">
-                    <p className="text-sm font-semibold text-[var(--taali-text)]">
-                      {`Q${index + 1}. `}
-                      {item.question}
-                    </p>
-                    {Array.isArray(item.what_to_listen_for) && item.what_to_listen_for.length > 0 ? (
-                      <p className="mt-1 text-xs text-[var(--taali-text)]">
-                        <span className="font-semibold text-[var(--taali-text)]">Look for:</span>
-                        {' '}
-                        {item.what_to_listen_for.join(' • ')}
-                      </p>
-                    ) : null}
-                    {Array.isArray(item.concerning_signals) && item.concerning_signals.length > 0 ? (
-                      <p className="mt-1 text-xs text-[var(--taali-muted)]">
-                        <span className="font-semibold text-[var(--taali-text)]">Watch out for:</span>
-                        {' '}
-                        {item.concerning_signals.join(' • ')}
-                      </p>
-                    ) : null}
-                  </Card>
-                ))}
-              </div>
-            </div>
-          ) : null}
-        </Card>
-      ) : jobSpecReady && interviewFocusGenerating ? (
-        <Card className="mt-3 border-[var(--taali-border)] bg-[var(--taali-surface)] p-3 text-sm text-[var(--taali-muted)]">
-          <div className="inline-flex items-center gap-2">
-            <Loader2 size={15} className="animate-spin" />
-            Generating interview focus...
-          </div>
-        </Card>
-      ) : jobSpecReady ? (
-        <Card className="mt-3 border-[var(--taali-border-soft)] p-3 text-sm text-[var(--taali-muted)]">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <span>Interview focus pointers are generated automatically after job spec upload.</span>
-            {onRegenerateInterviewFocus ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                onClick={onRegenerateInterviewFocus}
-              >
-                Retry generation
-              </Button>
-            ) : null}
-          </div>
-        </Card>
-      ) : (
-        <Card className="mt-3 border-[var(--taali-border)] bg-[var(--taali-surface)] p-3.5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="inline-flex items-center gap-2 text-sm text-[var(--taali-muted)]">
-              <Lock size={14} />
-              Upload a job spec to unlock AI interview focus pointers.
-            </div>
-            <Button type="button" variant="secondary" size="sm" onClick={onEditRole}>
-              Upload job spec
-            </Button>
-          </div>
-        </Card>
-      )}
+      {/* Role-level interview focus card removed — interview guidance is per-candidate now,
+          surfaced in the candidate score sheet. The role.interview_focus data still feeds the
+          per-candidate screening pack template under the hood, but it has no dedicated UI. */}
     </Panel>
   );
 };

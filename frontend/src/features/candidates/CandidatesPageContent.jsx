@@ -742,6 +742,70 @@ export const CandidatesPage = ({
     }
   }, [rolesApi, showToast]);
 
+  // Bulk selection state for the candidates table.
+  const [selectedApplicationIds, setSelectedApplicationIds] = useState([]);
+  const [bulkScoreInFlight, setBulkScoreInFlight] = useState(false);
+  const [bulkGuidanceInFlight, setBulkGuidanceInFlight] = useState(false);
+
+  // Reset selection when role context changes — IDs from one role are
+  // meaningless against another's listing.
+  useEffect(() => {
+    setSelectedApplicationIds([]);
+  }, [selectedRoleId]);
+
+  const handleToggleApplicationSelected = useCallback((applicationId, isSelected) => {
+    setSelectedApplicationIds((prev) => {
+      const id = Number(applicationId);
+      if (isSelected) return prev.includes(id) ? prev : [...prev, id];
+      return prev.filter((existing) => Number(existing) !== id);
+    });
+  }, []);
+
+  const handleToggleAllVisibleSelected = useCallback((nextIds) => {
+    setSelectedApplicationIds(Array.isArray(nextIds) ? nextIds.map(Number) : []);
+  }, []);
+
+  const handleScoreSelected = useCallback(async (applicationIds) => {
+    if (!rolesApi?.scoreSelected || !selectedRoleId || !Array.isArray(applicationIds) || applicationIds.length === 0) return;
+    setBulkScoreInFlight(true);
+    try {
+      const res = await rolesApi.scoreSelected(selectedRoleId, applicationIds);
+      const data = res?.data || {};
+      const enqueued = Number(data.enqueued || 0);
+      const skipped = Number(data.skipped_unchanged || 0);
+      if (enqueued === 0 && skipped > 0) {
+        showToast(`No changes since last score — ${skipped} candidate(s) already up to date.`, 'info');
+      } else {
+        showToast(
+          `Scoring ${enqueued} candidate(s)${skipped > 0 ? `; ${skipped} already up to date` : ''}.`,
+          'success',
+        );
+        // Background polling already runs while score_status is pending,
+        // but kick a refresh so the new pending status appears immediately.
+        loadRoleContext(selectedRoleId);
+      }
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to score selected candidates.'), 'error');
+    } finally {
+      setBulkScoreInFlight(false);
+    }
+  }, [rolesApi, selectedRoleId, showToast, loadRoleContext]);
+
+  const handleRefreshGuidanceSelected = useCallback(async (applicationIds) => {
+    if (!rolesApi?.refreshInterviewSupportBulk || !selectedRoleId || !Array.isArray(applicationIds) || applicationIds.length === 0) return;
+    setBulkGuidanceInFlight(true);
+    try {
+      const res = await rolesApi.refreshInterviewSupportBulk(selectedRoleId, applicationIds);
+      const data = res?.data || {};
+      showToast(`Refreshed interview guidance for ${data.refreshed || 0} candidate(s).`, 'success');
+      loadRoleContext(selectedRoleId);
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to refresh interview guidance.'), 'error');
+    } finally {
+      setBulkGuidanceInFlight(false);
+    }
+  }, [rolesApi, selectedRoleId, showToast, loadRoleContext]);
+
   const [refreshingInterviewGuidanceId, setRefreshingInterviewGuidanceId] = useState(null);
   const handleRefreshInterviewGuidance = useCallback(async (application) => {
     if (!rolesApi?.refreshInterviewSupport || !application?.id) return;
@@ -1120,8 +1184,6 @@ export const CandidatesPage = ({
                   onBatchScore={handleBatchScore}
                   onFetchCvs={rolesApi?.fetchCvs ? handleFetchCvs : null}
                   fetchCvsProgress={fetchCvsProgress}
-                  interviewFocusGenerating={String(interviewFocusGeneratingRoleId) === String(selectedRoleId)}
-                  onRegenerateInterviewFocus={rolesApi?.regenerateInterviewFocus ? handleRegenerateInterviewFocus : null}
                 />
                 {loadingTasks ? (
                   <Panel className="px-4 py-3">
@@ -1163,6 +1225,13 @@ export const CandidatesPage = ({
                   uploadingCvId={uploadingCvId}
                   onGenerateTaaliCvAi={handleGenerateTaaliCvAi}
                   onEnrichCandidate={handleEnrichCandidate}
+                  selectedApplicationIds={selectedApplicationIds}
+                  onToggleApplicationSelected={handleToggleApplicationSelected}
+                  onToggleAllVisibleSelected={handleToggleAllVisibleSelected}
+                  onScoreSelected={rolesApi?.scoreSelected ? handleScoreSelected : null}
+                  onRefreshGuidanceSelected={rolesApi?.refreshInterviewSupportBulk ? handleRefreshGuidanceSelected : null}
+                  bulkScoreInFlight={bulkScoreInFlight}
+                  bulkGuidanceInFlight={bulkGuidanceInFlight}
                 />
               </>
             )}

@@ -1456,32 +1456,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               })}
             </div>
 
-            <div className="focus-panel">
-              <h4>Interview <em>focus</em></h4>
-              <p className="sub">
-                Use the generated prompts to pressure-test the strongest signals and close the biggest evidence gaps.
-              </p>
-              {(Array.isArray(role?.interview_focus?.questions) && role.interview_focus.questions.length > 0)
-                ? role.interview_focus.questions.slice(0, 4).map((question, index) => (
-                  <div key={`${question.question}-${index}`} className="focus-item">
-                    <div className="q">Q{index + 1}. {question.question}</div>
-                    <div className="a">
-                      {(question.what_to_listen_for || []).slice(0, 1).join(' ') || 'Look for specific, evidence-backed tradeoffs.'}
-                    </div>
-                  </div>
-                ))
-                : (
-                  <div className="focus-item">
-                    <div className="q">Interview focus not generated yet</div>
-                    <div className="a">Regenerate interview focus after updating criteria so the pipeline stays aligned with the latest recruiter guidance.</div>
-                  </div>
-                )}
-              <div className="row mt-4">
-                <button type="button" className="btn btn-outline btn-sm" onClick={handleRegenerateInterviewFocus} disabled={interviewFocusGenerating}>
-                  {interviewFocusGenerating ? 'Refreshing…' : 'Refresh guidance'}
-                </button>
-              </div>
-            </div>
+            {/* Role-level interview focus panel removed — interview guidance is per-candidate now,
+                surfaced in the candidate score sheet (kit + screening pack). */}
           </div>
         ) : activeView === 'role-fit' ? (
           <div className="role-fit-view">
