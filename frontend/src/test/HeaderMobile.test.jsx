@@ -38,7 +38,7 @@ describe('DashboardNav mobile header', () => {
     const mobileMenu = document.querySelector('.dashboard-nav-mobile');
     expect(mobileMenu).toBeInTheDocument();
     expect(within(mobileMenu).getByText('Sam Patel')).toBeInTheDocument();
-    expect(within(mobileMenu).getByText('DEEPLIGHT_AI')).toBeInTheDocument();
+    expect(within(mobileMenu).getByText('DeepLight AI')).toBeInTheDocument();
 
     const mobileLinks = within(mobileMenu).getAllByRole('menuitem')
       .filter((button) => button.className.includes('dashboard-nav-mobile-link'));

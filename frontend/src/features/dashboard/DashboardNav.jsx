@@ -5,7 +5,7 @@ import { useAuth } from '../../context/AuthContext';
 import { organizations as organizationsApi } from '../../shared/api';
 import { GlobalThemeToggle } from '../../shared/ui/GlobalThemeToggle';
 import { TaaliLines } from '../../shared/ui/Branding';
-import { formatHeaderOrgLabel } from '../../shared/layout/headerIdentity';
+import { formatHeaderOrgLabel, normalizeHeaderOrgName } from '../../shared/layout/headerIdentity';
 
 const pickUserName = (user) => {
   const directName = (user?.full_name || user?.name || '').trim();
@@ -40,7 +40,7 @@ const NAV_ITEMS_LEGACY = [
 export const DashboardNav = ({ currentPage, onNavigate, workflowV2Enabled = false }) => {
   const { user, logout } = useAuth();
   const userName = pickUserName(user);
-  const fallbackOrgName = pickOrganizationName(user);
+  const fallbackOrgName = normalizeHeaderOrgName(pickOrganizationName(user), 'No company');
   const [resolvedOrgName, setResolvedOrgName] = useState(fallbackOrgName);
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -55,10 +55,10 @@ export const DashboardNav = ({ currentPage, onNavigate, workflowV2Enabled = fals
         const response = await organizationsApi.get();
         const orgName = (response?.data?.name || '').trim();
         if (!cancelled) {
-          setResolvedOrgName(orgName || fallbackOrgName || 'No company');
+          setResolvedOrgName(normalizeHeaderOrgName(orgName || fallbackOrgName, 'No company'));
         }
       } catch {
-        if (!cancelled) setResolvedOrgName(fallbackOrgName || 'No company');
+        if (!cancelled) setResolvedOrgName(normalizeHeaderOrgName(fallbackOrgName, 'No company'));
       }
     };
     void loadOrganizationName();
@@ -67,8 +67,8 @@ export const DashboardNav = ({ currentPage, onNavigate, workflowV2Enabled = fals
     };
   }, [fallbackOrgName, user?.id, user?.organization_id]);
 
-  const orgName = resolvedOrgName || 'No company';
-  const orgLabel = formatHeaderOrgLabel(orgName);
+  const orgName = normalizeHeaderOrgName(resolvedOrgName || fallbackOrgName, 'No company');
+  const orgLabel = formatHeaderOrgLabel(orgName, 'No company');
   const navItems = workflowV2Enabled ? NAV_ITEMS_V2 : NAV_ITEMS_LEGACY;
   const homePage = workflowV2Enabled ? 'jobs' : 'assessments';
   const displayName = userName || 'User';

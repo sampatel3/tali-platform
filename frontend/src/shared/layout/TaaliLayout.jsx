@@ -9,7 +9,7 @@ import {
   subscribeThemePreference,
 } from '../../lib/themePreference';
 import { navigateToMarketingSection } from '../../lib/marketingScroll';
-import { formatHeaderOrgLabel } from './headerIdentity';
+import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 
 const APP_TABS = [
   { id: 'jobs', label: 'Jobs' },
@@ -93,11 +93,11 @@ export const ThemeToggleButton = ({ title = 'Toggle theme' }) => {
 
 const AppUser = ({ onNavigate }) => {
   const { user, logout } = useAuth();
-  const fallbackOrgName = resolveOrgName(user);
+  const fallbackOrgName = normalizeHeaderOrgName(resolveOrgName(user), 'No company');
   const [orgName, setOrgName] = useState(() => fallbackOrgName);
   const displayName = resolveUserName(user);
-  const displayOrgName = orgName || fallbackOrgName || 'Taali';
-  const orgLabel = formatHeaderOrgLabel(displayOrgName, 'Taali');
+  const displayOrgName = normalizeHeaderOrgName(orgName || fallbackOrgName, 'No company');
+  const orgLabel = formatHeaderOrgLabel(displayOrgName, 'No company');
   const initials = useMemo(() => initialsFor(displayName, displayOrgName), [displayName, displayOrgName]);
 
   useEffect(() => {
@@ -111,10 +111,10 @@ const AppUser = ({ onNavigate }) => {
         const res = await organizationsApi.get();
         if (!cancelled) {
           const resolved = String(res?.data?.name || '').trim();
-          setOrgName(resolved || fallbackOrgName || 'Taali');
+          setOrgName(normalizeHeaderOrgName(resolved || fallbackOrgName, 'No company'));
         }
       } catch {
-        if (!cancelled) setOrgName(fallbackOrgName || 'Taali');
+        if (!cancelled) setOrgName(normalizeHeaderOrgName(fallbackOrgName, 'No company'));
       }
     };
 

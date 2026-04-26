@@ -540,7 +540,7 @@ describe('AssessmentsPage', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Admin User')).toBeInTheDocument();
-      expect(screen.getByText('ACME_LABS')).toBeInTheDocument();
+      expect(screen.getByText('Acme Labs')).toBeInTheDocument();
     }, { timeout: 5000 });
   });
 
@@ -552,14 +552,14 @@ describe('AssessmentsPage', () => {
     };
     localStorage.setItem('taali_user', JSON.stringify(staleUser));
     auth.me.mockResolvedValue({ data: staleUser });
-    organizationsApi.get.mockResolvedValue({ data: { id: 1, name: 'Taali' } });
+    organizationsApi.get.mockResolvedValue({ data: { id: 1, name: 'DeepLight AI' } });
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
 
     renderAppAt('/assessments');
 
     await waitFor(() => {
       expect(screen.getByText('Sam Patel')).toBeInTheDocument();
-      expect(screen.getByText('TAALI')).toBeInTheDocument();
+      expect(screen.getByText('DeepLight AI')).toBeInTheDocument();
       expect(screen.queryByText('DEEPLIGHT_AI')).not.toBeInTheDocument();
     }, { timeout: 5000 });
   });
