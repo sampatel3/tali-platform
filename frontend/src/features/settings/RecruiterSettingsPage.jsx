@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
-  Bot,
   CreditCard,
   KeyRound,
   Mail,
@@ -253,9 +252,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [billingCredits, setBillingCredits] = useState(null);
   const [billingLoading, setBillingLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
-  const [customClaudeApiKey, setCustomClaudeApiKey] = useState('');
-  const [customClaudeApiKeyTouched, setCustomClaudeApiKeyTouched] = useState(false);
-  const [hasCustomClaudeApiKey, setHasCustomClaudeApiKey] = useState(false);
   const [emailTemplatePreview, setEmailTemplatePreview] = useState(DEFAULT_INVITE_TEMPLATE);
   const [apiSaving, setApiSaving] = useState(false);
   const [firefliesForm, setFirefliesForm] = useState(DEFAULT_FIRELIES_FORM);
@@ -491,9 +487,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setEmailTemplatePreview(
       String(orgData.invite_email_template || '').trim() || DEFAULT_INVITE_TEMPLATE
     );
-    setHasCustomClaudeApiKey(Boolean(orgData.has_custom_claude_api_key));
-    setCustomClaudeApiKey('');
-    setCustomClaudeApiKeyTouched(false);
     const firefliesConfig = orgData.fireflies_config || {};
     setFirefliesForm({
       apiKey: '',
@@ -687,15 +680,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const payload = {
       invite_email_template: String(emailTemplatePreview || '').trim() || null,
     };
-    if (customClaudeApiKeyTouched) {
-      payload.custom_claude_api_key = String(customClaudeApiKey || '').trim();
-    }
     try {
       const res = await orgsApi.update(payload);
       setOrgData((prev) => ({ ...(prev || {}), ...(res?.data || {}) }));
-      setHasCustomClaudeApiKey(Boolean(res?.data?.has_custom_claude_api_key));
-      setCustomClaudeApiKey('');
-      setCustomClaudeApiKeyTouched(false);
       showToast('API key settings saved.', 'success');
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to save API key settings.'), 'error');
@@ -1692,43 +1679,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   subtitle="Workspace-wide API credentials and recruiter email defaults."
                 >
                   <div className="settings-subgrid">
-                    <div className="settings-subcard">
-                      <div className="settings-subcard-head">
-                        <Bot size={18} />
-                        <div>
-                          <h3>Claude key</h3>
-                          <p>Optional workspace-level Claude key used for assessments and scoring.</p>
-                        </div>
-                      </div>
-                      <label className="field">
-                        <span className="k">Custom Claude API key</span>
-                        <input
-                          type="password"
-                          placeholder="Leave blank to keep current key"
-                          value={customClaudeApiKey}
-                          onChange={(event) => {
-                            setCustomClaudeApiKey(event.target.value);
-                            if (!customClaudeApiKeyTouched) setCustomClaudeApiKeyTouched(true);
-                          }}
-                        />
-                      </label>
-                      <div className="settings-chip-row">
-                        <span className={`chip ${hasCustomClaudeApiKey ? 'green' : ''}`}>{hasCustomClaudeApiKey ? 'Configured' : 'Not configured'}</span>
-                        {hasCustomClaudeApiKey ? (
-                          <button
-                            type="button"
-                            className="btn btn-outline btn-sm"
-                            onClick={() => {
-                              setCustomClaudeApiKey('');
-                              setCustomClaudeApiKeyTouched(true);
-                            }}
-                          >
-                            Clear stored key
-                          </button>
-                        ) : null}
-                      </div>
-                    </div>
-
                     <div className="settings-subcard">
                       <div className="settings-subcard-head">
                         <Mail size={18} />

@@ -31,8 +31,6 @@ class Organization(Base):
     billing_provider = Column(String, default="lemon")
     billing_config = Column(JSON, nullable=True)
     credits_balance = Column(Integer, default=0)
-    claude_api_key_encrypted = Column(String, nullable=True)
-    claude_api_key_last_rotated_at = Column(DateTime(timezone=True), nullable=True)
     default_assessment_duration_minutes = Column(Integer, default=30, nullable=False)
     invite_email_template = Column(Text, nullable=True)
     workspace_settings = Column(JSON, nullable=True)
@@ -68,7 +66,3 @@ class Organization(Base):
     def active_claude_scoring_model(self) -> str:
         from ..platform.config import settings
         return settings.resolved_claude_scoring_model
-
-    @property
-    def has_custom_claude_api_key(self) -> bool:
-        return bool((self.claude_api_key_encrypted or "").strip())

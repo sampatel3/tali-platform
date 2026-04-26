@@ -91,11 +91,6 @@ const workableStageLabel = (stage) => (
 const PreferencesSettingsTab = ({
   defaultAssessmentMinutes,
   setDefaultAssessmentMinutes,
-  customClaudeApiKey,
-  setCustomClaudeApiKey,
-  customClaudeApiKeyTouched,
-  setCustomClaudeApiKeyTouched,
-  hasCustomClaudeApiKey,
   emailTemplatePreview,
   setEmailTemplatePreview,
   preferencesSavedAt,
@@ -134,43 +129,6 @@ const PreferencesSettingsTab = ({
       </label>
       <p className="mt-2 text-xs text-[var(--taali-muted)]">
         Applied to newly created assessments.
-      </p>
-    </Panel>
-
-    <Panel className="p-5">
-      <h3 className="mb-3 text-lg font-bold text-[var(--taali-text)]">Custom Claude API Key (Optional)</h3>
-      <label className="block">
-        <span className="mb-1 block font-mono text-xs text-[var(--taali-muted)]">Rotate API key</span>
-        <Input
-          type="password"
-          placeholder="Leave blank to keep current key"
-          value={customClaudeApiKey}
-          onChange={(event) => {
-            setCustomClaudeApiKey(event.target.value);
-            if (!customClaudeApiKeyTouched) setCustomClaudeApiKeyTouched(true);
-          }}
-        />
-      </label>
-      <div className="mt-2 flex flex-wrap items-center gap-2">
-        <Badge variant={hasCustomClaudeApiKey ? 'success' : 'muted'} className="font-mono text-[11px]">
-          {hasCustomClaudeApiKey ? 'Configured' : 'Not configured'}
-        </Badge>
-        {hasCustomClaudeApiKey ? (
-          <Button
-            type="button"
-            variant="secondary"
-            size="sm"
-            onClick={() => {
-              setCustomClaudeApiKey('');
-              setCustomClaudeApiKeyTouched(true);
-            }}
-          >
-            Clear stored key
-          </Button>
-        ) : null}
-      </div>
-      <p className="mt-2 text-xs text-[var(--taali-muted)]">
-        Key is stored encrypted server-side for this workspace.
       </p>
     </Panel>
 
@@ -260,9 +218,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [inviteName, setInviteName] = useState('');
   const [inviteLoading, setInviteLoading] = useState(false);
   const [defaultAssessmentMinutes, setDefaultAssessmentMinutes] = useState(30);
-  const [customClaudeApiKey, setCustomClaudeApiKey] = useState('');
-  const [customClaudeApiKeyTouched, setCustomClaudeApiKeyTouched] = useState(false);
-  const [hasCustomClaudeApiKey, setHasCustomClaudeApiKey] = useState(false);
   const [emailTemplatePreview, setEmailTemplatePreview] = useState(DEFAULT_INVITE_TEMPLATE);
   const [preferencesSaving, setPreferencesSaving] = useState(false);
   const [preferencesSavedAt, setPreferencesSavedAt] = useState(null);
@@ -416,14 +371,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setEmailTemplatePreview(
       String(orgData.invite_email_template || '').trim() || DEFAULT_INVITE_TEMPLATE
     );
-    setHasCustomClaudeApiKey(Boolean(orgData.has_custom_claude_api_key));
-    setCustomClaudeApiKey('');
-    setCustomClaudeApiKeyTouched(false);
   }, [
     orgData?.id,
     orgData?.default_assessment_duration_minutes,
     orgData?.invite_email_template,
-    orgData?.has_custom_claude_api_key,
   ]);
 
   const handleAddCredits = async (packId) => {
@@ -910,9 +861,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       default_assessment_duration_minutes: clampedMinutes,
       invite_email_template: trimmedTemplate || null,
     };
-    if (customClaudeApiKeyTouched) {
-      payload.custom_claude_api_key = String(customClaudeApiKey || '').trim();
-    }
 
     setPreferencesSaving(true);
     try {
@@ -925,9 +873,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       setEmailTemplatePreview(
         String(updated.invite_email_template || '').trim() || DEFAULT_INVITE_TEMPLATE
       );
-      setHasCustomClaudeApiKey(Boolean(updated.has_custom_claude_api_key));
-      setCustomClaudeApiKey('');
-      setCustomClaudeApiKeyTouched(false);
       setPreferencesSavedAt(new Date().toISOString());
       showToast('Preferences saved.', 'success');
     } catch (err) {
@@ -1831,11 +1776,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               <PreferencesSettingsTab
                 defaultAssessmentMinutes={defaultAssessmentMinutes}
                 setDefaultAssessmentMinutes={setDefaultAssessmentMinutes}
-                customClaudeApiKey={customClaudeApiKey}
-                setCustomClaudeApiKey={setCustomClaudeApiKey}
-                customClaudeApiKeyTouched={customClaudeApiKeyTouched}
-                setCustomClaudeApiKeyTouched={setCustomClaudeApiKeyTouched}
-                hasCustomClaudeApiKey={hasCustomClaudeApiKey}
                 emailTemplatePreview={emailTemplatePreview}
                 setEmailTemplatePreview={setEmailTemplatePreview}
                 preferencesSavedAt={preferencesSavedAt}

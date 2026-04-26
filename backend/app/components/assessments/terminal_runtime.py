@@ -13,7 +13,6 @@ from ...models.assessment import Assessment
 from ...models.organization import Organization
 from ...models.task import Task
 from ...platform.config import settings
-from ...platform.secrets import decrypt_text
 from ...services.assessment_repository_service import AssessmentRepositoryService
 from ...services.task_catalog import workspace_repo_root as canonical_workspace_repo_root
 from .repository import append_assessment_timeline_event, utcnow
@@ -60,21 +59,13 @@ def workspace_repo_root(task: Task) -> str:
     return canonical_workspace_repo_root(task)
 
 
-def _resolve_claude_api_key(org: Organization | None) -> str:
-    # Prefer org-scoped key when present.
-    encrypted = getattr(org, "claude_api_key_encrypted", None) if org else None
-    if encrypted:
-        decrypted = decrypt_text(encrypted, settings.SECRET_KEY)
-        if decrypted:
-            return decrypted
-
-    if settings.ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK:
-        return settings.ANTHROPIC_API_KEY or ""
-    return ""
-
-
 def terminal_env(org: Organization | None) -> dict[str, str]:
-    key = (_resolve_claude_api_key(org) or "").strip()
+    # Taali pays Anthropic for all Claude usage on the platform; customers do
+    # not bring their own key. The org parameter is retained for future
+    # per-org policy hooks (e.g. budgets, model overrides) but is not used to
+    # source the key.
+    del org
+    key = (settings.ANTHROPIC_API_KEY or "").strip() if settings.ASSESSMENT_TERMINAL_ALLOW_GLOBAL_KEY_FALLBACK else ""
     envs: dict[str, str] = {}
     # Never allow interactive login prompts in candidate sessions.
     envs["CLAUDE_CODE_SKIP_AUTH_LOGIN"] = "1"

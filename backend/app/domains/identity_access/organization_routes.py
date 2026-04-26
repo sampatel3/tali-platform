@@ -302,10 +302,6 @@ def update_my_org(
     if data.invite_email_template is not None:
         template = (data.invite_email_template or "").strip()
         org.invite_email_template = template or None
-    if data.custom_claude_api_key is not None:
-        key = (data.custom_claude_api_key or "").strip()
-        org.claude_api_key_encrypted = encrypt_text(key, settings.SECRET_KEY) if key else None
-        org.claude_api_key_last_rotated_at = datetime.now(timezone.utc)
     if org.saml_enabled and not org.saml_metadata_url:
         raise HTTPException(status_code=400, detail="saml_metadata_url is required when saml_enabled is true")
     try:

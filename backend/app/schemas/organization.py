@@ -134,7 +134,6 @@ class OrgResponse(BaseModel):
     credits_balance: int = 0
     default_assessment_duration_minutes: int = 30
     invite_email_template: Optional[str] = None
-    has_custom_claude_api_key: bool = False
     workspace_settings: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
     scoring_policy: ScoringPolicy = Field(default_factory=ScoringPolicy)
     ai_tooling_config: AiToolingConfig = Field(default_factory=AiToolingConfig)
@@ -166,7 +165,6 @@ class OrgUpdate(BaseModel):
     recruiter_workflow_v2_enabled: Optional[bool] = None
     default_assessment_duration_minutes: Optional[int] = Field(default=None, ge=15, le=180)
     invite_email_template: Optional[str] = Field(default=None, max_length=10000)
-    custom_claude_api_key: Optional[str] = Field(default=None, min_length=0, max_length=2000)
 
 
 class WorkableConnect(BaseModel):

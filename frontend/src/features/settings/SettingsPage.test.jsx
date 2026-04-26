@@ -56,7 +56,6 @@ const baseOrgData = {
   plan: 'pay_per_use',
   default_assessment_duration_minutes: 30,
   invite_email_template: 'Hi {{candidate_name}}, your TAALI assessment is ready: {{assessment_link}}',
-  has_custom_claude_api_key: false,
   candidate_feedback_enabled: true,
   recruiter_workflow_v2_enabled: true,
   allowed_email_domains: [],
@@ -129,7 +128,7 @@ describe('SettingsPage recruiter surface', () => {
       expect(screen.getByRole('heading', { name: /API keys/i })).toBeInTheDocument();
     });
 
-    expect(screen.getByText('Claude key')).toBeInTheDocument();
+    expect(screen.getByText('Invite template')).toBeInTheDocument();
     expect(screen.getByText('Fireflies transcript ingestion')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Save API key settings' })).toBeInTheDocument();
   });

@@ -189,11 +189,6 @@ def _sanitize_candidate_response(text: str) -> str:
     return raw
 
 
-def _resolve_assessment_api_key(org: Organization | None) -> str:
-    env = terminal_env(org)
-    return str(env.get("ANTHROPIC_API_KEY") or "").strip()
-
-
 @router.post("/{assessment_id}/claude")
 def chat_with_claude(
     assessment_id: int,
@@ -212,7 +207,7 @@ def chat_with_claude(
         is_demo=bool(getattr(assessment, "is_demo", False)),
         task_budget_limit_usd=getattr(task, "claude_budget_limit_usd", None),
     )
-    api_key = _resolve_assessment_api_key(org)
+    api_key = str(terminal_env(org).get("ANTHROPIC_API_KEY") or "").strip()
     if not api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
