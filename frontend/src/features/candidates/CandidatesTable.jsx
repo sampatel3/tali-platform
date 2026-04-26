@@ -537,11 +537,21 @@ export const CandidatesTable = ({
                       if (column === 'taali_ai') {
                         const scorePayload = getPrimaryScorePayload(application);
                         const scoreStatus = application?.score_status;
-                        const needsRescore = scoreStatus === 'stale' || scoreStatus === 'error';
+                        const hasScore = typeof scorePayload.score === 'number';
+                        const isStale = scoreStatus === 'stale';
+                        const isError = scoreStatus === 'error';
                         const rescoreInFlight =
                           Number(generatingTaaliId) === Number(application.id)
                           || scoreStatus === 'pending'
                           || scoreStatus === 'running';
+                        const canTriggerScore = onGenerateTaaliCvAi && application.cv_filename;
+                        const buttonLabel = rescoreInFlight
+                          ? 'Scoring…'
+                          : isError
+                            ? 'Retry score'
+                            : (isStale || hasScore)
+                              ? 'Rescore'
+                              : 'Score';
                         return (
                           <td key={column} className="px-3 py-2">
                             <div className="flex flex-col items-center gap-2 text-center">
@@ -555,7 +565,7 @@ export const CandidatesTable = ({
                               <div className="max-w-[80px] text-[11px] leading-4 text-[var(--taali-muted)]" title={renderPrimaryScore(application)}>
                                 {renderModeLabel(application)}
                               </div>
-                              {needsRescore && onGenerateTaaliCvAi && application.cv_filename ? (
+                              {canTriggerScore ? (
                                 <button
                                   type="button"
                                   className="text-[10px] font-semibold uppercase tracking-wide text-[var(--taali-purple)] underline-offset-2 hover:underline disabled:opacity-50"
@@ -565,7 +575,7 @@ export const CandidatesTable = ({
                                     onGenerateTaaliCvAi(application);
                                   }}
                                 >
-                                  {rescoreInFlight ? 'Scoring…' : 'Rescore'}
+                                  {buttonLabel}
                                 </button>
                               ) : null}
                             </div>

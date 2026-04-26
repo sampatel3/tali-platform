@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
-import { BriefcaseBusiness, ChevronDown, ChevronUp, FileText, Loader2, Sparkles, Download, Lock } from 'lucide-react';
+import { BriefcaseBusiness, ChevronDown, ChevronUp, FileText, Loader2, RefreshCw, Sparkles, Download, Lock } from 'lucide-react';
 
 import {
   Badge,
@@ -237,29 +237,51 @@ export const RoleSummaryHeader = ({
 
       {hasInterviewFocus ? (
         <Card className="mt-3 p-3.5">
-          <button
-            type="button"
-            className="flex w-full items-start justify-between gap-3 text-left"
-            aria-expanded={focusExpanded}
-            aria-controls={focusPanelId}
-            onClick={() => setFocusExpanded((prev) => !prev)}
-          >
-            <div>
-              <p className="text-sm font-semibold text-[var(--taali-text)]">Interview focus</p>
-              <p className="text-[11px] text-[var(--taali-muted)]">Manual screening pointers from the job spec.</p>
-            </div>
-            <div className="flex items-center gap-2 text-[11px] text-[var(--taali-muted)]">
-              {role.interview_focus_generated_at ? (
-                <span className="text-[11px] text-[var(--taali-muted)]">
-                  Updated {new Date(role.interview_focus_generated_at).toLocaleDateString()}
+          <div className="flex w-full items-start justify-between gap-3">
+            <button
+              type="button"
+              className="flex flex-1 items-start justify-between gap-3 text-left"
+              aria-expanded={focusExpanded}
+              aria-controls={focusPanelId}
+              onClick={() => setFocusExpanded((prev) => !prev)}
+            >
+              <div>
+                <p className="text-sm font-semibold text-[var(--taali-text)]">Interview focus</p>
+                <p className="text-[11px] text-[var(--taali-muted)]">Manual screening pointers from the job spec.</p>
+              </div>
+              <div className="flex items-center gap-2 text-[11px] text-[var(--taali-muted)]">
+                {role.interview_focus_generated_at ? (
+                  <span className="text-[11px] text-[var(--taali-muted)]">
+                    Updated {new Date(role.interview_focus_generated_at).toLocaleDateString()}
+                  </span>
+                ) : null}
+                <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--taali-text)]">
+                  {focusExpanded ? 'Collapse' : 'Expand'}
+                  {focusExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                 </span>
-              ) : null}
-              <span className="inline-flex items-center gap-1.5 font-semibold text-[var(--taali-text)]">
-                {focusExpanded ? 'Collapse' : 'Expand'}
-                {focusExpanded ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-              </span>
-            </div>
-          </button>
+              </div>
+            </button>
+            {onRegenerateInterviewFocus ? (
+              <Button
+                type="button"
+                variant="secondary"
+                size="xs"
+                disabled={interviewFocusGenerating}
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onRegenerateInterviewFocus();
+                }}
+                title="Regenerate interview focus pointers and screening pack"
+              >
+                {interviewFocusGenerating ? (
+                  <Loader2 size={12} className="animate-spin" />
+                ) : (
+                  <RefreshCw size={12} />
+                )}
+                <span className="ml-1">{interviewFocusGenerating ? 'Generating' : 'Regenerate'}</span>
+              </Button>
+            ) : null}
+          </div>
 
           {focusExpanded ? (
             <div id={focusPanelId}>
