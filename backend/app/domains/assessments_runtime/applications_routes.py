@@ -326,6 +326,11 @@ def _application_sort_value(item: ApplicationDetailResponse, sort_by: str):
     if sort_by == "taali_score":
         normalized = _normalize_taali_score_for_filter(item.taali_score)
         return normalized if normalized is not None else float("-inf")
+    if sort_by == "cv_match_score":
+        return getattr(item, "cv_match_score", None) if getattr(item, "cv_match_score", None) is not None else float("-inf")
+    if sort_by == "cv_match_scored_at":
+        scored_at = getattr(item, "cv_match_scored_at", None)
+        return scored_at or datetime.min.replace(tzinfo=timezone.utc)
     if sort_by == "created_at":
         return item.created_at or datetime.min.replace(tzinfo=timezone.utc)
     return (
@@ -469,6 +474,24 @@ def _application_order_columns(sort_by: str, sort_order: str):
         primary = func.coalesce(
             CandidateApplication.taali_score_cache_100,
             -1.0 if reverse else 101.0,
+        )
+    elif sort_by == "cv_match_score":
+        primary = func.coalesce(
+            CandidateApplication.cv_match_score,
+            -1.0 if reverse else 101.0,
+        )
+    elif sort_by == "cv_match_scored_at":
+        # "Newest scored first" — recently scored apps float to the top.
+        # NULLs sort last in either direction so unscored candidates don't
+        # crowd the top during an active batch.
+        unscored_anchor = (
+            datetime.min.replace(tzinfo=timezone.utc)
+            if reverse
+            else datetime.max.replace(tzinfo=timezone.utc)
+        )
+        primary = func.coalesce(
+            CandidateApplication.cv_match_scored_at,
+            unscored_anchor,
         )
     elif sort_by == "created_at":
         primary = CandidateApplication.created_at
@@ -661,7 +684,10 @@ def create_application(
 @router.get("/roles/{role_id}/applications")
 def list_role_applications(
     role_id: int,
-    sort_by: str = Query(default="pre_screen_score", pattern="^(pre_screen_score|rank_score|workable_score|cv_match_score|taali_score|created_at)$"),
+    sort_by: str = Query(
+        default="pre_screen_score",
+        pattern="^(pre_screen_score|rank_score|workable_score|cv_match_score|cv_match_scored_at|taali_score|created_at)$",
+    ),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
     min_pre_screen_score: float | None = Query(default=None),
     min_rank_score: float | None = Query(default=None),
@@ -1076,7 +1102,10 @@ def list_applications_global(
     application_outcome: str | None = Query(default=None),
     application_outcomes: str | None = Query(default=None),
     search: str | None = Query(default=None),
-    sort_by: str = Query(default="pre_screen_score", pattern="^(pre_screen_score|pipeline_stage_updated_at|created_at|taali_score)$"),
+    sort_by: str = Query(
+        default="pre_screen_score",
+        pattern="^(pre_screen_score|pipeline_stage_updated_at|created_at|taali_score|cv_match_score|cv_match_scored_at)$",
+    ),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
     min_pre_screen_score: float | None = Query(default=None, ge=0, le=100),
     min_taali_score: float | None = Query(default=None, ge=0, le=100),
@@ -1247,7 +1276,10 @@ def get_role_pipeline(
     stages: str | None = Query(default=None),
     source: str | None = Query(default=None, pattern="^(manual|workable)$"),
     search: str | None = Query(default=None),
-    sort_by: str = Query(default="pre_screen_score", pattern="^(pre_screen_score|pipeline_stage_updated_at|created_at|taali_score)$"),
+    sort_by: str = Query(
+        default="pre_screen_score",
+        pattern="^(pre_screen_score|pipeline_stage_updated_at|created_at|taali_score|cv_match_score|cv_match_scored_at)$",
+    ),
     sort_order: str = Query(default="desc", pattern="^(asc|desc)$"),
     min_pre_screen_score: float | None = Query(default=None, ge=0, le=100),
     min_taali_score: float | None = Query(default=None, ge=0, le=100),
