@@ -245,6 +245,76 @@ const truncateSentence = (value = '', maxLength = 430) => {
   return `${truncated}…`;
 };
 
+const SUMMARY_STOP_WORDS = new Set([
+  'and',
+  'for',
+  'from',
+  'into',
+  'of',
+  'our',
+  'the',
+  'this',
+  'through',
+  'to',
+  'with',
+  'within',
+  'you',
+  'your',
+]);
+
+const tokenizeSummaryText = (value = '') => stripMarkdownSyntax(value)
+  .toLowerCase()
+  .replace(/[^a-z0-9]+/g, ' ')
+  .split(/\s+/)
+  .filter((token) => token.length > 2 && !SUMMARY_STOP_WORDS.has(token));
+
+const isSummaryParagraph = (line = '') => {
+  const text = stripMarkdownSyntax(line);
+  if (!text || /^[-•]\s+/.test(line) || getSpecSectionCue(text)) return false;
+  const words = text.split(/\s+/).filter(Boolean);
+  if (text.length < 80 || words.length < 12) return false;
+  if (/^[A-Z]{2,}\d{2,}$/i.test(text)) return false;
+  return /[.!?]$/.test(text);
+};
+
+const scoreSummaryParagraph = (line = '', roleName = '', index = 0) => {
+  if (!isSummaryParagraph(line)) return Number.NEGATIVE_INFINITY;
+
+  const text = stripMarkdownSyntax(line);
+  const lowered = text.toLowerCase();
+  const normalizedRoleName = stripMarkdownSyntax(roleName).toLowerCase();
+  const roleTokens = [...new Set(tokenizeSummaryText(roleName))];
+  const lineTokens = new Set(tokenizeSummaryText(text));
+  const roleTokenMatches = roleTokens.filter((token) => lineTokens.has(token)).length;
+
+  let score = 0;
+  if (normalizedRoleName && lowered.includes(normalizedRoleName)) score += 90;
+  score += roleTokenMatches * 18;
+  if (roleTokens.length && roleTokenMatches / roleTokens.length >= 0.5) score += 24;
+  if (/\b(the|this)\s+(role|position)\b/i.test(text)) score += 26;
+  if (/\b(responsible|accountability|serve|primary link|core member|leadership|delivery excellence|end-to-end)\b/i.test(text)) score += 22;
+  if (/\b(company|consultancy|clients|organizations|partner|we deliver|we empower|our clients)\b/i.test(text)) score -= 16;
+  return score - index;
+};
+
+const selectRoleSummary = (lines = [], roleName = '') => {
+  const candidates = lines
+    .map((line, index) => ({
+      line,
+      index,
+      score: scoreSummaryParagraph(line, roleName, index),
+    }))
+    .filter((item) => Number.isFinite(item.score))
+    .sort((a, b) => b.score - a.score);
+
+  if (candidates.length) {
+    const strongest = candidates[0];
+    if (strongest.score > 0) return strongest.line;
+  }
+
+  return lines.find(isSummaryParagraph) || lines.find((line) => !/^[-•]\s+/.test(line)) || '';
+};
+
 const normalizeSpecText = (raw = '') => String(raw || '')
   .replace(/\r\n/g, '\n')
   .replace(/\\n/g, '\n')
@@ -451,8 +521,7 @@ const parseJobSpec = (raw = '', roleName = '') => {
 
   const canonicalSections = canonicalizeSpecSections(cleanedSections);
   const descriptionSection = canonicalSections.find((section) => section.title === 'Description') || canonicalSections[0];
-  const summarySource = descriptionSection?.lines.find((line) => !/^[-•]\s+/.test(line)) || descriptionSection?.lines[0] || '';
-  void roleName;
+  const summarySource = selectRoleSummary(descriptionSection?.lines || [], roleName || title);
 
   return {
     title,

@@ -150,6 +150,8 @@ DeepLight AI is a specialist AI and data consultancy dedicated to transforming t
 
 DeepLight AI is a specialist AI and data consultancy dedicated to transforming the regional corporate landscape.
 
+The Portfolio Lead and Business Manager is a high-impact leadership position responsible for the end-to-end operational, financial, and delivery excellence of the Data Platform. As a core member of the Senior Leadership Team, this role carries a high degree of organizational authority and accountability, requiring an individual who can command respect across technical and financial functions while demonstrating rigorous management over the platform's most critical strategic assets. You will serve as the primary link between technical engineering teams and corporate functions, ensuring that resources are optimized, budgets are controlled, and strategic programs are delivered with rigorous governance.
+
 Your responsibilities within this role will include;
 Financial & Resource Management
 Delivery Governance & Leadership
@@ -170,7 +172,8 @@ Banking transformation experience
 
     expect(screen.getByText('Dubai, United Arab Emirates')).toBeInTheDocument();
     expect(screen.queryByText(/\*\*Location:\*\*/)).not.toBeInTheDocument();
-    expect(container.querySelector('.role-desc-summary')).toHaveTextContent(/DeepLight AI is a specialist AI and data consultancy/i);
+    expect(container.querySelector('.role-desc-summary')).toHaveTextContent(/The Portfolio Lead and Business Manager is a high-impact leadership position/i);
+    expect(container.querySelector('.role-desc-summary')).not.toHaveTextContent(/DeepLight AI is a specialist AI and data consultancy/i);
     expect(screen.queryByText(/keeps recruiter scoring/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Read full description/i }));
@@ -187,6 +190,7 @@ Banking transformation experience
     expect(sectionTitle('Requirements')).toBeInTheDocument();
     expect(sectionTitle('Benefits')).toBeInTheDocument();
     expect(screen.getAllByText(/DeepLight AI is a specialist AI and data consultancy/i)).toHaveLength(1);
+    expect(screen.getAllByText(/The Portfolio Lead and Business Manager is a high-impact leadership position/i)).toHaveLength(1);
     expect(screen.getByText(/Your responsibilities within this role will include/i)).toBeInTheDocument();
     expect(screen.getByText(/Financial & Resource Management/i).closest('li')).toBeInTheDocument();
     expect(screen.getByText(/Delivery Governance & Leadership/i).closest('li')).toBeInTheDocument();
