@@ -278,6 +278,14 @@ app.include_router(roles_router, prefix="/api/v1")
 app.include_router(scoring_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
 
+# cv_match_v3.0 admin + override surface (gated server-side; flag controls runner)
+from .cv_matching.routes import (
+    admin_router as cv_match_admin_router,
+    override_router as cv_match_override_router,
+)
+app.include_router(cv_match_admin_router, prefix="/api/v1")
+app.include_router(cv_match_override_router, prefix="/api/v1")
+
 
 @app.get("/health")
 def health_check():
