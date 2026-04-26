@@ -108,6 +108,14 @@ def _exec_uvicorn(port: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Dispatch to the worker bootstrap when this same image is used as the
+    # Celery worker service. Railway lets us share one image across services
+    # so we don't have to maintain two railway.json files; the worker service
+    # sets TALI_SERVICE_MODE=worker.
+    if os.environ.get("TALI_SERVICE_MODE", "web").lower() == "worker":
+        from .railway_worker_start import main as worker_main
+        return worker_main()
+
     parser = argparse.ArgumentParser(description="Bootstrap Railway web startup safely.")
     parser.add_argument(
         "--check-only",
