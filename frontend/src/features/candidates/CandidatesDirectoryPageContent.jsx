@@ -44,11 +44,16 @@ const OUTCOME_OPTIONS = [
   { value: 'hired', label: 'Hired' },
 ];
 const SORT_OPTIONS = [
+  { value: 'cv_match_scored_at:desc', label: 'Recently scored (newest first)' },
+  { value: 'cv_match_score:desc', label: 'CV match score (high to low)' },
+  { value: 'cv_match_score:asc', label: 'CV match score (low to high)' },
   { value: 'pre_screen_score:desc', label: 'Pre-screen score (high to low)' },
   { value: 'pre_screen_score:asc', label: 'Pre-screen score (low to high)' },
-  { value: 'pipeline_stage_updated_at:desc', label: 'Recent activity' },
   { value: 'taali_score:desc', label: 'TAALI score (high to low)' },
   { value: 'taali_score:asc', label: 'TAALI score (low to high)' },
+  { value: 'created_at:desc', label: 'Submitted (newest first)' },
+  { value: 'created_at:asc', label: 'Submitted (oldest first)' },
+  { value: 'pipeline_stage_updated_at:desc', label: 'Recent activity' },
 ];
 const STAGE_COUNT_DEFAULTS = {
   all: 0,
@@ -1480,6 +1485,29 @@ export const CandidatesDirectoryPage = ({
             <ArrowRight size={10} />
             From Workable
           </button>
+
+          <label className="filter-chip" style={{ cursor: 'pointer', padding: 0 }}>
+            <span style={{ padding: '0 6px 0 12px', fontSize: 11, color: 'var(--mute)', whiteSpace: 'nowrap' }}>Sort:</span>
+            <select
+              value={sortOption}
+              onChange={(event) => setSortOption(event.target.value)}
+              aria-label="Sort candidates"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                outline: 'none',
+                fontSize: 12,
+                padding: '6px 12px 6px 0',
+                cursor: 'pointer',
+                color: 'inherit',
+                appearance: 'none',
+              }}
+            >
+              {SORT_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
 
           <button type="button" className="filter-chip" disabled title="Additional recruiter filters are coming next.">
             + Add filter
