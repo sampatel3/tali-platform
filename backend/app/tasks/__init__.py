@@ -7,6 +7,14 @@ from .assessment_tasks import (
     cleanup_expired_assessments,
     sync_workable_orgs,
 )
+# Eager-import scoring_tasks so Celery autodiscover registers the
+# score_application_job + batch_score_role tasks on the worker. Without
+# this, dispatched scoring jobs land in the queue but the worker drops
+# them with "Received unregistered task" and silently discards.
+from .scoring_tasks import (
+    batch_score_role,
+    score_application_job,
+)
 from .workable_tasks import run_workable_sync_run_task
 
 __all__ = [
@@ -17,5 +25,7 @@ __all__ = [
     "post_results_to_workable",
     "cleanup_expired_assessments",
     "sync_workable_orgs",
+    "score_application_job",
+    "batch_score_role",
     "run_workable_sync_run_task",
 ]
