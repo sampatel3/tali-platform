@@ -2078,6 +2078,7 @@ def score_selected_applications(
     enqueued = 0
     skipped = 0
     not_eligible = 0
+    needs_cv_fetch: list[int] = []
     for app in apps:
         # Skip done rows on default runs — cache would no-op anyway, but this
         # keeps the cv_score_jobs log clean and respects "only rescore on
@@ -2089,6 +2090,18 @@ def score_selected_applications(
         ):
             skipped += 1
             continue
+
+        # Workable applications without CV text yet: queue for background
+        # fetch+score so the recruiter doesn't have to click Fetch CVs first.
+        # The fetch happens off the request thread; the score is enqueued
+        # immediately after the CV lands.
+        if (
+            not (app.cv_text or "").strip()
+            and (app.source or "") == "workable"
+        ):
+            needs_cv_fetch.append(app.id)
+            continue
+
         job = enqueue_score(db, app, force=force)
         if job is None:
             not_eligible += 1
@@ -2101,12 +2114,87 @@ def score_selected_applications(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to enqueue scoring jobs")
 
+    if needs_cv_fetch:
+        threading.Thread(
+            target=_run_fetch_then_score,
+            args=(needs_cv_fetch, current_user.organization_id),
+            kwargs={"force": force},
+            daemon=True,
+        ).start()
+
     return {
         "status": "enqueued",
         "requested": len(application_ids),
         "enqueued": enqueued,
         "skipped_unchanged": skipped,
         "not_eligible": not_eligible,
+        "auto_fetching": len(needs_cv_fetch),
+    }
+
+
+@router.post("/roles/{role_id}/applications/fetch-cvs-selected")
+def fetch_cvs_selected_applications(
+    role_id: int,
+    payload: dict = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Fetch CVs from Workable for a specific list of application IDs.
+
+    Body: ``{"application_ids": [1, 2, 3]}``
+
+    Mirrors ``/roles/{role_id}/fetch-cvs`` but scoped to a recruiter's
+    selection rather than the whole role. Runs in a background thread —
+    this endpoint returns immediately. Already-CV'd apps are no-ops.
+    """
+    payload = payload or {}
+    raw_ids = payload.get("application_ids") or []
+    if not isinstance(raw_ids, list) or not raw_ids:
+        raise HTTPException(status_code=400, detail="application_ids is required")
+    try:
+        application_ids = [int(x) for x in raw_ids]
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="application_ids must be integers")
+
+    get_role(role_id, current_user.organization_id, db)
+    org = (
+        db.query(Organization)
+        .filter(Organization.id == current_user.organization_id)
+        .first()
+    )
+    if not org or not org.workable_connected:
+        raise HTTPException(status_code=400, detail="Workable is not connected")
+
+    apps = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id.in_(application_ids),
+            CandidateApplication.organization_id == current_user.organization_id,
+            CandidateApplication.role_id == role_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .all()
+    )
+    fetchable = [
+        a.id
+        for a in apps
+        if not (a.cv_text or "").strip() and (a.source or "") == "workable"
+    ]
+    already_present = sum(1 for a in apps if (a.cv_text or "").strip())
+
+    if fetchable:
+        threading.Thread(
+            target=_run_fetch_then_score,
+            args=(fetchable, current_user.organization_id),
+            kwargs={"score_after": False},
+            daemon=True,
+        ).start()
+
+    return {
+        "status": "started" if fetchable else "noop",
+        "requested": len(application_ids),
+        "fetching": len(fetchable),
+        "already_present": already_present,
     }
 
 
@@ -2194,6 +2282,67 @@ def batch_score_status(
 # ---------------------------------------------------------------------------
 # Batch CV fetch (from Workable, no scoring)
 # ---------------------------------------------------------------------------
+
+
+def _run_fetch_then_score(
+    application_ids: list[int],
+    org_id: int,
+    *,
+    score_after: bool = True,
+    force: bool = False,
+) -> None:
+    """Background worker: fetch CVs for a specific application list, then
+    optionally enqueue scoring for each.
+
+    Used by:
+      - ``/roles/{role_id}/applications/score-selected`` when some selected
+        applications are missing CV text — the endpoint returns immediately
+        with ``auto_fetching: N`` and this thread fetches + scores in the
+        background.
+      - ``/roles/{role_id}/applications/fetch-cvs-selected`` for the
+        standalone "Fetch CVs" bulk action (``score_after=False``).
+    """
+    db = SessionLocal()
+    try:
+        org = db.query(Organization).filter(Organization.id == org_id).first()
+        if not org:
+            return
+        apps = (
+            db.query(CandidateApplication)
+            .options(joinedload(CandidateApplication.candidate))
+            .filter(
+                CandidateApplication.id.in_(application_ids),
+                CandidateApplication.organization_id == org_id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .all()
+        )
+        for app in apps:
+            try:
+                if not (app.cv_text or "").strip():
+                    if app.candidate and (app.candidate.cv_text or "").strip():
+                        # Candidate has a CV at the candidate level — promote it
+                        # to the application row.
+                        app.cv_file_url = app.candidate.cv_file_url
+                        app.cv_filename = app.candidate.cv_filename
+                        app.cv_text = app.candidate.cv_text
+                        app.cv_uploaded_at = app.candidate.cv_uploaded_at
+                    elif (app.source or "") == "workable":
+                        _try_fetch_cv_from_workable(app, app.candidate, db, org)
+                if score_after and (app.cv_text or "").strip():
+                    enqueue_score(db, app, force=force)
+            except Exception:
+                logger.exception(
+                    "Background fetch+score failed for application_id=%s", app.id
+                )
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+    except Exception:
+        logger.exception("_run_fetch_then_score failed for org_id=%s", org_id)
+    finally:
+        db.close()
 
 
 def _run_batch_fetch_cvs(role_id: int, org_id: int) -> None:

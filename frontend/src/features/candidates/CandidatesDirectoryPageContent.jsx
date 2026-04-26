@@ -1099,23 +1099,34 @@ export const CandidatesDirectoryPage = ({
       let totalEnqueued = 0;
       let totalSkipped = 0;
       let totalNotEligible = 0;
+      let totalAutoFetching = 0;
       for (const [roleId, applicationIds] of byRole) {
         const res = await rolesApi.scoreSelected(roleId, applicationIds);
         const data = res?.data || {};
         totalEnqueued += Number(data.enqueued || 0);
         totalSkipped += Number(data.skipped_unchanged || 0);
         totalNotEligible += Number(data.not_eligible || 0);
+        totalAutoFetching += Number(data.auto_fetching || 0);
       }
-      if (totalEnqueued > 0) {
-        const skippedSuffix = totalSkipped > 0 ? `; ${totalSkipped} already up to date` : '';
-        const notEligibleSuffix = totalNotEligible > 0
-          ? `; ${totalNotEligible} skipped (no CV on file — try Fetch CVs first)`
-          : '';
-        showToast(`Scoring ${totalEnqueued} candidate(s)${skippedSuffix}${notEligibleSuffix}.`, 'success');
+      const skippedSuffix = totalSkipped > 0 ? `; ${totalSkipped} already up to date` : '';
+      const fetchingSuffix = totalAutoFetching > 0
+        ? `; fetching CVs and scoring ${totalAutoFetching} more in the background`
+        : '';
+      const notEligibleSuffix = totalNotEligible > 0
+        ? `; ${totalNotEligible} skipped (no CV available)`
+        : '';
+      if (totalEnqueued > 0 || totalAutoFetching > 0) {
+        const headline = totalEnqueued > 0
+          ? `Scoring ${totalEnqueued} candidate(s)`
+          : `Fetching CVs and scoring ${totalAutoFetching} candidate(s)`;
+        const tail = totalEnqueued > 0
+          ? `${skippedSuffix}${fetchingSuffix}${notEligibleSuffix}`
+          : `${skippedSuffix}${notEligibleSuffix}`;
+        showToast(`${headline}${tail}.`, 'success');
         loadApplications({});
       } else if (totalNotEligible > 0) {
         showToast(
-          `No CV on file for ${totalNotEligible} candidate(s). Run Fetch CVs from Workable first, then re-score.`,
+          `No CV available for ${totalNotEligible} candidate(s) and they aren't linked to Workable. Upload CVs first, then re-score.`,
           'info',
         );
       } else if (totalSkipped > 0) {
@@ -1127,6 +1138,50 @@ export const CandidatesDirectoryPage = ({
       showToast(getErrorMessage(err, 'Failed to score selected candidates.'), 'error');
     } finally {
       setBulkScoreInFlight(false);
+    }
+  }, [selectedApplicationIdSet, applications, rolesApi, showToast, loadApplications]);
+
+  const [bulkFetchCvsInFlight, setBulkFetchCvsInFlight] = useState(false);
+  const handleFetchCvsSelected = useCallback(async () => {
+    const ids = Array.from(selectedApplicationIdSet).map(Number);
+    if (ids.length === 0 || !rolesApi?.fetchCvsSelected) return;
+
+    const byRole = new Map();
+    for (const app of applications) {
+      const id = Number(app?.id);
+      if (!ids.includes(id)) continue;
+      const roleId = app?.role_id;
+      if (!roleId) continue;
+      if (!byRole.has(roleId)) byRole.set(roleId, []);
+      byRole.get(roleId).push(id);
+    }
+    if (byRole.size === 0) return;
+    setBulkFetchCvsInFlight(true);
+    try {
+      let totalFetching = 0;
+      let totalAlreadyPresent = 0;
+      for (const [roleId, applicationIds] of byRole) {
+        const res = await rolesApi.fetchCvsSelected(roleId, applicationIds);
+        const data = res?.data || {};
+        totalFetching += Number(data.fetching || 0);
+        totalAlreadyPresent += Number(data.already_present || 0);
+      }
+      if (totalFetching > 0) {
+        const suffix = totalAlreadyPresent > 0
+          ? `; ${totalAlreadyPresent} already had CVs`
+          : '';
+        showToast(`Fetching ${totalFetching} CV(s) from Workable${suffix}.`, 'success');
+        // Poll-friendly: refresh after a short delay so the user sees CV columns populate.
+        setTimeout(() => loadApplications({}), 4000);
+      } else if (totalAlreadyPresent > 0) {
+        showToast(`All selected candidates already have CVs (${totalAlreadyPresent}).`, 'info');
+      } else {
+        showToast('No fetchable CVs in the selection (not linked to Workable).', 'info');
+      }
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to fetch CVs for selected candidates.'), 'error');
+    } finally {
+      setBulkFetchCvsInFlight(false);
     }
   }, [selectedApplicationIdSet, applications, rolesApi, showToast, loadApplications]);
 
@@ -1489,9 +1544,19 @@ export const CandidatesDirectoryPage = ({
               type="button"
               onClick={handleScoreSelected}
               disabled={selectedApplicationIds.length === 0 || bulkScoreInFlight}
-              title="Re-score CV match for selected candidates (cache hits make unchanged ones instant)"
+              title="Re-score CV match for selected candidates. CVs missing from Workable get fetched automatically."
             >
               {bulkScoreInFlight ? 'Scoring…' : `Score selected (${selectedApplicationIds.length})`}
+            </button>
+          ) : null}
+          {rolesApi?.fetchCvsSelected ? (
+            <button
+              type="button"
+              onClick={handleFetchCvsSelected}
+              disabled={selectedApplicationIds.length === 0 || bulkFetchCvsInFlight}
+              title="Pull CVs from Workable for the selected candidates without scoring."
+            >
+              {bulkFetchCvsInFlight ? 'Fetching…' : `Fetch CVs (${selectedApplicationIds.length})`}
             </button>
           ) : null}
           {rolesApi?.refreshInterviewSupportBulk ? (
