@@ -139,16 +139,39 @@ describe('JobPipelinePage', () => {
       data: {
         ...baseRole,
         name: 'Portfolio Lead and Business Manager',
-        description: '# Portfolio Lead and Business Manager **Location:** Dubai, United Arab Emirates **Employment type:** Full-time **Application:** https://deeplight.workable.com/jobs/5757335/candidates/new **State:** published **Full title:** Portfolio Lead and Business Manager - DL88 ## Description DeepLight AI is a specialist AI and data consultancy dedicated to transforming the regional corporate landscape. ## Full Description DeepLight AI is a specialist AI and data consultancy dedicated to transforming the regional corporate landscape. **Your responsibilities within this role will include:** - Financial & Resource Management: own forecasting and budgets. **Candidate Requirements:** - Leadership in AI transformation. **What we offer:** Growth with a senior team.',
+        description: `# Portfolio Lead and Business Manager
+**Location:** Dubai, United Arab Emirates
+**Employment type:** Full-time
+**Application:** https://deeplight.workable.com/jobs/5757335/candidates/new
+**State:** published
+
+## Description
+DeepLight AI is a specialist AI and data consultancy dedicated to transforming the regional corporate landscape.
+
+DeepLight AI is a specialist AI and data consultancy dedicated to transforming the regional corporate landscape.
+
+Your responsibilities within this role will include;
+Financial & Resource Management
+Delivery Governance & Leadership
+Operational Excellence
+
+*As an AI consultancy, our greatest asset is the expertise of our people. **Requirements** To be successful in this role, you'll need: - 8+ years leading AI, data, or platform delivery teams. - Strong communication with executive stakeholders.
+
+It would be great if you also have;
+Banking transformation experience
+
+**Benefits** Benefits & Growth Opportunities - Shape the future of AI implementation with a senior team. - Inclusive interview and application process.`,
       },
     });
 
-    renderPipeline();
+    const { container } = renderPipeline();
 
     await screen.findByRole('heading', { name: /Portfolio Lead and Business Manager/i });
 
     expect(screen.getByText('Dubai, United Arab Emirates')).toBeInTheDocument();
     expect(screen.queryByText(/\*\*Location:\*\*/)).not.toBeInTheDocument();
+    expect(container.querySelector('.role-desc-summary')).toHaveTextContent(/DeepLight AI is a specialist AI and data consultancy/i);
+    expect(screen.queryByText(/keeps recruiter scoring/i)).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /Read full description/i }));
 
@@ -165,10 +188,17 @@ describe('JobPipelinePage', () => {
     expect(sectionTitle('Benefits')).toBeInTheDocument();
     expect(screen.getAllByText(/DeepLight AI is a specialist AI and data consultancy/i)).toHaveLength(1);
     expect(screen.getByText(/Your responsibilities within this role will include/i)).toBeInTheDocument();
-    expect(screen.getByText(/Financial & Resource Management/i)).toBeInTheDocument();
+    expect(screen.getByText(/Financial & Resource Management/i).closest('li')).toBeInTheDocument();
+    expect(screen.getByText(/Delivery Governance & Leadership/i).closest('li')).toBeInTheDocument();
     expect(querySectionTitle('Full Description')).not.toBeInTheDocument();
     expect(querySectionTitle('Candidate Requirements')).not.toBeInTheDocument();
-    expect(screen.getByText(/Leadership in AI transformation/i)).toBeInTheDocument();
+    const requirementsSection = sectionTitle('Requirements').closest('.role-sec');
+    const benefitsSection = sectionTitle('Benefits').closest('.role-sec');
+    expect(within(requirementsSection).getByText(/To be successful in this role/i)).toBeInTheDocument();
+    expect(within(requirementsSection).getByText(/8\+ years leading AI/i).closest('li')).toBeInTheDocument();
+    expect(within(requirementsSection).getByText(/Banking transformation experience/i).closest('li')).toBeInTheDocument();
+    expect(within(benefitsSection).getByText(/Shape the future of AI implementation/i).closest('li')).toBeInTheDocument();
+    expect(screen.queryByText(/Benefits & Growth Opportunities/i)).not.toBeInTheDocument();
     expect(querySectionTitle('What we offer')).not.toBeInTheDocument();
   });
 

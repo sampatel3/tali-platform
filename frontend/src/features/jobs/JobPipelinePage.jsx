@@ -142,6 +142,7 @@ const SPEC_META_LABELS = {
 const WORKABLE_SECTION_LABELS = [
   'about',
   'benefits',
+  'benefits & growth opportunities',
   'candidate profile',
   'candidate requirements',
   'description',
@@ -157,6 +158,7 @@ const WORKABLE_SECTION_LABELS = [
   'role overview',
   'skills',
   'what we offer',
+  'what you will do',
   'who you are',
   'you will',
   'your responsibilities',
@@ -175,18 +177,20 @@ const SPEC_SECTION_ALIASES = new Map([
   ['candidate profile', 'Requirements'],
   ['candidate requirements', 'Requirements'],
   ['experience', 'Requirements'],
-  ['key responsibilities', 'Requirements'],
   ['must have', 'Requirements'],
   ['nice to have', 'Requirements'],
   ['qualifications', 'Requirements'],
   ['requirements', 'Requirements'],
-  ['responsibilities', 'Requirements'],
   ['skills', 'Requirements'],
   ['what you bring', 'Requirements'],
   ['who you are', 'Requirements'],
-  ['you will', 'Requirements'],
-  ['your responsibilities', 'Requirements'],
+  ['key responsibilities', 'Description'],
+  ['responsibilities', 'Description'],
+  ['what you will do', 'Description'],
+  ['you will', 'Description'],
+  ['your responsibilities', 'Description'],
   ['benefits', 'Benefits'],
+  ['benefits & growth opportunities', 'Benefits'],
   ['perks', 'Benefits'],
   ['what we offer', 'Benefits'],
 ]);
@@ -195,6 +199,8 @@ const stripMarkdownSyntax = (value = '') => String(value || '')
   .replace(/^#{1,6}\s+/gm, '')
   .replace(/\*\*([^*]+)\*\*/g, '$1')
   .replace(/\*([^*]+)\*/g, '$1')
+  .replace(/^\*+/, '')
+  .replace(/\*+$/, '')
   .replace(/\s+/g, ' ')
   .trim();
 
@@ -245,6 +251,10 @@ const normalizeSpecText = (raw = '') => String(raw || '')
   .replace(/\s+(#{1,6}\s+)/g, '\n$1')
   .replace(/\s+##\s+/g, '\n## ')
   .replace(/\s+\*\*([^*\n]{2,120}):\*\*/g, '\n**$1:**')
+  .replace(/\s+\*\*((?:Description|Full Description|Job Description|Requirements|Candidate Requirements|Must Have|Nice to Have|Benefits|Benefits & Growth Opportunities|What We Offer))\*\*/gi, '\n**$1**')
+  .replace(/\*\*((?:Description|Full Description|Job Description|Requirements|Candidate Requirements|Must Have|Nice to Have|Benefits|Benefits & Growth Opportunities|What We Offer))\*\*\s+/gi, '**$1**\n')
+  .replace(/\s+[-•]\s+(?=[A-Z0-9])/g, '\n- ')
+  .replace(/\s+(\d+[.)])\s+(?=[A-Z0-9])/g, '\n$1 ')
   .replace(/\n{3,}/g, '\n\n')
   .trim();
 
@@ -265,6 +275,30 @@ const specContentKey = (value = '') => stripMarkdownSyntax(value)
   .replace(/[^a-z0-9]+/g, ' ')
   .trim();
 
+const specLineLabel = (line = '') => normalizeSectionTitle(String(line || '')
+  .replace(/^[-•]\s+/, '')
+  .replace(/^\*\*([^*]{2,140})\*\*$/g, '$1'));
+
+const getSpecSectionCue = (line = '') => {
+  const label = specLineLabel(line);
+  const lowered = label.toLowerCase();
+  const canonical = canonicalSpecSectionTitle(label);
+
+  if (canonical) {
+    return { title: canonical, keepLine: false };
+  }
+
+  if (/^(to be successful\b|you'?ll need\b|you will need\b|it would be great if\b|ideal candidate\b|essential requirements?\b|desired requirements?\b)/i.test(label)) {
+    return { title: 'Requirements', keepLine: true };
+  }
+
+  if (/^(benefits?\b|benefits & growth opportunities\b|what we offer\b|perks\b|compensation\b|rewards\b)/i.test(label)) {
+    return { title: 'Benefits', keepLine: !/^(benefits?|benefits & growth opportunities|what we offer|perks)$/i.test(lowered) };
+  }
+
+  return null;
+};
+
 const canonicalizeSpecSections = (sections = []) => {
   const buckets = {
     Description: [],
@@ -274,13 +308,18 @@ const canonicalizeSpecSections = (sections = []) => {
   const seen = new Set();
 
   sections.forEach((section) => {
-    const title = canonicalSpecSectionTitle(section.title) || 'Description';
+    let activeTitle = canonicalSpecSectionTitle(section.title) || 'Description';
     section.lines.forEach((line) => {
       if (!line || isSpecMetadataLine(line)) return;
+      const sectionCue = getSpecSectionCue(line);
+      if (sectionCue) {
+        activeTitle = sectionCue.title;
+        if (!sectionCue.keepLine) return;
+      }
       const key = specContentKey(line);
       if (!key || seen.has(key)) return;
       seen.add(key);
-      buckets[title].push(line);
+      buckets[activeTitle].push(line);
     });
   });
 
@@ -333,6 +372,23 @@ const parseJobSpec = (raw = '', roleName = '') => {
       }
 
       ensureSection('Description').lines.push(`**${normalizeSectionTitle(headingText) || 'Role detail'}**`);
+      return;
+    }
+
+    const boldOnlyMatch = line.match(/^\*\*([^*]{2,140})\*\*$/);
+    if (boldOnlyMatch) {
+      const canonicalLabel = canonicalSpecSectionTitle(boldOnlyMatch[1]);
+      if (canonicalLabel) {
+        currentSection = { title: canonicalLabel, lines: [] };
+        sections.push(currentSection);
+        return;
+      }
+    }
+
+    const lineSectionCue = getSpecSectionCue(line);
+    if (lineSectionCue && !lineSectionCue.keepLine) {
+      currentSection = { title: lineSectionCue.title, lines: [] };
+      sections.push(currentSection);
       return;
     }
 
@@ -396,14 +452,12 @@ const parseJobSpec = (raw = '', roleName = '') => {
   const canonicalSections = canonicalizeSpecSections(cleanedSections);
   const descriptionSection = canonicalSections.find((section) => section.title === 'Description') || canonicalSections[0];
   const summarySource = descriptionSection?.lines.find((line) => !/^[-•]\s+/.test(line)) || descriptionSection?.lines[0] || '';
-  const fallbackSummary = roleName
-    ? `${roleName} keeps recruiter scoring, threshold tuning, and candidate movement in one place.`
-    : 'This recruiter workspace mirrors the job spec, scoring guidance, and active pipeline for the role.';
+  void roleName;
 
   return {
     title,
     meta,
-    summary: truncateSentence(summarySource || fallbackSummary),
+    summary: summarySource ? truncateSentence(summarySource) : '',
     sections: canonicalSections,
   };
 };
@@ -420,32 +474,61 @@ const renderSpecInline = (value = '') => {
 };
 
 const FormattedJobSpecSection = ({ section, marker }) => {
+  const isStandaloneSpecItem = (line = '') => {
+    const text = stripMarkdownSyntax(line);
+    const words = text.split(/\s+/).filter(Boolean);
+    if (!text || words.length > 9 || text.length > 90) return false;
+    if (/[.!?:;]$/.test(text)) return false;
+    if (getSpecSectionCue(text)) return false;
+    if (/^[A-Z0-9]/.test(text)) return true;
+    const titleCasedWords = words.filter((word) => /^[A-Z0-9&/()+-]/.test(word));
+    return titleCasedWords.length >= Math.max(1, Math.ceil(words.length * 0.7));
+  };
+
   const items = section.lines
     .map((line) => {
-      const bulletMatch = line.match(/^[-•]\s+(.+)$/);
+      const bulletMatch = line.match(/^(?:[-•]|\d+[.)])\s+(.+)$/);
+      const inferredBullet = !bulletMatch && isStandaloneSpecItem(line);
       return {
-        type: bulletMatch ? 'bullet' : 'paragraph',
+        type: bulletMatch || inferredBullet ? 'bullet' : 'paragraph',
         text: bulletMatch ? bulletMatch[1].trim() : line,
       };
     })
     .filter((item) => stripMarkdownSyntax(item.text));
 
-  const paragraphs = items.filter((item) => item.type === 'paragraph');
-  const bullets = items.filter((item) => item.type === 'bullet');
+  const blocks = [];
+  let pendingBullets = [];
+  const flushBullets = () => {
+    if (!pendingBullets.length) return;
+    blocks.push({ type: 'bullets', items: pendingBullets });
+    pendingBullets = [];
+  };
+
+  items.forEach((item) => {
+    if (item.type === 'bullet') {
+      pendingBullets.push(item);
+      return;
+    }
+    flushBullets();
+    blocks.push(item);
+  });
+  flushBullets();
 
   return (
     <div className="role-sec">
       <div className="role-sec-title"><span className="marker">{marker}</span>{section.title}</div>
-      {paragraphs.map((item, index) => (
-        <p key={`p-${index}`}>{renderSpecInline(item.text)}</p>
-      ))}
-      {bullets.length ? (
-        <ul className="role-spec-list">
-          {bullets.map((item, index) => (
-            <li key={`b-${index}`}>{renderSpecInline(item.text)}</li>
-          ))}
-        </ul>
-      ) : null}
+      {blocks.map((block, index) => {
+        if (block.type === 'bullets') {
+          return (
+            <ul key={`b-${index}`} className="role-spec-list">
+              {block.items.map((item, itemIndex) => (
+                <li key={`${item.text}-${itemIndex}`}>{renderSpecInline(item.text)}</li>
+              ))}
+            </ul>
+          );
+        }
+        return <p key={`p-${index}`}>{renderSpecInline(block.text)}</p>;
+      })}
     </div>
   );
 };
@@ -677,8 +760,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const roleSummary = useMemo(() => (
     parsedJobSpec.summary
     || String(role?.summary || role?.job_summary || '').trim()
-    || `${role?.name || 'This role'} keeps recruiter scoring, threshold tuning, and candidate movement in one place.`
-  ), [parsedJobSpec.summary, role?.job_summary, role?.name, role?.summary]);
+  ), [parsedJobSpec.summary, role?.job_summary, role?.summary]);
   const roleHighlights = useMemo(() => {
     const questions = Array.isArray(role?.interview_focus?.questions) ? role.interview_focus.questions : [];
     const triggers = Array.isArray(role?.interview_focus?.manual_screening_triggers)
@@ -966,10 +1048,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
           <div className="role-desc">
             <div className="role-desc-main">
-              <p className="role-desc-summary">
-                <b>{role?.name || 'This role'}</b> keeps recruiter scoring, threshold tuning, and candidate movement in one place.
-                {!detailsExpanded && roleSummary ? ` ${roleSummary}` : ' Use this workspace to keep CV scoring current and move candidates from screening into decision-ready review.'}
-              </p>
+              {!detailsExpanded && roleSummary ? (
+                <p className="role-desc-summary">{roleSummary}</p>
+              ) : null}
 
               <button
                 type="button"
