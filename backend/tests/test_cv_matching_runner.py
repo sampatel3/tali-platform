@@ -286,7 +286,7 @@ def test_runner_happy_path():
     assert len(client.messages.calls) == 1
     assert client.messages.calls[0]["model"] == MODEL_VERSION
     assert client.messages.calls[0]["temperature"] == 0.0
-    assert client.messages.calls[0]["max_tokens"] == 4096
+    assert client.messages.calls[0]["max_tokens"] == 8192
 
 
 def test_runner_retries_on_validation_failure_then_succeeds():

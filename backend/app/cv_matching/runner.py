@@ -49,11 +49,13 @@ logger = logging.getLogger("taali.cv_match.runner")
 # --- Cost discipline constants ---------------------------------------------
 
 INPUT_TOKEN_CEILING = 3500
-# Output ceiling: 1500 was the handover spec but real Haiku 4.5 outputs
-# truncate mid-JSON for typical 5-requirement assessments (~5KB JSON).
-# Bumped to 4096 — still well under Haiku's per-call max and the marginal
-# cost is ~$0.0008 per call. Empirical fix.
-OUTPUT_TOKEN_CEILING = 4096
+# Output ceiling: started at handover's 1500 → 4096 (still truncated for
+# rich evidence quotes on 5-criterion assessments) → 8192. Production
+# logs showed JSON failing parse at char 13516 (~3400 tokens) which is
+# *under* 4096 but the model emits structural issues when it gets close
+# to the cap, so the safety margin matters. Haiku 4.5 supports much
+# higher output budgets; 8192 still costs only ~$0.0016 per call.
+OUTPUT_TOKEN_CEILING = 8192
 MAX_RETRIES = 1  # exactly one retry on validation failure
 TEMPERATURE = 0.0
 
