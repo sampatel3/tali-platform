@@ -1,6 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 
 vi.mock('../../shared/api', () => ({
   roles: {
@@ -62,7 +63,7 @@ describe('JobsPage Workable sync states', () => {
       },
     });
 
-    render(<JobsPage onNavigate={vi.fn()} />);
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     expect(await screen.findByRole('button', { name: /Syncing/i })).toBeDisabled();
     expect(apiClient.organizations.getWorkableSyncStatus).toHaveBeenCalledWith();
@@ -96,7 +97,7 @@ describe('JobsPage Workable sync states', () => {
       },
     });
 
-    render(<JobsPage onNavigate={vi.fn()} />);
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     fireEvent.click(await screen.findByRole('button', { name: /^Sync now$/i }));
 
@@ -118,7 +119,7 @@ describe('JobsPage Workable sync states', () => {
       },
     });
 
-    render(<JobsPage onNavigate={vi.fn()} />);
+    render(<MemoryRouter><JobsPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     fireEvent.click(await screen.findByRole('button', { name: '+ New role' }));
 

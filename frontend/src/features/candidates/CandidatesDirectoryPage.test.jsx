@@ -1,6 +1,7 @@
 import React from 'react';
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { MemoryRouter } from 'react-router-dom';
 
 const showToast = vi.fn();
 
@@ -154,7 +155,7 @@ describe('CandidatesDirectoryPage', () => {
       return { data: updated };
     });
 
-    render(<CandidatesDirectoryPage onNavigate={vi.fn()} />);
+    render(<MemoryRouter><CandidatesDirectoryPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     await screen.findAllByText('Alice Workable');
     await waitFor(() => {
@@ -178,7 +179,7 @@ describe('CandidatesDirectoryPage', () => {
   }, 10000);
 
   it('rejects a Workable-linked candidate from the inline drawer with two-step confirmation', async () => {
-    render(<CandidatesDirectoryPage onNavigate={vi.fn()} />);
+    render(<MemoryRouter><CandidatesDirectoryPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     const aliceName = await screen.findByText('Alice Workable');
     const aliceRow = aliceName.closest('[role="button"]');

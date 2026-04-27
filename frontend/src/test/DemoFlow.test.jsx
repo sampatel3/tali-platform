@@ -129,8 +129,10 @@ describe('Demo flow redesign', () => {
     expect(screen.getByRole('heading', { level: 1, name: /See Taali/i })).toBeInTheDocument();
     expect(screen.getByText(/No fake provisioning/i)).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 2, name: /What candidates and hiring teams/i })).not.toBeInTheDocument();
-    expect(screen.queryByTitle(/^What candidates see$/i)).not.toBeInTheDocument();
-    expect(screen.queryByTitle(/^What hiring teams see$/i)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/^Jobs you’re hiring for$/i)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/^Candidates flowing in$/i)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/^Standing report$/i)).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/^Candidate workspace$/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Demo' })).not.toBeInTheDocument();
     expect(screen.getByLabelText(/^Track/i)).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Start my session/i })).not.toBeInTheDocument();
@@ -161,18 +163,47 @@ describe('Demo flow redesign', () => {
     });
 
     expect(screen.getByRole('heading', { level: 2, name: /What candidates and hiring teams/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /What candidates see/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /What hiring teams see/i })).toBeInTheDocument();
-    const candidateFrame = screen.getByTitle('What candidates see');
-    const reportFrame = screen.getByTitle('What hiring teams see');
-    expect(candidateFrame).toBeInTheDocument();
-    expect(candidateFrame).toHaveAttribute('src', '/assessment/live?demo=1&showcase=1');
-    expect(candidateFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
+    expect(screen.getByRole('button', { name: /Jobs you’re hiring for/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Candidates flowing in/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Standing report/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Candidate workspace/i })).toBeInTheDocument();
+
+    const jobsFrame = screen.getByTitle('Jobs you’re hiring for');
+    const candidatesFrame = screen.getByTitle('Candidates flowing in');
+    const reportFrame = screen.getByTitle('Standing report');
+    const workspaceFrame = screen.getByTitle('Candidate workspace');
+
+    expect(jobsFrame).toHaveAttribute('src', '/jobs?demo=1&showcase=1');
+    expect(candidatesFrame).toHaveAttribute('src', '/candidates?demo=1&showcase=1');
     expect(reportFrame).toHaveAttribute('src', '/c/demo?view=interview&k=demo-token&showcase=1');
-    expect(reportFrame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
-    expect(screen.getAllByText('Locked preview')).toHaveLength(2);
+    expect(workspaceFrame).toHaveAttribute('src', '/assessment/live?demo=1&showcase=1');
+
+    [jobsFrame, candidatesFrame, reportFrame, workspaceFrame].forEach((frame) => {
+      expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-same-origin');
+    });
+
+    expect(screen.getAllByText('Locked preview')).toHaveLength(4);
     expect(screen.queryByText(/Open full size/i)).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Platform' })).not.toBeInTheDocument();
     expect(onNavigate).not.toHaveBeenCalledWith('candidate-welcome', expect.anything());
+  });
+
+  it('orders showcase panes in the hiring narrative', async () => {
+    renderDemo();
+
+    fireEvent.change(screen.getByLabelText(/^Full name$/i), { target: { value: 'Jane Doe' } });
+    fireEvent.change(screen.getByLabelText(/^Work email$/i), { target: { value: 'jane@company.com' } });
+    fireEvent.change(screen.getByLabelText(/^Company$/i), { target: { value: 'Acme' } });
+    fireEvent.change(screen.getByLabelText(/^Company size$/i), { target: { value: '51–200' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Open walkthrough/i }));
+
+    const tablist = await screen.findByRole('tablist', { name: /Walkthrough views/i });
+    const tabButtons = Array.from(tablist.querySelectorAll('button')).map((button) => button.textContent || '');
+    expect(tabButtons.length).toBe(4);
+    expect(tabButtons[0]).toMatch(/Jobs/);
+    expect(tabButtons[1]).toMatch(/Candidates/);
+    expect(tabButtons[2]).toMatch(/Standing report/);
+    expect(tabButtons[3]).toMatch(/Candidate workspace/);
   });
 });
