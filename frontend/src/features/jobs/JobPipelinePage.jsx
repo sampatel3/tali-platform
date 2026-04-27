@@ -880,10 +880,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         include_scored: Boolean(payload.include_scored || includeScored),
       });
       if (payload.status === 'nothing_to_score') {
+        // Persistent toaster won't show progress for a no-op, so surface
+        // an info toast here.
         showToast(includeScored ? 'No CVs available to score.' : 'No newly added CVs need scoring.', 'info');
         return;
       }
-      showToast(includeScored ? 'Re-score started.' : 'CV scoring started for new candidates.', 'success');
+      // No success toast — the persistent BackgroundJobsToaster already
+      // shows "Re-scoring CVs · 0/N · progress bar" in the bottom-right.
+      // Two surfaces for the same event was visual noise.
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to start CV scoring.'), 'error');
     }
@@ -899,7 +903,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         fetched: Number(res?.data?.fetched || 0),
         errors: Number(res?.data?.errors || 0),
       });
-      showToast('Fetching missing CVs from Workable.', 'success');
+      // No success toast — the persistent BackgroundJobsToaster surfaces
+      // the fetch progress in the bottom-right.
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to fetch CVs from Workable.'), 'error');
     }
