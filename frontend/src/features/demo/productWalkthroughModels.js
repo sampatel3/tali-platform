@@ -248,6 +248,138 @@ export const AI_SHOWCASE_APPLICATION = {
       },
     ],
   },
+  interview_prep: {
+    stageOne: [
+      {
+        question: 'Walk me through the Helix patient-summarisation rollout — start at the moment you knew the existing release-gate would not be enough, and end at the metric you tracked after launch.',
+        source: 'CV · Helix Health',
+        context: 'Validates the headline claim on her CV (6.1% → 0.4% unsafe completions) and how she frames release safety in regulated environments.',
+        listenFor: [
+          'Names a specific failure mode (e.g. medium-confidence high-risk completions reaching clinicians) — not a generic "we improved safety".',
+          'Distinguishes the deterministic risk classifier from the generative path; explains why the classifier sits in front, not after.',
+          'Owns at least one decision that slowed the launch on purpose, and can name what would have happened if she had not.',
+          'Ties the post-launch metric to a stakeholder decision — not just an internal dashboard.',
+        ],
+        redFlags: [
+          'Talks about the model architecture instead of the safety contract.',
+          'Cannot name who in the org used the metric or how it changed their behaviour.',
+          'Frames the work as "added some guardrails" without an explicit before/after.',
+        ],
+        evidence: 'CV · Senior AI Engineer, Helix Health · "Reduced unsafe completions on the launch checklist from 6.1% to 0.4%". Also covered in the recruiter screen transcript.',
+      },
+      {
+        question: 'In the assessment you rejected a default-allow fallback that Claude proposed. Talk me through the moment you decided to push back, and what would have made you accept it.',
+        source: 'Taali assessment · Prompt 04',
+        context: 'Probes whether the rejection was reflexive or reasoned. We want her to be willing to accept a fallback under the right conditions.',
+        listenFor: [
+          'Articulates the asymmetric cost (a wrong allow ships unsafe output to a user; a wrong escalate just adds reviewer load).',
+          'Names the specific condition under which a default-allow would be acceptable (e.g. action class with no user-facing effect, or feature-flagged shadow traffic).',
+          'References the RISKS.md item or launch-checklist rule the fallback would have violated.',
+        ],
+        redFlags: [
+          '"You should never have a default-allow" — too absolute; she is being dogmatic rather than reasoned.',
+          'Cannot name a scenario where a default-allow is the right call.',
+        ],
+        evidence: 'Assessment prompt 04 + Claude turn 04 (workspace pane). Standing-report Assessment tab also shows the rejection.',
+      },
+      {
+        question: 'You mentioned at Lighthouse you ran a prompt registry with red-team review. What broke the first time you tried to run that process, and what did you change?',
+        source: 'CV · Lighthouse FinCrime',
+        context: 'Tests whether the prompt-registry experience was real and operational, not aspirational. Strong candidates have a story about an early failure.',
+        listenFor: [
+          'A concrete process failure — e.g. red-team coverage gap, review queue back-pressure, inconsistent prompt versioning across environments.',
+          'A specific change made (added a coverage matrix, made review SLAs explicit, gated production deploys on registry version match).',
+          'Acknowledges what the change cost (review latency, engineer happiness, etc.) — not just upside.',
+        ],
+        redFlags: [
+          'Describes the system in steady state without naming a single thing that broke.',
+          'Blames the team or tooling without naming her own decision to change.',
+        ],
+        evidence: 'CV · AI Engineer, Lighthouse FinCrime, 2021–2023.',
+      },
+      {
+        question: 'Your CV match flagged compliance-stakeholder framing as the one weak spot. Read me your last residual-risk note as if I were the General Counsel — pick a real launch.',
+        source: 'Taali signal · CV match',
+        context: 'Directly probes the "partially_met" requirement. Whether she has the language now matters more than the past evidence.',
+        listenFor: [
+          'Opens with what the patch set covers, not the engineering work that produced it.',
+          'Names the residual gap and the human escalation route in one sentence.',
+          'Avoids hedging — the GC needs to know what she will and will not stand behind.',
+          'Picks a real launch, not a hypothetical.',
+        ],
+        redFlags: [
+          'Defaults to engineering-internal language even after being asked to switch frame.',
+          'The note is structurally a status update rather than a risk handoff.',
+        ],
+        evidence: 'CV match · "Communicate residual launch risk clearly" — partially_met. Also surfaces in tech panel concerns.',
+      },
+    ],
+    stageTwo: [
+      {
+        question: 'Design the offline eval harness for the next major model upgrade on this team. What does v1 look like, and what is the first thing you would deliberately leave out of v1?',
+        source: 'Assessment · Eval design',
+        context: 'Strongest signal in her assessment was offline eval design (8.4/10). We want to see if she can scope a v1 with deliberate omissions, not just describe the ideal.',
+        listenFor: [
+          'Scopes v1 around regression cases that have already caused incidents — not coverage breadth for its own sake.',
+          'Names a specific thing she leaves out (e.g. ranking metrics, multi-turn evals, latency regression) and why.',
+          'Distinguishes what runs pre-merge from what runs nightly from what runs only on a release candidate.',
+          'Plans for the eval-harness drift problem (tests that pass but no longer reflect production input distribution).',
+        ],
+        redFlags: [
+          'Proposes everything — every metric, every harness, every layer — without a sequencing story.',
+          'No plan for keeping the eval set fresh as the product changes.',
+        ],
+        evidence: 'Assessment scoring · debugging_design 8.5/10 · prompt_clarity 8.6/10. Workspace pane turn 06–08 shows her scoping decisions live.',
+      },
+      {
+        question: 'You shipped three patches in the assessment in 36 minutes. Pick the one you would most want to revisit before merging to main, and tell me why.',
+        source: 'Assessment · Self-critique',
+        context: 'Tests whether she can hold her own work to the same standard she held Claude\'s suggestions to. This is a strong-engineer differentiator.',
+        listenFor: [
+          'Picks the medium-confidence high-risk gating patch and names a specific concern (e.g. HIGH_CONFIDENCE_FLOOR was not parameterised by action class).',
+          'Or: picks the regression test for LLM failure and names a coverage gap (e.g. only one failure mode covered).',
+          'Names what additional review she would want — eval data, a paired engineer, or a specific stakeholder.',
+        ],
+        redFlags: [
+          'Says she would not change anything.',
+          'Picks the cosmetic README patch — she should know that is not the load-bearing one.',
+        ],
+        evidence: 'Workspace pane · final patch summary. Assessment tab · Patch sequence overview.',
+      },
+      {
+        question: 'When the LLM provider is partially degraded — slow but not down — your code has to make a choice. Walk me through the fallback semantics you would actually ship.',
+        source: 'Panel · Production realism',
+        context: 'Probes the boundary case her assessment did not cover. The assessment caught full failure (EscalationRequired); partial degradation is harder.',
+        listenFor: [
+          'Distinguishes latency-budget breach from quality regression — they have different fallbacks.',
+          'Names a circuit-breaker pattern with explicit reset criteria, not "timeout and retry".',
+          'Acknowledges the user-facing UX choice: degrade silently, degrade visibly, or fail explicitly. Ties the choice to the action class.',
+          'Has a story about when she would NOT fall back — high-blast-radius actions where slow-but-correct beats fast-but-cached.',
+        ],
+        redFlags: [
+          '"Just retry with backoff" — the answer is too small for the question.',
+          'No user-facing consideration — only talks about the system, not the person on the other end of it.',
+        ],
+        evidence: 'Assessment prompt 05 covers full failure only; partial degradation is the boundary case left to interview.',
+      },
+      {
+        question: 'You will inherit a prompt registry on day one here. What is the first audit you run, and what would make you escalate before week two?',
+        source: 'Onboarding · 30-60-90',
+        context: 'Forward-looking question. We want to see if she can come in and assess existing safety posture quickly, not just rebuild from scratch.',
+        listenFor: [
+          'First audit is concrete: e.g. find every production prompt that bypasses the registry, or check version-pin parity between staging and production.',
+          'Has a specific bar that would trigger escalation (e.g. "any production prompt with no eval coverage" or "any registry entry whose author has left the company").',
+          'Plans the conversation with engineering leadership before week two — not a unilateral fix.',
+          'Names a quick-win that builds trust without breaking anything (a coverage report, a one-pager on the audit findings).',
+        ],
+        redFlags: [
+          'Wants to rewrite the registry on day one.',
+          'Cannot name a specific escalation bar — she will not know when to call it.',
+        ],
+        evidence: 'CV · Lighthouse prompt registry experience. Tech panel summary · cross-functional leadership rated nice_to_have / partially_met.',
+      },
+    ],
+  },
 };
 
 export const AI_SHOWCASE_COMPLETED_ASSESSMENT = {
