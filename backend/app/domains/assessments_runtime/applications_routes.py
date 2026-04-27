@@ -1205,12 +1205,17 @@ def list_applications_global(
         base_query = base_query.filter(CandidateApplication.application_outcome.in_(requested_outcomes))
     if search:
         term = f"%{search.strip()}%"
+        # Match across candidate name/email/position AND the role name —
+        # the search box placeholder ("name, email, or role") had been
+        # lying since v1; recruiters typing a job title saw zero results.
         base_query = (
             base_query.join(Candidate, Candidate.id == CandidateApplication.candidate_id)
+            .outerjoin(Role, Role.id == CandidateApplication.role_id)
             .filter(
                 Candidate.full_name.ilike(term)
                 | Candidate.email.ilike(term)
                 | Candidate.position.ilike(term)
+                | Role.name.ilike(term)
             )
         )
     threshold = _normalize_taali_score_for_filter(min_taali_score)
