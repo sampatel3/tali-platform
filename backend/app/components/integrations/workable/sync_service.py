@@ -464,10 +464,12 @@ def _store_candidate_resume(
     if not content:
         return False
     ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
-    if ext not in {"pdf", "docx", "txt"}:
+    preview_only_exts = {"pdf", "png", "jpg", "jpeg", "webp"}
+    text_exts = {"pdf", "docx", "txt"}
+    if ext not in (text_exts | preview_only_exts):
         return False
-    extracted = sanitize_text_for_storage(extract_text(content, ext))
-    if not extracted:
+    extracted = sanitize_text_for_storage(extract_text(content, ext)) if ext in text_exts else ""
+    if not extracted and ext not in preview_only_exts:
         return False
     file_url = save_file_locally(
         content=content,

@@ -229,6 +229,7 @@ class ApplicationResponse(BaseModel):
 class ApplicationDetailResponse(ApplicationResponse):
     """Application with optional full CV text for viewer."""
     cv_text: Optional[str] = None
+    cv_sections: Optional[dict[str, Any]] = None
     assessment_preview: Optional[dict[str, Any]] = None
     assessment_history: list[dict[str, Any]] = Field(default_factory=list)
     candidate_interview_kit: Optional[dict[str, Any]] = None

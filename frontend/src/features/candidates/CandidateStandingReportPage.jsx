@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { Copy, Mail, ExternalLink, Eye } from 'lucide-react';
+import { AlertCircle, Check, Copy, Download, Mail, ExternalLink, Eye } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
@@ -47,31 +47,335 @@ const REPORT_TABS = [
 const INTERNAL_TABS = new Set(REPORT_TABS.filter((tab) => tab.internalOnly).map((tab) => tab.id));
 const REPORT_TAB_IDS = new Set(REPORT_TABS.map((tab) => tab.id));
 
-// Inline viewer for the candidate's CV file. Uses the existing
-// /candidates/{id}/documents/cv blob endpoint. Caches the blob URL
-// across re-renders; cleans up on unmount. Inline preview only works for
-// PDFs (browser-native <iframe>); other extensions show a download
-// button.
-const CV_VIEWER_PDF_HEIGHT = 720;
+const CV_VIEWER_PDF_HEIGHT = 860;
+const CV_TEXT_PREVIEW_LIMIT = 18000;
 
 const inferCvMime = (filename) => {
   const ext = String(filename || '').split('.').pop().toLowerCase();
   if (ext === 'pdf') return 'application/pdf';
+  if (ext === 'png') return 'image/png';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'gif') return 'image/gif';
   if (ext === 'docx') return 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
   if (ext === 'doc') return 'application/msword';
   if (ext === 'txt') return 'text/plain';
   return '';
 };
 
-const CvViewer = ({ candidateId, filename, uploadedAt, candidatesApi, parsedSections }) => {
+const isCvImageMime = (mime) => String(mime || '').startsWith('image/');
+const canInlinePreviewCv = (mime) => mime === 'application/pdf' || isCvImageMime(mime);
+
+const asCleanText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+
+const asArray = (value) => (Array.isArray(value) ? value.filter(Boolean) : []);
+
+const splitInlineList = (value) => String(value || '')
+  .split(/[,;|•\n]/)
+  .map((item) => asCleanText(item).replace(/^[-*]\s*/, ''))
+  .filter((item) => item && item.length <= 80);
+
+const CV_SECTION_ALIASES = [
+  { key: 'summary', label: 'Profile', pattern: /^(profile|summary|about|objective|professional summary)$/i },
+  { key: 'experience', label: 'Experience', pattern: /^(experience|work experience|employment|career history|professional experience)$/i },
+  { key: 'education', label: 'Education', pattern: /^(education|academic background)$/i },
+  { key: 'skills', label: 'Skills', pattern: /^(skills|technical skills|core skills|technologies|tools)$/i },
+  { key: 'certifications', label: 'Certifications', pattern: /^(certifications|certificates|licenses)$/i },
+  { key: 'languages', label: 'Languages', pattern: /^languages$/i },
+  { key: 'links', label: 'Links', pattern: /^(links|portfolio|projects|publications|notable writing)$/i },
+];
+
+const detectCvSectionHeading = (line) => {
+  const cleaned = asCleanText(line).replace(/:$/, '');
+  if (!cleaned || cleaned.length > 44) return null;
+  return CV_SECTION_ALIASES.find((item) => item.pattern.test(cleaned)) || null;
+};
+
+const deriveRawCvSections = (cvText) => {
+  const text = String(cvText || '').slice(0, CV_TEXT_PREVIEW_LIMIT);
+  const lines = text.replace(/\r/g, '\n').split('\n').map((line) => line.trim());
+  const introLines = [];
+  const sections = [];
+  let current = null;
+
+  lines.forEach((line) => {
+    if (!line) {
+      if (current && current.lines.length && current.lines[current.lines.length - 1] !== '') current.lines.push('');
+      return;
+    }
+    const heading = detectCvSectionHeading(line);
+    if (heading) {
+      if (current && current.lines.length) sections.push(current);
+      current = { key: heading.key, title: heading.label, lines: [] };
+      return;
+    }
+    if (current) {
+      current.lines.push(line);
+    } else {
+      introLines.push(line);
+    }
+  });
+
+  if (current && current.lines.length) sections.push(current);
+  if (!sections.length && introLines.length) {
+    sections.push({ key: 'raw', title: 'CV text', lines: introLines.length > 4 ? introLines.slice(4) : introLines });
+  }
+  return { introLines, sections };
+};
+
+const normalizeExperienceEntries = (entries) => asArray(entries).map((entry, index) => {
+  if (typeof entry === 'string') {
+    return { key: `experience-${index}`, title: entry, company: '', start: '', end: '', bullets: [] };
+  }
+  const title = asCleanText(entry?.title || entry?.role || entry?.position) || 'Role';
+  const company = asCleanText(entry?.company || entry?.employer || entry?.organization);
+  const start = asCleanText(entry?.start || entry?.start_date);
+  const end = asCleanText(entry?.end || entry?.end_date || (entry?.current ? 'Present' : ''));
+  const summary = asCleanText(entry?.summary || entry?.description || entry?.notes);
+  const bullets = asArray(entry?.bullets).map(asCleanText).filter(Boolean);
+  if (summary && !bullets.length) bullets.push(summary);
+  return {
+    key: `${company}-${title}-${index}`,
+    title,
+    company,
+    start,
+    end,
+    bullets,
+  };
+});
+
+const normalizeEducationEntries = (entries) => asArray(entries).map((entry, index) => {
+  if (typeof entry === 'string') {
+    return { key: `education-${index}`, title: entry, detail: '', date: '', notes: '' };
+  }
+  const degree = asCleanText(entry?.degree);
+  const field = asCleanText(entry?.field || entry?.field_of_study);
+  const institution = asCleanText(entry?.institution || entry?.school);
+  const title = [degree, field].filter(Boolean).join(' · ') || institution || 'Education';
+  const detail = institution && institution !== title ? institution : '';
+  const start = asCleanText(entry?.start || entry?.start_date);
+  const end = asCleanText(entry?.end || entry?.end_date);
+  return {
+    key: `${institution}-${title}-${index}`,
+    title,
+    detail,
+    date: [start, end].filter(Boolean).join(' - '),
+    notes: asCleanText(entry?.notes),
+  };
+});
+
+const normalizeCvSections = ({ parsedSections, cvText, application }) => {
+  const parsed = parsedSections && typeof parsedSections === 'object' && !parsedSections.parse_failed
+    ? parsedSections
+    : {};
+  const raw = deriveRawCvSections(cvText);
+  const rawByKey = raw.sections.reduce((acc, section) => {
+    if (!acc[section.key]) acc[section.key] = section;
+    return acc;
+  }, {});
+  const rawSummary = rawByKey.summary?.lines?.join(' ') || raw.introLines.slice(1, 4).join(' ');
+  const name = application?.candidate_name || application?.candidate_email || 'Candidate';
+  const headline = asCleanText(parsed.headline || application?.candidate_headline || application?.candidate_position || application?.role_name);
+  const summary = asCleanText(parsed.summary || application?.candidate_summary || rawSummary);
+  const skills = [
+    ...asArray(parsed.skills).map(asCleanText),
+    ...asArray(application?.candidate_skills).map(asCleanText),
+    ...splitInlineList(rawByKey.skills?.lines?.join('\n') || ''),
+  ].filter(Boolean);
+  const uniqueSkills = Array.from(new Set(skills.map((skill) => skill.trim()).filter(Boolean))).slice(0, 28);
+
+  return {
+    name,
+    headline,
+    summary,
+    contact: [
+      application?.candidate_email,
+      application?.candidate_location,
+      application?.candidate_phone,
+    ].map(asCleanText).filter(Boolean),
+    links: Array.from(new Set([
+      ...asArray(parsed.links).map(asCleanText),
+      ...asArray(application?.candidate_social_profiles).map((item) => asCleanText(item?.url || item?.name || item)),
+      application?.candidate_profile_url,
+    ].map(asCleanText).filter(Boolean))).slice(0, 6),
+    experience: normalizeExperienceEntries(
+      asArray(parsed.experience).length ? parsed.experience : application?.candidate_experience
+    ),
+    education: normalizeEducationEntries(
+      asArray(parsed.education).length ? parsed.education : application?.candidate_education
+    ),
+    skills: uniqueSkills,
+    certifications: asArray(parsed.certifications).map(asCleanText).filter(Boolean),
+    languages: asArray(parsed.languages).map(asCleanText).filter(Boolean),
+    rawSections: raw.sections.filter((section) => !['summary', 'skills'].includes(section.key)),
+  };
+};
+
+const renderRawCvLines = (lines) => {
+  const blocks = [];
+  let current = [];
+  const flush = () => {
+    if (current.length) {
+      blocks.push(current);
+      current = [];
+    }
+  };
+  asArray(lines).forEach((line) => {
+    if (!line) {
+      flush();
+      return;
+    }
+    current.push(line);
+  });
+  flush();
+
+  return blocks.map((block, index) => {
+    const isList = block.every((line) => /^[-*•]/.test(line));
+    if (isList) {
+      return (
+        <ul key={`raw-list-${index}`} className="cv-raw-list">
+          {block.map((line, lineIndex) => (
+            <li key={`${line}-${lineIndex}`}>{line.replace(/^[-*•]\s*/, '')}</li>
+          ))}
+        </ul>
+      );
+    }
+    return <p key={`raw-p-${index}`} className="cv-profile">{block.join(' ')}</p>;
+  });
+};
+
+const CvDocumentContent = ({ cvModel, matchingSkills }) => {
+  const matchedSkillSet = new Set(asArray(matchingSkills).map((skill) => asCleanText(skill).toLowerCase()).filter(Boolean));
+
+  return (
+    <>
+      <div className="cv-doc-meta"><span className="pg">CV</span></div>
+      <h2 className="cv-name">{cvModel.name}</h2>
+      {cvModel.headline ? <p className="cv-tagline">{cvModel.headline}</p> : null}
+      {(cvModel.contact.length || cvModel.links.length) ? (
+        <div className="cv-contact">
+          {[...cvModel.contact, ...cvModel.links].map((item, index) => {
+            const isLink = /^https?:\/\//i.test(item) || item.includes('linkedin.com') || item.includes('github.com');
+            const href = item.includes('@') && !isLink ? `mailto:${item}` : (isLink ? item : '');
+            return (
+              <React.Fragment key={`${item}-${index}`}>
+                {index ? <span className="sep">·</span> : null}
+                {href ? <a href={href} target={isLink ? '_blank' : undefined} rel={isLink ? 'noopener noreferrer' : undefined}>{item}</a> : <span>{item}</span>}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      ) : null}
+
+      {cvModel.summary ? (
+        <section className="cv-section">
+          <h4>Profile</h4>
+          <p className="cv-profile">{cvModel.summary}</p>
+        </section>
+      ) : null}
+
+      {cvModel.experience.length ? (
+        <section className="cv-section">
+          <h4>Experience</h4>
+          {cvModel.experience.map((entry) => (
+            <div key={entry.key} className="cv-role" data-evidence={entry.bullets.length ? '' : undefined}>
+              <div className="cv-role-top">
+                <div>
+                  <span className="cv-role-title">{entry.title}</span>
+                  {entry.company ? <span className="cv-role-co"> · {entry.company}</span> : null}
+                </div>
+                {(entry.start || entry.end) ? <span className="cv-role-date">{[entry.start, entry.end].filter(Boolean).join(' - ')}</span> : null}
+              </div>
+              {entry.bullets.length ? (
+                <ul className="cv-raw-list">
+                  {entry.bullets.map((bullet, index) => <li key={`${bullet}-${index}`}>{bullet}</li>)}
+                </ul>
+              ) : null}
+            </div>
+          ))}
+        </section>
+      ) : null}
+
+      {cvModel.education.length ? (
+        <section className="cv-section">
+          <h4>Education</h4>
+          {cvModel.education.map((entry) => (
+            <div key={entry.key} className="cv-edu">
+              <div className="row">
+                <span className="t">{entry.title}</span>
+                {entry.date ? <span className="d">{entry.date}</span> : null}
+              </div>
+              {entry.detail ? <p>{entry.detail}</p> : null}
+              {entry.notes ? <p>{entry.notes}</p> : null}
+            </div>
+          ))}
+        </section>
+      ) : null}
+
+      {cvModel.skills.length ? (
+        <section className="cv-section">
+          <h4>Skills</h4>
+          <div className="cv-skills">
+            {cvModel.skills.map((skill, index) => {
+              const matched = matchedSkillSet.has(asCleanText(skill).toLowerCase());
+              return <span key={`${skill}-${index}`} className={`sk ${matched ? 'match' : ''}`}>{skill}</span>;
+            })}
+          </div>
+        </section>
+      ) : null}
+
+      {cvModel.certifications.length ? (
+        <section className="cv-section">
+          <h4>Certifications</h4>
+          <div className="cv-skills">
+            {cvModel.certifications.map((item, index) => <span key={`${item}-${index}`} className="sk">{item}</span>)}
+          </div>
+        </section>
+      ) : null}
+
+      {cvModel.languages.length ? (
+        <section className="cv-section">
+          <h4>Languages</h4>
+          <div className="cv-skills">
+            {cvModel.languages.map((item, index) => <span key={`${item}-${index}`} className="sk">{item}</span>)}
+          </div>
+        </section>
+      ) : null}
+
+      {cvModel.rawSections.map((section, sectionIndex) => (
+        <section key={`${section.key}-${sectionIndex}`} className="cv-section">
+          <h4>{section.title}</h4>
+          {renderRawCvLines(section.lines)}
+        </section>
+      ))}
+    </>
+  );
+};
+
+const CvDocumentViewer = ({
+  applicationId,
+  candidateId,
+  filename,
+  uploadedAt,
+  rolesApi,
+  candidatesApi,
+  parsedSections,
+  cvText,
+  application,
+  cvMatchDetails,
+  autoPreview = false,
+}) => {
   const [blobUrl, setBlobUrl] = useState('');
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
-  const [showInline, setShowInline] = useState(false);
 
   const mime = inferCvMime(filename);
   const isPdf = mime === 'application/pdf';
+  const isImage = isCvImageMime(mime);
+  const canPreview = canInlinePreviewCv(mime);
   const downloadName = filename || 'candidate-cv';
+  const cvModel = useMemo(() => normalizeCvSections({ parsedSections, cvText, application }), [application, cvText, parsedSections]);
+  const hasTextFallback = Boolean(cvText || parsedSections || cvModel.summary || cvModel.rawSections.length);
 
   useEffect(() => {
     return () => {
@@ -81,11 +385,14 @@ const CvViewer = ({ candidateId, filename, uploadedAt, candidatesApi, parsedSect
 
   const ensureBlob = useCallback(async () => {
     if (blobUrl) return blobUrl;
-    if (!candidateId || !candidatesApi?.downloadDocument) return '';
+    if (!applicationId && !candidateId) return '';
     setLoading(true);
     setErrorMessage('');
     try {
-      const res = await candidatesApi.downloadDocument(candidateId, 'cv');
+      const res = applicationId && rolesApi?.downloadApplicationDocument
+        ? await rolesApi.downloadApplicationDocument(applicationId, 'cv')
+        : await candidatesApi?.downloadDocument?.(candidateId, 'cv');
+      if (!res) return '';
       const blob = new Blob([res.data], mime ? { type: mime } : undefined);
       const url = URL.createObjectURL(blob);
       setBlobUrl(url);
@@ -96,7 +403,12 @@ const CvViewer = ({ candidateId, filename, uploadedAt, candidatesApi, parsedSect
     } finally {
       setLoading(false);
     }
-  }, [blobUrl, candidateId, candidatesApi, mime]);
+  }, [applicationId, blobUrl, candidateId, candidatesApi, mime, rolesApi]);
+
+  useEffect(() => {
+    if (!autoPreview || !filename || !canPreview || blobUrl || loading) return;
+    void ensureBlob();
+  }, [autoPreview, blobUrl, canPreview, ensureBlob, filename, loading]);
 
   const handleDownload = useCallback(async () => {
     const url = await ensureBlob();
@@ -109,174 +421,163 @@ const CvViewer = ({ candidateId, filename, uploadedAt, candidatesApi, parsedSect
     anchor.remove();
   }, [ensureBlob, downloadName]);
 
-  const handleTogglePreview = useCallback(async () => {
-    if (showInline) {
-      setShowInline(false);
-      return;
-    }
-    if (!blobUrl) await ensureBlob();
-    setShowInline(true);
-  }, [showInline, blobUrl, ensureBlob]);
-
   if (!filename) {
     return (
-      <div className="cv-viewer empty">
-        <div className="cv-viewer-head">
+      <div className="cv-doc empty">
+        <div className="cv-doc-empty">
           <div>
             <div className="sub">Candidate CV</div>
             <div className="headline">No CV on file</div>
           </div>
-        </div>
-        <div className="cv-viewer-empty-body">
-          Click "Fetch CVs" on the role pipeline (or upload one manually) to score this candidate.
+          <p>Fetch the CV from Workable or upload one manually to show the document beside the match evidence.</p>
         </div>
       </div>
     );
   }
 
   return (
-    <div className="cv-viewer">
-      <div className="cv-viewer-head">
-        <div>
-          <div className="sub">Candidate CV ✓ fetched</div>
-          <div className="headline">{filename}</div>
-          {uploadedAt ? (
-            <div className="muted-xs">Last updated {new Date(uploadedAt).toLocaleString()}</div>
-          ) : null}
-        </div>
-        <div className="cv-viewer-actions">
-          {isPdf ? (
-            <button
-              type="button"
-              className="btn btn-outline btn-sm"
-              onClick={handleTogglePreview}
-              disabled={loading}
-            >
-              {loading ? 'Loading…' : showInline ? 'Hide preview' : 'Preview inline'}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="btn btn-purple btn-sm"
-            onClick={handleDownload}
-            disabled={loading}
-          >
-            {loading ? 'Loading…' : 'Download'}
-          </button>
-        </div>
-      </div>
-      {errorMessage ? <div className="cv-viewer-error">{errorMessage}</div> : null}
-      {showInline && isPdf && blobUrl ? (
+    <article className={`cv-doc ${blobUrl && canPreview ? 'has-embed' : ''}`}>
+      {blobUrl && isPdf ? (
         <iframe
           title="Candidate CV"
           src={blobUrl}
           className="cv-viewer-frame"
-          style={{ width: '100%', height: CV_VIEWER_PDF_HEIGHT, border: '1px solid var(--taali-border)', borderRadius: 8 }}
+          style={{ width: '100%', height: CV_VIEWER_PDF_HEIGHT }}
         />
       ) : null}
-      {parsedSections ? <CvParsedSections sections={parsedSections} /> : null}
-    </div>
+      {blobUrl && isImage ? (
+        <img src={blobUrl} alt="Candidate CV" className="cv-viewer-image" />
+      ) : null}
+      {!blobUrl && loading && canPreview ? (
+        <div className="cv-doc-loading">
+          <Spinner size={18} />
+          <span>Loading CV preview...</span>
+        </div>
+      ) : null}
+      {(!blobUrl || !canPreview) && (!loading || !canPreview) ? (
+        hasTextFallback ? (
+          <CvDocumentContent cvModel={cvModel} matchingSkills={cvMatchDetails?.matching_skills || []} />
+        ) : (
+          <div className="cv-doc-empty">
+            <div>
+              <div className="sub">Candidate CV fetched</div>
+              <div className="headline">{filename}</div>
+            </div>
+            <p>This file type cannot be previewed inline yet. Download the original CV to inspect it.</p>
+          </div>
+        )
+      ) : null}
+      {errorMessage ? <div className="cv-viewer-error">{errorMessage}</div> : null}
+      <div className="cv-doc-filebar">
+        <span>{filename}{uploadedAt ? ` · updated ${new Date(uploadedAt).toLocaleDateString()}` : ''}</span>
+        <button type="button" className="btn btn-outline btn-sm" onClick={handleDownload} disabled={loading}>
+          <Download size={13} />
+          Download
+        </button>
+      </div>
+    </article>
   );
 };
 
-const CvParsedSections = ({ sections }) => {
-  if (!sections || typeof sections !== 'object') return null;
-  if (sections.parse_failed) return null;
-  const {
-    headline,
-    summary,
-    experience,
-    education,
-    skills,
-    certifications,
-    languages,
-    links,
-  } = sections;
+const CvMatchRail = ({
+  application,
+  reportModel,
+  cvMatchDetails,
+  matchedRequirements,
+  missingRequirements,
+  onJumpToPrep,
+}) => {
+  const roleFitScore = reportModel?.summaryModel?.roleFitScore;
+  const matchedItems = (
+    matchedRequirements.length
+      ? matchedRequirements
+      : asArray(cvMatchDetails?.matching_skills).map((skill) => ({
+        requirement: skill,
+        evidence_quote: 'Skill matched in the candidate profile.',
+      }))
+  ).slice(0, 6);
+  const gapItems = (
+    missingRequirements.length
+      ? missingRequirements
+      : asArray(cvMatchDetails?.missing_skills).map((skill) => ({
+        requirement: skill,
+        evidence_quote: 'Probe this in the interview loop.',
+      }))
+  ).slice(0, 5);
+  const requirementTotal = Array.isArray(cvMatchDetails?.requirements_assessment)
+    ? cvMatchDetails.requirements_assessment.length
+    : matchedItems.length + gapItems.length;
+  const scoredAt = application?.cv_match_scored_at || application?.updated_at || null;
+
   return (
-    <div className="cv-sections">
-      {headline ? <div className="cv-section-headline"><strong>{headline}</strong></div> : null}
-      {summary ? (
-        <section className="cv-section">
-          <h4>Summary</h4>
-          <p>{summary}</p>
-        </section>
-      ) : null}
-      {Array.isArray(experience) && experience.length ? (
-        <section className="cv-section">
-          <h4>Experience</h4>
-          <div className="cv-experience-list">
-            {experience.map((entry, idx) => (
-              <div key={`${entry?.company || ''}-${entry?.title || ''}-${idx}`} className="cv-experience-card">
-                <div className="cv-experience-head">
-                  <strong>{entry?.title || 'Role'}</strong>
-                  {entry?.company ? <span> · {entry.company}</span> : null}
-                </div>
-                {(entry?.start || entry?.end) ? (
-                  <div className="muted-xs">{entry?.start || ''}{entry?.start && entry?.end ? ' — ' : ''}{entry?.end || ''}</div>
-                ) : null}
-                {Array.isArray(entry?.bullets) && entry.bullets.length ? (
-                  <ul>
-                    {entry.bullets.map((bullet, bi) => (
-                      <li key={bi}>{bullet}</li>
-                    ))}
-                  </ul>
-                ) : null}
+    <aside className="cv-rail">
+      <div className="rail-card">
+        <div className="rail-score">
+          <div className={`num ${(roleFitScore || 0) >= 75 ? 'hi' : 'md'}`}>
+            {roleFitScore != null ? Math.round(roleFitScore) : '—'}<sup>%</sup>
+          </div>
+          <div>
+            <div className="lbl">CV match</div>
+            <div className="meta">
+              vs. <b>{application?.role_name || application?.candidate_position || 'target role'}</b>
+              {requirementTotal ? <> · <b>{matchedItems.length} of {requirementTotal}</b> evidenced</> : null}
+            </div>
+          </div>
+        </div>
+        <div className="rail-meta">
+          {scoredAt ? `Scored ${new Date(scoredAt).toLocaleDateString()}` : 'Awaiting CV score'}
+          {cvMatchDetails?.score_scale ? ` · ${cvMatchDetails.score_scale}` : ''}
+        </div>
+      </div>
+
+      <div className="rail-card">
+        <div className="rail-section">
+          <div className="rail-head">
+            <span className="lbl">Matched · <b>{matchedItems.length}</b></span>
+            <span className="dot ok" aria-hidden="true" />
+          </div>
+          {matchedItems.length ? matchedItems.map((item, index) => {
+            const evidence = extractRequirementEvidence(item) || item?.evidence_quote || 'Matched evidence on file.';
+            return (
+              <div key={extractRequirementKey(item, index)} className="rail-item ok">
+                <span className="ic"><Check size={10} strokeWidth={3} /></span>
+                <span>
+                  <span className="t">{item.requirement || item}</span>
+                  <span className="ev">{evidence}</span>
+                </span>
               </div>
-            ))}
+            );
+          }) : (
+            <div className="rail-empty">No matched requirements are attached yet.</div>
+          )}
+        </div>
+
+        <div className="rail-section gap-section">
+          <div className="rail-head">
+            <span className="lbl">Missing or unclear · <b>{gapItems.length}</b></span>
+            <span className="dot gap" aria-hidden="true" />
           </div>
-        </section>
-      ) : null}
-      {Array.isArray(education) && education.length ? (
-        <section className="cv-section">
-          <h4>Education</h4>
-          <ul>
-            {education.map((entry, idx) => (
-              <li key={`${entry?.institution || ''}-${entry?.degree || ''}-${idx}`}>
-                <strong>{entry?.degree || 'Education'}</strong>
-                {entry?.institution ? `, ${entry.institution}` : ''}
-                {(entry?.start || entry?.end) ? <span className="muted-xs"> ({entry?.start || ''}{entry?.start && entry?.end ? '–' : ''}{entry?.end || ''})</span> : null}
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-      {Array.isArray(skills) && skills.length ? (
-        <section className="cv-section">
-          <h4>Skills</h4>
-          <div className="cv-chip-row">
-            {skills.map((skill, idx) => <span key={`${skill}-${idx}`} className="cv-chip">{skill}</span>)}
-          </div>
-        </section>
-      ) : null}
-      {Array.isArray(certifications) && certifications.length ? (
-        <section className="cv-section">
-          <h4>Certifications</h4>
-          <div className="cv-chip-row">
-            {certifications.map((cert, idx) => <span key={`${cert}-${idx}`} className="cv-chip">{cert}</span>)}
-          </div>
-        </section>
-      ) : null}
-      {Array.isArray(languages) && languages.length ? (
-        <section className="cv-section">
-          <h4>Languages</h4>
-          <div className="cv-chip-row">
-            {languages.map((lang, idx) => <span key={`${lang}-${idx}`} className="cv-chip">{lang}</span>)}
-          </div>
-        </section>
-      ) : null}
-      {Array.isArray(links) && links.length ? (
-        <section className="cv-section">
-          <h4>Links</h4>
-          <ul>
-            {links.map((href, idx) => (
-              <li key={`${href}-${idx}`}>
-                <a href={href} target="_blank" rel="noopener noreferrer">{href}</a>
-              </li>
-            ))}
-          </ul>
-        </section>
-      ) : null}
-    </div>
+          {gapItems.length ? gapItems.map((item, index) => {
+            const evidence = item?.impact || extractRequirementEvidence(item) || item?.evidence_quote || 'Probe this live.';
+            return (
+              <div key={extractRequirementKey(item, index)} className="rail-item gap">
+                <span className="ic"><AlertCircle size={10} strokeWidth={3} /></span>
+                <span>
+                  <span className="t">{item.requirement || item}</span>
+                  <span className="ev">{evidence}</span>
+                </span>
+              </div>
+            );
+          }) : (
+            <div className="rail-empty">No CV gaps are attached yet.</div>
+          )}
+        </div>
+
+        <button type="button" className="rail-jump" onClick={onJumpToPrep}>
+          Feed gaps into interview prep
+        </button>
+      </div>
+    </aside>
   );
 };
 
@@ -374,7 +675,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     try {
       const appRes = sharedRouteToken
         ? await rolesApi.getApplicationByShareToken(sharedRouteToken)
-        : await rolesApi.getApplication(numericApplicationId);
+        : await rolesApi.getApplication(numericApplicationId, { params: { include_cv_text: true } });
       const nextApplication = appRes?.data || null;
       setApplication(nextApplication);
 
@@ -687,27 +988,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setBusyAction('');
     }
   }, [assessmentId, assessmentsApi, showToast]);
-
-  const handleDownloadCandidateDoc = async (docType) => {
-    const candidateId = application?.candidate_id || completedAssessment?.candidate_id || null;
-    if (!candidateId || !candidatesApi?.downloadDocument) return;
-    try {
-      const res = await candidatesApi.downloadDocument(candidateId, docType);
-      const blob = new Blob([res.data]);
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = docType === 'cv'
-        ? (application?.cv_filename || completedAssessment?.candidate_cv_filename || 'candidate-cv')
-        : (completedAssessment?.candidate_job_spec_filename || application?.role_job_spec_filename || 'job-spec');
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to download document.'), 'error');
-    }
-  };
 
   if (loading) {
     return (
@@ -1033,21 +1313,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         </div>
 
         <div className={`pane ${activeTab === 'cv' ? 'active' : ''}`} data-p="cv" data-internal-only>
-          <CvViewer
-            candidateId={application?.candidate_id || completedAssessment?.candidate_id || null}
-            filename={application?.cv_filename || completedAssessment?.candidate_cv_filename || ''}
-            uploadedAt={application?.cv_uploaded_at || null}
-            candidatesApi={candidatesApi}
-            parsedSections={application?.cv_sections || null}
-          />
-          <div className="match-head">
-            <div className={`match-score ${(reportModel?.summaryModel?.roleFitScore || 0) >= 75 ? 'hi' : 'md'}`}>
-              {reportModel?.summaryModel?.roleFitScore != null ? Math.round(reportModel.summaryModel.roleFitScore) : '—'}<sup>%</sup>
-            </div>
-            <div>
-              <div className="sub">CV & role match</div>
-              <div className="headline">{cvMatchDetails?.summary || 'Role-fit evidence is available from the candidate application and assessment context.'}</div>
-            </div>
+          <div className="cv-doc-actions">
+            <span className="name">
+              {(application?.candidate_name || application?.candidate_email || 'Candidate')} · CV
+              {application?.cv_uploaded_at ? ` · uploaded ${new Date(application.cv_uploaded_at).toLocaleDateString()}` : ''}
+            </span>
             {application?.workable_profile_url ? (
               <button
                 type="button"
@@ -1058,35 +1328,28 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               </button>
             ) : null}
           </div>
-          <div className="match-grid">
-            <div className="match-col matched">
-              <h4>Matched requirements <span className="chip-num">{matchedRequirements.length}</span></h4>
-              <div className="match-list">
-                {(matchedRequirements.length ? matchedRequirements : (cvMatchDetails?.matching_skills || []).map((skill) => ({ requirement: skill, evidence_quote: 'Skill matched in candidate profile.' }))).slice(0, 5).map((item, index) => {
-                  const evidence = extractRequirementEvidence(item) || 'Matched evidence on file.';
-                  return (
-                    <div key={extractRequirementKey(item, index)} className="match-item">
-                      <span className="tick">✓</span>
-                      <span>{item.requirement || item}<div className="ev">{evidence}</div></span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-            <div className="match-col missing">
-              <h4>Gaps to validate <span className="chip-num">{missingRequirements.length || (cvMatchDetails?.missing_skills || []).length}</span></h4>
-              <div className="match-list">
-                {(missingRequirements.length ? missingRequirements : (cvMatchDetails?.missing_skills || []).map((skill) => ({ requirement: skill, evidence_quote: 'Probe this in the interview loop.' }))).slice(0, 5).map((item, index) => {
-                  const evidence = item?.impact || extractRequirementEvidence(item) || 'Probe this live.';
-                  return (
-                    <div key={extractRequirementKey(item, index)} className="match-item">
-                      <span className="cross">×</span>
-                      <span>{item.requirement || item}<div className="ev">{evidence}</div></span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
+          <div className="cv-layout">
+            <CvDocumentViewer
+              applicationId={application?.id || null}
+              candidateId={application?.candidate_id || completedAssessment?.candidate_id || null}
+              filename={application?.cv_filename || completedAssessment?.candidate_cv_filename || ''}
+              uploadedAt={application?.cv_uploaded_at || null}
+              rolesApi={rolesApi}
+              candidatesApi={candidatesApi}
+              parsedSections={application?.cv_sections || null}
+              cvText={application?.cv_text || ''}
+              application={application}
+              cvMatchDetails={cvMatchDetails}
+              autoPreview={activeTab === 'cv'}
+            />
+            <CvMatchRail
+              application={application}
+              reportModel={reportModel}
+              cvMatchDetails={cvMatchDetails}
+              matchedRequirements={matchedRequirements}
+              missingRequirements={missingRequirements}
+              onJumpToPrep={() => activateTab('prep')}
+            />
           </div>
         </div>
 

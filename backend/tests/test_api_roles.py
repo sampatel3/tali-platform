@@ -660,6 +660,61 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
     assert apps[0]["cv_match_scored_at"] is not None
 
 
+def test_application_detail_exposes_cv_sections_and_document_file(client, db, tmp_path, monkeypatch):
+    headers, _ = auth_headers(client)
+    role = client.post("/api/v1/roles", json={"name": "CV document role"}, headers=headers).json()
+    job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Python backend role"), "text/plain")}
+    assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers).status_code == 200
+
+    app = client.post(
+        f"/api/v1/roles/{role['id']}/applications",
+        json={"candidate_email": "cv-doc@example.com", "candidate_name": "CV Doc"},
+        headers=headers,
+    ).json()
+
+    stored_cv = tmp_path / "cv-doc.pdf"
+    stored_cv.write_bytes(b"%PDF-1.4 stored cv bytes")
+    monkeypatch.setattr(
+        applications_routes,
+        "process_document_upload",
+        lambda **_: {
+            "file_url": str(stored_cv),
+            "filename": "cv-doc.pdf",
+            "extracted_text": "CV Doc\n\nSummary\nPython backend engineer\n\nSkills\nPython, FastAPI",
+            "text_preview": "CV Doc",
+        },
+    )
+
+    cv_file = {"file": ("cv-doc.pdf", io.BytesIO(b"%PDF-1.4 upload"), "application/pdf")}
+    upload_resp = client.post(f"/api/v1/applications/{app['id']}/upload-cv", files=cv_file, headers=headers)
+    assert upload_resp.status_code == 200, upload_resp.text
+
+    app_row = db.query(CandidateApplication).filter(CandidateApplication.id == app["id"]).first()
+    app_row.cv_sections = {
+        "headline": "Backend Engineer",
+        "summary": "Python backend engineer",
+        "skills": ["Python", "FastAPI"],
+        "experience": [],
+        "education": [],
+        "certifications": [],
+        "languages": [],
+        "links": [],
+    }
+    db.commit()
+
+    detail_resp = client.get(f"/api/v1/applications/{app['id']}?include_cv_text=true", headers=headers)
+    assert detail_resp.status_code == 200, detail_resp.text
+    detail = detail_resp.json()
+    assert detail["cv_text"].startswith("CV Doc")
+    assert detail["cv_sections"]["headline"] == "Backend Engineer"
+    assert detail["cv_sections"]["skills"] == ["Python", "FastAPI"]
+
+    doc_resp = client.get(f"/api/v1/applications/{app['id']}/documents/cv", headers=headers)
+    assert doc_resp.status_code == 200, doc_resp.text
+    assert doc_resp.content == b"%PDF-1.4 stored cv bytes"
+    assert doc_resp.headers["content-type"].startswith("application/pdf")
+
+
 def test_job_spec_upload_generates_interview_focus(client, monkeypatch):
     headers, _ = auth_headers(client)
     role = client.post("/api/v1/roles", json={"name": "Interview focus role"}, headers=headers).json()

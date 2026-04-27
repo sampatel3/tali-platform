@@ -707,8 +707,8 @@ def application_to_response(
         candidate_email=(candidate.email if candidate else ""),
         candidate_name=(candidate.full_name if candidate else None),
         candidate_position=(candidate.position if candidate else None),
-        cv_filename=app.cv_filename,
-        cv_uploaded_at=app.cv_uploaded_at,
+        cv_filename=app.cv_filename or (candidate.cv_filename if candidate else None),
+        cv_uploaded_at=app.cv_uploaded_at or (candidate.cv_uploaded_at if candidate else None),
         cv_match_score=cv_match_score,
         cv_match_details=cv_match_details or None,
         cv_match_scored_at=app.cv_match_scored_at,
@@ -770,6 +770,10 @@ def application_detail_payload(app: CandidateApplication, *, include_cv_text: bo
         payload["cv_text"] = cv or None
     else:
         payload["cv_text"] = None
+    cv_sections = app.cv_sections if isinstance(app.cv_sections, dict) else None
+    if cv_sections is None and app.candidate and isinstance(app.candidate.cv_sections, dict):
+        cv_sections = app.candidate.cv_sections
+    payload["cv_sections"] = cv_sections
     payload["assessment_preview"] = _assessment_preview_for_application(app)
     payload["assessment_history"] = _assessment_history_for_application(app)
     payload["candidate_interview_kit"] = build_candidate_interview_kit_for_application(app)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import mimetypes
+from pathlib import Path
 import secrets
 import threading
 from datetime import datetime, timedelta, timezone
@@ -8,7 +10,7 @@ from time import perf_counter
 import re
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import asc, desc, func, or_
 from sqlalchemy.orm import Session, joinedload
@@ -52,6 +54,7 @@ from ...components.integrations.workable.service import WorkableRateLimitError, 
 from ...services.document_service import (
     MAX_FILE_SIZE,
     extract_text,
+    load_stored_document_bytes,
     process_document_upload,
     sanitize_json_for_storage,
     sanitize_text_for_storage,
@@ -1023,6 +1026,51 @@ def download_application_report_pdf(
     )
 
 
+@router.get("/applications/{application_id}/documents/{doc_type}")
+def download_application_document(
+    application_id: int,
+    doc_type: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return application-scoped CV/job-spec files for inline report previews."""
+    app = get_application(application_id, current_user.organization_id, db)
+    normalized_doc_type = str(doc_type or "").strip().lower()
+    if normalized_doc_type not in {"cv", "job-spec"}:
+        raise HTTPException(status_code=400, detail="Unsupported document type")
+
+    if normalized_doc_type == "cv":
+        file_url = app.cv_file_url or (app.candidate.cv_file_url if app.candidate else None)
+        filename = app.cv_filename or (app.candidate.cv_filename if app.candidate else None) or "candidate-cv"
+    else:
+        file_url = app.role.job_spec_file_url if app.role else None
+        filename = app.role.job_spec_filename if app.role else None
+        if not file_url and app.candidate:
+            file_url = app.candidate.job_spec_file_url
+            filename = app.candidate.job_spec_filename
+        filename = filename or "job-spec"
+
+    if not file_url:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    safe_filename = _report_filename_part(filename, "document")
+    inline_headers = {"Content-Disposition": f'inline; filename="{safe_filename}"'}
+
+    stored_bytes = load_stored_document_bytes(file_url)
+    if stored_bytes:
+        return Response(content=stored_bytes, media_type=media_type, headers=inline_headers)
+
+    if file_url.startswith("http://") or file_url.startswith("https://"):
+        return RedirectResponse(url=file_url, status_code=307)
+
+    file_path = Path(file_url).resolve()
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="Document file missing")
+
+    return FileResponse(path=str(file_path), filename=filename, media_type=media_type, headers=inline_headers)
+
+
 @router.patch("/applications/{application_id}", response_model=ApplicationResponse)
 def update_application(
     application_id: int,
@@ -1829,7 +1877,9 @@ def _try_fetch_cv_from_workable(
         return False
 
     ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
-    if ext not in {"pdf", "docx", "txt"}:
+    preview_only_exts = {"pdf", "png", "jpg", "jpeg", "webp"}
+    text_exts = {"pdf", "docx", "txt"}
+    if ext not in (text_exts | preview_only_exts):
         return False
 
     now = datetime.now(timezone.utc)
@@ -1845,8 +1895,8 @@ def _try_fetch_cv_from_workable(
     except Exception:
         pass
 
-    extracted = sanitize_text_for_storage(extract_text(content, ext))
-    if not extracted:
+    extracted = sanitize_text_for_storage(extract_text(content, ext)) if ext in text_exts else ""
+    if not extracted and ext not in preview_only_exts:
         return False
 
     app.cv_file_url = file_url
@@ -1870,6 +1920,9 @@ def _try_fetch_cv_from_workable(
     # prevent the CV fetch from succeeding — the candidate page falls
     # back to raw text rendering when cv_sections is null or
     # parse_failed=True.
+    if not extracted:
+        return True
+
     try:
         from ...cv_parsing import parse_cv
 

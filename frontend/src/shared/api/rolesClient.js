@@ -26,6 +26,8 @@ export const roles = {
   listApplicationEvents: (applicationId, params = {}) => api.get(`/applications/${applicationId}/events`, { params }),
   generateApplicationInterviewDebrief: (applicationId, data = {}) => api.post(`/applications/${applicationId}/interview-debrief`, data),
   downloadApplicationReport: (applicationId) => api.get(`/applications/${applicationId}/report.pdf`, { responseType: 'blob' }),
+  downloadApplicationDocument: (applicationId, docType = 'cv') =>
+    api.get(`/applications/${applicationId}/documents/${docType}`, { responseType: 'blob' }),
   createApplication: (roleId, data) => api.post(`/roles/${roleId}/applications`, data),
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),
   updateApplicationStage: (applicationId, data) => api.patch(`/applications/${applicationId}/stage`, data),
