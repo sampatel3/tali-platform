@@ -65,6 +65,7 @@ export const BackgroundJobsToaster = ({ roleId }) => {
   const batchTotal = Number(batchProgress?.total || 0);
   const batchScored = Number(batchProgress?.scored || 0);
   const batchErrors = Number(batchProgress?.errors || 0);
+  const batchPreScreenedOut = Number(batchProgress?.pre_screened_out || 0);
   const fetchTotal = Number(fetchProgress?.total || 0);
   const fetchDone = Number(fetchProgress?.fetched || 0);
 
@@ -136,7 +137,7 @@ export const BackgroundJobsToaster = ({ roleId }) => {
       cancelling,
       cancelled,
       detail: batchTotal > 0
-        ? `${batchScored}/${batchTotal} scored${batchErrors ? ` · ${batchErrors} error(s)` : ''}`
+        ? `${batchScored}/${batchTotal} scored${batchPreScreenedOut ? ` · ${batchPreScreenedOut} pre-screened out` : ''}${batchErrors ? ` · ${batchErrors} error(s)` : ''}`
         : 'starting…',
       pct,
     });

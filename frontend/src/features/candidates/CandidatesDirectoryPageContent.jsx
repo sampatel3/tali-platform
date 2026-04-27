@@ -1777,7 +1777,7 @@ export const CandidatesDirectoryPage = ({
                   <div>Candidate</div>
                   <div>Role</div>
                   <div title="CV scored against job spec + recruiter requirements">CV match</div>
-                  <div>Taali score</div>
+                  <div title="Composite score — CV match before assessment, blended with assessment after.">Taali score</div>
                   <div>AI collab</div>
                   <div>Hire signal</div>
                   <div>Status</div>

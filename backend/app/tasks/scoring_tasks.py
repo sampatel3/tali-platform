@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
     max_retries=0,
     queue="scoring",
 )
-def score_application_job(self, application_id: int) -> dict:
+def score_application_job(self, application_id: int, *, force_full_score: bool = False) -> dict:
     """Score a single application asynchronously.
 
     The orchestrator wires the cache + Claude call + result persistence;
@@ -30,6 +30,9 @@ def score_application_job(self, application_id: int) -> dict:
     a transient Claude failure should mark the latest job as ``error`` and
     let the recruiter trigger a manual rescore — silent retries would mask
     real issues like a malformed prompt.
+
+    ``force_full_score`` bypasses the pre-screen gate (used when a
+    recruiter manually overrides a "pre-screened out" verdict).
     """
     from ..models.candidate_application import CandidateApplication
     from ..models.cv_score_job import CvScoreJob, SCORE_JOB_ERROR
@@ -60,7 +63,7 @@ def score_application_job(self, application_id: int) -> dict:
             return {"status": "skipped", "application_id": application_id, "job_status": job.status}
 
         try:
-            _execute_scoring(db, application=application, job=job)
+            _execute_scoring(db, application=application, job=job, force_full_score=force_full_score)
             db.commit()
             return {
                 "status": job.status,
@@ -209,6 +212,7 @@ def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
         apps = query.all()
 
         enqueued = 0
+        pre_screened_out = 0
         for app in apps:
             if is_batch_score_cancelled(role_id):
                 logger.info(
@@ -223,10 +227,15 @@ def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
                     "count": enqueued,
                     "fetched": fetched,
                     "fetch_failures": fetch_failures,
+                    "pre_screened_out": pre_screened_out,
                 }
             job = enqueue_score(db, app, force=include_scored)
             if job is not None:
                 enqueued += 1
+                # When inline (no Celery), the job has already run by now —
+                # count gate-filtered verdicts so the toaster can show progress.
+                if str(getattr(job, "cache_hit", "") or "") == "pre_screen_filtered":
+                    pre_screened_out += 1
         db.commit()
 
         # Clear the flag after a clean run so the next batch starts fresh.
@@ -247,6 +256,7 @@ def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
             "count": enqueued,
             "fetched": fetched,
             "fetch_failures": fetch_failures,
+            "pre_screened_out": pre_screened_out,
         }
     finally:
         db.close()

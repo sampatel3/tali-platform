@@ -189,6 +189,13 @@ class Settings(BaseSettings):
     # Empty string = ring-buffer-only (admin route reads from memory).
     CV_MATCH_TRACE_LOG_PATH: str = ""
 
+    # Two-tier scoring gate: when True, every v3 score is preceded by a
+    # cheap pre-screen LLM call (~$0.0002/CV). "no" verdicts skip the
+    # full v3 call and short-circuit with a "pre_screened_out" cache_hit.
+    # "yes"/"maybe"/"error" fall through to v3 unchanged. Default off.
+    # Recruiters override per candidate via enqueue_score(force=True).
+    ENABLE_PRE_SCREEN_GATE: bool = False
+
     # MVP feature flags (default to MVP-safe behavior)
     MVP_DISABLE_STRIPE: bool = True
     MVP_DISABLE_LEMON: bool = True

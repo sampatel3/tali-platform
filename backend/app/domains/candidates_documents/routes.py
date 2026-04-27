@@ -317,6 +317,17 @@ def download_candidate_document(
 
     file_path = Path(file_url).resolve()
     if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="Document file missing")
+        # Local file missing — almost always means the file lived on
+        # ephemeral disk (e.g. Railway) and was lost on redeploy because
+        # S3 was unavailable at upload time. 410 with structured detail
+        # so the UI can render a clear "re-upload required" CTA instead
+        # of a perpetual spinner.
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "reason": "file_storage_unavailable",
+                "message": "CV file expired from local storage. Re-upload from Workable to restore it.",
+            },
+        )
 
     return FileResponse(path=str(file_path), filename=filename)

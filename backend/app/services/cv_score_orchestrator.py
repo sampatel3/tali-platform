@@ -44,6 +44,7 @@ from ..models.cv_score_job import (
 )
 from ..models.role import Role
 from ..platform.config import settings
+from ..domains.assessments_runtime.pipeline_service import append_application_event
 from .fit_matching_service import (
     CV_MATCH_V4_PROMPT_VERSION,
     CvMatchValidationError,
@@ -200,16 +201,21 @@ def enqueue_score(
     if settings.MVP_DISABLE_CELERY:
         # Run inline so unit/dev environments don't need a broker. The job
         # object is mutated in place by _execute_scoring; the caller commits.
-        _run_score_job_inline(db, job_id=job.id)
+        _run_score_job_inline(db, job_id=job.id, force_full_score=force)
     else:
         from ..tasks.scoring_tasks import score_application_job
 
-        async_result = score_application_job.delay(application.id)
+        async_result = score_application_job.delay(application.id, force_full_score=force)
         job.celery_task_id = str(async_result.id)
     return job
 
 
-def _run_score_job_inline(db: Session, *, job_id: int) -> None:
+def _run_score_job_inline(
+    db: Session,
+    *,
+    job_id: int,
+    force_full_score: bool = False,
+) -> None:
     """Run a job within the current request's session (used when Celery is disabled).
 
     Mirrors the Celery task body but reuses the active ``db`` so the work
@@ -228,7 +234,7 @@ def _run_score_job_inline(db: Session, *, job_id: int) -> None:
         job.error_message = "application_not_found"
         job.finished_at = datetime.now(timezone.utc)
         return
-    _execute_scoring(db, application=application, job=job)
+    _execute_scoring(db, application=application, job=job, force_full_score=force_full_score)
 
 
 def _execute_scoring(
@@ -236,6 +242,7 @@ def _execute_scoring(
     *,
     application: CandidateApplication,
     job: CvScoreJob,
+    force_full_score: bool = False,
 ) -> None:
     """Run the scoring pipeline for one application + job pair.
 
@@ -246,7 +253,7 @@ def _execute_scoring(
     cv_match_v3.0 module for grounded, retried, schema-validated scoring.
     """
     if settings.USE_CV_MATCH_V3:
-        _execute_scoring_v3(db, application=application, job=job)
+        _execute_scoring_v3(db, application=application, job=job, force_full_score=force_full_score)
         return
 
     role = application.role
@@ -354,6 +361,64 @@ def _execute_scoring(
     application.cv_match_scored_at = datetime.now(timezone.utc)
     job.status = SCORE_JOB_DONE
     job.finished_at = datetime.now(timezone.utc)
+    _emit_cv_scored_event(
+        db,
+        application=application,
+        job=job,
+        score_100=normalized_score,
+        recommendation=str((match_details or {}).get("recommendation") or ""),
+        prompt_version=prompt_version,
+        model_version=resolved_model,
+        trace_id=str((match_details or {}).get("trace_id") or job.cache_key or job.id),
+        cache_hit=job.cache_hit or "miss",
+    )
+
+
+def _emit_cv_scored_event(
+    db: Session,
+    *,
+    application: CandidateApplication,
+    job: CvScoreJob,
+    score_100: float | None,
+    recommendation: str,
+    prompt_version: str | None,
+    model_version: str | None,
+    trace_id: str,
+    cache_hit: str,
+) -> None:
+    """Emit a `cv_scored` activity event so the candidate timeline reflects
+    every successful CV score. Idempotent on (application, trace_id)."""
+    try:
+        score_label = (
+            f"{float(score_100):.0f}%"
+            if isinstance(score_100, (int, float)) and score_100 is not None
+            else "—"
+        )
+        rec_label = recommendation.replace("_", " ").strip() or "scored"
+        reason = f"CV scored: {rec_label} ({score_label})"
+        append_application_event(
+            db,
+            app=application,
+            event_type="cv_scored",
+            actor_type="system",
+            reason=reason,
+            metadata={
+                "prompt_version": prompt_version,
+                "model_version": model_version,
+                "role_fit_score": score_100,
+                "recommendation": recommendation or None,
+                "trace_id": trace_id,
+                "cache_hit": cache_hit,
+                "job_id": job.id,
+            },
+            idempotency_key=f"cv_scored:{application.id}:{trace_id}",
+        )
+    except Exception:  # pragma: no cover — telemetry must never break scoring
+        logger.exception(
+            "Failed to emit cv_scored event for application=%s job=%s",
+            getattr(application, "id", None),
+            getattr(job, "id", None),
+        )
 
 
 def _execute_scoring_v3(
@@ -361,6 +426,7 @@ def _execute_scoring_v3(
     *,
     application: CandidateApplication,
     job: CvScoreJob,
+    force_full_score: bool = False,
 ) -> None:
     """Score one application via the cv_match_v3.0 pipeline.
 
@@ -418,6 +484,46 @@ def _execute_scoring_v3(
                 )
             )
 
+    # Two-tier scoring gate. When enabled, the cheap pre-screen runs
+    # first; "no" verdicts skip the expensive v3 call entirely. Recruiter
+    # manual rescores (force_full_score) bypass the gate.
+    if settings.ENABLE_PRE_SCREEN_GATE and not force_full_score:
+        from ..cv_matching.runner_pre_screen import (
+            PRE_SCREEN_PROMPT_VERSION as PRE_SCREEN_VERSION,
+            run_pre_screen,
+        )
+
+        pre = run_pre_screen(cv_text, job_spec_text, requirements)
+        if pre.decision == "no":
+            now = datetime.now(timezone.utc)
+            details = {
+                "scoring_version": V3_PROMPT_VERSION,
+                "pre_screen_decision": pre.decision,
+                "pre_screen_reason": pre.reason,
+                "pre_screen_trace_id": pre.trace_id,
+                "pre_screen_prompt_version": PRE_SCREEN_VERSION,
+                "summary": f"Pre-screen filtered out: {pre.reason}",
+                "recommendation": "no",
+            }
+            application.cv_match_score = None
+            application.cv_match_details = details
+            application.cv_match_scored_at = now
+            job.cache_hit = "pre_screen_filtered"
+            job.status = SCORE_JOB_DONE
+            job.finished_at = now
+            _emit_cv_scored_event(
+                db,
+                application=application,
+                job=job,
+                score_100=None,
+                recommendation="pre_screened_out",
+                prompt_version=PRE_SCREEN_VERSION,
+                model_version=V3_MODEL_VERSION,
+                trace_id=pre.trace_id or f"job-{job.id}",
+                cache_hit="pre_screen_filtered",
+            )
+            return
+
     output = run_cv_match(cv_text, job_spec_text, requirements)
     job.cache_hit = "hit" if getattr(output, "cache_hit", False) else "miss"
 
@@ -439,6 +545,17 @@ def _execute_scoring_v3(
     application.cv_match_scored_at = datetime.now(timezone.utc)
     job.status = SCORE_JOB_DONE
     job.finished_at = datetime.now(timezone.utc)
+    _emit_cv_scored_event(
+        db,
+        application=application,
+        job=job,
+        score_100=output.role_fit_score,
+        recommendation=getattr(output.recommendation, "value", str(output.recommendation or "")),
+        prompt_version=V3_PROMPT_VERSION,
+        model_version=V3_MODEL_VERSION,
+        trace_id=output.trace_id or f"job-{job.id}",
+        cache_hit="hit" if getattr(output, "cache_hit", False) else "miss",
+    )
 
 
 def mark_role_scores_stale(db: Session, role_id: int) -> int:
