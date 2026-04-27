@@ -357,6 +357,56 @@ const CvDocumentContent = ({ cvModel, matchingSkills }) => {
   );
 };
 
+const toBulletList = (value) => {
+  if (Array.isArray(value)) return value.filter(Boolean).map(asCleanText).filter(Boolean);
+  const text = asCleanText(value);
+  return text ? [text] : [];
+};
+
+const PrepQuestionCard = ({ item, number, listenLabel, concernLabel, fallbackConcern }) => {
+  const listenItems = toBulletList(item?.listenFor);
+  const concernItems = toBulletList(item?.redFlags || item?.followUp);
+  const evidenceText = asCleanText(item?.evidence);
+  const contextText = asCleanText(item?.context);
+  return (
+    <div className="q-card">
+      <div className="q-num">QUESTION {String(number).padStart(2, '0')} · {item?.source || 'Standing report'}</div>
+      <div className="q-text">{item?.question}</div>
+      {contextText ? (
+        <div className="q-context" style={{ marginTop: '6px', fontSize: '13.5px', lineHeight: 1.55, color: 'var(--mute)' }}>
+          {contextText}
+        </div>
+      ) : null}
+      <div className="q-meta">
+        <div>
+          <div className="label">{listenLabel}</div>
+          <ul className="listen">
+            {(listenItems.length ? listenItems : ['Specific examples tied to the candidate evidence.']).map((line, idx) => (
+              <li key={`listen-${idx}`}>{line}</li>
+            ))}
+          </ul>
+        </div>
+        <div>
+          <div className="label">{concernLabel}</div>
+          <ul className="concerning">
+            {(concernItems.length ? concernItems : [fallbackConcern]).map((line, idx) => (
+              <li key={`concern-${idx}`}>{line}</li>
+            ))}
+          </ul>
+        </div>
+      </div>
+      {evidenceText ? (
+        <div className="q-evidence" style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '10px', background: 'var(--taali-surface-subtle, rgba(124, 58, 237, 0.06))', fontSize: '13px', lineHeight: 1.55, color: 'var(--ink-2)' }}>
+          <div className="label" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--mute)', marginBottom: '4px' }}>
+            Anchor in
+          </div>
+          {evidenceText}
+        </div>
+      ) : null}
+    </div>
+  );
+};
+
 const CvDocumentViewer = ({
   applicationId,
   candidateId,
@@ -828,6 +878,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       .slice(0, 4);
   }, [cvMatchDetails]);
   const interviewQuestions = useMemo(() => {
+    const override = application?.interview_prep;
+    if (override && (Array.isArray(override.stageOne) || Array.isArray(override.stageTwo))) {
+      return {
+        stageOne: Array.isArray(override.stageOne) ? override.stageOne : [],
+        stageTwo: Array.isArray(override.stageTwo) ? override.stageTwo : [],
+      };
+    }
     const stageOne = [
       {
         question: `Walk me through the strongest evidence that ${application?.role_name || 'this role'} matches your recent work.`,
@@ -853,7 +910,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       },
     ].slice(0, 4);
     return { stageOne, stageTwo };
-  }, [application?.role_name, riskItems, strengthItems]);
+  }, [application?.interview_prep, application?.role_name, riskItems, strengthItems]);
   const timelineItems = useMemo(() => {
     if (applicationEvents.length) {
       return applicationEvents.slice(0, 8).map((event) => ({
@@ -1401,14 +1458,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               <p className="sub">Use these to validate claims quickly before the deeper panel loop.</p>
               <div className="qgroup">
                 {interviewQuestions.stageOne.map((item, index) => (
-                  <div key={`${item.question}-${index}`} className="q-card">
-                    <div className="q-num">QUESTION {String(index + 1).padStart(2, '0')} · {item.source}</div>
-                    <div className="q-text">{item.question}</div>
-                    <div className="q-meta">
-                      <div><div className="label">Listen for</div><ul className="listen"><li>{item.listenFor}</li></ul></div>
-                      <div><div className="label">Follow-up</div><ul className="concerning"><li>Ask for one concrete example, artifact, or tradeoff.</li></ul></div>
-                    </div>
-                  </div>
+                  <PrepQuestionCard
+                    key={`${item.question}-${index}`}
+                    item={item}
+                    number={index + 1}
+                    listenLabel="Listen for"
+                    concernLabel="Follow-up"
+                    fallbackConcern="Ask for one concrete example, artifact, or tradeoff."
+                  />
                 ))}
               </div>
             </div>
@@ -1417,14 +1474,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               <p className="sub">Designed for the hiring panel: probe how the candidate thinks with AI in the actual work.</p>
               <div className="qgroup">
                 {interviewQuestions.stageTwo.map((item, index) => (
-                  <div key={`${item.question}-${index}`} className="q-card">
-                    <div className="q-num">QUESTION {String(index + 1).padStart(2, '0')} · {item.source}</div>
-                    <div className="q-text">{item.question}</div>
-                    <div className="q-meta">
-                      <div><div className="label">Strong signal</div><ul className="listen"><li>{item.listenFor}</li></ul></div>
-                      <div><div className="label">Concern</div><ul className="concerning"><li>Vague answers without links to code, prompts, or decisions.</li></ul></div>
-                    </div>
-                  </div>
+                  <PrepQuestionCard
+                    key={`${item.question}-${index}`}
+                    item={item}
+                    number={index + 1}
+                    listenLabel="Strong signal"
+                    concernLabel="Concern"
+                    fallbackConcern="Vague answers without links to code, prompts, or decisions."
+                  />
                 ))}
               </div>
             </div>
