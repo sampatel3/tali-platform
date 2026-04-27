@@ -126,12 +126,13 @@ const getRoleBadgeLabel = (role) => {
   return 'Role';
 };
 
-export const JobsPage = ({ onNavigate, NavComponent = null }) => {
+export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => {
   const rolesApi = apiClient.roles;
   const orgApi = apiClient.organizations;
   const tasksApi = 'tasks' in apiClient ? apiClient.tasks : null;
   const [searchParams] = useSearchParams();
   const isShowcase = searchParams.get('demo') === '1' && searchParams.get('showcase') === '1';
+  const onNavigate = isShowcase ? () => {} : rawOnNavigate;
 
   const [roles, setRoles] = useState([]);
   const [orgData, setOrgData] = useState(null);
