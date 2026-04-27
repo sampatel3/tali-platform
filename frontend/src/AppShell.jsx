@@ -85,8 +85,15 @@ const isPublicCandidateSharePath = (pathname, search = '') => {
   return false;
 };
 
+const isShowcaseRecruiterPath = (pathname, search = '') => {
+  const params = new URLSearchParams(search || '');
+  if (params.get('demo') !== '1' || params.get('showcase') !== '1') return false;
+  return pathname === '/jobs' || pathname === '/candidates';
+};
+
 const isProtectedRecruiterPath = (pathname, search = '') => {
   if (isPublicCandidateSharePath(pathname, search)) return false;
+  if (isShowcaseRecruiterPath(pathname, search)) return false;
   return (
     [
     '/dashboard',
