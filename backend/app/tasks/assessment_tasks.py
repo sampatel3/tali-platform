@@ -224,9 +224,58 @@ def send_assessment_expiry_reminders():
         db.close()
 
 
+_WORKABLE_SYNC_LOCK_KEY = "celery:lock:sync_workable_orgs"
+_WORKABLE_SYNC_LOCK_TTL_SECONDS = 7200  # 2h ceiling — auto-released if a worker dies mid-sync
+
+
+def _acquire_sync_lock():
+    """Best-effort Redis lock so only one sync_workable_orgs runs at a time.
+
+    The Workable paginated sync regularly takes 60-70 min — longer than its
+    30-min schedule — and previously piled up on the worker pool, blocking
+    every other Celery task (including scoring). Using SETNX with a TTL
+    means crashed workers don't leave the lock stuck forever.
+
+    Returns the redis client if we got the lock, None if another sync is
+    already running, or False on Redis errors (caller treats as no-lock,
+    runs anyway — better than failing closed and never syncing).
+    """
+    try:
+        import redis  # type: ignore
+
+        client = redis.Redis.from_url(settings.REDIS_URL)
+        # SET NX EX TTL — atomic acquire-with-expiry.
+        acquired = client.set(
+            _WORKABLE_SYNC_LOCK_KEY,
+            "1",
+            nx=True,
+            ex=_WORKABLE_SYNC_LOCK_TTL_SECONDS,
+        )
+        if not acquired:
+            return None
+        return client
+    except Exception:
+        logger.exception("Failed to acquire Workable sync lock; running unguarded")
+        return False
+
+
+def _release_sync_lock(client) -> None:
+    if not client:
+        return
+    try:
+        client.delete(_WORKABLE_SYNC_LOCK_KEY)
+    except Exception:
+        logger.exception("Failed to release Workable sync lock")
+
+
 @celery_app.task
 def sync_workable_orgs():
-    """Periodic task: sync Workable jobs/candidates for hybrid-workflow orgs."""
+    """Periodic task: sync Workable jobs/candidates for hybrid-workflow orgs.
+
+    Self-skips when another instance is already running (Redis-backed
+    lock with a 2-hour TTL ceiling). Without the lock, scheduled fires
+    pile up on slow paginated syncs and starve the worker pool.
+    """
     from datetime import datetime, timedelta, timezone
     from sqlalchemy.orm import Session
 
@@ -237,6 +286,13 @@ def sync_workable_orgs():
 
     if settings.MVP_DISABLE_WORKABLE:
         return {"status": "skipped", "reason": "workable_disabled"}
+
+    lock_client = _acquire_sync_lock()
+    if lock_client is None:
+        # Another sync is in progress — skip this scheduled fire entirely.
+        # Beat will try again at the next interval.
+        logger.info("sync_workable_orgs skipping: another sync is already running")
+        return {"status": "skipped", "reason": "already_running"}
 
     db: Session = SessionLocal()
     synced = 0
@@ -283,3 +339,4 @@ def sync_workable_orgs():
         return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
     finally:
         db.close()
+        _release_sync_lock(lock_client)
