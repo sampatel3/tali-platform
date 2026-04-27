@@ -304,7 +304,7 @@ const getStatusChip = (application) => {
 const toCsvValue = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
 
 export const CandidatesDirectoryPage = ({
-  onNavigate,
+  onNavigate: rawOnNavigate,
   NavComponent = null,
   initialRoleId = null,
   lockRoleId = null,
@@ -320,6 +320,7 @@ export const CandidatesDirectoryPage = ({
   const { showToast } = useToast();
   const [searchParams] = useSearchParams();
   const isShowcase = searchParams.get('demo') === '1' && searchParams.get('showcase') === '1';
+  const onNavigate = isShowcase ? () => {} : rawOnNavigate;
   const lockedRoleValue = lockRoleId != null && String(lockRoleId).trim() ? String(lockRoleId).trim() : null;
   const defaultRoleFilter = lockedRoleValue
     || (initialRoleId != null && String(initialRoleId).trim() ? String(initialRoleId).trim() : 'all');
@@ -1379,9 +1380,10 @@ export const CandidatesDirectoryPage = ({
   }, []);
 
   const openCandidateReportInNewTab = useCallback((application) => {
+    if (isShowcase) return;
     if (!application?.id || typeof window === 'undefined') return;
     window.open(candidateReportHref(application), '_blank', 'noopener,noreferrer');
-  }, []);
+  }, [isShowcase]);
 
   const isInteractiveRowTarget = (target) => (
     target instanceof Element
