@@ -138,11 +138,11 @@ describe('JobPipelinePage', () => {
     renderPipeline({ onNavigate });
 
     const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
-    expect(appliedCard).toHaveAttribute('href', '/candidates/1');
+    expect(appliedCard).toHaveAttribute('href', '/candidates/1?from=jobs/101');
 
     fireEvent.click(appliedCard);
 
-    expect(onNavigate).toHaveBeenCalledWith('candidate-report', { candidateApplicationId: 1 });
+    expect(onNavigate).toHaveBeenCalledWith('candidate-report', { candidateApplicationId: 1, fromRoleId: 101 });
     expect(screen.queryByText(/Send Taali assessment/i)).not.toBeInTheDocument();
   });
 
