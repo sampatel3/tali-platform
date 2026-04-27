@@ -454,7 +454,25 @@ const CvDocumentViewer = ({
       setBlobUrl(url);
       return url;
     } catch (err) {
-      setErrorMessage('Failed to load CV.');
+      const status = err?.response?.status;
+      const detail = err?.response?.data;
+      // The download endpoints return JSON in detail, but axios may
+      // surface it as ArrayBuffer because the request expects a blob.
+      let parsedDetail = detail;
+      if (detail instanceof ArrayBuffer) {
+        try {
+          parsedDetail = JSON.parse(new TextDecoder().decode(detail));
+        } catch (_) {
+          parsedDetail = null;
+        }
+      }
+      const reason = parsedDetail?.detail?.reason || parsedDetail?.reason;
+      const message = parsedDetail?.detail?.message || parsedDetail?.message;
+      if (status === 410 || reason === 'file_storage_unavailable') {
+        setErrorMessage(message || 'CV file expired from storage. Re-upload from Workable to restore it.');
+      } else {
+        setErrorMessage('Failed to load CV.');
+      }
       return '';
     } finally {
       setLoading(false);
@@ -487,7 +505,23 @@ const CvDocumentViewer = ({
       anchor.click();
       anchor.remove();
     } catch (err) {
-      setErrorMessage('Failed to download CV.');
+      const status = err?.response?.status;
+      const detail = err?.response?.data;
+      let parsedDetail = detail;
+      if (detail instanceof ArrayBuffer) {
+        try {
+          parsedDetail = JSON.parse(new TextDecoder().decode(detail));
+        } catch (_) {
+          parsedDetail = null;
+        }
+      }
+      const reason = parsedDetail?.detail?.reason || parsedDetail?.reason;
+      const message = parsedDetail?.detail?.message || parsedDetail?.message;
+      if (status === 410 || reason === 'file_storage_unavailable') {
+        setErrorMessage(message || 'CV file expired from storage. Re-upload from Workable to restore it.');
+      } else {
+        setErrorMessage('Failed to download CV.');
+      }
     } finally {
       if (downloadUrl) window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
       setDownloading(false);
@@ -581,6 +615,10 @@ const CvMatchRail = ({
     ? cvMatchDetails.requirements_assessment.length
     : matchedItems.length + gapItems.length;
   const scoredAt = application?.cv_match_scored_at || application?.updated_at || null;
+  const summaryText = String(cvMatchDetails?.summary || '').trim();
+  const summaryParagraphs = summaryText
+    ? summaryText.split(/\n{2,}|\r\n{2,}/).map((p) => p.trim()).filter(Boolean)
+    : [];
 
   return (
     <section className="cv-rail cv-match-summary" aria-label="CV match summary">
@@ -601,6 +639,13 @@ const CvMatchRail = ({
           {scoredAt ? `Scored ${new Date(scoredAt).toLocaleDateString()}` : 'Awaiting CV score'}
           {cvMatchDetails?.score_scale ? ` · ${cvMatchDetails.score_scale}` : ''}
         </div>
+        {summaryParagraphs.length ? (
+          <div className="rail-summary" style={{ marginTop: '12px', fontSize: '13.5px', lineHeight: 1.6, color: 'var(--ink-2)' }}>
+            {summaryParagraphs.map((paragraph, idx) => (
+              <p key={`cv-summary-${idx}`} style={{ margin: idx === 0 ? '0' : '8px 0 0' }}>{paragraph}</p>
+            ))}
+          </div>
+        ) : null}
       </div>
 
       <div className="rail-card">
@@ -649,7 +694,7 @@ const CvMatchRail = ({
         </div>
 
         <button type="button" className="rail-jump" onClick={onJumpToPrep}>
-          Feed gaps into interview prep
+          View interview prep →
         </button>
       </div>
     </section>
@@ -827,12 +872,27 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const workableConnected = Boolean(orgData?.workable_connected);
   const workableSource = Boolean(application?.workable_sourced || application?.workable_score_raw != null || application?.workable_profile_url);
   const shareUrl = shareState.url || (sharedRouteToken ? buildFallbackShareUrl(application?.id || routeApplicationKey, sharedRouteToken) : '');
-  const strengthItems = useMemo(() => (
-    (reportModel?.dimensionEntries || [])
+  const strengthItems = useMemo(() => {
+    const dimensionStrengths = (reportModel?.dimensionEntries || [])
       .filter((item) => Number.isFinite(Number(item?.value)))
       .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
-      .slice(0, 4)
-  ), [reportModel?.dimensionEntries]);
+      .slice(0, 4);
+    if (dimensionStrengths.length) return dimensionStrengths;
+    // Fallback when no assessment is on file: surface CV-match
+    // experience highlights so the Overview tab isn't empty.
+    const highlights = Array.isArray(reportModel?.roleFitModel?.experienceHighlights)
+      ? reportModel.roleFitModel.experienceHighlights
+      : [];
+    return highlights
+      .map((label, idx) => ({
+        key: `cv-highlight-${idx}`,
+        label: String(label || '').trim(),
+        value: null,
+        source: 'cv_match',
+      }))
+      .filter((item) => item.label)
+      .slice(0, 4);
+  }, [reportModel?.dimensionEntries, reportModel?.roleFitModel?.experienceHighlights]);
   const riskItems = useMemo(() => {
     const concerns = Array.isArray(reportModel?.roleFitModel?.concerns) ? reportModel.roleFitModel.concerns : [];
     const requirementGap = reportModel?.roleFitModel?.firstRequirementGap;
@@ -861,6 +921,22 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     completedAssessment,
     fallback: reportModel?.roleFitModel,
   });
+  const preScreenDecision = String(cvMatchDetails?.pre_screen_decision || '').toLowerCase();
+  const isPreScreenedOut = preScreenDecision === 'no';
+  const preScreenReason = String(cvMatchDetails?.pre_screen_reason || '').trim();
+  const handleRunFullEvaluation = useCallback(async () => {
+    if (!application?.id || !rolesApi?.scoreSelected || !application?.role_id) return;
+    setBusyAction('rescore');
+    try {
+      await rolesApi.scoreSelected(application.role_id, [application.id], { force: true });
+      showToast('Full CV evaluation queued. Refresh in a few seconds.', 'success');
+      void loadStandingReport();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to start full evaluation.'), 'error');
+    } finally {
+      setBusyAction('');
+    }
+  }, [application?.id, application?.role_id, loadStandingReport, rolesApi, showToast]);
   const matchedRequirements = useMemo(() => {
     const requirements = Array.isArray(cvMatchDetails?.requirements_assessment)
       ? cvMatchDetails.requirements_assessment
@@ -913,11 +989,24 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   }, [application?.interview_prep, application?.role_name, riskItems, strengthItems]);
   const timelineItems = useMemo(() => {
     if (applicationEvents.length) {
-      return applicationEvents.slice(0, 8).map((event) => ({
-        title: String(event?.event_type || 'Activity').replace(/_/g, ' '),
-        detail: event?.reason || event?.description || event?.metadata?.note || 'Candidate activity recorded.',
-        when: event?.created_at,
-      }));
+      return applicationEvents.slice(0, 8).map((event) => {
+        const type = String(event?.event_type || '').toLowerCase();
+        let title;
+        if (type === 'cv_scored') {
+          const meta = event?.metadata || {};
+          const score = Number(meta.role_fit_score);
+          const rec = String(meta.recommendation || '').replace(/_/g, ' ').trim();
+          const scoreLabel = Number.isFinite(score) ? `${Math.round(score)}%` : '—';
+          title = `CV scored — ${rec ? `${rec} ` : ''}(${scoreLabel})`;
+        } else {
+          title = String(event?.event_type || 'Activity').replace(/_/g, ' ');
+        }
+        return {
+          title,
+          detail: event?.reason || event?.description || event?.metadata?.note || 'Candidate activity recorded.',
+          when: event?.created_at,
+        };
+      });
     }
     return [
       {
@@ -1133,7 +1222,42 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             <span className={`chip ${reportModel?.recommendation?.variant === 'success' ? 'green' : reportModel?.recommendation?.variant === 'warning' ? 'amber' : 'purple'}`}>
               {reportModel?.recommendation?.label || 'Pending review'}
             </span>
+            {isPreScreenedOut ? (
+              <span className="chip" style={{ background: 'var(--taali-surface-subtle, rgba(100,116,139,0.15))', color: 'var(--ink-2)' }}>
+                Pre-screened out
+              </span>
+            ) : null}
           </div>
+          {isPreScreenedOut ? (
+            <div
+              data-internal-only
+              style={{
+                marginTop: '14px',
+                padding: '12px 14px',
+                borderRadius: '12px',
+                background: 'var(--taali-surface-subtle, rgba(100,116,139,0.08))',
+                border: '1px solid var(--taali-border, rgba(100,116,139,0.2))',
+                display: 'flex',
+                gap: '12px',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                flexWrap: 'wrap',
+              }}
+            >
+              <div style={{ fontSize: '13.5px', color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 600 }}>
+                <strong>Filtered out by pre-screen.</strong>{' '}
+                {preScreenReason || 'A cheap pre-screen decided this CV did not plausibly meet the role must-haves.'}
+              </div>
+              <button
+                type="button"
+                className="btn btn-primary btn-sm"
+                onClick={handleRunFullEvaluation}
+                disabled={busyAction === 'rescore'}
+              >
+                {busyAction === 'rescore' ? 'Queuing…' : 'Run full evaluation'}
+              </button>
+            </div>
+          ) : null}
           <h1>
             {application?.candidate_name || application?.candidate_email || 'Candidate'}
             {application?.role_name ? (
@@ -1142,9 +1266,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           </h1>
           <div className="report-hero-grid">
             <div className="c hi">
-              <div className="k">Composite</div>
+              <div className="k">TAALI score</div>
               <div className="v">{reportModel?.summaryModel?.taaliScore != null ? `${Math.round(reportModel.summaryModel.taaliScore)} / 100` : '—'}</div>
-              <div className="d">{completedAssessment ? 'Assessment included' : 'Standing view only'}</div>
+              <div className="d">{completedAssessment ? 'CV + assessment' : 'Pre-assessment'}</div>
             </div>
             <div className="c hi">
               <div className="k">Role fit</div>
@@ -1228,24 +1352,34 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             <div className="report-card">
               <h2>Top <em>strengths</em></h2>
               <p className="sub">Ranked by the strongest dimensions currently visible in this standing report.</p>
-              {strengthItems.length ? strengthItems.map((item, index) => (
-                <div key={item.key} className="rank-row">
-                  <div className="rk">{String(index + 1).padStart(2, '0')}</div>
-                  <div>
-                    <div className="t">{item.label}</div>
-                    <div className="s">
-                      {index === 0 ? reportModel?.strongestSignalDescription : `Score signal remains strong in ${item.label.toLowerCase()} across the current evidence set.`}
-                    </div>
-                    {index === 0 ? (
-                      <div className="evidence-block">
-                        <div className="turn">Evidence</div>
-                        {reportModel?.evidenceSections?.roleFit?.description || reportModel?.evidenceSections?.assessment?.description || 'Standing report evidence is attached directly to the linked recruiter and assessment records.'}
+              {strengthItems.length ? strengthItems.map((item, index) => {
+                const isCvHighlight = item.source === 'cv_match';
+                const numericValue = Number.isFinite(Number(item?.value)) ? Number(item.value) : null;
+                return (
+                  <div key={item.key} className="rank-row">
+                    <div className="rk">{String(index + 1).padStart(2, '0')}</div>
+                    <div>
+                      <div className="t">{item.label}</div>
+                      <div className="s">
+                        {isCvHighlight
+                          ? 'Highlight extracted from the candidate CV during scoring. Probe for ownership and outcomes during interviews.'
+                          : index === 0
+                            ? reportModel?.strongestSignalDescription
+                            : `Score signal remains strong in ${String(item.label || '').toLowerCase()} across the current evidence set.`}
                       </div>
-                    ) : null}
+                      {index === 0 && !isCvHighlight ? (
+                        <div className="evidence-block">
+                          <div className="turn">Evidence</div>
+                          {reportModel?.evidenceSections?.roleFit?.description || reportModel?.evidenceSections?.assessment?.description || 'Standing report evidence is attached directly to the linked recruiter and assessment records.'}
+                        </div>
+                      ) : null}
+                    </div>
+                    <div className="pct">
+                      {isCvHighlight ? <span className="chip purple">CV match</span> : (numericValue != null ? `${Math.round(numericValue)} / 10` : '—')}
+                    </div>
                   </div>
-                  <div className="pct">{Math.round(Number(item.value || 0))} / 10</div>
-                </div>
-              )) : (
+                );
+              }) : (
                 <div className="rank-row">
                   <div className="rk">01</div>
                   <div>

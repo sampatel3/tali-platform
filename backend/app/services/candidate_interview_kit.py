@@ -19,6 +19,9 @@ from ..models.candidate_application import CandidateApplication
 
 _PRIORITY_STATUSES = {"missing", "partially_met", "unknown"}
 _AT_RISK_EVIDENCE_TYPES = {"absent", "implied", "contradicted"}
+_LOW_CONFIDENCE_LABELS = {"low"}
+_V3_PROMPT_VERSIONS = {"cv_match_v3.0"}
+_V4_SCORING_VERSIONS = {"cv_match_v4"}
 
 
 def _candidate_assessment_entries(details: dict) -> list[dict]:
@@ -26,6 +29,37 @@ def _candidate_assessment_entries(details: dict) -> list[dict]:
     if not isinstance(raw, list):
         return []
     return [entry for entry in raw if isinstance(entry, dict)]
+
+
+def _confidence_value(entry: dict) -> float:
+    """Normalize confidence into 0-1 float.
+
+    v4 emits a numeric confidence (0..1). v3 emits ``high|medium|low``.
+    """
+    raw = entry.get("confidence")
+    if isinstance(raw, str):
+        label = raw.strip().lower()
+        if label == "high":
+            return 0.9
+        if label == "medium":
+            return 0.6
+        if label == "low":
+            return 0.3
+        try:
+            return float(label)
+        except (TypeError, ValueError):
+            return 0.0
+    try:
+        return float(raw or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _is_must_have(entry: dict) -> bool:
+    if bool(entry.get("must_have")):
+        return True
+    priority = str(entry.get("priority") or "").strip().lower()
+    return priority == "must_have"
 
 
 def _is_priority(entry: dict) -> bool:
@@ -39,49 +73,58 @@ def _is_priority(entry: dict) -> bool:
     evidence_type = str(entry.get("evidence_type") or "").lower()
     if evidence_type in _AT_RISK_EVIDENCE_TYPES:
         return True
-    try:
-        confidence = float(entry.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
+    confidence = _confidence_value(entry)
     return confidence < 0.6
 
 
 def _rank_key(entry: dict) -> tuple[int, int, float]:
     # Sort blockers first, then must-haves, then by ascending confidence.
     blocker_rank = 0 if entry.get("blocker") else 1
-    must_have_rank = 0 if entry.get("must_have") else 1
-    try:
-        confidence = float(entry.get("confidence") or 0)
-    except (TypeError, ValueError):
-        confidence = 0.0
-    return (blocker_rank, must_have_rank, confidence)
+    must_have_rank = 0 if _is_must_have(entry) else 1
+    return (blocker_rank, must_have_rank, _confidence_value(entry))
 
 
 def _kit_item(entry: dict) -> dict[str, Any]:
+    # Field names differ between v3 and v4. Normalize to the v4 surface so
+    # frontend renders work without branching: criterion_id/text/cv_quote.
     return {
-        "criterion_id": entry.get("criterion_id"),
-        "criterion_text": entry.get("criterion_text"),
-        "must_have": bool(entry.get("must_have")),
+        "criterion_id": entry.get("criterion_id") or entry.get("requirement_id"),
+        "criterion_text": entry.get("criterion_text") or entry.get("requirement"),
+        "must_have": _is_must_have(entry),
         "blocker": bool(entry.get("blocker")),
         "status": entry.get("status"),
         "confidence": entry.get("confidence"),
         "evidence_type": entry.get("evidence_type"),
-        "cv_quote": entry.get("cv_quote"),
+        "cv_quote": entry.get("cv_quote") or entry.get("evidence_quote"),
         "risk_level": entry.get("risk_level"),
         "screening_recommendation": entry.get("screening_recommendation"),
-        "interview_probe": entry.get("interview_probe"),
+        "interview_probe": entry.get("interview_probe") or entry.get("impact"),
     }
+
+
+def _detect_scoring_version(details: dict) -> str | None:
+    raw = str(details.get("scoring_version") or "").strip()
+    if raw in _V4_SCORING_VERSIONS:
+        return "cv_match_v4"
+    if raw in _V3_PROMPT_VERSIONS:
+        return "cv_match_v3.0"
+    prompt_version = str(details.get("prompt_version") or "").strip()
+    if prompt_version in _V3_PROMPT_VERSIONS:
+        return "cv_match_v3.0"
+    return None
 
 
 def build_candidate_interview_kit_from_details(details: dict | None) -> dict[str, Any] | None:
     """Build the kit directly from a ``cv_match_details`` blob.
 
     Useful for tests and for code paths that already have the dict in hand.
-    Returns ``None`` if the row is not v4-shaped or has no criteria.
+    Returns ``None`` when the row has no recognisable scoring version OR no
+    requirements_assessment entries.
     """
     if not isinstance(details, dict):
         return None
-    if str(details.get("scoring_version") or "") != "cv_match_v4":
+    scoring_version = _detect_scoring_version(details)
+    if scoring_version is None:
         return None
     entries = _candidate_assessment_entries(details)
     if not entries:
@@ -103,7 +146,7 @@ def build_candidate_interview_kit_from_details(details: dict | None) -> dict[str
     )
 
     return {
-        "scoring_version": "cv_match_v4",
+        "scoring_version": scoring_version,
         "knockout_checks": [_kit_item(e) for e in blockers],
         "priority_probes": [_kit_item(e) for e in priority_probes],
         "confirmed_strengths": [_kit_item(e) for e in confirmed],

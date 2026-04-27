@@ -1068,7 +1068,16 @@ def download_application_document(
 
     file_path = Path(file_url).resolve()
     if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="Document file missing")
+        # Ephemeral-disk loss (Railway redeploys when S3 is unavailable).
+        # 410 surfaces a recoverable "re-upload from Workable" path; 404
+        # would imply the candidate never had a CV at all.
+        raise HTTPException(
+            status_code=410,
+            detail={
+                "reason": "file_storage_unavailable",
+                "message": "CV file expired from local storage. Re-upload from Workable to restore it.",
+            },
+        )
 
     return FileResponse(path=str(file_path), filename=filename, media_type=media_type, headers=response_headers)
 
@@ -2470,6 +2479,7 @@ def batch_score_status(
 
     scored = 0
     errors = 0
+    pre_screened_out = 0
     if total > 0 and started_at is not None:
         # Count terminal-state jobs for this role since the batch began.
         # `cv_match_scored_at` is set by `_execute_scoring(_v3)` on success;
@@ -2493,6 +2503,15 @@ def batch_score_status(
             )
             .count()
         )
+        pre_screened_out = (
+            db.query(CvScoreJob)
+            .filter(
+                CvScoreJob.role_id == role_id,
+                CvScoreJob.cache_hit == "pre_screen_filtered",
+                CvScoreJob.finished_at >= started_at,
+            )
+            .count()
+        )
 
     # Mark completed when every targeted application has a terminal state.
     status = progress.get("status", "idle")
@@ -2506,6 +2525,7 @@ def batch_score_status(
         "total": total,
         "scored": scored,
         "errors": errors,
+        "pre_screened_out": pre_screened_out,
         "include_scored": bool(progress.get("include_scored")),
     }
 

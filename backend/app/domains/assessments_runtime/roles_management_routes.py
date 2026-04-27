@@ -44,6 +44,7 @@ def _generate_interview_focus(role: Role) -> tuple[dict | None, str | None]:
         job_spec_text=job_spec_text,
         api_key=settings.ANTHROPIC_API_KEY,
         model=settings.resolved_claude_scoring_model,
+        additional_requirements=(role.additional_requirements or "").strip() or None,
     )
     if not interview_focus:
         return None, "Interview focus unavailable: failed to generate pointers"

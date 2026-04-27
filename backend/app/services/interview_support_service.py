@@ -6,6 +6,11 @@ from typing import Any
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from .document_service import sanitize_json_for_storage, sanitize_text_for_storage
+from .interview_tech_questions import (
+    deterministic_tech_questions,
+    format_evidence_anchor,
+    maybe_generate_tech_questions,
+)
 from .pre_screening_service import pre_screen_snapshot
 
 INTERVIEW_STAGES = ("screening", "tech_stage_2")
@@ -378,34 +383,30 @@ def build_application_interview_support(
         )
 
     tech_questions = list((templates.get("tech_stage_2") or {}).get("questions") or [])
-    for skill in missing_skills[:3]:
-        tech_questions.append(
-            _question(
-                question=f"Walk through the most technically complex work you've done related to {skill.lower()}.",
-                why_this_matters="This is a likely technical gap relative to the job requirements.",
-                evidence_anchor=skill,
-                positive_signals=[
-                    "Deep implementation detail",
-                    "Tradeoff reasoning",
-                    "Debugging examples",
-                ],
-                red_flags=[
-                    "Only conceptual familiarity",
-                    "No concrete decisions or outcomes",
-                ],
-                follow_up_probe="Ask about architecture choices, failure modes, and what they would optimize next.",
-            )
-        )
     screening_summary = interview_summaries.get("screening") or {}
-    if screening_summary.get("summary"):
+
+    # LLM-driven tech-question generator runs first (CV evidence +
+    # transcript anchored). Falls back to the deterministic templates
+    # below when the call fails or returns nothing.
+    llm_tech_questions = maybe_generate_tech_questions(
+        application,
+        role,
+        details,
+        pre_screen.get("pre_screen_evidence") if isinstance(pre_screen, dict) else None,
+    )
+    use_llm = bool(llm_tech_questions)
+    raw_pack = llm_tech_questions if use_llm else deterministic_tech_questions(
+        missing_skills, screening_summary.get("summary"),
+    )
+    for raw_q in raw_pack:
         tech_questions.append(
             _question(
-                question="Build on the first interview: what technical example best validates the strongest screening claim?",
-                why_this_matters="Keeps the technical interview grounded in evidence already surfaced during screening.",
-                evidence_anchor=screening_summary.get("summary"),
-                positive_signals=["Consistency with prior interview", "Specific architecture detail", "Honest tradeoffs"],
-                red_flags=["Inconsistent narrative", "Surface-level technical depth"],
-                follow_up_probe="Ask which part they personally designed, debugged, and measured.",
+                question=raw_q.get("question") or "",
+                why_this_matters=raw_q.get("why_this_matters"),
+                evidence_anchor=format_evidence_anchor(raw_q) if use_llm else raw_q.get("evidence_anchor"),
+                positive_signals=raw_q.get("positive_signals"),
+                red_flags=raw_q.get("red_flags"),
+                follow_up_probe=raw_q.get("follow_up_probe"),
             )
         )
 

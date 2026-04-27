@@ -153,7 +153,7 @@ def test_batch_score_role_fetches_missing_cvs(session_factory, monkeypatch):
     # `enqueue_score` runs the inline path because MVP_DISABLE_CELERY=True;
     # _execute_scoring would call the legacy v3 / v4 flow. Stub _execute_scoring
     # to a no-op success.
-    def _fake_execute_scoring(db, *, application, job):
+    def _fake_execute_scoring(db, *, application, job, **_unused):
         application.cv_match_score = 75.0
         application.cv_match_details = {"summary": "stub"}
         job.status = "done"
@@ -215,7 +215,7 @@ def test_batch_score_role_skips_when_cv_unfetchable(session_factory, monkeypatch
 
     monkeypatch.setattr(
         "app.services.cv_score_orchestrator._execute_scoring",
-        lambda db, *, application, job: setattr(application, "cv_match_score", 50.0)
+        lambda db, *, application, job, **_unused: setattr(application, "cv_match_score", 50.0)
         or setattr(job, "status", "done"),
     )
 
