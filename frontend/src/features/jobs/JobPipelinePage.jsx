@@ -20,6 +20,7 @@ import {
   Spinner,
   Textarea,
 } from '../../shared/ui/TaaliPrimitives';
+import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidatesDirectoryPage } from '../candidates/CandidatesDirectoryPage';
 import { candidateReportHref } from '../candidates/CandidateTriageDrawer';
@@ -1076,6 +1077,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
+      <BackgroundJobsToaster roleId={numericRoleId} />
       <div className="page">
         <button type="button" className="pipeline-back" onClick={() => onNavigate('jobs')}>
           <ArrowLeft size={10} />
@@ -1217,6 +1219,24 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               </div>
             </div>
             <div className="sa-actions">
+              {role?.source === 'workable' ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={handleFetchCvs}
+                  disabled={String(fetchCvsProgress?.status || '').toLowerCase() === 'running'}
+                  title="Fetch CVs from Workable for any candidates missing one. Required before scoring works."
+                >
+                  {String(fetchCvsProgress?.status || '').toLowerCase() === 'running' ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" />
+                      Fetching {fetchCvsProgress.fetched}/{fetchCvsProgress.total}
+                    </>
+                  ) : (
+                    <>Fetch CVs</>
+                  )}
+                </button>
+              ) : null}
               {unscoredApplications.length > 0 ? (
                 <button
                   type="button"
@@ -1236,7 +1256,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 {String(batchScoreProgress?.status || '').toLowerCase() === 'running' ? (
                   <>
                     <Loader2 size={13} className="animate-spin" />
-                    Re-scoring…
+                    Re-scoring {batchScoreProgress.scored}/{batchScoreProgress.total}
                   </>
                 ) : (
                   <>
@@ -1381,20 +1401,7 @@ Disqualifying: No experience with regulated financial data`}
                     {savingRoleConfig ? 'Saving…' : 'Save threshold'}
                   </button>
                 </div>
-                {role?.source === 'workable' ? (
-                  <div className="row mt-3">
-                    <button
-                      type="button"
-                      className="btn btn-outline btn-sm"
-                      onClick={handleFetchCvs}
-                      disabled={String(fetchCvsProgress?.status || '').toLowerCase() === 'running'}
-                    >
-                      {String(fetchCvsProgress?.status || '').toLowerCase() === 'running'
-                        ? `Fetching ${fetchCvsProgress.fetched}/${fetchCvsProgress.total}`
-                        : 'Fetch missing CVs'}
-                    </button>
-                  </div>
-                ) : null}
+                {/* Fetch CVs button moved up next to the Re-score buttons. */}
               </div>
             </div>
           </div>

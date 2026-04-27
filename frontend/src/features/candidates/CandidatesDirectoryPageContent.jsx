@@ -17,6 +17,7 @@ import {
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import { getErrorMessage } from './candidatesUiUtils';
+import { BackgroundJobsToaster } from './BackgroundJobsToaster';
 import { CandidateSheet } from './CandidateSheet';
 import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
 import {
@@ -1393,9 +1394,19 @@ export const CandidatesDirectoryPage = ({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [selectedApplicationId]);
 
+  // Active role for the toaster — only meaningful when a single role
+  // is filtered (otherwise the role-scoped batch-status endpoints don't
+  // apply). Toaster renders nothing when roleId is falsy.
+  const toasterRoleId = (() => {
+    if (effectiveRoleFilters.length !== 1) return null;
+    const id = Number(effectiveRoleFilters[0]);
+    return Number.isFinite(id) && id > 0 ? id : null;
+  })();
+
   return (
     <div>
       {NavComponent ? <NavComponent currentPage={navCurrentPage} onNavigate={onNavigate} /> : null}
+      {!embedded && toasterRoleId ? <BackgroundJobsToaster roleId={toasterRoleId} /> : null}
       <div className={embedded ? '' : 'page'}>
         {showPageHead ? (
           <div className="page-head">
@@ -1456,14 +1467,78 @@ export const CandidatesDirectoryPage = ({
             />
           </div>
 
-          {effectiveRoleFilters.slice(0, 2).map((roleId) => {
-            const label = roleFilterOptions.find((option) => option.value === roleId)?.label || roleId;
-            return (
-              <button key={roleId} type="button" className="filter-chip on" onClick={() => setRoleFilters([roleId])}>
-                {label}
-              </button>
-            );
-          })}
+          {!roleFilterLocked && roleFilterOptions.length > 0 ? (
+            <label className="filter-chip" style={{ cursor: 'pointer', padding: 0 }}>
+              <span style={{ padding: '0 6px 0 12px', fontSize: 11, color: 'var(--mute)', whiteSpace: 'nowrap' }}>Role:</span>
+              <select
+                value={effectiveRoleFilters[0] || ''}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  setRoleFilters(value ? [value] : []);
+                }}
+                aria-label="Filter by role"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  fontSize: 12,
+                  padding: '6px 12px 6px 0',
+                  cursor: 'pointer',
+                  color: 'inherit',
+                  appearance: 'none',
+                  maxWidth: 200,
+                }}
+              >
+                <option value="">All roles</option>
+                {roleFilterOptions.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+
+          {!rolePipelineMode ? (
+            <label className="filter-chip" style={{ cursor: 'pointer', padding: 0 }}>
+              <span style={{ padding: '0 6px 0 12px', fontSize: 11, color: 'var(--mute)', whiteSpace: 'nowrap' }}>Outcome:</span>
+              <select
+                value={outcomeFilters.length === 1 ? outcomeFilters[0] : (outcomeFilters.length === 0 ? 'all' : 'open')}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  if (value === 'all') {
+                    setOutcomeFilters([]);
+                  } else {
+                    setOutcomeFilters([value]);
+                  }
+                }}
+                aria-label="Filter by application outcome"
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  outline: 'none',
+                  fontSize: 12,
+                  padding: '6px 12px 6px 0',
+                  cursor: 'pointer',
+                  color: 'inherit',
+                  appearance: 'none',
+                }}
+              >
+                <option value="all">All outcomes</option>
+                {OUTCOME_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {roleFilterLocked
+            ? effectiveRoleFilters.slice(0, 2).map((roleId) => {
+                const label = roleFilterOptions.find((option) => option.value === roleId)?.label || roleId;
+                return (
+                  <span key={roleId} className="filter-chip on" title={`Locked to ${label}`}>
+                    {label}
+                  </span>
+                );
+              })
+            : null}
 
           {activeFilterDescription ? (
             <button
