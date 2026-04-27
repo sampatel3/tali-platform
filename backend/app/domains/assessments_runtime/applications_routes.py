@@ -1901,6 +1901,80 @@ _batch_score_progress: dict[int, dict] = {}
 _batch_fetch_cvs_progress: dict[int, dict] = {}
 
 
+# --------------------------------------------------------------------------- #
+# Cooperative cancellation                                                     #
+#                                                                              #
+# Long-running batch jobs (score + fetch) check a Redis flag between           #
+# iterations and bail out gracefully. Redis (vs. in-memory dict) so the        #
+# Celery worker sees the same flag the API process set.                        #
+#                                                                              #
+# Flag key shapes:                                                             #
+#   batch_score:cancel:{role_id}                                               #
+#   batch_fetch_cvs:cancel:{role_id}                                           #
+# 1-hour TTL prevents stuck cancels if the worker dies before clearing.        #
+# --------------------------------------------------------------------------- #
+
+
+_BATCH_SCORE_CANCEL_PREFIX = "batch_score:cancel:"
+_BATCH_FETCH_CANCEL_PREFIX = "batch_fetch_cvs:cancel:"
+_CANCEL_FLAG_TTL_SECONDS = 3600
+
+
+def _redis_client():
+    """Lazy redis client. Returns None on errors so callers can no-op."""
+    try:
+        import redis  # type: ignore
+
+        from ...platform.config import settings  # late import — avoids cycles
+
+        return redis.Redis.from_url(settings.REDIS_URL)
+    except Exception:
+        logger.exception("Failed to build redis client for cancel flag")
+        return None
+
+
+def _set_cancel_flag(prefix: str, role_id: int) -> bool:
+    """Set the cancel flag for a job. Returns True on success."""
+    client = _redis_client()
+    if client is None:
+        return False
+    try:
+        client.set(f"{prefix}{role_id}", "1", ex=_CANCEL_FLAG_TTL_SECONDS)
+        return True
+    except Exception:
+        logger.exception("Failed to set cancel flag for role_id=%s", role_id)
+        return False
+
+
+def _is_cancelled(prefix: str, role_id: int) -> bool:
+    client = _redis_client()
+    if client is None:
+        return False
+    try:
+        return bool(client.get(f"{prefix}{role_id}"))
+    except Exception:
+        return False
+
+
+def _clear_cancel_flag(prefix: str, role_id: int) -> None:
+    client = _redis_client()
+    if client is None:
+        return
+    try:
+        client.delete(f"{prefix}{role_id}")
+    except Exception:
+        pass
+
+
+def is_batch_score_cancelled(role_id: int) -> bool:
+    """Public — used by the Celery batch_score_role task to bail out."""
+    return _is_cancelled(_BATCH_SCORE_CANCEL_PREFIX, role_id)
+
+
+def is_batch_fetch_cancelled(role_id: int) -> bool:
+    return _is_cancelled(_BATCH_FETCH_CANCEL_PREFIX, role_id)
+
+
 def _run_batch_score(role_id: int, org_id: int, *, include_scored: bool = False) -> None:
     """Background worker: score applications for a role.
 
@@ -2381,6 +2455,36 @@ def batch_score_status(
     }
 
 
+@router.post("/roles/{role_id}/batch-score/cancel")
+def cancel_batch_score(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cooperatively cancel a running batch-score job.
+
+    Sets a Redis flag the worker checks between candidates. The current
+    candidate finishes (cleanly), then the loop returns with
+    ``status: cancelled``. Already-enqueued per-application score tasks
+    keep running — a recruiter who clicks Cancel mid-batch sees
+    in-flight scores complete, but no new ones get dispatched.
+
+    Returns the updated progress shape so the frontend can flip the
+    toaster to the cancelled state without a separate poll.
+    """
+    get_role(role_id, current_user.organization_id, db)
+    set_ok = _set_cancel_flag(_BATCH_SCORE_CANCEL_PREFIX, role_id)
+    progress = _batch_score_progress.get(role_id, {})
+    if progress.get("status") == "running":
+        progress["status"] = "cancelling"
+        _batch_score_progress[role_id] = progress
+    return {
+        "ok": bool(set_ok),
+        "role_id": role_id,
+        "status": progress.get("status", "idle"),
+    }
+
+
 # ---------------------------------------------------------------------------
 # Batch CV fetch (from Workable, no scoring)
 # ---------------------------------------------------------------------------
@@ -2477,6 +2581,23 @@ def _run_batch_fetch_cvs(role_id: int, org_id: int) -> None:
         _batch_fetch_cvs_progress[role_id] = progress
 
         for idx, app in enumerate(apps_to_fetch):
+            # Cooperative cancel: bail out cleanly between candidates so a
+            # recruiter who clicks Cancel doesn't have to wait for all
+            # remaining Workable fetches to finish.
+            if is_batch_fetch_cancelled(role_id):
+                progress["status"] = "cancelled"
+                _batch_fetch_cvs_progress[role_id] = progress
+                _clear_cancel_flag(_BATCH_FETCH_CANCEL_PREFIX, role_id)
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                logger.info(
+                    "_run_batch_fetch_cvs cancelled at %d/%d for role_id=%s",
+                    idx, total, role_id,
+                )
+                return
+
             try:
                 if not (app.cv_text or "").strip():
                     if app.candidate and (app.candidate.cv_text or "").strip():
@@ -2564,6 +2685,31 @@ def batch_fetch_cvs_status(
         "total": progress.get("total", 0),
         "fetched": progress.get("fetched", 0),
         "errors": progress.get("errors", 0),
+    }
+
+
+@router.post("/roles/{role_id}/fetch-cvs/cancel")
+def cancel_batch_fetch_cvs(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cooperatively cancel a running CV-fetch batch.
+
+    Same pattern as /batch-score/cancel: sets a Redis flag the loop
+    checks between candidates. The current Workable HTTP request
+    finishes; subsequent ones are skipped.
+    """
+    get_role(role_id, current_user.organization_id, db)
+    set_ok = _set_cancel_flag(_BATCH_FETCH_CANCEL_PREFIX, role_id)
+    progress = _batch_fetch_cvs_progress.get(role_id, {})
+    if progress.get("status") == "running":
+        progress["status"] = "cancelling"
+        _batch_fetch_cvs_progress[role_id] = progress
+    return {
+        "ok": bool(set_ok),
+        "role_id": role_id,
+        "status": progress.get("status", "idle"),
     }
 
 
