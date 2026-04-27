@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowRight,
@@ -8,6 +9,11 @@ import {
 
 import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import {
+  CANDIDATES_DIRECTORY_SHOWCASE,
+  CANDIDATES_DIRECTORY_STAGE_COUNTS,
+  JOBS_SHOWCASE,
+} from '../demo/productWalkthroughModels';
 import {
   Button,
   EmptyState,
@@ -312,6 +318,8 @@ export const CandidatesDirectoryPage = ({
 }) => {
   const rolesApi = apiClient.roles;
   const { showToast } = useToast();
+  const [searchParams] = useSearchParams();
+  const isShowcase = searchParams.get('demo') === '1' && searchParams.get('showcase') === '1';
   const lockedRoleValue = lockRoleId != null && String(lockRoleId).trim() ? String(lockRoleId).trim() : null;
   const defaultRoleFilter = lockedRoleValue
     || (initialRoleId != null && String(initialRoleId).trim() ? String(initialRoleId).trim() : 'all');
@@ -571,6 +579,7 @@ export const CandidatesDirectoryPage = ({
   const ensureRoleTasks = useCallback(async (roleId) => {
     const key = String(roleId || '');
     if (!key) return [];
+    if (isShowcase) return [];
     if (Object.prototype.hasOwnProperty.call(roleTasksByRoleId, key)) {
       return roleTasksByRoleId[key] || [];
     }
@@ -584,9 +593,14 @@ export const CandidatesDirectoryPage = ({
       setRoleTasksByRoleId((prev) => ({ ...prev, [key]: [] }));
       return [];
     }
-  }, [roleTasksByRoleId, rolesApi, showToast]);
+  }, [isShowcase, roleTasksByRoleId, rolesApi, showToast]);
 
   const loadRoles = useCallback(async () => {
+    if (isShowcase) {
+      setRoles(JOBS_SHOWCASE);
+      setLoadingRoles(false);
+      return;
+    }
     setLoadingRoles(true);
     try {
       const res = await rolesApi.list();
@@ -596,9 +610,23 @@ export const CandidatesDirectoryPage = ({
     } finally {
       setLoadingRoles(false);
     }
-  }, [rolesApi]);
+  }, [isShowcase, rolesApi]);
 
   const loadApplications = useCallback(async ({ preferredApplicationId = null } = {}) => {
+    if (isShowcase) {
+      setApplicationsPayload({
+        items: CANDIDATES_DIRECTORY_SHOWCASE,
+        total: CANDIDATES_DIRECTORY_SHOWCASE.length,
+        limit: PAGE_SIZE,
+        offset: 0,
+      });
+      setStageCounts({ ...CANDIDATES_DIRECTORY_STAGE_COUNTS });
+      setApplicationsError('');
+      setLoadingApplications(false);
+      setLoadingStageCounts(false);
+      setSelectedApplicationId(null);
+      return;
+    }
     setLoadingApplications(true);
     setLoadingStageCounts(true);
     setApplicationsError('');
@@ -669,10 +697,11 @@ export const CandidatesDirectoryPage = ({
       setLoadingApplications(false);
       setLoadingStageCounts(false);
     }
-  }, [buildListQueryParams, lockedRoleValue, rolePipelineMode, rolePipelineName, rolesApi]);
+  }, [buildListQueryParams, isShowcase, lockedRoleValue, rolePipelineMode, rolePipelineName, rolesApi]);
 
   const loadApplicationDetail = useCallback(async (applicationId, { includeCvText = false, force = false } = {}) => {
     if (!applicationId) return null;
+    if (isShowcase) return null;
     const key = String(applicationId);
     const cached = applicationDetailsById[key];
     if (!force && cached && (!includeCvText || cached.cv_text)) return cached;
@@ -696,10 +725,14 @@ export const CandidatesDirectoryPage = ({
         Number(current) === Number(applicationId) ? null : current
       ));
     }
-  }, [applicationDetailsById, rolesApi, showToast, upsertApplicationInCache]);
+  }, [applicationDetailsById, isShowcase, rolesApi, showToast, upsertApplicationInCache]);
 
   const loadApplicationEvents = useCallback(async (applicationId) => {
     if (!applicationId) return;
+    if (isShowcase) {
+      setEventsByApplicationId((prev) => ({ ...prev, [String(applicationId)]: [] }));
+      return;
+    }
     setLoadingEventsId(Number(applicationId));
     try {
       const res = await rolesApi.listApplicationEvents(Number(applicationId), { limit: 8, offset: 0 });
@@ -715,7 +748,7 @@ export const CandidatesDirectoryPage = ({
         Number(current) === Number(applicationId) ? null : current
       ));
     }
-  }, [rolesApi, showToast]);
+  }, [isShowcase, rolesApi, showToast]);
 
   const refreshAll = useCallback(async () => {
     await Promise.all([
@@ -735,6 +768,7 @@ export const CandidatesDirectoryPage = ({
   // Auto-poll while any visible application has an in-flight scoring job.
   // Stops as soon as every score_status settles to done/error/stale.
   useEffect(() => {
+    if (isShowcase) return undefined;
     const hasInflight = applications.some((app) => {
       const status = app?.score_status;
       return status === 'pending' || status === 'running';
@@ -744,7 +778,7 @@ export const CandidatesDirectoryPage = ({
       loadApplications({ preferredApplicationId: selectedApplicationId || null });
     }, 8000);
     return () => clearInterval(handle);
-  }, [applications, loadApplications, selectedApplicationId]);
+  }, [applications, isShowcase, loadApplications, selectedApplicationId]);
 
   useEffect(() => {
     if (!selectedApplicationId) return;

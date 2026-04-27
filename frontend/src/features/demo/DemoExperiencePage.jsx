@@ -40,11 +40,18 @@ const scrollToWalkthrough = () => {
 const REPORT_SHOWCASE_TOKEN = 'demo-token';
 const REPORT_SHOWCASE_TABS = new Set(['overview', 'assessment', 'prep']);
 
+const PANE_NARRATIVE = {
+  jobs: 'Open roles you’re hiring for, with Workable sync.',
+  candidates: 'Every candidate scored, filterable, and ranked.',
+  report: 'Standing report with assessment + interview transcript.',
+  workspace: 'The exact surface candidates use to solve the task.',
+};
+
 export const DemoExperiencePage = ({ onNavigate }) => {
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState('');
   const [submittedLead, setSubmittedLead] = useState(null);
-  const [activePane, setActivePane] = useState('candidate');
+  const [activePane, setActivePane] = useState('jobs');
 
   const updateField = (field) => (event) => {
     const value = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
@@ -52,17 +59,29 @@ export const DemoExperiencePage = ({ onNavigate }) => {
   };
 
   const panes = useMemo(() => ({
-    candidate: {
-      key: 'candidate',
-      label: 'What candidates see',
-      urlLabel: 'taali.ai/assess/demo · candidate workspace',
-      src: '/assessment/live?demo=1&showcase=1',
+    jobs: {
+      key: 'jobs',
+      label: 'Jobs you’re hiring for',
+      urlLabel: 'taali.ai/jobs · recruiter workspace',
+      src: '/jobs?demo=1&showcase=1',
+    },
+    candidates: {
+      key: 'candidates',
+      label: 'Candidates flowing in',
+      urlLabel: 'taali.ai/candidates · scored & filterable',
+      src: '/candidates?demo=1&showcase=1',
     },
     report: {
       key: 'report',
-      label: 'What hiring teams see',
+      label: 'Standing report',
       urlLabel: 'taali.ai/c/demo · hiring team report',
       src: `/c/demo?view=interview&k=${REPORT_SHOWCASE_TOKEN}&showcase=1`,
+    },
+    workspace: {
+      key: 'workspace',
+      label: 'Candidate workspace',
+      urlLabel: 'taali.ai/assess/demo · candidate workspace',
+      src: '/assessment/live?demo=1&showcase=1',
     },
   }), []);
 
@@ -76,7 +95,13 @@ export const DemoExperiencePage = ({ onNavigate }) => {
       const sameRoute = frameUrl.pathname === intendedUrl.pathname;
       let allowed = sameRoute;
 
-      if (pane.key === 'candidate') {
+      if (pane.key === 'workspace') {
+        allowed = sameRoute
+          && frameUrl.searchParams.get('demo') === '1'
+          && frameUrl.searchParams.get('showcase') === '1';
+      }
+
+      if (pane.key === 'jobs' || pane.key === 'candidates') {
         allowed = sameRoute
           && frameUrl.searchParams.get('demo') === '1'
           && frameUrl.searchParams.get('showcase') === '1';
@@ -257,7 +282,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
               </div>
               <div className="r">
                 <b>This walkthrough covers</b>
-                Candidate task brief, repo, editor, terminal, AI panel, and the panel-safe candidate report.
+                The full hiring loop: jobs board, candidates flowing in with Workable sync and CV scoring, the standing report with interview transcript evidence, and the candidate workspace.
               </div>
             </div>
 
@@ -291,7 +316,7 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                       referrerPolicy="no-referrer"
                       onLoad={handleShowcaseFrameLoad(pane)}
                     />
-                    <div className="wt-tip"><span className="dot" /> Interactive demo surface</div>
+                    <div className="wt-tip"><span className="dot" /> {PANE_NARRATIVE[key] || 'Interactive demo surface'}</div>
                   </div>
                 </div>
               </div>

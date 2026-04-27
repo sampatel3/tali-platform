@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   ArrowRight,
   Filter,
@@ -20,6 +21,10 @@ import {
   formatRelativeDateTime,
   resolveSyncHealth,
 } from '../../shared/ui/RecruiterDesignPrimitives';
+import {
+  JOBS_SHOWCASE,
+  JOBS_SHOWCASE_ORG,
+} from '../demo/productWalkthroughModels';
 
 const STAGES = [
   { key: 'applied', label: 'Applied' },
@@ -125,6 +130,8 @@ export const JobsPage = ({ onNavigate, NavComponent = null }) => {
   const rolesApi = apiClient.roles;
   const orgApi = apiClient.organizations;
   const tasksApi = 'tasks' in apiClient ? apiClient.tasks : null;
+  const [searchParams] = useSearchParams();
+  const isShowcase = searchParams.get('demo') === '1' && searchParams.get('showcase') === '1';
 
   const [roles, setRoles] = useState([]);
   const [orgData, setOrgData] = useState(null);
@@ -140,6 +147,15 @@ export const JobsPage = ({ onNavigate, NavComponent = null }) => {
   const [roleSheetError, setRoleSheetError] = useState('');
 
   const loadJobsHub = useCallback(async () => {
+    if (isShowcase) {
+      setRoles(JOBS_SHOWCASE);
+      setOrgData(JOBS_SHOWCASE_ORG);
+      setSyncing(false);
+      setSyncRunId(null);
+      setError('');
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError('');
     try {
@@ -176,13 +192,17 @@ export const JobsPage = ({ onNavigate, NavComponent = null }) => {
     } finally {
       setLoading(false);
     }
-  }, [orgApi, rolesApi]);
+  }, [isShowcase, orgApi, rolesApi]);
 
   useEffect(() => {
     void loadJobsHub();
   }, [loadJobsHub]);
 
   useEffect(() => {
+    if (isShowcase) {
+      setAllTasks([]);
+      return undefined;
+    }
     if (!tasksApi?.list) {
       setAllTasks([]);
       return undefined;
@@ -204,7 +224,7 @@ export const JobsPage = ({ onNavigate, NavComponent = null }) => {
     return () => {
       cancelled = true;
     };
-  }, [tasksApi]);
+  }, [isShowcase, tasksApi]);
 
   useEffect(() => {
     if (!syncRunId) return undefined;
@@ -240,6 +260,7 @@ export const JobsPage = ({ onNavigate, NavComponent = null }) => {
   }, [loadJobsHub, orgApi, syncRunId]);
 
   const handleSyncNow = async () => {
+    if (isShowcase) return;
     setError('');
     setSyncing(true);
     try {
@@ -413,9 +434,12 @@ export const JobsPage = ({ onNavigate, NavComponent = null }) => {
             type="button"
             className="btn btn-purple"
             onClick={() => {
+              if (isShowcase) return;
               setRoleSheetError('');
               setRoleSheetOpen(true);
             }}
+            disabled={isShowcase}
+            aria-disabled={isShowcase || undefined}
           >
             + New role
           </button>
