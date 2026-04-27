@@ -145,14 +145,34 @@ def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
         try:
             from ..domains.assessments_runtime.applications_routes import (
                 _try_fetch_cv_from_workable,
+                is_batch_score_cancelled,
             )
         except Exception as exc:  # pragma: no cover — defensive
             logger.exception("Failed to import _try_fetch_cv_from_workable: %s", exc)
             _try_fetch_cv_from_workable = None  # type: ignore[assignment]
+            is_batch_score_cancelled = lambda _: False  # type: ignore[assignment]
 
         fetched = 0
         fetch_failures = 0
         for app in apps:
+            # Cooperative cancel between candidates so the recruiter
+            # can stop a 600-candidate batch without restarting the worker.
+            if is_batch_score_cancelled(role_id):
+                logger.info(
+                    "batch_score_role cancelled during fetch phase for role_id=%s",
+                    role_id,
+                )
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                return {
+                    "status": "cancelled",
+                    "role_id": role_id,
+                    "count": 0,
+                    "fetched": fetched,
+                    "fetch_failures": fetch_failures,
+                }
             if (app.cv_text or "").strip():
                 continue
             try:
@@ -190,10 +210,37 @@ def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
 
         enqueued = 0
         for app in apps:
+            if is_batch_score_cancelled(role_id):
+                logger.info(
+                    "batch_score_role cancelled during enqueue phase for role_id=%s "
+                    "(enqueued %d, remaining %d)",
+                    role_id, enqueued, len(apps) - enqueued,
+                )
+                db.commit()
+                return {
+                    "status": "cancelled",
+                    "role_id": role_id,
+                    "count": enqueued,
+                    "fetched": fetched,
+                    "fetch_failures": fetch_failures,
+                }
             job = enqueue_score(db, app, force=include_scored)
             if job is not None:
                 enqueued += 1
         db.commit()
+
+        # Clear the flag after a clean run so the next batch starts fresh.
+        # If the run *was* cancelled we already early-returned above; in
+        # both early-return cases the cancel endpoint clears the flag too.
+        try:
+            from ..domains.assessments_runtime.applications_routes import (
+                _BATCH_SCORE_CANCEL_PREFIX,
+                _clear_cancel_flag,
+            )
+            _clear_cancel_flag(_BATCH_SCORE_CANCEL_PREFIX, role_id)
+        except Exception:
+            pass
+
         return {
             "status": "enqueued",
             "role_id": role_id,

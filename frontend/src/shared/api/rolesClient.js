@@ -62,6 +62,8 @@ export const roles = {
     { params: { include_scored: options.include_scored === true ? true : undefined } },
   ),
   batchScoreStatus: (roleId) => api.get(`/roles/${roleId}/batch-score/status`),
+  cancelBatchScore: (roleId) => api.post(`/roles/${roleId}/batch-score/cancel`),
+  cancelFetchCvs: (roleId) => api.post(`/roles/${roleId}/fetch-cvs/cancel`),
   fetchCvs: (roleId) => api.post(`/roles/${roleId}/fetch-cvs`),
   fetchCvsStatus: (roleId) => api.get(`/roles/${roleId}/fetch-cvs/status`),
   createAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments`, data),

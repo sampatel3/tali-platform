@@ -58,24 +58,33 @@ export const BackgroundJobsToaster = ({ roleId }) => {
     };
   }, [roleId, rolesApi]);
 
-  const batchActive = String(batchProgress?.status || '').toLowerCase() === 'running';
-  const fetchActive = String(fetchProgress?.status || '').toLowerCase() === 'running';
+  const batchStatus = String(batchProgress?.status || '').toLowerCase();
+  const fetchStatus = String(fetchProgress?.status || '').toLowerCase();
+  const batchActive = batchStatus === 'running';
+  const fetchActive = fetchStatus === 'running';
   const batchTotal = Number(batchProgress?.total || 0);
   const batchScored = Number(batchProgress?.scored || 0);
   const batchErrors = Number(batchProgress?.errors || 0);
   const fetchTotal = Number(fetchProgress?.total || 0);
   const fetchDone = Number(fetchProgress?.fetched || 0);
 
-  // The toaster has three states it should render:
-  // 1. running: active job, show progress
-  // 2. recently completed: not running, but scored < total still bears
-  //    visibility for a moment (we surface "completed" until dismissed)
-  // 3. nothing relevant — render null
-  const showBatch = batchActive || (
-    !batchActive && batchTotal > 0 && (batchScored + batchErrors) >= batchTotal && batchProgress?.status !== 'idle'
+  // States to keep the row visible:
+  //  - running:          show live progress
+  //  - cancelling:       worker hasn't acked the cancel yet — keep visible
+  //                      so the user sees "Cancelling…" feedback
+  //  - cancelled:        terminal state, surface so they know it stopped
+  //  - completed:        all done, visible until dismissed
+  const showBatch = (
+    batchActive
+    || batchStatus === 'cancelling'
+    || batchStatus === 'cancelled'
+    || (batchTotal > 0 && (batchScored + batchErrors) >= batchTotal && batchStatus !== 'idle')
   );
-  const showFetch = fetchActive || (
-    !fetchActive && fetchTotal > 0 && fetchDone >= fetchTotal && fetchProgress?.status !== 'idle'
+  const showFetch = (
+    fetchActive
+    || fetchStatus === 'cancelling'
+    || fetchStatus === 'cancelled'
+    || (fetchTotal > 0 && fetchDone >= fetchTotal && fetchStatus !== 'idle')
   );
 
   // Dismiss key — refreshes when the job restarts so a new run re-shows
@@ -95,13 +104,37 @@ export const BackgroundJobsToaster = ({ roleId }) => {
 
   const handleDismiss = () => setDismissedKey(currentKey);
 
+  const handleCancel = async (job) => {
+    if (!rolesApi) return;
+    try {
+      if (job === 'batch' && rolesApi.cancelBatchScore) {
+        await rolesApi.cancelBatchScore(roleId);
+        // Optimistic UI flip — next poll will confirm.
+        setBatchProgress((prev) => prev ? { ...prev, status: 'cancelling' } : prev);
+      } else if (job === 'fetch' && rolesApi.cancelFetchCvs) {
+        await rolesApi.cancelFetchCvs(roleId);
+        setFetchProgress((prev) => prev ? { ...prev, status: 'cancelling' } : prev);
+      }
+    } catch (err) {
+      // Silent — toaster is non-critical UI; user can click again.
+    }
+  };
+
   const items = [];
   if (showBatch) {
     const pct = batchTotal > 0 ? Math.round(((batchScored + batchErrors) / batchTotal) * 100) : 0;
+    const cancelling = String(batchProgress?.status || '').toLowerCase() === 'cancelling';
+    const cancelled = String(batchProgress?.status || '').toLowerCase() === 'cancelled';
     items.push({
       key: 'batch',
-      title: batchActive ? 'Re-scoring CVs' : 'Re-scoring complete',
+      title: cancelled
+        ? 'Re-scoring cancelled'
+        : cancelling
+          ? 'Cancelling re-score…'
+          : batchActive ? 'Re-scoring CVs' : 'Re-scoring complete',
       complete: !batchActive,
+      cancelling,
+      cancelled,
       detail: batchTotal > 0
         ? `${batchScored}/${batchTotal} scored${batchErrors ? ` · ${batchErrors} error(s)` : ''}`
         : 'starting…',
@@ -110,10 +143,18 @@ export const BackgroundJobsToaster = ({ roleId }) => {
   }
   if (showFetch) {
     const pct = fetchTotal > 0 ? Math.round((fetchDone / fetchTotal) * 100) : 0;
+    const cancelling = String(fetchProgress?.status || '').toLowerCase() === 'cancelling';
+    const cancelled = String(fetchProgress?.status || '').toLowerCase() === 'cancelled';
     items.push({
       key: 'fetch',
-      title: fetchActive ? 'Fetching CVs from Workable' : 'CV fetch complete',
+      title: cancelled
+        ? 'Fetch cancelled'
+        : cancelling
+          ? 'Cancelling fetch…'
+          : fetchActive ? 'Fetching CVs from Workable' : 'CV fetch complete',
       complete: !fetchActive,
+      cancelling,
+      cancelled,
       detail: fetchTotal > 0 ? `${fetchDone}/${fetchTotal} fetched` : 'starting…',
       pct,
     });
@@ -135,6 +176,17 @@ export const BackgroundJobsToaster = ({ roleId }) => {
             <div className="bg-jobs-bar" aria-hidden="true">
               <div className="bg-jobs-bar-fill" style={{ width: `${Math.max(0, Math.min(100, item.pct))}%` }} />
             </div>
+            {!item.complete && !item.cancelled ? (
+              <button
+                type="button"
+                className="bg-jobs-cancel"
+                onClick={() => handleCancel(item.key)}
+                disabled={item.cancelling}
+                aria-label={`Cancel ${item.key === 'batch' ? 're-scoring' : 'CV fetch'}`}
+              >
+                {item.cancelling ? 'Cancelling…' : 'Cancel'}
+              </button>
+            ) : null}
           </div>
         </div>
       ))}

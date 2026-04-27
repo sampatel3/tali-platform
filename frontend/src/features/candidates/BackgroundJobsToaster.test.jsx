@@ -1,11 +1,13 @@
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('../../shared/api', () => ({
   roles: {
     batchScoreStatus: vi.fn(),
     fetchCvsStatus: vi.fn(),
+    cancelBatchScore: vi.fn(),
+    cancelFetchCvs: vi.fn(),
   },
 }));
 
@@ -81,6 +83,30 @@ describe('BackgroundJobsToaster', () => {
     });
     // Final detail: 10/10 + 0 errors
     expect(screen.getByText(/10\/10 scored/)).toBeInTheDocument();
+  });
+
+  it('Cancel button calls the right endpoint and flips status to cancelling', async () => {
+    apiClient.roles.batchScoreStatus.mockResolvedValue({
+      data: { status: 'running', total: 100, scored: 25, errors: 0 },
+    });
+    apiClient.roles.fetchCvsStatus.mockResolvedValue({
+      data: { status: 'idle', total: 0, fetched: 0 },
+    });
+    apiClient.roles.cancelBatchScore.mockResolvedValue({
+      data: { ok: true, status: 'cancelling' },
+    });
+
+    render(<BackgroundJobsToaster roleId={101} />);
+    const cancelButton = await screen.findByRole('button', { name: /Cancel re-scoring/i });
+    fireEvent.click(cancelButton);
+
+    await waitFor(() => {
+      expect(apiClient.roles.cancelBatchScore).toHaveBeenCalledWith(101);
+    });
+    // Optimistic UI flip
+    await waitFor(() => {
+      expect(screen.getByText(/Cancelling re-score/i)).toBeInTheDocument();
+    });
   });
 
   it('renders both rows when batch and fetch are running concurrently', async () => {
