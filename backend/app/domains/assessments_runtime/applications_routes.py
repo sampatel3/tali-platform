@@ -1057,13 +1057,34 @@ def download_application_document(
     media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     safe_filename = _report_filename_part(filename, "document")
     disposition = "attachment" if download else "inline"
-    response_headers = {"Content-Disposition": f'{disposition}; filename="{safe_filename}"'}
+    content_disposition = f'{disposition}; filename="{safe_filename}"'
+    # Cache-Control: private prevents shared caches; max-age lets the
+    # browser reuse the response across tab switches without re-fetching.
+    response_headers = {
+        "Content-Disposition": content_disposition,
+        "Cache-Control": "private, max-age=3600",
+    }
 
-    stored_bytes = load_stored_document_bytes(file_url)
-    if stored_bytes:
-        return Response(content=stored_bytes, media_type=media_type, headers=response_headers)
-
+    # S3-hosted file: redirect to a presigned URL so the browser fetches
+    # directly from S3 (eliminates the Railway → S3 → Railway round trip).
+    # Falls back to streaming through the backend only when presigning is
+    # unavailable (creds rejected, bucket missing, etc.).
     if file_url.startswith("http://") or file_url.startswith("https://"):
+        from urllib.parse import urlparse
+        from ...services.s3_service import generate_presigned_get_url
+
+        parsed = urlparse(file_url)
+        if parsed.netloc.endswith("amazonaws.com"):
+            key = parsed.path.lstrip("/")
+            if key:
+                presigned = generate_presigned_get_url(
+                    key,
+                    expires_in=3600,
+                    content_disposition=content_disposition,
+                )
+                if presigned:
+                    return RedirectResponse(url=presigned, status_code=307)
+        # Non-S3 absolute URL or presign failed → 307 to original URL.
         return RedirectResponse(url=file_url, status_code=307)
 
     file_path = Path(file_url).resolve()
@@ -1079,7 +1100,15 @@ def download_application_document(
             },
         )
 
-    return FileResponse(path=str(file_path), filename=filename, media_type=media_type, headers=response_headers)
+    # Local file: stream via FileResponse (uses aiofiles, no full-file
+    # buffer) so a 5 MB PDF doesn't sit in Python memory while the
+    # response trickles to the client.
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
+        media_type=media_type,
+        headers=response_headers,
+    )
 
 
 @router.patch("/applications/{application_id}", response_model=ApplicationResponse)

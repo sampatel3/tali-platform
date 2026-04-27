@@ -29,10 +29,10 @@ export const pathForPage = (page, options = {}) => {
     case 'candidate-report': {
       if (!options.candidateApplicationId) return '/candidates';
       const base = `/candidates/${encodeURIComponent(options.candidateApplicationId)}`;
-      if (Number.isFinite(Number(options.fromRoleId))) {
-        return `${base}?from=jobs/${encodeURIComponent(options.fromRoleId)}`;
-      }
-      return base;
+      if (options.fromRoleId === null || options.fromRoleId === undefined) return base;
+      const numericRoleId = Number(options.fromRoleId);
+      if (!Number.isFinite(numericRoleId) || numericRoleId <= 0) return base;
+      return `${base}?from=jobs/${encodeURIComponent(numericRoleId)}`;
     }
     case 'candidate-detail':
     case 'assessment-results':

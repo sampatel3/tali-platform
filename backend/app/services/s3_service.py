@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 import threading
-from typing import Optional
+from typing import Any, Optional
 
 logger = logging.getLogger("taali.s3")
 
@@ -195,3 +195,33 @@ def generate_s3_key(entity_type: str, entity_id: int, filename: str) -> str:
     """Generate a structured S3 key."""
     safe_filename = filename.replace(" ", "_").replace("/", "_")
     return f"uploads/{entity_type}/{entity_id}/{safe_filename}"
+
+
+def generate_presigned_get_url(
+    key: str,
+    *,
+    expires_in: int = 3600,
+    content_disposition: str | None = None,
+) -> Optional[str]:
+    """Generate a short-lived presigned GET URL so browsers can download
+    directly from S3 without the file flowing through Railway.
+
+    Returns ``None`` when S3 is unavailable. ``content_disposition`` lets
+    callers force ``inline; filename="…"`` or ``attachment; filename="…"``
+    on the response (S3 honours ``ResponseContentDisposition``).
+    """
+    client, bucket = _get_client()
+    if client is None:
+        return None
+    params: dict[str, Any] = {"Bucket": bucket, "Key": key}
+    if content_disposition:
+        params["ResponseContentDisposition"] = content_disposition
+    try:
+        return client.generate_presigned_url(
+            "get_object",
+            Params=params,
+            ExpiresIn=int(expires_in),
+        )
+    except Exception as exc:
+        logger.debug("Failed to generate presigned URL for %s: %s", key, exc)
+        return None

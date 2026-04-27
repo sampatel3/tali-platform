@@ -22,7 +22,7 @@ import {
   Sheet,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
-import { getErrorMessage } from './candidatesUiUtils';
+import { getErrorMessage, getPrimaryScorePayload } from './candidatesUiUtils';
 import { BackgroundJobsToaster } from './BackgroundJobsToaster';
 import { CandidateSheet } from './CandidateSheet';
 import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
@@ -52,10 +52,6 @@ const OUTCOME_OPTIONS = [
 ];
 const SORT_OPTIONS = [
   { value: 'cv_match_scored_at:desc', label: 'Recently scored (newest first)' },
-  { value: 'cv_match_score:desc', label: 'CV match score (high to low)' },
-  { value: 'cv_match_score:asc', label: 'CV match score (low to high)' },
-  { value: 'pre_screen_score:desc', label: 'Pre-screen score (high to low)' },
-  { value: 'pre_screen_score:asc', label: 'Pre-screen score (low to high)' },
   { value: 'taali_score:desc', label: 'TAALI score (high to low)' },
   { value: 'taali_score:asc', label: 'TAALI score (low to high)' },
   { value: 'created_at:desc', label: 'Submitted (newest first)' },
@@ -1776,8 +1772,7 @@ export const CandidatesDirectoryPage = ({
                   </div>
                   <div>Candidate</div>
                   <div>Role</div>
-                  <div title="CV scored against job spec + recruiter requirements">CV match</div>
-                  <div title="Composite score — CV match before assessment, blended with assessment after.">Taali score</div>
+                  <div title="Composite score — CV match before assessment, blended with assessment after.">TAALI score</div>
                   <div>AI collab</div>
                   <div>Hire signal</div>
                   <div>Status</div>
@@ -1791,7 +1786,6 @@ export const CandidatesDirectoryPage = ({
                   const preScreenScore = resolvePreScreenScore(application);
                   const taaliScore = resolveTaaliScore(application);
                   const updatedAt = application.pipeline_stage_updated_at || application.updated_at || application.created_at;
-                  const cvTone = getCvMatchTone(preScreenScore, thresholdRoleValue);
                   const aiSignal = getAiCollabSignal(application);
                   const hireSignal = getHireSignal(application);
                   const statusChip = getStatusChip(application);
@@ -1847,24 +1841,36 @@ export const CandidatesDirectoryPage = ({
                           </div>
                         </div>
 
-                        <div className="c-cv" title={preScreenScore == null ? 'Not scored yet' : `${Math.round(Number(preScreenScore))}%`}>
-                          <span className={`pct ${cvTone}`}>
-                            {(() => {
-                              const status = application?.score_status;
-                              if (status === 'pending' || status === 'running') return 'Scoring…';
-                              if (preScreenScore == null) {
-                                if (status === 'error') return 'Error';
-                                if (status === 'stale') return 'Stale';
-                                return '—';
-                              }
-                              const formatted = `${Math.round(Number(preScreenScore))}%`;
-                              return status === 'stale' ? `${formatted} · stale` : formatted;
-                            })()}
-                          </span>
-                          <div className="meter">
-                            <i className={cvTone} style={{ width: `${Math.max(0, Math.min(100, Number(preScreenScore || 0)))}%` }} />
-                            {hasThresholdRoleValue ? (
-                              <span className="thr" style={{ left: `${Math.max(0, Math.min(100, thresholdRoleValue))}%` }} />
+                        <div
+                          className={`c-score ${Number(taaliScore) >= 80 ? 'high' : Number(taaliScore) >= 60 ? 'mid' : Number.isFinite(Number(taaliScore)) ? 'low' : ''}`}
+                          title={taaliScore == null ? 'Not scored yet' : `TAALI score: ${Math.round(Number(taaliScore))}/100`}
+                        >
+                          {(() => {
+                            const status = application?.score_status;
+                            if (status === 'pending' || status === 'running') {
+                              return <span className="dash">Scoring…</span>;
+                            }
+                            if (taaliScore == null) {
+                              if (status === 'error') return <span className="dash">Error</span>;
+                              if (status === 'stale') return <span className="dash">Stale</span>;
+                              return <span className="dash">—</span>;
+                            }
+                            return (
+                              <>
+                                {Math.round(Number(taaliScore))}
+                                <span className="dash">/100</span>
+                                {application?.score_status === 'stale' ? <span className="dash"> · stale</span> : null}
+                              </>
+                            );
+                          })()}
+                          <div className="c-score-meta">
+                            <span className="provenance">
+                              {application?.assessment_score_cache_100 != null || application?.score_summary?.assessment_score != null
+                                ? 'CV + assessment'
+                                : 'Pre-assessment (CV)'}
+                            </span>
+                            {application.workable_score_raw != null && taaliScore != null ? (
+                              <span className="wk-pip">WK <b>{Math.round(Number(application.workable_score_raw))}</b></span>
                             ) : null}
                           </div>
                           {rolesApi?.generateTaaliCvAi && application.cv_filename ? (() => {
@@ -1877,7 +1883,7 @@ export const CandidatesDirectoryPage = ({
                               ? 'Scoring…'
                               : status === 'error'
                                 ? 'Retry'
-                                : (status === 'stale' || preScreenScore != null)
+                                : (status === 'stale' || taaliScore != null)
                                   ? 'Rescore'
                                   : 'Score';
                             return (
@@ -1895,14 +1901,6 @@ export const CandidatesDirectoryPage = ({
                               </button>
                             );
                           })() : null}
-                        </div>
-
-                        <div className={`c-score ${Number(taaliScore) >= 80 ? 'high' : Number(taaliScore) >= 60 ? 'mid' : Number.isFinite(Number(taaliScore)) ? 'low' : ''}`}>
-                          {taaliScore != null ? Math.round(Number(taaliScore)) : <span className="dash">—</span>}
-                          {taaliScore != null ? <span className="dash">/100</span> : null}
-                          {application.workable_score_raw != null && taaliScore != null ? (
-                            <span className="wk-pip">WK <b>{Math.round(Number(application.workable_score_raw))}</b></span>
-                          ) : null}
                         </div>
 
                         <div>

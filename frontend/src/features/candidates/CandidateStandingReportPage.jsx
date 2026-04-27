@@ -628,7 +628,7 @@ const CvMatchRail = ({
             {roleFitScore != null ? Math.round(roleFitScore) : '—'}<sup>%</sup>
           </div>
           <div>
-            <div className="lbl">CV match</div>
+            <div className="lbl">TAALI score · CV match</div>
             <div className="meta">
               vs. <b>{application?.role_name || application?.candidate_position || 'target role'}</b>
               {requirementTotal ? <> · <b>{matchedItems.length} of {requirementTotal}</b> evidenced</> : null}
@@ -1265,15 +1265,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             ) : null}
           </h1>
           <div className="report-hero-grid">
-            <div className="c hi">
+            <div className="c hi report-hero-grid-primary">
               <div className="k">TAALI score</div>
               <div className="v">{reportModel?.summaryModel?.taaliScore != null ? `${Math.round(reportModel.summaryModel.taaliScore)} / 100` : '—'}</div>
-              <div className="d">{completedAssessment ? 'CV + assessment' : 'Pre-assessment'}</div>
-            </div>
-            <div className="c hi">
-              <div className="k">Role fit</div>
-              <div className="v">{reportModel?.summaryModel?.roleFitScore != null ? `${Math.round(reportModel.summaryModel.roleFitScore)}%` : '—'}</div>
-              <div className="d">{application?.role_name || application?.candidate_position || 'Role evidence'}</div>
+              <div className="d">
+                {completedAssessment
+                  ? `CV + assessment · ${application?.role_name || 'role evidence'}`
+                  : `Pre-assessment (CV) · ${application?.role_name || 'role evidence'}`}
+              </div>
             </div>
             <div className="c">
               <div className="k">Assessment</div>

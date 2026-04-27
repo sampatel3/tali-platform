@@ -173,6 +173,70 @@ def test_unknown_must_have_triggers_floor():
     assert score <= 40.0
 
 
+# ---------- recruiter id-prefix multiplier (D3) ----------
+
+
+def test_recruiter_prefix_outweighs_jd_extracted_prefix():
+    """A recruiter must-have met + a jd_req must-have missing should
+    score higher than the symmetric case (recruiter missing, jd_req met)
+    because the recruiter signal is multiplied 1.5×."""
+    recruiter_met_jd_missing = [
+        _ra("crit_recruiter_1", Priority.MUST_HAVE, Status.MET),
+        _ra("jd_req_1", Priority.MUST_HAVE, Status.MISSING),
+    ]
+    recruiter_missing_jd_met = [
+        _ra("crit_recruiter_1", Priority.MUST_HAVE, Status.MISSING),
+        _ra("jd_req_1", Priority.MUST_HAVE, Status.MET),
+    ]
+    a_score = compute_requirements_match_score(recruiter_met_jd_missing)
+    b_score = compute_requirements_match_score(recruiter_missing_jd_met)
+    # Both hit the must-have floor (40) because at least one must-have
+    # is missing in each case; verify the floor does its job.
+    assert a_score <= 40.0
+    assert b_score <= 40.0
+    # Symmetric without the missing-must-have floor: pick PARTIALLY_MET
+    # for the second one so neither hits the floor.
+    a = [
+        _ra("crit_recruiter_1", Priority.MUST_HAVE, Status.MET),
+        _ra("jd_req_1", Priority.MUST_HAVE, Status.PARTIALLY_MET),
+    ]
+    b = [
+        _ra("crit_recruiter_1", Priority.MUST_HAVE, Status.PARTIALLY_MET),
+        _ra("jd_req_1", Priority.MUST_HAVE, Status.MET),
+    ]
+    sa = compute_requirements_match_score(a)
+    sb = compute_requirements_match_score(b)
+    # Recruiter-met case should score HIGHER than recruiter-partial case
+    # because the recruiter weight is multiplied by 1.5×.
+    assert sa > sb, (sa, sb)
+
+
+def test_recruiter_only_unaffected_by_multiplier_when_solo():
+    """A single recruiter requirement met = 100 (base case unchanged
+    when no jd_req mix)."""
+    score = compute_requirements_match_score([
+        _ra("crit_recruiter_1", Priority.MUST_HAVE, Status.MET),
+    ])
+    assert score == 100.0
+
+
+def test_derived_prefix_does_not_get_multiplier():
+    """Derived (non-recruiter) requirements should NOT be boosted; the
+    multiplier is gated on the `crit_recruiter_` prefix specifically."""
+    a = [
+        _ra("crit_derived_1", Priority.MUST_HAVE, Status.MET),
+        _ra("jd_req_1", Priority.MUST_HAVE, Status.PARTIALLY_MET),
+    ]
+    b = [
+        _ra("crit_derived_1", Priority.MUST_HAVE, Status.PARTIALLY_MET),
+        _ra("jd_req_1", Priority.MUST_HAVE, Status.MET),
+    ]
+    # Symmetric — the boost only applies to crit_recruiter_*, so swapping
+    # met/partial between two non-recruiter requirements yields the same
+    # score either way.
+    assert compute_requirements_match_score(a) == compute_requirements_match_score(b)
+
+
 # ---------- derive_recommendation ----------
 
 

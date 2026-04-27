@@ -240,3 +240,87 @@ def test_flag_on_failed_v3_marks_job_error(db, monkeypatch):
     assert application.cv_match_score is None
     assert "error" in (application.cv_match_details or {})
     assert application.cv_match_details["scoring_version"] == PROMPT_VERSION
+
+
+def test_recruiter_must_haves_pass_disqualifying_flag(db, monkeypatch):
+    """Recruiter must-have criteria must reach run_cv_match with the
+    `crit_recruiter_` id prefix and `disqualifying_if_missing=True`. This
+    is the upstream half of the D1+D3 fix: the orchestrator tags
+    recruiter-source criteria so aggregation can both apply the floor cap
+    and the 1.5× weight multiplier downstream.
+    """
+    from app.cv_matching.schemas import Priority
+    from app.models.role_criterion import (
+        CRITERION_SOURCE_DERIVED,
+        CRITERION_SOURCE_RECRUITER,
+        RoleCriterion,
+    )
+    from app.platform.config import settings
+
+    monkeypatch.setattr(settings, "USE_CV_MATCH_V3", True, raising=False)
+    monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key", raising=False)
+    monkeypatch.setattr(settings, "MVP_DISABLE_CELERY", True, raising=False)
+
+    application, role = _make_app_and_role(db)
+
+    # Recruiter-added must-have AND a derived (LLM-extracted) must-have.
+    db.add(
+        RoleCriterion(
+            role_id=role.id,
+            source=CRITERION_SOURCE_RECRUITER,
+            ordering=1,
+            weight=1.0,
+            must_have=True,
+            text="5+ years AWS Glue in production",
+        )
+    )
+    db.add(
+        RoleCriterion(
+            role_id=role.id,
+            source=CRITERION_SOURCE_DERIVED,
+            ordering=2,
+            weight=1.0,
+            must_have=True,
+            text="Strong Python skills",
+        )
+    )
+    db.commit()
+    db.refresh(role)
+
+    captured: dict[str, Any] = {}
+
+    def _capture(cv_text, jd_text, requirements, **kwargs):
+        captured["requirements"] = list(requirements or [])
+        return CVMatchOutput(
+            prompt_version=PROMPT_VERSION,
+            skills_match_score=80.0,
+            experience_relevance_score=80.0,
+            requirements_assessment=[],
+            summary="ok",
+            requirements_match_score=80.0,
+            cv_fit_score=80.0,
+            role_fit_score=80.0,
+            recommendation=Recommendation.YES,
+            scoring_status=ScoringStatus.OK,
+            model_version="claude-haiku-4-5-20251001",
+            trace_id="trace-1",
+        )
+
+    monkeypatch.setattr("app.cv_matching.runner.run_cv_match", _capture)
+
+    from app.services.cv_score_orchestrator import enqueue_score
+
+    enqueue_score(db, application, force=True)
+
+    reqs = captured["requirements"]
+    assert len(reqs) == 2
+    by_id = {r.id: r for r in reqs}
+    assert any(rid.startswith("crit_recruiter_") for rid in by_id)
+    assert any(rid.startswith("crit_derived_") for rid in by_id)
+    recruiter_req = next(r for r in reqs if r.id.startswith("crit_recruiter_"))
+    derived_req = next(r for r in reqs if r.id.startswith("crit_derived_"))
+    assert recruiter_req.priority == Priority.MUST_HAVE
+    assert recruiter_req.disqualifying_if_missing is True
+    # Derived must-haves are NOT marked disqualifying — only the
+    # recruiter's specific intent should trigger the must-have floor.
+    assert derived_req.disqualifying_if_missing is False

@@ -26,6 +26,14 @@ _PRIORITY_WEIGHTS: dict[Priority, float] = {
     Priority.NICE_TO_HAVE: 0.05,
 }
 
+# Recruiter-added requirements are tagged with id prefix `crit_recruiter_`
+# upstream (cv_score_orchestrator). LLM-extracted JD requirements use
+# `jd_req_*`; auto-derived role criteria use `crit_derived_*`. We apply a
+# multiplier so the recruiter's specific intent dominates the score even
+# when the LLM also surfaces JD-implicit must-haves alongside.
+_RECRUITER_ID_PREFIX = "crit_recruiter_"
+_RECRUITER_WEIGHT_MULTIPLIER = 1.5
+
 # Status multipliers applied to priority weights.
 _STATUS_WEIGHTS: dict[Status, float] = {
     Status.MET: 1.0,
@@ -70,6 +78,11 @@ def compute_requirements_match_score(
         if a.priority == Priority.CONSTRAINT:
             continue
         priority_weight = _PRIORITY_WEIGHTS.get(a.priority, 0.0)
+        # Recruiter-added requirements get a 1.5× multiplier so they
+        # dominate the requirements_match aggregate even when the LLM
+        # extracts additional JD-derived requirements alongside.
+        if str(a.requirement_id or "").startswith(_RECRUITER_ID_PREFIX):
+            priority_weight *= _RECRUITER_WEIGHT_MULTIPLIER
         status_weight = _STATUS_WEIGHTS.get(a.status, 0.0)
         total_weight += priority_weight
         earned_weight += priority_weight * status_weight

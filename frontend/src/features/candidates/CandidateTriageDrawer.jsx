@@ -9,7 +9,6 @@ import {
 import { Button } from '../../shared/ui/TaaliPrimitives';
 import {
   CandidateAvatar,
-  WorkableScorePip,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 
 export const TRIAGE_STAGE_OPTIONS = [
@@ -22,10 +21,10 @@ export const TRIAGE_STAGE_OPTIONS = [
 export const candidateReportHref = (application, fromRoleId = null) => {
   if (!application?.id) return '/candidates';
   const base = `/candidates/${encodeURIComponent(application.id)}`;
-  if (Number.isFinite(Number(fromRoleId))) {
-    return `${base}?from=jobs/${encodeURIComponent(fromRoleId)}`;
-  }
-  return base;
+  if (fromRoleId === null || fromRoleId === undefined) return base;
+  const numericRoleId = Number(fromRoleId);
+  if (!Number.isFinite(numericRoleId) || numericRoleId <= 0) return base;
+  return `${base}?from=jobs/${encodeURIComponent(numericRoleId)}`;
 };
 
 const resolveAssessmentId = (application) => (
@@ -34,17 +33,11 @@ const resolveAssessmentId = (application) => (
   || null
 );
 
-const resolvePreScreenScore = (application) => (
-  application?.pre_screen_score
-  ?? application?.cv_match_score
-  ?? application?.pre_screen_score_100
-  ?? null
-);
-
 const resolveTaaliScore = (application) => (
   application?.taali_score
   ?? application?.score_summary?.taali_score
   ?? application?.assessment_score_cache_100
+  ?? application?.cv_match_score
   ?? null
 );
 
@@ -114,7 +107,7 @@ export function CandidateTriageDrawer({
 
   if (!application) return null;
 
-  const reportHref = candidateReportHref(application);
+  const reportHref = candidateReportHref(application, application?.role_id);
   const sendLabel = assessmentId ? 'Send retake' : 'Send invite';
 
   const handleReportClick = (event) => {
@@ -155,23 +148,19 @@ export function CandidateTriageDrawer({
           </div>
 
           <div className="candidate-triage-scores">
-            <div className="candidate-triage-score-card">
-              <div className="k">Pre-screen</div>
-              <div className="v">{formatScore(resolvePreScreenScore(application))}</div>
-            </div>
-            <div className="candidate-triage-score-card">
-              <div className="k">Taali</div>
+            <div className="candidate-triage-score-card candidate-triage-score-card-primary">
+              <div className="k">TAALI score</div>
               <div className="v">{formatScore(resolveTaaliScore(application))}</div>
-            </div>
-            <div className="candidate-triage-score-card">
-              <div className="k">Workable</div>
-              <div className="v">
-                {application.workable_score_raw != null ? (
-                  <WorkableScorePip value={application.workable_score_raw} />
-                ) : (
-                  '—'
-                )}
+              <div className="provenance">
+                {(application?.assessment_score_cache_100 != null || application?.score_summary?.assessment_score != null)
+                  ? 'CV + assessment'
+                  : 'Pre-assessment (CV)'}
               </div>
+              {application.workable_score_raw != null ? (
+                <div className="workable-chip">
+                  vs. Workable raw <b>{Math.round(Number(application.workable_score_raw))}</b>
+                </div>
+              ) : null}
             </div>
           </div>
         </section>

@@ -3215,7 +3215,7 @@ html[data-theme="dark"] {
 .cand-head,
 .cand-row {
   display: grid;
-  grid-template-columns: 28px minmax(230px, 1.65fr) minmax(220px, 1.25fr) minmax(118px, 0.8fr) minmax(118px, 0.78fr) minmax(100px, 0.72fr) minmax(124px, 0.86fr) minmax(106px, 0.72fr) minmax(96px, 0.66fr);
+  grid-template-columns: 28px minmax(230px, 1.65fr) minmax(220px, 1.25fr) minmax(150px, 1.0fr) minmax(100px, 0.72fr) minmax(124px, 0.86fr) minmax(106px, 0.72fr) minmax(96px, 0.66fr);
   gap: 14px;
   align-items: center;
   padding: 14px 22px;
@@ -3423,6 +3423,47 @@ html[data-theme="dark"] {
   font-weight: 500;
 }
 
+.c-score-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 400;
+  color: var(--mute);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.c-score-meta .provenance {
+  color: var(--mute);
+}
+
+.c-score .cv-rescore-link {
+  display: inline-block;
+  margin-top: 4px;
+  background: none;
+  border: 0;
+  padding: 0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+  color: var(--purple);
+  cursor: pointer;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.c-score .cv-rescore-link:hover:not(:disabled) {
+  text-decoration: underline;
+}
+
+.c-score .cv-rescore-link:disabled {
+  color: var(--mute-2);
+  cursor: default;
+}
+
 .candidate-ai-pill {
   display: inline-flex;
   padding: 3px 10px;
@@ -3566,9 +3607,39 @@ html[data-theme="dark"] {
 
 .candidate-triage-scores {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
   gap: 8px;
   margin-top: 16px;
+}
+
+.candidate-triage-score-card.candidate-triage-score-card-primary {
+  background: color-mix(in oklab, var(--purple) 6%, var(--bg));
+  border-color: color-mix(in oklab, var(--purple) 25%, var(--line));
+}
+
+.candidate-triage-score-card-primary .v {
+  font-size: 22px !important;
+}
+
+.candidate-triage-score-card .provenance {
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.candidate-triage-score-card .workable-chip {
+  margin-top: 6px;
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: rgba(45, 140, 255, 0.1);
+  color: #2d8cff;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 500;
 }
 
 .candidate-triage-score-card {
@@ -3929,10 +4000,14 @@ html[data-theme="dark"] {
 
 .report-hero-grid {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: 2fr 1fr 1fr;
   gap: 14px;
   padding-top: 20px;
   border-top: 1px solid rgba(255, 255, 255, 0.12);
+}
+
+.report-hero-grid-primary .v {
+  font-size: 36px !important;
 }
 
 .report-hero-grid .c .k {

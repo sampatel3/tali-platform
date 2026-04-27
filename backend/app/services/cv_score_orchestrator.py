@@ -466,21 +466,30 @@ def _execute_scoring_v3(
         application.cv_match_scored_at = None
         return
 
-    # Translate role_criterion rows into RequirementInput. The legacy v4
-    # pathway uses integer criterion_ids; v3 uses string ids, so we prefix.
+    # Translate role_criterion rows into RequirementInput. We tag
+    # recruiter-sourced criteria with a `crit_recruiter_` id prefix so the
+    # aggregation layer can weight them higher than LLM/JD-derived ones
+    # (`crit_derived_`). Recruiter must-haves are also marked
+    # disqualifying — that triggers the existing must-have floor in
+    # aggregation (caps the score at 40 when missing) and the LEAN_NO
+    # cap on `derive_recommendation`.
     requirements: list[RequirementInput] = []
     if role is not None:
         for c in sorted(role.criteria or [], key=lambda c: getattr(c, "ordering", 0)):
             if getattr(c, "deleted_at", None) is not None:
                 continue
+            source = str(getattr(c, "source", "") or "").lower()
+            is_recruiter = source in {"recruiter", "recruiter_constraint"}
             priority = (
                 V3Priority.MUST_HAVE if bool(c.must_have) else V3Priority.STRONG_PREFERENCE
             )
+            id_prefix = "crit_recruiter_" if is_recruiter else "crit_derived_"
             requirements.append(
                 RequirementInput(
-                    id=f"crit_{int(c.id)}",
+                    id=f"{id_prefix}{int(c.id)}",
                     requirement=str(c.text or "").strip(),
                     priority=priority,
+                    disqualifying_if_missing=is_recruiter and bool(c.must_have),
                 )
             )
 

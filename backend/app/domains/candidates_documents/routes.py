@@ -313,6 +313,22 @@ def download_candidate_document(
         raise HTTPException(status_code=404, detail="Document not found")
 
     if file_url.startswith("http://") or file_url.startswith("https://"):
+        # S3-hosted: redirect to a presigned URL so the browser fetches
+        # directly from S3 (no Railway round-trip).
+        from urllib.parse import urlparse
+        from ...services.s3_service import generate_presigned_get_url
+
+        parsed = urlparse(file_url)
+        if parsed.netloc.endswith("amazonaws.com"):
+            key = parsed.path.lstrip("/")
+            if key:
+                presigned = generate_presigned_get_url(
+                    key,
+                    expires_in=3600,
+                    content_disposition=f'attachment; filename="{filename}"',
+                )
+                if presigned:
+                    return RedirectResponse(url=presigned, status_code=307)
         return RedirectResponse(url=file_url, status_code=307)
 
     file_path = Path(file_url).resolve()
@@ -330,4 +346,8 @@ def download_candidate_document(
             },
         )
 
-    return FileResponse(path=str(file_path), filename=filename)
+    return FileResponse(
+        path=str(file_path),
+        filename=filename,
+        headers={"Cache-Control": "private, max-age=3600"},
+    )
