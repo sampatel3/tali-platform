@@ -124,21 +124,38 @@ def main() -> int:
     interval_seconds = float(os.environ.get("RAILWAY_DEPENDENCY_WAIT_INTERVAL_SECONDS", "2"))
     _wait_for_database(timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
     _wait_for_redis(timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
-    _log("Starting Celery worker...")
-    os.execvp(
+    # Queues consumed by this worker. By default the single Railway
+    # worker process consumes both `celery` (general tasks: emails,
+    # Workable sync, etc.) and `scoring` (cv_match_v3.0 score +
+    # batch_score). When we peel scoring off onto a second Railway
+    # service later, set TALI_WORKER_QUEUES="scoring" on that service
+    # and "celery" on this one — see backend/docs/CELERY_QUEUES.md.
+    queues = os.environ.get("TALI_WORKER_QUEUES", "celery,scoring").strip() or "celery,scoring"
+    # Bumped from 2 → 4 so Workable sync (long, 60+ min) can't claim
+    # every slot. Combined with the sync_workable_orgs lock, scoring
+    # always has at least 2-3 slots free in practice.
+    concurrency = os.environ.get("TALI_WORKER_CONCURRENCY", "4")
+    # `--beat` runs the periodic-task scheduler in-process. Only the
+    # worker that owns scheduling should set this (TALI_WORKER_BEAT).
+    # Default = beat enabled (single-worker setup).
+    beat_enabled = os.environ.get("TALI_WORKER_BEAT", "true").strip().lower() != "false"
+
+    cmd = [
         sys.executable,
-        [
-            sys.executable,
-            "-m",
-            "celery",
-            "-A",
-            "app.tasks",
-            "worker",
-            "--beat",
-            "--loglevel=info",
-            "--concurrency=2",
-        ],
-    )
+        "-m",
+        "celery",
+        "-A",
+        "app.tasks",
+        "worker",
+        f"--queues={queues}",
+        f"--concurrency={concurrency}",
+        "--loglevel=info",
+    ]
+    if beat_enabled:
+        cmd.insert(cmd.index("worker") + 1, "--beat")
+
+    _log(f"Starting Celery worker (queues={queues}, concurrency={concurrency}, beat={beat_enabled})...")
+    os.execvp(sys.executable, cmd)
     return 0
 
 

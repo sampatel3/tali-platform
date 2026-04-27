@@ -16,7 +16,12 @@ from .celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(name="app.tasks.scoring_tasks.score_application_job", bind=True, max_retries=0)
+@celery_app.task(
+    name="app.tasks.scoring_tasks.score_application_job",
+    bind=True,
+    max_retries=0,
+    queue="scoring",
+)
 def score_application_job(self, application_id: int) -> dict:
     """Score a single application asynchronously.
 
@@ -81,7 +86,10 @@ def score_application_job(self, application_id: int) -> dict:
         db.close()
 
 
-@celery_app.task(name="app.tasks.scoring_tasks.batch_score_role")
+@celery_app.task(
+    name="app.tasks.scoring_tasks.batch_score_role",
+    queue="scoring",
+)
 def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
     """Fan out per-application scoring jobs for every application under a role.
 

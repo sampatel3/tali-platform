@@ -152,6 +152,11 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: Optional[str] = None
     AWS_S3_BUCKET: Optional[str] = "taali-assessments"
     AWS_REGION: str = "us-east-1"
+    # Set to True to bypass S3 entirely (creds expired, bucket down, or
+    # storage isn't required for the current deploy). Files persist
+    # locally only in this mode — fine for cv_text-driven scoring since
+    # the extracted text lives in Postgres regardless.
+    S3_DISABLED: bool = False
 
     # Sentry
     SENTRY_DSN: Optional[str] = None

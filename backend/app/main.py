@@ -314,11 +314,21 @@ def health_check():
         "stripe_configured": _is_configured_secret(settings.STRIPE_API_KEY),
     }
 
+    try:
+        from .services.s3_service import s3_status
+        s3_health = s3_status()
+    except Exception:
+        s3_health = {"available": False, "reason": "probe_error"}
+
+    # S3 down doesn't degrade the API: cv_text persists in Postgres
+    # regardless. Surface the state for ops visibility but don't change
+    # the top-level status_str unless DB or Redis is actually broken.
     status_str = "healthy" if db_ok and redis_ok else "degraded"
     return {
         "status": status_str,
         "service": "taali-api",
         "database": db_ok,
         "redis": redis_ok,
+        "s3": s3_health,
         "integrations": integrations,
     }
