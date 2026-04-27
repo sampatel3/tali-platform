@@ -39,7 +39,7 @@ const resolveAssessmentStatus = (application) => (
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
   { id: 'assessment', label: 'Assessment' },
-  { id: 'cv', label: 'CV & match', internalOnly: true },
+  { id: 'cv', label: 'CV & match' },
   { id: 'prep', label: 'Interview prep' },
   { id: 'notes', label: 'Notes & timeline', internalOnly: true },
 ];
@@ -646,6 +646,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const numericApplicationId = Number(routeApplicationKey);
   const isInterviewView = searchParams.get('view') === 'interview';
   const requestedTab = searchParams.get('tab') || 'overview';
+  const backFromRoleId = useMemo(() => {
+    const match = (searchParams.get('from') || '').match(/^jobs\/(\d+)$/);
+    return match ? Number(match[1]) : null;
+  }, [searchParams]);
   const [activeTab, setActiveTab] = useState(
     REPORT_TAB_IDS.has(requestedTab) ? requestedTab : 'overview'
   );
@@ -1050,8 +1054,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             <span><b>Interview view.</b> You are seeing the panel-safe version of this Taali report.</span>
           </div>
         ) : null}
-        <button type="button" className="standing-back back" data-internal-only onClick={() => onNavigate('candidates')}>
-          Back to candidates
+        <button
+          type="button"
+          className="standing-back back"
+          data-internal-only
+          onClick={() => {
+            if (backFromRoleId != null) {
+              onNavigate('job-pipeline', { roleId: backFromRoleId });
+              return;
+            }
+            onNavigate('candidates');
+          }}
+        >
+          {backFromRoleId != null ? 'Back to job' : 'Back to candidates'}
         </button>
         <div className="kicker" style={{ marginBottom: '10px' }}>Candidate standing report</div>
 
@@ -1063,11 +1078,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             </span>
           </div>
           <h1>
-            {application?.candidate_name || application?.candidate_email || 'Candidate'} — where they <em>stand</em> in the pipeline.
+            {application?.candidate_name || application?.candidate_email || 'Candidate'}
+            {application?.role_name ? (
+              <> · <span style={{ color: 'var(--mute)' }}>{application.role_name}</span></>
+            ) : null}
           </h1>
-          <p className="lead">
-            A role-anchored, shareable summary. Evidence-first: every major claim stays tied to recruiter-visible signals from the application, role fit, and completed assessment history.
-          </p>
           <div className="report-hero-grid">
             <div className="c hi">
               <div className="k">Composite</div>
@@ -1337,7 +1352,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           </div>
         </div>
 
-        <div className={`pane ${activeTab === 'cv' ? 'active' : ''}`} data-p="cv" data-internal-only>
+        <div className={`pane ${activeTab === 'cv' ? 'active' : ''}`} data-p="cv">
           <div className="cv-doc-actions">
             <span className="name">
               {(application?.candidate_name || application?.candidate_email || 'Candidate')} · CV
@@ -1347,6 +1362,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
+                data-internal-only
                 onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
               >
                 View on Workable

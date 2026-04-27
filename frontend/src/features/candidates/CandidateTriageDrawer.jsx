@@ -19,9 +19,14 @@ export const TRIAGE_STAGE_OPTIONS = [
   { value: 'review', label: 'Review' },
 ];
 
-export const candidateReportHref = (application) => (
-  application?.id ? `/candidates/${encodeURIComponent(application.id)}` : '/candidates'
-);
+export const candidateReportHref = (application, fromRoleId = null) => {
+  if (!application?.id) return '/candidates';
+  const base = `/candidates/${encodeURIComponent(application.id)}`;
+  if (Number.isFinite(Number(fromRoleId))) {
+    return `${base}?from=jobs/${encodeURIComponent(fromRoleId)}`;
+  }
+  return base;
+};
 
 const resolveAssessmentId = (application) => (
   application?.score_summary?.assessment_id

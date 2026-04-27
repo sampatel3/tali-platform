@@ -26,10 +26,14 @@ export const pathForPage = (page, options = {}) => {
       return '/demo';
     case 'candidates':
       return '/candidates';
-    case 'candidate-report':
-      return options.candidateApplicationId
-        ? `/candidates/${encodeURIComponent(options.candidateApplicationId)}`
-        : '/candidates';
+    case 'candidate-report': {
+      if (!options.candidateApplicationId) return '/candidates';
+      const base = `/candidates/${encodeURIComponent(options.candidateApplicationId)}`;
+      if (Number.isFinite(Number(options.fromRoleId))) {
+        return `${base}?from=jobs/${encodeURIComponent(options.fromRoleId)}`;
+      }
+      return base;
+    }
     case 'candidate-detail':
     case 'assessment-results':
       return options.candidateDetailAssessmentId

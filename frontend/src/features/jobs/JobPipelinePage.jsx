@@ -1028,8 +1028,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
   const viewCandidateReport = useCallback((application) => {
     if (!application?.id) return;
-    onNavigate('candidate-report', { candidateApplicationId: application.id });
-  }, [onNavigate]);
+    const navOptions = { candidateApplicationId: application.id };
+    if (Number.isFinite(numericRoleId)) {
+      navOptions.fromRoleId = numericRoleId;
+    }
+    onNavigate('candidate-report', navOptions);
+  }, [numericRoleId, onNavigate]);
 
   const handlePipelineReportClick = useCallback((event, application) => {
     if (
@@ -1450,7 +1454,7 @@ Disqualifying: No experience with regulated financial data`}
                         <a
                           key={application.id}
                           className="kanban-card text-left"
-                          href={candidateReportHref(application)}
+                          href={candidateReportHref(application, numericRoleId)}
                           onClick={(event) => handlePipelineReportClick(event, application)}
                         >
                           <div className="cc-top">
@@ -1508,7 +1512,10 @@ Disqualifying: No experience with regulated financial data`}
                     key={application.id}
                     type="button"
                     className="role-fit-row"
-                    onClick={() => onNavigate('candidate-report', { candidateApplicationId: application.id })}
+                    onClick={() => onNavigate('candidate-report', {
+                      candidateApplicationId: application.id,
+                      ...(Number.isFinite(numericRoleId) ? { fromRoleId: numericRoleId } : {}),
+                    })}
                   >
                     <div className="av">{buildApplicationTitle(application).slice(0, 2).toUpperCase()}</div>
                     <div className="rf-main">
@@ -1557,7 +1564,10 @@ Disqualifying: No experience with regulated financial data`}
                   key={`${item.application.id}-${item.at}-${index}`}
                   type="button"
                   className="activity-item"
-                  onClick={() => onNavigate('candidate-report', { candidateApplicationId: item.application.id })}
+                  onClick={() => onNavigate('candidate-report', {
+                    candidateApplicationId: item.application.id,
+                    ...(Number.isFinite(numericRoleId) ? { fromRoleId: numericRoleId } : {}),
+                  })}
                 >
                   <span className="dot" />
                   <span className="when">{formatRelativeShort(item.at)}</span>
