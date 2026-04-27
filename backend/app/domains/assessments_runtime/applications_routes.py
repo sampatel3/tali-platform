@@ -1030,6 +1030,7 @@ def download_application_report_pdf(
 def download_application_document(
     application_id: int,
     doc_type: str,
+    download: bool = Query(False, description="Return attachment disposition for browser downloads"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -1055,11 +1056,12 @@ def download_application_document(
 
     media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     safe_filename = _report_filename_part(filename, "document")
-    inline_headers = {"Content-Disposition": f'inline; filename="{safe_filename}"'}
+    disposition = "attachment" if download else "inline"
+    response_headers = {"Content-Disposition": f'{disposition}; filename="{safe_filename}"'}
 
     stored_bytes = load_stored_document_bytes(file_url)
     if stored_bytes:
-        return Response(content=stored_bytes, media_type=media_type, headers=inline_headers)
+        return Response(content=stored_bytes, media_type=media_type, headers=response_headers)
 
     if file_url.startswith("http://") or file_url.startswith("https://"):
         return RedirectResponse(url=file_url, status_code=307)
@@ -1068,7 +1070,7 @@ def download_application_document(
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Document file missing")
 
-    return FileResponse(path=str(file_path), filename=filename, media_type=media_type, headers=inline_headers)
+    return FileResponse(path=str(file_path), filename=filename, media_type=media_type, headers=response_headers)
 
 
 @router.patch("/applications/{application_id}", response_model=ApplicationResponse)

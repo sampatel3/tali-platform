@@ -5690,7 +5690,7 @@ body.interview-view .page {
 
 .cv-layout {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 360px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 22px;
   align-items: start;
 }
@@ -6026,11 +6026,13 @@ body.interview-view .page {
 }
 
 .cv-rail {
-  position: sticky;
-  top: 16px;
-  display: flex;
-  flex-direction: column;
+  display: grid;
   gap: 14px;
+}
+
+.cv-match-summary {
+  grid-template-columns: minmax(280px, 0.95fr) repeat(2, minmax(0, 1fr));
+  align-items: stretch;
 }
 
 .cv-rail .rail-card {
@@ -6038,6 +6040,10 @@ body.interview-view .page {
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
+}
+
+.cv-match-summary .rail-card {
+  min-height: 100%;
 }
 
 .cv-rail .rail-score {
@@ -6106,11 +6112,6 @@ body.interview-view .page {
 
 .cv-rail .rail-section:last-child {
   margin-bottom: 0;
-}
-
-.cv-rail .gap-section {
-  padding-top: 14px;
-  border-top: 1px solid var(--line-2);
 }
 
 .cv-rail .rail-head {
@@ -6209,12 +6210,8 @@ body.interview-view .page {
 }
 
 @media (max-width: 1180px) {
-  .cv-layout {
+  .cv-match-summary {
     grid-template-columns: minmax(0, 1fr);
-  }
-
-  .cv-rail {
-    position: static;
   }
 
   .cv-doc {

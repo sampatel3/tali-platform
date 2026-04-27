@@ -713,6 +713,12 @@ def test_application_detail_exposes_cv_sections_and_document_file(client, db, tm
     assert doc_resp.status_code == 200, doc_resp.text
     assert doc_resp.content == b"%PDF-1.4 stored cv bytes"
     assert doc_resp.headers["content-type"].startswith("application/pdf")
+    assert doc_resp.headers["content-disposition"].startswith("inline;")
+
+    download_resp = client.get(f"/api/v1/applications/{app['id']}/documents/cv?download=true", headers=headers)
+    assert download_resp.status_code == 200, download_resp.text
+    assert download_resp.content == b"%PDF-1.4 stored cv bytes"
+    assert download_resp.headers["content-disposition"].startswith("attachment;")
 
 
 def test_job_spec_upload_generates_interview_focus(client, monkeypatch):

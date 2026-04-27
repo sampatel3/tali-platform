@@ -68,6 +68,11 @@ const canInlinePreviewCv = (mime) => mime === 'application/pdf' || isCvImageMime
 
 const asCleanText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
+const sanitizeDownloadName = (value, fallback = 'candidate-cv') => {
+  const cleaned = String(value || '').replace(/[\\/:*?"<>|]+/g, ' ').replace(/\s+/g, ' ').trim();
+  return cleaned || fallback;
+};
+
 const asArray = (value) => (Array.isArray(value) ? value.filter(Boolean) : []);
 
 const splitInlineList = (value) => String(value || '')
@@ -367,13 +372,14 @@ const CvDocumentViewer = ({
 }) => {
   const [blobUrl, setBlobUrl] = useState('');
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [errorMessage, setErrorMessage] = useState('');
 
   const mime = inferCvMime(filename);
   const isPdf = mime === 'application/pdf';
   const isImage = isCvImageMime(mime);
   const canPreview = canInlinePreviewCv(mime);
-  const downloadName = filename || 'candidate-cv';
+  const downloadName = sanitizeDownloadName(filename, 'candidate-cv');
   const cvModel = useMemo(() => normalizeCvSections({ parsedSections, cvText, application }), [application, cvText, parsedSections]);
   const hasTextFallback = Boolean(cvText || parsedSections || cvModel.summary || cvModel.rawSections.length);
 
@@ -411,15 +417,32 @@ const CvDocumentViewer = ({
   }, [autoPreview, blobUrl, canPreview, ensureBlob, filename, loading]);
 
   const handleDownload = useCallback(async () => {
-    const url = await ensureBlob();
-    if (!url) return;
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = downloadName;
-    document.body.appendChild(anchor);
-    anchor.click();
-    anchor.remove();
-  }, [ensureBlob, downloadName]);
+    if (!applicationId && !candidateId) return;
+    setDownloading(true);
+    setErrorMessage('');
+    let downloadUrl = '';
+    try {
+      const res = applicationId && rolesApi?.downloadApplicationDocument
+        ? await rolesApi.downloadApplicationDocument(applicationId, 'cv', { params: { download: true } })
+        : await candidatesApi?.downloadDocument?.(candidateId, 'cv');
+      if (!res) return;
+      const contentType = res?.headers?.['content-type'] || mime || 'application/octet-stream';
+      const blob = res.data instanceof Blob ? res.data : new Blob([res.data], { type: contentType });
+      downloadUrl = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = downloadUrl;
+      anchor.download = downloadName;
+      anchor.rel = 'noopener';
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+    } catch (err) {
+      setErrorMessage('Failed to download CV.');
+    } finally {
+      if (downloadUrl) window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      setDownloading(false);
+    }
+  }, [applicationId, candidateId, candidatesApi, downloadName, mime, rolesApi]);
 
   if (!filename) {
     return (
@@ -470,9 +493,9 @@ const CvDocumentViewer = ({
       {errorMessage ? <div className="cv-viewer-error">{errorMessage}</div> : null}
       <div className="cv-doc-filebar">
         <span>{filename}{uploadedAt ? ` · updated ${new Date(uploadedAt).toLocaleDateString()}` : ''}</span>
-        <button type="button" className="btn btn-outline btn-sm" onClick={handleDownload} disabled={loading}>
+        <button type="button" className="btn btn-outline btn-sm" onClick={handleDownload} disabled={downloading}>
           <Download size={13} />
-          Download
+          {downloading ? 'Downloading...' : 'Download'}
         </button>
       </div>
     </article>
@@ -510,8 +533,8 @@ const CvMatchRail = ({
   const scoredAt = application?.cv_match_scored_at || application?.updated_at || null;
 
   return (
-    <aside className="cv-rail">
-      <div className="rail-card">
+    <section className="cv-rail cv-match-summary" aria-label="CV match summary">
+      <div className="rail-card cv-summary-card">
         <div className="rail-score">
           <div className={`num ${(roleFitScore || 0) >= 75 ? 'hi' : 'md'}`}>
             {roleFitScore != null ? Math.round(roleFitScore) : '—'}<sup>%</sup>
@@ -551,8 +574,10 @@ const CvMatchRail = ({
             <div className="rail-empty">No matched requirements are attached yet.</div>
           )}
         </div>
+      </div>
 
-        <div className="rail-section gap-section">
+      <div className="rail-card">
+        <div className="rail-section">
           <div className="rail-head">
             <span className="lbl">Missing or unclear · <b>{gapItems.length}</b></span>
             <span className="dot gap" aria-hidden="true" />
@@ -577,7 +602,7 @@ const CvMatchRail = ({
           Feed gaps into interview prep
         </button>
       </div>
-    </aside>
+    </section>
   );
 };
 
@@ -1329,6 +1354,14 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             ) : null}
           </div>
           <div className="cv-layout">
+            <CvMatchRail
+              application={application}
+              reportModel={reportModel}
+              cvMatchDetails={cvMatchDetails}
+              matchedRequirements={matchedRequirements}
+              missingRequirements={missingRequirements}
+              onJumpToPrep={() => activateTab('prep')}
+            />
             <CvDocumentViewer
               applicationId={application?.id || null}
               candidateId={application?.candidate_id || completedAssessment?.candidate_id || null}
@@ -1341,14 +1374,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               application={application}
               cvMatchDetails={cvMatchDetails}
               autoPreview={activeTab === 'cv'}
-            />
-            <CvMatchRail
-              application={application}
-              reportModel={reportModel}
-              cvMatchDetails={cvMatchDetails}
-              matchedRequirements={matchedRequirements}
-              missingRequirements={missingRequirements}
-              onJumpToPrep={() => activateTab('prep')}
             />
           </div>
         </div>
