@@ -26,6 +26,20 @@ from typing import Optional
 logger = logging.getLogger("taali.candidate_graph.client")
 
 
+class _NoopCrossEncoder:
+    """Passthrough reranker — returns passages in original order, score=1.0.
+
+    Graphiti's default cross-encoder is OpenAIRerankerClient which requires
+    OPENAI_API_KEY. We don't use OpenAI; this stub satisfies the interface
+    without calling any external service. Graphiti uses the cross-encoder only
+    for final reranking of search results; returning uniform scores means
+    Graphiti's own BM25/vector ranking governs order, which is acceptable.
+    """
+
+    async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
+        return [(p, 1.0) for p in passages]
+
+
 _graphiti = None
 _lock = threading.Lock()
 _loop: Optional[asyncio.AbstractEventLoop] = None
@@ -137,6 +151,7 @@ def get_graphiti():
             llm_client=llm_client,
             embedder=embedder,
             graph_driver=neo4j_driver,
+            cross_encoder=_NoopCrossEncoder(),
         )
         # First-time index/constraint creation. Idempotent — safe on every boot.
         try:
