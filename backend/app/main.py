@@ -361,7 +361,7 @@ def graphiti_health():
 
 
 @app.post("/admin/graphiti/backfill")
-def graphiti_backfill_all(request: Request, background_tasks):
+def graphiti_backfill_all(request: Request):
     """Trigger a full Graphiti backfill for all organisations.
 
     Returns 202 immediately; backfill runs as a background thread on the
