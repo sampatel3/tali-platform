@@ -361,25 +361,36 @@ def graphiti_health():
 
 
 @app.post("/admin/graphiti/backfill")
-def graphiti_backfill_all(request: Request):
+def graphiti_backfill_all(request: Request, background_tasks):
     """Trigger a full Graphiti backfill for all organisations.
 
-    Protected by ``ADMIN_SECRET`` env var. Returns a summary dict.
+    Returns 202 immediately; backfill runs as a background thread on the
+    server. Check Railway logs for progress and final summary.
     """
     from .platform.config import settings
     from .platform.database import SessionLocal
     from .candidate_graph.sync import sync_all_organizations
+    import threading
 
     admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
     provided = request.headers.get("X-Admin-Secret", "")
     if not admin_secret or provided != admin_secret:
         raise HTTPException(status_code=403, detail="Forbidden")
 
-    db = SessionLocal()
-    try:
-        return sync_all_organizations(db)
-    finally:
-        db.close()
+    def _run():
+        import logging
+        log = logging.getLogger("taali.candidate_graph.backfill")
+        db = SessionLocal()
+        try:
+            result = sync_all_organizations(db)
+            log.info("Graphiti backfill complete: %s", result)
+        except Exception:
+            log.exception("Graphiti backfill failed")
+        finally:
+            db.close()
+
+    threading.Thread(target=_run, name="graphiti-backfill", daemon=True).start()
+    return {"status": "started", "message": "Backfill running in background — check Railway logs for progress"}
 
 
 @app.post("/admin/graphiti/test-episode")
