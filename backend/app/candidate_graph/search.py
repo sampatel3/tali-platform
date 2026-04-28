@@ -16,6 +16,7 @@ All three are sync; they call Graphiti through ``client.run_async``.
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Iterable
 
 from . import client as graph_client
@@ -114,14 +115,27 @@ def subgraph_for_candidates(
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
 
+    # 25-second wall-clock budget; 10s per-candidate call timeout.
+    # Returns partial results when budget is exhausted rather than hanging.
+    WALL_BUDGET = 25.0
+    PER_CALL_TIMEOUT = 10.0
+    deadline = time.monotonic() + WALL_BUDGET
+
     for candidate_id in ids[:50]:  # bound the per-call work
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            logger.info(
+                "subgraph_for_candidates: time budget exhausted at %d nodes", len(nodes)
+            )
+            break
         try:
             results = graph_client.run_async(
                 graphiti.search(
                     query=f"facts about candidate {candidate_id}",
                     group_ids=[group_id],
                     num_results=20,
-                )
+                ),
+                timeout=min(PER_CALL_TIMEOUT, remaining),
             )
         except Exception as exc:
             logger.debug("subgraph search failed candidate_id=%s: %s", candidate_id, exc)
