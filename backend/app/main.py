@@ -411,6 +411,94 @@ def graphiti_backfill_all(request: Request):
     }
 
 
+@app.post("/admin/cv-score/batch-all")
+def admin_batch_score_all(request: Request):
+    """Admin trigger for batch-score-all across every role in every org.
+
+    Query params:
+      applied_after  ISO date string (e.g. 2026-01-01) to filter by Workable application date
+      include_scored bool (default false) — rescore already-scored apps
+      org_id         int — limit to a single org (optional)
+
+    Uses X-Admin-Secret header for auth (no user JWT required).
+    """
+    from .platform.config import settings
+    from .platform.database import SessionLocal
+    from .models.role import Role
+    from .models.candidate_application import CandidateApplication
+    from .models.candidate import Candidate
+    from datetime import datetime, timezone
+
+    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not admin_secret or provided != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    applied_after = request.query_params.get("applied_after")
+    include_scored = request.query_params.get("include_scored", "false").lower() == "true"
+    org_id_str = request.query_params.get("org_id")
+    org_id_filter = int(org_id_str) if org_id_str and org_id_str.isdigit() else None
+
+    db = SessionLocal()
+    try:
+        roles_q = db.query(Role).filter(Role.deleted_at.is_(None))
+        if org_id_filter:
+            roles_q = roles_q.filter(Role.organization_id == org_id_filter)
+        roles = roles_q.all()
+
+        dispatched = []
+        skipped = []
+        for role in roles:
+            if not (role.job_spec_text or "").strip():
+                skipped.append({"role_id": role.id, "reason": "no_job_spec"})
+                continue
+
+            count_q = db.query(CandidateApplication).filter(
+                CandidateApplication.role_id == role.id,
+                CandidateApplication.organization_id == role.organization_id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            if not include_scored:
+                count_q = count_q.filter(CandidateApplication.cv_match_score.is_(None))
+            if applied_after:
+                try:
+                    cutoff = datetime.fromisoformat(applied_after)
+                    if cutoff.tzinfo is None:
+                        cutoff = cutoff.replace(tzinfo=timezone.utc)
+                    count_q = (
+                        count_q
+                        .join(Candidate, CandidateApplication.candidate_id == Candidate.id)
+                        .filter(Candidate.workable_created_at >= cutoff)
+                    )
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"Invalid applied_after: {applied_after}")
+
+            target = count_q.count()
+            if target == 0:
+                skipped.append({"role_id": role.id, "reason": "nothing_to_score"})
+                continue
+
+            from .tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
+            _celery_batch_score_role.delay(
+                role.id,
+                include_scored=include_scored,
+                applied_after=applied_after,
+            )
+            dispatched.append({"role_id": role.id, "org_id": role.organization_id, "target": target})
+
+        return {
+            "status": "dispatched",
+            "dispatched": len(dispatched),
+            "skipped": len(skipped),
+            "total_target": sum(d["target"] for d in dispatched),
+            "roles": dispatched,
+            "applied_after": applied_after,
+            "include_scored": include_scored,
+        }
+    finally:
+        db.close()
+
+
 @app.post("/admin/graphiti/test-episode")
 def graphiti_test_episode(request: Request):
     """Send one synthetic episode to Graphiti and return success or error detail.
