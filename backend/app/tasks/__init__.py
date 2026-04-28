@@ -15,6 +15,15 @@ from .scoring_tasks import (
     batch_score_role,
     score_application_job,
 )
+# Eager-import automation_tasks so Celery registers the event-driven
+# auto-tasks (interview focus, interview pack regen, auto-reject pre-
+# screen). Skipping this would leave them unregistered and silently
+# dropped — same trap as scoring_tasks above.
+from .automation_tasks import (
+    generate_application_interview_pack,
+    generate_role_interview_focus,
+    run_application_auto_reject,
+)
 from .workable_tasks import run_workable_sync_run_task
 
 __all__ = [
@@ -27,5 +36,8 @@ __all__ = [
     "sync_workable_orgs",
     "score_application_job",
     "batch_score_role",
+    "generate_role_interview_focus",
+    "generate_application_interview_pack",
+    "run_application_auto_reject",
     "run_workable_sync_run_task",
 ]
