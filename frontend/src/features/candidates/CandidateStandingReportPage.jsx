@@ -682,11 +682,21 @@ const CvMatchRail = ({
           </div>
           {gapItems.length ? gapItems.map((item, index) => {
             const evidence = item?.impact || extractRequirementEvidence(item) || item?.evidence_quote || 'Probe this live.';
+            // Distinguish missing (red) from partial / unknown (amber /
+            // grey) so a constraint with positive evidence flagged as
+            // "unknown" by the model doesn't read as a hard miss.
+            const status = String(item?.status || '').toLowerCase();
+            const statusLabel = status === 'partially_met' ? 'Partial'
+              : status === 'unknown' ? 'Needs evidence'
+              : 'Missing';
             return (
               <div key={extractRequirementKey(item, index)} className="rail-item gap">
                 <span className="ic"><AlertCircle size={10} strokeWidth={3} /></span>
                 <span>
-                  <span className="t">{item.requirement || item}</span>
+                  <span className="t">
+                    <span style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--mute)', marginRight: 6 }}>{statusLabel}</span>
+                    {item.requirement || item}
+                  </span>
                   <span className="ev">{evidence}</span>
                 </span>
               </div>
@@ -875,50 +885,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const workableConnected = Boolean(orgData?.workable_connected);
   const workableSource = Boolean(application?.workable_sourced || application?.workable_score_raw != null || application?.workable_profile_url);
   const shareUrl = shareState.url || (sharedRouteToken ? buildFallbackShareUrl(application?.id || routeApplicationKey, sharedRouteToken) : '');
-  const strengthItems = useMemo(() => {
-    const dimensionStrengths = (reportModel?.dimensionEntries || [])
-      .filter((item) => Number.isFinite(Number(item?.value)))
-      .sort((a, b) => Number(b.value || 0) - Number(a.value || 0))
-      .slice(0, 4);
-    if (dimensionStrengths.length) return dimensionStrengths;
-    // Fallback when no assessment is on file: surface CV-match
-    // experience highlights so the Overview tab isn't empty.
-    const highlights = Array.isArray(reportModel?.roleFitModel?.experienceHighlights)
-      ? reportModel.roleFitModel.experienceHighlights
-      : [];
-    return highlights
-      .map((label, idx) => ({
-        key: `cv-highlight-${idx}`,
-        label: String(label || '').trim(),
-        value: null,
-        source: 'cv_match',
-      }))
-      .filter((item) => item.label)
-      .slice(0, 4);
-  }, [reportModel?.dimensionEntries, reportModel?.roleFitModel?.experienceHighlights]);
-  const riskItems = useMemo(() => {
-    const concerns = Array.isArray(reportModel?.roleFitModel?.concerns) ? reportModel.roleFitModel.concerns : [];
-    const requirementGap = reportModel?.roleFitModel?.firstRequirementGap;
-    const items = [];
-    if (reportModel?.probeTitle || reportModel?.probeDescription) {
-      items.push({
-        title: reportModel.probeTitle || 'Primary probe area',
-        description: reportModel.probeDescription || 'Probe where the current evidence is still thin.',
-      });
-    }
-    if (requirementGap?.requirement && !items.some((item) => item.title === requirementGap.requirement)) {
-      items.push({
-        title: requirementGap.requirement,
-        description: requirementGap.impact || requirementGap.evidence || 'Validate this gap during the panel loop.',
-      });
-    }
-    concerns.forEach((concern) => {
-      if (!items.some((item) => item.title === concern)) {
-        items.push({ title: concern, description: 'This surfaced in the standing report evidence and is worth pressure-testing live.' });
-      }
-    });
-    return items.slice(0, 3);
-  }, [reportModel]);
+  // Strengths and risks are now derived from the same
+  // requirements_assessment data that drives the Matched / Missing
+  // cards on the CV & match tab — so what shows on Overview matches
+  // what shows on CV & match. Recruiter-added crit_* surfaces ahead of
+  // JD-extracted jd_req_* (recruiter signal > scraped signal).
   const cvMatchDetails = resolveCvMatchDetails({
     application,
     completedAssessment,
@@ -969,6 +940,47 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       requirements.filter((item) => String(item?.status || '').toLowerCase() !== 'met')
     );
   }, [cvMatchDetails]);
+  const strengthItems = useMemo(() => {
+    const met = matchedRequirements.slice(0, 4).map((item, idx) => ({
+      key: `strength-${item.requirement_id || idx}`,
+      label: item.requirement || '',
+      value: null,
+      source: String(item.requirement_id || '').startsWith('crit_') ? 'recruiter' : 'jd',
+      detail: item.impact || item.reasoning || '',
+    })).filter((item) => item.label);
+    if (met.length) return met;
+    // Fallback when no requirements are scored yet (pre-scoring state).
+    const highlights = Array.isArray(reportModel?.roleFitModel?.experienceHighlights)
+      ? reportModel.roleFitModel.experienceHighlights
+      : [];
+    return highlights
+      .map((label, idx) => ({
+        key: `cv-highlight-${idx}`,
+        label: String(label || '').trim(),
+        value: null,
+        source: 'cv_match',
+      }))
+      .filter((item) => item.label)
+      .slice(0, 4);
+  }, [matchedRequirements, reportModel?.roleFitModel?.experienceHighlights]);
+  const riskItems = useMemo(() => {
+    // Top non-met requirements (missing > partial > unknown), recruiter
+    // criteria first. Mirrors the order the user sees on the Missing /
+    // Partial / Unclear card.
+    const STATUS_RANK = { missing: 0, partially_met: 1, unknown: 2 };
+    const ranked = [...missingRequirements].sort((a, b) => {
+      const aRecruiter = String(a?.requirement_id || '').startsWith('crit_') ? 0 : 1;
+      const bRecruiter = String(b?.requirement_id || '').startsWith('crit_') ? 0 : 1;
+      if (aRecruiter !== bRecruiter) return aRecruiter - bRecruiter;
+      const aSt = STATUS_RANK[String(a?.status || '').toLowerCase()] ?? 3;
+      const bSt = STATUS_RANK[String(b?.status || '').toLowerCase()] ?? 3;
+      return aSt - bSt;
+    });
+    return ranked.slice(0, 3).map((item) => ({
+      title: item.requirement,
+      description: item.impact || item.reasoning || 'Validate this gap during the panel loop.',
+    }));
+  }, [missingRequirements]);
   const interviewQuestions = useMemo(() => {
     const override = application?.interview_prep;
     if (override && (Array.isArray(override.stageOne) || Array.isArray(override.stageTwo))) {

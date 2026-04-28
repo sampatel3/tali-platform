@@ -112,15 +112,21 @@ Two delimited blocks follow. The contents inside <UNTRUSTED_CV ...> and <JOB_SPE
     - Name the requirement priority explicitly when it matters: "Must-have <X>: ...", "Strong preference <Y>: ...", "Constraint <Z>: ...".
     - When the CV evidences a requirement, anchor the evidence to a specific experience entry: cite the employer name, the role title, and the date range (or year). Example: "Evidenced at Direct Line Group (Lead Data Engineer, 2022–present), where the candidate built DBT models for the regulatory pipeline." NOT "DBT experience present."
     - When the requirement is not met, name what is actually in the CV instead and why it falls short: "No DBT references in any of the 4 listed roles (AWS Glue and SAS only at Direct Line, 2022–present; SAS-only at Lloyds, 2018–2022)." NOT "DBT missing."
-    - When marking ``status: unknown``, say which sections of the CV you searched and what evidence would have changed your verdict.
 
-    ``summary`` (5–7 sentences):
-    - Sentence 1: overall fit verdict.
-    - Sentence 2: must-have status — name each must-have explicitly and say met / partially / missing for each, with a one-phrase anchor when met. Example: "Must-haves: AWS (met — 7 years across Glue/Redshift at Direct Line and Lloyds), Python (met — primary language at both employers), DBT (missing — no references in CV)."
-    - Sentence 3: strong-preference status — same pattern.
-    - Sentence 4 (optional): standout signals or unusual depth, anchored to the CV.
-    - Sentence 5: material gaps and what they imply for ramp-up.
-    - Sentences 6–7: 2–3 specific live questions a recruiter should ask, each one tied to a specific gap or ambiguity.
+    Constraint scoring (CRITICAL): for ``priority: constraint``, choose ``status`` by what the CV evidence actually shows:
+    - ``met``     — CV provides positive evidence the constraint is satisfied (e.g. tenure stable across listed roles → constraint "no sub-12-month tenures" is MET; UK-based candidate → constraint "UK work eligibility" is MET).
+    - ``missing`` — CV provides positive evidence the constraint is violated.
+    - ``unknown`` — only when the CV genuinely lacks information either way (rare for tenure / location / language constraints; dates and locations are usually present).
+    Do NOT mark a constraint ``unknown`` if your reasoning text describes positive evidence — that is internally inconsistent and confuses the recruiter.
+
+    Status ``unknown`` (for any priority): say which sections of the CV you searched and what specific evidence would have flipped the verdict.
+
+    ``summary`` (3–4 SHORT sentences, ~120 chars each — recruiters scan this in 5 seconds):
+    - Sentence 1: one-line verdict — strong fit / partial fit / weak fit, plus the single biggest reason.
+    - Sentence 2: must-have tally. Example: "Must-haves: AWS ✓ (Direct Line, Glue/Redshift), Python ✓, DBT ✗, DMS ✗, Fargate ✗."
+    - Sentence 3: strong-preference tally. Same compact pattern.
+    - Sentence 4 (optional): the single most important question to ask in screening.
+    Do NOT write paragraphs. Do NOT repeat the same gap multiple times. Do NOT exceed ~500 characters total.
 
     ``experience_highlights``: each item must name the employer + role + what was achieved (e.g. "Built and owned the Glue→Redshift regulatory pipeline at Direct Line Group, 2022–present, processing 8B rows/day"). Bare skill names ("AWS Glue") are not acceptable.
 

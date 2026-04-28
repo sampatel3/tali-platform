@@ -51,9 +51,9 @@ const OUTCOME_OPTIONS = [
   { value: 'hired', label: 'Hired' },
 ];
 const SORT_OPTIONS = [
-  { value: 'cv_match_scored_at:desc', label: 'Recently scored (newest first)' },
   { value: 'taali_score:desc', label: 'Taali AI Score (high to low)' },
   { value: 'taali_score:asc', label: 'Taali AI Score (low to high)' },
+  { value: 'cv_match_scored_at:desc', label: 'Recently scored (newest first)' },
   { value: 'created_at:desc', label: 'Submitted (newest first)' },
   { value: 'created_at:asc', label: 'Submitted (oldest first)' },
   { value: 'pipeline_stage_updated_at:desc', label: 'Recent activity' },
@@ -1634,14 +1634,16 @@ export const CandidatesDirectoryPage = ({
           {hasThresholdRoleValue ? (
             <button
               type="button"
-              className="threshold-control"
+              className={`filter-chip ${Number(minPreScreenScore) === thresholdRoleValue ? 'on' : ''}`}
               onClick={() => setMinPreScreenScore(Number(minPreScreenScore) === thresholdRoleValue ? '' : String(thresholdRoleValue))}
-              title="Toggle the saved role threshold filter"
+              title={`Toggle filter: hide candidates below ${thresholdRoleValue}%`}
+              style={{ gap: 8 }}
             >
-              <span className="dot" />
-              <span className="role">{thresholdRole?.name || 'Role'} threshold:</span>
-              <b>{thresholdRoleValue}%</b>
-              <span style={{ color: 'var(--mute)', marginLeft: 4 }}>{belowThresholdCount} below</span>
+              <span style={{ color: 'var(--mute)' }}>Threshold</span>
+              <b style={{ color: 'inherit', fontWeight: 600 }}>{thresholdRoleValue}%</b>
+              {belowThresholdCount > 0 ? (
+                <span style={{ color: 'var(--mute)' }}>· {belowThresholdCount} below</span>
+              ) : null}
             </button>
           ) : null}
 

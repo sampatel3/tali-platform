@@ -273,12 +273,28 @@ def _execute_scoring(
     from ..domains.assessments_runtime.role_support import (
         refresh_application_score_cache,
     )
+    from .interview_support_service import refresh_application_interview_support
 
     try:
         refresh_application_score_cache(application, db=db)
     except Exception:  # pragma: no cover — cache refresh must not break scoring
         logger.exception(
             "Failed to refresh score cache for application=%s job=%s",
+            getattr(application, "id", None),
+            getattr(job, "id", None),
+        )
+
+    # Pre-build interview-support pack from the fresh details. Detail
+    # endpoint reads this from cache instead of regenerating Claude
+    # questions inline (which previously made every page load 20s+).
+    try:
+        refresh_application_interview_support(
+            application,
+            organization=getattr(application, "organization", None),
+        )
+    except Exception:  # pragma: no cover — interview-pack refresh must not break scoring
+        logger.exception(
+            "Failed to refresh interview support for application=%s job=%s",
             getattr(application, "id", None),
             getattr(job, "id", None),
         )
