@@ -91,7 +91,11 @@ def _run_checked(command: list[str], label: str) -> None:
 
 
 def _exec_uvicorn(port: str) -> None:
-    _log(f"Starting uvicorn on port {port}...")
+    # Default to 2 workers so a single slow request (e.g. an inline Claude
+    # call from a recruiter-triggered endpoint) can't freeze the entire
+    # web service. Override with TALI_WEB_WORKERS for tuning.
+    workers = os.environ.get("TALI_WEB_WORKERS", "2").strip() or "2"
+    _log(f"Starting uvicorn on port {port} (workers={workers})...")
     os.execvp(
         sys.executable,
         [
@@ -103,6 +107,8 @@ def _exec_uvicorn(port: str) -> None:
             "0.0.0.0",
             "--port",
             port,
+            "--workers",
+            workers,
         ],
     )
 

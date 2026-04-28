@@ -18,7 +18,6 @@ from ....models.role import Role
 from ....models.workable_sync_run import WorkableSyncRun
 from ....platform.config import settings
 from ....domains.assessments_runtime.pipeline_service import (
-    append_application_event,
     ensure_pipeline_fields,
     initialize_pipeline_event_if_missing,
     map_legacy_status_to_pipeline,
@@ -31,18 +30,14 @@ from ....services.document_service import (
     sanitize_text_for_storage,
     save_file_locally,
 )
-from ....services.application_automation_service import run_auto_reject_if_needed
-from ....services.cv_score_orchestrator import enqueue_score
+from ....services.application_events import on_application_created
 from ....services.fit_matching_service import (
     CvMatchValidationError,
     calculate_cv_job_match_sync,
     calculate_cv_job_match_v4_sync,
 )
 from ....services.spec_normalizer import normalize_spec
-from ....services.interview_support_service import (
-    build_role_interview_pack_templates,
-    refresh_application_interview_support,
-)
+from ....services.interview_support_service import build_role_interview_pack_templates
 from ....services.pre_screening_service import refresh_pre_screening_fields
 from .service import WorkableRateLimitError, WorkableService
 
@@ -1288,37 +1283,22 @@ class WorkableSyncService:
                         filename=filename,
                         content=content,
                     )
-            computed_match = False
-            if (app.cv_text or "").strip() and getattr(role, "job_spec_text", None):
-                # Enqueue through the orchestrator so workable-driven scoring
-                # benefits from the same cache + job log as recruiter actions.
-                # When MVP_DISABLE_CELERY, this runs inline within `db`.
-                job = enqueue_score(db, app)
-                computed_match = job is not None and job.status == "done"
-            if computed_match or app.score_cached_at is None:
+            # Refresh the read-only score cache from existing fields. We
+            # do NOT auto-enqueue scoring here — scoring is human-only,
+            # triggered via Score / Rescore / Score selected. The
+            # interview-pack regen and auto-reject pre-screen are fanned
+            # out as Celery tasks below so the sync loop doesn't make
+            # synchronous Claude calls per candidate.
+            if app.score_cached_at is None:
                 refresh_application_score_cache(app, db=db)
             else:
                 refresh_pre_screening_fields(app)
-            refresh_application_interview_support(app)
-            auto_result = run_auto_reject_if_needed(
-                db=db,
-                org=org,
-                app=app,
-                role=role,
-                actor_type="sync",
-            )
-            if auto_result.get("performed"):
-                append_application_event(
-                    db,
-                    app=app,
-                    event_type="workable_auto_reject_applied",
-                    actor_type="sync",
-                    reason=str(auto_result.get("reason") or "Auto reject applied during full sync"),
-                    metadata={
-                        "pre_screen_score": auto_result.get("snapshot", {}).get("pre_screen_score"),
-                        "threshold_100": auto_result.get("config", {}).get("threshold_100"),
-                    },
-                )
+            # Defer the per-application auto work (interview pack +
+            # auto-reject pre-screen) to Celery. Pass score=False because
+            # Workable bulk sync is NOT a recruiter action — scoring stays
+            # human-triggered. We commit-via-flush below; the Celery tasks
+            # open their own sessions so they see the upserted row.
+            on_application_created(app, score=False)
         else:
             refresh_pre_screening_fields(app)
         app.rank_score = _rank_score_for_application(app)

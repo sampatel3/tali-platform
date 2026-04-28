@@ -14,12 +14,10 @@ from ...models.organization import Organization
 from ...models.role import Role
 from ...models.task import Task
 from ...models.user import User
-from ...platform.config import settings
 from ...platform.database import get_db
 from ...schemas.role import RoleCreate, RoleResponse, RoleTaskLinkRequest, RoleUpdate
+from ...services.application_events import on_role_jd_attached
 from ...services.document_service import process_document_upload
-from ...services.interview_support_service import build_role_interview_pack_templates
-from ...services.interview_focus_service import generate_interview_focus_sync
 from ...services.cv_score_orchestrator import mark_role_scores_stale
 from ...services.role_criteria_service import (
     sync_all_criteria,
@@ -31,24 +29,6 @@ from .pipeline_service import role_pipeline_counts
 
 router = APIRouter(tags=["Roles"])
 logger = logging.getLogger("taali.roles")
-
-
-def _generate_interview_focus(role: Role) -> tuple[dict | None, str | None]:
-    job_spec_text = (role.job_spec_text or "").strip()
-    if not job_spec_text:
-        return None, "Interview focus unavailable: job spec text is empty"
-    if not settings.ANTHROPIC_API_KEY:
-        return None, "Interview focus unavailable: Anthropic API key is not configured"
-
-    interview_focus = generate_interview_focus_sync(
-        job_spec_text=job_spec_text,
-        api_key=settings.ANTHROPIC_API_KEY,
-        model=settings.resolved_claude_scoring_model,
-        additional_requirements=(role.additional_requirements or "").strip() or None,
-    )
-    if not interview_focus:
-        return None, "Interview focus unavailable: failed to generate pointers"
-    return interview_focus, None
 
 
 @router.post("/roles", response_model=RoleResponse, status_code=status.HTTP_201_CREATED)
@@ -314,22 +294,6 @@ def upload_role_job_spec(
     role.interview_focus = None
     role.interview_focus_generated_at = None
 
-    interview_focus: dict | None = None
-    interview_focus_error: str | None = None
-    try:
-        interview_focus, interview_focus_error = _generate_interview_focus(role)
-    except Exception:
-        logger.exception("Failed to generate interview focus for role_id=%s", role.id)
-        interview_focus = None
-        interview_focus_error = "Interview focus unavailable: failed to generate pointers"
-
-    if interview_focus:
-        role.interview_focus = interview_focus
-        role.interview_focus_generated_at = now
-        templates = build_role_interview_pack_templates(role)
-        role.screening_pack_template = templates.get("screening")
-        role.tech_interview_pack_template = templates.get("tech_stage_2")
-
     try:
         sync_derived_criteria(db, role)
         mark_role_scores_stale(db, role.id)
@@ -338,6 +302,12 @@ def upload_role_job_spec(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to upload job spec")
+
+    # Auto-trigger interview-focus generation in the background. The
+    # request returns immediately; the worker writes interview_focus +
+    # pack templates back onto the role row when Claude responds.
+    on_role_jd_attached(role)
+
     return {
         "success": True,
         "role_id": role.id,
@@ -347,7 +317,7 @@ def upload_role_job_spec(
         "interview_focus_generated": bool(role.interview_focus),
         "interview_focus_generated_at": role.interview_focus_generated_at,
         "interview_focus": role.interview_focus,
-        "interview_focus_error": interview_focus_error,
+        "interview_focus_pending": True,
     }
 
 
@@ -359,25 +329,8 @@ def regenerate_interview_focus(
 ):
     """Regenerate interview focus pointers from the role's job spec. Use after fixing CLAUDE_MODEL."""
     role = get_role(role_id, current_user.organization_id, db)
-    now = datetime.now(timezone.utc)
     role.interview_focus = None
     role.interview_focus_generated_at = None
-
-    interview_focus: dict | None = None
-    interview_focus_error: str | None = None
-    try:
-        interview_focus, interview_focus_error = _generate_interview_focus(role)
-    except Exception:
-        logger.exception("Failed to regenerate interview focus for role_id=%s", role.id)
-        interview_focus = None
-        interview_focus_error = "Interview focus unavailable: failed to generate pointers"
-
-    if interview_focus:
-        role.interview_focus = interview_focus
-        role.interview_focus_generated_at = now
-        templates = build_role_interview_pack_templates(role)
-        role.screening_pack_template = templates.get("screening")
-        role.tech_interview_pack_template = templates.get("tech_stage_2")
 
     try:
         db.commit()
@@ -386,13 +339,15 @@ def regenerate_interview_focus(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to regenerate interview focus")
 
+    on_role_jd_attached(role)
+
     return {
         "success": True,
         "role_id": role.id,
         "interview_focus_generated": bool(role.interview_focus),
         "interview_focus_generated_at": role.interview_focus_generated_at,
         "interview_focus": role.interview_focus,
-        "interview_focus_error": interview_focus_error,
+        "interview_focus_pending": True,
     }
 
 

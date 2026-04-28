@@ -71,6 +71,7 @@ from ...services.fireflies_service import (
     attach_fireflies_match_metadata,
     normalized_transcript_bundle,
 )
+from ...services.application_events import on_application_created
 from ...services.cv_score_orchestrator import (
     enqueue_score,
     latest_score_status,
@@ -1651,28 +1652,17 @@ def upload_application_cv(
     app.cv_match_score = None
     app.cv_match_details = None
     app.cv_match_scored_at = None
-    try:
-        enqueue_score(db, app, force=True)
-    except Exception:
-        logger.exception("Failed to enqueue CV match scoring for application_id=%s", app.id)
     _refresh_rank_score(app)
     refresh_application_score_cache(app, db=db)
-    refresh_application_interview_support(app)
-    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    if org:
-        run_auto_reject_if_needed(
-            db=db,
-            org=org,
-            app=app,
-            role=app.role,
-            actor_type="recruiter",
-            actor_id=current_user.id,
-        )
     try:
         db.commit()
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to upload CV")
+    # CV upload is a deliberate human action — implicit "score this".
+    # Fan out scoring + interview pack + auto-reject pre-screen as
+    # background tasks so the recruiter gets the page back immediately.
+    on_application_created(app, score=True, score_force=True)
     return ApplicationCvUploadResponse(
         application_id=app.id,
         filename=result["filename"],
