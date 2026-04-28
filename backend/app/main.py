@@ -358,3 +358,25 @@ def graphiti_health():
     from .candidate_graph.client import healthcheck
 
     return healthcheck()
+
+
+@app.post("/admin/graphiti/backfill")
+def graphiti_backfill_all(request: Request):
+    """Trigger a full Graphiti backfill for all organisations.
+
+    Protected by ``ADMIN_SECRET`` env var. Returns a summary dict.
+    """
+    from .platform.config import settings
+    from .platform.database import SessionLocal
+    from .candidate_graph.sync import sync_all_organizations
+
+    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not admin_secret or provided != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    db = SessionLocal()
+    try:
+        return sync_all_organizations(db)
+    finally:
+        db.close()

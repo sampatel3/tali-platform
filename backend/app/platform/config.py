@@ -165,6 +165,9 @@ class Settings(BaseSettings):
     # experience entries.
     GRAPHITI_MAX_EPISODES_PER_CANDIDATE: int = 40
 
+    # Admin
+    ADMIN_SECRET: str = ""
+
     # URLs
     FRONTEND_URL: str = "http://localhost:5173"
     BACKEND_URL: str = "http://localhost:8000"
