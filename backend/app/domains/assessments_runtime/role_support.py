@@ -181,6 +181,7 @@ def role_to_response(
         workable_actor_member_id=role.workable_actor_member_id,
         workable_disqualify_reason_id=role.workable_disqualify_reason_id,
         auto_reject_note_template=role.auto_reject_note_template,
+        starred_for_auto_sync=bool(getattr(role, "starred_for_auto_sync", False)),
         tasks_count=tasks_count,
         applications_count=applications_count,
         stage_counts=stage_counts or {},

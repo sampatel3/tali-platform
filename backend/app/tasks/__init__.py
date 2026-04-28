@@ -6,6 +6,7 @@ from .assessment_tasks import (
     post_results_to_workable,
     cleanup_expired_assessments,
     sync_workable_orgs,
+    sync_starred_roles,
 )
 # Eager-import scoring_tasks so Celery autodiscover registers the
 # score_application_job + batch_score_role tasks on the worker. Without
@@ -34,6 +35,7 @@ __all__ = [
     "post_results_to_workable",
     "cleanup_expired_assessments",
     "sync_workable_orgs",
+    "sync_starred_roles",
     "score_application_job",
     "batch_score_role",
     "generate_role_interview_focus",

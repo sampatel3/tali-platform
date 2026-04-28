@@ -340,3 +340,140 @@ def sync_workable_orgs():
     finally:
         db.close()
         _release_sync_lock(lock_client)
+
+
+_STARRED_SYNC_LOCK_KEY_PREFIX = "celery:lock:sync_starred_roles"
+_STARRED_SYNC_LOCK_TTL_SECONDS = 600  # 10m ceiling — starred sync is filtered, fast
+
+
+def _acquire_starred_lock(org_id: int):
+    """Per-org lock for starred-role sync.
+
+    Independent from the broader sync_workable_orgs lock so a slow
+    org-wide sync can't block the 15-min starred cadence.
+    """
+    try:
+        import redis  # type: ignore
+
+        client = redis.Redis.from_url(settings.REDIS_URL)
+        key = f"{_STARRED_SYNC_LOCK_KEY_PREFIX}:{org_id}"
+        acquired = client.set(key, "1", nx=True, ex=_STARRED_SYNC_LOCK_TTL_SECONDS)
+        if not acquired:
+            return None
+        return (client, key)
+    except Exception:
+        logger.exception(
+            "Failed to acquire starred-roles sync lock org_id=%s; running unguarded",
+            org_id,
+        )
+        return False
+
+
+def _release_starred_lock(handle) -> None:
+    if not handle:
+        return
+    try:
+        client, key = handle
+        client.delete(key)
+    except Exception:
+        logger.exception("Failed to release starred-roles sync lock")
+
+
+@celery_app.task
+def sync_starred_roles():
+    """Periodic task: pull from Workable for orgs with starred roles.
+
+    Filters each org's sync to the workable_job_id of its starred roles,
+    so this stays fast (per-job calls) even for orgs with hundreds of
+    roles. Auto-scoring of newly created applications happens inside the
+    sync path — see sync_service._sync_candidate_for_role, gated on
+    role.starred_for_auto_sync.
+    """
+    from sqlalchemy.orm import Session
+
+    from ..components.integrations.workable.service import WorkableService
+    from ..components.integrations.workable.sync_service import WorkableSyncService
+    from ..models.organization import Organization
+    from ..models.role import Role
+    from ..platform.database import SessionLocal
+
+    if settings.MVP_DISABLE_WORKABLE:
+        return {"status": "skipped", "reason": "workable_disabled"}
+
+    db: Session = SessionLocal()
+    synced = 0
+    skipped = 0
+    failed = 0
+    try:
+        starred_rows = (
+            db.query(Role.organization_id, Role.workable_job_id)
+            .filter(
+                Role.starred_for_auto_sync == True,  # noqa: E712
+                Role.deleted_at.is_(None),
+                Role.workable_job_id.isnot(None),
+            )
+            .all()
+        )
+        by_org: dict[int, list[str]] = {}
+        for org_id, workable_job_id in starred_rows:
+            if not workable_job_id:
+                continue
+            shortcode = str(workable_job_id).strip()
+            if not shortcode:
+                continue
+            by_org.setdefault(int(org_id), []).append(shortcode)
+
+        if not by_org:
+            return {"status": "ok", "synced": 0, "skipped": 0, "failed": 0}
+
+        org_ids = list(by_org.keys())
+        orgs = (
+            db.query(Organization)
+            .filter(
+                Organization.id.in_(org_ids),
+                Organization.workable_connected == True,  # noqa: E712
+                Organization.workable_access_token != None,  # noqa: E711
+                Organization.workable_subdomain != None,  # noqa: E711
+            )
+            .all()
+        )
+
+        for org in orgs:
+            shortcodes = by_org.get(int(org.id)) or []
+            if not shortcodes:
+                continue
+            lock_handle = _acquire_starred_lock(int(org.id))
+            if lock_handle is None:
+                # Another starred-sync is already running for this org.
+                skipped += 1
+                continue
+            try:
+                service = WorkableSyncService(
+                    WorkableService(
+                        access_token=org.workable_access_token,
+                        subdomain=org.workable_subdomain,
+                    )
+                )
+                # mode="full" so the candidate path enters the branch
+                # that downloads the CV and calls on_application_created;
+                # that's where starred_for_auto_sync gates auto-scoring.
+                service.sync_org(
+                    db,
+                    org,
+                    full_resync=False,
+                    mode="full",
+                    selected_job_shortcodes=shortcodes,
+                )
+                synced += 1
+            except Exception:
+                failed += 1
+                logger.exception(
+                    "Starred-roles sync failed for org_id=%s shortcodes=%s",
+                    org.id,
+                    shortcodes,
+                )
+            finally:
+                _release_starred_lock(lock_handle)
+        return {"status": "ok", "synced": synced, "skipped": skipped, "failed": failed}
+    finally:
+        db.close()

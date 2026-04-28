@@ -117,6 +117,7 @@ class RoleResponse(BaseModel):
     workable_actor_member_id: Optional[str] = None
     workable_disqualify_reason_id: Optional[str] = None
     auto_reject_note_template: Optional[str] = None
+    starred_for_auto_sync: bool = False
     tasks_count: int = 0
     applications_count: int = 0
     stage_counts: dict[str, int] = Field(default_factory=dict)

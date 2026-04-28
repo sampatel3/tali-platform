@@ -5,6 +5,7 @@ import {
   Filter,
   RefreshCw,
   Search,
+  Star,
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
@@ -344,6 +345,26 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       });
   }, [query, roles, sourceFilter]);
 
+  const handleToggleStar = useCallback(async (role) => {
+    if (!role || isShowcase) return;
+    const isStarred = Boolean(role.starred_for_auto_sync);
+    // Optimistic flip — reverted on error.
+    setRoles((current) => current.map((item) => (
+      item.id === role.id ? { ...item, starred_for_auto_sync: !isStarred } : item
+    )));
+    try {
+      if (isStarred) {
+        await rolesApi.unstar(role.id);
+      } else {
+        await rolesApi.star(role.id);
+      }
+    } catch {
+      setRoles((current) => current.map((item) => (
+        item.id === role.id ? { ...item, starred_for_auto_sync: isStarred } : item
+      )));
+    }
+  }, [isShowcase, rolesApi]);
+
   const handleRoleSubmit = async ({
     name,
     description,
@@ -545,10 +566,38 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                 >
                   <div className="job-head">
                     <div>
-                      <h3>{role.name}</h3>
+                      <h3>
+                        <button
+                          type="button"
+                          className="job-star"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            void handleToggleStar(role);
+                          }}
+                          aria-label={role.starred_for_auto_sync ? 'Unstar role (stop auto-sync)' : 'Star role to enable auto-sync and real-time scoring'}
+                          aria-pressed={Boolean(role.starred_for_auto_sync)}
+                          title={role.starred_for_auto_sync ? 'Auto-sync enabled · click to disable' : 'Star to auto-sync from Workable and score in real-time'}
+                          style={{
+                            background: 'transparent',
+                            border: 'none',
+                            padding: 2,
+                            marginRight: 6,
+                            cursor: 'pointer',
+                            verticalAlign: 'middle',
+                            color: role.starred_for_auto_sync ? 'var(--purple, #7c3aed)' : 'var(--mute, #999)',
+                          }}
+                        >
+                          <Star
+                            size={15}
+                            fill={role.starred_for_auto_sync ? 'currentColor' : 'none'}
+                          />
+                        </button>
+                        {role.name}
+                      </h3>
                       <div className="sub">
                         {Number(role.active_candidates_count || role.applications_count || 0)} active candidates
                         {role?.tasks_count ? ` · ${role.tasks_count} task${role.tasks_count === 1 ? '' : 's'}` : ''}
+                        {role.starred_for_auto_sync ? ' · Auto-sync · 15 min' : ''}
                       </div>
                     </div>
                     {workableRole ? (

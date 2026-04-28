@@ -78,6 +78,41 @@ def test_role_application_assessment_lifecycle(client):
     assert assessment["application_id"] == app_payload["id"]
 
 
+def test_role_star_unstar_toggles_auto_sync_flag(client):
+    headers, _ = auth_headers(client)
+    role = client.post(
+        "/api/v1/roles",
+        json={"name": "Starred Role"},
+        headers=headers,
+    ).json()
+
+    # New roles default to unstarred and the field is surfaced in list/get.
+    assert role.get("starred_for_auto_sync") is False
+    listed = client.get("/api/v1/roles", headers=headers).json()
+    assert any(r["id"] == role["id"] and r["starred_for_auto_sync"] is False for r in listed)
+
+    star_resp = client.post(f"/api/v1/roles/{role['id']}/star", headers=headers)
+    assert star_resp.status_code == 200, star_resp.text
+    assert star_resp.json()["starred_for_auto_sync"] is True
+
+    listed = client.get("/api/v1/roles", headers=headers).json()
+    assert any(r["id"] == role["id"] and r["starred_for_auto_sync"] is True for r in listed)
+
+    unstar_resp = client.delete(f"/api/v1/roles/{role['id']}/star", headers=headers)
+    assert unstar_resp.status_code == 200, unstar_resp.text
+    assert unstar_resp.json()["starred_for_auto_sync"] is False
+
+
+def test_role_star_is_org_scoped(client):
+    headers_a, _ = auth_headers(client, organization_name="OrgStarA")
+    headers_b, _ = auth_headers(client, organization_name="OrgStarB")
+    role_a = client.post("/api/v1/roles", json={"name": "Org A Role"}, headers=headers_a).json()
+
+    # OrgB cannot star OrgA's role.
+    forbidden = client.post(f"/api/v1/roles/{role_a['id']}/star", headers=headers_b)
+    assert forbidden.status_code == 404
+
+
 def test_single_candidate_can_have_multiple_role_applications(client):
     headers, _ = auth_headers(client)
 

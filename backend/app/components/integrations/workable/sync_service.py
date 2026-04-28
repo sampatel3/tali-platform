@@ -1294,11 +1294,17 @@ class WorkableSyncService:
             else:
                 refresh_pre_screening_fields(app)
             # Defer the per-application auto work (interview pack +
-            # auto-reject pre-screen) to Celery. Pass score=False because
-            # Workable bulk sync is NOT a recruiter action — scoring stays
-            # human-triggered. We commit-via-flush below; the Celery tasks
-            # open their own sessions so they see the upserted row.
-            on_application_created(app, score=False)
+            # auto-reject pre-screen) to Celery. Default scoring stays
+            # human-triggered, EXCEPT for roles flagged
+            # starred_for_auto_sync — recruiters opt those into real-time
+            # scoring per-candidate. Only score on the create branch
+            # (created_application) so re-syncs of an existing app don't
+            # re-enqueue scoring jobs every Beat tick.
+            auto_score = bool(
+                created_application
+                and getattr(role, "starred_for_auto_sync", False)
+            )
+            on_application_created(app, score=auto_score)
         else:
             refresh_pre_screening_fields(app)
         app.rank_score = _rank_score_for_application(app)

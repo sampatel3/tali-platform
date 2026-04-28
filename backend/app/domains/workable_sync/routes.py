@@ -285,6 +285,73 @@ def _run_sync_in_background(
     )
 
 
+def kick_off_filtered_sync(
+    db: Session,
+    *,
+    org: Organization,
+    job_shortcodes: list[str],
+    requested_by_user_id: int | None,
+    mode: str = "full",
+) -> int | None:
+    """Start a Workable sync run filtered to specific job shortcodes.
+
+    Used by the star-role flow to give recruiters near-immediate results
+    without waiting for the next 15-min Beat tick. Returns the new run_id,
+    or None if the org isn't Workable-connected or another run is already
+    in progress (caller doesn't need to do anything in that case — the
+    in-flight run will pick up changes).
+    """
+    if settings.MVP_DISABLE_WORKABLE:
+        return None
+    if not (org.workable_connected and org.workable_access_token and org.workable_subdomain):
+        return None
+    if not job_shortcodes:
+        return None
+    if _latest_running_run_for_org(db, org.id) is not None:
+        return None
+
+    requested_mode = (mode or "full").strip().lower()
+    if requested_mode not in {"metadata", "full"}:
+        requested_mode = "full"
+
+    now = datetime.now(timezone.utc)
+    run = WorkableSyncRun(
+        organization_id=org.id,
+        requested_by_user_id=requested_by_user_id,
+        mode=requested_mode,
+        status="running",
+        phase="queued",
+        jobs_total=0,
+        jobs_processed=0,
+        candidates_seen=0,
+        candidates_upserted=0,
+        applications_upserted=0,
+        errors=[],
+        db_snapshot=_db_snapshot_for_org(db, org.id),
+        started_at=now,
+    )
+    db.add(run)
+    db.flush()
+    org.workable_sync_started_at = now
+    org.workable_sync_cancel_requested_at = None
+    org.workable_sync_progress = {
+        "run_id": run.id,
+        "mode": requested_mode,
+        "phase": "queued",
+        "jobs_total": 0,
+        "jobs_processed": 0,
+        "candidates_seen": 0,
+        "candidates_upserted": 0,
+        "applications_upserted": 0,
+        "selected_job_shortcodes": list(job_shortcodes),
+        "errors": [],
+    }
+    db.commit()
+
+    _enqueue_sync(org.id, run.id, requested_mode, list(job_shortcodes))
+    return run.id
+
+
 def _run_workable_diagnostic(org: Organization) -> dict:
     """Run Workable API diagnostic for the org. Returns structured output for testing."""
     if not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
