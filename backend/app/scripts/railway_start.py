@@ -136,8 +136,34 @@ def main(argv: list[str] | None = None) -> int:
     interval_seconds = float(os.environ.get("RAILWAY_DB_WAIT_INTERVAL_SECONDS", "2"))
     _wait_for_database(timeout_seconds=timeout_seconds, interval_seconds=interval_seconds)
     _run_checked([sys.executable, "-m", "alembic", "upgrade", "head"], "database migrations")
+    _invalidate_stale_cv_match_scores()
     _exec_uvicorn(os.environ.get("PORT", "8000"))
     return 0
+
+
+def _invalidate_stale_cv_match_scores() -> None:
+    """Null out cv_match_score on rows whose cached score was produced
+    under an older PROMPT_VERSION. Idempotent: re-running with no drift
+    is a fast no-op. Wrapped so failures don't block startup."""
+    try:
+        from app.cv_matching import PROMPT_VERSION
+        from app.platform.database import SessionLocal
+        from app.scripts.invalidate_stale_cv_scores import (
+            invalidate_stale_cv_match_scores,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        _log(f"WARNING: stale-cv-score invalidation skipped (import failed): {exc}")
+        return
+    db = SessionLocal()
+    try:
+        affected = invalidate_stale_cv_match_scores(db, PROMPT_VERSION)
+        _log(
+            f"Stale CV match scores nulled: {affected} (current={PROMPT_VERSION})"
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        _log(f"WARNING: stale-cv-score invalidation failed: {exc}")
+    finally:
+        db.close()
 
 
 if __name__ == "__main__":
