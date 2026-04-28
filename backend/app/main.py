@@ -380,3 +380,55 @@ def graphiti_backfill_all(request: Request):
         return sync_all_organizations(db)
     finally:
         db.close()
+
+
+@app.post("/admin/graphiti/test-episode")
+def graphiti_test_episode(request: Request):
+    """Send one synthetic episode to Graphiti and return success or error detail.
+
+    Used to verify the add_episode pipeline end-to-end after setup.
+    """
+    from .platform.config import settings
+    from .candidate_graph import client as graph_client
+    from .candidate_graph.episodes import Episode, dispatch
+
+    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not admin_secret or provided != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not graph_client.is_configured():
+        return {"status": "unconfigured"}
+
+    import traceback
+    from datetime import datetime, timezone
+    from graphiti_core.nodes import EpisodeType  # type: ignore[import-not-found]
+
+    ep = Episode(
+        name="test-episode-debug",
+        body="Subject candidate: Test Person (taali_id=0)\nThis is a test episode for connectivity verification.",
+        source_description="admin.test",
+        reference_time=datetime.now(timezone.utc),
+        group_id="org:0",
+    )
+    try:
+        graphiti = graph_client.get_graphiti()
+        graph_client.run_async(
+            graphiti.add_episode(
+                name=ep.name,
+                episode_body=ep.body,
+                source=EpisodeType.text,
+                source_description=ep.source_description,
+                reference_time=ep.reference_time,
+                group_id=ep.group_id,
+            ),
+            timeout=120.0,
+        )
+        return {"status": "ok", "episodes_sent": 1}
+    except Exception as exc:
+        return {
+            "status": "error",
+            "error_type": type(exc).__name__,
+            "error": str(exc),
+            "traceback": traceback.format_exc(),
+        }
