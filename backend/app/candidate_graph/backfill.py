@@ -1,13 +1,19 @@
-"""Backfill CLI for the candidate knowledge graph.
+"""Backfill CLI for the candidate knowledge graph (Graphiti).
 
 Usage:
 
     python -m app.candidate_graph.backfill --org 42
     python -m app.candidate_graph.backfill --all-orgs
 
-Idempotent. Safe to re-run after schema bumps. Skips candidates with no
-experience/education/skills (they produce no graph). Aborts cleanly when
-``NEO4J_URI`` is unset.
+Idempotent. Each candidate produces N episodes (profile + skills/edu +
+one per experience entry, capped by GRAPHITI_MAX_EPISODES_PER_CANDIDATE)
+plus a CV-text episode. Each interview produces 1-2 episodes (transcript
+plus structured summary). Each non-trivial pipeline event produces 1.
+
+LLM cost budget at the defaults:
+- ~$0.005 per profile episode (Anthropic Haiku 4.5 extraction)
+- ~$0.0001 per Voyage embedding call (1024-dim, voyage-3)
+- Typical org of 200 candidates with 1 interview each: ~$3-8 total.
 """
 
 from __future__ import annotations
@@ -17,8 +23,8 @@ import json
 import logging
 import sys
 
-from . import sync as sync_module
 from . import client as graph_client
+from . import sync as sync_module
 
 logger = logging.getLogger("taali.candidate_graph.backfill")
 
@@ -46,7 +52,9 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     if not graph_client.is_configured():
-        logger.error("Neo4j is not configured (NEO4J_URI is empty); aborting.")
+        logger.error(
+            "Graphiti not configured (need NEO4J_URI and VOYAGE_API_KEY); aborting."
+        )
         return 2
 
     from ..platform.database import SessionLocal
@@ -59,8 +67,9 @@ def main(argv: list[str] | None = None) -> int:
             result = sync_module.sync_organization(db, int(args.org))
     finally:
         db.close()
+        graph_client.close()
 
-    print(json.dumps(result, indent=2))
+    print(json.dumps(result, indent=2, default=str))
     return 0
 
 

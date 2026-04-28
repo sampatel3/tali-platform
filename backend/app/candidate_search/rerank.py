@@ -86,9 +86,9 @@ def _build_graph_context(
 
         if not graph_client.is_configured():
             return None
-        from ..candidate_graph import queries as graph_queries
+        from ..candidate_graph import search as graph_search
 
-        return graph_queries.colleague_neighbourhood(
+        return graph_search.colleague_neighbourhood(
             organization_id=organization_id,
             candidate_id=candidate_id,
         )

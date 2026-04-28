@@ -1,15 +1,13 @@
-"""Idempotent Postgres → Neo4j sync for candidates.
+"""High-level sync entry points used by listeners + the backfill CLI.
 
-Reads ``Candidate.experience_entries`` (Workable shape:
-``{company,title,start_date,end_date,...}``), ``Candidate.cv_sections``
-(cv_parsing shape: ``{company,title,location,start,end,bullets}``),
-``Candidate.skills`` (list[str]), ``Candidate.education_entries``, and
-the candidate's own location, then upserts the corresponding nodes and
-edges into Neo4j. ``MERGE`` makes re-runs free.
+Each function turns one or more domain rows into Graphiti episodes via
+``episodes.py`` and dispatches them to Graphiti. All functions are
+idempotent at the Graphiti level — duplicate ``add_episode`` calls with
+the same body are deduped by Graphiti's content fingerprint, so retries
+and re-runs are safe.
 
-Multi-tenancy: every node and edge created by sync carries the
-candidate's ``organization_id``; query-time tenancy filters are in
-``queries.py``.
+These functions are sync-callable; they hide Graphiti's async surface
+behind ``client.run_async``.
 """
 
 from __future__ import annotations
@@ -20,268 +18,162 @@ from typing import Iterable
 
 from sqlalchemy.orm import Session
 
-from . import client as graph_client
 from ..models.candidate import Candidate
+from ..models.candidate_application import CandidateApplication
+from ..models.candidate_application_event import CandidateApplicationEvent
+from ..models.application_interview import ApplicationInterview
+from . import client as graph_client
+from . import episodes as episode_module
 
 logger = logging.getLogger("taali.candidate_graph.sync")
 
 
-def _norm(value: str | None) -> str:
-    return (value or "").strip().lower()
+def sync_candidate(
+    candidate: Candidate,
+    *,
+    db: Session | None = None,
+    include_cv_text: bool = True,
+) -> int:
+    """Ingest one candidate's profile (+ optional raw CV text) into Graphiti.
 
-
-def _safe_str(value) -> str:
-    if value is None:
-        return ""
-    return str(value).strip()
-
-
-def _experience_iter(candidate: Candidate) -> Iterable[dict]:
-    """Yield normalised experience dicts from BOTH possible sources.
-
-    Output shape: ``{company, title, location, start_date, end_date}``.
-    Empty companies are skipped.
+    Returns the number of episodes successfully sent. Returns 0 (no error)
+    when Graphiti is not configured or the candidate is missing
+    organization_id.
     """
-    seen: set[tuple[str, str]] = set()
+    if not graph_client.is_configured():
+        return 0
+    if candidate.id is None or candidate.organization_id is None:
+        return 0
 
-    # Workable shape
-    for entry in (candidate.experience_entries or []):
-        if not isinstance(entry, dict):
-            continue
-        company = _safe_str(entry.get("company"))
-        if not company:
-            continue
-        title = _safe_str(entry.get("title"))
-        start = _safe_str(entry.get("start_date"))
-        end = _safe_str(entry.get("end_date"))
-        key = (_norm(company), start)
-        if key in seen:
-            continue
-        seen.add(key)
-        yield {
-            "company": company,
-            "title": title,
-            "location": _safe_str(entry.get("location")),
-            "start_date": start,
-            "end_date": end,
-        }
+    from ..platform.config import settings
 
-    # cv_parsing shape (different field names)
-    cv_sections = candidate.cv_sections or {}
-    if isinstance(cv_sections, dict):
-        for entry in (cv_sections.get("experience") or []):
-            if not isinstance(entry, dict):
-                continue
-            company = _safe_str(entry.get("company"))
-            if not company:
-                continue
-            start = _safe_str(entry.get("start"))
-            key = (_norm(company), start)
-            if key in seen:
-                continue
-            seen.add(key)
-            yield {
-                "company": company,
-                "title": _safe_str(entry.get("title")),
-                "location": _safe_str(entry.get("location")),
-                "start_date": start,
-                "end_date": _safe_str(entry.get("end")),
-            }
+    profile_eps = episode_module.build_candidate_profile_episodes(
+        candidate,
+        max_episodes=int(settings.GRAPHITI_MAX_EPISODES_PER_CANDIDATE),
+    )
+    cv_ep = episode_module.build_cv_text_episode(candidate) if include_cv_text else None
+    episodes = profile_eps + ([cv_ep] if cv_ep else [])
+    sent = episode_module.dispatch(episodes)
+
+    if db is not None and sent > 0:
+        _record_sync_state(db, int(candidate.id))
+    return sent
 
 
-def _education_iter(candidate: Candidate) -> Iterable[dict]:
-    """Yield normalised school dicts. Output: ``{school}``."""
-    seen: set[str] = set()
-    for entry in (candidate.education_entries or []):
-        if not isinstance(entry, dict):
-            continue
-        school = _safe_str(entry.get("school") or entry.get("institution"))
-        if not school or _norm(school) in seen:
-            continue
-        seen.add(_norm(school))
-        yield {"school": school}
-
-    cv_sections = candidate.cv_sections or {}
-    if isinstance(cv_sections, dict):
-        for entry in (cv_sections.get("education") or []):
-            if not isinstance(entry, dict):
-                continue
-            school = _safe_str(entry.get("institution") or entry.get("school"))
-            if not school or _norm(school) in seen:
-                continue
-            seen.add(_norm(school))
-            yield {"school": school}
+def sync_interview(interview: ApplicationInterview, *, db: Session | None = None) -> int:
+    """Ingest one interview transcript + structured summary."""
+    if not graph_client.is_configured():
+        return 0
+    episodes = episode_module.build_interview_episodes(interview)
+    return episode_module.dispatch(episodes)
 
 
-def _skills_list(candidate: Candidate) -> list[str]:
-    """Combine skills from both candidate.skills and cv_sections.skills."""
-    out: list[str] = []
-    seen: set[str] = set()
-    raw_skills = candidate.skills or []
-    if isinstance(raw_skills, list):
-        for item in raw_skills:
-            name = _safe_str(item)
-            if name and _norm(name) not in seen:
-                seen.add(_norm(name))
-                out.append(name)
-    cv_sections = candidate.cv_sections or {}
-    if isinstance(cv_sections, dict):
-        for item in (cv_sections.get("skills") or []):
-            name = _safe_str(item)
-            if name and _norm(name) not in seen:
-                seen.add(_norm(name))
-                out.append(name)
+def sync_event(event: CandidateApplicationEvent) -> int:
+    """Ingest a pipeline event (best-effort; some are no-op)."""
+    if not graph_client.is_configured():
+        return 0
+    episode = episode_module.build_event_episode(event)
+    if episode is None:
+        return 0
+    return episode_module.dispatch([episode])
+
+
+def sync_organization(db: Session, organization_id: int) -> dict:
+    """Backfill: ingest every candidate + every linked interview for one org.
+
+    Returns ``{candidates: {total, succeeded, episodes}, interviews:
+    {total, episodes}, events: {total, episodes}}``. Idempotent — safe to
+    re-run after schema bumps.
+    """
+    if not graph_client.is_configured():
+        return {"status": "unconfigured"}
+
+    out = {
+        "candidates": {"total": 0, "succeeded": 0, "episodes": 0},
+        "interviews": {"total": 0, "episodes": 0},
+        "events": {"total": 0, "episodes": 0},
+    }
+
+    candidates = (
+        db.query(Candidate)
+        .filter(Candidate.organization_id == organization_id)
+        .filter(Candidate.deleted_at.is_(None))
+        .all()
+    )
+    out["candidates"]["total"] = len(candidates)
+    for candidate in candidates:
+        sent = sync_candidate(candidate, db=db, include_cv_text=True)
+        if sent > 0:
+            out["candidates"]["succeeded"] += 1
+            out["candidates"]["episodes"] += sent
+
+    interviews = (
+        db.query(ApplicationInterview)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == ApplicationInterview.application_id,
+        )
+        .filter(ApplicationInterview.organization_id == organization_id)
+        .filter(CandidateApplication.deleted_at.is_(None))
+        .all()
+    )
+    out["interviews"]["total"] = len(interviews)
+    for interview in interviews:
+        out["interviews"]["episodes"] += sync_interview(interview, db=db)
+
+    events = (
+        db.query(CandidateApplicationEvent)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == CandidateApplicationEvent.application_id,
+        )
+        .filter(CandidateApplication.organization_id == organization_id)
+        .filter(CandidateApplication.deleted_at.is_(None))
+        .all()
+    )
+    out["events"]["total"] = len(events)
+    for event in events:
+        out["events"]["episodes"] += sync_event(event)
+
     return out
 
 
-_UPSERT_PERSON_CYPHER = """
-MERGE (p:Person {id: $person_id})
-SET p.organization_id = $org_id,
-    p.full_name = $full_name,
-    p.headline = $headline,
-    p.last_synced_at = $synced_at
-"""
-
-
-_REPLACE_RELS_CYPHER = """
-MATCH (p:Person {id: $person_id})
-WHERE p.organization_id = $org_id
-OPTIONAL MATCH (p)-[r]->()
-DELETE r
-"""
-
-
-_UPSERT_WORKED_AT_CYPHER = """
-MATCH (p:Person {id: $person_id, organization_id: $org_id})
-MERGE (c:Company {organization_id: $org_id, name_normalized: $company_norm})
-ON CREATE SET c.name_display = $company_display
-SET c.name_display = $company_display
-MERGE (p)-[r:WORKED_AT]->(c)
-SET r.organization_id = $org_id,
-    r.title = $title,
-    r.location = $location,
-    r.start_date = $start_date,
-    r.end_date = $end_date
-"""
-
-
-_UPSERT_STUDIED_AT_CYPHER = """
-MATCH (p:Person {id: $person_id, organization_id: $org_id})
-MERGE (s:School {organization_id: $org_id, name_normalized: $school_norm})
-ON CREATE SET s.name_display = $school_display
-SET s.name_display = $school_display
-MERGE (p)-[r:STUDIED_AT]->(s)
-SET r.organization_id = $org_id
-"""
-
-
-_UPSERT_HAS_SKILL_CYPHER = """
-MATCH (p:Person {id: $person_id, organization_id: $org_id})
-MERGE (sk:Skill {organization_id: $org_id, name_normalized: $skill_norm})
-ON CREATE SET sk.name_display = $skill_display
-SET sk.name_display = $skill_display
-MERGE (p)-[r:HAS_SKILL]->(sk)
-SET r.organization_id = $org_id
-"""
-
-
-_UPSERT_LOCATED_IN_CYPHER = """
-MATCH (p:Person {id: $person_id, organization_id: $org_id})
-MERGE (co:Country {organization_id: $org_id, name_normalized: $country_norm})
-ON CREATE SET co.name_display = $country_display
-MERGE (p)-[r:LOCATED_IN]->(co)
-SET r.organization_id = $org_id
-"""
-
-
-def sync_candidate(candidate: Candidate, *, db: Session | None = None) -> bool:
-    """Upsert one candidate's graph projection.
-
-    Returns True on success, False when Neo4j isn't configured (or on any
-    handled error). Never raises — graph sync is fire-and-forget; if it
-    fails, Postgres is unchanged and the next sync attempt will catch up.
-    """
+def sync_all_organizations(db: Session) -> dict:
+    """Backfill every organisation. Used by ``backfill --all-orgs``."""
     if not graph_client.is_configured():
-        return False
-    if candidate.id is None or candidate.organization_id is None:
-        return False
-
-    org_id = int(candidate.organization_id)
-    person_id = int(candidate.id)
-    synced_at = datetime.now(timezone.utc).isoformat()
-
-    try:
-        with graph_client.session() as s:
-            s.run(
-                _UPSERT_PERSON_CYPHER,
-                person_id=person_id,
-                org_id=org_id,
-                full_name=_safe_str(candidate.full_name),
-                headline=_safe_str(candidate.headline),
-                synced_at=synced_at,
-            )
-            # Wipe outgoing rels first so deleted experience entries
-            # don't linger. Still cheap because the graph is small per
-            # candidate.
-            s.run(_REPLACE_RELS_CYPHER, person_id=person_id, org_id=org_id)
-
-            for entry in _experience_iter(candidate):
-                s.run(
-                    _UPSERT_WORKED_AT_CYPHER,
-                    person_id=person_id,
-                    org_id=org_id,
-                    company_norm=_norm(entry["company"]),
-                    company_display=entry["company"],
-                    title=entry["title"],
-                    location=entry["location"],
-                    start_date=entry["start_date"],
-                    end_date=entry["end_date"],
-                )
-
-            for edu in _education_iter(candidate):
-                s.run(
-                    _UPSERT_STUDIED_AT_CYPHER,
-                    person_id=person_id,
-                    org_id=org_id,
-                    school_norm=_norm(edu["school"]),
-                    school_display=edu["school"],
-                )
-
-            for skill in _skills_list(candidate):
-                s.run(
-                    _UPSERT_HAS_SKILL_CYPHER,
-                    person_id=person_id,
-                    org_id=org_id,
-                    skill_norm=_norm(skill),
-                    skill_display=skill,
-                )
-
-            country = _safe_str(candidate.location_country)
-            if country:
-                s.run(
-                    _UPSERT_LOCATED_IN_CYPHER,
-                    person_id=person_id,
-                    org_id=org_id,
-                    country_norm=_norm(country),
-                    country_display=country,
-                )
-
-        if db is not None:
-            _record_sync_state(db, person_id)
-
-        return True
-    except Exception as exc:
-        logger.warning("Graph sync failed for candidate=%s: %s", candidate.id, exc)
-        return False
+        return {"status": "unconfigured"}
+    org_ids = [
+        int(row[0])
+        for row in db.query(Candidate.organization_id)
+        .filter(Candidate.organization_id.is_not(None))
+        .distinct()
+        .all()
+    ]
+    aggregate = {
+        "orgs": len(org_ids),
+        "candidates": {"total": 0, "succeeded": 0, "episodes": 0},
+        "interviews": {"total": 0, "episodes": 0},
+        "events": {"total": 0, "episodes": 0},
+    }
+    for org_id in org_ids:
+        result = sync_organization(db, org_id)
+        if not isinstance(result, dict) or "candidates" not in result:
+            continue
+        for key in ("candidates", "interviews", "events"):
+            for sub in result[key]:
+                aggregate[key][sub] += result[key][sub]
+    return aggregate
 
 
 def _record_sync_state(db: Session, candidate_id: int) -> None:
-    """Stamp ``graph_sync_state.last_synced_at = now()`` for this candidate."""
+    """Stamp graph_sync_state.last_synced_at = now() for this candidate."""
     try:
         from ..models.graph_sync_state import GraphSyncState
 
         existing = (
-            db.query(GraphSyncState).filter(GraphSyncState.candidate_id == candidate_id).one_or_none()
+            db.query(GraphSyncState)
+            .filter(GraphSyncState.candidate_id == candidate_id)
+            .one_or_none()
         )
         now_utc = datetime.now(timezone.utc)
         if existing is None:
@@ -299,49 +191,3 @@ def _record_sync_state(db: Session, candidate_id: int) -> None:
     except Exception as exc:
         logger.debug("graph_sync_state write skipped: %s", exc)
         db.rollback()
-
-
-def sync_organization(db: Session, organization_id: int) -> dict:
-    """Backfill: re-sync every candidate for one org.
-
-    Returns ``{total, succeeded, skipped}``. Idempotent — safe to re-run.
-    """
-    if not graph_client.is_configured():
-        return {"total": 0, "succeeded": 0, "skipped": 0, "neo4j": "unconfigured"}
-
-    candidates = (
-        db.query(Candidate)
-        .filter(Candidate.organization_id == organization_id)
-        .filter(Candidate.deleted_at.is_(None))
-        .all()
-    )
-    total = len(candidates)
-    succeeded = 0
-    skipped = 0
-    for candidate in candidates:
-        if sync_candidate(candidate, db=db):
-            succeeded += 1
-        else:
-            skipped += 1
-    return {"total": total, "succeeded": succeeded, "skipped": skipped}
-
-
-def sync_all_organizations(db: Session) -> dict:
-    """Backfill every org. Used by ``backfill --all-orgs``."""
-    if not graph_client.is_configured():
-        return {"orgs": 0, "total": 0, "succeeded": 0, "neo4j": "unconfigured"}
-
-    org_ids = [
-        int(row[0])
-        for row in db.query(Candidate.organization_id)
-        .filter(Candidate.organization_id.is_not(None))
-        .distinct()
-        .all()
-    ]
-    aggregate = {"orgs": len(org_ids), "total": 0, "succeeded": 0, "skipped": 0}
-    for org_id in org_ids:
-        result = sync_organization(db, org_id)
-        aggregate["total"] += result["total"]
-        aggregate["succeeded"] += result["succeeded"]
-        aggregate["skipped"] += result["skipped"]
-    return aggregate

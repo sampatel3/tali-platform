@@ -169,10 +169,10 @@ def test_no_nl_query_keeps_legacy_path_unchanged(client):
     assert "parsed_filter" not in data
 
 
-def test_neo4j_healthcheck_unconfigured(client):
-    resp = client.get("/healthz/neo4j")
+def test_graphiti_healthcheck_unconfigured(client):
+    resp = client.get("/healthz/graphiti")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] in ("unconfigured", "ok", "error")
-    # In the test environment NEO4J_URI is unset, so:
+    # In the test environment NEO4J_URI / VOYAGE_API_KEY are unset, so:
     assert body["status"] == "unconfigured"

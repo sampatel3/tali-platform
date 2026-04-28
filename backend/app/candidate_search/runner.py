@@ -153,10 +153,10 @@ def run_search(
     subgraph: GraphPayload | None = None
     if include_subgraph and application_ids:
         try:
-            from ..candidate_graph import queries as graph_queries
+            from ..candidate_graph import search as graph_search
 
             candidate_ids = _candidate_ids_for_application_ids(db, application_ids)
-            subgraph = graph_queries.subgraph_for_candidates(
+            subgraph = graph_search.subgraph_for_candidates(
                 organization_id=organization_id,
                 candidate_ids=candidate_ids,
             )
@@ -199,7 +199,7 @@ def _execute_graph_predicates(
 
     try:
         from ..candidate_graph import client as graph_client
-        from ..candidate_graph import queries as graph_queries
+        from ..candidate_graph import search as graph_search
 
         if not graph_client.is_configured():
             warnings.append(
@@ -210,7 +210,7 @@ def _execute_graph_predicates(
             )
             return None
 
-        return graph_queries.candidate_ids_matching_all(
+        return graph_search.candidate_ids_matching_all(
             organization_id=organization_id,
             predicates=parsed.graph_predicates,
         )
