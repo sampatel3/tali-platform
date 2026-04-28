@@ -66,6 +66,7 @@ export const BackgroundJobsToaster = ({ roleId }) => {
   const batchScored = Number(batchProgress?.scored || 0);
   const batchErrors = Number(batchProgress?.errors || 0);
   const batchPreScreenedOut = Number(batchProgress?.pre_screened_out || 0);
+  const batchPreScreenEnabled = Boolean(batchProgress?.pre_screen_enabled);
   const fetchTotal = Number(fetchProgress?.total || 0);
   const fetchDone = Number(fetchProgress?.fetched || 0);
 
@@ -126,34 +127,36 @@ export const BackgroundJobsToaster = ({ roleId }) => {
     const pct = batchTotal > 0 ? Math.round(((batchScored + batchErrors) / batchTotal) * 100) : 0;
     const cancelling = String(batchProgress?.status || '').toLowerCase() === 'cancelling';
     const cancelled = String(batchProgress?.status || '').toLowerCase() === 'cancelled';
+    const processed = batchScored + batchErrors + batchPreScreenedOut;
+    const remaining = Math.max(0, batchTotal - processed);
+    const activeTitle = batchPreScreenEnabled
+      ? (processed === 0 ? 'Pre-screening CVs…' : 'Pre-screening + scoring CVs')
+      : 'Re-scoring CVs';
     items.push({
       key: 'batch',
       title: cancelled
         ? 'Re-scoring cancelled'
         : cancelling
           ? 'Cancelling re-score…'
-          : batchActive ? 'Re-scoring CVs' : 'Re-scoring complete',
+          : batchActive ? activeTitle : 'Re-scoring complete',
       complete: !batchActive,
       cancelling,
       cancelled,
       detail: batchTotal > 0
         ? (() => {
-            // Two-phase progress so the user can see how the gate is
-            // working: pre-screen runs first, "no" verdicts skip v9, the
-            // rest get full scoring. Without this surface area the
-            // toaster just says "X/N scored" and the user can't tell
-            // whether the gate is firing.
-            const processed = batchScored + batchErrors + batchPreScreenedOut;
-            const remaining = Math.max(0, batchTotal - processed);
             const parts = [];
-            parts.push(`${processed}/${batchTotal} processed`);
-            if (batchPreScreenedOut) parts.push(`${batchPreScreenedOut} filtered by pre-screen`);
-            if (batchScored) parts.push(`${batchScored} fully scored`);
-            if (batchErrors) parts.push(`${batchErrors} error(s)`);
-            if (remaining && batchActive) parts.push(`${remaining} remaining`);
+            if (processed === 0 && batchPreScreenEnabled) {
+              parts.push(`Pre-screening ${batchTotal} candidates…`);
+            } else {
+              parts.push(`${processed}/${batchTotal} processed`);
+              if (batchPreScreenedOut) parts.push(`${batchPreScreenedOut} filtered by pre-screen`);
+              if (batchScored) parts.push(`${batchScored} fully scored`);
+              if (batchErrors) parts.push(`${batchErrors} error(s)`);
+              if (remaining && batchActive) parts.push(`${remaining} remaining`);
+            }
             return parts.join(' · ');
           })()
-        : 'starting pre-screen…',
+        : 'starting…',
       pct,
     });
   }

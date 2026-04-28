@@ -25,7 +25,7 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.application_interview import ApplicationInterview
-from ...models.cv_score_job import CvScoreJob, SCORE_JOB_DONE, SCORE_JOB_ERROR
+from ...models.cv_score_job import CvScoreJob, SCORE_JOB_DONE, SCORE_JOB_ERROR, SCORE_JOB_PENDING, SCORE_JOB_RUNNING
 from ...models.organization import Organization
 from ...models.role import Role
 from ...models.task import Task
@@ -2023,7 +2023,9 @@ _batch_fetch_cvs_progress: dict[int, dict] = {}
 
 _BATCH_SCORE_CANCEL_PREFIX = "batch_score:cancel:"
 _BATCH_FETCH_CANCEL_PREFIX = "batch_fetch_cvs:cancel:"
+_BATCH_META_PREFIX = "batch_score:meta:"
 _CANCEL_FLAG_TTL_SECONDS = 3600
+_BATCH_META_TTL_SECONDS = 7200  # 2 hours — survives API restart during a batch
 
 
 def _redis_client():
@@ -2068,6 +2070,51 @@ def _clear_cancel_flag(prefix: str, role_id: int) -> None:
         return
     try:
         client.delete(f"{prefix}{role_id}")
+    except Exception:
+        pass
+
+
+def _write_batch_meta(role_id: int, *, total: int, started_at: datetime, include_scored: bool) -> None:
+    """Persist batch start state to Redis so API process restarts don't lose it."""
+    import json as _json
+    client = _redis_client()
+    if client is None:
+        return
+    try:
+        client.set(
+            f"{_BATCH_META_PREFIX}{role_id}",
+            _json.dumps({
+                "total": total,
+                "started_at": started_at.isoformat(),
+                "include_scored": bool(include_scored),
+            }),
+            ex=_BATCH_META_TTL_SECONDS,
+        )
+    except Exception:
+        pass
+
+
+def _read_batch_meta(role_id: int) -> dict | None:
+    """Read persisted batch meta from Redis. Returns None if absent or parse fails."""
+    import json as _json
+    client = _redis_client()
+    if client is None:
+        return None
+    try:
+        raw = client.get(f"{_BATCH_META_PREFIX}{role_id}")
+        if raw is None:
+            return None
+        return _json.loads(raw)
+    except Exception:
+        return None
+
+
+def _delete_batch_meta(role_id: int) -> None:
+    client = _redis_client()
+    if client is None:
+        return
+    try:
+        client.delete(f"{_BATCH_META_PREFIX}{role_id}")
     except Exception:
         pass
 
@@ -2241,6 +2288,11 @@ def batch_score_role(
             "include_scored": bool(include_scored),
         }
 
+    # Clear any stale cancel flag so Cancel → Re-score works without
+    # the new batch being immediately killed by the old flag.
+    _clear_cancel_flag(_BATCH_SCORE_CANCEL_PREFIX, role_id)
+
+    batch_started_at = datetime.now(timezone.utc)
     _batch_score_progress[role_id] = {
         "total": target_count,
         "scored": 0,
@@ -2250,8 +2302,11 @@ def batch_score_role(
         # Wall-clock anchor for the DB-backed progress poll. Without
         # this, the status endpoint can't tell which cv_score_jobs rows
         # belong to *this* batch (vs. earlier ones for the same role).
-        "started_at": datetime.now(timezone.utc),
+        "started_at": batch_started_at,
     }
+    # Mirror to Redis so the status endpoint survives an API process
+    # restart mid-batch (in-process dict is wiped on restart).
+    _write_batch_meta(role_id, total=target_count, started_at=batch_started_at, include_scored=bool(include_scored))
 
     if settings.MVP_DISABLE_CELERY:
         # Inline path keeps tests + dev environments working without a broker.
@@ -2519,6 +2574,20 @@ def batch_score_status(
     total = int(progress.get("total", 0) or 0)
     started_at = progress.get("started_at")
 
+    # If the in-process dict was wiped by an API restart, recover from Redis.
+    if total == 0:
+        meta = _read_batch_meta(role_id)
+        if meta:
+            total = int(meta.get("total", 0) or 0)
+            started_at_raw = meta.get("started_at")
+            if started_at_raw and started_at is None:
+                try:
+                    started_at = datetime.fromisoformat(started_at_raw)
+                    if started_at.tzinfo is None:
+                        started_at = started_at.replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+
     scored = 0
     errors = 0
     pre_screened_out = 0
@@ -2560,10 +2629,23 @@ def batch_score_status(
 
     # Mark completed when every targeted application has a terminal state.
     status = progress.get("status", "idle")
-    if total > 0 and (scored + errors) >= total and status == "running":
+    if status == "idle" and total > 0 and started_at is not None:
+        # Recovered from Redis after API restart — derive status from DB counts.
+        active_jobs = (
+            db.query(CvScoreJob)
+            .filter(
+                CvScoreJob.role_id == role_id,
+                CvScoreJob.status.in_([SCORE_JOB_PENDING, SCORE_JOB_RUNNING]),
+                CvScoreJob.queued_at >= started_at,
+            )
+            .count()
+        )
+        status = "running" if active_jobs > 0 else "completed"
+    if total > 0 and (scored + errors + pre_screened_out) >= total and status == "running":
         status = "completed"
         progress["status"] = status
         _batch_score_progress[role_id] = progress
+        _delete_batch_meta(role_id)
 
     return {
         "status": status,
@@ -2572,6 +2654,7 @@ def batch_score_status(
         "errors": errors,
         "pre_screened_out": pre_screened_out,
         "include_scored": bool(progress.get("include_scored")),
+        "pre_screen_enabled": bool(settings.ENABLE_PRE_SCREEN_GATE),
     }
 
 
