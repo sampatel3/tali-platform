@@ -15,7 +15,6 @@ from app.cv_matching.archetype_synthesizer import (
     synthesize_archetype,
 )
 from app.cv_matching.calibrators.judge import judge_advance_probability
-from app.cv_matching.embeddings import clear_cache as clear_embed_cache
 
 
 # --------------------------------------------------------------------------- #
@@ -54,7 +53,6 @@ class _Client:
 
 
 def setup_function(_):
-    clear_embed_cache()
     reset_cache()
 
 

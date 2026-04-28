@@ -1,23 +1,21 @@
-"""On-demand archetype synthesis (agentic replacement for the static rubric library).
+"""On-demand archetype synthesis (agentic, single-provider).
 
-The first time a JD arrives that doesn't cosine-match any cached archetype,
-this module makes one Sonnet call to *synthesize* an ``ArchetypeRubric``
-(substitution rules + seniority anchors + dimension weights) for that role
-family, persists it to the ``cv_archetypes`` cache table, and returns it.
+The first time a JD arrives, this module makes one Sonnet call to
+*synthesize* an ``ArchetypeRubric`` (substitution rules + seniority
+anchors + dimension weights) for that role family, persists it to the
+``cv_archetypes`` cache, and returns it.
 
-Subsequent JDs whose embeddings cosine-match a cached centroid above the
-threshold reuse the cached rubric — no Sonnet call.
+Subsequent calls with the same JD (after normalisation: lowercase,
+whitespace collapsed) reuse the cached rubric — no Sonnet call.
 
-Net effect: zero human curation, self-extending library. Cost: one Sonnet
-call (~$0.05) per truly novel role family. Hit rate approaches 100%
-within a few weeks of operation.
+Net effect: zero human curation, zero non-Anthropic dependencies.
+Cost: one Sonnet call (~$0.05) per *unique* JD. Same JD scored
+against many CVs pays the synthesis cost once.
 
-Public surface:
-
-    synthesize_archetype(jd_text, requirements=None) -> ArchetypeRubric | None
-
-Returns ``None`` when synthesis fails (model error, key missing, etc.) so
-the caller can render the prompt without an archetype block.
+If you later want similarity-based dedup (so two near-identical JDs
+share a rubric), see ``backend/app/cv_matching/README.md`` — that's
+a documented future enhancement that needs an embedding provider
+(Anthropic doesn't ship one).
 """
 
 from __future__ import annotations
@@ -25,18 +23,13 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from dataclasses import dataclass, field
+import re
+from dataclasses import dataclass
 from typing import Sequence
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .embeddings import cosine_similarity, embed_jd
-
 logger = logging.getLogger("taali.cv_match.archetype_synthesizer")
-
-# Cosine floor for "this cached archetype matches well enough to reuse".
-# Below this, we synthesize a fresh one.
-DEFAULT_REUSE_THRESHOLD = 0.78
 
 _GENERATOR_MODEL = "claude-sonnet-4-6"
 _GENERATOR_TEMPERATURE = 0.0
@@ -44,7 +37,7 @@ _GENERATOR_MAX_TOKENS = 4000
 
 
 # ---------------------------------------------------------------------------
-# ArchetypeRubric pydantic schema (was previously in rubrics/schema.py)
+# ArchetypeRubric pydantic schema
 # ---------------------------------------------------------------------------
 
 
@@ -96,99 +89,116 @@ class ArchetypeRubric(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# In-process LRU + DB-backed cache
+# Cache (in-process LRU + DB)
 # ---------------------------------------------------------------------------
 
 
 @dataclass
 class _CachedRubric:
-    archetype_id: str
-    centroid: list[float]
+    cache_key: str
     rubric: ArchetypeRubric
 
 
-_lru: list[_CachedRubric] = []
+_lru: dict[str, ArchetypeRubric] = {}
 _LRU_CAPACITY = 256
 
 
-def _archetype_id_from_jd(jd_text: str) -> str:
-    """Stable id derived from JD content. Used as both filename and cache key."""
-    return "auto_" + hashlib.sha256((jd_text or "").encode("utf-8")).hexdigest()[:12]
+def _normalise(text: str) -> str:
+    """Lowercase + collapse all whitespace runs to single spaces.
 
-
-def _read_cache_from_db() -> list[_CachedRubric]:
-    """Pull every cached archetype out of the DB into the LRU. Empty on failure."""
-    try:
-        from ..models.cv_embeddings import CvEmbedding
-        from ..platform.database import SessionLocal
-    except Exception as exc:
-        logger.debug("Archetype cache DB read skipped: %s", exc)
-        return []
-
-    out: list[_CachedRubric] = []
-    session = SessionLocal()
-    try:
-        rows = (
-            session.query(CvEmbedding)
-            .filter(CvEmbedding.provider == "archetype_rubric")
-            .all()
-        )
-        for row in rows:
-            try:
-                blob = row.embedding  # we hijack this column to store the rubric JSON
-                if isinstance(blob, dict) and "rubric" in blob and "centroid" in blob:
-                    rubric = ArchetypeRubric.model_validate(blob["rubric"])
-                    centroid = [float(x) for x in blob["centroid"]]
-                    out.append(
-                        _CachedRubric(
-                            archetype_id=rubric.archetype_id,
-                            centroid=centroid,
-                            rubric=rubric,
-                        )
-                    )
-            except (ValidationError, TypeError, KeyError) as exc:
-                logger.debug("Skipping malformed archetype row %s: %s", row.content_hash, exc)
-                continue
-        return out
-    except Exception as exc:  # pragma: no cover — defensive
-        logger.warning("Archetype cache DB read failed: %s", exc)
-        return []
-    finally:
-        session.close()
-
-
-def _persist_to_db(archetype_id: str, centroid: list[float], rubric: ArchetypeRubric) -> None:
-    """Write a synthesized archetype to the cv_embeddings table.
-
-    We reuse the existing table to avoid another migration. The
-    ``provider`` column distinguishes "archetype_rubric" rows from real
-    embedding rows; ``embedding`` carries the full rubric JSON
-    (centroid + rubric).
+    Trade-off: lighter-touch normalisation gives more cache hits but more
+    false-positives (two JDs that look similar but aren't actually the
+    same role share a rubric). This is the conservative middle ground.
     """
+    if not text:
+        return ""
+    return re.sub(r"\s+", " ", text.strip().lower())
+
+
+def _cache_key(jd_text: str) -> str:
+    return hashlib.sha256(_normalise(jd_text).encode("utf-8")).hexdigest()
+
+
+def _archetype_id_from_jd(jd_text: str) -> str:
+    """Stable id derived from JD content. Used as the DB row key."""
+    return "auto_" + _cache_key(jd_text)[:12]
+
+
+def reset_cache() -> None:
+    """Drop the in-process LRU. Tests use this to isolate runs."""
+    _lru.clear()
+    _db_loaded.clear()
+
+
+_db_loaded: set[str] = set()  # sentinel so we only attempt DB load once
+
+
+def _load_from_db(cache_key: str) -> ArchetypeRubric | None:
+    """Pull one cached archetype out of the DB by cache_key. None on any failure."""
     try:
         from ..models.cv_embeddings import CvEmbedding
         from ..platform.database import SessionLocal
     except Exception as exc:
-        logger.debug("Archetype persist skipped (no DB): %s", exc)
-        return
+        logger.debug("Archetype DB read skipped (import): %s", exc)
+        return None
 
-    session = SessionLocal()
     try:
-        existing = (
+        session = SessionLocal()
+    except Exception as exc:
+        logger.debug("Archetype DB read skipped (session): %s", exc)
+        return None
+
+    try:
+        row = (
             session.query(CvEmbedding)
-            .filter_by(content_hash=archetype_id)
+            .filter_by(content_hash=cache_key, provider="archetype_rubric")
             .one_or_none()
         )
-        payload = {
-            "centroid": list(centroid),
-            "rubric": rubric.model_dump(mode="json"),
-        }
+        if row is None:
+            return None
+        blob = row.embedding
+        if isinstance(blob, dict) and "rubric" in blob:
+            return ArchetypeRubric.model_validate(blob["rubric"])
+        return None
+    except Exception as exc:
+        # Catches OperationalError ("no such table") in lightweight test
+        # contexts where the cv_embeddings migration hasn't been applied,
+        # plus pydantic validation errors on malformed rows.
+        logger.debug("Archetype DB read failed: %s", exc)
+        return None
+    finally:
+        try:
+            session.close()
+        except Exception:  # pragma: no cover — defensive
+            pass
+
+
+def _persist_to_db(cache_key: str, rubric: ArchetypeRubric) -> None:
+    """Write a synthesized archetype to the cv_archetypes-shaped table."""
+    try:
+        from ..models.cv_embeddings import CvEmbedding
+        from ..platform.database import SessionLocal
+    except Exception as exc:
+        logger.debug("Archetype persist skipped (import): %s", exc)
+        return
+
+    try:
+        session = SessionLocal()
+    except Exception as exc:
+        logger.debug("Archetype persist skipped (session): %s", exc)
+        return
+
+    try:
+        existing = (
+            session.query(CvEmbedding).filter_by(content_hash=cache_key).one_or_none()
+        )
+        payload = {"rubric": rubric.model_dump(mode="json")}
         if existing is not None:
             existing.embedding = payload
         else:
             session.add(
                 CvEmbedding(
-                    content_hash=archetype_id,
+                    content_hash=cache_key,
                     provider="archetype_rubric",
                     model="synthesizer_v1",
                     embedding=payload,
@@ -196,23 +206,16 @@ def _persist_to_db(archetype_id: str, centroid: list[float], rubric: ArchetypeRu
             )
         session.commit()
     except Exception as exc:
-        logger.warning("Archetype persist failed: %s", exc)
-        session.rollback()
+        logger.debug("Archetype persist failed: %s", exc)
+        try:
+            session.rollback()
+        except Exception:  # pragma: no cover — defensive
+            pass
     finally:
-        session.close()
-
-
-def _ensure_lru_loaded() -> None:
-    if _lru:
-        return
-    cached = _read_cache_from_db()
-    if cached:
-        _lru.extend(cached[-_LRU_CAPACITY:])
-
-
-def reset_cache() -> None:
-    """Drop the in-process LRU. Tests use this to isolate runs."""
-    _lru.clear()
+        try:
+            session.close()
+        except Exception:  # pragma: no cover — defensive
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -341,16 +344,17 @@ def synthesize_archetype(
     jd_text: str,
     requirements: Sequence | None = None,
     *,
-    reuse_threshold: float = DEFAULT_REUSE_THRESHOLD,
     client=None,
 ) -> ArchetypeRubric | None:
     """Return an ArchetypeRubric for this JD.
 
-    1. Embed the JD.
-    2. Cosine-match against every cached archetype's centroid.
-    3. If best match >= reuse_threshold, return that cached rubric.
-    4. Otherwise, fire one Sonnet call to synthesize a fresh rubric,
-       persist it to the cache, return it.
+    1. Look up cache_key = sha256(normalise(jd_text)).
+    2. Hit in LRU → return cached rubric.
+    3. Hit in DB → load into LRU, return.
+    4. Miss → fire Sonnet synthesis, persist, return.
+
+    ``requirements`` is currently ignored (only the JD text drives the
+    cache key). Kept on the signature for forward compatibility.
 
     Returns ``None`` when synthesis fails (e.g. no Anthropic key, model
     error). Caller proceeds without an archetype block.
@@ -358,33 +362,17 @@ def synthesize_archetype(
     if not jd_text or not jd_text.strip():
         return None
 
-    _ensure_lru_loaded()
+    cache_key = _cache_key(jd_text)
 
-    try:
-        jd_vec = embed_jd(jd_text, list(requirements or []))
-    except Exception as exc:
-        logger.warning("JD embedding failed; skipping archetype routing: %s", exc)
-        return None
+    if cache_key in _lru:
+        return _lru[cache_key]
 
-    best: _CachedRubric | None = None
-    best_sim = -1.0
-    for entry in _lru:
-        try:
-            sim = cosine_similarity(jd_vec, entry.centroid)
-        except ValueError:
-            # Provider mix → dim mismatch. Skip stale entries.
-            continue
-        if sim > best_sim:
-            best = entry
-            best_sim = sim
-
-    if best is not None and best_sim >= reuse_threshold:
-        logger.info(
-            "Archetype cache hit: %s (cosine=%.4f)",
-            best.archetype_id,
-            best_sim,
-        )
-        return best.rubric
+    if cache_key not in _db_loaded:
+        _db_loaded.add(cache_key)
+        from_db = _load_from_db(cache_key)
+        if from_db is not None:
+            _lru[cache_key] = from_db
+            return from_db
 
     rubric = _synthesize_via_sonnet(jd_text, client=client)
     if rubric is None:
@@ -393,12 +381,13 @@ def synthesize_archetype(
     archetype_id = rubric.archetype_id or _archetype_id_from_jd(jd_text)
     rubric = rubric.model_copy(update={"archetype_id": archetype_id})
 
-    centroid = jd_vec
-    cached = _CachedRubric(archetype_id=archetype_id, centroid=centroid, rubric=rubric)
-    _lru.append(cached)
+    _lru[cache_key] = rubric
     while len(_lru) > _LRU_CAPACITY:
-        _lru.pop(0)
-    _persist_to_db(archetype_id, centroid, rubric)
+        # FIFO eviction (Python dict preserves insertion order).
+        oldest = next(iter(_lru))
+        del _lru[oldest]
+
+    _persist_to_db(cache_key, rubric)
     return rubric
 
 
@@ -406,7 +395,6 @@ __all__ = [
     "ArchetypeRubric",
     "MustHaveArchetype",
     "SeniorityAnchors",
-    "DEFAULT_REUSE_THRESHOLD",
     "reset_cache",
     "synthesize_archetype",
 ]

@@ -183,14 +183,6 @@ class Settings(BaseSettings):
     # Empty string = ring-buffer-only (admin route reads from memory).
     CV_MATCH_TRACE_LOG_PATH: str = ""
 
-    # Embedding provider selection. "voyage", "openai", or "mock"
-    # (deterministic hash-based; for tests). Used by the on-demand
-    # archetype synthesizer to cosine-route incoming JDs.
-    EMBEDDING_PROVIDER: str = "mock"
-    EMBEDDING_MODEL: str = ""  # blank = provider default
-    VOYAGE_API_KEY: str = ""
-    OPENAI_API_KEY: str = ""
-
     # Two-tier scoring gate: when True, every v3 score is preceded by a
     # cheap pre-screen LLM call (~$0.0002/CV). "no" verdicts skip the
     # full v3 call and short-circuit with a "pre_screened_out" cache_hit.
