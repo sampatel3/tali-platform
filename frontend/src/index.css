@@ -2301,7 +2301,6 @@ html[data-theme="dark"] {
 .thr-label,
 .thr-caption,
 .candidate-summary-card .k,
-.candidate-ai-pill,
 .candidate-table .pagination {
   font-family: var(--font-mono);
 }
@@ -3215,7 +3214,7 @@ html[data-theme="dark"] {
 .cand-head,
 .cand-row {
   display: grid;
-  grid-template-columns: 28px minmax(230px, 1.65fr) minmax(220px, 1.25fr) minmax(118px, 0.8fr) minmax(118px, 0.78fr) minmax(100px, 0.72fr) minmax(124px, 0.86fr) minmax(106px, 0.72fr) minmax(96px, 0.66fr);
+  grid-template-columns: 28px minmax(230px, 1.65fr) minmax(220px, 1.25fr) minmax(170px, 1.1fr) minmax(124px, 0.86fr) minmax(106px, 0.72fr) minmax(96px, 0.66fr);
   gap: 14px;
   align-items: center;
   padding: 14px 22px;
@@ -3307,20 +3306,24 @@ html[data-theme="dark"] {
   margin-top: 2px;
 }
 
-.c-cv {
+.c-score-unified {
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
 }
 
-.c-cv .pct {
+.c-score-unified .pct {
   font-family: var(--font-mono);
   font-size: 13.5px;
   font-weight: 600;
-  min-width: 30px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 
-.c-cv .pct.un {
+.c-score-unified .pct.un {
   color: var(--mute);
   font-weight: 500;
   font-size: 11px;
@@ -3328,53 +3331,89 @@ html[data-theme="dark"] {
   text-transform: uppercase;
 }
 
-.c-cv .pct.lo {
+.c-score-unified .pct.lo {
   color: var(--red);
 }
 
-.c-cv .pct.md {
+.c-score-unified .pct.md {
   color: var(--amber);
 }
 
-.c-cv .pct.hi {
+.c-score-unified .pct.hi {
   color: var(--green);
 }
 
-.c-cv .meter {
-  flex: 1;
+.c-score-unified .meter {
+  width: 100%;
+  max-width: 140px;
   height: 5px;
-  max-width: 70px;
   border-radius: 3px;
   background: var(--line-2);
   overflow: hidden;
   position: relative;
 }
 
-.c-cv .meter i {
+.c-score-unified .meter i {
   display: block;
   height: 100%;
   border-radius: 3px;
 }
 
-.c-cv .meter i.lo {
+.c-score-unified .meter i.lo {
   background: var(--red);
 }
 
-.c-cv .meter i.md {
+.c-score-unified .meter i.md {
   background: var(--amber);
 }
 
-.c-cv .meter i.hi {
+.c-score-unified .meter i.hi {
   background: var(--green);
 }
 
-.c-cv .meter .thr {
+.c-score-unified .meter .thr {
   position: absolute;
   top: -2px;
   bottom: -2px;
   width: 1.5px;
   background: var(--ink);
   opacity: 0.55;
+}
+
+.c-score-unified .score-meta {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.c-score-unified .wk-pip {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  color: #2d8cff;
+  font-weight: 500;
+}
+
+.score-kind-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+.score-kind-pill.cv {
+  background: var(--bg-3);
+  color: var(--mute);
+}
+
+.score-kind-pill.composite {
+  background: color-mix(in oklab, var(--purple) 14%, transparent);
+  color: var(--purple);
 }
 
 .below-pill {
@@ -3390,66 +3429,6 @@ html[data-theme="dark"] {
   letter-spacing: 0.06em;
   font-weight: 600;
   margin-top: 4px;
-}
-
-.c-score {
-  font-family: var(--font-mono);
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.c-score.high {
-  color: var(--green);
-}
-
-.c-score.mid {
-  color: var(--purple);
-}
-
-.c-score.low {
-  color: var(--red);
-}
-
-.c-score .dash {
-  color: var(--mute-2);
-  font-weight: 400;
-}
-
-.c-score .wk-pip {
-  font-family: var(--font-mono);
-  font-size: 10px;
-  color: #2d8cff;
-  margin-left: 6px;
-  font-weight: 500;
-}
-
-.candidate-ai-pill {
-  display: inline-flex;
-  padding: 3px 10px;
-  border-radius: 6px;
-  font-size: 12px;
-  background: var(--bg-3);
-  color: var(--ink-2);
-}
-
-.candidate-ai-pill.a {
-  background: color-mix(in oklab, var(--green) 18%, transparent);
-  color: var(--green);
-}
-
-.candidate-ai-pill.b {
-  background: color-mix(in oklab, var(--purple) 15%, transparent);
-  color: var(--purple);
-}
-
-.candidate-ai-pill.c {
-  background: color-mix(in oklab, var(--amber) 15%, transparent);
-  color: var(--amber);
-}
-
-.candidate-ai-pill.d {
-  background: color-mix(in oklab, var(--red) 12%, transparent);
-  color: var(--red);
 }
 
 .candidate-status-chip {

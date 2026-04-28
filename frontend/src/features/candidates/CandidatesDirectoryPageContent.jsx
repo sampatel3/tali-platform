@@ -110,6 +110,17 @@ const resolveTaaliScore = (application) => (
   ?? null
 );
 
+const resolveUnifiedScore = (application) => {
+  const taali = resolveTaaliScore(application);
+  const preScreen = resolvePreScreenScore(application);
+  const mode = application?.score_mode || application?.score_summary?.score_mode || null;
+  const isComposite = Boolean(mode) && mode !== 'role_fit_only';
+  if (isComposite && taali != null) return { value: taali, kind: 'composite' };
+  if (preScreen != null) return { value: preScreen, kind: 'cv' };
+  if (taali != null) return { value: taali, kind: 'cv' };
+  return { value: null, kind: null };
+};
+
 const resolveOptionalPercent = (value) => {
   if (value === null || value === undefined || value === '') return null;
   const numeric = Number(value);
@@ -270,27 +281,11 @@ const getCvMatchTone = (score, thresholdValue) => {
 };
 
 const getHireSignal = (application) => {
-  const taaliScore = Number(resolveTaaliScore(application));
-  const preScreenScore = Number(resolvePreScreenScore(application));
-  const score = Number.isFinite(taaliScore) ? taaliScore : preScreenScore;
+  const score = Number(resolveUnifiedScore(application).value);
   if (!Number.isFinite(score)) return { label: 'Pending', tone: '' };
   if (score >= 80) return { label: 'Strong hire', tone: 'green' };
   if (score >= 65) return { label: 'Maybe', tone: 'amber' };
   return { label: 'No hire', tone: 'red' };
-};
-
-const getAiCollabSignal = (application) => {
-  const taaliScore = Number(resolveTaaliScore(application));
-  if (!Number.isFinite(taaliScore)) {
-    const stage = String(application?.pipeline_stage || '').toLowerCase();
-    if (stage === 'in_assessment') return { label: 'live', suffix: 'In progress', tone: 'c' };
-    return { label: '—', suffix: '', tone: '' };
-  }
-  if (taaliScore >= 90) return { label: 'A+', suffix: `${Math.round(taaliScore)}`, tone: 'a' };
-  if (taaliScore >= 80) return { label: 'A', suffix: `${Math.round(taaliScore)}`, tone: 'a' };
-  if (taaliScore >= 70) return { label: 'B', suffix: `${Math.round(taaliScore)}`, tone: 'b' };
-  if (taaliScore >= 60) return { label: 'C', suffix: `${Math.round(taaliScore)}`, tone: 'c' };
-  return { label: 'D', suffix: `${Math.round(taaliScore)}`, tone: 'd' };
 };
 
 const getStatusChip = (application) => {
@@ -1776,9 +1771,7 @@ export const CandidatesDirectoryPage = ({
                   </div>
                   <div>Candidate</div>
                   <div>Role</div>
-                  <div title="CV scored against job spec + recruiter requirements">CV match</div>
-                  <div title="Composite score — CV match before assessment, blended with assessment after.">Taali score</div>
-                  <div>AI collab</div>
+                  <div title="CV match before assessment, blended composite after">Taali AI Score</div>
                   <div>Hire signal</div>
                   <div>Status</div>
                   <div>Submitted</div>
@@ -1789,10 +1782,9 @@ export const CandidatesDirectoryPage = ({
                   const selectableForBulkReject = application?.application_outcome === 'open';
                   const roleApplicationCount = Number(roleApplicationsByCandidateKey[candidateApplicationKey(application)] || 1);
                   const preScreenScore = resolvePreScreenScore(application);
-                  const taaliScore = resolveTaaliScore(application);
+                  const unifiedScore = resolveUnifiedScore(application);
                   const updatedAt = application.pipeline_stage_updated_at || application.updated_at || application.created_at;
-                  const cvTone = getCvMatchTone(preScreenScore, thresholdRoleValue);
-                  const aiSignal = getAiCollabSignal(application);
+                  const scoreTone = getCvMatchTone(unifiedScore.value, thresholdRoleValue);
                   const hireSignal = getHireSignal(application);
                   const statusChip = getStatusChip(application);
                   const belowThreshold = Number.isFinite(thresholdRoleValue) && Number.isFinite(Number(preScreenScore)) && Number(preScreenScore) < thresholdRoleValue;
@@ -1847,68 +1839,64 @@ export const CandidatesDirectoryPage = ({
                           </div>
                         </div>
 
-                        <div className="c-cv" title={preScreenScore == null ? 'Not scored yet' : `${Math.round(Number(preScreenScore))}%`}>
-                          <span className={`pct ${cvTone}`}>
+                        <div className="c-score-unified" title={unifiedScore.value == null ? 'Not scored yet' : `${Math.round(Number(unifiedScore.value))}%`}>
+                          <span className={`pct ${scoreTone}`}>
                             {(() => {
                               const status = application?.score_status;
                               if (status === 'pending' || status === 'running') return 'Scoring…';
-                              if (preScreenScore == null) {
+                              if (unifiedScore.value == null) {
                                 if (status === 'error') return 'Error';
                                 if (status === 'stale') return 'Stale';
                                 return '—';
                               }
-                              const formatted = `${Math.round(Number(preScreenScore))}%`;
+                              const formatted = `${Math.round(Number(unifiedScore.value))}%`;
                               return status === 'stale' ? `${formatted} · stale` : formatted;
                             })()}
+                            {application.workable_score_raw != null && unifiedScore.value != null ? (
+                              <span className="wk-pip">WK <b>{Math.round(Number(application.workable_score_raw))}</b></span>
+                            ) : null}
                           </span>
                           <div className="meter">
-                            <i className={cvTone} style={{ width: `${Math.max(0, Math.min(100, Number(preScreenScore || 0)))}%` }} />
+                            <i className={scoreTone} style={{ width: `${Math.max(0, Math.min(100, Number(unifiedScore.value || 0)))}%` }} />
                             {hasThresholdRoleValue ? (
                               <span className="thr" style={{ left: `${Math.max(0, Math.min(100, thresholdRoleValue))}%` }} />
                             ) : null}
                           </div>
-                          {rolesApi?.generateTaaliCvAi && application.cv_filename ? (() => {
-                            const status = application?.score_status;
-                            const inFlight =
-                              Number(generatingTaaliId) === Number(application.id)
-                              || status === 'pending'
-                              || status === 'running';
-                            const label = inFlight
-                              ? 'Scoring…'
-                              : status === 'error'
-                                ? 'Retry'
-                                : (status === 'stale' || preScreenScore != null)
-                                  ? 'Rescore'
-                                  : 'Score';
-                            return (
-                              <button
-                                type="button"
-                                className="cv-rescore-link"
-                                disabled={inFlight}
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handleGenerateTaaliCvAi(application);
-                                }}
-                                title="Score this candidate's CV match"
-                              >
-                                {label}
-                              </button>
-                            );
-                          })() : null}
-                        </div>
-
-                        <div className={`c-score ${Number(taaliScore) >= 80 ? 'high' : Number(taaliScore) >= 60 ? 'mid' : Number.isFinite(Number(taaliScore)) ? 'low' : ''}`}>
-                          {taaliScore != null ? Math.round(Number(taaliScore)) : <span className="dash">—</span>}
-                          {taaliScore != null ? <span className="dash">/100</span> : null}
-                          {application.workable_score_raw != null && taaliScore != null ? (
-                            <span className="wk-pip">WK <b>{Math.round(Number(application.workable_score_raw))}</b></span>
-                          ) : null}
-                        </div>
-
-                        <div>
-                          <span className={`candidate-ai-pill ${aiSignal.tone}`}>
-                            {aiSignal.label}{aiSignal.suffix ? ` · ${aiSignal.suffix}` : ''}
-                          </span>
+                          <div className="score-meta">
+                            {unifiedScore.kind ? (
+                              <span className={`score-kind-pill ${unifiedScore.kind}`}>
+                                {unifiedScore.kind === 'composite' ? 'Composite' : 'CV'}
+                              </span>
+                            ) : null}
+                            {rolesApi?.generateTaaliCvAi && application.cv_filename ? (() => {
+                              const status = application?.score_status;
+                              const inFlight =
+                                Number(generatingTaaliId) === Number(application.id)
+                                || status === 'pending'
+                                || status === 'running';
+                              const label = inFlight
+                                ? 'Scoring…'
+                                : status === 'error'
+                                  ? 'Retry'
+                                  : (status === 'stale' || preScreenScore != null)
+                                    ? 'Rescore'
+                                    : 'Score';
+                              return (
+                                <button
+                                  type="button"
+                                  className="cv-rescore-link"
+                                  disabled={inFlight}
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handleGenerateTaaliCvAi(application);
+                                  }}
+                                  title="Score this candidate's CV match"
+                                >
+                                  {label}
+                                </button>
+                              );
+                            })() : null}
+                          </div>
                         </div>
 
                         <div>
