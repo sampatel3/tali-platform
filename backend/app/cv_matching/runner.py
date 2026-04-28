@@ -47,10 +47,17 @@ logger = logging.getLogger("taali.cv_match.runner")
 # Input ceiling: 32K tokens. Haiku 4.5 supports up to 200K input.
 # Real CVs are routinely 3.5K-5.5K tokens; the prompt template is ~3K
 # (with archetype block); long JDs another 1-2K. 32K leaves headroom for
-# the worst-case CV without requiring a deeper redesign. At Haiku input
-# pricing ($0.25/1M), 32K input tokens is ~$0.008 per call.
+# the worst-case CV. At Haiku input pricing ($0.25/1M), 32K input
+# tokens is ~$0.008 per call.
 INPUT_TOKEN_CEILING = 32_000
-OUTPUT_TOKEN_CEILING = 4000
+# Output ceiling: 8K tokens. The new prompt's per-requirement object is
+# ~150 tokens (evidence_quotes list, reasoning, status, tier, etc.).
+# At 8 requirements × 150 = 1200 + 6-dim scores + summary + matching/
+# missing skills lists, real responses land around 3000-5000 tokens.
+# Production showed truncation at 4000 (chars 16K-17K = ~4K tokens).
+# 8K leaves room for 15+ requirements without truncation. At Haiku
+# output pricing ($1.25/1M), 8K output is ~$0.01 per call.
+OUTPUT_TOKEN_CEILING = 8000
 MAX_RETRIES = 1
 TEMPERATURE = 0.0
 
