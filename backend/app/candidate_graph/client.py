@@ -12,7 +12,7 @@ Configuration:
   returns False and all graph features degrade gracefully.
 
 Tenancy: every Graphiti episode/entity is namespaced via ``group_id``,
-which we always set to ``f"org:{organization_id}"``. Cross-org queries
+which we always set to ``f"org-{organization_id}"``. Cross-org queries
 never match because Graphiti's search filters on group_id by construction.
 """
 
@@ -63,7 +63,7 @@ def is_configured() -> bool:
 
 def group_id_for_org(organization_id: int) -> str:
     """Stable Graphiti group_id derived from organization id."""
-    return f"org:{int(organization_id)}"
+    return f"org-{int(organization_id)}"
 
 
 def _start_background_loop() -> asyncio.AbstractEventLoop:

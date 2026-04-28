@@ -16,7 +16,7 @@ entities and relationships with Anthropic; embeds them with Voyage AI;
 serves hybrid (graph + BM25 + vector) search on top.
 
 Multi-tenancy: every episode is namespaced via Graphiti's ``group_id``,
-set to ``f"org:{organization_id}"``. Cross-org traversal is impossible
+set to ``f"org-{organization_id}"``. Cross-org traversal is impossible
 because all search APIs filter on group_id.
 
 The integration is optional: when ``settings.NEO4J_URI`` or

@@ -409,7 +409,7 @@ def graphiti_test_episode(request: Request):
         body="Subject candidate: Test Person (taali_id=0)\nThis is a test episode for connectivity verification.",
         source_description="admin.test",
         reference_time=datetime.now(timezone.utc),
-        group_id="org:0",
+        group_id="org-0",
     )
     try:
         graphiti = graph_client.get_graphiti()

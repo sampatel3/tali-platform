@@ -25,7 +25,7 @@ from app.candidate_graph import client as graph_client
 def _force_configured(monkeypatch):
     """Episode builders don't actually call Graphiti, but group_id_for_org
     is always callable. Patch it so tests don't depend on env vars."""
-    monkeypatch.setattr(graph_client, "group_id_for_org", lambda org_id: f"org:{org_id}")
+    monkeypatch.setattr(graph_client, "group_id_for_org", lambda org_id: f"org-{org_id}")
     yield
 
 
@@ -61,7 +61,7 @@ def test_profile_episode_includes_subject_header_and_summary():
     eps = episode_module.build_candidate_profile_episodes(cand, max_episodes=10)
     assert any("Subject candidate: Alice Example (taali_id=1)" in e.body for e in eps)
     assert any("Built distributed systems" in e.body for e in eps)
-    assert all(e.group_id == "org:1" for e in eps)
+    assert all(e.group_id == "org-1" for e in eps)
 
 
 def test_skills_education_collapsed_into_one_episode():
