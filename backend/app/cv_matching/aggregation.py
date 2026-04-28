@@ -18,8 +18,8 @@ from .schemas import (
 
 _PRIORITY_WEIGHTS: dict[Priority, float] = {
     Priority.MUST_HAVE: 0.70,
-    Priority.STRONG_PREFERENCE: 0.25,
-    Priority.NICE_TO_HAVE: 0.05,
+    Priority.STRONG_PREFERENCE: 0.40,
+    Priority.NICE_TO_HAVE: 0.15,
 }
 
 _STATUS_WEIGHTS: dict[Status, float] = {
