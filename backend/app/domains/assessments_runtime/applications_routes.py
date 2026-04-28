@@ -745,32 +745,6 @@ def list_role_applications(
 
     apps = query.all()
 
-    updated = False
-    for app in apps:
-        score_inputs_changed = False
-        try:
-            # Enqueue scoring instead of blocking the listing on a Claude call.
-            # Frontend reads `score_status` to know whether to show pending UI.
-            if app.cv_match_score is None and app.cv_text:
-                enqueue_score(db, app)
-            old_rank = app.rank_score
-            if old_rank is None:
-                _refresh_rank_score(app)
-                if app.rank_score != old_rank:
-                    score_inputs_changed = True
-            needs_pre_screen_backfill = sort_by == "pre_screen_score" and app.pre_screen_score_100 is None
-            if score_inputs_changed or app.score_cached_at is None or needs_pre_screen_backfill:
-                refresh_application_score_cache(app)
-                updated = True
-        except Exception:
-            logger.exception("Failed to update scoring fields for application_id=%s", app.id)
-    if updated:
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-            logger.exception("Failed to persist backfilled cv_match_score values")
-
     out = [ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text)) for app in apps]
 
     def _sort_value(item: ApplicationDetailResponse):
