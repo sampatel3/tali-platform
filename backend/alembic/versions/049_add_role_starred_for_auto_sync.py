@@ -5,7 +5,7 @@ Beat cadence and newly ingested candidates auto-enqueue CV scoring (gated
 by the existing two-tier pre-screen).
 
 Revision ID: 049_add_role_starred_for_auto_sync
-Revises: 048_add_graph_sync_state
+Revises: 047_add_cv_embeddings
 Create Date: 2026-04-28
 """
 
@@ -16,7 +16,7 @@ import sqlalchemy as sa
 
 
 revision = "049_add_role_starred_for_auto_sync"
-down_revision = "048_add_graph_sync_state"
+down_revision = "047_add_cv_embeddings"
 branch_labels = None
 depends_on = None
 
