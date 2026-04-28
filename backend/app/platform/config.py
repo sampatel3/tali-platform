@@ -209,7 +209,7 @@ class Settings(BaseSettings):
     # pairwise comparisons against per-archetype anchor candidates to
     # produce a finer continuous score and a self-consistency
     # uncertainty band. Only fires when USE_CV_MATCH_V4_PHASE3 is True.
-    USE_CV_MATCH_V4_PHASE3: bool = False
+    USE_CV_MATCH_V4_PHASE3: bool = True
     CV_MATCH_BORDERLINE_LO: float = 40.0
     CV_MATCH_BORDERLINE_HI: float = 75.0
     # CISC-style self-consistency: max samples for borderline cases.
