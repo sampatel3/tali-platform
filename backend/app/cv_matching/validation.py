@@ -25,7 +25,7 @@ from __future__ import annotations
 import logging
 import re
 
-from .schemas import CVMatchResult, RequirementInput, Status
+from .schemas import CVMatchResult, CVMatchResultV4, RequirementInput, Status
 
 logger = logging.getLogger("taali.cv_match.validation")
 
@@ -177,3 +177,120 @@ def check_suspicious_score(
         return False
     word_count = len((cv_text or "").split())
     return word_count < _THIN_CV_WORD_COUNT
+
+
+# ---------------------------------------------------------------------------
+# v4 validators (work over ``CVMatchResultV4``)
+# ---------------------------------------------------------------------------
+
+
+def validate_evidence_grounding_v4(result: CVMatchResultV4, cv_text: str) -> int:
+    """v4 grounding: ``evidence_quotes`` is a list — every quote must appear
+    verbatim in the CV. Quotes that fail substring lookup are dropped from the
+    list. If, after dropping, no quotes remain on a met/partially_met
+    assessment, the status is downgraded to ``unknown``.
+
+    The first surviving quote sets ``evidence_start_char`` /
+    ``evidence_end_char``. Multiple-quote offset spans are not represented
+    explicitly — the recruiter UI uses the quote list directly.
+
+    Returns the number of assessments that were downgraded.
+    """
+    downgraded = 0
+    cv_text = cv_text or ""
+
+    for assessment in result.requirements_assessment:
+        if assessment.status not in (Status.MET, Status.PARTIALLY_MET):
+            # Missing/unknown don't require evidence.
+            continue
+
+        cleaned: list[str] = []
+        first_idx = -1
+        first_len = 0
+        for raw_quote in assessment.evidence_quotes or []:
+            quote = (raw_quote or "").strip()
+            if not quote:
+                continue
+            idx = cv_text.find(quote)
+            if idx < 0:
+                logger.warning(
+                    "Dropped hallucinated quote on requirement %s: %r",
+                    assessment.requirement_id,
+                    quote[:80],
+                )
+                continue
+            cleaned.append(quote)
+            if first_idx < 0:
+                first_idx = idx
+                first_len = len(quote)
+
+        if not cleaned:
+            assessment.status = Status.UNKNOWN
+            assessment.match_tier = "missing"
+            assessment.evidence_quotes = []
+            assessment.evidence_start_char = -1
+            assessment.evidence_end_char = -1
+            downgraded += 1
+            continue
+
+        assessment.evidence_quotes = cleaned
+        assessment.evidence_start_char = first_idx
+        assessment.evidence_end_char = first_idx + first_len
+
+    return downgraded
+
+
+def validate_cross_field_consistency_v4(
+    result: CVMatchResultV4,
+    requirements: list[RequirementInput],
+) -> None:
+    """v4 cross-field invariants. Raises ``ValidationFailure`` on first issue.
+
+    Enforces:
+    - top-level scores in 0-100 (Pydantic also enforces this — defense in depth)
+    - met/partially_met requirements have non-empty evidence_quotes
+    - ``match_tier == "missing"`` only valid when status in (MISSING, UNKNOWN)
+    - every supplied recruiter requirement appears in the assessment
+    - assessment requirement_ids are unique
+    """
+    if not (0 <= result.skills_match_score <= 100):
+        raise ValidationFailure(
+            f"skills_match_score out of range: {result.skills_match_score}"
+        )
+    if not (0 <= result.experience_relevance_score <= 100):
+        raise ValidationFailure(
+            f"experience_relevance_score out of range: {result.experience_relevance_score}"
+        )
+
+    seen_ids: set[str] = set()
+    for assessment in result.requirements_assessment:
+        if assessment.requirement_id in seen_ids:
+            raise ValidationFailure(
+                f"Duplicate requirement_id in assessment: {assessment.requirement_id}"
+            )
+        seen_ids.add(assessment.requirement_id)
+
+        if assessment.status in (Status.MET, Status.PARTIALLY_MET):
+            if not assessment.evidence_quotes:
+                raise ValidationFailure(
+                    f"Requirement {assessment.requirement_id} has status="
+                    f"{assessment.status.value} but evidence_quotes is empty"
+                )
+
+        # match_tier="missing" must align with status in (MISSING, UNKNOWN)
+        if assessment.match_tier == "missing" and assessment.status not in (
+            Status.MISSING,
+            Status.UNKNOWN,
+        ):
+            raise ValidationFailure(
+                f"Requirement {assessment.requirement_id} has match_tier='missing' "
+                f"but status='{assessment.status.value}' — these must align"
+            )
+
+    if requirements:
+        recruiter_ids = {r.id for r in requirements}
+        missing = recruiter_ids - seen_ids
+        if missing:
+            raise ValidationFailure(
+                f"Recruiter requirements missing from assessment: {sorted(missing)}"
+            )

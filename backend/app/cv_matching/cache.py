@@ -21,7 +21,9 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
+
+from pydantic import BaseModel
 
 from .schemas import CVMatchOutput
 
@@ -53,13 +55,23 @@ def compute_cache_key(
     return hashlib.sha256(blob).hexdigest()
 
 
-def get(cache_key: str) -> CVMatchOutput | None:
-    """Lookup a cached CVMatchOutput. Returns None on miss or schema drift.
+def get(
+    cache_key: str,
+    *,
+    result_schema: type[BaseModel] = CVMatchOutput,
+) -> Any | None:
+    """Lookup a cached output. Returns None on miss or schema drift.
 
     Returns None if:
     - the row doesn't exist
-    - the JSON in the row fails to round-trip through CVMatchOutput
+    - the JSON in the row fails to round-trip through ``result_schema``
       (defensive: this catches schema drift between cache writers)
+
+    ``result_schema`` defaults to ``CVMatchOutput`` (v3) for backwards
+    compatibility. The v4 runner passes ``CVMatchOutputV4``. Cache rows
+    written under one schema are not rehydratable under the other; the
+    cache key includes ``prompt_version``, so v3 and v4 rows live under
+    separate keys and never cross.
     """
     try:
         from ..platform.database import SessionLocal
@@ -75,11 +87,12 @@ def get(cache_key: str) -> CVMatchOutput | None:
         if row is None:
             return None
         try:
-            output = CVMatchOutput.model_validate(row.result or {})
+            output = result_schema.model_validate(row.result or {})
         except Exception as exc:
             logger.warning(
-                "Cache hit but row failed schema validation (key=%s): %s",
+                "Cache hit but row failed schema validation (key=%s, schema=%s): %s",
                 cache_key[:16],
+                result_schema.__name__,
                 exc,
             )
             return None

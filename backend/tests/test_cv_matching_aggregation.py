@@ -282,3 +282,115 @@ def test_aggregate_constraint_failure_short_circuits_to_no():
         assessments=assessments,
     )
     assert rec == Recommendation.NO
+
+
+# ===========================================================================
+# v4 match-tier weighting (RALPH 2.9). Backwards-compatible: v3
+# RequirementAssessment objects continue to score as before because
+# they carry no ``match_tier`` attribute.
+# ===========================================================================
+
+
+def _ra_v4(
+    rid: str,
+    priority: Priority,
+    status: Status,
+    match_tier: str = "exact",
+):
+    """Build a RequirementAssessmentV4 with concrete evidence to pass
+    Pydantic — content of evidence_quotes doesn't matter for aggregation."""
+    from app.cv_matching.schemas import RequirementAssessmentV4
+
+    return RequirementAssessmentV4(
+        requirement_id=rid,
+        requirement=rid,
+        priority=priority,
+        evidence_quotes=["x"] if status == Status.MET else [],
+        status=status,
+        match_tier=match_tier,
+    )
+
+
+def test_v3_aggregation_byte_identical_with_tier_helper_present():
+    """v3 RequirementAssessment has no match_tier field. Aggregation must
+    yield the same numbers it always did — the tier helper returns 1.0."""
+    assessments = [
+        _ra("a", Priority.MUST_HAVE, Status.MET),
+        _ra("b", Priority.STRONG_PREFERENCE, Status.PARTIALLY_MET),
+        _ra("c", Priority.NICE_TO_HAVE, Status.MISSING),
+    ]
+    score = compute_requirements_match_score(assessments)
+    # Exact value from the original v3 calibration math:
+    # earned = 0.70*1.0 + 0.25*0.5 + 0.05*0 = 0.825
+    # total  = 0.70 + 0.25 + 0.05 = 1.00
+    # → 82.5
+    assert abs(score - 82.5) < 0.01
+
+
+def test_v4_exact_tier_matches_v3_score():
+    """All-exact v4 assessments score the same as v3 assessments."""
+    v3 = [_ra("a", Priority.MUST_HAVE, Status.MET)]
+    v4 = [_ra_v4("a", Priority.MUST_HAVE, Status.MET, match_tier="exact")]
+    assert compute_requirements_match_score(
+        v3
+    ) == compute_requirements_match_score(v4)
+
+
+def test_v4_strong_substitute_discounts_to_85_percent_of_exact():
+    exact = [_ra_v4("a", Priority.MUST_HAVE, Status.MET, match_tier="exact")]
+    strong = [
+        _ra_v4("a", Priority.MUST_HAVE, Status.MET, match_tier="strong_substitute")
+    ]
+    # exact → 100, strong_substitute → 85 (×0.85 multiplier).
+    assert compute_requirements_match_score(exact) == 100.0
+    assert compute_requirements_match_score(strong) == 85.0
+
+
+def test_v4_weak_substitute_discounts_to_55_percent_of_exact():
+    weak = [
+        _ra_v4("a", Priority.MUST_HAVE, Status.MET, match_tier="weak_substitute")
+    ]
+    assert compute_requirements_match_score(weak) == 55.0
+
+
+def test_v4_unrelated_tier_zeroes_credit_even_when_status_met():
+    """``match_tier=unrelated`` is the actual mismatch indicator. Even
+    if the LLM emitted status=met (it shouldn't with proper validation,
+    but defense in depth), the tier multiplier zeroes out the credit."""
+    unrelated = [
+        _ra_v4("a", Priority.MUST_HAVE, Status.MET, match_tier="unrelated")
+    ]
+    score = compute_requirements_match_score(unrelated)
+    # 0% credit on the only requirement → score 0; must_have-missing
+    # logic does NOT apply because status is MET, but the tier zeroed it.
+    assert score == 0.0
+
+
+def test_v4_partially_met_strong_substitute_combines_multipliers():
+    """0.5 status × 0.85 tier = 0.425 — must equal earned/total × 100."""
+    a = [
+        _ra_v4(
+            "a",
+            Priority.MUST_HAVE,
+            Status.PARTIALLY_MET,
+            match_tier="strong_substitute",
+        )
+    ]
+    score = compute_requirements_match_score(a)
+    # earned = 0.70 * 0.5 * 0.85 = 0.2975
+    # total  = 0.70
+    # → 0.2975 / 0.70 = 0.425 → 42.5
+    assert abs(score - 42.5) < 0.01
+
+
+def test_v4_full_tier_matrix_runs_and_returns_in_range():
+    """Smoke test across all tier × status pairs to ensure no
+    KeyError, no None — just numeric output between 0 and 100."""
+    statuses = [Status.MET, Status.PARTIALLY_MET, Status.UNKNOWN, Status.MISSING]
+    tiers = ["exact", "strong_substitute", "weak_substitute", "unrelated", "missing"]
+    for st in statuses:
+        for tier in tiers:
+            score = compute_requirements_match_score(
+                [_ra_v4("a", Priority.MUST_HAVE, st, match_tier=tier)]
+            )
+            assert 0.0 <= score <= 100.0, f"score out of range for {st},{tier}"

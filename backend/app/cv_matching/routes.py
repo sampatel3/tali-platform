@@ -4,6 +4,8 @@ Two routers, both mounted under ``/api/v1`` from ``main.py``:
 
 - ``admin_router`` — ``GET /admin/cv-match/traces`` returns the most recent
   telemetry rows for an admin to spot-check the pipeline. Superuser-only.
+  Also exposes ``GET /admin/cv-match/fairness`` (RALPH 4.4): per-segment
+  selection rate, scoring rate, and impact ratio over a rolling window.
 
 - ``override_router`` — ``POST /candidates/{candidate_id}/cv-match-override``
   captures a recruiter's disagreement with a recommendation. The audit row
@@ -13,7 +15,7 @@ Two routers, both mounted under ``/api/v1`` from ``main.py``:
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -25,6 +27,13 @@ from ..models.candidate_application import CandidateApplication
 from ..models.cv_match_override import CvMatchOverride
 from ..models.user import User
 from ..platform.database import get_db
+from .fairness.impact_ratio import (
+    AMBER_THRESHOLD,
+    ApplicationOutcome,
+    GREEN_THRESHOLD,
+    SegmentRow,
+    compute_impact_ratios,
+)
 from .schemas import Recommendation
 from .telemetry import recent_traces
 
@@ -73,6 +82,93 @@ def list_traces(
     _require_admin(user)
     rows = recent_traces(limit=limit)
     return [TraceRow.model_validate(row) for row in rows]
+
+
+# --------------------------------------------------------------------------- #
+# Admin: fairness dashboard (RALPH 4.4)                                        #
+# --------------------------------------------------------------------------- #
+
+
+class FairnessRow(BaseModel):
+    """One per-segment row of the impact-ratio dashboard."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    segment_key: str
+    n_applications: int
+    n_scored: int
+    n_advanced: int
+    selection_rate: float
+    scoring_rate: float
+    impact_ratio: float | None
+    rag: str  # "green" | "amber" | "red"
+
+
+class FairnessReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    window_days: int
+    green_threshold: float
+    amber_threshold: float
+    rows: list[FairnessRow]
+    notes: list[str] = Field(default_factory=list)
+
+
+@admin_router.get("/fairness", response_model=FairnessReport)
+def fairness_dashboard(
+    window_days: int = Query(90, ge=1, le=365),
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    """Per-segment impact-ratio dashboard.
+
+    Reads recent ``CandidateApplication`` rows (the last ``window_days``)
+    and rolls up selection rate / scoring rate / impact ratio per
+    segment. Segment attribution depends on a separately-stored
+    diversity self-id mapping; until that table is wired, this
+    endpoint returns a single "all" row.
+    """
+    _require_admin(user)
+    cutoff = datetime.now(timezone.utc) - timedelta(days=window_days)
+    apps = (
+        db.query(CandidateApplication)
+        .filter(CandidateApplication.created_at >= cutoff)
+        .all()
+    )
+
+    outcomes = []
+    notes: list[str] = []
+    for app in apps:
+        details = getattr(app, "cv_match_details", {}) or {}
+        outcomes.append(
+            ApplicationOutcome(
+                application_id=int(app.id),
+                recommendation=details.get("recommendation"),
+                scoring_status=details.get("scoring_status", "ok"),
+            )
+        )
+    # Segment mapping placeholder. Real implementation reads from a
+    # diversity self-id table (out of scope for this module).
+    segment_for_application: dict[int, str] = {o.application_id: "all" for o in outcomes}
+    if not segment_for_application:
+        notes.append(
+            f"No applications in the last {window_days} days; nothing to report."
+        )
+    else:
+        notes.append(
+            "Segment attribution placeholder: returning a single 'all' row "
+            "until diversity self-id integration lands. Replace "
+            "``segment_for_application`` with real attribution data when ready."
+        )
+
+    rows = compute_impact_ratios(outcomes, segment_for_application)
+    return FairnessReport(
+        window_days=window_days,
+        green_threshold=GREEN_THRESHOLD,
+        amber_threshold=AMBER_THRESHOLD,
+        rows=[FairnessRow(**row.__dict__) for row in rows],
+        notes=notes,
+    )
 
 
 # --------------------------------------------------------------------------- #

@@ -34,6 +34,25 @@ _STATUS_WEIGHTS: dict[Status, float] = {
     Status.MISSING: 0.0,
 }
 
+# Match-tier multipliers (v4 only). Applied on top of priority × status.
+# v3 assessments have no match_tier attribute, so the helper below
+# returns 1.0 for them — v3 aggregation results are byte-identical to
+# the pre-v4 implementation.
+_TIER_WEIGHTS: dict[str, float] = {
+    "exact": 1.0,
+    "strong_substitute": 0.85,
+    "weak_substitute": 0.55,
+    "unrelated": 0.0,
+    "missing": 0.0,
+}
+
+
+def _tier_multiplier(assessment) -> float:
+    tier = getattr(assessment, "match_tier", None)
+    if tier is None:
+        return 1.0  # v3 path — no tier, full credit
+    return _TIER_WEIGHTS.get(tier, 1.0)
+
 # Floor caps when disqualifying requirements/constraints fail.
 _CONSTRAINT_FLOOR = 30.0
 _MUST_HAVE_FLOOR = 40.0
@@ -71,8 +90,9 @@ def compute_requirements_match_score(
             continue
         priority_weight = _PRIORITY_WEIGHTS.get(a.priority, 0.0)
         status_weight = _STATUS_WEIGHTS.get(a.status, 0.0)
+        tier_multiplier = _tier_multiplier(a)
         total_weight += priority_weight
-        earned_weight += priority_weight * status_weight
+        earned_weight += priority_weight * status_weight * tier_multiplier
 
     if total_weight <= 0:
         return 50.0
@@ -101,8 +121,67 @@ def compute_requirements_match_score(
 def compute_cv_fit(
     skills_match_score: float, experience_relevance_score: float
 ) -> float:
-    """Simple average of the two LLM-produced sub-scores."""
+    """Simple average of the two LLM-produced sub-scores (v3 / v4.1)."""
     return round((skills_match_score + experience_relevance_score) / 2.0, 2)
+
+
+_DEFAULT_DIMENSION_WEIGHTS = {
+    "skills_coverage": 0.25,
+    "skills_depth": 0.20,
+    "title_trajectory": 0.15,
+    "seniority_alignment": 0.15,
+    "industry_match": 0.15,
+    "tenure_pattern": 0.10,
+}
+
+
+def compute_cv_fit_v4_2(
+    dimension_scores,
+    weights: dict[str, float] | None = None,
+) -> float:
+    """v4.2 cv_fit derived from six dimension scores.
+
+    ``weights`` is a per-archetype dict from the rubric YAML. When
+    None, the default weighting is used. Missing keys default to the
+    six-dimension default; weights are renormalised to sum to 1.0
+    before applying.
+    """
+    if dimension_scores is None:
+        return 0.0
+    base_weights = {**_DEFAULT_DIMENSION_WEIGHTS, **(weights or {})}
+    total = sum(base_weights.values()) or 1.0
+    weighted = (
+        base_weights["skills_coverage"] * dimension_scores.skills_coverage
+        + base_weights["skills_depth"] * dimension_scores.skills_depth
+        + base_weights["title_trajectory"] * dimension_scores.title_trajectory
+        + base_weights["seniority_alignment"] * dimension_scores.seniority_alignment
+        + base_weights["industry_match"] * dimension_scores.industry_match
+        + base_weights["tenure_pattern"] * dimension_scores.tenure_pattern
+    )
+    return round(weighted / total, 2)
+
+
+def derive_v3_compat_scores(dimension_scores) -> tuple[float, float]:
+    """Project six v4.2 dimensions back onto the v3 (skills, experience) pair.
+
+    skills_match_score          = mean(skills_coverage, skills_depth)
+    experience_relevance_score  = mean(title_trajectory, seniority_alignment,
+                                       industry_match, tenure_pattern)
+
+    These are the legacy fields some callers still read; populating
+    them from the v4.2 dimensions keeps consumers like
+    ``role_support.py`` working without conditional code.
+    """
+    if dimension_scores is None:
+        return 0.0, 0.0
+    skills = (dimension_scores.skills_coverage + dimension_scores.skills_depth) / 2.0
+    experience = (
+        dimension_scores.title_trajectory
+        + dimension_scores.seniority_alignment
+        + dimension_scores.industry_match
+        + dimension_scores.tenure_pattern
+    ) / 4.0
+    return round(skills, 2), round(experience, 2)
 
 
 def compute_role_fit(cv_fit: float, requirements_match: float) -> float:

@@ -1,0 +1,50 @@
+name: Fairness gate (cv_matching)
+
+# RALPH 4.3: counterfactual probes as a CI gate. Only fires when
+# ANTHROPIC_API_KEY is configured as a secret — otherwise the gate is
+# skipped (CI stays green; manual review still required when adding a
+# new prompt).
+on:
+  pull_request:
+    paths:
+      - "backend/app/cv_matching/prompts.py"
+      - "backend/app/cv_matching/aggregation.py"
+      - "backend/app/cv_matching/validation.py"
+      - "backend/app/cv_matching/runner.py"
+      - "backend/app/cv_matching/rubrics/**"
+      - "backend/app/cv_matching/fairness/**"
+
+jobs:
+  counterfactual-probes:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      # Skip the live-API gate when no key is configured. Pure-function
+      # probe-generation tests still run as part of the regular CI job.
+      - name: Skip live-API gate when secret not present
+        id: have_key
+        run: |
+          if [ -z "${ANTHROPIC_API_KEY}" ]; then
+            echo "skip=true"  >> "$GITHUB_OUTPUT"
+            echo "ANTHROPIC_API_KEY not set; skipping live-API fairness gate."
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      - name: Run counterfactual probes
+        if: steps.have_key.outputs.skip == 'false'
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python -m app.cv_matching.evals.run_evals \
+            --version v4.2 --no-cache --counterfactual-probes

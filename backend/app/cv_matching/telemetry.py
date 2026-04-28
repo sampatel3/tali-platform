@@ -66,22 +66,36 @@ def emit_trace(
 ) -> None:
     """Append one structured trace row.
 
-    Fields exactly per the handover:
+    Fields per the handover plus v4 additions:
       trace_id, cv_hash, jd_hash, prompt_version, model_version,
       input_tokens, output_tokens, latency_ms, retry_count,
-      validation_failures, cache_hit, final_status, created_at
+      validation_failures, cache_hit, final_status, created_at,
+      shadow, pipeline_version
+
+    ``prompt_version`` is read from the run context when available
+    (so v4 calls trace as ``cv_match_v4.1``); falls back to the v3
+    module constant for older callers that don't populate the context.
 
     Never raises — telemetry must not break the runner's contract.
     """
     try:
-        from . import MODEL_VERSION, PROMPT_VERSION
+        from . import MODEL_VERSION, PROMPT_VERSION, PROMPT_VERSION_V4
+
+        pipeline_version = getattr(ctx, "pipeline_version", "v3")
+        if pipeline_version == "v4.1":
+            prompt_version = PROMPT_VERSION_V4
+        else:
+            prompt_version = PROMPT_VERSION
+
+        shadow = bool(getattr(ctx, "extra", {}).get("shadow", False))
 
         latency_ms = int((time.monotonic() - ctx.started_at) * 1000)
         row = {
             "trace_id": ctx.trace_id,
             "cv_hash": ctx.cv_hash,
             "jd_hash": ctx.jd_hash,
-            "prompt_version": PROMPT_VERSION,
+            "prompt_version": prompt_version,
+            "pipeline_version": pipeline_version,
             "model_version": MODEL_VERSION,
             "input_tokens": ctx.input_tokens,
             "output_tokens": ctx.output_tokens,
@@ -90,6 +104,7 @@ def emit_trace(
             "validation_failures": ctx.validation_failures,
             "cache_hit": ctx.cache_hit,
             "final_status": getattr(final_status, "value", str(final_status)),
+            "shadow": shadow,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 

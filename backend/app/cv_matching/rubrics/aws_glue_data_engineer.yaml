@@ -1,0 +1,110 @@
+archetype_id: aws_glue_data_engineer
+description: |
+  Senior data engineer who owns AWS-native ETL pipelines (Glue/EMR/Athena),
+  partners with analytics/ML teams, and writes Python + SQL daily.
+
+jd_centroid_text: |
+  We're hiring a Senior Data Engineer to own our AWS Glue / Spark ETL
+  platform. You'll design schemas, optimise jobs, partner with analytics
+  teams, and ship reliable daily pipelines that feed downstream ML and
+  reporting. Strong Python and SQL required. Bonus for IaC (Terraform /
+  CDK) and Step Functions orchestration.
+
+must_have_archetypes:
+  - cluster: managed_spark_etl
+    description: "AWS Glue, Databricks, EMR — managed Spark with metadata catalog"
+    exact_matches:
+      - "AWS Glue"
+      - "Glue ETL"
+      - "Glue jobs"
+    strong_substitutes:
+      - "Databricks"
+      - "EMR"
+      - "Synapse Spark"
+    weak_substitutes:
+      - "self-managed Spark"
+      - "Hadoop MapReduce"
+      - "Dataflow"
+    unrelated:
+      - "pandas-only ETL"
+      - "dbt-only stack"
+      - "Excel macros"
+
+  - cluster: python_data_engineering
+    description: "Python for ETL, transformations, and pipeline orchestration"
+    exact_matches:
+      - "Python"
+      - "PySpark"
+    strong_substitutes:
+      - "Scala (in Spark context)"
+    weak_substitutes:
+      - "shell scripts"
+      - "Bash automation"
+    unrelated:
+      - "Java backend services"
+      - "PHP web"
+
+  - cluster: sql
+    description: "SQL for transformations, optimisation, and analytics"
+    exact_matches:
+      - "SQL"
+      - "Athena"
+      - "Redshift"
+      - "PostgreSQL"
+    strong_substitutes:
+      - "BigQuery SQL"
+      - "Snowflake SQL"
+    weak_substitutes:
+      - "Pandas DataFrame manipulation only"
+    unrelated:
+      - "MongoDB-only NoSQL"
+
+depth_signals:
+  skills_coverage:
+    - "AWS Glue + Spark + Athena named together"
+    - "Step Functions / Airflow for orchestration"
+  skills_depth:
+    - "owned a production Glue pipeline at >1TB/day"
+    - "led a job-cost optimisation that materially cut spend"
+    - "designed schema-evolution strategy for partitioned tables"
+  title_trajectory:
+    - "promoted from data engineer to senior data engineer at the same company"
+    - "moved from BI/analytics into engineering"
+  seniority_alignment:
+    - "5+ years in data engineering"
+    - "owns SLA for a tier-1 pipeline"
+  industry_match:
+    - "regulated industry data engineering (banking, healthcare, gov)"
+    - "fintech ETL with PII handling"
+  tenure_pattern:
+    - "≥2 years at most recent role"
+    - "no job-hopping shorter than 12 months in the last 4 years"
+
+seniority_anchors:
+  band_100: |
+    Maintainer-level: led a multi-team Glue/Spark migration, named in
+    talks or open-source, owns SLA for a tier-1 pipeline. Comfortable
+    with cost optimisation, schema evolution, and partner-team
+    onboarding.
+  band_75: |
+    Owns end-to-end Glue ETL for a product surface. Comfortable with
+    Athena tuning, Step Functions, IAM least-privilege. 5+ years
+    relevant experience.
+  band_50: |
+    Has shipped Glue jobs but as a contributor; relies on the team
+    for deeper Spark tuning or schema-evolution decisions. 2-4 years
+    in data engineering.
+  band_25: |
+    Adjacent stack (Databricks, EMR, or self-managed Spark) but no
+    Glue; or Glue exposure limited to <1 year of contributions.
+  band_0: |
+    Wrong stack entirely (Snowflake-pure analyst, BI dashboard owner,
+    backend engineer with no data work).
+
+dimension_weights:
+  skills_coverage: 0.25
+  skills_depth: 0.25
+  title_trajectory: 0.10
+  seniority_alignment: 0.15
+  industry_match: 0.15
+  tenure_pattern: 0.10

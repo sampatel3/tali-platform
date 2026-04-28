@@ -242,3 +242,193 @@ def test_main_writes_baseline_snapshot(monkeypatch, tmp_path):
     blob = json.loads(snapshot[0].read_text(encoding="utf-8"))
     assert blob["prompt_version"] == PROMPT_VERSION
     assert len(blob["results"]) >= 1
+
+
+def test_prompt_version_constants_coexist():
+    from app.cv_matching import PROMPT_VERSION, PROMPT_VERSION_V4
+
+    assert PROMPT_VERSION == "cv_match_v3.0"
+    assert PROMPT_VERSION_V4 == "cv_match_v4.1"
+    assert PROMPT_VERSION != PROMPT_VERSION_V4
+
+
+def _build_v4_passing_response(cv_text: str) -> dict:
+    """Same fixture as _build_passing_response but in v4 schema shape."""
+    aws_quote = "AWS Glue"
+    python_quote = "Python"
+    return {
+        "prompt_version": "cv_match_v4.1",
+        "skills_match_score": 90,
+        "experience_relevance_score": 85,
+        "requirements_assessment": [
+            {
+                "requirement_id": "req_1",
+                "requirement": "AWS Glue",
+                "priority": "must_have",
+                "evidence_quotes": [aws_quote],
+                "evidence_start_char": cv_text.find(aws_quote),
+                "evidence_end_char": cv_text.find(aws_quote) + len(aws_quote),
+                "reasoning": "Candidate names AWS Glue explicitly in their experience.",
+                "status": "met",
+                "match_tier": "exact",
+                "impact": "Required tool clearly named.",
+                "confidence": "high",
+            },
+            {
+                "requirement_id": "req_2",
+                "requirement": "Python",
+                "priority": "must_have",
+                "evidence_quotes": [python_quote],
+                "evidence_start_char": cv_text.find(python_quote),
+                "evidence_end_char": cv_text.find(python_quote) + len(python_quote),
+                "reasoning": "Python listed as a primary language.",
+                "status": "met",
+                "match_tier": "exact",
+                "impact": "Stated.",
+                "confidence": "high",
+            },
+            {
+                "requirement_id": "req_3",
+                "requirement": "Banking domain",
+                "priority": "strong_preference",
+                "evidence_quotes": ["Regional Bank"],
+                "evidence_start_char": cv_text.find("Regional Bank"),
+                "evidence_end_char": cv_text.find("Regional Bank")
+                + len("Regional Bank"),
+                "reasoning": "Worked at a Regional Bank for 3 years.",
+                "status": "met",
+                "match_tier": "exact",
+                "impact": "Banking experience.",
+                "confidence": "high",
+            },
+        ],
+        "matching_skills": ["AWS Glue", "Python", "SQL"],
+        "missing_skills": [],
+        "experience_highlights": ["7 years AWS data engineering"],
+        "concerns": [],
+        "summary": "Strong direct match across must-haves and banking domain.",
+    }
+
+
+def test_run_one_v4_dispatches_v4_pipeline(monkeypatch, placeholder_case):
+    cv_text = (
+        Path(__file__).resolve().parent.parent
+        / "app"
+        / "cv_matching"
+        / "evals"
+        / placeholder_case["cv_file"]
+    ).read_text(encoding="utf-8")
+
+    response_body = json.dumps(_build_v4_passing_response(cv_text))
+    stub = _StubClient(messages=_StubMessages(body=response_body))
+
+    monkeypatch.setattr(
+        "app.cv_matching.runner._resolve_anthropic_client",
+        lambda: stub,
+    )
+
+    result = run_one(placeholder_case, skip_cache=True, version="v4.1")
+    assert result.passed, f"failures: {result.failures}"
+    # The output blob should carry the v4 prompt version + the v4 per-req shape.
+    assert result.output["prompt_version"] == "cv_match_v4.1"
+    assert "evidence_quotes" in result.output["requirements_assessment"][0]
+    assert "match_tier" in result.output["requirements_assessment"][0]
+
+
+def test_main_version_v4_writes_v4_snapshot(monkeypatch, tmp_path):
+    cv_path = (
+        Path(__file__).resolve().parent.parent
+        / "app"
+        / "cv_matching"
+        / "evals"
+        / "fixtures"
+        / "cvs"
+        / "placeholder_eng.txt"
+    )
+    cv_text = cv_path.read_text(encoding="utf-8")
+    body = json.dumps(_build_v4_passing_response(cv_text))
+    stub = _StubClient(messages=_StubMessages(body=body))
+    monkeypatch.setattr(
+        "app.cv_matching.runner._resolve_anthropic_client",
+        lambda: stub,
+    )
+    monkeypatch.setattr(run_evals, "BASELINE_DIR", tmp_path / "baselines")
+    monkeypatch.setattr(
+        "sys.argv", ["run_evals", "--no-cache", "--version", "v4.1"]
+    )
+    rc = run_evals.main()
+    assert rc == 0
+
+    snapshots = list((tmp_path / "baselines").glob("cv_match_v4.1_*.json"))
+    assert len(snapshots) == 1
+    blob = json.loads(snapshots[0].read_text(encoding="utf-8"))
+    assert blob["prompt_version"] == "cv_match_v4.1"
+    assert blob["version"] == "v4.1"
+
+
+def test_main_version_both_writes_two_snapshots(monkeypatch, tmp_path):
+    cv_path = (
+        Path(__file__).resolve().parent.parent
+        / "app"
+        / "cv_matching"
+        / "evals"
+        / "fixtures"
+        / "cvs"
+        / "placeholder_eng.txt"
+    )
+    cv_text = cv_path.read_text(encoding="utf-8")
+    v3_body = json.dumps(_build_passing_response(cv_text))
+    v4_body = json.dumps(_build_v4_passing_response(cv_text))
+
+    # Stub returns the v3 body first time, v4 body second time. The harness
+    # runs v3 across all cases, then v4 across all cases.
+    bodies = [v3_body, v4_body]
+    call_idx = {"i": 0}
+
+    @dataclass
+    class _ToggleResponse:
+        text: str
+
+        @property
+        def content(self):
+            return [_StubBlock(text=self.text)]
+
+        @property
+        def usage(self):
+            return _StubUsage()
+
+    @dataclass
+    class _ToggleMessages:
+        def create(self, **kwargs):
+            body = bodies[min(call_idx["i"], len(bodies) - 1)]
+            call_idx["i"] += 1
+            return _ToggleResponse(text=body)
+
+        def count_tokens(self, **kwargs):
+            from dataclasses import dataclass as _dc
+
+            @_dc
+            class _C:
+                input_tokens: int = 100
+
+            return _C()
+
+    @dataclass
+    class _ToggleClient:
+        messages: _ToggleMessages = field(default_factory=_ToggleMessages)
+
+    monkeypatch.setattr(
+        "app.cv_matching.runner._resolve_anthropic_client",
+        lambda: _ToggleClient(),
+    )
+    monkeypatch.setattr(run_evals, "BASELINE_DIR", tmp_path / "baselines")
+    monkeypatch.setattr(
+        "sys.argv", ["run_evals", "--no-cache", "--version", "both"]
+    )
+    rc = run_evals.main()
+    assert rc == 0
+
+    v3_snaps = list((tmp_path / "baselines").glob("cv_match_v3.0_*.json"))
+    v4_snaps = list((tmp_path / "baselines").glob("cv_match_v4.1_*.json"))
+    assert len(v3_snaps) == 1
+    assert len(v4_snaps) == 1
