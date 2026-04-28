@@ -139,6 +139,17 @@ class Settings(BaseSettings):
     # Redis
     REDIS_URL: str = "redis://localhost:6379"
 
+    # Neo4j (optional). Powers the candidate knowledge-graph view and
+    # graph predicates in natural-language search. When NEO4J_URI is
+    # blank the graph features degrade gracefully: the graph view shows
+    # a configuration hint, and graph predicates drop out of NL queries.
+    # Production is deployed via Railway's Neo4j template (see
+    # docs/neo4j-railway-setup.md); local dev typically leaves it blank.
+    NEO4J_URI: str = ""
+    NEO4J_USER: str = "neo4j"
+    NEO4J_PASSWORD: str = ""
+    NEO4J_DATABASE: str = "neo4j"
+
     # URLs
     FRONTEND_URL: str = "http://localhost:5173"
     BACKEND_URL: str = "http://localhost:8000"
