@@ -26,18 +26,20 @@ from typing import Optional
 logger = logging.getLogger("taali.candidate_graph.client")
 
 
-class _NoopCrossEncoder:
-    """Passthrough reranker — returns passages in original order, score=1.0.
+def _make_noop_cross_encoder():
+    """Build a passthrough CrossEncoderClient that avoids the OpenAI default.
 
-    Graphiti's default cross-encoder is OpenAIRerankerClient which requires
-    OPENAI_API_KEY. We don't use OpenAI; this stub satisfies the interface
-    without calling any external service. Graphiti uses the cross-encoder only
-    for final reranking of search results; returning uniform scores means
-    Graphiti's own BM25/vector ranking governs order, which is acceptable.
+    Graphiti validates cross_encoder via isinstance(CrossEncoderClient), so we
+    import and subclass it here (inside a function to defer the graphiti import
+    until Graphiti is actually configured).
     """
+    from graphiti_core.cross_encoder.client import CrossEncoderClient  # type: ignore[import-not-found]
 
-    async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
-        return [(p, 1.0) for p in passages]
+    class _Noop(CrossEncoderClient):
+        async def rank(self, query: str, passages: list[str]) -> list[tuple[str, float]]:
+            return [(p, 1.0) for p in passages]
+
+    return _Noop()
 
 
 _graphiti = None
@@ -151,7 +153,7 @@ def get_graphiti():
             llm_client=llm_client,
             embedder=embedder,
             graph_driver=neo4j_driver,
-            cross_encoder=_NoopCrossEncoder(),
+            cross_encoder=_make_noop_cross_encoder(),
         )
         # First-time index/constraint creation. Idempotent — safe on every boot.
         try:
