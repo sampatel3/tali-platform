@@ -270,9 +270,15 @@ class RequirementAssessment(BaseModel):
     See the ``_VARIANTS`` tables above. This makes both the LLM's
     output and recruiter-typed input forgiving of small phrasing
     differences without forcing a retry / silent rejection.
+
+    ``extra="ignore"``: the v9 prompt's anchoring instructions prompt
+    the model to occasionally invent helper fields like
+    ``reasoning_detail``. Strict ``forbid`` triggers a Claude retry that
+    almost always fails the same way and burns the call. Ignoring the
+    extras lands the score and drops the noise.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     requirement_id: str
     requirement: str
@@ -311,9 +317,13 @@ class DimensionScores(BaseModel):
     """Six 0-100 dimensions emitted by the LLM. Aggregation derives
     ``cv_fit_score`` as a weighted average using per-archetype weights
     (or default weights when no archetype matched).
+
+    ``extra="ignore"`` — same reasoning as RequirementAssessment: the
+    model sometimes adds helper fields (``concerns_flag``,
+    ``confidence_band``) under v9's prompt; ignore vs. retry-and-fail.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     skills_coverage: float = Field(ge=0, le=100)
     skills_depth: float = Field(ge=0, le=100)
@@ -341,9 +351,11 @@ class CVMatchResult(BaseModel):
     The legacy v3 ``skills_match_score`` / ``experience_relevance_score``
     pair is back-filled by aggregation from the six dimensions for
     downstream-consumer compatibility.
+
+    ``extra="ignore"`` — see RequirementAssessment / DimensionScores.
     """
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
     prompt_version: str
     skills_match_score: float = Field(default=0.0, ge=0, le=100)
