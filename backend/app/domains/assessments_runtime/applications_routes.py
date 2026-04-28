@@ -745,7 +745,12 @@ def list_role_applications(
 
     apps = query.all()
 
-    out = [ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text)) for app in apps]
+    # List context: use the cached-score payload to avoid per-row Anthropic
+    # calls (interview-pack regeneration). Detail-only fields (cv_sections,
+    # assessment_preview, assessment_history, candidate_interview_kit) stay
+    # absent and the schema treats them as optional. The dedicated detail
+    # endpoint below still uses application_detail_payload.
+    out = [ApplicationDetailResponse(**application_list_payload(app, include_cv_text=include_cv_text)) for app in apps]
 
     def _sort_value(item: ApplicationDetailResponse):
         if sort_by == "pre_screen_score":

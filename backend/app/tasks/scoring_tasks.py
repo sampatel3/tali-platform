@@ -62,6 +62,29 @@ def score_application_job(self, application_id: int, *, force_full_score: bool =
             # Another worker already picked this up — bail out.
             return {"status": "skipped", "application_id": application_id, "job_status": job.status}
 
+        # Cooperative cancel. batch_score_role checks the same Redis flag
+        # between fetch/enqueue phases, but once the per-app jobs are
+        # dispatched they need to check it themselves — otherwise clicking
+        # Cancel after enqueue does nothing and the recruiter waits for
+        # 500+ Anthropic calls to drain naturally.
+        try:
+            from ..domains.assessments_runtime.applications_routes import is_batch_score_cancelled
+        except Exception:  # pragma: no cover - defensive
+            is_batch_score_cancelled = lambda _role_id: False  # type: ignore[assignment]
+        if application.role_id is not None and is_batch_score_cancelled(int(application.role_id)):
+            job.status = SCORE_JOB_ERROR
+            job.error_message = "cancelled_by_recruiter"
+            job.finished_at = datetime.now(timezone.utc)
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+            return {
+                "status": "cancelled",
+                "application_id": application_id,
+                "role_id": int(application.role_id),
+            }
+
         try:
             _execute_scoring(db, application=application, job=job, force_full_score=force_full_score)
             db.commit()
