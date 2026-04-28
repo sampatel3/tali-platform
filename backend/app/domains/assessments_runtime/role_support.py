@@ -658,10 +658,23 @@ def application_to_response(
     score_status = _latest_score_job_status(app)
     score_summary = score_summary_from_cache(app) if use_cached_score_summary else _score_summary_for_application(app)
     pre_screen = pre_screen_snapshot(app)
-    interview_support = refresh_application_interview_support(
-        app,
-        organization=getattr(app, "organization", None),
-    )
+    if use_cached_score_summary:
+        # List mode: read cached interview-pack columns. Avoids per-row
+        # synchronous Claude calls that previously froze the pipeline page
+        # under 1 uvicorn worker. Packs are refreshed on detail-view loads
+        # and on explicit refresh endpoints.
+        interview_support = {
+            "screening_pack": app.screening_pack,
+            "tech_interview_pack": app.tech_interview_pack,
+            "screening_interview_summary": app.screening_interview_summary,
+            "tech_interview_summary": app.tech_interview_summary,
+            "interview_evidence_summary": app.interview_evidence_summary,
+        }
+    else:
+        interview_support = refresh_application_interview_support(
+            app,
+            organization=getattr(app, "organization", None),
+        )
     interviews = []
     for interview in app.interviews or []:
         interviews.append(
