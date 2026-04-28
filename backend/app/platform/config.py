@@ -150,6 +150,21 @@ class Settings(BaseSettings):
     NEO4J_PASSWORD: str = ""
     NEO4J_DATABASE: str = "neo4j"
 
+    # Graphiti — temporal knowledge graph on top of Neo4j. Replaces the
+    # manual sync/Cypher path when configured. Uses Anthropic for LLM
+    # extraction (reuses ANTHROPIC_API_KEY) and Voyage AI for embeddings.
+    # If VOYAGE_API_KEY is empty, Graphiti is disabled and graph features
+    # degrade exactly like Neo4j-not-configured.
+    VOYAGE_API_KEY: str = ""
+    GRAPHITI_LLM_MODEL: str = "claude-haiku-4-5-20251001"
+    GRAPHITI_LLM_SMALL_MODEL: str = "claude-haiku-4-5-20251001"
+    GRAPHITI_EMBEDDING_MODEL: str = "voyage-3"
+    GRAPHITI_EMBEDDING_DIMS: int = 1024  # voyage-3 native dimension
+    # Hard cap on per-candidate Graphiti episode count during backfill —
+    # safeguard against runaway LLM cost on a candidate with hundreds of
+    # experience entries.
+    GRAPHITI_MAX_EPISODES_PER_CANDIDATE: int = 40
+
     # URLs
     FRONTEND_URL: str = "http://localhost:5173"
     BACKEND_URL: str = "http://localhost:8000"

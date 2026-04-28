@@ -39,7 +39,7 @@ _openapi_url = None if _is_production else "/api/openapi.json"
 async def _lifespan(_app: FastAPI):
     # Startup
     logger.info("%s API started | env=%s", BRAND_NAME, "production" if settings.SENTRY_DSN else "development")
-    # Wire candidate_graph SQLAlchemy listeners (no-op when Neo4j is unset).
+    # Wire candidate_graph SQLAlchemy listeners (no-op when Graphiti is unset).
     try:
         from .candidate_graph.listeners import register_listeners
 
@@ -47,13 +47,13 @@ async def _lifespan(_app: FastAPI):
     except Exception:  # pragma: no cover — listener install must never block boot
         logger.exception("Failed to register candidate_graph listeners")
     yield
-    # Shutdown
+    # Shutdown — close Graphiti's driver and stop its background loop.
     try:
-        from .candidate_graph.client import close_driver
+        from .candidate_graph.client import close
 
-        close_driver()
+        close()
     except Exception:  # pragma: no cover — defensive
-        logger.exception("Failed to close Neo4j driver on shutdown")
+        logger.exception("Failed to close Graphiti on shutdown")
 
 
 app = FastAPI(
@@ -347,9 +347,14 @@ def health_check():
     }
 
 
-@app.get("/healthz/neo4j")
-def neo4j_health():
-    """Per-component health probe used by the Railway setup verification step."""
+@app.get("/healthz/graphiti")
+def graphiti_health():
+    """Per-component health probe used by the Railway setup verification step.
+
+    Returns ``{status: ok|unconfigured|error}``. ``unconfigured`` means
+    NEO4J_URI or VOYAGE_API_KEY is empty — graph features are disabled
+    by design, not a fault.
+    """
     from .candidate_graph.client import healthcheck
 
     return healthcheck()
