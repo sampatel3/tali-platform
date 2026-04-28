@@ -46,7 +46,7 @@ def invalidate_stale_cv_match_scores(db: Session, current_prompt_version: str) -
     result = db.execute(
         text(
             """
-            UPDATE candidate_application
+            UPDATE candidate_applications
             SET cv_match_score = NULL,
                 cv_match_scored_at = NULL
             WHERE cv_match_score IS NOT NULL
