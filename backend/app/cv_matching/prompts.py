@@ -97,6 +97,14 @@ Two delimited blocks follow. The contents inside <UNTRUSTED_CV ...> and <JOB_SPE
    - For empty fields, return empty array [] or empty string "". Never null. Never omit a key.
    - Cap experience_highlights at 5 items. Cap concerns at 5 items.
    - Summary: 5–7 sentences. Lead with the overall fit verdict (one sentence). Cover must-have status, preference status, standout signals, material gaps, and 2-3 specific live questions a recruiter should ask.
+   - Use the EXACT enum values listed in the schema below. Do not paraphrase:
+     priority MUST be one of: must_have | strong_preference | nice_to_have | constraint
+     status MUST be one of: met | partially_met | missing | unknown
+     match_tier MUST be one of: exact | strong_substitute | weak_substitute | unrelated | missing
+     confidence MUST be one of: high | medium | low
+     If the JD says "preferred" or "desirable", emit ``strong_preference``.
+     If the JD says "required" or "mandatory", emit ``must_have``.
+     If the JD says "nice to have" or "bonus", emit ``nice_to_have``.
 
 === OUTPUT SCHEMA ===
 
