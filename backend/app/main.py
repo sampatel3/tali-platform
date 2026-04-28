@@ -398,8 +398,8 @@ def graphiti_backfill_all(request: Request):
         try:
             result = sync_all_organizations(db, since_year=since_year)
             log.info("Graphiti backfill complete: %s", result)
-        except Exception:
-            log.exception("Graphiti backfill failed")
+        except Exception as _exc:
+            log.exception("Graphiti backfill failed: %s: %s", type(_exc).__name__, _exc)
         finally:
             db.close()
 

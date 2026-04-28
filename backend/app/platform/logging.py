@@ -17,6 +17,9 @@ class JsonFormatter(logging.Formatter):
         }
         if request_id:
             payload["request_id"] = request_id
+        if record.exc_info:
+            import traceback
+            payload["exception"] = "".join(traceback.format_exception(*record.exc_info))
         return json.dumps(payload, ensure_ascii=True)
 
 
