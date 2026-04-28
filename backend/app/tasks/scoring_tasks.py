@@ -131,7 +131,12 @@ def score_application_job(
     name="app.tasks.scoring_tasks.batch_score_role",
     queue="scoring",
 )
-def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
+def batch_score_role(
+    role_id: int,
+    *,
+    include_scored: bool = False,
+    applied_after: str | None = None,
+) -> dict:
     """Fan out per-application scoring jobs for every application under a role.
 
     For Workable-imported applications missing ``cv_text``, the CV is fetched
@@ -145,9 +150,14 @@ def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
     scoring then fans out to parallel ``score_application_job`` tasks. For
     600 candidates the fetch loop takes ~30-50 min; scoring runs in the
     background after that.
+
+    ``applied_after`` (ISO date string, e.g. "2026-01-01") filters to
+    candidates whose Workable application date is on or after that date.
+    Used for backfills where we only want a specific cohort.
     """
     from sqlalchemy.orm import joinedload
 
+    from ..models.candidate import Candidate
     from ..models.candidate_application import CandidateApplication
     from ..models.organization import Organization
     from ..models.role import Role
@@ -177,6 +187,17 @@ def batch_score_role(role_id: int, *, include_scored: bool = False) -> dict:
         )
         if not include_scored:
             query = query.filter(CandidateApplication.cv_match_score.is_(None))
+
+        if applied_after:
+            from datetime import timezone as _tz
+            cutoff = datetime.fromisoformat(applied_after)
+            if cutoff.tzinfo is None:
+                cutoff = cutoff.replace(tzinfo=_tz.utc)
+            query = (
+                query
+                .join(Candidate, CandidateApplication.candidate_id == Candidate.id)
+                .filter(Candidate.workable_created_at >= cutoff)
+            )
 
         apps = query.all()
 

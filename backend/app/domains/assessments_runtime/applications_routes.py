@@ -2128,11 +2128,12 @@ def is_batch_fetch_cancelled(role_id: int) -> bool:
     return _is_cancelled(_BATCH_FETCH_CANCEL_PREFIX, role_id)
 
 
-def _run_batch_score(role_id: int, org_id: int, *, include_scored: bool = False) -> None:
-    """Background worker: score applications for a role.
+def _run_batch_score(role_id: int, org_id: int, *, include_scored: bool = False, applied_after: str | None = None) -> None:
+    """Background worker: score applications for a role (inline/dev path).
 
     By default, only unscored applications are processed. When include_scored=True,
-    already-scored applications are re-scored as well.
+    already-scored applications are re-scored as well. applied_after restricts to
+    candidates whose Workable application date is on or after that ISO date.
     """
     db = SessionLocal()
     try:
@@ -2159,6 +2160,19 @@ def _run_batch_score(role_id: int, org_id: int, *, include_scored: bool = False)
         )
         if not include_scored:
             apps_query = apps_query.filter(CandidateApplication.cv_match_score.is_(None))
+        if applied_after:
+            try:
+                from ...models.candidate import Candidate as _Candidate
+                cutoff = datetime.fromisoformat(applied_after)
+                if cutoff.tzinfo is None:
+                    cutoff = cutoff.replace(tzinfo=timezone.utc)
+                apps_query = (
+                    apps_query
+                    .join(_Candidate, CandidateApplication.candidate_id == _Candidate.id)
+                    .filter(_Candidate.workable_created_at >= cutoff)
+                )
+            except (ValueError, Exception) as exc:
+                logger.warning("_run_batch_score: invalid applied_after=%s: %s", applied_after, exc)
         apps = apps_query.all()
 
         total = len(apps)
@@ -2246,13 +2260,17 @@ def batch_score_role(
         default=False,
         description="When true, re-score candidates even if they already have a CV match score.",
     ),
+    applied_after: str | None = Query(
+        default=None,
+        description="ISO date (e.g. 2026-01-01). Only process candidates whose Workable application date is on or after this date.",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Start background batch scoring for a role.
 
     Default behavior scores only unscored applications. include_scored=true enables
-    a full re-score pass for the role.
+    a full re-score pass for the role. applied_after filters to a specific applicant cohort.
     """
     role = get_role(role_id, current_user.organization_id, db)
     if not role_has_job_spec(role):
@@ -2313,14 +2331,14 @@ def batch_score_role(
         thread = threading.Thread(
             target=_run_batch_score,
             args=(role_id, current_user.organization_id),
-            kwargs={"include_scored": include_scored},
+            kwargs={"include_scored": include_scored, "applied_after": applied_after},
             daemon=True,
         )
         thread.start()
     else:
-        from ...tasks.scoring_tasks import batch_score_role
+        from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
 
-        batch_score_role.delay(role_id, include_scored=include_scored)
+        _celery_batch_score_role.delay(role_id, include_scored=include_scored, applied_after=applied_after)
 
     return {
         "status": "started",
@@ -2685,6 +2703,253 @@ def cancel_batch_score(
         "ok": bool(set_ok),
         "role_id": role_id,
         "status": progress.get("status", "idle"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cross-role backfill (fan out batch-score across every role in an org)
+# ---------------------------------------------------------------------------
+
+_BACKFILL_META_KEY = "backfill:meta:{org_id}"
+_BACKFILL_META_TTL = 86400  # 24 hours
+
+
+@router.post("/batch-score-all")
+def batch_score_all_roles(
+    applied_after: str | None = Query(
+        default=None,
+        description="ISO date (e.g. 2026-01-01). Only score candidates whose Workable application date is on or after this date.",
+    ),
+    include_scored: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Fan out batch-score across every active role in the org.
+
+    Each role gets its own ``batch_score_role`` Celery task so they run in
+    parallel (bounded by worker concurrency). Per-role progress is tracked
+    via the existing ``/roles/{role_id}/batch-score/status`` endpoint.
+    The response includes the full role list and per-role target counts so
+    the caller can track progress across all roles.
+    """
+    from ...models.role import Role
+    from ...models.candidate import Candidate
+
+    roles = (
+        db.query(Role)
+        .filter(
+            Role.organization_id == current_user.organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .all()
+    )
+
+    # Count scoreable apps per role (same filter as the task will use)
+    dispatched = []
+    skipped = []
+    for role in roles:
+        if not role_has_job_spec(role):
+            skipped.append({"role_id": role.id, "reason": "no_job_spec"})
+            continue
+
+        count_q = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.role_id == role.id,
+                CandidateApplication.organization_id == current_user.organization_id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+        )
+        if not include_scored:
+            count_q = count_q.filter(CandidateApplication.cv_match_score.is_(None))
+        if applied_after:
+            try:
+                from datetime import timezone as _tz
+                cutoff = datetime.fromisoformat(applied_after)
+                if cutoff.tzinfo is None:
+                    cutoff = cutoff.replace(tzinfo=_tz.utc)
+                count_q = (
+                    count_q
+                    .join(Candidate, CandidateApplication.candidate_id == Candidate.id)
+                    .filter(Candidate.workable_created_at >= cutoff)
+                )
+            except ValueError:
+                raise HTTPException(status_code=400, detail=f"Invalid applied_after date: {applied_after}")
+
+        target_count = count_q.count()
+        if target_count == 0:
+            skipped.append({"role_id": role.id, "reason": "nothing_to_score"})
+            continue
+
+        # Register in per-role progress dict so status endpoint returns data
+        _clear_cancel_flag(_BATCH_SCORE_CANCEL_PREFIX, role.id)
+        batch_started_at = datetime.now(timezone.utc)
+        _batch_score_progress[role.id] = {
+            "total": target_count,
+            "scored": 0,
+            "errors": 0,
+            "status": "running",
+            "include_scored": bool(include_scored),
+            "started_at": batch_started_at,
+        }
+        _write_batch_meta(
+            role.id,
+            total=target_count,
+            started_at=batch_started_at,
+            include_scored=bool(include_scored),
+        )
+
+        if settings.MVP_DISABLE_CELERY:
+            thread = threading.Thread(
+                target=_run_batch_score,
+                args=(role.id, current_user.organization_id),
+                kwargs={"include_scored": include_scored, "applied_after": applied_after},
+                daemon=True,
+            )
+            thread.start()
+        else:
+            from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
+            _celery_batch_score_role.delay(
+                role.id, include_scored=include_scored, applied_after=applied_after
+            )
+
+        dispatched.append({"role_id": role.id, "target": target_count})
+
+    total_target = sum(d["target"] for d in dispatched)
+    logger.info(
+        "batch_score_all_roles: org=%s applied_after=%s dispatched=%d roles total_target=%d",
+        current_user.organization_id, applied_after, len(dispatched), total_target,
+    )
+
+    # Persist backfill summary to Redis for status queries
+    import json as _json
+    client = _redis_client()
+    if client:
+        try:
+            client.set(
+                _BACKFILL_META_KEY.format(org_id=current_user.organization_id),
+                _json.dumps({
+                    "applied_after": applied_after,
+                    "started_at": datetime.now(timezone.utc).isoformat(),
+                    "roles": dispatched,
+                    "total_target": total_target,
+                }),
+                ex=_BACKFILL_META_TTL,
+            )
+        except Exception:
+            pass
+
+    return {
+        "status": "dispatched",
+        "roles_dispatched": len(dispatched),
+        "roles_skipped": len(skipped),
+        "total_target": total_target,
+        "applied_after": applied_after,
+        "dispatched": dispatched,
+        "skipped": skipped,
+    }
+
+
+@router.get("/batch-score-all/status")
+def batch_score_all_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Aggregate status across all roles from the last batch-score-all run."""
+    import json as _json
+    client = _redis_client()
+    meta = None
+    if client:
+        try:
+            raw = client.get(_BACKFILL_META_KEY.format(org_id=current_user.organization_id))
+            if raw:
+                meta = _json.loads(raw)
+        except Exception:
+            pass
+
+    if not meta:
+        return {"status": "no_backfill", "roles": []}
+
+    role_statuses = []
+    total_scored = 0
+    total_pre_screened_out = 0
+    total_errors = 0
+    total_target = int(meta.get("total_target", 0))
+    all_complete = True
+
+    for entry in meta.get("roles", []):
+        role_id = entry["role_id"]
+        progress = _batch_score_progress.get(role_id, {})
+        status = progress.get("status", "idle")
+        started_at = progress.get("started_at")
+
+        if started_at is None:
+            redis_meta = _read_batch_meta(role_id)
+            if redis_meta and redis_meta.get("started_at"):
+                try:
+                    started_at = datetime.fromisoformat(redis_meta["started_at"])
+                    if started_at.tzinfo is None:
+                        started_at = started_at.replace(tzinfo=timezone.utc)
+                except Exception:
+                    pass
+
+        scored = errors = pre_screened_out = 0
+        if started_at is not None:
+            pre_screened_out = (
+                db.query(CvScoreJob)
+                .filter(
+                    CvScoreJob.role_id == role_id,
+                    CvScoreJob.cache_hit == "pre_screen_filtered",
+                    CvScoreJob.finished_at >= started_at,
+                )
+                .count()
+            )
+            scored = (
+                db.query(CvScoreJob)
+                .filter(
+                    CvScoreJob.role_id == role_id,
+                    CvScoreJob.status == SCORE_JOB_DONE,
+                    CvScoreJob.cache_hit != "pre_screen_filtered",
+                    CvScoreJob.finished_at >= started_at,
+                )
+                .count()
+            )
+            errors = (
+                db.query(CvScoreJob)
+                .filter(
+                    CvScoreJob.role_id == role_id,
+                    CvScoreJob.status == SCORE_JOB_ERROR,
+                    CvScoreJob.finished_at >= started_at,
+                )
+                .count()
+            )
+
+        total_scored += scored
+        total_pre_screened_out += pre_screened_out
+        total_errors += errors
+        if status not in ("completed", "cancelled", "failed"):
+            all_complete = False
+
+        role_statuses.append({
+            "role_id": role_id,
+            "target": entry["target"],
+            "scored": scored,
+            "pre_screened_out": pre_screened_out,
+            "errors": errors,
+            "status": status,
+        })
+
+    processed = total_scored + total_errors + total_pre_screened_out
+    return {
+        "status": "completed" if all_complete else "running",
+        "applied_after": meta.get("applied_after"),
+        "started_at": meta.get("started_at"),
+        "total_target": total_target,
+        "total_scored": total_scored,
+        "total_pre_screened_out": total_pre_screened_out,
+        "total_errors": total_errors,
+        "processed": processed,
+        "roles": role_statuses,
     }
 
 
