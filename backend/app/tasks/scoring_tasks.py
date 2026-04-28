@@ -22,7 +22,13 @@ logger = logging.getLogger(__name__)
     max_retries=0,
     queue="scoring",
 )
-def score_application_job(self, application_id: int, *, force_full_score: bool = False) -> dict:
+def score_application_job(
+    self,
+    application_id: int,
+    *,
+    job_id: int | None = None,
+    force_full_score: bool = False,
+) -> dict:
     """Score a single application asynchronously.
 
     The orchestrator wires the cache + Claude call + result persistence;
@@ -30,6 +36,12 @@ def score_application_job(self, application_id: int, *, force_full_score: bool =
     a transient Claude failure should mark the latest job as ``error`` and
     let the recruiter trigger a manual rescore — silent retries would mask
     real issues like a malformed prompt.
+
+    ``job_id`` pins the task to the specific cv_score_jobs row created by
+    enqueue_score, avoiding a race where _latest_job sees an older
+    error/done job because the API-server transaction hasn't committed
+    yet. Falls back to _latest_job for backwards compatibility (legacy
+    enqueues without job_id).
 
     ``force_full_score`` bypasses the pre-screen gate (used when a
     recruiter manually overrides a "pre-screened out" verdict).
@@ -50,11 +62,14 @@ def score_application_job(self, application_id: int, *, force_full_score: bool =
             logger.warning("score_application_job: application_id=%s not found", application_id)
             return {"status": "missing", "application_id": application_id}
 
-        job = _latest_job(db, application_id)
+        if job_id is not None:
+            job = db.query(CvScoreJob).filter(CvScoreJob.id == int(job_id)).first()
+        else:
+            job = _latest_job(db, application_id)
         if job is None:
             logger.warning(
-                "score_application_job: no CvScoreJob row for application_id=%s",
-                application_id,
+                "score_application_job: no CvScoreJob row for application_id=%s job_id=%s",
+                application_id, job_id,
             )
             return {"status": "no_job", "application_id": application_id}
 

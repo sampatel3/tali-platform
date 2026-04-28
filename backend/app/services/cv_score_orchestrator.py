@@ -216,7 +216,18 @@ def enqueue_score(
     else:
         from ..tasks.scoring_tasks import score_application_job
 
-        async_result = score_application_job.delay(application.id, force_full_score=bypass_pre_screen)
+        # Commit BEFORE dispatching so the worker (on a different DB
+        # connection) sees the new pending job. Without this, batch
+        # rescores raced: workers picked up the celery task, queried
+        # _latest_job, found the previous error/done job because the
+        # API server hadn't committed yet, and bailed out as "skipped".
+        db.commit()
+
+        async_result = score_application_job.delay(
+            application.id,
+            job_id=int(job.id),
+            force_full_score=bypass_pre_screen,
+        )
         job.celery_task_id = str(async_result.id)
     return job
 

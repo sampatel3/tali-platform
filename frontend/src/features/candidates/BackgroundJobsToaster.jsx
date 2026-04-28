@@ -137,8 +137,23 @@ export const BackgroundJobsToaster = ({ roleId }) => {
       cancelling,
       cancelled,
       detail: batchTotal > 0
-        ? `${batchScored}/${batchTotal} scored${batchPreScreenedOut ? ` · ${batchPreScreenedOut} pre-screened out` : ''}${batchErrors ? ` · ${batchErrors} error(s)` : ''}`
-        : 'starting…',
+        ? (() => {
+            // Two-phase progress so the user can see how the gate is
+            // working: pre-screen runs first, "no" verdicts skip v9, the
+            // rest get full scoring. Without this surface area the
+            // toaster just says "X/N scored" and the user can't tell
+            // whether the gate is firing.
+            const processed = batchScored + batchErrors + batchPreScreenedOut;
+            const remaining = Math.max(0, batchTotal - processed);
+            const parts = [];
+            parts.push(`${processed}/${batchTotal} processed`);
+            if (batchPreScreenedOut) parts.push(`${batchPreScreenedOut} filtered by pre-screen`);
+            if (batchScored) parts.push(`${batchScored} fully scored`);
+            if (batchErrors) parts.push(`${batchErrors} error(s)`);
+            if (remaining && batchActive) parts.push(`${remaining} remaining`);
+            return parts.join(' · ');
+          })()
+        : 'starting pre-screen…',
       pct,
     });
   }

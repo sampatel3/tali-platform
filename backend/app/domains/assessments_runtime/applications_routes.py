@@ -25,7 +25,7 @@ from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.application_interview import ApplicationInterview
-from ...models.cv_score_job import CvScoreJob, SCORE_JOB_ERROR
+from ...models.cv_score_job import CvScoreJob, SCORE_JOB_DONE, SCORE_JOB_ERROR
 from ...models.organization import Organization
 from ...models.role import Role
 from ...models.task import Task
@@ -2524,15 +2524,27 @@ def batch_score_status(
     pre_screened_out = 0
     if total > 0 and started_at is not None:
         # Count terminal-state jobs for this role since the batch began.
-        # `cv_match_scored_at` is set by `_execute_scoring(_v3)` on success;
-        # `cv_score_jobs.status='error'` covers the failure path.
-        scored = (
-            db.query(CandidateApplication)
+        # ``cv_score_jobs`` is the source of truth — pre-screen-filtered
+        # candidates have ``cache_hit="pre_screen_filtered"`` (those are
+        # NOT counted as fully scored, only as filtered). Successful v9
+        # runs land with status=done and a non-filtered cache_hit. Errors
+        # show up as status=error.
+        pre_screened_out = (
+            db.query(CvScoreJob)
             .filter(
-                CandidateApplication.role_id == role_id,
-                CandidateApplication.organization_id == current_user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-                CandidateApplication.cv_match_scored_at >= started_at,
+                CvScoreJob.role_id == role_id,
+                CvScoreJob.cache_hit == "pre_screen_filtered",
+                CvScoreJob.finished_at >= started_at,
+            )
+            .count()
+        )
+        scored = (
+            db.query(CvScoreJob)
+            .filter(
+                CvScoreJob.role_id == role_id,
+                CvScoreJob.status == SCORE_JOB_DONE,
+                CvScoreJob.cache_hit != "pre_screen_filtered",
+                CvScoreJob.finished_at >= started_at,
             )
             .count()
         )
@@ -2541,15 +2553,6 @@ def batch_score_status(
             .filter(
                 CvScoreJob.role_id == role_id,
                 CvScoreJob.status == SCORE_JOB_ERROR,
-                CvScoreJob.finished_at >= started_at,
-            )
-            .count()
-        )
-        pre_screened_out = (
-            db.query(CvScoreJob)
-            .filter(
-                CvScoreJob.role_id == role_id,
-                CvScoreJob.cache_hit == "pre_screen_filtered",
                 CvScoreJob.finished_at >= started_at,
             )
             .count()
