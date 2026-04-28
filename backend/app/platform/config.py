@@ -210,11 +210,19 @@ class Settings(BaseSettings):
     CV_MATCH_TRACE_LOG_PATH: str = ""
 
     # Two-tier scoring gate: when True, every v3 score is preceded by a
-    # cheap pre-screen LLM call (~$0.0002/CV). "no" verdicts skip the
-    # full v3 call and short-circuit with a "pre_screened_out" cache_hit.
-    # "yes"/"maybe"/"error" fall through to v3 unchanged. Default off.
+    # cheap pre-screen LLM call (~$0.0002/CV). Candidates scoring below
+    # PRE_SCREEN_THRESHOLD skip v3 entirely (marked pre_screen_filtered).
+    # Scores at or above the threshold fall through to full scoring.
+    # Error/parse failures always fall through. Default off.
     # Recruiters override per candidate via enqueue_score(force=True).
     ENABLE_PRE_SCREEN_GATE: bool = False
+
+    # Numeric threshold (0-100) for the pre-screen gate. Candidates whose
+    # pre-screen score is strictly below this value are filtered out without
+    # running the full v3 scoring pipeline. Tune this to filter 10-50% of
+    # the worst-fit profiles while keeping permissive defaults.
+    # Recommended: 30 (catches only clear mismatches).
+    PRE_SCREEN_THRESHOLD: int = 30
 
     # MVP feature flags (default to MVP-safe behavior)
     MVP_DISABLE_STRIPE: bool = True

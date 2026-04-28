@@ -40,6 +40,7 @@ class PreScreenResult:
     model_version: str
     trace_id: str
     cache_hit: bool
+    score: float | None = None  # 0-100 numeric pre-screen score (v2.0+)
 
 
 def compute_pre_screen_cache_key(
@@ -112,6 +113,11 @@ def _cache_get(cache_key: str) -> PreScreenResult | None:
         result = row.result if isinstance(row.result, dict) else {}
         decision = _normalize_decision(str(result.get("decision") or ""))
         reason = str(result.get("reason") or "")
+        raw_score = result.get("score")
+        try:
+            cached_score: float | None = max(0.0, min(100.0, float(raw_score)))
+        except (TypeError, ValueError):
+            cached_score = None
         try:
             row.hit_count = (row.hit_count or 0) + 1
             row.last_hit_at = datetime.now(timezone.utc)
@@ -125,6 +131,7 @@ def _cache_get(cache_key: str) -> PreScreenResult | None:
             model_version=MODEL_VERSION,
             trace_id=str(result.get("trace_id") or ""),
             cache_hit=True,
+            score=cached_score,
         )
     finally:
         session.close()
@@ -152,6 +159,7 @@ def _cache_set(cache_key: str, result: PreScreenResult, score: float | None = No
             score_100=score,
             result={
                 "decision": result.decision,
+                "score": result.score,
                 "reason": result.reason,
                 "trace_id": result.trace_id,
             },
@@ -244,10 +252,21 @@ def run_pre_screen(
     text = _strip_json_fences(raw)
     decision: PreScreenDecision = "error"
     reason = ""
+    parsed_score: float | None = None
     try:
         parsed = json.loads(text)
         if isinstance(parsed, dict):
-            decision = _normalize_decision(str(parsed.get("decision") or ""))
+            # v2.0: numeric score; v1.0 compat: fall back to decision field
+            raw_score = parsed.get("score")
+            if raw_score is not None:
+                try:
+                    parsed_score = max(0.0, min(100.0, float(raw_score)))
+                    decision = "yes" if parsed_score >= 50.0 else "no"
+                except (TypeError, ValueError):
+                    pass
+            if parsed_score is None:
+                # v1.0 cache hit or malformed v2 response — use decision field
+                decision = _normalize_decision(str(parsed.get("decision") or ""))
             reason = str(parsed.get("reason") or "")[:240]
     except json.JSONDecodeError as exc:
         logger.warning("Pre-screen JSON parse failed: %s", exc)
@@ -256,8 +275,8 @@ def run_pre_screen(
 
     elapsed_ms = int((time.monotonic() - started) * 1000)
     logger.info(
-        "Pre-screen verdict: decision=%s elapsed_ms=%d reason=%s",
-        decision, elapsed_ms, reason[:120],
+        "Pre-screen verdict: score=%s decision=%s elapsed_ms=%d reason=%s",
+        parsed_score, decision, elapsed_ms, reason[:120],
     )
 
     result = PreScreenResult(
@@ -267,7 +286,8 @@ def run_pre_screen(
         model_version=MODEL_VERSION,
         trace_id=trace_id,
         cache_hit=False,
+        score=parsed_score,
     )
     if not skip_cache and decision != "error":
-        _cache_set(cache_key, result)
+        _cache_set(cache_key, result, score=parsed_score)
     return result

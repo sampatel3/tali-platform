@@ -422,8 +422,9 @@ def _execute_scoring_v3(
             )
 
     # Two-tier scoring gate. When enabled, the cheap pre-screen runs
-    # first; "no" verdicts skip the expensive v3 call entirely. Recruiter
-    # manual rescores (force_full_score) bypass the gate.
+    # first; candidates scoring below PRE_SCREEN_THRESHOLD skip v3.
+    # Error/parse failures always fall through. Recruiter manual rescores
+    # (force_full_score) bypass the gate entirely.
     if settings.ENABLE_PRE_SCREEN_GATE and not force_full_score:
         from ..cv_matching.runner_pre_screen import (
             PRE_SCREEN_PROMPT_VERSION as PRE_SCREEN_VERSION,
@@ -431,20 +432,27 @@ def _execute_scoring_v3(
         )
 
         pre = run_pre_screen(cv_text, job_spec_text, requirements)
-        if pre.decision == "no":
+        threshold = settings.PRE_SCREEN_THRESHOLD
+        # Only filter when we have a numeric score AND it's below threshold.
+        # None score (parse failure/error) always falls through to v3.
+        if pre.score is not None and pre.score < threshold:
             now = datetime.now(timezone.utc)
             details = {
                 "scoring_version": V3_PROMPT_VERSION,
-                "pre_screen_decision": pre.decision,
+                "pre_screen_score_100": pre.score,
+                "pre_screen_decision": "no",
                 "pre_screen_reason": pre.reason,
                 "pre_screen_trace_id": pre.trace_id,
                 "pre_screen_prompt_version": PRE_SCREEN_VERSION,
-                "summary": f"Pre-screen filtered out: {pre.reason}",
+                "summary": f"Pre-screen filtered: score {pre.score:.0f}/100 (threshold {threshold}). {pre.reason}",
                 "recommendation": "no",
             }
             application.cv_match_score = None
             application.cv_match_details = details
             application.cv_match_scored_at = now
+            # Write pre_screen_score_100 directly so the directory sort and
+            # score display shows the pre-screen score for filtered candidates.
+            application.pre_screen_score_100 = pre.score
             job.cache_hit = "pre_screen_filtered"
             job.status = SCORE_JOB_DONE
             job.finished_at = now
@@ -452,7 +460,7 @@ def _execute_scoring_v3(
                 db,
                 application=application,
                 job=job,
-                score_100=None,
+                score_100=pre.score,
                 recommendation="pre_screened_out",
                 prompt_version=PRE_SCREEN_VERSION,
                 model_version=V3_MODEL_VERSION,

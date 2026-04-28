@@ -86,6 +86,11 @@ def pre_screen_snapshot(app: CandidateApplication) -> dict[str, Any]:
     # v9). Re-running ``compute_role_fit_score`` here would double-count
     # requirements. Treat pre_screen as a pass-through of the aggregated
     # score so the directory list matches the candidate detail page.
+    # For pre-screen-filtered candidates (cv_match_score=None), fall back to
+    # the pre-screen score stored in cv_match_details so they appear in the
+    # directory with their numeric pre-screen score instead of blank.
+    if cv_fit_score is None:
+        cv_fit_score = normalize_score_100(details.get("pre_screen_score_100"))
     pre_screen_score = cv_fit_score
     recommendation = sanitize_text_for_storage(
         str(
