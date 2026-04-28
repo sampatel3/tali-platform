@@ -46,6 +46,16 @@ async def _lifespan(_app: FastAPI):
         register_listeners()
     except Exception:  # pragma: no cover — listener install must never block boot
         logger.exception("Failed to register candidate_graph listeners")
+    # Kick off Graphiti init in a background thread so Neo4j async resources
+    # are created on the shared background event loop before the first real
+    # request arrives. The healthcheck returns "initializing" until ready.
+    try:
+        from .candidate_graph import client as _gc
+        if _gc.is_configured():
+            import threading as _t
+            _t.Thread(target=_gc.get_graphiti, name="graphiti-init", daemon=True).start()
+    except Exception:
+        logger.exception("Failed to start Graphiti background init")
     yield
     # Shutdown — close Graphiti's driver and stop its background loop.
     try:

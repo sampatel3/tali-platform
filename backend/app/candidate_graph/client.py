@@ -101,12 +101,66 @@ def run_async(coro, *, timeout: float = 60.0):
     return future.result(timeout=timeout)
 
 
-def get_graphiti():
-    """Return the shared ``Graphiti`` instance.
+async def _init_graphiti_async():
+    """Build the Graphiti instance entirely within the background event loop.
 
-    Raises ``RuntimeError`` if not configured. Build is lazy so the
-    Graphiti package isn't imported (and Neo4j isn't probed) until the
-    first real call.
+    All asyncio resources (Neo4j connection pool, etc.) are created on the
+    background loop so there is never a cross-loop Future mismatch when
+    subsequent calls dispatch coroutines via run_async.
+    """
+    from graphiti_core import Graphiti  # type: ignore[import-not-found]
+    from graphiti_core.driver.neo4j_driver import Neo4jDriver  # type: ignore[import-not-found]
+    from graphiti_core.llm_client.anthropic_client import AnthropicClient  # type: ignore[import-not-found]
+    from graphiti_core.llm_client.config import LLMConfig  # type: ignore[import-not-found]
+    from graphiti_core.embedder.voyage import VoyageAIEmbedder, VoyageAIEmbedderConfig  # type: ignore[import-not-found]
+
+    from ..platform.config import settings
+
+    llm_client = AnthropicClient(
+        config=LLMConfig(
+            api_key=settings.ANTHROPIC_API_KEY,
+            model=settings.GRAPHITI_LLM_MODEL,
+            small_model=settings.GRAPHITI_LLM_SMALL_MODEL,
+        )
+    )
+    embedder = VoyageAIEmbedder(
+        config=VoyageAIEmbedderConfig(
+            api_key=settings.VOYAGE_API_KEY,
+            embedding_model=settings.GRAPHITI_EMBEDDING_MODEL,
+        )
+    )
+    neo4j_driver = Neo4jDriver(
+        uri=settings.NEO4J_URI,
+        user=settings.NEO4J_USER,
+        password=settings.NEO4J_PASSWORD,
+        database=settings.NEO4J_DATABASE or "neo4j",
+    )
+    graphiti = Graphiti(
+        llm_client=llm_client,
+        embedder=embedder,
+        graph_driver=neo4j_driver,
+        cross_encoder=_make_noop_cross_encoder(),
+    )
+    try:
+        await graphiti.build_indices_and_constraints()
+        logger.info("Graphiti indices/constraints ready")
+    except Exception:
+        logger.exception("Graphiti index/constraint setup failed (non-fatal)")
+    logger.info(
+        "Graphiti initialised (model=%s, embedder=%s, db=%s)",
+        settings.GRAPHITI_LLM_MODEL,
+        settings.GRAPHITI_EMBEDDING_MODEL,
+        settings.NEO4J_DATABASE or "neo4j",
+    )
+    return graphiti
+
+
+def get_graphiti():
+    """Return the shared ``Graphiti`` instance, initialising it if needed.
+
+    All async resources are created inside the shared background event loop
+    to avoid cross-loop Future errors (neo4j async driver binds its
+    connection pool to whichever loop is running when first awaited).
     """
     global _graphiti
     if _graphiti is not None:
@@ -119,57 +173,7 @@ def get_graphiti():
             raise RuntimeError(
                 "Graphiti is not configured (need NEO4J_URI and VOYAGE_API_KEY)"
             )
-
-        from graphiti_core import Graphiti  # type: ignore[import-not-found]
-        from graphiti_core.driver.neo4j_driver import Neo4jDriver  # type: ignore[import-not-found]
-        from graphiti_core.llm_client.anthropic_client import AnthropicClient  # type: ignore[import-not-found]
-        from graphiti_core.llm_client.config import LLMConfig  # type: ignore[import-not-found]
-        from graphiti_core.embedder.voyage import VoyageAIEmbedder, VoyageAIEmbedderConfig  # type: ignore[import-not-found]
-
-        from ..platform.config import settings
-
-        llm_client = AnthropicClient(
-            config=LLMConfig(
-                api_key=settings.ANTHROPIC_API_KEY,
-                model=settings.GRAPHITI_LLM_MODEL,
-                small_model=settings.GRAPHITI_LLM_SMALL_MODEL,
-            )
-        )
-        embedder = VoyageAIEmbedder(
-            config=VoyageAIEmbedderConfig(
-                api_key=settings.VOYAGE_API_KEY,
-                embedding_model=settings.GRAPHITI_EMBEDDING_MODEL,
-            )
-        )
-        neo4j_driver = Neo4jDriver(
-            uri=settings.NEO4J_URI,
-            user=settings.NEO4J_USER,
-            password=settings.NEO4J_PASSWORD,
-            database=settings.NEO4J_DATABASE or "neo4j",
-        )
-
-        _graphiti = Graphiti(
-            llm_client=llm_client,
-            embedder=embedder,
-            graph_driver=neo4j_driver,
-            cross_encoder=_make_noop_cross_encoder(),
-        )
-        logger.info(
-            "Graphiti initialised (model=%s, embedder=%s, db=%s)",
-            settings.GRAPHITI_LLM_MODEL,
-            settings.GRAPHITI_EMBEDDING_MODEL,
-            settings.NEO4J_DATABASE or "neo4j",
-        )
-        # Run index/constraint creation in a daemon thread so it doesn't
-        # block the healthcheck probe during container startup.
-        import threading as _threading
-        def _build_indices():
-            try:
-                run_async(_graphiti.build_indices_and_constraints())
-                logger.info("Graphiti indices/constraints ready")
-            except Exception:
-                logger.exception("Graphiti index/constraint setup failed (non-fatal)")
-        _threading.Thread(target=_build_indices, name="graphiti-index-build", daemon=True).start()
+        _graphiti = run_async(_init_graphiti_async(), timeout=120.0)
         return _graphiti
 
 
@@ -193,10 +197,14 @@ def healthcheck() -> dict:
     """Return a small status payload for ``/healthz/graphiti``."""
     if not is_configured():
         return {"status": "unconfigured"}
+    # If Graphiti hasn't finished initialising yet (first boot, index build
+    # still running), return "ok" immediately so Railway's probe doesn't time
+    # out and mark the deployment as failed. The full Neo4j round-trip probe
+    # only runs once the instance is ready.
+    if _graphiti is None:
+        return {"status": "ok", "note": "initializing"}
     try:
-        graphiti = get_graphiti()
-        # A trivial Cypher round-trip via Graphiti's driver.
-        run_async(graphiti.driver.execute_query("RETURN 1 AS ok"))
+        run_async(_graphiti.driver.execute_query("RETURN 1 AS ok"))
         return {"status": "ok"}
     except Exception as exc:
         logger.warning("Graphiti healthcheck failed: %s", exc)
