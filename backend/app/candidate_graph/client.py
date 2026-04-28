@@ -154,17 +154,22 @@ def get_graphiti():
             graph_driver=neo4j_driver,
             cross_encoder=_make_noop_cross_encoder(),
         )
-        # First-time index/constraint creation. Idempotent — safe on every boot.
-        try:
-            run_async(_graphiti.build_indices_and_constraints())
-        except Exception:
-            logger.exception("Graphiti index/constraint setup failed (non-fatal)")
         logger.info(
             "Graphiti initialised (model=%s, embedder=%s, db=%s)",
             settings.GRAPHITI_LLM_MODEL,
             settings.GRAPHITI_EMBEDDING_MODEL,
             settings.NEO4J_DATABASE or "neo4j",
         )
+        # Run index/constraint creation in a daemon thread so it doesn't
+        # block the healthcheck probe during container startup.
+        import threading as _threading
+        def _build_indices():
+            try:
+                run_async(_graphiti.build_indices_and_constraints())
+                logger.info("Graphiti indices/constraints ready")
+            except Exception:
+                logger.exception("Graphiti index/constraint setup failed (non-fatal)")
+        _threading.Thread(target=_build_indices, name="graphiti-index-build", daemon=True).start()
         return _graphiti
 
 

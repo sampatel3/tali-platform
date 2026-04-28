@@ -99,15 +99,22 @@ def sync_organization(
         "events": {"total": 0, "episodes": 0},
     }
 
+    from datetime import datetime, timezone
+
     cand_q = (
         db.query(Candidate)
         .filter(Candidate.organization_id == organization_id)
         .filter(Candidate.deleted_at.is_(None))
     )
     if since_year is not None:
-        from datetime import datetime, timezone
-        cand_q = cand_q.filter(
-            Candidate.created_at >= datetime(since_year, 1, 1, tzinfo=timezone.utc)
+        # Filter to candidates who applied in or after since_year.
+        cutoff = datetime(since_year, 1, 1, tzinfo=timezone.utc)
+        cand_q = (
+            cand_q
+            .join(CandidateApplication, CandidateApplication.candidate_id == Candidate.id)
+            .filter(CandidateApplication.created_at >= cutoff)
+            .filter(CandidateApplication.deleted_at.is_(None))
+            .distinct()
         )
     candidates = cand_q.all()
     out["candidates"]["total"] = len(candidates)
