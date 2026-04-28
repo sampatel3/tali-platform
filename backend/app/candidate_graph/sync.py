@@ -101,20 +101,29 @@ def sync_organization(
 
     from datetime import datetime, timezone
 
-    cand_q = (
-        db.query(Candidate)
-        .filter(Candidate.organization_id == organization_id)
-        .filter(Candidate.deleted_at.is_(None))
-    )
     if since_year is not None:
-        # Filter to candidates who applied in or after since_year.
+        # Filter to candidates who submitted an application in or after since_year.
+        # Use a subquery on candidate_id (integer) to avoid SELECT DISTINCT on json
+        # columns in the candidates table (postgres has no equality op for json).
         cutoff = datetime(since_year, 1, 1, tzinfo=timezone.utc)
-        cand_q = (
-            cand_q
-            .join(CandidateApplication, CandidateApplication.candidate_id == Candidate.id)
+        applied_sub = (
+            db.query(CandidateApplication.candidate_id)
+            .filter(CandidateApplication.organization_id == organization_id)
             .filter(CandidateApplication.created_at >= cutoff)
             .filter(CandidateApplication.deleted_at.is_(None))
             .distinct()
+            .subquery()
+        )
+        cand_q = (
+            db.query(Candidate)
+            .filter(Candidate.id.in_(applied_sub))
+            .filter(Candidate.deleted_at.is_(None))
+        )
+    else:
+        cand_q = (
+            db.query(Candidate)
+            .filter(Candidate.organization_id == organization_id)
+            .filter(Candidate.deleted_at.is_(None))
         )
     candidates = cand_q.all()
     out["candidates"]["total"] = len(candidates)
