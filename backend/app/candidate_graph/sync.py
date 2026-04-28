@@ -78,7 +78,12 @@ def sync_event(event: CandidateApplicationEvent) -> int:
     return episode_module.dispatch([episode])
 
 
-def sync_organization(db: Session, organization_id: int) -> dict:
+def sync_organization(
+    db: Session,
+    organization_id: int,
+    *,
+    since_year: int | None = None,
+) -> dict:
     """Backfill: ingest every candidate + every linked interview for one org.
 
     Returns ``{candidates: {total, succeeded, episodes}, interviews:
@@ -94,12 +99,17 @@ def sync_organization(db: Session, organization_id: int) -> dict:
         "events": {"total": 0, "episodes": 0},
     }
 
-    candidates = (
+    cand_q = (
         db.query(Candidate)
         .filter(Candidate.organization_id == organization_id)
         .filter(Candidate.deleted_at.is_(None))
-        .all()
     )
+    if since_year is not None:
+        from datetime import datetime, timezone
+        cand_q = cand_q.filter(
+            Candidate.created_at >= datetime(since_year, 1, 1, tzinfo=timezone.utc)
+        )
+    candidates = cand_q.all()
     out["candidates"]["total"] = len(candidates)
     for candidate in candidates:
         sent = sync_candidate(candidate, db=db, include_cv_text=True)
@@ -138,7 +148,7 @@ def sync_organization(db: Session, organization_id: int) -> dict:
     return out
 
 
-def sync_all_organizations(db: Session) -> dict:
+def sync_all_organizations(db: Session, *, since_year: int | None = None) -> dict:
     """Backfill every organisation. Used by ``backfill --all-orgs``."""
     if not graph_client.is_configured():
         return {"status": "unconfigured"}
@@ -151,12 +161,13 @@ def sync_all_organizations(db: Session) -> dict:
     ]
     aggregate = {
         "orgs": len(org_ids),
+        "since_year": since_year,
         "candidates": {"total": 0, "succeeded": 0, "episodes": 0},
         "interviews": {"total": 0, "episodes": 0},
         "events": {"total": 0, "episodes": 0},
     }
     for org_id in org_ids:
-        result = sync_organization(db, org_id)
+        result = sync_organization(db, org_id, since_year=since_year)
         if not isinstance(result, dict) or "candidates" not in result:
             continue
         for key in ("candidates", "interviews", "events"):

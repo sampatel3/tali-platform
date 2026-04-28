@@ -364,8 +364,9 @@ def graphiti_health():
 def graphiti_backfill_all(request: Request):
     """Trigger a full Graphiti backfill for all organisations.
 
-    Returns 202 immediately; backfill runs as a background thread on the
-    server. Check Railway logs for progress and final summary.
+    Optional query param: ``since_year=2026`` limits to candidates created
+    on or after 1 Jan of that year. Returns 202 immediately; backfill runs
+    as a background thread. Check Railway logs for progress and final summary.
     """
     from .platform.config import settings
     from .platform.database import SessionLocal
@@ -377,12 +378,15 @@ def graphiti_backfill_all(request: Request):
     if not admin_secret or provided != admin_secret:
         raise HTTPException(status_code=403, detail="Forbidden")
 
+    since_year_str = request.query_params.get("since_year")
+    since_year = int(since_year_str) if since_year_str and since_year_str.isdigit() else None
+
     def _run():
         import logging
         log = logging.getLogger("taali.candidate_graph.backfill")
         db = SessionLocal()
         try:
-            result = sync_all_organizations(db)
+            result = sync_all_organizations(db, since_year=since_year)
             log.info("Graphiti backfill complete: %s", result)
         except Exception:
             log.exception("Graphiti backfill failed")
@@ -390,7 +394,11 @@ def graphiti_backfill_all(request: Request):
             db.close()
 
     threading.Thread(target=_run, name="graphiti-backfill", daemon=True).start()
-    return {"status": "started", "message": "Backfill running in background — check Railway logs for progress"}
+    return {
+        "status": "started",
+        "since_year": since_year,
+        "message": "Backfill running in background — check Railway logs for progress",
+    }
 
 
 @app.post("/admin/graphiti/test-episode")
