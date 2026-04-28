@@ -33,6 +33,10 @@ celery_app.conf.update(
             "task": "app.tasks.assessment_tasks.sync_workable_orgs",
             "schedule": 1800.0,
         },
+        "sync-starred-roles-every-15-minutes": {
+            "task": "app.tasks.assessment_tasks.sync_starred_roles",
+            "schedule": 900.0,
+        },
         "assessment-expiry-reminders-daily": {
             "task": "app.tasks.assessment_tasks.send_assessment_expiry_reminders",
             "schedule": 86400.0,

@@ -243,6 +243,72 @@ def update_role(
     return role_to_response(role)
 
 
+@router.post("/roles/{role_id}/star", response_model=RoleResponse)
+def star_role(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Mark a role as starred for auto-sync + real-time scoring.
+
+    Side-effect: kick off an immediate Workable sync filtered to this role
+    so the recruiter sees fresh candidates within seconds rather than
+    waiting up to 15 min for the next Beat tick. Skipped silently for
+    manual roles (no workable_job_id) or when another sync is already
+    running for the org.
+    """
+    role = get_role(role_id, current_user.organization_id, db)
+    role.starred_for_auto_sync = True
+    try:
+        db.commit()
+        db.refresh(role)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to star role")
+
+    if (role.source == "workable") and (role.workable_job_id or "").strip():
+        try:
+            from ..workable_sync.routes import kick_off_filtered_sync
+
+            org = (
+                db.query(Organization)
+                .filter(Organization.id == current_user.organization_id)
+                .first()
+            )
+            if org is not None:
+                kick_off_filtered_sync(
+                    db,
+                    org=org,
+                    job_shortcodes=[str(role.workable_job_id).strip()],
+                    requested_by_user_id=current_user.id,
+                    mode="full",
+                )
+        except Exception:
+            logger.exception(
+                "Failed to kick off immediate sync after starring role_id=%s",
+                role.id,
+            )
+
+    return role_to_response(role)
+
+
+@router.delete("/roles/{role_id}/star", response_model=RoleResponse)
+def unstar_role(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    role = get_role(role_id, current_user.organization_id, db)
+    role.starred_for_auto_sync = False
+    try:
+        db.commit()
+        db.refresh(role)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to unstar role")
+    return role_to_response(role)
+
+
 @router.delete("/roles/{role_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_role(
     role_id: int,

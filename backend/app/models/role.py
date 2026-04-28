@@ -40,6 +40,13 @@ class Role(Base):
     workable_actor_member_id = Column(String, nullable=True)
     workable_disqualify_reason_id = Column(String, nullable=True)
     auto_reject_note_template = Column(Text, nullable=True)
+    starred_for_auto_sync = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+        default=False,
+        index=True,
+    )
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
