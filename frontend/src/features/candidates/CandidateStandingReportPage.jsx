@@ -595,6 +595,9 @@ const CvMatchRail = ({
   onJumpToPrep,
 }) => {
   const roleFitScore = reportModel?.summaryModel?.roleFitScore;
+  // Don't truncate — the user explicitly wants every recruiter
+  // requirement visible on their own report. Lists are pre-sorted by
+  // recruiter-first then priority.
   const matchedItems = (
     matchedRequirements.length
       ? matchedRequirements
@@ -602,7 +605,7 @@ const CvMatchRail = ({
         requirement: skill,
         evidence_quote: 'Skill matched in the candidate profile.',
       }))
-  ).slice(0, 6);
+  );
   const gapItems = (
     missingRequirements.length
       ? missingRequirements
@@ -610,7 +613,7 @@ const CvMatchRail = ({
         requirement: skill,
         evidence_quote: 'Probe this in the interview loop.',
       }))
-  ).slice(0, 5);
+  );
   const requirementTotal = Array.isArray(cvMatchDetails?.requirements_assessment)
     ? cvMatchDetails.requirements_assessment.length
     : matchedItems.length + gapItems.length;
@@ -937,21 +940,34 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       setBusyAction('');
     }
   }, [application?.id, application?.role_id, loadStandingReport, rolesApi, showToast]);
+  // Sort so recruiter-added criteria (id prefix ``crit_``) surface
+  // ahead of JD-extracted ones (``jd_req_``), then by priority. Show
+  // every requirement — silently truncating recruiter must-haves at 4
+  // was hiding the user's own criteria from their own report.
+  const PRIORITY_RANK = { must_have: 0, strong_preference: 1, nice_to_have: 2, constraint: 3 };
+  const sortRequirements = (items) => [...items].sort((a, b) => {
+    const aRecruiter = String(a?.requirement_id || '').startsWith('crit_') ? 0 : 1;
+    const bRecruiter = String(b?.requirement_id || '').startsWith('crit_') ? 0 : 1;
+    if (aRecruiter !== bRecruiter) return aRecruiter - bRecruiter;
+    const aPri = PRIORITY_RANK[String(a?.priority || '').toLowerCase()] ?? 4;
+    const bPri = PRIORITY_RANK[String(b?.priority || '').toLowerCase()] ?? 4;
+    return aPri - bPri;
+  });
   const matchedRequirements = useMemo(() => {
     const requirements = Array.isArray(cvMatchDetails?.requirements_assessment)
       ? cvMatchDetails.requirements_assessment
       : [];
-    return requirements
-      .filter((item) => String(item?.status || '').toLowerCase() === 'met')
-      .slice(0, 4);
+    return sortRequirements(
+      requirements.filter((item) => String(item?.status || '').toLowerCase() === 'met')
+    );
   }, [cvMatchDetails]);
   const missingRequirements = useMemo(() => {
     const requirements = Array.isArray(cvMatchDetails?.requirements_assessment)
       ? cvMatchDetails.requirements_assessment
       : [];
-    return requirements
-      .filter((item) => String(item?.status || '').toLowerCase() !== 'met')
-      .slice(0, 4);
+    return sortRequirements(
+      requirements.filter((item) => String(item?.status || '').toLowerCase() !== 'met')
+    );
   }, [cvMatchDetails]);
   const interviewQuestions = useMemo(() => {
     const override = application?.interview_prep;
@@ -1200,22 +1216,34 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             <span><b>Interview view.</b> You are seeing the panel-safe version of this Taali report.</span>
           </div>
         ) : null}
-        <button
-          type="button"
-          className="standing-back back"
-          data-internal-only
-          onClick={() => {
-            if (backFromRoleId != null) {
-              onNavigate('job-pipeline', { roleId: backFromRoleId });
-              return;
-            }
-            onNavigate('candidates');
-          }}
-        >
-          {backFromRoleId != null
-            ? `← Back to job: ${application?.role_name || 'role'}`
-            : '← Back to candidates'}
-        </button>
+        {(() => {
+          // Prefer the role on the application itself — it's always
+          // populated when the candidate is attached to a role, so the
+          // back link works even when the user reloads /candidates/N
+          // and loses the ?from=jobs/X query param. Fall back to the
+          // ?from param (kept for legacy deep-links that pass it
+          // explicitly), and finally to the all-candidates list.
+          const targetRoleId = application?.role_id ?? backFromRoleId ?? null;
+          const targetRoleName = application?.role_name || 'job';
+          return (
+            <button
+              type="button"
+              className="standing-back back"
+              data-internal-only
+              onClick={() => {
+                if (targetRoleId != null) {
+                  onNavigate('job-pipeline', { roleId: targetRoleId });
+                  return;
+                }
+                onNavigate('candidates');
+              }}
+            >
+              {targetRoleId != null
+                ? `← Back to job: ${targetRoleName}`
+                : '← Back to candidates'}
+            </button>
+          );
+        })()}
         <div className="kicker" style={{ marginBottom: '10px' }}>Candidate standing report</div>
 
         <div className="report-hero">

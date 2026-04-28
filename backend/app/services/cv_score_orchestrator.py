@@ -168,12 +168,23 @@ def enqueue_score(
     application: CandidateApplication,
     *,
     force: bool = False,
+    bypass_pre_screen: bool = False,
 ) -> CvScoreJob | None:
     """Queue a CV score for an application.
 
     Returns the new job, or the existing active job if one is already
     pending/running and ``force`` is False. Returns ``None`` when the
     application can't be scored (no CV, no spec, no API key).
+
+    ``force`` only controls the duplicate-job check (allow re-enqueue
+    even if a pending/running job already exists). It does NOT bypass
+    the pre-screen gate — historically the two were conflated, which
+    meant batch rescores accidentally ran the expensive v9 prompt on
+    every candidate even when ``ENABLE_PRE_SCREEN_GATE`` was on.
+
+    ``bypass_pre_screen`` is the explicit opt-out for the pre-screen
+    gate: use only when a recruiter has reviewed and wants a full v9
+    score regardless of the cheap filter's verdict.
     """
     if not application or application.id is None:
         return None
@@ -201,11 +212,11 @@ def enqueue_score(
     if settings.MVP_DISABLE_CELERY:
         # Run inline so unit/dev environments don't need a broker. The job
         # object is mutated in place by _execute_scoring; the caller commits.
-        _run_score_job_inline(db, job_id=job.id, force_full_score=force)
+        _run_score_job_inline(db, job_id=job.id, force_full_score=bypass_pre_screen)
     else:
         from ..tasks.scoring_tasks import score_application_job
 
-        async_result = score_application_job.delay(application.id, force_full_score=force)
+        async_result = score_application_job.delay(application.id, force_full_score=bypass_pre_screen)
         job.celery_task_id = str(async_result.id)
     return job
 

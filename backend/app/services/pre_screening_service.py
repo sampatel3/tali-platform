@@ -78,15 +78,15 @@ def pre_screen_snapshot(app: CandidateApplication) -> dict[str, Any]:
     details = app.cv_match_details if isinstance(app.cv_match_details, dict) else {}
     cv_fit_score = normalize_score_100(app.cv_match_score)
     requirements_fit_score = normalize_score_100(
-        getattr(app, "requirements_fit_score_100", None)
-        if getattr(app, "requirements_fit_score_100", None) is not None
-        else details.get("requirements_match_score_100")
+        details.get("requirements_match_score_100")
+        or details.get("requirements_match_score")
     )
-    pre_screen_score = normalize_score_100(
-        getattr(app, "pre_screen_score_100", None)
-        if getattr(app, "pre_screen_score_100", None) is not None
-        else compute_role_fit_score(cv_fit_score, requirements_fit_score)
-    )
+    # ``cv_match_score`` is already the aggregated role_fit score
+    # written by ``cv_score_orchestrator`` (= 0.40·cv_fit + 0.60·req in
+    # v9). Re-running ``compute_role_fit_score`` here would double-count
+    # requirements. Treat pre_screen as a pass-through of the aggregated
+    # score so the directory list matches the candidate detail page.
+    pre_screen_score = cv_fit_score
     recommendation = sanitize_text_for_storage(
         str(
             getattr(app, "pre_screen_recommendation", None)
