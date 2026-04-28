@@ -1,32 +1,27 @@
 """Deterministic aggregation over LLM-emitted CV match data.
 
-Source of truth: ``backend/app/cv_matching/calibration.md``.
-
-The LLM produces only ``skills_match_score``, ``experience_relevance_score``,
-and per-requirement assessments. Everything else is derived here. This split
-eliminates LLM variance on multi-factor weighted arithmetic and makes scores
-auditable.
-
-Functions are pure: same inputs always produce same outputs. Unit-tested in
-``backend/tests/test_cv_matching_aggregation.py`` against the worked example
-and edge cases.
+The LLM produces six dimension scores + per-requirement assessments.
+Everything else is derived here.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable
 
-from .schemas import Priority, Recommendation, RequirementAssessment, Status
+from .schemas import (
+    DimensionScores,
+    Priority,
+    Recommendation,
+    RequirementAssessment,
+    Status,
+)
 
-# Priority weights for non-constraint requirements. Constraints are handled
-# separately via floors below.
 _PRIORITY_WEIGHTS: dict[Priority, float] = {
     Priority.MUST_HAVE: 0.70,
     Priority.STRONG_PREFERENCE: 0.25,
     Priority.NICE_TO_HAVE: 0.05,
 }
 
-# Status multipliers applied to priority weights.
 _STATUS_WEIGHTS: dict[Status, float] = {
     Status.MET: 1.0,
     Status.PARTIALLY_MET: 0.5,
@@ -34,10 +29,6 @@ _STATUS_WEIGHTS: dict[Status, float] = {
     Status.MISSING: 0.0,
 }
 
-# Match-tier multipliers (v4 only). Applied on top of priority × status.
-# v3 assessments have no match_tier attribute, so the helper below
-# returns 1.0 for them — v3 aggregation results are byte-identical to
-# the pre-v4 implementation.
 _TIER_WEIGHTS: dict[str, float] = {
     "exact": 1.0,
     "strong_substitute": 0.85,
@@ -46,40 +37,45 @@ _TIER_WEIGHTS: dict[str, float] = {
     "missing": 0.0,
 }
 
-
-def _tier_multiplier(assessment) -> float:
-    tier = getattr(assessment, "match_tier", None)
-    if tier is None:
-        return 1.0  # v3 path — no tier, full credit
-    return _TIER_WEIGHTS.get(tier, 1.0)
-
-# Floor caps when disqualifying requirements/constraints fail.
 _CONSTRAINT_FLOOR = 30.0
 _MUST_HAVE_FLOOR = 40.0
 
-# Recommendation thresholds on role_fit_score.
 _STRONG_YES_THRESHOLD = 85.0
 _YES_THRESHOLD = 70.0
 _LEAN_NO_THRESHOLD = 50.0
+
+
+_DEFAULT_DIMENSION_WEIGHTS = {
+    "skills_coverage": 0.25,
+    "skills_depth": 0.20,
+    "title_trajectory": 0.15,
+    "seniority_alignment": 0.15,
+    "industry_match": 0.15,
+    "tenure_pattern": 0.10,
+}
 
 
 def _is_unfulfilled(status: Status) -> bool:
     return status in (Status.MISSING, Status.UNKNOWN)
 
 
+def _tier_multiplier(assessment) -> float:
+    return _TIER_WEIGHTS.get(getattr(assessment, "match_tier", "exact"), 1.0)
+
+
 def compute_requirements_match_score(
     assessments: Iterable[RequirementAssessment],
 ) -> float:
-    """Weighted average across requirements with priority+status weights.
+    """Weighted average across requirements with priority × status × tier weights.
 
-    Algorithm (from calibration.md):
+    Algorithm:
       1. total_weight = Σ priority_weight over non-constraint requirements
-      2. earned_weight = Σ (priority_weight × status_weight) over same set
+      2. earned_weight = Σ (priority_weight × status_weight × tier_weight) over same set
       3. base = (earned_weight / total_weight) × 100
-      4. apply caps: if any disqualifying constraint missing/unknown → cap at 30;
-         if any disqualifying must_have missing/unknown → cap at 40
+      4. apply caps: disqualifying constraint missing → ≤ 30; disqualifying
+         must_have missing → ≤ 40
 
-    Edge: if no non-constraint requirements (or total_weight is 0), return 50.0.
+    Edge: if no non-constraint requirements (or total_weight == 0), return 50.0.
     """
     assessments_list = list(assessments)
 
@@ -99,10 +95,8 @@ def compute_requirements_match_score(
 
     score = (earned_weight / total_weight) * 100.0
 
-    # Floors are caps from above when disqualifying gates fail.
     has_failed_disq_constraint = any(
-        a.priority == Priority.CONSTRAINT
-        and _is_unfulfilled(a.status)
+        a.priority == Priority.CONSTRAINT and _is_unfulfilled(a.status)
         for a in assessments_list
     )
     has_failed_disq_must_have = any(
@@ -121,31 +115,16 @@ def compute_requirements_match_score(
 def compute_cv_fit(
     skills_match_score: float, experience_relevance_score: float
 ) -> float:
-    """Simple average of the two LLM-produced sub-scores (v3 / v4.1)."""
+    """Legacy two-arg cv_fit (simple average). Kept for backwards-compatible
+    callers; the dimension-driven version below is the active path."""
     return round((skills_match_score + experience_relevance_score) / 2.0, 2)
 
 
-_DEFAULT_DIMENSION_WEIGHTS = {
-    "skills_coverage": 0.25,
-    "skills_depth": 0.20,
-    "title_trajectory": 0.15,
-    "seniority_alignment": 0.15,
-    "industry_match": 0.15,
-    "tenure_pattern": 0.10,
-}
-
-
-def compute_cv_fit_v4_2(
-    dimension_scores,
+def compute_cv_fit_from_dimensions(
+    dimension_scores: DimensionScores | None,
     weights: dict[str, float] | None = None,
 ) -> float:
-    """v4.2 cv_fit derived from six dimension scores.
-
-    ``weights`` is a per-archetype dict from the rubric YAML. When
-    None, the default weighting is used. Missing keys default to the
-    six-dimension default; weights are renormalised to sum to 1.0
-    before applying.
-    """
+    """Six-dimension weighted average for cv_fit. None → 0.0."""
     if dimension_scores is None:
         return 0.0
     base_weights = {**_DEFAULT_DIMENSION_WEIGHTS, **(weights or {})}
@@ -161,16 +140,16 @@ def compute_cv_fit_v4_2(
     return round(weighted / total, 2)
 
 
-def derive_v3_compat_scores(dimension_scores) -> tuple[float, float]:
-    """Project six v4.2 dimensions back onto the v3 (skills, experience) pair.
+def derive_v3_compat_scores(
+    dimension_scores: DimensionScores | None,
+) -> tuple[float, float]:
+    """Project six dimensions back onto the legacy (skills, experience) pair.
 
     skills_match_score          = mean(skills_coverage, skills_depth)
     experience_relevance_score  = mean(title_trajectory, seniority_alignment,
                                        industry_match, tenure_pattern)
 
-    These are the legacy fields some callers still read; populating
-    them from the v4.2 dimensions keeps consumers like
-    ``role_support.py`` working without conditional code.
+    Kept so existing consumers (``role_support.py`` etc.) continue to work.
     """
     if dimension_scores is None:
         return 0.0, 0.0
@@ -185,12 +164,7 @@ def derive_v3_compat_scores(dimension_scores) -> tuple[float, float]:
 
 
 def compute_role_fit(cv_fit: float, requirements_match: float) -> float:
-    """role_fit = 0.40 × cv_fit + 0.60 × requirements_match.
-
-    Note: this is the cv_match_v3.0 weighting per ``calibration.md``. The
-    legacy ``backend/app/services/taali_scoring.py`` uses 50/50 — that path
-    is unchanged.
-    """
+    """role_fit = 0.40 × cv_fit + 0.60 × requirements_match."""
     return round(0.40 * cv_fit + 0.60 * requirements_match, 2)
 
 
@@ -200,20 +174,11 @@ def derive_recommendation(
     has_failed_constraint: bool,
     has_missing_must_have: bool,
 ) -> Recommendation:
-    """Hard rules first (constraint failures), then score thresholds.
-
-    Args:
-        role_fit: aggregated role-fit score, 0-100.
-        has_failed_constraint: any disqualifying constraint missing/unknown.
-        has_missing_must_have: any must_have missing/unknown (regardless of
-            disqualifying flag — the calibration says any missing must_have
-            caps the recommendation at LEAN_NO).
-    """
+    """Hard rules first (constraint failures), then score thresholds."""
     if has_failed_constraint:
         return Recommendation.NO
 
     if has_missing_must_have:
-        # Cap at LEAN_NO. If the score would otherwise yield NO, leave NO.
         if role_fit < _LEAN_NO_THRESHOLD:
             return Recommendation.NO
         return Recommendation.LEAN_NO
@@ -229,18 +194,23 @@ def derive_recommendation(
 
 def aggregate(
     *,
-    skills_match_score: float,
-    experience_relevance_score: float,
+    dimension_scores: DimensionScores | None,
     assessments: Iterable[RequirementAssessment],
-) -> tuple[float, float, float, Recommendation]:
+    archetype_weights: dict[str, float] | None = None,
+) -> tuple[float, float, float, float, float, Recommendation]:
     """Run the full aggregation chain.
 
-    Returns (requirements_match, cv_fit, role_fit, recommendation).
+    Returns (skills_match, experience_relevance, requirements_match,
+    cv_fit, role_fit, recommendation).
+
+    skills_match + experience_relevance are derived from the dimensions
+    for legacy-consumer compatibility.
     """
     assessments_list = list(assessments)
     requirements_match = compute_requirements_match_score(assessments_list)
-    cv_fit = compute_cv_fit(skills_match_score, experience_relevance_score)
+    cv_fit = compute_cv_fit_from_dimensions(dimension_scores, archetype_weights)
     role_fit = compute_role_fit(cv_fit, requirements_match)
+    skills_match, experience_relevance = derive_v3_compat_scores(dimension_scores)
 
     has_failed_constraint = any(
         a.priority == Priority.CONSTRAINT and _is_unfulfilled(a.status)
@@ -256,4 +226,11 @@ def aggregate(
         has_failed_constraint=has_failed_constraint,
         has_missing_must_have=has_missing_must_have,
     )
-    return requirements_match, cv_fit, role_fit, recommendation
+    return (
+        skills_match,
+        experience_relevance,
+        requirements_match,
+        cv_fit,
+        role_fit,
+        recommendation,
+    )

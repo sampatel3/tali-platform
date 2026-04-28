@@ -45,17 +45,27 @@ def _valid_response_json() -> str:
     return json.dumps(
         {
             "prompt_version": PROMPT_VERSION,
-            "skills_match_score": 90,
-            "experience_relevance_score": 85,
+            "dimension_scores": {
+                "skills_coverage": 90.0,
+                "skills_depth": 85.0,
+                "title_trajectory": 80.0,
+                "seniority_alignment": 80.0,
+                "industry_match": 80.0,
+                "tenure_pattern": 80.0,
+            },
+            "skills_match_score": 0,
+            "experience_relevance_score": 0,
             "requirements_assessment": [
                 {
                     "requirement_id": "req_1",
                     "requirement": "AWS Glue",
                     "priority": "must_have",
-                    "status": "met",
-                    "evidence_quote": quote,
+                    "evidence_quotes": [quote],
                     "evidence_start_char": CV.find(quote),
                     "evidence_end_char": CV.find(quote) + len(quote),
+                    "reasoning": "Glue named in candidate experience.",
+                    "status": "met",
+                    "match_tier": "exact",
                     "impact": "Direct match.",
                     "confidence": "high",
                 }
@@ -239,11 +249,15 @@ def test_cache_round_trip_through_db(db, monkeypatch):
 def test_runner_caches_and_reuses(db, monkeypatch):
     """End-to-end: same inputs twice = one Claude call, identical output."""
     from tests.conftest import TestingSessionLocal
+    from app.cv_matching import archetype_synthesizer
 
     monkeypatch.setattr(
         "app.platform.database.SessionLocal",
         TestingSessionLocal,
         raising=False,
+    )
+    monkeypatch.setattr(
+        archetype_synthesizer, "synthesize_archetype", lambda *a, **kw: None
     )
 
     client = _StubClient(messages=_StubMessages(body=_valid_response_json()))
@@ -270,11 +284,15 @@ def test_runner_caches_and_reuses(db, monkeypatch):
 
 def test_runner_skip_cache_bypasses(db, monkeypatch):
     from tests.conftest import TestingSessionLocal
+    from app.cv_matching import archetype_synthesizer
 
     monkeypatch.setattr(
         "app.platform.database.SessionLocal",
         TestingSessionLocal,
         raising=False,
+    )
+    monkeypatch.setattr(
+        archetype_synthesizer, "synthesize_archetype", lambda *a, **kw: None
     )
 
     client = _StubClient(messages=_StubMessages(body=_valid_response_json()))

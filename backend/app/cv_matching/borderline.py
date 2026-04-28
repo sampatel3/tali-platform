@@ -13,9 +13,8 @@ disambiguators:
    per-archetype anchor candidates via PandaLM-consistency Haiku
    calls and back out a Bradley-Terry continuous score.
 
-Both fire only when ``USE_CV_MATCH_V4_PHASE3`` is True. Both have
-their own cost guardrails so a flag-flip doesn't 5× the per-match
-spend.
+Both have their own cost guardrails so they don't 5× the per-match
+spend when invoked.
 """
 
 from __future__ import annotations

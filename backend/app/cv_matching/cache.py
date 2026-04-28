@@ -1,18 +1,11 @@
-"""Cache adapter over the existing ``cv_score_cache`` table.
+"""Cache adapter over the ``cv_score_cache`` table.
 
-Cache key (per handover):
+Cache key:
 
     sha256(cv_text + jd_text + json(requirements) + prompt_version + model_version)
 
-This shape differs from the legacy v4 cache key (which hashes
-spec_description/spec_requirements/criteria_id-list). They share the same
-DB table but never collide because content hashing is collision-free at the
-SHA256 level and the prompt_version differs (`cv_match_v3.0` vs
-`cv_match_v4`).
-
-TTL: 30 days is documented as configurable in ``calibration.md`` but no
-sweep job exists yet — rows are immutable until a future cleanup task adds
-LRU eviction on top of the existing ``hit_count`` / ``last_hit_at`` columns.
+Bumping ``PROMPT_VERSION`` invalidates the cache cleanly — every entry
+keys on it, so old rows become unreachable and a fresh score regenerates.
 """
 
 from __future__ import annotations
@@ -21,9 +14,7 @@ import hashlib
 import json
 import logging
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any
-
-from pydantic import BaseModel
+from typing import TYPE_CHECKING
 
 from .schemas import CVMatchOutput
 
@@ -55,29 +46,12 @@ def compute_cache_key(
     return hashlib.sha256(blob).hexdigest()
 
 
-def get(
-    cache_key: str,
-    *,
-    result_schema: type[BaseModel] = CVMatchOutput,
-) -> Any | None:
-    """Lookup a cached output. Returns None on miss or schema drift.
-
-    Returns None if:
-    - the row doesn't exist
-    - the JSON in the row fails to round-trip through ``result_schema``
-      (defensive: this catches schema drift between cache writers)
-
-    ``result_schema`` defaults to ``CVMatchOutput`` (v3) for backwards
-    compatibility. The v4 runner passes ``CVMatchOutputV4``. Cache rows
-    written under one schema are not rehydratable under the other; the
-    cache key includes ``prompt_version``, so v3 and v4 rows live under
-    separate keys and never cross.
-    """
+def get(cache_key: str) -> CVMatchOutput | None:
+    """Lookup a cached output. Returns None on miss or schema drift."""
     try:
         from ..platform.database import SessionLocal
         from ..models.cv_score_cache import CvScoreCache
     except Exception as exc:
-        # In lightweight test contexts the DB is not wired up; treat as miss.
         logger.debug("Cache get skipped (no DB): %s", exc)
         return None
 
@@ -87,16 +61,14 @@ def get(
         if row is None:
             return None
         try:
-            output = result_schema.model_validate(row.result or {})
+            output = CVMatchOutput.model_validate(row.result or {})
         except Exception as exc:
             logger.warning(
-                "Cache hit but row failed schema validation (key=%s, schema=%s): %s",
+                "Cache hit but row failed schema validation (key=%s): %s",
                 cache_key[:16],
-                result_schema.__name__,
                 exc,
             )
             return None
-        # Bump hit counter so future LRU sweep can prefer recently-used rows.
         try:
             row.hit_count = (row.hit_count or 0) + 1
             row.last_hit_at = datetime.now(timezone.utc)
@@ -109,16 +81,11 @@ def get(
 
 
 def set(cache_key: str, output: CVMatchOutput) -> None:
-    """Persist a CVMatchOutput. No-op if the row already exists.
-
-    Failed runs are not cached (callers can retry). Successful runs are
-    immutable: re-running the same inputs after a cache hit returns the
-    identical row, so write-once is safe.
-    """
+    """Persist a CVMatchOutput. No-op if row already exists or run failed."""
     from .schemas import ScoringStatus
 
     if output.scoring_status != ScoringStatus.OK:
-        return  # don't poison the cache with failed runs
+        return
 
     try:
         from ..platform.database import SessionLocal

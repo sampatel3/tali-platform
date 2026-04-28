@@ -1,24 +1,15 @@
-"""Per-call telemetry for the cv_match_v3.0 pipeline.
+"""Per-call telemetry for the cv_matching pipeline.
 
 Writes one structured row per call (cached and uncached) via a dedicated
 Python logger. Infra routes the logger to wherever it needs to go (stdout
 JSON, log file, Datadog tail) without this module needing to know.
 
 PII rule: log only hashes (`cv_hash`, `jd_hash`) and metadata. Never log
-full CV or JD text. The runner already pre-hashes inputs into the
-``_RunContext`` it threads through.
+full CV or JD text.
 
 Persistence model:
-- Default: log file at ``settings.cv_match_trace_log_path`` (rotated by
-  the platform). The admin route (``GET /admin/cv-match/traces``) tails
-  this file.
-- Fallback: an in-process ring buffer of the last ``RING_CAPACITY`` traces,
-  used when the log file path is empty or write-locked. The admin route
-  reads the ring when the log file isn't available.
-
-The handover is explicit: "log to a structured log file first. Do not
-introduce a DB table for traces unless query needs require it." A future
-table can replace the ring without changing the runner contract.
+- Default: log file at ``settings.cv_match_trace_log_path``.
+- Fallback: in-process ring buffer of the last ``RING_CAPACITY`` traces.
 """
 
 from __future__ import annotations
@@ -45,10 +36,6 @@ _ring_lock = Lock()
 
 
 def _trace_log_path() -> str:
-    """Resolve the trace log path from settings, falling back to env var.
-
-    Empty string disables file writes (ring-only).
-    """
     try:
         from ..platform.config import settings
 
@@ -64,38 +51,16 @@ def emit_trace(
     *,
     final_status: "ScoringStatus",
 ) -> None:
-    """Append one structured trace row.
-
-    Fields per the handover plus v4 additions:
-      trace_id, cv_hash, jd_hash, prompt_version, model_version,
-      input_tokens, output_tokens, latency_ms, retry_count,
-      validation_failures, cache_hit, final_status, created_at,
-      shadow, pipeline_version
-
-    ``prompt_version`` is read from the run context when available
-    (so v4 calls trace as ``cv_match_v4.1``); falls back to the v3
-    module constant for older callers that don't populate the context.
-
-    Never raises — telemetry must not break the runner's contract.
-    """
+    """Append one structured trace row. Never raises."""
     try:
-        from . import MODEL_VERSION, PROMPT_VERSION, PROMPT_VERSION_V4
-
-        pipeline_version = getattr(ctx, "pipeline_version", "v3")
-        if pipeline_version == "v4.1":
-            prompt_version = PROMPT_VERSION_V4
-        else:
-            prompt_version = PROMPT_VERSION
-
-        shadow = bool(getattr(ctx, "extra", {}).get("shadow", False))
+        from . import MODEL_VERSION, PROMPT_VERSION
 
         latency_ms = int((time.monotonic() - ctx.started_at) * 1000)
         row = {
             "trace_id": ctx.trace_id,
             "cv_hash": ctx.cv_hash,
             "jd_hash": ctx.jd_hash,
-            "prompt_version": prompt_version,
-            "pipeline_version": pipeline_version,
+            "prompt_version": PROMPT_VERSION,
             "model_version": MODEL_VERSION,
             "input_tokens": ctx.input_tokens,
             "output_tokens": ctx.output_tokens,
@@ -104,7 +69,6 @@ def emit_trace(
             "validation_failures": ctx.validation_failures,
             "cache_hit": ctx.cache_hit,
             "final_status": getattr(final_status, "value", str(final_status)),
-            "shadow": shadow,
             "created_at": datetime.now(timezone.utc).isoformat(),
         }
 
@@ -125,14 +89,7 @@ def emit_trace(
 
 
 def recent_traces(limit: int = 50) -> list[dict[str, Any]]:
-    """Return the most recent traces for the admin endpoint.
-
-    Reads the log file if configured (preferred — survives process
-    restarts). Falls back to the in-process ring buffer when the file is
-    unavailable.
-
-    Result order: newest first. Limit is clamped to [1, 500].
-    """
+    """Return the most recent traces for the admin endpoint. Newest first."""
     limit = max(1, min(int(limit), RING_CAPACITY))
     path = _trace_log_path()
 

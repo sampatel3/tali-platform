@@ -179,66 +179,13 @@ class Settings(BaseSettings):
     # Default calibration prompt (used when task has no custom calibration_prompt)
     DEFAULT_CALIBRATION_PROMPT: str = "Ask Claude to help you write a Python function that reverses a string. Show your approach to working with AI assistance."
 
-    # cv_match_v3.0 cutover flag (Phase 10 of the production-grade upgrade).
-    # When True, cv_score_orchestrator routes scoring through
-    # `app.cv_matching.runner.run_cv_match` instead of the legacy v3/v4
-    # `fit_matching_service` calls. Default off — flip to True in dev/staging
-    # first, monitor traces via `/admin/cv-match/traces`, then promote.
-    USE_CV_MATCH_V3: bool = False
     # Optional path to write cv_match telemetry rows (one JSON line per call).
     # Empty string = ring-buffer-only (admin route reads from memory).
     CV_MATCH_TRACE_LOG_PATH: str = ""
 
-    # cv_match v4.1 (Phase 1) cutover flag. When True, run_cv_match dispatches
-    # to the v4.1 path (UNTRUSTED_CV spotlighting, anchored 25-point rubric,
-    # anti-default rule, evidence-first per-requirement schema). Default off
-    # so v3 stays the production path until shadow-eval confirms parity.
-    # Tasks 1.4 (tool-use) and 1.5 (prompt caching) require Anthropic SDK
-    # >=0.39 and are NOT enabled at this flag flip — they ship in a follow-up.
-    USE_CV_MATCH_V4_PHASE1: bool = False
-
-    # Phase 2 cutover flag for cv_match_v4.2 (archetype-aware substitution
-    # rules + decomposed dimension scoring). When True, run_cv_match
-    # dispatches to v4.2 and overrides PHASE1. Default off until the
-    # archetype rubric library is reviewed and the eval harness shows
-    # parity-or-better against v3.
-    USE_CV_MATCH_V4_PHASE2: bool = False
-
-    # Phase 3 borderline tie-break. When the composite role_fit lands
-    # in [BORDERLINE_LO, BORDERLINE_HI], the runner runs Bradley-Terry
-    # pairwise comparisons against per-archetype anchor candidates to
-    # produce a finer continuous score and a self-consistency
-    # uncertainty band. Only fires when USE_CV_MATCH_V4_PHASE3 is True.
-    USE_CV_MATCH_V4_PHASE3: bool = True
-    CV_MATCH_BORDERLINE_LO: float = 40.0
-    CV_MATCH_BORDERLINE_HI: float = 75.0
-    # CISC-style self-consistency: max samples for borderline cases.
-    # Stops early once the running stddev stabilises.
-    CV_MATCH_BORDERLINE_MAX_SAMPLES: int = 5
-
-    # Probability (0.0-1.0) that a v3 cv_match call also fires a silent v4.1
-    # shadow run. Shadow runs write a telemetry trace with shadow=True but do
-    # NOT affect the recruiter response. Recommended rollout: 0.10 once the
-    # v4.1 path is wired and validated; 0.0 before then. Independent from
-    # USE_CV_MATCH_V4_PHASE1 — the shadow path is the safest way to gather
-    # comparison data before flipping the primary path.
-    CV_MATCH_V4_SHADOW_SAMPLE_RATE: float = 0.0
-
-    # Phase 2 embedding pre-filter. When True, batch matches (>30 candidates
-    # against one JD) embed all CVs once, cosine-rank against the JD, and
-    # drop the bottom 50% before spending Haiku tokens. Override-tagged
-    # candidates are NEVER dropped regardless of this flag.
-    USE_CV_MATCH_V4_PREFILTER: bool = False
-    # Cosine threshold below which a candidate is considered an obvious
-    # mismatch. Empirical Voyage-3.5-lite typical range is [0.55, 0.85] for
-    # in-domain matches; 0.50 is a conservative drop floor.
-    CV_MATCH_V4_PREFILTER_COSINE_THRESHOLD: float = 0.50
-    # Pre-filter only fires above this batch size. At small N the embedding
-    # round-trip overhead exceeds what the filter saves on Haiku calls.
-    CV_MATCH_V4_PREFILTER_MIN_BATCH: int = 30
-
-    # Embedding provider selection. "voyage" (default), "openai", or "mock"
-    # (deterministic hash-based; for tests).
+    # Embedding provider selection. "voyage", "openai", or "mock"
+    # (deterministic hash-based; for tests). Used by the on-demand
+    # archetype synthesizer to cosine-route incoming JDs.
     EMBEDDING_PROVIDER: str = "mock"
     EMBEDDING_MODEL: str = ""  # blank = provider default
     VOYAGE_API_KEY: str = ""

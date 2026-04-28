@@ -1,21 +1,14 @@
-"""Production-grade CV matching pipeline (cv_match_v3.0).
+"""Production CV matching pipeline.
 
 Public surface:
 
     from app.cv_matching import run_cv_match, CVMatchOutput, RequirementInput
 
-The pipeline is gated by ``settings.USE_CV_MATCH_V3``. When the flag is off,
-existing call sites in ``cv_score_orchestrator`` continue to use the legacy
-``cv_match_v4`` / ``cv_fit_v3_evidence_enriched`` flows unchanged.
-
-See ``docs/cv_matching_audit.md`` for the legacy system and
-``docs/cv_matching_cutover.md`` for the rollout procedure.
+Single scoring path. No version flags. Iterate by bumping ``PROMPT_VERSION``
+and (when relevant) ``MODEL_VERSION``.
 """
 
-PROMPT_VERSION = "cv_match_v3.0"
-PROMPT_VERSION_V4 = "cv_match_v4.1"
-PROMPT_VERSION_V4_2 = "cv_match_v4.2"
-PROMPT_VERSION_V4_3 = "cv_match_v4.3"
+PROMPT_VERSION = "cv_match_v5"
 MODEL_VERSION = "claude-haiku-4-5-20251001"
 
 
@@ -26,15 +19,12 @@ def __getattr__(name: str):
         "Category",
         "Confidence",
         "CVMatchOutput",
-        "CVMatchOutputV4",
         "CVMatchResult",
-        "CVMatchResultV4",
         "DimensionScores",
         "MatchTier",
         "Priority",
         "Recommendation",
         "RequirementAssessment",
-        "RequirementAssessmentV4",
         "RequirementInput",
         "ScoringStatus",
         "Status",
@@ -53,20 +43,14 @@ __all__ = [
     "Category",
     "Confidence",
     "CVMatchOutput",
-    "CVMatchOutputV4",
     "CVMatchResult",
-    "CVMatchResultV4",
     "DimensionScores",
     "MODEL_VERSION",
     "MatchTier",
     "PROMPT_VERSION",
-    "PROMPT_VERSION_V4",
-    "PROMPT_VERSION_V4_2",
-    "PROMPT_VERSION_V4_3",
     "Priority",
     "Recommendation",
     "RequirementAssessment",
-    "RequirementAssessmentV4",
     "RequirementInput",
     "ScoringStatus",
     "Status",

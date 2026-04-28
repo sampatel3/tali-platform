@@ -32,6 +32,7 @@ from .api import (
     save_calibrator,
 )
 from .isotonic import IsotonicCalibrator
+from .judge import judge_advance_probability
 from .platt import PlattCalibrator
 
 __all__ = [
@@ -39,6 +40,7 @@ __all__ = [
     "PlattCalibrator",
     "apply_calibrator",
     "fit_calibrator",
+    "judge_advance_probability",
     "load_calibrator",
     "save_calibrator",
 ]
