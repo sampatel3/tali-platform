@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import re
+from difflib import SequenceMatcher
 
 from .schemas import CVMatchResult, RequirementInput, Status
 
@@ -37,6 +38,81 @@ _INJECTION_PATTERNS = [
 
 _SUSPICIOUS_SCORE_THRESHOLD = 95.0
 _THIN_CV_WORD_COUNT = 200
+
+# Fuzzy-quote-match threshold. The LLM frequently paraphrases when
+# generating ``evidence_quotes``: a phrase that's nearly verbatim in
+# the CV (off by a word, an extra space, a hyphen) gets emitted as a
+# quote that doesn't strictly substring-match. Strict matching dropped
+# legitimate evidence; fuzzy matching with a high similarity threshold
+# preserves the grounding intent (the quote must substantially appear
+# in the CV) without punishing close paraphrases.
+_FUZZY_THRESHOLD = 0.85
+# Window scan: for each LLM quote, slide a CV window of similar length
+# and check the best similarity. _FUZZY_WINDOW_PAD is how much extra
+# CV context to consider on either side of the quote-length window.
+_FUZZY_WINDOW_PAD = 20
+
+
+def _normalise_for_fuzzy(s: str) -> str:
+    """Collapse whitespace and lowercase for similarity comparison."""
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
+
+
+def _fuzzy_locate(quote: str, cv_text: str) -> tuple[int, int] | None:
+    """Find the best fuzzy match for ``quote`` in ``cv_text``.
+
+    Returns ``(start, end)`` of the best matching CV span if similarity
+    >= ``_FUZZY_THRESHOLD``, else ``None``. Exact substring hits are
+    fast-pathed; only quotes that miss the exact path pay the
+    O(len(cv_text)) sliding-window cost.
+    """
+    if not quote or not cv_text:
+        return None
+    # Fast path: exact substring (most quotes hit this).
+    idx = cv_text.find(quote)
+    if idx >= 0:
+        return (idx, idx + len(quote))
+
+    # Slow path: case-insensitive whitespace-normalised substring.
+    cv_lower = cv_text.lower()
+    quote_lower = quote.lower()
+    idx = cv_lower.find(quote_lower)
+    if idx >= 0:
+        return (idx, idx + len(quote))
+
+    # Slowest path: sliding-window fuzzy match.
+    quote_norm = _normalise_for_fuzzy(quote)
+    if not quote_norm or len(quote_norm) < 8:
+        # Don't fuzzy-match tiny quotes — too easy to false-positive.
+        return None
+
+    cv_norm = _normalise_for_fuzzy(cv_text)
+    matcher = SequenceMatcher(None, cv_norm, quote_norm, autojunk=False)
+    blocks = matcher.get_matching_blocks()
+    if not blocks:
+        return None
+    # The longest matching block tells us where in the CV the quote
+    # most likely came from. Build a window around it and score
+    # similarity to decide whether to accept.
+    longest = max(blocks, key=lambda b: b.size)
+    if longest.size == 0:
+        return None
+    win_start = max(0, longest.a - _FUZZY_WINDOW_PAD)
+    win_end = min(len(cv_norm), longest.a + len(quote_norm) + _FUZZY_WINDOW_PAD)
+    window = cv_norm[win_start:win_end]
+    sim = SequenceMatcher(None, window, quote_norm, autojunk=False).ratio()
+    if sim < _FUZZY_THRESHOLD:
+        return None
+    # Re-locate the matched window in the original (unnormalised) cv_text.
+    # The normalisation collapsed whitespace, so character offsets shift —
+    # we approximate by finding the first matched word from the block.
+    pivot_words = quote.split()[:3]
+    if pivot_words:
+        pivot = " ".join(pivot_words)
+        pivot_idx = cv_text.lower().find(pivot.lower())
+        if pivot_idx >= 0:
+            return (pivot_idx, pivot_idx + len(pivot))
+    return (0, min(len(cv_text), len(quote)))
 
 
 class ValidationFailure(RuntimeError):
@@ -66,18 +142,18 @@ def validate_evidence_grounding(result: CVMatchResult, cv_text: str) -> int:
             quote = (raw_quote or "").strip()
             if not quote:
                 continue
-            idx = cv_text.find(quote)
-            if idx < 0:
-                logger.warning(
-                    "Dropped hallucinated quote on requirement %s: %r",
+            located = _fuzzy_locate(quote, cv_text)
+            if located is None:
+                logger.info(
+                    "Dropped unverifiable quote on requirement %s: %r",
                     assessment.requirement_id,
                     quote[:80],
                 )
                 continue
             cleaned.append(quote)
             if first_idx < 0:
-                first_idx = idx
-                first_len = len(quote)
+                first_idx = located[0]
+                first_len = located[1] - located[0]
 
         if not cleaned:
             assessment.status = Status.UNKNOWN

@@ -179,10 +179,12 @@ def test_partially_met_strong_sub_combines_multipliers():
     assert abs(compute_requirements_match_score(a) - 42.5) < 0.01
 
 
-# ---------- floors ----------
+# ---------- no floors (removed; underlying weighted average speaks) ----------
 
 
-def test_constraint_disqualifying_floor():
+def test_constraint_failure_no_longer_floors_score():
+    """Constraint failures don't hard-cap requirements_match_score
+    anymore — the weighted average speaks for itself."""
     assessments = [_ra("a", Priority.MUST_HAVE, Status.MET)]
     assessments.append(
         RequirementAssessment(
@@ -199,23 +201,67 @@ def test_constraint_disqualifying_floor():
             confidence=Confidence.MEDIUM,
         )
     )
-    assert compute_requirements_match_score(assessments) == 30.0
+    # Single met must_have, constraint excluded from the average → 100.
+    # No floor cap to 30.
+    assert compute_requirements_match_score(assessments) == 100.0
 
 
-def test_must_have_disqualifying_floor():
+def test_missing_must_have_no_longer_floors_score():
+    """A missing must_have just lowers the weighted average; no floor
+    at 40 anymore."""
     assessments = [
         _ra("ok", Priority.STRONG_PREFERENCE, Status.MET),
         _ra("missed", Priority.MUST_HAVE, Status.MISSING),
     ]
-    assert compute_requirements_match_score(assessments) <= 40.0
+    score = compute_requirements_match_score(assessments)
+    # priority weights: must_have=0.70, strong_pref=0.25; total=0.95.
+    # earned: 0 (must_have missing) + 0.25 * 1.0 * 1.0 = 0.25.
+    # 0.25/0.95 * 100 ≈ 26.32. No floor at 40.
+    assert abs(score - 26.32) < 0.1
 
 
-def test_unknown_must_have_triggers_floor():
+def test_unknown_must_have_no_longer_floors_score():
     assessments = [
         _ra("ok", Priority.STRONG_PREFERENCE, Status.MET),
         _ra("unk", Priority.MUST_HAVE, Status.UNKNOWN),
     ]
-    assert compute_requirements_match_score(assessments) <= 40.0
+    score = compute_requirements_match_score(assessments)
+    # earned: 0.25 (strong_pref met) + 0.70 * 0.3 * 0 (tier missing on
+    # unknown via _ra helper) = 0.25. total=0.95 → 26.32.
+    assert abs(score - 26.32) < 0.1
+
+
+# ---------- recruiter-added requirement weight bump ----------
+
+
+def test_recruiter_added_requirement_gets_1_5x_weight():
+    """Two requirements at the same priority/status: one recruiter-added
+    (id NOT prefixed jd_req_), one JD-extracted (jd_req_*). The
+    recruiter-added one weighs 1.5x more in the aggregation."""
+    # Both met, both must_have, both exact. With identical weights,
+    # the score is 100 either way (a met-only set always scores 100).
+    # Exercise the differential by mixing met + missing.
+    assessments_recruiter_met = [
+        _ra("crit_1", Priority.MUST_HAVE, Status.MET),  # recruiter, met
+        _ra("jd_req_1", Priority.MUST_HAVE, Status.MISSING),  # llm, missing
+    ]
+    assessments_jd_met = [
+        _ra("jd_req_1", Priority.MUST_HAVE, Status.MET),  # llm, met
+        _ra("crit_1", Priority.MUST_HAVE, Status.MISSING),  # recruiter, missing
+    ]
+    score_recruiter_met = compute_requirements_match_score(assessments_recruiter_met)
+    score_jd_met = compute_requirements_match_score(assessments_jd_met)
+    # When the recruiter-added req is met, the aggregate score is
+    # higher than when the JD-extracted one is met (recruiter weight
+    # carries more).
+    assert score_recruiter_met > score_jd_met
+    # Specifically:
+    # recruiter_met: total = 0.70*1.5 + 0.70 = 1.05 + 0.70 = 1.75;
+    #                earned = 1.05*1.0*1.0 + 0 = 1.05; → 1.05/1.75 = 60.0
+    # jd_met:        total = 0.70 + 0.70*1.5 = 1.75;
+    #                earned = 0.70*1.0*1.0 + 0 = 0.70; → 0.70/1.75 = 40.0
+    assert abs(score_recruiter_met - 60.0) < 0.1
+    assert abs(score_jd_met - 40.0) < 0.1
 
 
 # ---------- derive_recommendation ----------
@@ -239,25 +285,20 @@ def test_recommendation_thresholds():
         assert got == expected, (role_fit, got, expected)
 
 
-def test_failed_constraint_forces_no():
-    for role_fit in (0.0, 50.0, 85.0, 100.0):
-        assert (
-            derive_recommendation(
-                role_fit, has_failed_constraint=True, has_missing_must_have=False
-            )
-            == Recommendation.NO
-        )
-
-
-def test_missing_must_have_caps_at_lean_no():
-    assert (
-        derive_recommendation(95.0, has_failed_constraint=False, has_missing_must_have=True)
-        == Recommendation.LEAN_NO
-    )
-    assert (
-        derive_recommendation(30.0, has_failed_constraint=False, has_missing_must_have=True)
-        == Recommendation.NO
-    )
+def test_recommendation_ignores_legacy_flags():
+    """``has_failed_constraint`` and ``has_missing_must_have`` are
+    accepted on the signature for backwards-compat but no longer
+    affect the recommendation — the underlying weighted aggregation
+    already discounts those candidates via the priority/status/tier
+    weights, so a hard cap on top double-punishes."""
+    # Same role_fit, all four flag combinations → same recommendation.
+    for role_fit, expected in [(95.0, Recommendation.STRONG_YES), (60.0, Recommendation.LEAN_NO)]:
+        for fc in (True, False):
+            for mmh in (True, False):
+                got = derive_recommendation(
+                    role_fit, has_failed_constraint=fc, has_missing_must_have=mmh
+                )
+                assert got == expected, (role_fit, fc, mmh, got, expected)
 
 
 # ---------- aggregate (full chain) ----------
@@ -286,15 +327,22 @@ def test_aggregate_round_trip():
     assert abs(exp - 62.5) < 0.01
 
 
-def test_aggregate_constraint_failure_short_circuits_to_no():
+def test_aggregate_constraint_failure_no_longer_forces_no():
+    """Constraint failures don't hard-cap the recommendation anymore.
+    A candidate with a missing constraint can still earn YES if the
+    weighted aggregate is high enough."""
     assessments = [
         _ra("ok", Priority.MUST_HAVE, Status.MET),
         _ra("loc", Priority.CONSTRAINT, Status.MISSING),
     ]
-    _, _, _, _, _, rec = aggregate(
+    _, _, req_match, _, role_fit, rec = aggregate(
         dimension_scores=_ds(), assessments=assessments
     )
-    assert rec == Recommendation.NO
+    # The single met must_have gives req_match=100 (constraints are
+    # excluded from the weighted average). cv_fit ~69.75 → role_fit
+    # ~87.9 → STRONG_YES.
+    assert req_match == 100.0
+    assert rec == Recommendation.STRONG_YES
 
 
 def test_aggregate_with_archetype_weights_changes_cv_fit():

@@ -37,8 +37,12 @@ _TIER_WEIGHTS: dict[str, float] = {
     "missing": 0.0,
 }
 
-_CONSTRAINT_FLOOR = 30.0
-_MUST_HAVE_FLOOR = 40.0
+# Recruiter-added requirements (id NOT prefixed with "jd_req_") get a
+# bumped priority weight: the recruiter knows what they're hiring for,
+# so their explicit asks carry more signal than what the LLM extracted
+# from the JD prose. 1.5x means a recruiter-added must_have effectively
+# weighs as much as ~1.5 LLM-extracted must_haves.
+_RECRUITER_WEIGHT_MULTIPLIER = 1.5
 
 _STRONG_YES_THRESHOLD = 85.0
 _YES_THRESHOLD = 70.0
@@ -63,17 +67,27 @@ def _tier_multiplier(assessment) -> float:
     return _TIER_WEIGHTS.get(getattr(assessment, "match_tier", "exact"), 1.0)
 
 
+def _recruiter_weight_multiplier(assessment) -> float:
+    """Recruiter-added requirements (id NOT prefixed ``jd_req_``) get a
+    1.5x priority weight. The recruiter knows what they're hiring for;
+    their explicit asks carry more signal than what the LLM extracted
+    from the JD prose."""
+    rid = (getattr(assessment, "requirement_id", "") or "").lower()
+    if rid.startswith("jd_req_"):
+        return 1.0
+    return _RECRUITER_WEIGHT_MULTIPLIER
+
+
 def compute_requirements_match_score(
     assessments: Iterable[RequirementAssessment],
 ) -> float:
-    """Weighted average across requirements with priority × status × tier weights.
+    """Weighted average across requirements.
 
-    Algorithm:
-      1. total_weight = Σ priority_weight over non-constraint requirements
-      2. earned_weight = Σ (priority_weight × status_weight × tier_weight) over same set
-      3. base = (earned_weight / total_weight) × 100
-      4. apply caps: disqualifying constraint missing → ≤ 30; disqualifying
-         must_have missing → ≤ 40
+    Per-requirement weight = priority × status × tier × recruiter_bump.
+
+    No floors, no caps — pure weighted average. A candidate with all
+    must-haves missing simply ends up with a low requirements_match
+    naturally.
 
     Edge: if no non-constraint requirements (or total_weight == 0), return 50.0.
     """
@@ -87,29 +101,15 @@ def compute_requirements_match_score(
         priority_weight = _PRIORITY_WEIGHTS.get(a.priority, 0.0)
         status_weight = _STATUS_WEIGHTS.get(a.status, 0.0)
         tier_multiplier = _tier_multiplier(a)
-        total_weight += priority_weight
-        earned_weight += priority_weight * status_weight * tier_multiplier
+        recruiter_bump = _recruiter_weight_multiplier(a)
+        effective_weight = priority_weight * recruiter_bump
+        total_weight += effective_weight
+        earned_weight += effective_weight * status_weight * tier_multiplier
 
     if total_weight <= 0:
         return 50.0
 
-    score = (earned_weight / total_weight) * 100.0
-
-    has_failed_disq_constraint = any(
-        a.priority == Priority.CONSTRAINT and _is_unfulfilled(a.status)
-        for a in assessments_list
-    )
-    has_failed_disq_must_have = any(
-        a.priority == Priority.MUST_HAVE and _is_unfulfilled(a.status)
-        for a in assessments_list
-    )
-
-    if has_failed_disq_constraint:
-        score = min(score, _CONSTRAINT_FLOOR)
-    if has_failed_disq_must_have:
-        score = min(score, _MUST_HAVE_FLOOR)
-
-    return round(score, 2)
+    return round((earned_weight / total_weight) * 100.0, 2)
 
 
 def compute_cv_fit(
@@ -174,15 +174,15 @@ def derive_recommendation(
     has_failed_constraint: bool,
     has_missing_must_have: bool,
 ) -> Recommendation:
-    """Hard rules first (constraint failures), then score thresholds."""
-    if has_failed_constraint:
-        return Recommendation.NO
+    """Pure score-threshold recommendation.
 
-    if has_missing_must_have:
-        if role_fit < _LEAN_NO_THRESHOLD:
-            return Recommendation.NO
-        return Recommendation.LEAN_NO
-
+    Constraint failures and missing must-haves no longer hard-cap the
+    recommendation — the underlying weighted aggregation already
+    discounts those candidates via priority × status × tier weights.
+    The boolean flags are accepted on the signature for backwards
+    compatibility but ignored.
+    """
+    del has_failed_constraint, has_missing_must_have  # no longer used
     if role_fit >= _STRONG_YES_THRESHOLD:
         return Recommendation.STRONG_YES
     if role_fit >= _YES_THRESHOLD:
