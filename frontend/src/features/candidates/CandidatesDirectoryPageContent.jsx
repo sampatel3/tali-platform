@@ -35,6 +35,8 @@ import {
   WorkableTagSm,
   formatRelativeDateTime,
 } from '../../shared/ui/RecruiterDesignPrimitives';
+import { NLSearchBar } from './NLSearchBar';
+import { CandidateGraphView } from './CandidateGraphView';
 
 const PAGE_SIZE = 50;
 const STAGE_OPTIONS = [
@@ -346,6 +348,15 @@ export const CandidatesDirectoryPage = ({
   const [search, setSearch] = useState('');
   const [workableOnly, setWorkableOnly] = useState(false);
   const [page, setPage] = useState(0);
+  // Natural-language search state (independent from the legacy `search` field).
+  // `nlQuery` is the active query echoed by the URL; `parsedFilter` /
+  // `nlWarnings` / `subgraph` are server-side-derived and reset on each load.
+  const [nlQuery, setNlQuery] = useState('');
+  const [parsedFilter, setParsedFilter] = useState(null);
+  const [nlWarnings, setNlWarnings] = useState([]);
+  const [nlSubgraph, setNlSubgraph] = useState(null);
+  const [viewMode, setViewMode] = useState('list');
+  const [refineExpanded, setRefineExpanded] = useState(false);
 
   const [applicationsPayload, setApplicationsPayload] = useState({
     items: [],
@@ -552,6 +563,13 @@ export const CandidatesDirectoryPage = ({
     }
     const trimmed = search.trim();
     if (trimmed) params.search = trimmed;
+    // NL search overrides the legacy `search` param; backend ignores
+    // `search` when `nl_query` is present (parsed_filter is authoritative).
+    const trimmedNl = (nlQuery || '').trim();
+    if (trimmedNl) {
+      params.nl_query = trimmedNl;
+      params.view = viewMode;
+    }
     return params;
   }, [
     currentPage,
@@ -559,9 +577,11 @@ export const CandidatesDirectoryPage = ({
     effectiveRoleFilters,
     effectiveStageFilters,
     minPreScreenScore,
+    nlQuery,
     rolePipelineMode,
     search,
     sortOption,
+    viewMode,
     workableOnly,
   ]);
 
@@ -693,6 +713,10 @@ export const CandidatesDirectoryPage = ({
         if (target && items.some((item) => Number(item.id) === target)) return target;
         return null;
       });
+      // NL-search response fields. Empty/absent = legacy path.
+      setParsedFilter(payload.parsed_filter || null);
+      setNlWarnings(Array.isArray(payload.nl_warnings) ? payload.nl_warnings : []);
+      setNlSubgraph(payload.subgraph || null);
     } catch (error) {
       setApplicationsPayload({ items: [], total: 0, limit: PAGE_SIZE, offset: 0 });
       setApplicationsError(getErrorMessage(error, 'Failed to load candidates.'));
@@ -701,6 +725,9 @@ export const CandidatesDirectoryPage = ({
         setRolePipelineName('');
       }
       setStageCounts({ ...STAGE_COUNT_DEFAULTS });
+      setParsedFilter(null);
+      setNlWarnings([]);
+      setNlSubgraph(null);
     } finally {
       setLoadingApplications(false);
       setLoadingStageCounts(false);
@@ -1479,7 +1506,54 @@ export const CandidatesDirectoryPage = ({
 
         {prelude ? <div className="mb-4 space-y-4">{prelude}</div> : null}
 
-        <div className="candidate-toolbar">
+        <NLSearchBar
+          nlQuery={nlQuery}
+          onSubmit={(q) => {
+            setNlQuery(q);
+            setPage(0);
+            setRefineExpanded(false);
+          }}
+          onClear={() => {
+            setNlQuery('');
+            setParsedFilter(null);
+            setNlWarnings([]);
+            setNlSubgraph(null);
+            setRefineExpanded(false);
+          }}
+          parsedFilter={parsedFilter}
+          onRemoveChip={(field, value) => {
+            // Drop the chip locally and re-issue the query without it.
+            // We mutate parsedFilter in place; the next loadApplications
+            // round-trip won't pass the modified filter, so the chip
+            // removal is purely client-side until the next free-form
+            // query. For v1 we punt on a "send pruned filter" endpoint —
+            // recruiters can edit the query box and re-search.
+            setParsedFilter((prev) => {
+              if (!prev) return prev;
+              const next = { ...prev };
+              if (Array.isArray(next[field])) {
+                next[field] = next[field].filter((item) => {
+                  if (field === 'graph_predicates') {
+                    return !(item.type === value.type && item.value === value.value);
+                  }
+                  return item !== value;
+                });
+              } else if (field === 'min_years_experience') {
+                next.min_years_experience = null;
+              }
+              return next;
+            });
+          }}
+          warnings={nlWarnings}
+          viewMode={viewMode}
+          onViewModeChange={(next) => setViewMode(next)}
+          isLoading={loadingApplications && Boolean(nlQuery)}
+        />
+
+        <div
+          className="candidate-toolbar"
+          style={nlQuery && !refineExpanded ? { display: 'none' } : undefined}
+        >
           <div className="segset">
             {segmentOptions.map((option) => (
               <button
@@ -1751,6 +1825,23 @@ export const CandidatesDirectoryPage = ({
           </Panel>
         ) : null}
 
+        {nlQuery ? (
+          <div className="nl-search__refine-row">
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => setRefineExpanded((v) => !v)}
+            >
+              {refineExpanded ? 'Hide filters' : 'Refine filters'}
+            </button>
+            {applicationsPayload.total > 0 ? (
+              <span className="muted">
+                {applicationsPayload.total} match{applicationsPayload.total === 1 ? '' : 'es'}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
+
         {showInitialLoadingState ? (
           <div className="flex min-h-[260px] items-center justify-center">
             <Spinner size={22} />
@@ -1759,10 +1850,31 @@ export const CandidatesDirectoryPage = ({
           <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4 text-sm text-[var(--taali-danger)]">
             {applicationsError}
           </Panel>
+        ) : nlQuery && viewMode === 'graph' ? (
+          <CandidateGraphView
+            subgraph={nlSubgraph}
+            isLoading={loadingApplications}
+            onSelectCandidate={(personId) => {
+              // Scroll the matching candidate row into view; if not on this
+              // page we surface a hint via toast.
+              const target = applications.find(
+                (a) => Number(a.candidate_id) === Number(personId)
+              );
+              if (target) {
+                setSelectedApplicationId(Number(target.id));
+              } else {
+                showToast('Candidate is on another page — switch to list view to open.', 'info');
+              }
+            }}
+          />
         ) : applications.length === 0 ? (
           <EmptyState
-            title="No candidates found"
-            description="Try changing filters or add candidates from role pipelines."
+            title={nlQuery ? 'No candidates match this query' : 'No candidates found'}
+            description={
+              nlQuery
+                ? 'Try removing a chip above, or rephrase your search.'
+                : 'Try changing filters or add candidates from role pipelines.'
+            }
           />
         ) : (
           <div>
