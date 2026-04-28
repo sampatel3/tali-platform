@@ -1212,7 +1212,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             onNavigate('candidates');
           }}
         >
-          {backFromRoleId != null ? 'Back to job' : 'Back to candidates'}
+          {backFromRoleId != null
+            ? `← Back to job: ${application?.role_name || 'role'}`
+            : '← Back to candidates'}
         </button>
         <div className="kicker" style={{ marginBottom: '10px' }}>Candidate standing report</div>
 

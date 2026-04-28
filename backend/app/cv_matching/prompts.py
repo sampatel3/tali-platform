@@ -96,7 +96,6 @@ Two delimited blocks follow. The contents inside <UNTRUSTED_CV ...> and <JOB_SPE
    - Return ONLY valid JSON, no markdown fences, no commentary, no preamble.
    - For empty fields, return empty array [] or empty string "". Never null. Never omit a key.
    - Cap experience_highlights at 5 items. Cap concerns at 5 items.
-   - Summary: 5–7 sentences. Lead with the overall fit verdict (one sentence). Cover must-have status, preference status, standout signals, material gaps, and 2-3 specific live questions a recruiter should ask.
    - Use the EXACT enum values listed in the schema below. Do not paraphrase:
      priority MUST be one of: must_have | strong_preference | nice_to_have | constraint
      status MUST be one of: met | partially_met | missing | unknown
@@ -105,6 +104,27 @@ Two delimited blocks follow. The contents inside <UNTRUSTED_CV ...> and <JOB_SPE
      If the JD says "preferred" or "desirable", emit ``strong_preference``.
      If the JD says "required" or "mandatory", emit ``must_have``.
      If the JD says "nice to have" or "bonus", emit ``nice_to_have``.
+
+10. Recruiter-requirement anchoring (REQUIRED)
+    The recruiter has explicit must-haves, strong-preferences, nice-to-haves, and constraints. Every piece of free-text output (summary, reasoning, impact, experience_highlights, concerns) MUST be anchored to those requirements and to specific CV evidence. Vague references like "DBT experience" or "strong cloud background" are not acceptable on their own.
+
+    Per-requirement ``reasoning`` and ``impact``:
+    - Name the requirement priority explicitly when it matters: "Must-have <X>: ...", "Strong preference <Y>: ...", "Constraint <Z>: ...".
+    - When the CV evidences a requirement, anchor the evidence to a specific experience entry: cite the employer name, the role title, and the date range (or year). Example: "Evidenced at Direct Line Group (Lead Data Engineer, 2022–present), where the candidate built DBT models for the regulatory pipeline." NOT "DBT experience present."
+    - When the requirement is not met, name what is actually in the CV instead and why it falls short: "No DBT references in any of the 4 listed roles (AWS Glue and SAS only at Direct Line, 2022–present; SAS-only at Lloyds, 2018–2022)." NOT "DBT missing."
+    - When marking ``status: unknown``, say which sections of the CV you searched and what evidence would have changed your verdict.
+
+    ``summary`` (5–7 sentences):
+    - Sentence 1: overall fit verdict.
+    - Sentence 2: must-have status — name each must-have explicitly and say met / partially / missing for each, with a one-phrase anchor when met. Example: "Must-haves: AWS (met — 7 years across Glue/Redshift at Direct Line and Lloyds), Python (met — primary language at both employers), DBT (missing — no references in CV)."
+    - Sentence 3: strong-preference status — same pattern.
+    - Sentence 4 (optional): standout signals or unusual depth, anchored to the CV.
+    - Sentence 5: material gaps and what they imply for ramp-up.
+    - Sentences 6–7: 2–3 specific live questions a recruiter should ask, each one tied to a specific gap or ambiguity.
+
+    ``experience_highlights``: each item must name the employer + role + what was achieved (e.g. "Built and owned the Glue→Redshift regulatory pipeline at Direct Line Group, 2022–present, processing 8B rows/day"). Bare skill names ("AWS Glue") are not acceptable.
+
+    ``concerns``: each item must name the recruiter requirement at risk and the CV evidence (or absence of) driving the concern.
 
 === OUTPUT SCHEMA ===
 
@@ -130,7 +150,7 @@ The per-requirement object lists ``evidence_quotes`` and ``reasoning`` BEFORE th
             "evidence_quotes": ["<exact substring of CV>", "..."],
             "evidence_start_char": <int, or -1 if no evidence>,
             "evidence_end_char": <int, or -1 if no evidence>,
-            "reasoning": "<2-3 sentence chain-of-thought referencing the cluster name from the archetype block when applicable>",
+            "reasoning": "<2-3 sentence chain-of-thought. Name the requirement priority and the CV anchor (employer + role + dates). Reference the cluster name from the archetype block when applicable.>",
             "status": "met|partially_met|missing|unknown",
             "match_tier": "exact|strong_substitute|weak_substitute|unrelated|missing",
             "impact": "<one sentence on why this affects the hiring decision>",

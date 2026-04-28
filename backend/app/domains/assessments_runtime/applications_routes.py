@@ -329,7 +329,14 @@ def _application_sort_value(item: ApplicationDetailResponse, sort_by: str):
         return item.pre_screen_score if item.pre_screen_score is not None else float("-inf")
     if sort_by == "taali_score":
         normalized = _normalize_taali_score_for_filter(item.taali_score)
-        return normalized if normalized is not None else float("-inf")
+        if normalized is not None:
+            return normalized
+        # Fall back to the CV match (pre-screen) score so unified-column sort
+        # matches what the row displays — most candidates haven't done an
+        # assessment, so taali_score is NULL until then.
+        if item.pre_screen_score is not None:
+            return float(item.pre_screen_score)
+        return float("-inf")
     if sort_by == "cv_match_score":
         return getattr(item, "cv_match_score", None) if getattr(item, "cv_match_score", None) is not None else float("-inf")
     if sort_by == "cv_match_scored_at":
@@ -475,8 +482,10 @@ def _application_order_columns(sort_by: str, sort_order: str):
             -1.0 if reverse else 101.0,
         )
     elif sort_by == "taali_score":
+        # Coalesce to pre-screen so the sort matches the unified score column.
         primary = func.coalesce(
             CandidateApplication.taali_score_cache_100,
+            CandidateApplication.pre_screen_score_100,
             -1.0 if reverse else 101.0,
         )
     elif sort_by == "cv_match_score":

@@ -52,12 +52,8 @@ const OUTCOME_OPTIONS = [
 ];
 const SORT_OPTIONS = [
   { value: 'cv_match_scored_at:desc', label: 'Recently scored (newest first)' },
-  { value: 'cv_match_score:desc', label: 'CV match score (high to low)' },
-  { value: 'cv_match_score:asc', label: 'CV match score (low to high)' },
-  { value: 'pre_screen_score:desc', label: 'Pre-screen score (high to low)' },
-  { value: 'pre_screen_score:asc', label: 'Pre-screen score (low to high)' },
-  { value: 'taali_score:desc', label: 'TAALI score (high to low)' },
-  { value: 'taali_score:asc', label: 'TAALI score (low to high)' },
+  { value: 'taali_score:desc', label: 'Taali AI Score (high to low)' },
+  { value: 'taali_score:asc', label: 'Taali AI Score (low to high)' },
   { value: 'created_at:desc', label: 'Submitted (newest first)' },
   { value: 'created_at:asc', label: 'Submitted (oldest first)' },
   { value: 'pipeline_stage_updated_at:desc', label: 'Recent activity' },
@@ -274,15 +270,31 @@ const uniqueStringValues = (values) => {
 const getCvMatchTone = (score, thresholdValue) => {
   const numeric = Number(score);
   if (!Number.isFinite(numeric)) return 'un';
-  if (Number.isFinite(Number(thresholdValue)) && numeric < Number(thresholdValue)) return 'lo';
+  const threshold = Number(thresholdValue);
+  // When the recruiter has set a per-role threshold, that's the source
+  // of truth: below = red, comfortably above = green, just above =
+  // amber. The hardcoded 60/80 cutoffs only kick in when no threshold
+  // is configured, so a 50% candidate on a role with a 40% threshold
+  // renders amber (above bar) instead of red.
+  if (Number.isFinite(threshold) && threshold > 0) {
+    if (numeric < threshold) return 'lo';
+    if (numeric >= threshold + 20) return 'hi';
+    return 'md';
+  }
   if (numeric >= 80) return 'hi';
   if (numeric >= 60) return 'md';
   return 'lo';
 };
 
-const getHireSignal = (application) => {
+const getHireSignal = (application, thresholdValue) => {
   const score = Number(resolveUnifiedScore(application).value);
   if (!Number.isFinite(score)) return { label: 'Pending', tone: '' };
+  const threshold = Number(thresholdValue);
+  if (Number.isFinite(threshold) && threshold > 0) {
+    if (score < threshold) return { label: 'Below threshold', tone: 'red' };
+    if (score >= threshold + 20) return { label: 'Strong hire', tone: 'green' };
+    return { label: 'Above threshold', tone: 'amber' };
+  }
   if (score >= 80) return { label: 'Strong hire', tone: 'green' };
   if (score >= 65) return { label: 'Maybe', tone: 'amber' };
   return { label: 'No hire', tone: 'red' };
@@ -1785,7 +1797,7 @@ export const CandidatesDirectoryPage = ({
                   const unifiedScore = resolveUnifiedScore(application);
                   const updatedAt = application.pipeline_stage_updated_at || application.updated_at || application.created_at;
                   const scoreTone = getCvMatchTone(unifiedScore.value, thresholdRoleValue);
-                  const hireSignal = getHireSignal(application);
+                  const hireSignal = getHireSignal(application, thresholdRoleValue);
                   const statusChip = getStatusChip(application);
                   const belowThreshold = Number.isFinite(thresholdRoleValue) && Number.isFinite(Number(preScreenScore)) && Number(preScreenScore) < thresholdRoleValue;
                   return (

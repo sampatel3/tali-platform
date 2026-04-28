@@ -254,6 +254,23 @@ def _execute_scoring(
     _execute_scoring_v3(
         db, application=application, job=job, force_full_score=force_full_score
     )
+    # Sync the cached score columns (role_fit_score_cache_100,
+    # taali_score_cache_100, score_mode_cache, pre_screen_score_100) so
+    # the candidate-detail endpoint — which reads from the cache — sees
+    # the fresh CV score. Without this the directory list (live-computed)
+    # and detail page (cache-read) drift apart after every rescore.
+    from ..domains.assessments_runtime.role_support import (
+        refresh_application_score_cache,
+    )
+
+    try:
+        refresh_application_score_cache(application, db=db)
+    except Exception:  # pragma: no cover — cache refresh must not break scoring
+        logger.exception(
+            "Failed to refresh score cache for application=%s job=%s",
+            getattr(application, "id", None),
+            getattr(job, "id", None),
+        )
 
 
 def _emit_cv_scored_event(
