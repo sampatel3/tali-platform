@@ -197,7 +197,8 @@ def test_run_one_passes_against_stub(monkeypatch, placeholder_case):
 
     result = run_one(placeholder_case, skip_cache=True)
     assert result.passed, f"failures: {result.failures}"
-    assert result.recommendation in ("yes", "strong_yes")
+    # recommendation is no longer auto-surfaced — UI derives it from the
+    # role's reject threshold. Just assert on the score.
     assert 60 <= result.role_fit_score <= 100
 
 

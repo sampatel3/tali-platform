@@ -197,40 +197,28 @@ def aggregate(
     dimension_scores: DimensionScores | None,
     assessments: Iterable[RequirementAssessment],
     archetype_weights: dict[str, float] | None = None,
-) -> tuple[float, float, float, float, float, Recommendation]:
+) -> tuple[float, float, float, float, float]:
     """Run the full aggregation chain.
 
     Returns (skills_match, experience_relevance, requirements_match,
-    cv_fit, role_fit, recommendation).
+    cv_fit, role_fit).
 
-    skills_match + experience_relevance are derived from the dimensions
-    for legacy-consumer compatibility.
+    No recommendation is returned — the recruiter sets a per-role
+    reject threshold on the job page; the UI derives the indicator
+    dynamically from ``role_fit_score`` against that threshold.
+
+    skills_match + experience_relevance are derived from the
+    dimensions for legacy-consumer compatibility.
     """
     assessments_list = list(assessments)
     requirements_match = compute_requirements_match_score(assessments_list)
     cv_fit = compute_cv_fit_from_dimensions(dimension_scores, archetype_weights)
     role_fit = compute_role_fit(cv_fit, requirements_match)
     skills_match, experience_relevance = derive_v3_compat_scores(dimension_scores)
-
-    has_failed_constraint = any(
-        a.priority == Priority.CONSTRAINT and _is_unfulfilled(a.status)
-        for a in assessments_list
-    )
-    has_missing_must_have = any(
-        a.priority == Priority.MUST_HAVE and _is_unfulfilled(a.status)
-        for a in assessments_list
-    )
-
-    recommendation = derive_recommendation(
-        role_fit,
-        has_failed_constraint=has_failed_constraint,
-        has_missing_must_have=has_missing_must_have,
-    )
     return (
         skills_match,
         experience_relevance,
         requirements_match,
         cv_fit,
         role_fit,
-        recommendation,
     )

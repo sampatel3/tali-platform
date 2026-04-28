@@ -311,7 +311,7 @@ def test_aggregate_round_trip():
         _ra("req_1", Priority.MUST_HAVE, Status.MET),
         _ra("req_2", Priority.STRONG_PREFERENCE, Status.MET),
     ]
-    skills, exp, req_match, cv_fit, role_fit, rec = aggregate(
+    skills, exp, req_match, cv_fit, role_fit = aggregate(
         dimension_scores=_ds(),
         assessments=assessments,
     )
@@ -321,7 +321,8 @@ def test_aggregate_round_trip():
     assert abs(cv_fit - 69.75) < 0.01
     # role_fit = 0.4 * 69.75 + 0.6 * 100 = 27.9 + 60 = 87.9
     assert abs(role_fit - 87.9) < 0.01
-    assert rec == Recommendation.STRONG_YES
+    # No recommendation returned — that's a UI decision against the
+    # per-role reject threshold the recruiter sets on the job page.
     # Back-filled v3-compat scores.
     assert abs(skills - 77.5) < 0.01
     assert abs(exp - 62.5) < 0.01
@@ -335,14 +336,14 @@ def test_aggregate_constraint_failure_no_longer_forces_no():
         _ra("ok", Priority.MUST_HAVE, Status.MET),
         _ra("loc", Priority.CONSTRAINT, Status.MISSING),
     ]
-    _, _, req_match, _, role_fit, rec = aggregate(
+    _, _, req_match, _, role_fit = aggregate(
         dimension_scores=_ds(), assessments=assessments
     )
     # The single met must_have gives req_match=100 (constraints are
     # excluded from the weighted average). cv_fit ~69.75 → role_fit
-    # ~87.9 → STRONG_YES.
+    # ~87.9. No recommendation returned.
     assert req_match == 100.0
-    assert rec == Recommendation.STRONG_YES
+    assert abs(role_fit - 87.9) < 0.01
 
 
 def test_aggregate_with_archetype_weights_changes_cv_fit():
@@ -354,7 +355,7 @@ def test_aggregate_with_archetype_weights_changes_cv_fit():
         "industry_match": 0.0,
         "tenure_pattern": 0.0,
     }
-    skills, _, _, cv_fit, _, _ = aggregate(
+    skills, _, _, cv_fit, _ = aggregate(
         dimension_scores=_ds(),
         assessments=[],
         archetype_weights=a_weights,

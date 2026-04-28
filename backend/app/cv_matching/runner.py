@@ -316,7 +316,6 @@ def run_cv_match(
         req_match,
         cv_fit,
         role_fit,
-        recommendation,
     ) = aggregate(
         dimension_scores=parsed.dimension_scores,
         assessments=parsed.requirements_assessment,
@@ -351,7 +350,9 @@ def run_cv_match(
         requirements_match_score=req_match,
         cv_fit_score=cv_fit,
         role_fit_score=role_fit,
-        recommendation=recommendation,
+        # recommendation deliberately omitted — derived at display time
+        # from role_fit_score + the per-role reject threshold the
+        # recruiter sets on the job page.
         injection_suspected=scan_for_injection(cv_text),
         suspicious_score=check_suspicious_score(
             requirements_match_score=req_match, cv_text=cv_text

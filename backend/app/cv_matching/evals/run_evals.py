@@ -87,11 +87,16 @@ def _check_case(case: dict, output: CVMatchOutput) -> list[str]:
     failures: list[str] = []
     expected = case.get("expected", {}) or {}
 
+    # recommendation_in: kept for backwards-compat but treated as advisory.
+    # The runner no longer auto-derives a recommendation (the UI does that
+    # dynamically against the per-role reject threshold), so output.recommendation
+    # is typically None. We still surface the assertion when both sides have a value.
     expected_recs = expected.get("recommendation_in") or []
-    if expected_recs and output.recommendation.value not in expected_recs:
-        failures.append(
-            f"recommendation={output.recommendation.value} not in {expected_recs}"
-        )
+    if expected_recs and output.recommendation is not None:
+        if output.recommendation.value not in expected_recs:
+            failures.append(
+                f"recommendation={output.recommendation.value} not in {expected_recs}"
+            )
 
     score_range = expected.get("role_fit_score_range")
     if score_range:
@@ -149,7 +154,9 @@ def run_one(case: dict, *, skip_cache: bool = False) -> CaseResult:
     return CaseResult(
         case_id=case["case_id"],
         passed=not failures,
-        recommendation=output.recommendation.value,
+        recommendation=(
+            output.recommendation.value if output.recommendation is not None else "—"
+        ),
         role_fit_score=output.role_fit_score,
         failures=failures,
         output=output.model_dump(mode="json"),

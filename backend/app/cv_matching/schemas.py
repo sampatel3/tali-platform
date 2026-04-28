@@ -323,6 +323,18 @@ class DimensionScores(BaseModel):
     tenure_pattern: float = Field(ge=0, le=100)
 
 
+def _truncate_to_5(v: Any) -> Any:
+    """Truncate a list to its first 5 entries; pass non-lists through.
+
+    The LLM occasionally emits 6+ items despite the prompt's "cap at 5"
+    rule. Strict validation rejects → forces a retry. Truncation keeps
+    the first 5 (autoregressively the most-relevant) and proceeds.
+    """
+    if isinstance(v, list) and len(v) > 5:
+        return v[:5]
+    return v
+
+
 class CVMatchResult(BaseModel):
     """Raw LLM output after JSON parsing.
 
@@ -343,6 +355,11 @@ class CVMatchResult(BaseModel):
     experience_highlights: list[str] = Field(default_factory=list, max_length=5)
     concerns: list[str] = Field(default_factory=list, max_length=5)
     summary: str = ""
+
+    @field_validator("experience_highlights", "concerns", mode="before")
+    @classmethod
+    def _truncate_capped_lists(cls, v):
+        return _truncate_to_5(v)
 
 
 class CVMatchOutput(BaseModel):
@@ -367,7 +384,15 @@ class CVMatchOutput(BaseModel):
     requirements_match_score: float = Field(default=0.0, ge=0, le=100)
     cv_fit_score: float = Field(default=0.0, ge=0, le=100)
     role_fit_score: float = Field(default=0.0, ge=0, le=100)
-    recommendation: Recommendation = Recommendation.NO
+    # Recommendation is no longer auto-derived from a fixed score
+    # threshold. The recruiter sets a per-role reject threshold on the
+    # job page; the UI renders the recommendation dynamically by
+    # comparing ``role_fit_score`` against that user-configurable value.
+    # Field kept on the schema so legacy consumers don't crash on its
+    # absence; never populated by the runner. Override capture
+    # endpoints in routes.py still use the Recommendation enum for
+    # *recruiter-supplied* override values — that's a different surface.
+    recommendation: Recommendation | None = None
 
     injection_suspected: bool = False
     suspicious_score: bool = False
