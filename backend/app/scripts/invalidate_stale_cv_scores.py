@@ -50,7 +50,8 @@ def invalidate_stale_cv_match_scores(db: Session, current_prompt_version: str) -
             SET cv_match_score = NULL,
                 cv_match_scored_at = NULL
             WHERE cv_match_score IS NOT NULL
-              AND COALESCE(cv_match_details->>'scoring_version', '') <> :current_version
+              AND COALESCE(cv_match_details->>'prompt_version',
+                           cv_match_details->>'scoring_version', '') <> :current_version
             """
         ),
         {"current_version": current_prompt_version},
