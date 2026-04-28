@@ -406,9 +406,28 @@ export const buildAssessmentSummaryModel = ({ application, completedAssessment }
   };
 };
 
-const getRecommendation = (score100) => {
+const getRecommendation = (score100, rejectThreshold100 = null) => {
   const numeric = toFiniteNumber(score100);
   if (!Number.isFinite(numeric)) return { label: 'Pending', variant: 'muted' };
+
+  // The recruiter-set ``auto_reject_threshold_100`` on the role is the
+  // source of truth when present. Render binary against it: at-or-above
+  // = consider, below = flag for rejection. The recruiter manages the
+  // threshold on the job page.
+  // NB: ``toFiniteNumber(null) === 0`` (because ``Number(null) === 0``)
+  // so the null/undefined check has to happen BEFORE coercion — we
+  // can't just rely on isFinite afterwards.
+  if (rejectThreshold100 !== null && rejectThreshold100 !== undefined) {
+    const threshold = toFiniteNumber(rejectThreshold100);
+    if (Number.isFinite(threshold) && threshold > 0) {
+      if (numeric < threshold) {
+        return { label: 'Below threshold', variant: 'danger' };
+      }
+      return { label: 'Above threshold', variant: 'success' };
+    }
+  }
+
+  // Backwards-compat fallback when no role threshold is configured.
   if (numeric >= 80) return { label: 'Strong Hire', variant: 'success' };
   if (numeric >= 65) return { label: 'Hire', variant: 'info' };
   if (numeric >= 50) return { label: 'Consider', variant: 'warning' };
@@ -663,7 +682,15 @@ export const buildStandingCandidateReportModel = ({
       value: Number(value),
     }))
     .filter((item) => Number.isFinite(item.value));
-  const recommendation = getRecommendation(summaryModel.taaliScore);
+  // Per-role recruiter-configured reject threshold. Falls back to the
+  // 4-bucket heuristic when not configured. Sources, in order: explicit
+  // override on application.role, top-level application field (some
+  // serializers flatten it), or null.
+  const rejectThreshold100 =
+    application?.role?.auto_reject_threshold_100
+    ?? application?.auto_reject_threshold_100
+    ?? null;
+  const recommendation = getRecommendation(summaryModel.taaliScore, rejectThreshold100);
   const recruiterSummaryText = roleFitModel.summaryText
     || roleFitModel.rationaleBullets?.[0]
     || summaryModel.heuristicSummary
