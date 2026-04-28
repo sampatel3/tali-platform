@@ -18,7 +18,7 @@ resend==2.4.0
 celery==5.4.0
 redis==5.1.0
 neo4j==5.27.0
-graphiti-core[anthropic,voyageai]==0.21.0
+graphiti-core[anthropic,voyageai]==0.28.2
 boto3==1.35.0
 sentry-sdk[fastapi]==2.14.0
 httpx==0.27.2

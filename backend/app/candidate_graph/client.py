@@ -139,7 +139,6 @@ def get_graphiti():
             config=VoyageAIEmbedderConfig(
                 api_key=settings.VOYAGE_API_KEY,
                 embedding_model=settings.GRAPHITI_EMBEDDING_MODEL,
-                embedding_dim=int(settings.GRAPHITI_EMBEDDING_DIMS),
             )
         )
         neo4j_driver = Neo4jDriver(
