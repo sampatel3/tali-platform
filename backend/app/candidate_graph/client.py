@@ -105,6 +105,7 @@ def get_graphiti():
             )
 
         from graphiti_core import Graphiti  # type: ignore[import-not-found]
+        from graphiti_core.driver.neo4j_driver import Neo4jDriver  # type: ignore[import-not-found]
         from graphiti_core.llm_client.anthropic_client import AnthropicClient  # type: ignore[import-not-found]
         from graphiti_core.llm_client.config import LLMConfig  # type: ignore[import-not-found]
         from graphiti_core.embedder.voyage import VoyageAIEmbedder, VoyageAIEmbedderConfig  # type: ignore[import-not-found]
@@ -125,14 +126,17 @@ def get_graphiti():
                 embedding_dim=int(settings.GRAPHITI_EMBEDDING_DIMS),
             )
         )
-
-        _graphiti = Graphiti(
+        neo4j_driver = Neo4jDriver(
             uri=settings.NEO4J_URI,
             user=settings.NEO4J_USER,
             password=settings.NEO4J_PASSWORD,
             database=settings.NEO4J_DATABASE or "neo4j",
+        )
+
+        _graphiti = Graphiti(
             llm_client=llm_client,
             embedder=embedder,
+            graph_driver=neo4j_driver,
         )
         # First-time index/constraint creation. Idempotent — safe on every boot.
         try:
