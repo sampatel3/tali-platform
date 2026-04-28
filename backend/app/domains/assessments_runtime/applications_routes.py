@@ -1150,6 +1150,9 @@ def list_applications_global(
     application_outcome: str | None = Query(default=None),
     application_outcomes: str | None = Query(default=None),
     search: str | None = Query(default=None),
+    nl_query: str | None = Query(default=None, max_length=500),
+    view: str = Query(default="list", pattern="^(list|graph)$"),
+    rerank: bool = Query(default=True),
     sort_by: str = Query(
         default="pre_screen_score",
         pattern="^(pre_screen_score|pipeline_stage_updated_at|created_at|taali_score|cv_match_score|cv_match_scored_at)$",
@@ -1165,6 +1168,51 @@ def list_applications_global(
     current_user: User = Depends(get_current_user),
 ):
     started_at = perf_counter()
+
+    # Natural-language search: when nl_query is set, the parser drives
+    # filtering. The legacy `search` param is ignored (chips are
+    # authoritative — see UI). We compute a parsed filter, narrow the
+    # base query to its candidate-id set, then carry on with the existing
+    # outcome / stage / sort / pagination path.
+    nl_query_clean = (nl_query or "").strip()
+    parsed_filter_payload = None
+    nl_warnings: list[dict] = []
+    nl_subgraph_payload = None
+    nl_rerank_applied = False
+    if nl_query_clean:
+        from ...candidate_search import rate_limit as nl_rate_limit
+        from ...candidate_search.runner import run_search
+
+        if not nl_rate_limit.check_and_record(int(current_user.organization_id)):
+            raise HTTPException(
+                status_code=429,
+                detail="Too many natural-language queries — try again in a minute.",
+            )
+
+        nl_base = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.organization_id == current_user.organization_id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+        )
+        nl_result = run_search(
+            db=db,
+            organization_id=int(current_user.organization_id),
+            nl_query=nl_query_clean,
+            base_query=nl_base,
+            rerank_enabled=bool(rerank),
+            include_subgraph=(view == "graph"),
+        )
+        parsed_filter_payload = nl_result.parsed_filter.model_dump(mode="json")
+        nl_warnings = [w.model_dump(mode="json") for w in nl_result.warnings]
+        nl_rerank_applied = nl_result.rerank_applied
+        nl_subgraph_payload = (
+            nl_result.subgraph.model_dump(mode="json")
+            if nl_result.subgraph is not None
+            else None
+        )
+
     base_query = (
         db.query(CandidateApplication)
         .filter(
@@ -1172,6 +1220,14 @@ def list_applications_global(
             CandidateApplication.deleted_at.is_(None),
         )
     )
+    # When NL filtering returned a (possibly empty) id set, narrow the
+    # primary query before the standard filters apply.
+    if nl_query_clean:
+        nl_ids = nl_result.application_ids
+        if not nl_ids:
+            base_query = base_query.filter(CandidateApplication.id.in_([-1]))
+        else:
+            base_query = base_query.filter(CandidateApplication.id.in_(nl_ids))
     requested_role_ids = _parse_int_csv_filter(role_ids, field_name="role_ids")
     if role_id is not None:
         requested_role_ids = [int(role_id), *requested_role_ids]
@@ -1201,11 +1257,13 @@ def list_applications_global(
             requested_outcomes.append(single_outcome)
     if requested_outcomes:
         base_query = base_query.filter(CandidateApplication.application_outcome.in_(requested_outcomes))
-    if search:
+    if search and not nl_query_clean:
         term = f"%{search.strip()}%"
         # Match across candidate name/email/position AND the role name —
         # the search box placeholder ("name, email, or role") had been
         # lying since v1; recruiters typing a job title saw zero results.
+        # When nl_query is set the parsed filter is authoritative and the
+        # legacy `search` param is ignored.
         base_query = (
             base_query.join(Candidate, Candidate.id == CandidateApplication.candidate_id)
             .outerjoin(Role, Role.id == CandidateApplication.role_id)
@@ -1319,6 +1377,12 @@ def list_applications_global(
     }
     if include_stage_counts:
         response_payload["stage_counts"] = stage_counts
+    if nl_query_clean:
+        response_payload["parsed_filter"] = parsed_filter_payload
+        response_payload["nl_warnings"] = nl_warnings
+        response_payload["nl_rerank_applied"] = nl_rerank_applied
+        if view == "graph" and nl_subgraph_payload is not None:
+            response_payload["subgraph"] = nl_subgraph_payload
     return response_payload
 
 

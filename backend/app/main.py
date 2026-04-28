@@ -345,3 +345,11 @@ def health_check():
         "s3": s3_health,
         "integrations": integrations,
     }
+
+
+@app.get("/healthz/neo4j")
+def neo4j_health():
+    """Per-component health probe used by the Railway setup verification step."""
+    from .candidate_graph.client import healthcheck
+
+    return healthcheck()
