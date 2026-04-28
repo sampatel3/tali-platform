@@ -106,17 +106,14 @@ def sync_organization(
         # Use a subquery on candidate_id (integer) to avoid SELECT DISTINCT on json
         # columns in the candidates table (postgres has no equality op for json).
         cutoff = datetime(since_year, 1, 1, tzinfo=timezone.utc)
-        applied_sub = (
-            db.query(CandidateApplication.candidate_id)
-            .filter(CandidateApplication.organization_id == organization_id)
-            .filter(CandidateApplication.created_at >= cutoff)
-            .filter(CandidateApplication.deleted_at.is_(None))
-            .distinct()
-            .subquery()
-        )
+        applied_ids = db.query(CandidateApplication.candidate_id).filter(
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.created_at >= cutoff,
+            CandidateApplication.deleted_at.is_(None),
+        ).distinct()
         cand_q = (
             db.query(Candidate)
-            .filter(Candidate.id.in_(applied_sub))
+            .filter(Candidate.id.in_(applied_ids))
             .filter(Candidate.deleted_at.is_(None))
         )
     else:
