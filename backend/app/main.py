@@ -39,8 +39,21 @@ _openapi_url = None if _is_production else "/api/openapi.json"
 async def _lifespan(_app: FastAPI):
     # Startup
     logger.info("%s API started | env=%s", BRAND_NAME, "production" if settings.SENTRY_DSN else "development")
+    # Wire candidate_graph SQLAlchemy listeners (no-op when Neo4j is unset).
+    try:
+        from .candidate_graph.listeners import register_listeners
+
+        register_listeners()
+    except Exception:  # pragma: no cover — listener install must never block boot
+        logger.exception("Failed to register candidate_graph listeners")
     yield
-    # Shutdown (none needed currently)
+    # Shutdown
+    try:
+        from .candidate_graph.client import close_driver
+
+        close_driver()
+    except Exception:  # pragma: no cover — defensive
+        logger.exception("Failed to close Neo4j driver on shutdown")
 
 
 app = FastAPI(

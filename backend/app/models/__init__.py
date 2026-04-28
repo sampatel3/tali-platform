@@ -28,6 +28,7 @@ from .task import Task
 from .session import AssessmentSession
 from .billing_credit_ledger import BillingCreditLedger
 from .workable_sync_run import WorkableSyncRun
+from .graph_sync_state import GraphSyncState
 
 __all__ = [
     "User",
@@ -58,4 +59,5 @@ __all__ = [
     "AssessmentSession",
     "BillingCreditLedger",
     "WorkableSyncRun",
+    "GraphSyncState",
 ]
