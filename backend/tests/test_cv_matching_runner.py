@@ -191,20 +191,12 @@ def test_runner_sends_untrusted_cv_wrapper(monkeypatch):
 
 def test_runner_failure_on_input_token_ceiling(monkeypatch):
     _disable_archetype(monkeypatch)
+    import app.cv_matching.runner as runner_module
+
+    # Drive the ceiling to 1 so even a tiny input exceeds it.
+    monkeypatch.setattr(runner_module, "INPUT_TOKEN_CEILING", 1)
     cv = "x"
     client = _stub_client([_payload()])
-    # Force count_tokens to report way over the 3500 ceiling.
-    client.messages.counted_tokens = 99999  # type: ignore[attr-defined]
-
-    @dataclass
-    class _FatCount:
-        input_tokens: int = 99999
-
-    def fat_count(**kwargs):
-        return _FatCount()
-
-    client.messages.count_tokens = fat_count  # type: ignore[method-assign]
-
     out = run_cv_match(
         cv_text=cv, jd_text="JD", requirements=[], client=client, skip_cache=True
     )

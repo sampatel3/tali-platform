@@ -28,9 +28,9 @@ logger = logging.getLogger("taali.interview_tech")
 
 MODEL_VERSION = "claude-haiku-4-5-20251001"
 PROMPT_VERSION = "interview_tech_v1.0"
-OUTPUT_TOKEN_CEILING = 2200
-TRANSCRIPT_CHAR_CAP = 4000
-NOTES_CHAR_CAP = 1500
+OUTPUT_TOKEN_CEILING = 1600
+TRANSCRIPT_CHAR_CAP = 2000
+NOTES_CHAR_CAP = 1000
 
 
 PROMPT = """You are designing a technical-stage interview brief for a hiring panel. Use the full evidence packet below to write substantive, evidence-anchored questions — not generic templates.
@@ -193,7 +193,7 @@ def build_prompt(
 ) -> str:
     return PROMPT.format(
         prompt_version=PROMPT_VERSION,
-        job_spec_text=(job_spec_text or "").strip()[:5000],
+        job_spec_text=(job_spec_text or "").strip()[:3000],
         recruiter_block=_format_recruiter_block(recruiter_requirements),
         requirements_block=_format_requirements_block(requirements_assessment),
         transcript_block=_format_transcript_block(transcript_text),

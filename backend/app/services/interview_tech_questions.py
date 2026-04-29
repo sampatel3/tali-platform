@@ -145,6 +145,16 @@ def maybe_generate_tech_questions(
     if role is None or not (getattr(role, "job_spec_text", "") or "").strip():
         return None
 
+    # Skip regeneration when the existing pack was built from the same
+    # CV scoring version. The prompt_version in cv_match_details changes
+    # with each scoring model bump, so this stays current automatically.
+    details = cv_match_details if isinstance(cv_match_details, dict) else {}
+    current_cv_version = details.get("prompt_version") or details.get("scoring_version") or ""
+    existing_pack = getattr(application, "tech_interview_pack", None)
+    if isinstance(existing_pack, dict) and current_cv_version:
+        if existing_pack.get("cv_match_prompt_version") == current_cv_version:
+            return None  # reuse existing — no LLM call needed
+
     details = cv_match_details if isinstance(cv_match_details, dict) else {}
     requirements_assessment = details.get("requirements_assessment")
     if not isinstance(requirements_assessment, list):

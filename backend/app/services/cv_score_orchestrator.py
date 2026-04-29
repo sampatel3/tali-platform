@@ -298,17 +298,20 @@ def _execute_scoring(
     # Pre-build interview-support pack from the fresh details. Detail
     # endpoint reads this from cache instead of regenerating Claude
     # questions inline (which previously made every page load 20s+).
-    try:
-        refresh_application_interview_support(
-            application,
-            organization=getattr(application, "organization", None),
-        )
-    except Exception:  # pragma: no cover — interview-pack refresh must not break scoring
-        logger.exception(
-            "Failed to refresh interview support for application=%s job=%s",
-            getattr(application, "id", None),
-            getattr(job, "id", None),
-        )
+    # Skip on cache hits — the pack was built when the score was first
+    # computed, so rebuilding would make an unnecessary Haiku call.
+    if job.cache_hit != "hit":
+        try:
+            refresh_application_interview_support(
+                application,
+                organization=getattr(application, "organization", None),
+            )
+        except Exception:  # pragma: no cover — interview-pack refresh must not break scoring
+            logger.exception(
+                "Failed to refresh interview support for application=%s job=%s",
+                getattr(application, "id", None),
+                getattr(job, "id", None),
+            )
 
 
 def _emit_cv_scored_event(

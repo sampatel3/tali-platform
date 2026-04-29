@@ -432,6 +432,9 @@ def build_application_interview_support(
             "source": "application_generated",
             "generated_at": _utcnow().isoformat(),
             "questions": _dedupe_questions(tech_questions),
+            # Stamp the CV scoring version so maybe_generate_tech_questions
+            # can skip regeneration when the CV hasn't changed.
+            "cv_match_prompt_version": details.get("prompt_version") or details.get("scoring_version") or "",
         }
     )
     interview_evidence_summary = sanitize_json_for_storage(

@@ -94,27 +94,17 @@ def _strip_json_fences(raw: str) -> str:
     return text
 
 
-def _count_input_tokens(client, messages: list[dict], system: str) -> int:
-    """Count input tokens via the SDK; heuristic fallback when unavailable."""
-    if not hasattr(client.messages, "count_tokens"):
-        total_chars = sum(
-            len(block.get("text", "") if isinstance(block, dict) else block)
-            for msg in messages
-            for block in (
-                msg["content"] if isinstance(msg.get("content"), list) else [{"text": msg.get("content", "")}]
-            )
+def _count_input_tokens(messages: list[dict], system: str) -> int:
+    """Estimate input tokens from character counts — no API call, no billing."""
+    total_chars = sum(
+        len(block.get("text", "") if isinstance(block, dict) else str(block))
+        for msg in messages
+        for block in (
+            msg["content"] if isinstance(msg.get("content"), list) else [{"text": msg.get("content", "")}]
         )
-        return (total_chars + len(system)) // 4
-    try:
-        result = client.messages.count_tokens(
-            model=MODEL_VERSION,
-            system=system,
-            messages=messages,
-        )
-        return int(getattr(result, "input_tokens", 0) or 0)
-    except Exception as exc:  # pragma: no cover — defensive
-        logger.warning("Token counting failed: %s", exc)
-        return 8000  # conservative fallback — below the 32K ceiling
+    )
+    # ~3.5 chars/token for English; slightly conservative to avoid undercounting.
+    return int((total_chars + len(system)) / 3.5)
 
 
 def _failed_output(*, error_reason: str, ctx: _RunContext) -> CVMatchOutput:
@@ -265,7 +255,7 @@ def run_cv_match(
         return out
 
     # 5. Token ceiling check
-    counted_in = _count_input_tokens(client, messages, _SYSTEM_PROMPT)
+    counted_in = _count_input_tokens(messages, _SYSTEM_PROMPT)
     if counted_in > INPUT_TOKEN_CEILING:
         out = _failed_output(
             error_reason=(
