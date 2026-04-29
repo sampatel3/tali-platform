@@ -439,13 +439,14 @@ def graphiti_backfill_all(request: Request):
 
     since_year_str = request.query_params.get("since_year")
     since_year = int(since_year_str) if since_year_str and since_year_str.isdigit() else None
+    cv_only = request.query_params.get("cv_only", "false").lower() == "true"
 
     def _run():
         import logging
         log = logging.getLogger("taali.candidate_graph.backfill")
         db = SessionLocal()
         try:
-            result = sync_all_organizations(db, since_year=since_year)
+            result = sync_all_organizations(db, since_year=since_year, cv_only=cv_only)
             log.info("Graphiti backfill complete: %s", result)
         except Exception as _exc:
             log.exception("Graphiti backfill failed: %s: %s", type(_exc).__name__, _exc)
@@ -456,6 +457,7 @@ def graphiti_backfill_all(request: Request):
     return {
         "status": "started",
         "since_year": since_year,
+        "cv_only": cv_only,
         "message": "Backfill running in background — check Railway logs for progress",
     }
 
