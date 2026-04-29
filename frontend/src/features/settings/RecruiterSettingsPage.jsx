@@ -16,7 +16,6 @@ import {
   Sheet,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
-import { CardSkeleton } from '../../shared/ui/Skeletons';
 import {
   SyncPulse,
   WorkableLogo,
@@ -1032,10 +1031,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   };
 
   const renderLoadingState = (
-    <div className="settings-loading">
-      <CardSkeleton lines={4} />
-      <CardSkeleton lines={6} />
-      <CardSkeleton lines={5} />
+    <div className="flex min-h-[260px] items-center justify-center">
+      <Spinner size={32} />
     </div>
   );
 

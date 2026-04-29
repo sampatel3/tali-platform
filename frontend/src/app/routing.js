@@ -41,6 +41,8 @@ export const pathForPage = (page, options = {}) => {
         : '/assessments';
     case 'tasks':
       return '/tasks';
+    case 'tasks-bespoke':
+      return '/tasks/bespoke';
     case 'analytics':
     case 'reporting':
       return '/reporting';

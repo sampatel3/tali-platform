@@ -74,6 +74,9 @@ const TasksPage = lazy(() =>
 const TaskPreviewPage = lazy(() =>
   import('./features/tasks/TasksPage').then((m) => ({ default: m.TaskPreviewPage }))
 );
+const BespokeTaskRequestPage = lazy(() =>
+  import('./features/tasks/BespokeTaskRequestPage').then((m) => ({ default: m.BespokeTaskRequestPage }))
+);
 const SettingsPage = lazy(() =>
   import('./features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage }))
 );
@@ -105,6 +108,7 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
     '/analytics',
     '/reporting',
     '/tasks',
+    '/tasks/bespoke',
     '/candidate-detail',
     ].includes(pathname)
     || pathname.startsWith('/jobs/')
@@ -505,6 +509,15 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <TasksPage onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/tasks/bespoke"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <BespokeTaskRequestPage onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />
           </Suspense>
         )}
       />

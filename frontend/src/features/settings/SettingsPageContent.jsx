@@ -17,7 +17,6 @@ import {
   Panel,
   Sheet,
 } from '../../shared/ui/TaaliPrimitives';
-import { CardSkeleton } from '../../shared/ui/Skeletons';
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
@@ -1755,12 +1754,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
         />
 
         {orgLoading ? (
-          <div className="space-y-5">
-            <CardSkeleton lines={3} />
-            <div className="grid gap-4 md:grid-cols-2">
-              <CardSkeleton lines={4} />
-              <CardSkeleton lines={4} />
-            </div>
+          <div className="flex min-h-[260px] items-center justify-center">
+            <Spinner size={32} />
           </div>
         ) : (
           <>

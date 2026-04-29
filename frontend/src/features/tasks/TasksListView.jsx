@@ -7,8 +7,8 @@ import {
   PageContainer,
   PageHeader,
   Panel,
+  Spinner,
 } from '../../shared/ui/TaaliPrimitives';
-import { CardSkeleton } from '../../shared/ui/Skeletons';
 import { ScoringGlossaryPanel, SCORING_GLOSSARY_METRIC_COUNT } from '../../shared/ui/ScoringGlossaryPanel';
 
 const DIFFICULTY_LEVEL_CLASS = {
@@ -109,10 +109,8 @@ export const TasksListView = ({
     />
 
     {loading ? (
-      <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
-        {Array.from({ length: 6 }).map((_, index) => (
-          <CardSkeleton key={`tasks-skeleton-${index}`} lines={3} />
-        ))}
+      <div className="flex min-h-[260px] items-center justify-center">
+        <Spinner size={32} />
       </div>
     ) : tasksList.length === 0 ? (
       <Panel className="px-6 py-16 text-center">

@@ -6,8 +6,7 @@ import { useToast } from '../../context/ToastContext';
 import { getDocumentTitle } from '../../config/brand';
 import { formatScale100Score } from '../../lib/scoreDisplay';
 import * as apiClient from '../../shared/api';
-import { Button, PageContainer, PageHeader, Panel, Select, TableShell } from '../../shared/ui/TaaliPrimitives';
-import { StatCardSkeleton, TableRowSkeleton } from '../../shared/ui/Skeletons';
+import { Button, PageContainer, PageHeader, Panel, Select, Spinner, TableShell } from '../../shared/ui/TaaliPrimitives';
 
 const PAGE_SIZE = 10;
 const ONBOARDING_DISMISSED_KEY = 'taali_onboarding_dismissed';
@@ -284,11 +283,8 @@ export const DashboardPage = ({
         ) : null}
 
         {loading ? (
-          <div className="mb-5 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-            <StatCardSkeleton />
-            <StatCardSkeleton />
-            <StatCardSkeleton />
-            <StatCardSkeleton />
+          <div className="mb-5 flex min-h-[140px] items-center justify-center">
+            <Spinner size={32} />
           </div>
         ) : (
           <div className="mb-5 grid gap-4 md:grid-cols-2 lg:grid-cols-4">
@@ -419,20 +415,9 @@ export const DashboardPage = ({
           </div>
 
           {loading ? (
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-[var(--taali-border-soft)] bg-[var(--taali-table-header)]">
-                  {['Candidate', 'Role', 'Task', 'Status', 'TAALI Score', 'Assessment Score', 'Sent', 'Completed', 'Actions'].map((label) => (
-                    <th key={label} className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase tracking-[0.08em]">{label}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {Array.from({ length: 8 }).map((_, index) => (
-                  <TableRowSkeleton key={`dashboard-skeleton-${index}`} cols={9} />
-                ))}
-              </tbody>
-            </table>
+            <div className="flex min-h-[260px] items-center justify-center">
+              <Spinner size={32} />
+            </div>
           ) : (
             <table className="w-full">
               <thead>

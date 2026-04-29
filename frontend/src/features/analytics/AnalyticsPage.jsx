@@ -17,8 +17,7 @@ import {
 import { assessments as assessmentsApi, analytics as analyticsApi, roles as rolesApi, tasks as tasksApi } from '../../shared/api';
 import { getCategoryScoresFromAssessment } from '../../lib/comparisonCategories';
 import { dimensionOrder, getDimensionById } from '../../scoring/scoringDimensions';
-import { Button, PageContainer, PageHeader, Panel, Select } from '../../shared/ui/TaaliPrimitives';
-import { CardSkeleton, StatCardSkeleton } from '../../shared/ui/Skeletons';
+import { Button, PageContainer, PageHeader, Panel, Select, Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const DATE_RANGE_OPTIONS = [
   { value: '7d', label: 'Last 7 days' },
@@ -307,18 +306,8 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
         </Panel>
 
         {loading ? (
-          <div className="space-y-5">
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-              <StatCardSkeleton />
-              <StatCardSkeleton />
-              <StatCardSkeleton />
-              <StatCardSkeleton />
-            </div>
-            <div className="grid gap-5 lg:grid-cols-2">
-              <CardSkeleton lines={8} />
-              <CardSkeleton lines={8} />
-            </div>
-            <CardSkeleton lines={10} />
+          <div className="flex min-h-[260px] items-center justify-center">
+            <Spinner size={32} />
           </div>
         ) : (
           <div className="space-y-5">

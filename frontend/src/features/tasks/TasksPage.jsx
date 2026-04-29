@@ -4,7 +4,7 @@ import { useParams } from 'react-router-dom';
 
 import { useToast } from '../../context/ToastContext';
 import { tasks as tasksApi } from '../../shared/api';
-import { CardSkeleton } from '../../shared/ui/Skeletons';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const AssessmentPage = lazy(() => import('../assessment_runtime/AssessmentPage'));
 
@@ -167,10 +167,14 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
             </h1>
             <p>Browse read-only assessment tasks, preview the candidate workspace, and use them when assigning candidates from jobs.</p>
           </div>
-          <div className="eng-badge">
+          <button
+            type="button"
+            className="eng-badge eng-badge-button"
+            onClick={() => onNavigate?.('tasks-bespoke')}
+          >
             <span className="ico"><Lock size={14} /></span>
-            <span className="t"><b>Read-only catalog</b><br /><span>Task source stays with engineering</span></span>
-          </div>
+            <span className="t"><b>Read-only catalog</b><br /><span>Contact Taali to build a bespoke task for candidate assessment</span></span>
+          </button>
         </div>
 
         <div className="tasks-toolbar">
@@ -210,10 +214,8 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
         </div>
 
         {loading ? (
-          <div className="tasks-loading-grid">
-            {Array.from({ length: 4 }).map((_, index) => (
-              <CardSkeleton key={`task-library-${index}`} lines={4} />
-            ))}
+          <div className="flex min-h-[260px] items-center justify-center">
+            <Spinner size={32} />
           </div>
         ) : filteredTasks.length === 0 ? (
           <div className="tasks-empty-panel">No tasks available</div>
@@ -316,8 +318,8 @@ export const TaskPreviewPage = () => {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-[var(--bg)] p-10">
-        <CardSkeleton lines={5} />
+      <div className="flex min-h-screen items-center justify-center bg-[var(--bg)]">
+        <Spinner size={32} />
       </div>
     );
   }
@@ -335,7 +337,7 @@ export const TaskPreviewPage = () => {
   }
 
   return (
-    <Suspense fallback={<div className="min-h-screen bg-[var(--bg)] p-10"><CardSkeleton lines={5} /></div>}>
+    <Suspense fallback={<div className="flex min-h-screen items-center justify-center bg-[var(--bg)]"><Spinner size={32} /></div>}>
       <AssessmentPage
         startData={buildPreviewStartData(task)}
         demoMode
