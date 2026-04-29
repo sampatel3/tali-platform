@@ -82,6 +82,51 @@ function FetchCounters({ data }) {
   );
 }
 
+function ProcessCounters({ data }) {
+  const fetchTotal = Number(data?.fetch?.total ?? 0);
+  const fetchAttempted = Number(data?.fetch?.attempted ?? 0);
+  const fetchFetched = Number(data?.fetch?.fetched ?? 0);
+  const fetchUnavailable = Number(data?.fetch?.unavailable ?? 0);
+  const fetchErrors = Number(data?.fetch?.errors ?? 0);
+  const preTotal = Number(data?.pre_screen?.total ?? 0);
+  const prePros = Number(data?.pre_screen?.processed ?? 0);
+  const preErrors = Number(data?.pre_screen?.errors ?? 0);
+  const scoreTotal = Number(data?.score?.total ?? 0);
+  const scorePros = Number(data?.score?.scored ?? 0);
+  const scoreErrors = Number(data?.score?.errors ?? 0);
+  const scoreFiltered = Number(data?.score?.filtered ?? 0);
+  const total = fetchTotal + preTotal + scoreTotal;
+  const processed = fetchAttempted + prePros + scorePros;
+  const lines = [];
+  if (fetchTotal > 0) {
+    const annot = [];
+    if (fetchFetched) annot.push(`${fetchFetched} got CV`);
+    if (fetchUnavailable) annot.push(`${fetchUnavailable} unavailable`);
+    if (fetchErrors) annot.push(`${fetchErrors} err`);
+    lines.push(`Fetch ${fetchAttempted}/${fetchTotal}${annot.length ? ` (${annot.join(', ')})` : ''}`);
+  }
+  if (preTotal > 0) {
+    lines.push(`Pre-screen ${prePros}/${preTotal}${preErrors ? ` (${preErrors} err)` : ''}`);
+  }
+  if (scoreTotal > 0) {
+    const annot = [];
+    if (scoreFiltered) annot.push(`${scoreFiltered} filtered`);
+    if (scoreErrors) annot.push(`${scoreErrors} err`);
+    lines.push(`Score ${scorePros}/${scoreTotal}${annot.length ? ` (${annot.join(', ')})` : ''}`);
+  }
+  return (
+    <div className="bg-jobs-panel-counters">
+      <strong>{processed}</strong> / {total}
+      {lines.map((l) => (
+        <div key={l} className="bg-jobs-panel-breakdown">{l}</div>
+      ))}
+      {data?.current_step ? (
+        <div className="bg-jobs-panel-phase">step: <code>{data.current_step}</code></div>
+      ) : null}
+    </div>
+  );
+}
+
 function GraphCounters({ data }) {
   const total = Number(data?.total ?? data?.counters?.total ?? 0);
   const synced = Number(data?.synced ?? data?.counters?.synced ?? 0);
@@ -178,6 +223,7 @@ export default function BackgroundJobsPanel() {
 
   const liveJobs = ctx?.jobs ?? {};
   const liveFetch = ctx?.fetchJobs ?? {};
+  const liveProcess = ctx?.processJobs ?? {};
   const graphSync = ctx?.graphSyncJob ?? null;
   const workableSync = ctx?.workableSyncJob ?? null;
 
@@ -216,6 +262,29 @@ export default function BackgroundJobsPanel() {
   const liveFetchRoleIds = useMemo(() => new Set(
     Object.keys(liveFetch).map((k) => Number(k)),
   ), [liveFetch]);
+
+  const processRows = useMemo(() => {
+    const out = [];
+    for (const [roleIdRaw, data] of Object.entries(liveProcess)) {
+      const roleId = Number(roleIdRaw);
+      if (!isVisible(data?.status)) continue;
+      const scope = data?.role_name ? `Role: ${data.role_name}` : `Role #${roleId}`;
+      out.push(
+        <JobRow
+          key={`process-live-${roleId}`}
+          status={data.status}
+          scope={scope}
+          counters={<ProcessCounters data={data} />}
+          startedAt={data?.started_at}
+          finishedAt={data?.finished_at}
+          onCancel={() => ctx?.cancelProcessJob?.(roleId)}
+          onDismiss={() => ctx?.dismissProcessJob?.(roleId)}
+          isLive
+        />
+      );
+    }
+    return out;
+  }, [liveProcess, ctx]);
 
   const scoreRows = useMemo(() => {
     // Render live rows first (active + terminal-but-still-tracked), then
@@ -370,10 +439,11 @@ export default function BackgroundJobsPanel() {
     const liveActive = (m) => Object.values(m).some((d) => ACTIVE_STATUSES.has(String(d?.status ?? '').toLowerCase()));
     if (liveActive(liveJobs)) return true;
     if (liveActive(liveFetch)) return true;
+    if (liveActive(liveProcess)) return true;
     if (graphSync && ACTIVE_STATUSES.has(String(graphSync.status ?? '').toLowerCase())) return true;
     if (workableSync && (workableSync.sync_in_progress || ACTIVE_STATUSES.has(String(workableSync.status ?? '').toLowerCase()))) return true;
     return false;
-  }, [liveJobs, liveFetch, graphSync, workableSync]);
+  }, [liveJobs, liveFetch, liveProcess, graphSync, workableSync]);
 
   // tick is read so React re-renders the "last updated" tooltip text every 5s.
   void tick;
@@ -394,6 +464,12 @@ export default function BackgroundJobsPanel() {
         <span className="bg-jobs-panel-header-text">Auto-refreshing every 5s</span>
       </div>
 
+      <SubTable
+        title="Process candidates"
+        headers={headers}
+        rows={processRows}
+        emptyText="No active runs."
+      />
       <SubTable
         title="Scoring batch"
         headers={headers}
