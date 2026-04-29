@@ -22,6 +22,7 @@ import {
   Textarea,
 } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
+import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidatesDirectoryPage } from '../candidates/CandidatesDirectoryPage';
@@ -614,9 +615,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const { showToast } = useToast();
   const {
     jobs,
+    processJobs,
     trackRole,
     trackRoleFetchCvs,
     trackRolePreScreen,
+    trackRoleProcess,
   } = useJobStatus() ?? {};
   void onViewCandidate;
 
@@ -630,6 +633,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [fetchCvsProgress, setFetchCvsProgress] = useState(EMPTY_FETCH_PROGRESS);
   const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
   const [confirmAction, setConfirmAction] = useState(EMPTY_CONFIRM);
+  const [processDialogOpen, setProcessDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
   const [criteriaDraft, setCriteriaDraft] = useState('');
@@ -1387,86 +1391,34 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               </div>
             </div>
             <div className="sa-actions action-toolbar">
-              {role?.source === 'workable' ? (
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={handleFetchCvs}
-                  disabled={String(fetchCvsProgress?.status || '').toLowerCase() === 'running'}
-                  title="Fetch CVs from Workable for any candidates missing one. Required before scoring works."
-                >
-                  {String(fetchCvsProgress?.status || '').toLowerCase() === 'running' ? (
-                    <>
-                      <Loader2 size={13} className="animate-spin" />
-                      Fetching {fetchCvsProgress.fetched}/{fetchCvsProgress.total}
-                    </>
-                  ) : (
-                    <>Fetch CVs</>
-                  )}
-                </button>
-              ) : null}
-              {/* Pre-screen — always visible. Cheap LLM-only pass; surfaces
-                  candidates as Below threshold/Manual review/Proceed/Strong
-                  match without running the expensive v3 score. */}
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => openConfirm('pre_screen_new')}
-                disabled={String(preScreenProgress?.status || '').toLowerCase() === 'running'}
-                title="Run pre-screen on candidates that have a CV but haven't been pre-screened (or whose CV changed). Idempotent — safe to click anytime."
-              >
-                {String(preScreenProgress?.status || '').toLowerCase() === 'running' && !preScreenProgress?.refresh ? (
-                  <>
-                    <Loader2 size={13} className="animate-spin" />
-                    Pre-screening {preScreenProgress.processed}/{preScreenProgress.total}
-                  </>
-                ) : (
-                  <>Pre-screen</>
-                )}
-              </button>
-              <button
-                type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => openConfirm('pre_screen_refresh')}
-                disabled={String(preScreenProgress?.status || '').toLowerCase() === 'running'}
-                title="Re-run pre-screen on every candidate with a CV. Existing scores remain — only the pre-screen result is overwritten."
-              >
-                {String(preScreenProgress?.status || '').toLowerCase() === 'running' && preScreenProgress?.refresh ? (
-                  <>
-                    <Loader2 size={13} className="animate-spin" />
-                    Refreshing {preScreenProgress.processed}/{preScreenProgress.total}
-                  </>
-                ) : (
-                  <>Refresh pre-screen</>
-                )}
-              </button>
-              <span className="action-toolbar__divider" aria-hidden="true" />
-              {unscoredApplications.length > 0 ? (
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={() => handleBatchScore({ includeScored: false })}
-                  disabled={String(batchScoreProgress?.status || '').toLowerCase() === 'running'}
-                >
-                  Score {unscoredApplications.length} new
-                </button>
-              ) : null}
+              {/* Single button replaces Fetch CVs / Pre-screen / Refresh / Score
+                  new / Re-score all. The dialog lets the user pick which
+                  steps to run. The cascade (fetch → pre-screen → score)
+                  always runs in order. */}
               <button
                 type="button"
                 className="btn btn-purple btn-sm"
-                onClick={() => handleBatchScore({ includeScored: true })}
-                disabled={String(batchScoreProgress?.status || '').toLowerCase() === 'running'}
+                onClick={() => setProcessDialogOpen(true)}
+                disabled={String(processJobs?.[numericRoleId]?.status || '').toLowerCase() === 'running'}
               >
-                {String(batchScoreProgress?.status || '').toLowerCase() === 'running' ? (
-                  <>
-                    <Loader2 size={13} className="animate-spin" />
-                    Re-scoring {batchScoreProgress.scored}/{batchScoreProgress.total}
-                  </>
-                ) : (
-                  <>
-                    Re-score all {activeApplications.length} CVs
-                  </>
-                )}
+                {(() => {
+                  const pj = processJobs?.[numericRoleId];
+                  const status = String(pj?.status || '').toLowerCase();
+                  if (status === 'running') {
+                    const step = pj?.current_step;
+                    const label = step === 'fetch' ? 'Fetching CVs'
+                      : step === 'pre_screen' ? 'Pre-screening'
+                      : step === 'score' ? 'Scoring'
+                      : 'Processing';
+                    return (
+                      <>
+                        <Loader2 size={13} className="animate-spin" />
+                        {label}…
+                      </>
+                    );
+                  }
+                  return <>Process candidates</>;
+                })()}
               </button>
             </div>
           </div>
@@ -1842,6 +1794,31 @@ Disqualifying: No experience with regulated financial data`}
           disabled={confirmAction.dryRunLoading}
           onClose={closeConfirm}
           onConfirm={runConfirmedAction}
+        />
+
+        <ProcessCandidatesDialog
+          open={processDialogOpen}
+          roleId={numericRoleId}
+          onClose={() => setProcessDialogOpen(false)}
+          onConfirm={async (body) => {
+            try {
+              const res = await rolesApi.processRole(numericRoleId, body);
+              const payload = res?.data ?? {};
+              if (payload.status === 'already_running') {
+                showToast('This role is already being processed.', 'info');
+              } else {
+                trackRoleProcess?.(numericRoleId);
+                const steps = [];
+                if (body.fetch_cvs) steps.push('fetch CVs');
+                if (body.pre_screen || body.refresh_pre_screen) steps.push('pre-screen');
+                if (body.score && body.score !== 'none') steps.push('score');
+                showToast(`Started: ${steps.join(' → ')}`, 'info');
+              }
+              setProcessDialogOpen(false);
+            } catch (error) {
+              showToast(getErrorMessage(error, 'Failed to start.'), 'error');
+            }
+          }}
         />
       </div>
     </div>

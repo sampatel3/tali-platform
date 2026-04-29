@@ -25,13 +25,16 @@ export const BackgroundJobsToaster = () => {
     jobs,
     fetchJobs,
     preScreenJobs,
+    processJobs,
     graphSyncJob,
     dismissJob,
     dismissFetchJob,
     dismissPreScreenJob,
+    dismissProcessJob,
     dismissGraphSyncJob,
     cancelBatch,
     cancelFetchCvs,
+    cancelProcessJob,
   } = ctx;
 
   const visible = (status) => {
@@ -39,23 +42,32 @@ export const BackgroundJobsToaster = () => {
     return s === 'running' || s === 'cancelling' || s === 'cancelled' || s === 'completed' || s === 'failed';
   };
 
+  // Process jobs (cascade) — preferred. Show one row per role.
+  const processEntries = Object.entries(processJobs ?? {})
+    .map(([roleId, data]) => ({ kind: 'process', roleId: Number(roleId), data }))
+    .filter(({ data }) => visible(data?.status));
+
+  // Hide legacy single-action rows for any role that already has a process
+  // row visible. This avoids stacking 2-3 rows per role during the transition.
+  const processRoleSet = new Set(processEntries.map((e) => e.roleId));
+
   const scoreEntries = Object.entries(jobs)
     .map(([roleId, data]) => ({ kind: 'score', roleId: Number(roleId), data }))
-    .filter(({ data }) => visible(data?.status));
+    .filter(({ data, roleId }) => visible(data?.status) && !processRoleSet.has(roleId));
 
   const fetchEntries = Object.entries(fetchJobs)
     .map(([roleId, data]) => ({ kind: 'fetch', roleId: Number(roleId), data }))
-    .filter(({ data }) => visible(data?.status));
+    .filter(({ data, roleId }) => visible(data?.status) && !processRoleSet.has(roleId));
 
   const preScreenEntries = Object.entries(preScreenJobs)
     .map(([roleId, data]) => ({ kind: 'pre_screen', roleId: Number(roleId), data }))
-    .filter(({ data }) => visible(data?.status));
+    .filter(({ data, roleId }) => visible(data?.status) && !processRoleSet.has(roleId));
 
   const graphEntries = visible(graphSyncJob?.status)
     ? [{ kind: 'graph', roleId: 0, data: graphSyncJob }]
     : [];
 
-  const entries = [...scoreEntries, ...fetchEntries, ...preScreenEntries, ...graphEntries];
+  const entries = [...processEntries, ...scoreEntries, ...fetchEntries, ...preScreenEntries, ...graphEntries];
   if (entries.length === 0) return null;
 
   return (
@@ -65,11 +77,13 @@ export const BackgroundJobsToaster = () => {
           key={`${entry.kind}-${entry.roleId}`}
           entry={entry}
           onCancel={(() => {
+            if (entry.kind === 'process') return () => cancelProcessJob(entry.roleId);
             if (entry.kind === 'score') return () => cancelBatch(entry.roleId);
             if (entry.kind === 'fetch') return () => cancelFetchCvs(entry.roleId);
             return null;  // pre-screen / graph sync don't expose cancel yet
           })()}
           onDismiss={(() => {
+            if (entry.kind === 'process') return () => dismissProcessJob(entry.roleId);
             if (entry.kind === 'score') return () => dismissJob(entry.roleId);
             if (entry.kind === 'fetch') return () => dismissFetchJob(entry.roleId);
             if (entry.kind === 'pre_screen') return () => dismissPreScreenJob(entry.roleId);
@@ -91,28 +105,48 @@ function JobRow({ entry, onCancel, onDismiss }) {
   const isFailed = status === 'failed';
   const isTerminal = isCancelled || isComplete || isFailed;
 
-  const total = Number(data?.total ?? 0);
   const errors = Number(data?.errors ?? 0);
   const roleName = String(data?.role_name ?? '') || (kind === 'graph' ? 'Knowledge graph' : `Role #${roleId}`);
 
-  // Each kind reports progress under a different field name.
-  const processed = (() => {
-    if (kind === 'score') {
-      const scored = Number(data?.scored ?? 0);
-      const preScreenedOut = Number(data?.pre_screened_out ?? 0);
-      return scored + errors + preScreenedOut;
-    }
-    if (kind === 'fetch') return Number(data?.fetched ?? 0);
-    if (kind === 'pre_screen') return Number(data?.processed ?? 0);
-    if (kind === 'graph') return Number(data?.synced ?? 0);
-    return 0;
-  })();
+  // Process (cascade) jobs report a multi-step progress structure.
+  // We compute total/processed differently for them and surface per-step
+  // detail in the subtitle.
+  let total = Number(data?.total ?? 0);
+  let processed = 0;
+
+  if (kind === 'process') {
+    const fetchTotal = Number(data?.fetch?.total ?? 0);
+    const fetchAttempted = Number(data?.fetch?.attempted ?? 0);
+    const preTotal = Number(data?.pre_screen?.total ?? 0);
+    const prePros = Number(data?.pre_screen?.processed ?? 0);
+    const scoreTotal = Number(data?.score?.total ?? 0);
+    const scorePros = Number(data?.score?.scored ?? 0);
+    total = fetchTotal + preTotal + scoreTotal;
+    processed = fetchAttempted + prePros + scorePros;
+  } else if (kind === 'score') {
+    const scored = Number(data?.scored ?? 0);
+    const preScreenedOut = Number(data?.pre_screened_out ?? 0);
+    processed = scored + errors + preScreenedOut;
+  } else if (kind === 'fetch') {
+    processed = Number(data?.fetched ?? 0);
+  } else if (kind === 'pre_screen') {
+    processed = Number(data?.processed ?? 0);
+  } else if (kind === 'graph') {
+    processed = Number(data?.synced ?? 0);
+  }
 
   const remaining = Math.max(0, total - processed);
   const pct = total > 0 ? Math.round((processed / total) * 100) : 0;
 
   const title = (() => {
     const verb = (() => {
+      if (kind === 'process') {
+        const step = String(data?.current_step ?? '').toLowerCase();
+        if (step === 'fetch') return 'Fetching CVs';
+        if (step === 'pre_screen') return 'Pre-screening';
+        if (step === 'score') return 'Scoring';
+        return 'Processing';
+      }
       if (kind === 'fetch') return 'Fetching CVs';
       if (kind === 'pre_screen') return data?.refresh ? 'Refreshing pre-screen' : 'Pre-screening';
       if (kind === 'graph') return 'Syncing to graph';
@@ -128,6 +162,49 @@ function JobRow({ entry, onCancel, onDismiss }) {
   })();
 
   const detail = (() => {
+    if (kind === 'process') {
+      // Render per-step counts so the user sees fetch, pre-screen, and
+      // score progress at once. Each step shows "M/N" (processed/total).
+      const fetchTotal = Number(data?.fetch?.total ?? 0);
+      const fetchAttempted = Number(data?.fetch?.attempted ?? 0);
+      const fetchFetched = Number(data?.fetch?.fetched ?? 0);
+      const fetchUnavailable = Number(data?.fetch?.unavailable ?? 0);
+      const fetchErrors = Number(data?.fetch?.errors ?? 0);
+      const preTotal = Number(data?.pre_screen?.total ?? 0);
+      const prePros = Number(data?.pre_screen?.processed ?? 0);
+      const preErrors = Number(data?.pre_screen?.errors ?? 0);
+      const scoreTotal = Number(data?.score?.total ?? 0);
+      const scorePros = Number(data?.score?.scored ?? 0);
+      const scoreErrors = Number(data?.score?.errors ?? 0);
+      const scoreFiltered = Number(data?.score?.filtered ?? 0);
+
+      const parts = [];
+      if (fetchTotal > 0) {
+        let f = `Fetch ${fetchAttempted}/${fetchTotal}`;
+        if (fetchFetched && fetchFetched < fetchAttempted) f += ` (${fetchFetched} got CV`;
+        else if (fetchFetched) f += ` (${fetchFetched} got CV`;
+        if (fetchUnavailable) f += `, ${fetchUnavailable} unavailable`;
+        if (fetchErrors) f += `, ${fetchErrors} err`;
+        if (fetchFetched || fetchUnavailable || fetchErrors) f += ')';
+        parts.push(f);
+      }
+      if (preTotal > 0) {
+        let p = `Pre-screen ${prePros}/${preTotal}`;
+        if (preErrors) p += ` (${preErrors} err)`;
+        parts.push(p);
+      }
+      if (scoreTotal > 0) {
+        let s = `Score ${scorePros}/${scoreTotal}`;
+        const annot = [];
+        if (scoreFiltered) annot.push(`${scoreFiltered} filtered`);
+        if (scoreErrors) annot.push(`${scoreErrors} err`);
+        if (annot.length) s += ` (${annot.join(', ')})`;
+        parts.push(s);
+      }
+      if (parts.length === 0) return 'starting…';
+      return parts.join(' · ');
+    }
+
     if (total === 0) return 'starting…';
     const parts = [`${processed}/${total} processed`];
     if (kind === 'score') {

@@ -9,7 +9,7 @@ from datetime import datetime, timedelta, timezone
 from time import perf_counter
 import re
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import asc, desc, func, or_
@@ -2017,6 +2017,11 @@ def _try_fetch_cv_from_workable(
 _batch_score_progress: dict[int, dict] = {}
 _batch_fetch_cvs_progress: dict[int, dict] = {}
 _batch_pre_screen_progress: dict[int, dict] = {}
+# Combined cascade progress (fetch → pre-screen → score) per role.
+# Replaces the three separate dicts above for the new /process flow; the
+# legacy dicts are still used by the deprecated single-action endpoints
+# until those are fully removed.
+_process_progress: dict[int, dict] = {}
 # Org-wide graph sync — keyed by organization_id
 _sync_graph_progress: dict[int, dict] = {}
 
@@ -2955,6 +2960,13 @@ def batch_score_status(
         else:
             queued_next = {"include_scored": queued_params.get("include_scored")}
 
+    # Look up role name once (cheap; the in-progress dict may not have it
+    # if the batch was started before this code path stored it).
+    role_obj = db.query(Role).filter(
+        Role.id == role_id, Role.organization_id == current_user.organization_id
+    ).first()
+    role_name = (role_obj.name if role_obj else None) or progress.get("role_name", "")
+
     return {
         "status": status,
         "total": total,
@@ -2963,7 +2975,7 @@ def batch_score_status(
         "pre_screened_out": pre_screened_out,
         "include_scored": bool(progress.get("include_scored")),
         "pre_screen_enabled": bool(settings.ENABLE_PRE_SCREEN_GATE),
-        "role_name": progress.get("role_name", ""),
+        "role_name": role_name,
         "queued": queued_next,
     }
 
@@ -3548,10 +3560,11 @@ def batch_fetch_cvs_status(
     current_user: User = Depends(get_current_user),
 ):
     """Poll batch CV fetch progress for a role."""
-    get_role(role_id, current_user.organization_id, db)
+    role = get_role(role_id, current_user.organization_id, db)
     progress = _batch_fetch_cvs_progress.get(role_id, {})
     return {
         "status": progress.get("status", "idle"),
+        "role_name": role.name,
         "total": progress.get("total", 0),
         "fetched": progress.get("fetched", 0),
         "errors": progress.get("errors", 0),
@@ -3766,10 +3779,11 @@ def batch_pre_screen_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    get_role(role_id, current_user.organization_id, db)
+    role = get_role(role_id, current_user.organization_id, db)
     progress = _batch_pre_screen_progress.get(role_id, {})
     return {
         "status": progress.get("status", "idle"),
+        "role_name": role.name,
         "total": progress.get("total", 0),
         "processed": progress.get("processed", 0),
         "errors": progress.get("errors", 0),
@@ -4054,6 +4068,555 @@ def cancel_sync_graph(
         )
         return {"ok": True, "status": "cancelling"}
     return {"ok": False, "status": progress.get("status", "idle")}
+
+
+# ---------------------------------------------------------------------------
+# Unified "Process candidates" endpoint.
+#
+# One endpoint that runs the cascade: fetch CVs (if missing) → pre-screen
+# (if needed) → score (new or all). Each step is independently toggleable
+# via the request body. Replaces the 5-button toolbar with a single button
+# + multi-select dialog on the frontend.
+#
+# Why a new endpoint instead of orchestrating the three legacy ones:
+# - Combined progress (one toaster row instead of three)
+# - Cascade-aware fetch tracking (fetched vs unavailable, distinct from
+#   processed-iterations)
+# - Single source of truth for "is anything running for this role?"
+#
+# The legacy /fetch-cvs, /batch-pre-screen, /batch-score endpoints stay
+# as backwards-compatible wrappers used by callers we haven't migrated.
+# ---------------------------------------------------------------------------
+
+
+_PROCESS_CANCEL_PREFIX = "process_role:cancel:"
+_PROCESS_PROGRESS_PREFIX = "process_role:progress:"
+# 30 minute TTL is plenty for the longest expected cascade. Re-written every
+# time the worker updates progress so it stays alive while running.
+_PROCESS_PROGRESS_TTL_SECONDS = 1800
+
+
+def is_process_cancelled(role_id: int) -> bool:
+    return _is_cancelled(_PROCESS_CANCEL_PREFIX, role_id)
+
+
+def _write_process_progress(role_id: int, progress: dict) -> None:
+    """Mirror process progress to Redis so other uvicorn workers see it.
+
+    With workers=2 the worker that runs the daemon thread holds the in-memory
+    dict, but status polls round-robin to both workers. Without Redis the
+    other worker returns ``idle`` and the toaster row flickers in/out.
+    """
+    import json as _json
+    client = _redis_client()
+    if client is None:
+        return
+    try:
+        # Convert datetime to iso so json can encode it.
+        safe = dict(progress)
+        if isinstance(safe.get("started_at"), datetime):
+            safe["started_at"] = safe["started_at"].isoformat()
+        client.set(
+            f"{_PROCESS_PROGRESS_PREFIX}{role_id}",
+            _json.dumps(safe, default=str),
+            ex=_PROCESS_PROGRESS_TTL_SECONDS,
+        )
+    except Exception:
+        pass
+
+
+def _read_process_progress(role_id: int) -> dict | None:
+    import json as _json
+    client = _redis_client()
+    if client is None:
+        return None
+    try:
+        raw = client.get(f"{_PROCESS_PROGRESS_PREFIX}{role_id}")
+        if raw is None:
+            return None
+        return _json.loads(raw)
+    except Exception:
+        return None
+
+
+def _set_process_progress(role_id: int, progress: dict) -> None:
+    """Update both the in-memory dict (fast path on the worker that owns it)
+    and Redis (visible to all workers)."""
+    _set_process_progress(role_id, progress)
+    _write_process_progress(role_id, progress)
+
+
+def _empty_process_progress() -> dict:
+    return {
+        "status": "idle",
+        "role_name": None,
+        "current_step": None,
+        "fetch": {"attempted": 0, "fetched": 0, "unavailable": 0, "errors": 0, "total": 0},
+        "pre_screen": {"total": 0, "processed": 0, "errors": 0},
+        "score": {"total": 0, "scored": 0, "filtered": 0, "errors": 0, "mode": "none"},
+    }
+
+
+def _process_dry_run(
+    db: Session,
+    *,
+    role_id: int,
+    organization_id: int,
+    fetch_cvs: bool,
+    pre_screen: bool,
+    refresh_pre_screen: bool,
+    score_mode: str,
+) -> dict:
+    """Compute counts for each cascade step without starting the worker.
+
+    Cascade-aware: when ``fetch_cvs`` is on, the pre-screen and score counts
+    include candidates that will end up with a CV after the fetch step.
+    """
+    from ...services.pre_screening_service import application_needs_pre_screen
+
+    apps = (
+        db.query(CandidateApplication)
+        .options(joinedload(CandidateApplication.candidate))
+        .filter(
+            CandidateApplication.role_id == role_id,
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .all()
+    )
+
+    def has_cv(a):
+        return bool((a.cv_text or "").strip())
+
+    def will_have_cv(a):
+        if has_cv(a):
+            return True
+        if not fetch_cvs:
+            return False
+        # Will be fetched only if source=workable.
+        return (a.source or "") == "workable"
+
+    # Fetch step
+    will_fetch = (
+        sum(1 for a in apps if not has_cv(a) and (a.source or "") == "workable")
+        if fetch_cvs else 0
+    )
+    no_cv_no_workable = sum(
+        1 for a in apps if not has_cv(a) and (a.source or "") != "workable"
+    )
+
+    # Pre-screen step
+    if refresh_pre_screen:
+        # Refresh = run for everyone who'll have a CV, regardless of prior result.
+        will_pre_screen = sum(1 for a in apps if will_have_cv(a))
+    elif pre_screen:
+        will_pre_screen = sum(
+            1 for a in apps
+            if will_have_cv(a)
+            and (
+                # never run, or about to be fetched (so the existing rec is None anyway),
+                # or stale (CV uploaded after pre-screen ran).
+                a.pre_screen_recommendation is None
+                or a.pre_screen_run_at is None
+                or (a.cv_uploaded_at is not None and a.cv_uploaded_at > a.pre_screen_run_at)
+            )
+        )
+    else:
+        will_pre_screen = 0
+
+    # Score step
+    if score_mode == "all":
+        will_score = sum(1 for a in apps if will_have_cv(a))
+    elif score_mode == "new":
+        def needs_score(a):
+            if not will_have_cv(a):
+                return False
+            if a.cv_match_score is not None:
+                # Already scored — only stale CV would force a rescore (we
+                # don't auto-rescore on stale CV in score=new mode).
+                return False
+            # Below-threshold candidates whose pre-screen is still valid: skip.
+            if (a.pre_screen_recommendation or "") == "Below threshold":
+                if a.pre_screen_run_at is not None and (
+                    a.cv_uploaded_at is None or a.cv_uploaded_at <= a.pre_screen_run_at
+                ):
+                    return False
+            return True
+        will_score = sum(1 for a in apps if needs_score(a))
+    else:
+        will_score = 0
+
+    return {
+        "fetch_cvs": {
+            "will_attempt": int(will_fetch),
+            "no_cv_no_workable": int(no_cv_no_workable),
+        },
+        "pre_screen": {
+            "will_run": int(will_pre_screen),
+            "refresh": bool(refresh_pre_screen),
+        },
+        "score": {
+            "will_run": int(will_score),
+            "mode": score_mode,
+        },
+        "total_candidates": len(apps),
+    }
+
+
+def _run_process(
+    role_id: int,
+    org_id: int,
+    *,
+    fetch_cvs: bool,
+    pre_screen: bool,
+    refresh_pre_screen: bool,
+    score_mode: str,
+) -> None:
+    """Background worker: cascade fetch → pre-screen → score for one role.
+
+    Updates ``_process_progress[role_id]`` in real time so the status endpoint
+    can report combined progress.
+    """
+    from ...services.pre_screening_service import (
+        application_needs_pre_screen,
+        execute_pre_screen_only,
+    )
+
+    db = SessionLocal()
+    progress = _process_progress.get(role_id) or _empty_process_progress()
+    try:
+        org = db.query(Organization).filter(Organization.id == org_id).first()
+        role = db.query(Role).filter(Role.id == role_id, Role.organization_id == org_id).first()
+        if not org or not role:
+            progress["status"] = "failed"
+            _set_process_progress(role_id, progress)
+            return
+
+        progress["role_name"] = role.name
+        progress["status"] = "running"
+        progress["current_step"] = None
+        _set_process_progress(role_id, progress)
+
+        # ── Step 1: Fetch CVs ────────────────────────────────────────────
+        if fetch_cvs:
+            progress["current_step"] = "fetch"
+            apps_to_fetch = (
+                db.query(CandidateApplication)
+                .options(joinedload(CandidateApplication.candidate))
+                .filter(
+                    CandidateApplication.role_id == role_id,
+                    CandidateApplication.organization_id == org_id,
+                    CandidateApplication.deleted_at.is_(None),
+                    CandidateApplication.source == "workable",
+                )
+                .all()
+            )
+            apps_to_fetch = [a for a in apps_to_fetch if not (a.cv_text or "").strip()]
+            progress["fetch"]["total"] = len(apps_to_fetch)
+            _set_process_progress(role_id, progress)
+
+            for idx, app in enumerate(apps_to_fetch):
+                if is_process_cancelled(role_id):
+                    progress["status"] = "cancelled"
+                    _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                    _set_process_progress(role_id, progress)
+                    return
+                try:
+                    success = False
+                    if app.candidate and (app.candidate.cv_text or "").strip():
+                        # CV already on the candidate row — copy it onto the app.
+                        app.cv_file_url = app.candidate.cv_file_url
+                        app.cv_filename = app.candidate.cv_filename
+                        app.cv_text = app.candidate.cv_text
+                        app.cv_uploaded_at = app.candidate.cv_uploaded_at
+                        success = True
+                    elif (app.source or "") == "workable":
+                        success = bool(_try_fetch_cv_from_workable(app, app.candidate, db, org))
+                    if success:
+                        progress["fetch"]["fetched"] += 1
+                    else:
+                        progress["fetch"]["unavailable"] += 1
+                except Exception:
+                    logger.exception("Process fetch failed for application_id=%s", app.id)
+                    progress["fetch"]["errors"] += 1
+                progress["fetch"]["attempted"] = idx + 1
+                _set_process_progress(role_id, progress)
+                if (idx + 1) % 3 == 0:
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+
+        # ── Step 2: Pre-screen ───────────────────────────────────────────
+        if pre_screen or refresh_pre_screen:
+            progress["current_step"] = "pre_screen"
+            apps = _select_pre_screen_targets(
+                db, role_id=role_id, organization_id=org_id, refresh=refresh_pre_screen
+            )
+            progress["pre_screen"]["total"] = len(apps)
+            _set_process_progress(role_id, progress)
+
+            for idx, app in enumerate(apps):
+                if is_process_cancelled(role_id):
+                    progress["status"] = "cancelled"
+                    _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                    _set_process_progress(role_id, progress)
+                    return
+                try:
+                    result = execute_pre_screen_only(app)
+                    if result.get("status") == "error":
+                        progress["pre_screen"]["errors"] += 1
+                    run_auto_reject_if_needed(
+                        db=db, org=org, app=app, role=role, actor_type="system"
+                    )
+                    db.flush()
+                except Exception:
+                    logger.exception("Process pre-screen failed for application_id=%s", app.id)
+                    progress["pre_screen"]["errors"] += 1
+                progress["pre_screen"]["processed"] = idx + 1
+                _set_process_progress(role_id, progress)
+                if (idx + 1) % 5 == 0:
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+
+        # ── Step 3: Score ────────────────────────────────────────────────
+        if score_mode in ("new", "all"):
+            progress["current_step"] = "score"
+            progress["score"]["mode"] = score_mode
+            include_scored = score_mode == "all"
+            apps_query = (
+                db.query(CandidateApplication)
+                .options(
+                    joinedload(CandidateApplication.candidate),
+                    joinedload(CandidateApplication.role),
+                    joinedload(CandidateApplication.interviews),
+                    joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
+                )
+                .filter(
+                    CandidateApplication.role_id == role_id,
+                    CandidateApplication.organization_id == org_id,
+                    CandidateApplication.deleted_at.is_(None),
+                )
+            )
+            if not include_scored:
+                apps_query = apps_query.filter(CandidateApplication.cv_match_score.is_(None))
+            apps = apps_query.all()
+            progress["score"]["total"] = len(apps)
+            _set_process_progress(role_id, progress)
+
+            job_spec_text = ((role.job_spec_text if role else None) or "").strip()
+            for idx, app in enumerate(apps):
+                if is_process_cancelled(role_id):
+                    progress["status"] = "cancelled"
+                    _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+                    _set_process_progress(role_id, progress)
+                    return
+                try:
+                    cv_text = (app.cv_text or "").strip()
+                    if not cv_text or not job_spec_text or not settings.ANTHROPIC_API_KEY:
+                        # Can't score without inputs — count as filtered for visibility.
+                        progress["score"]["filtered"] += 1
+                        progress["score"]["scored"] = idx + 1
+                        _set_process_progress(role_id, progress)
+                        continue
+                    if not include_scored:
+                        if app.cv_match_score is not None:
+                            progress["score"]["scored"] = idx + 1
+                            _set_process_progress(role_id, progress)
+                            continue
+                        if (
+                            (app.pre_screen_recommendation or "") == "Below threshold"
+                            and app.pre_screen_run_at is not None
+                            and (app.cv_uploaded_at is None or app.cv_uploaded_at <= app.pre_screen_run_at)
+                        ):
+                            progress["score"]["filtered"] += 1
+                            progress["score"]["scored"] = idx + 1
+                            _set_process_progress(role_id, progress)
+                            continue
+                    job = enqueue_score(db, app, force=include_scored)
+                    if job is not None and job.status == "error":
+                        progress["score"]["errors"] += 1
+                    _refresh_rank_score(app)
+                    refresh_application_score_cache(app, db=db)
+                    refresh_application_interview_support(app)
+                    run_auto_reject_if_needed(
+                        db=db, org=org, app=app, role=role, actor_type="system"
+                    )
+                    db.flush()
+                except Exception:
+                    logger.exception("Process score failed for application_id=%s", app.id)
+                    progress["score"]["errors"] += 1
+                progress["score"]["scored"] = idx + 1
+                _set_process_progress(role_id, progress)
+                if (idx + 1) % 5 == 0:
+                    try:
+                        db.commit()
+                    except Exception:
+                        db.rollback()
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+
+        progress["current_step"] = None
+        progress["status"] = "completed"
+        _set_process_progress(role_id, progress)
+    except Exception:
+        logger.exception("Process cascade failed for role_id=%s", role_id)
+        progress["status"] = "failed"
+        _set_process_progress(role_id, progress)
+    finally:
+        db.close()
+
+
+@router.post("/roles/{role_id}/process")
+def process_role(
+    role_id: int,
+    payload: dict = Body(default={}),
+    dry_run: bool = Query(default=False),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Run the cascade: fetch CVs → pre-screen → score, all configurable.
+
+    Body:
+      - ``fetch_cvs`` (bool, default false)
+      - ``pre_screen`` (bool, default false)
+      - ``refresh_pre_screen`` (bool, default false) — overrides pre_screen,
+        forces re-run for every candidate with a CV
+      - ``score`` ("none" | "new" | "all", default "none")
+
+    With ``?dry_run=true`` returns the per-step counts that would result.
+    """
+    role = get_role(role_id, current_user.organization_id, db)
+    fetch_cvs = bool(payload.get("fetch_cvs"))
+    pre_screen = bool(payload.get("pre_screen"))
+    refresh_pre_screen = bool(payload.get("refresh_pre_screen"))
+    score_mode = str(payload.get("score") or "none").lower()
+    if score_mode not in ("none", "new", "all"):
+        raise HTTPException(status_code=400, detail="score must be one of: none, new, all")
+    if not (fetch_cvs or pre_screen or refresh_pre_screen or score_mode != "none"):
+        raise HTTPException(status_code=400, detail="Pick at least one step to run")
+
+    if (pre_screen or refresh_pre_screen or score_mode != "none") and not role_has_job_spec(role):
+        raise HTTPException(status_code=400, detail="Upload job spec before pre-screen or scoring")
+
+    if dry_run:
+        counts = _process_dry_run(
+            db,
+            role_id=role_id,
+            organization_id=current_user.organization_id,
+            fetch_cvs=fetch_cvs,
+            pre_screen=pre_screen,
+            refresh_pre_screen=refresh_pre_screen,
+            score_mode=score_mode,
+        )
+        counts["role_name"] = role.name
+        return counts
+
+    # Already running for this role? Return the current state — UI can decide
+    # whether to surface "already running" or queue a follow-up.
+    existing = _process_progress.get(role_id, {})
+    if existing.get("status") in {"running", "cancelling"}:
+        return {"status": "already_running", **existing}
+
+    progress = _empty_process_progress()
+    progress.update({
+        "status": "running",
+        "role_name": role.name,
+        "started_at": datetime.now(timezone.utc).isoformat(),
+        "score": {**progress["score"], "mode": score_mode},
+    })
+    _set_process_progress(role_id, progress)
+    _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
+
+    thread = threading.Thread(
+        target=_run_process,
+        args=(role_id, current_user.organization_id),
+        kwargs={
+            "fetch_cvs": fetch_cvs,
+            "pre_screen": pre_screen,
+            "refresh_pre_screen": refresh_pre_screen,
+            "score_mode": score_mode,
+        },
+        daemon=True,
+    )
+    thread.start()
+    return {"status": "started", "role_name": role.name, **progress}
+
+
+@router.get("/roles/{role_id}/process/status")
+def process_role_status(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Combined cascade progress for the unified Process action.
+
+    Reads from Redis when this uvicorn worker doesn't have the in-memory
+    progress dict (the daemon thread runs in only one worker; status polls
+    round-robin to all workers, so we need a shared store).
+    """
+    role = get_role(role_id, current_user.organization_id, db)
+    # In-memory fast path — same worker that owns the daemon thread.
+    progress = _process_progress.get(role_id)
+    if not progress:
+        # Cross-worker / cross-restart fallback.
+        progress = _read_process_progress(role_id) or _empty_process_progress()
+    # Always include role_name so the toaster never falls back to "Role #N".
+    progress = dict(progress)
+    progress.setdefault("role_name", role.name)
+    return progress
+
+
+@router.post("/roles/{role_id}/process/cancel")
+def process_role_cancel(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    get_role(role_id, current_user.organization_id, db)
+    _set_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
+    progress = _process_progress.get(role_id, {})
+    if progress.get("status") == "running":
+        progress["status"] = "cancelling"
+        _set_process_progress(role_id, progress)
+    return {"ok": True, "role_id": role_id, "status": progress.get("status", "idle")}
+
+
+# ---------------------------------------------------------------------------
+# Add role_name to the legacy status endpoints so the toaster can label rows
+# with the role name instead of "Role #N".
+# ---------------------------------------------------------------------------
+
+
+def _attach_role_name(progress: dict, role_name: str | None) -> dict:
+    out = dict(progress or {})
+    if role_name:
+        out["role_name"] = role_name
+    return out
 
 
 @router.post("/applications/{application_id}/assessments", status_code=status.HTTP_201_CREATED)
