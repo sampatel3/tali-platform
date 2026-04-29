@@ -242,10 +242,12 @@ def _merge_neo4j_records(result, nodes: dict, edges: list) -> None:
         s_props = dict(record.get("s_props") or {})
         t_props = dict(record.get("t_props") or {})
         e_name = record.get("e_name") or ""
+        e_fact = record.get("e_fact") or ""
 
         # In Graphiti RELATES_TO edges the source is always the "subject"
         # entity (typically a Person) — use edge context to refine labels.
-        edge_label = _edge_label_for(e_name)
+        # e.name is None in current Graphiti schema, so fall back to the fact text.
+        edge_label = _edge_label_for(e_name, fact=e_fact)
         s_label = _label_for(s_props, [], s_name, is_source=True)
         t_label = _label_for(t_props, [], t_name, edge_context=edge_label)
         s_id = _node_id_for(s_uuid, s_label, s_props, None)
@@ -472,14 +474,15 @@ def _label_for(
     #    source and has a name that doesn't match company/school patterns,
     #    treat as Person.
     if is_source:
-        if any(name_lower.endswith(s) for s in _COMPANY_SUFFIXES):
+        if any(s in name_lower for s in _COMPANY_SUFFIXES):
             return "Company"
         if any(kw in name_lower for kw in _SCHOOL_KEYWORDS):
             return "School"
         return "Person"
 
-    # 3. Name-based heuristics for target nodes
-    if any(name_lower.endswith(s) for s in _COMPANY_SUFFIXES):
+    # 3. Name-based heuristics for target nodes — use substring, not endswith,
+    #    because company names often have trailing context (" - EMEA", " (India)").
+    if any(s in name_lower for s in _COMPANY_SUFFIXES):
         return "Company"
     if any(kw in name_lower for kw in _SCHOOL_KEYWORDS):
         return "School"
@@ -498,20 +501,32 @@ def _label_for(
     return "Skill"
 
 
-def _edge_label_for(name: str) -> str:
-    upper = (name or "").upper()
-    # Education: checked before employment to avoid misclassifying "STUDIED_AT"
-    if any(kw in upper for kw in ("STUDIED", "STUDIES", "EDUCATED", "ATTENDED", "GRADUATED", "ENROLLED")):
+def _edge_label_for(name: str, fact: str = "") -> str:
+    # Graphiti RELATES_TO edges have e.name = None in the current schema.
+    # Fall back to the fact text when the edge name is absent.
+    text = (name or fact or "").upper()
+    if not text:
+        return "HAS_SKILL"
+    # Education: checked first to avoid "ATTENDED" → WORKED_AT
+    if any(kw in text for kw in ("STUDIED", "STUDIES", "EDUCATED", "ATTENDED", "GRADUATED", "ENROLLED", "UNIVERSITY", "COLLEGE")):
         return "STUDIED_AT"
-    # Roles/titles: "HOLDS_POSITION", "HAS_TITLE", "ROLE" — target is a skill/role node
-    if any(kw in upper for kw in ("POSITION", "TITLE", "ROLE")):
+    # "holds the position of X at Company" — the "at Company" means WORKED_AT
+    # "holds the position of X" (no "at") — pure title, target is a Skill node
+    if any(kw in text for kw in ("HOLDS THE POSITION", "JOB TITLE", "HOLDS THE ROLE", "HOLDS THE JOB")):
+        if " AT " in text:
+            return "WORKED_AT"
         return "HAS_SKILL"
-    # Employment at a company: target is a Company node
-    if any(kw in upper for kw in ("WORKED", "WORKS", "EMPLOYED", "EMPLOY", "HIRED")):
+    # Employment at a company — "works as ... at", "worked at", "employed at"
+    if any(kw in text for kw in ("WORKED AT", "WORKS AT", "EMPLOYED AT", "EMPLOYED BY", "HIRED AT", "HIRED BY", "WORKS FOR", "WORKED FOR", "WORKS AS")):
         return "WORKED_AT"
-    if any(kw in upper for kw in ("SKILL", "PROFICIENT", "USES", "USED", "KNOWS", "EXPERTISE")):
+    # Generic employment verbs — broader but after the specific patterns above
+    if any(kw in text for kw in ("POSITION", "TITLE", "ROLE")):
         return "HAS_SKILL"
-    if any(kw in upper for kw in ("LOCATED", "LIVES", "BASED", "RESIDES", "RESIDE")):
+    if any(kw in text for kw in ("WORKED", "WORKS", "EMPLOYED", "EMPLOY", "HIRED")):
+        return "WORKED_AT"
+    if any(kw in text for kw in ("SKILL", "PROFICIENT", "USES", "USED", "KNOWS", "EXPERTISE")):
+        return "HAS_SKILL"
+    if any(kw in text for kw in ("LOCATED", "LIVES", "BASED", "RESIDES", "RESIDE")):
         return "LOCATED_IN"
     return "HAS_SKILL"  # safe default
 
@@ -529,7 +544,7 @@ def _merge_results_into_payload(
         target_uuid = fact.get("target_uuid")
         if not source_uuid or not target_uuid:
             continue
-        edge_label_str = _edge_label_for(fact.get("edge_label") or fact.get("name") or "")
+        edge_label_str = _edge_label_for(fact.get("edge_label") or fact.get("name") or "", fact=fact.get("fact") or "")
         source_label = _label_for(fact.get("source_attributes") or {}, fact.get("source_labels") or [], fact.get("source_name") or "", is_source=True)
         target_label = _label_for(fact.get("target_attributes") or {}, fact.get("target_labels") or [], fact.get("target_name") or "", edge_context=edge_label_str)
         source_name = fact.get("source_name") or "?"
