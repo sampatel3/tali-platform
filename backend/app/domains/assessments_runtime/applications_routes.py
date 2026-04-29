@@ -2024,8 +2024,10 @@ _batch_fetch_cvs_progress: dict[int, dict] = {}
 _BATCH_SCORE_CANCEL_PREFIX = "batch_score:cancel:"
 _BATCH_FETCH_CANCEL_PREFIX = "batch_fetch_cvs:cancel:"
 _BATCH_META_PREFIX = "batch_score:meta:"
+_BATCH_QUEUE_PREFIX = "batch_score:queued:"
 _CANCEL_FLAG_TTL_SECONDS = 3600
 _BATCH_META_TTL_SECONDS = 7200  # 2 hours — survives API restart during a batch
+_BATCH_QUEUE_TTL_SECONDS = 7200
 
 
 def _redis_client():
@@ -2115,6 +2117,44 @@ def _delete_batch_meta(role_id: int) -> None:
         return
     try:
         client.delete(f"{_BATCH_META_PREFIX}{role_id}")
+    except Exception:
+        pass
+
+
+def _write_batch_queue(role_id: int, *, include_scored: bool, applied_after: str | None) -> None:
+    """Persist a queued (waiting) batch request so it survives API restarts."""
+    import json as _json
+    client = _redis_client()
+    if client is None:
+        return
+    try:
+        client.set(
+            f"{_BATCH_QUEUE_PREFIX}{role_id}",
+            _json.dumps({"include_scored": bool(include_scored), "applied_after": applied_after}),
+            ex=_BATCH_QUEUE_TTL_SECONDS,
+        )
+    except Exception:
+        pass
+
+
+def _read_batch_queue(role_id: int) -> dict | None:
+    import json as _json
+    client = _redis_client()
+    if client is None:
+        return None
+    try:
+        raw = client.get(f"{_BATCH_QUEUE_PREFIX}{role_id}")
+        return _json.loads(raw) if raw else None
+    except Exception:
+        return None
+
+
+def _clear_batch_queue(role_id: int) -> None:
+    client = _redis_client()
+    if client is None:
+        return
+    try:
+        client.delete(f"{_BATCH_QUEUE_PREFIX}{role_id}")
     except Exception:
         pass
 
@@ -2277,12 +2317,15 @@ def batch_score_role(
         raise HTTPException(status_code=400, detail="Upload job spec before batch scoring")
 
     existing = _batch_score_progress.get(role_id, {})
-    if existing.get("status") == "running":
+    if existing.get("status") in {"running", "cancelling"}:
+        # Queue the new request instead of rejecting — it auto-starts when the
+        # active batch completes or is cancelled.
+        _write_batch_queue(role_id, include_scored=include_scored, applied_after=applied_after)
         return {
-            "status": "already_running",
+            "status": "queued",
             "total": existing.get("total", 0),
             "scored": existing.get("scored", 0),
-            "include_scored": bool(existing.get("include_scored")),
+            "include_scored": bool(include_scored),
         }
 
     target_query = (
@@ -2317,10 +2360,9 @@ def batch_score_role(
         "errors": 0,
         "status": "running",
         "include_scored": bool(include_scored),
-        # Wall-clock anchor for the DB-backed progress poll. Without
-        # this, the status endpoint can't tell which cv_score_jobs rows
-        # belong to *this* batch (vs. earlier ones for the same role).
         "started_at": batch_started_at,
+        "organization_id": current_user.organization_id,
+        "role_name": str(getattr(role, "name", "") or ""),
     }
     # Mirror to Redis so the status endpoint survives an API process
     # restart mid-batch (in-process dict is wiped on restart).
@@ -2574,6 +2616,30 @@ def refresh_interview_support_bulk(
     }
 
 
+@router.get("/batch-score/active")
+def get_active_batch_scores(
+    current_user: User = Depends(get_current_user),
+):
+    """Return all roles with an active or recently-completed batch for this org.
+
+    Used by the global jobs panel on mount to rediscover in-flight batches
+    after navigation or page refresh without relying on local React state.
+    """
+    active = []
+    for role_id, progress in list(_batch_score_progress.items()):
+        if progress.get("organization_id") != current_user.organization_id:
+            continue
+        if progress.get("status") in {"running", "cancelling", "completed", "cancelled"}:
+            active.append({
+                "role_id": role_id,
+                "role_name": progress.get("role_name", ""),
+                "status": progress.get("status"),
+                "total": progress.get("total", 0),
+                "scored": progress.get("scored", 0),
+            })
+    return {"active": active}
+
+
 @router.get("/roles/{role_id}/batch-score/status")
 def batch_score_status(
     role_id: int,
@@ -2665,6 +2731,55 @@ def batch_score_status(
         _batch_score_progress[role_id] = progress
         _delete_batch_meta(role_id)
 
+    # If the active batch just completed/cancelled, auto-start the queued one.
+    queued_params = _read_batch_queue(role_id)
+    queued_next: dict | None = None
+    if queued_params is not None:
+        if status in {"completed", "cancelled"}:
+            _clear_batch_queue(role_id)
+            # Kick off the queued batch inline (same logic as the POST endpoint).
+            _clear_cancel_flag(_BATCH_SCORE_CANCEL_PREFIX, role_id)
+            q_include = bool(queued_params.get("include_scored"))
+            q_after = queued_params.get("applied_after")
+            q_query = (
+                db.query(CandidateApplication)
+                .filter(
+                    CandidateApplication.role_id == role_id,
+                    CandidateApplication.organization_id == current_user.organization_id,
+                    CandidateApplication.deleted_at.is_(None),
+                )
+            )
+            if not q_include:
+                q_query = q_query.filter(CandidateApplication.cv_match_score.is_(None))
+            q_count = q_query.count()
+            if q_count > 0:
+                q_started_at = datetime.now(timezone.utc)
+                _batch_score_progress[role_id] = {
+                    "total": q_count,
+                    "scored": 0,
+                    "errors": 0,
+                    "status": "running",
+                    "include_scored": q_include,
+                    "started_at": q_started_at,
+                    "organization_id": current_user.organization_id,
+                }
+                _write_batch_meta(role_id, total=q_count, started_at=q_started_at, include_scored=q_include)
+                if settings.MVP_DISABLE_CELERY:
+                    import threading as _threading
+                    _threading.Thread(
+                        target=_run_batch_score,
+                        args=(role_id, current_user.organization_id),
+                        kwargs={"include_scored": q_include, "applied_after": q_after},
+                        daemon=True,
+                    ).start()
+                else:
+                    from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
+                    _celery_batch_score_role.delay(role_id, include_scored=q_include, applied_after=q_after)
+                status = "running"
+                queued_next = None  # now running, no longer queued
+        else:
+            queued_next = {"include_scored": queued_params.get("include_scored")}
+
     return {
         "status": status,
         "total": total,
@@ -2673,6 +2788,8 @@ def batch_score_status(
         "pre_screened_out": pre_screened_out,
         "include_scored": bool(progress.get("include_scored")),
         "pre_screen_enabled": bool(settings.ENABLE_PRE_SCREEN_GATE),
+        "role_name": progress.get("role_name", ""),
+        "queued": queued_next,
     }
 
 
@@ -2682,27 +2799,64 @@ def cancel_batch_score(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Cooperatively cancel a running batch-score job.
+    """Cancel a running or queued batch-score job.
 
-    Sets a Redis flag the worker checks between candidates. The current
-    candidate finishes (cleanly), then the loop returns with
-    ``status: cancelled``. Already-enqueued per-application score tasks
-    keep running — a recruiter who clicks Cancel mid-batch sees
-    in-flight scores complete, but no new ones get dispatched.
+    Two-layer cancellation:
+    1. Redis flag — the batch_score_role task loop and individual
+       score_application_job tasks check this and bail out.
+    2. DB marking — all PENDING cv_score_jobs for this role are
+       immediately set to error/cancelled_by_recruiter so any tasks
+       already sitting in the Celery queue skip the Claude call when
+       they're dequeued (worker checks job.status before calling the API).
 
-    Returns the updated progress shape so the frontend can flip the
-    toaster to the cancelled state without a separate poll.
+    Also clears any queued (not-yet-started) batch so it doesn't
+    auto-start after this cancel.
     """
     get_role(role_id, current_user.organization_id, db)
+
+    # Layer 1: Redis cancel flag (stops the batch loop + future dequeues).
     set_ok = _set_cancel_flag(_BATCH_SCORE_CANCEL_PREFIX, role_id)
+
+    # Layer 2: Immediately mark all pending score jobs as cancelled in the DB.
+    # Workers check job.status before calling Claude — if it's not pending/stale
+    # they skip processing. This is the definitive kill switch for tasks already
+    # sitting in the Celery queue.
+    now = datetime.now(timezone.utc)
+    try:
+        cancelled_count = (
+            db.query(CvScoreJob)
+            .filter(
+                CvScoreJob.role_id == role_id,
+                CvScoreJob.status == SCORE_JOB_PENDING,
+            )
+            .update(
+                {
+                    "status": SCORE_JOB_ERROR,
+                    "error_message": "cancelled_by_recruiter",
+                    "finished_at": now,
+                },
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+    except Exception:
+        logger.exception("Failed to mark pending jobs as cancelled for role_id=%s", role_id)
+        db.rollback()
+        cancelled_count = 0
+
+    # Clear any queued (not-yet-started) batch so it doesn't auto-start.
+    _clear_batch_queue(role_id)
+
     progress = _batch_score_progress.get(role_id, {})
-    if progress.get("status") == "running":
+    if progress.get("status") in {"running", "cancelling"}:
         progress["status"] = "cancelling"
         _batch_score_progress[role_id] = progress
+
     return {
         "ok": bool(set_ok),
         "role_id": role_id,
         "status": progress.get("status", "idle"),
+        "pending_jobs_cancelled": cancelled_count,
     }
 
 

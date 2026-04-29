@@ -9,6 +9,7 @@ import {
 
 import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { useJobStatus } from '../../contexts/JobStatusContext';
 import {
   CANDIDATES_DIRECTORY_SHOWCASE,
   CANDIDATES_DIRECTORY_STAGE_COUNTS,
@@ -23,7 +24,6 @@ import {
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import { getErrorMessage } from './candidatesUiUtils';
-import { BackgroundJobsToaster } from './BackgroundJobsToaster';
 import { CandidateSheet } from './CandidateSheet';
 import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
 import {
@@ -327,6 +327,7 @@ export const CandidatesDirectoryPage = ({
 }) => {
   const rolesApi = apiClient.roles;
   const { showToast } = useToast();
+  const { trackRole } = useJobStatus() ?? {};
   const [searchParams] = useSearchParams();
   const isShowcase = searchParams.get('demo') === '1' && searchParams.get('showcase') === '1';
   const onNavigate = isShowcase ? () => {} : rawOnNavigate;
@@ -1464,19 +1465,9 @@ export const CandidatesDirectoryPage = ({
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [selectedApplicationId]);
 
-  // Active role for the toaster — only meaningful when a single role
-  // is filtered (otherwise the role-scoped batch-status endpoints don't
-  // apply). Toaster renders nothing when roleId is falsy.
-  const toasterRoleId = (() => {
-    if (effectiveRoleFilters.length !== 1) return null;
-    const id = Number(effectiveRoleFilters[0]);
-    return Number.isFinite(id) && id > 0 ? id : null;
-  })();
-
   return (
     <div>
       {NavComponent ? <NavComponent currentPage={navCurrentPage} onNavigate={onNavigate} /> : null}
-      {!embedded && toasterRoleId ? <BackgroundJobsToaster roleId={toasterRoleId} /> : null}
       <div className={embedded ? '' : 'page'}>
         {showPageHead ? (
           <div className="page-head">

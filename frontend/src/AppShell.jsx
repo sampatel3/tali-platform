@@ -13,6 +13,8 @@ import { Loader2 } from 'lucide-react';
 
 import { useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
+import { JobStatusProvider } from './contexts/JobStatusContext';
+import { BackgroundJobsToaster } from './features/candidates/BackgroundJobsToaster';
 import {
   assessments as assessmentsApi,
   organizations as organizationsApi,
@@ -566,9 +568,13 @@ function App() {
   return (
     <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
       <ToastProvider>
-        <ErrorBoundary>
-          <AppContent />
-        </ErrorBoundary>
+        <JobStatusProvider>
+          <ErrorBoundary>
+            <AppContent />
+          </ErrorBoundary>
+          {/* Global job panel — outside routes so it survives navigation */}
+          <BackgroundJobsToaster />
+        </JobStatusProvider>
       </ToastProvider>
     </BrowserRouter>
   );

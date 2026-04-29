@@ -16,11 +16,11 @@ import {
 
 import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
+import { useJobStatus } from '../../contexts/JobStatusContext';
 import {
   Spinner,
   Textarea,
 } from '../../shared/ui/TaaliPrimitives';
-import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidatesDirectoryPage } from '../candidates/CandidatesDirectoryPage';
 import { candidateReportHref } from '../candidates/CandidateTriageDrawer';
@@ -608,6 +608,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const rolesApi = apiClient.roles;
   const tasksApi = 'tasks' in apiClient ? apiClient.tasks : null;
   const { showToast } = useToast();
+  const { trackRole } = useJobStatus() ?? {};
   void onViewCandidate;
 
   const numericRoleId = Number(roleId);
@@ -880,14 +881,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         include_scored: Boolean(payload.include_scored || includeScored),
       });
       if (payload.status === 'nothing_to_score') {
-        // Persistent toaster won't show progress for a no-op, so surface
-        // an info toast here.
         showToast(includeScored ? 'No CVs available to score.' : 'No newly added CVs need scoring.', 'info');
         return;
       }
-      // No success toast — the persistent BackgroundJobsToaster already
-      // shows "Re-scoring CVs · 0/N · progress bar" in the bottom-right.
-      // Two surfaces for the same event was visual noise.
+      // Tell the global panel to start tracking this role immediately,
+      // without waiting for the next discovery poll.
+      trackRole?.(numericRoleId);
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to start CV scoring.'), 'error');
     }
@@ -1086,7 +1085,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
-      <BackgroundJobsToaster roleId={numericRoleId} />
       <div className="page">
         <button type="button" className="pipeline-back" onClick={() => onNavigate('jobs')}>
           <ArrowLeft size={10} />
