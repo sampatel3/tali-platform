@@ -66,6 +66,17 @@ from ...services.candidate_feedback_engine import (
     build_interview_debrief_payload_for_application,
 )
 from ...services.application_automation_service import run_auto_reject_if_needed
+from ...services.background_job_runs import (
+    create_run as _create_job_run,
+    update_run as _update_job_run,
+)
+from ...models.background_job_run import (
+    JOB_KIND_CV_FETCH,
+    JOB_KIND_GRAPH_SYNC,
+    JOB_KIND_SCORING_BATCH,
+    SCOPE_KIND_ORG,
+    SCOPE_KIND_ROLE,
+)
 from ...services.fireflies_service import (
     FirefliesService,
     attach_fireflies_match_metadata,
@@ -2303,11 +2314,29 @@ def _run_batch_score(role_id: int, org_id: int, *, include_scored: bool = False,
 
         progress["status"] = "completed"
         _batch_score_progress[role_id] = progress
-    except Exception:
+        _update_job_run(
+            progress.get("run_id"),
+            status="completed",
+            counters={
+                "total": int(progress.get("total", 0) or 0),
+                "scored": int(progress.get("scored", 0) or 0),
+                "errors": int(progress.get("errors", 0) or 0),
+                "pre_screened_out": int(progress.get("pre_screened_out", 0) or 0),
+                "include_scored": bool(progress.get("include_scored")),
+            },
+            finished=True,
+        )
+    except Exception as exc:
         logger.exception("Batch scoring failed for role_id=%s", role_id)
         progress = _batch_score_progress.get(role_id, {})
         progress["status"] = "failed"
         _batch_score_progress[role_id] = progress
+        _update_job_run(
+            progress.get("run_id"),
+            status="failed",
+            error=str(exc)[:500],
+            finished=True,
+        )
     finally:
         db.close()
 
@@ -2450,6 +2479,14 @@ def batch_score_role(
     _clear_cancel_flag(_BATCH_SCORE_CANCEL_PREFIX, role_id)
 
     batch_started_at = datetime.now(timezone.utc)
+    run_id = _create_job_run(
+        kind=JOB_KIND_SCORING_BATCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role_id,
+        organization_id=current_user.organization_id,
+        counters={"total": target_count, "scored": 0, "errors": 0, "pre_screened_out": 0, "include_scored": bool(include_scored)},
+        status="running",
+    )
     _batch_score_progress[role_id] = {
         "total": target_count,
         "scored": 0,
@@ -2459,6 +2496,7 @@ def batch_score_role(
         "started_at": batch_started_at,
         "organization_id": current_user.organization_id,
         "role_name": str(getattr(role, "name", "") or ""),
+        "run_id": run_id,
     }
     # Mirror to Redis so the status endpoint survives an API process
     # restart mid-batch (in-process dict is wiped on restart).
@@ -2827,6 +2865,18 @@ def batch_score_status(
             progress["status"] = status
             _batch_score_progress[role_id] = progress
             _delete_batch_meta(role_id)
+            _update_job_run(
+                progress.get("run_id"),
+                status="completed",
+                counters={
+                    "total": total,
+                    "scored": scored,
+                    "errors": errors,
+                    "pre_screened_out": pre_screened_out,
+                    "include_scored": bool(progress.get("include_scored")),
+                },
+                finished=True,
+            )
         elif status == "cancelling":
             # All jobs are terminal — transition from cancelling to cancelled.
             # Errors already include the DB-marked-cancelled jobs, so this
@@ -2834,6 +2884,18 @@ def batch_score_status(
             status = "cancelled"
             progress["status"] = status
             _batch_score_progress[role_id] = progress
+            _update_job_run(
+                progress.get("run_id"),
+                status="cancelled",
+                counters={
+                    "total": total,
+                    "scored": scored,
+                    "errors": errors,
+                    "pre_screened_out": pre_screened_out,
+                    "include_scored": bool(progress.get("include_scored")),
+                },
+                finished=True,
+            )
 
     # If the active batch just completed/cancelled, auto-start the queued one.
     queued_params = _read_batch_queue(role_id)
@@ -2858,6 +2920,14 @@ def batch_score_status(
             q_count = q_query.count()
             if q_count > 0:
                 q_started_at = datetime.now(timezone.utc)
+                q_run_id = _create_job_run(
+                    kind=JOB_KIND_SCORING_BATCH,
+                    scope_kind=SCOPE_KIND_ROLE,
+                    scope_id=role_id,
+                    organization_id=current_user.organization_id,
+                    counters={"total": q_count, "scored": 0, "errors": 0, "pre_screened_out": 0, "include_scored": q_include},
+                    status="running",
+                )
                 _batch_score_progress[role_id] = {
                     "total": q_count,
                     "scored": 0,
@@ -2866,6 +2936,7 @@ def batch_score_status(
                     "include_scored": q_include,
                     "started_at": q_started_at,
                     "organization_id": current_user.organization_id,
+                    "run_id": q_run_id,
                 }
                 _write_batch_meta(role_id, total=q_count, started_at=q_started_at, include_scored=q_include)
                 if settings.MVP_DISABLE_CELERY:
@@ -2955,6 +3026,11 @@ def cancel_batch_score(
     if progress.get("status") in {"running", "cancelling"}:
         progress["status"] = "cancelling"
         _batch_score_progress[role_id] = progress
+        _update_job_run(
+            progress.get("run_id"),
+            status="cancelling",
+            cancel_requested=True,
+        )
 
     return {
         "ok": bool(set_ok),
@@ -3042,6 +3118,14 @@ def batch_score_all_roles(
         # Register in per-role progress dict so status endpoint returns data
         _clear_cancel_flag(_BATCH_SCORE_CANCEL_PREFIX, role.id)
         batch_started_at = datetime.now(timezone.utc)
+        bf_run_id = _create_job_run(
+            kind=JOB_KIND_SCORING_BATCH,
+            scope_kind=SCOPE_KIND_ROLE,
+            scope_id=role.id,
+            organization_id=current_user.organization_id,
+            counters={"total": target_count, "scored": 0, "errors": 0, "pre_screened_out": 0, "include_scored": bool(include_scored)},
+            status="running",
+        )
         _batch_score_progress[role.id] = {
             "total": target_count,
             "scored": 0,
@@ -3049,6 +3133,9 @@ def batch_score_all_roles(
             "status": "running",
             "include_scored": bool(include_scored),
             "started_at": batch_started_at,
+            "organization_id": current_user.organization_id,
+            "role_name": str(getattr(role, "name", "") or ""),
+            "run_id": bf_run_id,
         }
         _write_batch_meta(
             role.id,
@@ -3322,6 +3409,16 @@ def _run_batch_fetch_cvs(role_id: int, org_id: int) -> None:
                     "_run_batch_fetch_cvs cancelled at %d/%d for role_id=%s",
                     idx, total, role_id,
                 )
+                _update_job_run(
+                    progress.get("run_id"),
+                    status="cancelled",
+                    counters={
+                        "total": int(progress.get("total", 0) or 0),
+                        "fetched": int(progress.get("fetched", 0) or 0),
+                        "errors": int(progress.get("errors", 0) or 0),
+                    },
+                    finished=True,
+                )
                 return
 
             try:
@@ -3352,11 +3449,27 @@ def _run_batch_fetch_cvs(role_id: int, org_id: int) -> None:
             db.rollback()
         progress["status"] = "completed"
         _batch_fetch_cvs_progress[role_id] = progress
-    except Exception:
+        _update_job_run(
+            progress.get("run_id"),
+            status="completed",
+            counters={
+                "total": int(progress.get("total", 0) or 0),
+                "fetched": int(progress.get("fetched", 0) or 0),
+                "errors": int(progress.get("errors", 0) or 0),
+            },
+            finished=True,
+        )
+    except Exception as exc:
         logger.exception("Batch fetch CVs failed for role_id=%s", role_id)
         progress = _batch_fetch_cvs_progress.get(role_id, {})
         progress["status"] = "failed"
         _batch_fetch_cvs_progress[role_id] = progress
+        _update_job_run(
+            progress.get("run_id"),
+            status="failed",
+            error=str(exc)[:500],
+            finished=True,
+        )
     finally:
         db.close()
 
@@ -3405,6 +3518,20 @@ def batch_fetch_cvs_role(
         .all()
     )
     to_fetch_count = sum(1 for a in to_fetch if not (a.cv_text or "").strip())
+    fetch_run_id = _create_job_run(
+        kind=JOB_KIND_CV_FETCH,
+        scope_kind=SCOPE_KIND_ROLE,
+        scope_id=role_id,
+        organization_id=current_user.organization_id,
+        counters={"total": to_fetch_count, "fetched": 0, "errors": 0, "role_name": str(getattr(role, "name", "") or "")},
+        status="running",
+    )
+    fetch_existing = _batch_fetch_cvs_progress.get(role_id, {})
+    fetch_existing["run_id"] = fetch_run_id
+    fetch_existing["organization_id"] = current_user.organization_id
+    fetch_existing["role_name"] = str(getattr(role, "name", "") or "")
+    fetch_existing["started_at"] = datetime.now(timezone.utc)
+    _batch_fetch_cvs_progress[role_id] = fetch_existing
     thread = threading.Thread(
         target=_run_batch_fetch_cvs,
         args=(role_id, current_user.organization_id),
@@ -3449,6 +3576,11 @@ def cancel_batch_fetch_cvs(
     if progress.get("status") == "running":
         progress["status"] = "cancelling"
         _batch_fetch_cvs_progress[role_id] = progress
+        _update_job_run(
+            progress.get("run_id"),
+            status="cancelling",
+            cancel_requested=True,
+        )
     return {
         "ok": bool(set_ok),
         "role_id": role_id,
@@ -3695,6 +3827,12 @@ def _run_sync_graph(org_id: int, *, refresh: bool = False) -> None:
             progress["status"] = "failed"
             progress["error"] = "neo4j_not_configured"
             _sync_graph_progress[org_id] = progress
+            _update_job_run(
+                progress.get("run_id"),
+                status="failed",
+                error="neo4j_not_configured",
+                finished=True,
+            )
             return
 
         candidate_ids = _select_graph_sync_candidates(
@@ -3712,6 +3850,26 @@ def _run_sync_graph(org_id: int, *, refresh: bool = False) -> None:
         from ...models.candidate import Candidate
 
         for idx, cid in enumerate(candidate_ids):
+            # Cooperative cancel: bail out cleanly between candidates.
+            if progress.get("cancel_requested"):
+                progress["status"] = "cancelled"
+                _sync_graph_progress[org_id] = progress
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+                _update_job_run(
+                    progress.get("run_id"),
+                    status="cancelled",
+                    counters={
+                        "total": int(progress.get("total", 0) or 0),
+                        "synced": int(progress.get("synced", 0) or 0),
+                        "errors": int(progress.get("errors", 0) or 0),
+                        "refresh": bool(progress.get("refresh", False)),
+                    },
+                    finished=True,
+                )
+                return
             try:
                 cand = db.query(Candidate).filter(Candidate.id == cid).first()
                 if cand is None:
@@ -3738,11 +3896,28 @@ def _run_sync_graph(org_id: int, *, refresh: bool = False) -> None:
             db.rollback()
         progress["status"] = "completed"
         _sync_graph_progress[org_id] = progress
-    except Exception:
+        _update_job_run(
+            progress.get("run_id"),
+            status="completed",
+            counters={
+                "total": int(progress.get("total", 0) or 0),
+                "synced": int(progress.get("synced", 0) or 0),
+                "errors": int(progress.get("errors", 0) or 0),
+                "refresh": bool(progress.get("refresh", False)),
+            },
+            finished=True,
+        )
+    except Exception as exc:
         logger.exception("Sync graph failed for org_id=%s", org_id)
         progress = _sync_graph_progress.get(org_id, {})
         progress["status"] = "failed"
         _sync_graph_progress[org_id] = progress
+        _update_job_run(
+            progress.get("run_id"),
+            status="failed",
+            error=str(exc)[:500],
+            finished=True,
+        )
     finally:
         db.close()
 
@@ -3811,6 +3986,14 @@ def sync_graph_org(
     if not candidate_ids:
         return {"status": "nothing_to_sync", "total": 0, "refresh": bool(refresh)}
 
+    graph_run_id = _create_job_run(
+        kind=JOB_KIND_GRAPH_SYNC,
+        scope_kind=SCOPE_KIND_ORG,
+        scope_id=org_id,
+        organization_id=org_id,
+        counters={"total": len(candidate_ids), "synced": 0, "errors": 0, "refresh": bool(refresh)},
+        status="running",
+    )
     _sync_graph_progress[org_id] = {
         "total": len(candidate_ids),
         "synced": 0,
@@ -3818,6 +4001,7 @@ def sync_graph_org(
         "status": "running",
         "refresh": bool(refresh),
         "started_at": datetime.now(timezone.utc),
+        "run_id": graph_run_id,
     }
     thread = threading.Thread(
         target=_run_sync_graph,
@@ -3844,6 +4028,32 @@ def sync_graph_status(
         "refresh": bool(progress.get("refresh", False)),
         "error": progress.get("error"),
     }
+
+
+@router.post("/candidates/sync-graph/cancel")
+def cancel_sync_graph(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Cooperatively cancel a running org-wide graph sync.
+
+    Sets a flag on the in-memory progress dict; the worker checks it
+    between candidates and bails out cleanly. Same shape as the workable
+    sync cancel pattern.
+    """
+    org_id = current_user.organization_id
+    progress = _sync_graph_progress.get(org_id, {})
+    if progress.get("status") == "running":
+        progress["cancel_requested"] = True
+        progress["status"] = "cancelling"
+        _sync_graph_progress[org_id] = progress
+        _update_job_run(
+            progress.get("run_id"),
+            status="cancelling",
+            cancel_requested=True,
+        )
+        return {"ok": True, "status": "cancelling"}
+    return {"ok": False, "status": progress.get("status", "idle")}
 
 
 @router.post("/applications/{application_id}/assessments", status_code=status.HTTP_201_CREATED)

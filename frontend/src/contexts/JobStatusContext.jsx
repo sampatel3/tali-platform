@@ -65,6 +65,9 @@ export function JobStatusProvider({ children }) {
   // so we don't bother keying by org_id — the user is in one org per session.
   const [graphSyncJob, setGraphSyncJob] = useState(null);
   const [graphSyncTracked, setGraphSyncTracked] = useState(false);
+  // Org-wide Workable sync — same single-active assumption.
+  const [workableSyncJob, setWorkableSyncJob] = useState(null);
+  const [workableSyncTracked, setWorkableSyncTracked] = useState(false);
 
   // tracked sets: role IDs we're actively polling for each job kind
   const trackedRef = useRef(new Set(loadPersistedRoleIds()));
@@ -278,6 +281,29 @@ export function JobStatusProvider({ children }) {
     return () => { cancelled = true; if (timer) clearTimeout(timer); };
   }, [rolesApi, graphSyncTracked]);
 
+  // ── Org-wide Workable sync polling ────────────────────────────────────────
+  useEffect(() => {
+    if (!workableSyncTracked) return undefined;
+    let cancelled = false;
+    let timer = null;
+    const poll = async () => {
+      if (cancelled) return;
+      try {
+        const r = await rolesApi?.workableSyncStatus();
+        if (cancelled) return;
+        setWorkableSyncJob(r?.data ?? null);
+        const status = String(r?.data?.workable_last_sync_status ?? r?.data?.status ?? '').toLowerCase();
+        const inProgress = !!r?.data?.sync_in_progress;
+        if (!inProgress && status !== 'running' && status !== 'cancelling') {
+          setWorkableSyncTracked(false);
+        }
+      } catch {}
+      if (!cancelled) timer = setTimeout(poll, ROLE_POLL_MS);
+    };
+    poll();
+    return () => { cancelled = true; if (timer) clearTimeout(timer); };
+  }, [rolesApi, workableSyncTracked]);
+
   // ── Discovery polling — finds batches started from other pages/tabs ───────
   useEffect(() => {
     if (!rolesApi?.activeBatchScores) return undefined;
@@ -311,6 +337,44 @@ export function JobStatusProvider({ children }) {
     };
   }, [rolesApi, bumpVersion]);
 
+  // ── One-shot discovery on mount: pick up an in-flight workable sync ───────
+  useEffect(() => {
+    if (!rolesApi?.workableSyncStatus) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await rolesApi.workableSyncStatus();
+        if (cancelled) return;
+        if (r?.data?.sync_in_progress) {
+          setWorkableSyncJob(r.data);
+          setWorkableSyncTracked(true);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+    // Run once on mount — rolesApi is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── One-shot discovery on mount: pick up an in-flight graph sync ──────────
+  useEffect(() => {
+    if (!rolesApi?.syncGraphStatus) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const r = await rolesApi.syncGraphStatus();
+        if (cancelled) return;
+        const status = String(r?.data?.status ?? '').toLowerCase();
+        if (status === 'running' || status === 'cancelling') {
+          setGraphSyncJob(r.data);
+          setGraphSyncTracked(true);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // ── Public API ────────────────────────────────────────────────────────────
 
   // Call these after triggering a batch so tracking starts immediately
@@ -319,6 +383,7 @@ export function JobStatusProvider({ children }) {
   const trackRoleFetchCvs = useCallback((roleId) => addTrackedFetch(roleId), [addTrackedFetch]);
   const trackRolePreScreen = useCallback((roleId) => addTrackedPreScreen(roleId), [addTrackedPreScreen]);
   const trackGraphSync = useCallback(() => setGraphSyncTracked(true), []);
+  const trackWorkableSync = useCallback(() => setWorkableSyncTracked(true), []);
 
   // Dismiss a completed/cancelled job and stop tracking it.
   const dismissJob = useCallback(
@@ -362,6 +427,28 @@ export function JobStatusProvider({ children }) {
     setGraphSyncTracked(false);
   }, []);
 
+  const dismissWorkableSyncJob = useCallback(() => {
+    setWorkableSyncJob(null);
+    setWorkableSyncTracked(false);
+  }, []);
+
+  const cancelGraphSync = useCallback(async () => {
+    try {
+      await rolesApi?.syncGraphCancel();
+      setGraphSyncJob((prev) => (prev ? { ...prev, status: 'cancelling' } : prev));
+    } catch {}
+  }, [rolesApi]);
+
+  const cancelWorkableSync = useCallback(
+    async (runId = null) => {
+      try {
+        await rolesApi?.workableSyncCancel(runId);
+        setWorkableSyncJob((prev) => (prev ? { ...prev, status: 'cancelling' } : prev));
+      } catch {}
+    },
+    [rolesApi],
+  );
+
   // Cancel a running batch. Updates local state optimistically; next poll
   // confirms the server-side status.
   const cancelBatch = useCallback(
@@ -398,17 +485,23 @@ export function JobStatusProvider({ children }) {
     fetchJobs,
     preScreenJobs,
     graphSyncJob,
+    workableSyncJob,
     trackRole,
     trackRoleFetchCvs,
     trackRolePreScreen,
     trackGraphSync,
+    trackWorkableSync,
     dismissJob,
     dismissFetchJob,
     dismissPreScreenJob,
     dismissGraphSyncJob,
+    dismissWorkableSyncJob,
     cancelBatch,
     cancelFetchCvs,
+    cancelGraphSync,
+    cancelWorkableSync,
     trackedRoleIds: trackedRef.current,
+    trackedFetchRoleIds: trackedFetchRef.current,
   };
 
   return (

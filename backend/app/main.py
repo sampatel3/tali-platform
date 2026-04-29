@@ -260,6 +260,7 @@ from .api.v1.scoring import router as scoring_router
 from .api.v1.users import router as users_router
 from .api.v1.workable import router as workable_router
 from .api.v1.auth import router as auth_router
+from .api.v1.background_jobs import router as background_jobs_router
 
 # FastAPI-Users auth routers
 app.include_router(
@@ -300,6 +301,7 @@ app.include_router(candidates_router, prefix="/api/v1")
 app.include_router(roles_router, prefix="/api/v1")
 app.include_router(scoring_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
+app.include_router(background_jobs_router, prefix="/api/v1")
 
 # cv_match_v3.0 admin + override surface (gated server-side; flag controls runner)
 from .cv_matching.routes import (

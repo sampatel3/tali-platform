@@ -6837,3 +6837,151 @@ body.interview-view .page {
   background: rgba(0, 0, 0, 0.12);
   margin: 0 4px;
 }
+
+/* ---- Background jobs settings panel ---- */
+.bg-jobs-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+.bg-jobs-panel-header {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+  color: var(--taali-muted);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.bg-jobs-panel-header-text { white-space: nowrap; }
+.bg-jobs-panel-subtable {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.bg-jobs-panel-subtitle {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--taali-text);
+  margin: 0;
+}
+.bg-jobs-panel-table {
+  border: 1px solid var(--taali-border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: var(--taali-surface, #fff);
+}
+.bg-jobs-panel-row {
+  display: grid;
+  grid-template-columns: 160px 1.1fr 1.4fr 0.8fr 0.8fr 0.7fr;
+  gap: 10px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--taali-border);
+  font-size: 12px;
+  align-items: center;
+}
+.bg-jobs-panel-row:last-child { border-bottom: none; }
+.bg-jobs-panel-head {
+  background: var(--taali-bg-soft, #f7f7f9);
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.05em;
+  color: var(--taali-muted);
+}
+.bg-jobs-panel-head-cell { font-weight: 600; }
+.bg-jobs-panel-cell { min-width: 0; }
+.bg-jobs-panel-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.bg-jobs-panel-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  flex-shrink: 0;
+  display: inline-block;
+}
+.bg-jobs-panel-dot.tone-running   { background: #2563eb; box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.6); animation: bgJobsPulse 1.6s ease-out infinite; }
+.bg-jobs-panel-dot.tone-queued    { background: #9ca3af; }
+.bg-jobs-panel-dot.tone-cancelling{ background: #f59e0b; }
+.bg-jobs-panel-dot.tone-cancelled { background: #6b7280; }
+.bg-jobs-panel-dot.tone-completed { background: #10b981; }
+.bg-jobs-panel-dot.tone-failed    { background: #ef4444; }
+.bg-jobs-panel-dot.tone-noop      { background: #d1d5db; }
+.bg-jobs-panel-dot.tone-warning   { background: #f59e0b; }
+@keyframes bgJobsPulse {
+  0%   { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0.55); }
+  70%  { box-shadow: 0 0 0 6px rgba(37, 99, 235, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(37, 99, 235, 0); }
+}
+.bg-jobs-panel-status-label {
+  font-family: var(--taali-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  color: var(--taali-text);
+  background: var(--taali-bg-soft, #f3f4f6);
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.bg-jobs-panel-counters {
+  font-variant-numeric: tabular-nums;
+}
+.bg-jobs-panel-breakdown {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--taali-muted);
+}
+.bg-jobs-panel-phase {
+  margin-top: 2px;
+  font-size: 11px;
+  color: var(--taali-muted);
+}
+.bg-jobs-panel-muted { color: var(--taali-muted); }
+.bg-jobs-panel-empty {
+  padding: 14px 12px;
+  font-size: 12px;
+  color: var(--taali-muted);
+  text-align: center;
+}
+.bg-jobs-panel-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  justify-content: flex-end;
+}
+.bg-jobs-panel-btn {
+  background: transparent;
+  border: 1px solid var(--taali-border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  font-size: 11px;
+  color: var(--taali-muted);
+  cursor: pointer;
+}
+.bg-jobs-panel-btn:hover:not(:disabled) {
+  background: var(--taali-danger-soft, rgba(220, 53, 69, 0.08));
+  border-color: var(--taali-danger-border, rgba(220, 53, 69, 0.3));
+  color: var(--taali-danger, #b91c1c);
+}
+.bg-jobs-panel-btn:disabled { cursor: not-allowed; opacity: 0.6; }
+.bg-jobs-panel-icon-btn {
+  background: transparent;
+  border: none;
+  color: var(--taali-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+}
+.bg-jobs-panel-icon-btn:hover {
+  background: var(--taali-bg-soft, rgba(0,0,0,0.04));
+  color: var(--taali-text);
+}
+
+@media (max-width: 800px) {
+  .bg-jobs-panel-row {
+    grid-template-columns: 1fr;
+  }
+  .bg-jobs-panel-head { display: none; }
+}

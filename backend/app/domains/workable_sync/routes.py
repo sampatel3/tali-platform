@@ -598,6 +598,53 @@ def workable_sync_status(
     return out
 
 
+@router.get("/sync/runs")
+def workable_sync_runs(
+    limit: int = Query(10, ge=1, le=50),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return the most recent Workable sync runs for the caller's org."""
+    if settings.MVP_DISABLE_WORKABLE:
+        raise HTTPException(status_code=503, detail="Workable integration is disabled for MVP")
+    org = _get_org_for_user(db, current_user)
+    rows = (
+        db.query(WorkableSyncRun)
+        .filter(WorkableSyncRun.organization_id == org.id)
+        .order_by(WorkableSyncRun.id.desc())
+        .limit(limit)
+        .all()
+    )
+
+    def _iso(value):
+        if value is None:
+            return None
+        if hasattr(value, "isoformat"):
+            return value.isoformat()
+        return value
+
+    return {
+        "runs": [
+            {
+                "id": r.id,
+                "mode": r.mode or "metadata",
+                "status": r.status or "running",
+                "phase": r.phase,
+                "jobs_total": r.jobs_total or 0,
+                "jobs_processed": r.jobs_processed or 0,
+                "candidates_seen": r.candidates_seen or 0,
+                "candidates_upserted": r.candidates_upserted or 0,
+                "applications_upserted": r.applications_upserted or 0,
+                "errors": r.errors or [],
+                "started_at": _iso(r.started_at),
+                "finished_at": _iso(r.finished_at),
+                "cancel_requested_at": _iso(r.cancel_requested_at),
+            }
+            for r in rows
+        ]
+    }
+
+
 @router.post("/sync/cancel")
 def cancel_workable_sync(
     body: _SyncCancelBody | None = Body(default=None),

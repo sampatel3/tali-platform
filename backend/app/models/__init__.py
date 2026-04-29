@@ -29,6 +29,15 @@ from .session import AssessmentSession
 from .billing_credit_ledger import BillingCreditLedger
 from .workable_sync_run import WorkableSyncRun
 from .graph_sync_state import GraphSyncState
+from .background_job_run import (
+    BackgroundJobRun,
+    JOB_KIND_CV_FETCH,
+    JOB_KIND_GRAPH_SYNC,
+    JOB_KIND_SCORING_BATCH,
+    JOB_KINDS,
+    SCOPE_KIND_ORG,
+    SCOPE_KIND_ROLE,
+)
 
 __all__ = [
     "User",
@@ -60,4 +69,11 @@ __all__ = [
     "BillingCreditLedger",
     "WorkableSyncRun",
     "GraphSyncState",
+    "BackgroundJobRun",
+    "JOB_KIND_SCORING_BATCH",
+    "JOB_KIND_CV_FETCH",
+    "JOB_KIND_GRAPH_SYNC",
+    "JOB_KINDS",
+    "SCOPE_KIND_ROLE",
+    "SCOPE_KIND_ORG",
 ]

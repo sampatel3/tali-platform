@@ -22,6 +22,7 @@ import {
   WorkableLogo,
   formatRelativeDateTime,
 } from '../../shared/ui/RecruiterDesignPrimitives';
+import BackgroundJobsPanel from './BackgroundJobsPanel';
 
 const WORKABLE_SCOPE_OPTIONS = [
   { id: 'r_jobs', label: 'r_jobs', description: 'Read jobs and roles from Workable.' },
@@ -80,6 +81,8 @@ const SECTION_ALIASES = {
   preferences: 'api',
   api: 'api',
   notifications: 'notifications',
+  jobs: 'jobs',
+  'background-jobs': 'jobs',
 };
 const buildWorkableScopeSelection = (scopes = []) => {
   const granted = new Set(
@@ -1063,6 +1066,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
               <SettingsNavLink active={activeSection === 'members'} label="Members" onClick={() => navigateToSection('members')} />
               <SettingsNavLink active={activeSection === 'roles'} label="Roles & access" onClick={() => navigateToSection('roles')} />
 
+              <div className="settings-side-group-label">Operations</div>
+              <SettingsNavLink active={activeSection === 'jobs'} label="Background jobs" onClick={() => navigateToSection('jobs')} />
+
               <div className="settings-side-group-label">Connected</div>
               <SettingsNavLink active={activeSection === 'workable'} label="Workable" onClick={() => navigateToSection('workable')} />
               <SettingsNavLink active={activeSection === 'sso'} label="SSO / SAML" onClick={() => navigateToSection('sso')} />
@@ -1369,6 +1375,16 @@ Disqualifying: No experience with regulated financial data`}
                       {accessSaving ? 'Saving...' : 'Save access settings'}
                     </button>
                   </div>
+                </SectionPanel>
+              </div>
+
+              <div ref={(node) => { sectionRefs.current.jobs = node; }}>
+                <SectionPanel
+                  id="jobs"
+                  title="Background jobs"
+                  subtitle="Live and recent runs across scoring, CV fetch, Workable sync, and graph sync."
+                >
+                  <BackgroundJobsPanel />
                 </SectionPanel>
               </div>
 

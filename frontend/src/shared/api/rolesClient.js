@@ -104,6 +104,16 @@ export const roles = {
     },
   ),
   syncGraphStatus: () => api.get(`/candidates/sync-graph/status`),
+  syncGraphCancel: () => api.post(`/candidates/sync-graph/cancel`),
+  // Workable sync — org-wide. Live status reads the latest run; runs lists history.
+  workableSync: (mode = 'metadata') => api.post('/workable/sync', { mode }),
+  workableSyncStatus: () => api.get('/workable/sync/status'),
+  workableSyncRuns: (limit = 10) => api.get('/workable/sync/runs', { params: { limit } }),
+  workableSyncCancel: (runId = null) =>
+    api.post('/workable/sync/cancel', runId == null ? {} : { run_id: runId }),
+  // Background jobs panel: history listing across scoring batch / CV fetch / graph sync.
+  // Workable sync history is at /workable/sync/runs.
+  backgroundJobsRuns: (limit = 20) => api.get('/background-jobs/runs', { params: { limit } }),
   createAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments`, data),
   retakeAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments/retake`, data),
 };
