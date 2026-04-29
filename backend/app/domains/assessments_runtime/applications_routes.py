@@ -3932,7 +3932,7 @@ def _read_process_progress(role_id: int) -> dict | None:
 def _set_process_progress(role_id: int, progress: dict) -> None:
     """Update both the in-memory dict (fast path on the worker that owns it)
     and Redis (visible to all workers)."""
-    _set_process_progress(role_id, progress)
+    _process_progress[role_id] = progress
     _write_process_progress(role_id, progress)
 
 
