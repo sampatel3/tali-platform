@@ -642,46 +642,44 @@ def graphiti_cypher_debug(request: Request):
     group_id = f"org-{org_id}"
 
     graphiti = graph_client.get_graphiti()
+    out = {"group_id": group_id, "query": query}
 
-    # 1. Check what relationship types exist in the graph
-    rel_types = graph_client.run_async(
-        graphiti.driver.execute_query("CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType LIMIT 20"),
-        timeout=10.0,
-    )
+    # What relationship types exist?
+    try:
+        r = graph_client.run_async(
+            graphiti.driver.execute_query(
+                "MATCH ()-[e]->() RETURN DISTINCT type(e) AS t LIMIT 10"
+            ), timeout=10.0,
+        )
+        out["rel_types"] = [rec["t"] for rec in (r.records or [])]
+    except Exception as exc:
+        out["rel_types_error"] = str(exc)
 
-    # 2. Check what properties edges have
-    edge_props = graph_client.run_async(
-        graphiti.driver.execute_query(
-            "MATCH ()-[e]->() WHERE e.group_id = $gid RETURN keys(e) AS props, type(e) AS rel_type LIMIT 3",
-            {"gid": group_id},
-        ),
-        timeout=10.0,
-    )
+    # Sample edges for this org — any type
+    try:
+        r = graph_client.run_async(
+            graphiti.driver.execute_query(
+                "MATCH (s)-[e]->(t) WHERE e.group_id = $gid RETURN type(e) AS rel, e.fact AS fact, s.name AS s, t.name AS t LIMIT 5",
+                {"gid": group_id},
+            ), timeout=10.0,
+        )
+        out["org_edges_sample"] = [dict(rec) for rec in (r.records or [])]
+    except Exception as exc:
+        out["org_edges_error"] = str(exc)
 
-    # 3. Try the actual subgraph Cypher
-    cypher_result = graph_client.run_async(
-        graphiti.driver.execute_query(
-            """
-            MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity)
-            WHERE e.group_id = $gid
-              AND toLower(e.fact) CONTAINS toLower($q)
-            RETURN s.uuid AS s_uuid, s.name AS s_name,
-                   t.uuid AS t_uuid, t.name AS t_name,
-                   e.fact AS fact
-            LIMIT 5
-            """,
-            {"gid": group_id, "q": query},
-        ),
-        timeout=10.0,
-    )
+    # Try the actual Cypher we're using
+    try:
+        r = graph_client.run_async(
+            graphiti.driver.execute_query(
+                "MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity) WHERE e.group_id = $gid AND toLower(e.fact) CONTAINS toLower($q) RETURN s.name AS s, t.name AS t, e.fact AS fact LIMIT 5",
+                {"gid": group_id, "q": query},
+            ), timeout=10.0,
+        )
+        out["cypher_matches"] = [dict(rec) for rec in (r.records or [])]
+    except Exception as exc:
+        out["cypher_error"] = str(exc)
 
-    return {
-        "group_id": group_id,
-        "query": query,
-        "rel_types": [r["relationshipType"] for r in (rel_types.records or [])],
-        "edge_props_sample": [dict(r) for r in (edge_props.records or [])],
-        "cypher_matches": [dict(r) for r in (cypher_result.records or [])],
-    }
+    return out
 
 
 @app.post("/admin/graphiti/test-episode")
