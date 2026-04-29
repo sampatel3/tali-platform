@@ -91,6 +91,16 @@ export const roles = {
     { params: { dry_run: options.dry_run === true ? true : undefined } },
   ),
   fetchCvsStatus: (roleId) => api.get(`/roles/${roleId}/fetch-cvs/status`),
+  // Unified Process action — replaces individual fetch / pre-screen / score buttons.
+  // Body: { fetch_cvs, pre_screen, refresh_pre_screen, score: 'none'|'new'|'all' }.
+  // Pass { dry_run: true } in options to get cascade-aware preview counts.
+  processRole: (roleId, body = {}, options = {}) => api.post(
+    `/roles/${roleId}/process`,
+    body,
+    { params: { dry_run: options.dry_run === true ? true : undefined } },
+  ),
+  processRoleStatus: (roleId) => api.get(`/roles/${roleId}/process/status`),
+  cancelProcessRole: (roleId) => api.post(`/roles/${roleId}/process/cancel`),
   // Org-wide knowledge-graph sync. Lives on /candidates/* not /roles/* because
   // the graph projection is org-scoped, not role-scoped.
   syncGraph: (options = {}) => api.post(
