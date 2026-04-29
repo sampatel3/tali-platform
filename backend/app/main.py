@@ -685,7 +685,8 @@ def graphiti_cypher_debug(request: Request):
                 f"MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity) "
                 f"WHERE e.group_id = '{safe_gid}' "
                 f"AND toLower(e.fact) CONTAINS '{safe_q}' "
-                f"RETURN s.uuid AS s_uuid, s.name AS s, t.uuid AS t_uuid, t.name AS t, e.fact AS fact LIMIT 5"
+                f"RETURN s.uuid AS s_uuid, s.name AS s, t.uuid AS t_uuid, t.name AS t, "
+                f"e.name AS e_name, e.fact AS fact LIMIT 10"
             ), timeout=10.0,
         )
         out["cypher_matches"] = safe_records(r)
