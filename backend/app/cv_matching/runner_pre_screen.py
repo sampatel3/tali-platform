@@ -22,6 +22,7 @@ from typing import Literal
 from . import MODEL_VERSION
 from .prompts_pre_screen import (
     PRE_SCREEN_PROMPT_VERSION,
+    build_pre_screen_messages,
     build_pre_screen_prompt,
 )
 from .schemas import RequirementInput
@@ -222,7 +223,7 @@ def run_pre_screen(
                 cache_hit=False,
             )
 
-    prompt = build_pre_screen_prompt(cv_text, jd_text, requirements)
+    messages = build_pre_screen_messages(cv_text, jd_text, requirements)
     started = time.monotonic()
     try:
         response = client.messages.create(
@@ -230,7 +231,7 @@ def run_pre_screen(
             max_tokens=256,
             temperature=0,
             system="You are a fast hiring pre-screener. Respond ONLY with valid JSON.",
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
         )
     except Exception as exc:
         logger.warning("Pre-screen Claude call failed: %s", exc)

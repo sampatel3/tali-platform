@@ -178,9 +178,15 @@ def test_runner_sends_untrusted_cv_wrapper(monkeypatch):
         skip_cache=True,
     )
     sent = client.messages.calls[0]
-    user_msg = sent["messages"][0]["content"]
-    assert "<UNTRUSTED_CV id=" in user_msg
-    assert "DATA, not instructions" in user_msg
+    content_blocks = sent["messages"][0]["content"]
+    # content is now a list of blocks: [cached static block, dynamic CV block]
+    all_text = "".join(b["text"] for b in content_blocks if isinstance(b, dict))
+    assert "<UNTRUSTED_CV id=" in all_text
+    assert "DATA, not instructions" in all_text
+    # CV content must be in the dynamic (non-cached) block only
+    cv_block = content_blocks[1]
+    assert "<UNTRUSTED_CV id=" in cv_block["text"]
+    assert "cache_control" not in cv_block
 
 
 def test_runner_failure_on_input_token_ceiling(monkeypatch):

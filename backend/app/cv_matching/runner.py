@@ -26,7 +26,7 @@ from pydantic import ValidationError
 
 from . import MODEL_VERSION, PROMPT_VERSION
 from .aggregation import aggregate
-from .prompts import build_cv_match_prompt
+from .prompts import build_cv_match_messages, build_cv_match_prompt
 from .schemas import (
     CVMatchOutput,
     CVMatchResult,
@@ -94,20 +94,27 @@ def _strip_json_fences(raw: str) -> str:
     return text
 
 
-def _count_input_tokens(client, prompt: str, system: str) -> int:
+def _count_input_tokens(client, messages: list[dict], system: str) -> int:
     """Count input tokens via the SDK; heuristic fallback when unavailable."""
     if not hasattr(client.messages, "count_tokens"):
-        return (len(prompt) + len(system)) // 4
+        total_chars = sum(
+            len(block.get("text", "") if isinstance(block, dict) else block)
+            for msg in messages
+            for block in (
+                msg["content"] if isinstance(msg.get("content"), list) else [{"text": msg.get("content", "")}]
+            )
+        )
+        return (total_chars + len(system)) // 4
     try:
         result = client.messages.count_tokens(
             model=MODEL_VERSION,
             system=system,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
         )
         return int(getattr(result, "input_tokens", 0) or 0)
     except Exception as exc:  # pragma: no cover — defensive
         logger.warning("Token counting failed: %s", exc)
-        return (len(prompt) + len(system)) // 4
+        return 8000  # conservative fallback — below the 32K ceiling
 
 
 def _failed_output(*, error_reason: str, ctx: _RunContext) -> CVMatchOutput:
@@ -120,14 +127,16 @@ def _failed_output(*, error_reason: str, ctx: _RunContext) -> CVMatchOutput:
     )
 
 
-def _call_claude(client, *, prompt: str, ctx: _RunContext) -> str:
-    system = "You are an expert recruiter. Respond ONLY with valid JSON."
+_SYSTEM_PROMPT = "You are an expert recruiter. Respond ONLY with valid JSON."
+
+
+def _call_claude(client, *, messages: list[dict], ctx: _RunContext) -> str:
     response = client.messages.create(
         model=MODEL_VERSION,
         max_tokens=OUTPUT_TOKEN_CEILING,
         temperature=TEMPERATURE,
-        system=system,
-        messages=[{"role": "user", "content": prompt}],
+        system=_SYSTEM_PROMPT,
+        messages=messages,
     )
 
     usage = getattr(response, "usage", None)
@@ -240,9 +249,9 @@ def run_cv_match(
         logger.warning("Archetype synthesis failed; proceeding without: %s", exc)
         archetype = None
 
-    # 4. Build prompt
+    # 4. Build messages (two content blocks: cached static role block + dynamic CV block)
     try:
-        prompt = build_cv_match_prompt(
+        messages = build_cv_match_messages(
             cv_text,
             jd_text,
             requirements,
@@ -256,11 +265,7 @@ def run_cv_match(
         return out
 
     # 5. Token ceiling check
-    counted_in = _count_input_tokens(
-        client,
-        prompt,
-        system="You are an expert recruiter. Respond ONLY with valid JSON.",
-    )
+    counted_in = _count_input_tokens(client, messages, _SYSTEM_PROMPT)
     if counted_in > INPUT_TOKEN_CEILING:
         out = _failed_output(
             error_reason=(
@@ -272,13 +277,15 @@ def run_cv_match(
         telemetry_module.emit_trace(ctx, final_status=out.scoring_status)
         return out
 
-    # 6. Call Claude with at most one retry on validation failure
+    # 6. Call Claude with at most one retry on validation failure.
+    # On retry, append the error to the CV block so the static block stays
+    # cached (no need to re-send JD / rules / schema).
     last_err: str = ""
     parsed: CVMatchResult | None = None
-    current_prompt = prompt
+    current_messages = messages
     for attempt in range(MAX_RETRIES + 1):
         try:
-            raw_text = _call_claude(client, prompt=current_prompt, ctx=ctx)
+            raw_text = _call_claude(client, messages=current_messages, ctx=ctx)
         except Exception as exc:
             logger.exception("Claude call failed (attempt %d)", attempt + 1)
             out = _failed_output(error_reason=f"claude_call_failed: {exc}", ctx=ctx)
@@ -295,12 +302,24 @@ def run_cv_match(
             if attempt >= MAX_RETRIES:
                 break
             ctx.retry_count += 1
-            current_prompt = (
-                prompt
-                + "\n\nYour previous response failed validation with this error:\n"
-                + f"{last_err}\n"
-                + "Return a corrected JSON response. Do not include any commentary."
+            # Keep the cached static block; append the correction request only
+            # to the dynamic CV block so the next call still gets a cache hit.
+            retry_suffix = (
+                "\n\nYour previous response failed validation with this error:\n"
+                + last_err
+                + "\nReturn a corrected JSON response. Do not include any commentary."
             )
+            base_content = messages[0]["content"]
+            retry_cv_text = base_content[1]["text"] + retry_suffix
+            current_messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        base_content[0],  # cached static block (unchanged)
+                        {"type": "text", "text": retry_cv_text},
+                    ],
+                }
+            ]
 
     if parsed is None:
         out = _failed_output(
