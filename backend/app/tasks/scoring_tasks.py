@@ -102,6 +102,22 @@ def score_application_job(
 
         try:
             _execute_scoring(db, application=application, job=job, force_full_score=force_full_score)
+            # Post-execution cancel guard: _execute_scoring calls Claude
+            # synchronously (10-30s). If cancel fired DURING that call the
+            # cancel endpoint already marked this job as error in the DB
+            # (WHERE status='pending' — the job was never committed as
+            # 'running' so the DB still showed 'pending'). Without this
+            # check we'd commit status='done' + the score, overriding the
+            # cancel and writing an unwanted result to the application.
+            if application.role_id is not None and is_batch_score_cancelled(
+                int(application.role_id)
+            ):
+                db.rollback()  # discard score changes — the cancel marker stays
+                return {
+                    "status": "cancelled_mid_execution",
+                    "application_id": application_id,
+                    "role_id": int(application.role_id),
+                }
             db.commit()
             return {
                 "status": job.status,

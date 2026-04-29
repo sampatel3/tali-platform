@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
   ArrowLeft,
@@ -608,15 +608,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const rolesApi = apiClient.roles;
   const tasksApi = 'tasks' in apiClient ? apiClient.tasks : null;
   const { showToast } = useToast();
-  const { trackRole } = useJobStatus() ?? {};
+  const { jobs, trackRole } = useJobStatus() ?? {};
   void onViewCandidate;
 
   const numericRoleId = Number(roleId);
+  // Batch progress is owned by the global JobStatusContext — single source of truth.
+  const batchScoreProgress = jobs?.[numericRoleId] ?? EMPTY_PROGRESS;
   const [role, setRole] = useState(null);
   const [roleTasks, setRoleTasks] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
   const [roleApplications, setRoleApplications] = useState([]);
-  const [batchScoreProgress, setBatchScoreProgress] = useState(EMPTY_PROGRESS);
   const [fetchCvsProgress, setFetchCvsProgress] = useState(EMPTY_FETCH_PROGRESS);
   const [loading, setLoading] = useState(true);
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
@@ -652,7 +653,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setThresholdDraft(nextRole?.auto_reject_threshold_100 != null ? String(nextRole.auto_reject_threshold_100) : '');
       setRoleTasks(Array.isArray(tasksRes?.data) ? tasksRes.data : []);
       setRoleApplications(Array.isArray(applicationsRes?.data) ? applicationsRes.data : []);
-      setBatchScoreProgress(batchStatusRes?.data || EMPTY_PROGRESS);
+      // Hand off batch status to the global context — it owns display state.
+      // If a batch is already running when this page loads, make the context
+      // track it immediately (no waiting for the next 10s discovery poll).
+      const initBatchStatus = String(batchStatusRes?.data?.status || '').toLowerCase();
+      if (['running', 'cancelling', 'cancelled', 'completed'].includes(initBatchStatus)) {
+        trackRole?.(numericRoleId);
+      }
       setFetchCvsProgress(fetchStatusRes?.data || EMPTY_FETCH_PROGRESS);
     } catch (error) {
       setRole(null);
@@ -662,7 +669,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     } finally {
       setLoading(false);
     }
-  }, [numericRoleId, rolesApi, showToast]);
+  }, [numericRoleId, rolesApi, showToast, trackRole]);
 
   useEffect(() => {
     void loadRoleWorkspace();
@@ -692,35 +699,42 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     };
   }, [tasksApi]);
 
+  // ── Reload applications when the global context tells us a batch finished ──
+  // batchScoreProgress is read from JobStatusContext (single source of truth).
+  // We track the previous status in a ref so we detect the running→terminal
+  // transition and trigger a workspace reload to refresh candidate scores.
+  const prevBatchStatusRef = useRef('');
+  useEffect(() => {
+    const current = String(batchScoreProgress?.status || '').toLowerCase();
+    const prev = prevBatchStatusRef.current;
+    prevBatchStatusRef.current = current;
+    if (prev === 'running' && (current === 'completed' || current === 'cancelled')) {
+      void loadRoleWorkspace();
+      setRefreshTick((value) => value + 1);
+    }
+  }, [batchScoreProgress?.status, loadRoleWorkspace]);
+
+  // ── Poll fetchCvs progress (this lives locally, not in global context) ────
   useEffect(() => {
     if (!Number.isFinite(numericRoleId)) return undefined;
-    const batchRunning = String(batchScoreProgress?.status || '').toLowerCase() === 'running';
     const fetchRunning = String(fetchCvsProgress?.status || '').toLowerCase() === 'running';
-    if (!batchRunning && !fetchRunning) return undefined;
+    if (!fetchRunning) return undefined;
 
     let cancelled = false;
     const poll = async () => {
       try {
-        const [batchStatusRes, fetchStatusRes] = await Promise.all([
-          rolesApi.batchScoreStatus(numericRoleId),
-          rolesApi.fetchCvsStatus(numericRoleId),
-        ]);
+        const fetchStatusRes = await rolesApi.fetchCvsStatus(numericRoleId);
         if (cancelled) return;
-        const nextBatch = batchStatusRes?.data || EMPTY_PROGRESS;
         const nextFetch = fetchStatusRes?.data || EMPTY_FETCH_PROGRESS;
-        const batchWasRunning = String(batchScoreProgress?.status || '').toLowerCase() === 'running';
         const fetchWasRunning = String(fetchCvsProgress?.status || '').toLowerCase() === 'running';
-        const batchNowRunning = String(nextBatch.status || '').toLowerCase() === 'running';
         const fetchNowRunning = String(nextFetch.status || '').toLowerCase() === 'running';
-        setBatchScoreProgress(nextBatch);
         setFetchCvsProgress(nextFetch);
-        if ((batchWasRunning && !batchNowRunning) || (fetchWasRunning && !fetchNowRunning)) {
+        if (fetchWasRunning && !fetchNowRunning) {
           await loadRoleWorkspace();
           setRefreshTick((value) => value + 1);
         }
       } catch {
         if (!cancelled) {
-          setBatchScoreProgress((current) => ({ ...current, status: current.status || 'failed' }));
           setFetchCvsProgress((current) => ({ ...current, status: current.status || 'failed' }));
         }
       }
@@ -733,7 +747,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [batchScoreProgress, fetchCvsProgress, loadRoleWorkspace, numericRoleId, rolesApi]);
+  }, [fetchCvsProgress, loadRoleWorkspace, numericRoleId, rolesApi]);
 
   const activeApplications = useMemo(() => (
     roleApplications.filter((application) => application?.application_outcome === 'open')
@@ -873,19 +887,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     try {
       const res = await rolesApi.batchScore(numericRoleId, includeScored ? { include_scored: true } : {});
       const payload = res?.data || EMPTY_PROGRESS;
-      setBatchScoreProgress({
-        status: payload.status || 'started',
-        total: Number(payload.total || payload.total_target || 0),
-        scored: Number(payload.scored || 0),
-        errors: Number(payload.errors || 0),
-        include_scored: Boolean(payload.include_scored || includeScored),
-      });
       if (payload.status === 'nothing_to_score') {
         showToast(includeScored ? 'No CVs available to score.' : 'No newly added CVs need scoring.', 'info');
         return;
       }
-      // Tell the global panel to start tracking this role immediately,
-      // without waiting for the next discovery poll.
+      // Hand off to the global context — it will poll status and own the
+      // progress numbers shown in both this page and the global toaster.
       trackRole?.(numericRoleId);
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to start CV scoring.'), 'error');

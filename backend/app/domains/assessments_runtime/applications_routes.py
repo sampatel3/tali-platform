@@ -2725,11 +2725,19 @@ def batch_score_status(
             .count()
         )
         status = "running" if active_jobs > 0 else "completed"
-    if total > 0 and (scored + errors + pre_screened_out) >= total and status == "running":
-        status = "completed"
-        progress["status"] = status
-        _batch_score_progress[role_id] = progress
-        _delete_batch_meta(role_id)
+    if total > 0 and (scored + errors + pre_screened_out) >= total:
+        if status == "running":
+            status = "completed"
+            progress["status"] = status
+            _batch_score_progress[role_id] = progress
+            _delete_batch_meta(role_id)
+        elif status == "cancelling":
+            # All jobs are terminal — transition from cancelling to cancelled.
+            # Errors already include the DB-marked-cancelled jobs, so this
+            # fires once every pending job has been skipped or has completed.
+            status = "cancelled"
+            progress["status"] = status
+            _batch_score_progress[role_id] = progress
 
     # If the active batch just completed/cancelled, auto-start the queued one.
     queued_params = _read_batch_queue(role_id)
