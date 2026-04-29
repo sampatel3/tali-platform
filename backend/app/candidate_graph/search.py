@@ -121,11 +121,11 @@ def subgraph_for_candidates(
     try:
         result = graph_client.run_async(
             _cypher_subgraph_by_episodes(graphiti.driver, group_id, ids[:50]),
-            timeout=25.0,
+            timeout=8.0,
         )
         _merge_neo4j_records(result, nodes, edges)
     except Exception as exc:
-        logger.warning("subgraph_for_candidates cypher failed: %s", exc)
+        logger.exception("subgraph_for_candidates cypher failed: %s", exc)
 
     return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
 
@@ -147,11 +147,11 @@ def subgraph_for_query(*, organization_id: int, query: str) -> GraphPayload:
     try:
         result = graph_client.run_async(
             _cypher_subgraph_by_query(graphiti.driver, group_id, query, limit=SUBGRAPH_LIMIT),
-            timeout=15.0,
+            timeout=8.0,
         )
         _merge_neo4j_records(result, nodes, edges)
     except Exception as exc:
-        logger.warning("subgraph_for_query cypher failed: %s", exc)
+        logger.exception("subgraph_for_query cypher failed: %s", exc)
 
     return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
 
@@ -165,46 +165,67 @@ def subgraph_for_query(*, organization_id: int, query: str) -> GraphPayload:
 async def _cypher_subgraph_by_query(
     driver, group_id: str, query: str, limit: int = 100
 ):
-    """Edges whose fact text contains the query substring, with nodes joined."""
-    return await driver.execute_query(
-        """
+    """Edges whose fact text contains the query substring, with nodes joined.
+
+    Uses string formatting instead of parameterized queries because the Neo4j
+    driver version in use does not accept a plain dict as the second positional
+    argument to execute_query — parameterized calls either throw or return empty.
+
+    Safety:
+    - ``group_id`` is always ``org-{int}`` — no user-controlled chars.
+    - ``query`` has single-quotes escaped and is truncated to 200 chars.
+    - ``limit`` is a Python int — safe to interpolate directly.
+    """
+    safe_query = query.replace("'", "\\'")[:200]
+    cypher = f"""
         MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity)
-        WHERE e.group_id = $group_id
-          AND toLower(e.fact) CONTAINS toLower($query)
+        WHERE e.group_id = '{group_id}'
+          AND toLower(e.fact) CONTAINS toLower('{safe_query}')
         RETURN
           s.uuid AS s_uuid, s.name AS s_name, properties(s) AS s_props,
           t.uuid AS t_uuid, t.name AS t_name, properties(t) AS t_props,
           e.uuid AS e_uuid, e.name AS e_name, e.fact AS e_fact,
           e.valid_at AS e_valid_at, e.invalid_at AS e_invalid_at
-        LIMIT $lim
-        """,
-        {"group_id": group_id, "query": query, "lim": limit},
-    )
+        LIMIT {int(limit)}
+        """
+    return await driver.execute_query(cypher)
 
 
 async def _cypher_subgraph_by_episodes(
     driver, group_id: str, candidate_ids: list[int]
 ):
-    """Edges introduced by episodes for the given Postgres candidate IDs."""
+    """Edges introduced by episodes for the given Postgres candidate IDs.
+
+    Uses string formatting instead of parameterized queries (same reason as
+    _cypher_subgraph_by_query above).
+
+    Safety:
+    - ``candidate_ids`` are Python ints — safe to interpolate directly.
+    - ``group_id`` is always ``org-{int}`` — no user-controlled chars.
+
+    We do NOT filter Episode nodes by group_id property because it may not
+    be stored on Episode nodes in this Graphiti version. Instead we rely on:
+    - The ``candidate-{id}-`` STARTS WITH prefix on ep.name (candidate-scoped).
+    - The ``e.group_id`` filter on the RELATES_TO edge (org-scoped).
+    """
     # Episode names are stable: "candidate-{id}-profile", "candidate-{id}-cv", …
-    # We match any episode whose name starts with one of our prefixes.
-    prefixes = [f"candidate-{cid}-" for cid in candidate_ids]
-    return await driver.execute_query(
-        """
-        UNWIND $prefixes AS prefix
-        MATCH (ep:Episode {group_id: $group_id})
+    # Build a Cypher list literal of prefix strings.
+    prefix_list = ", ".join(f"'candidate-{int(cid)}-'" for cid in candidate_ids)
+    cypher = f"""
+        WITH [{prefix_list}] AS prefixes
+        UNWIND prefixes AS prefix
+        MATCH (ep:Episode)
         WHERE ep.name STARTS WITH prefix
         MATCH (ep)-[:MENTIONS]->(s:Entity)-[e:RELATES_TO]->(t:Entity)
-        WHERE e.group_id = $group_id
+        WHERE e.group_id = '{group_id}'
         RETURN
           s.uuid AS s_uuid, s.name AS s_name, properties(s) AS s_props,
           t.uuid AS t_uuid, t.name AS t_name, properties(t) AS t_props,
           e.uuid AS e_uuid, e.name AS e_name, e.fact AS e_fact,
           e.valid_at AS e_valid_at, e.invalid_at AS e_invalid_at
         LIMIT 200
-        """,
-        {"group_id": group_id, "prefixes": prefixes},
-    )
+        """
+    return await driver.execute_query(cypher)
 
 
 def _merge_neo4j_records(result, nodes: dict, edges: list) -> None:
@@ -220,9 +241,13 @@ def _merge_neo4j_records(result, nodes: dict, edges: list) -> None:
         t_name = record.get("t_name") or "?"
         s_props = dict(record.get("s_props") or {})
         t_props = dict(record.get("t_props") or {})
+        e_name = record.get("e_name") or ""
 
-        s_label = _label_for(s_props, [])
-        t_label = _label_for(t_props, [])
+        # In Graphiti RELATES_TO edges the source is always the "subject"
+        # entity (typically a Person) — use edge context to refine labels.
+        edge_label = _edge_label_for(e_name)
+        s_label = _label_for(s_props, [], s_name, is_source=True)
+        t_label = _label_for(t_props, [], t_name, edge_context=edge_label)
         s_id = _node_id_for(s_uuid, s_label, s_props, None)
         t_id = _node_id_for(t_uuid, t_label, t_props, None)
 
@@ -245,7 +270,7 @@ def _merge_neo4j_records(result, nodes: dict, edges: list) -> None:
             GraphEdge(
                 source=s_id,
                 target=t_id,
-                label=_edge_label_for(record.get("e_name") or ""),
+                label=edge_label,
                 extra={
                     "fact": record.get("e_fact"),
                     "valid_at": _stringify(record.get("e_valid_at")),
@@ -389,32 +414,100 @@ def _extract_taali_ids(results: Any) -> set[int]:
     return ids
 
 
-def _label_for(node_attrs: dict, fallback_labels: list[str]) -> str:
-    """Pick the closest match in our GraphNode label vocabulary."""
+_COMPANY_SUFFIXES = (
+    " ltd", " limited", " inc", " corp", " llc", " gmbh", " plc", " pvt",
+    " group", " holdings", " technologies", " technology", " tech", " systems",
+    " solutions", " services", " consulting", " international", " global",
+    " ventures", " partners", " associates", " agency", " studio", " labs",
+    " software", " digital", " media", " bank", " financial", " capital",
+    " investments", " logistics", " aviation", " healthcare", " pharma",
+    " energy", " telecom", " networks", " cloud", " ai", " data",
+)
+_SCHOOL_KEYWORDS = (
+    "university", "college", "school", "institute", "academy", "polytechnic",
+    "iit", "iim", "nit", "faculty", "department", "campus",
+)
+_COUNTRY_KEYWORDS = (
+    "india", "usa", "uk", "uae", "canada", "australia", "germany", "france",
+    "singapore", "united states", "united kingdom", "united arab emirates",
+)
+
+
+def _label_for(
+    node_attrs: dict,
+    fallback_labels: list[str],
+    name: str = "",
+    *,
+    is_source: bool = False,
+    edge_context: str = "",
+) -> str:
+    """Pick the closest match in our GraphNode label vocabulary.
+
+    Priority:
+    1. Explicit kind/label on the node (e.g. from older backfills).
+    2. Source-side heuristic: in RELATES_TO edges the source is almost always
+       a Person (the entity about whom the fact is stated).
+    3. Name-based heuristics: company suffix, school keyword, country name.
+    4. Edge context: if edge is WORKED_AT the target is likely Company, etc.
+    5. Safe default: Skill (renders small and generic).
+    """
     raw = " ".join([*(fallback_labels or []), str(node_attrs.get("kind", ""))])
     raw_lower = raw.lower()
+    # 1. Explicit label on node
     if "person" in raw_lower or "candidate" in raw_lower:
         return "Person"
     if "company" in raw_lower or "employer" in raw_lower or "organization" in raw_lower:
         return "Company"
     if "school" in raw_lower or "university" in raw_lower or "institution" in raw_lower:
         return "School"
-    if "skill" in raw_lower or "technology" in raw_lower:
-        return "Skill"
     if "country" in raw_lower or "location" in raw_lower:
         return "Country"
-    return "Skill"  # safe default for free-form Graphiti entities
+    if "skill" in raw_lower or "technology" in raw_lower:
+        return "Skill"
+
+    name_lower = (name or "").lower().strip()
+
+    # 2. Source side — Graphiti always puts the "subject" entity as the source
+    #    of RELATES_TO edges in employment/education facts. If this is the
+    #    source and has a name that doesn't match company/school patterns,
+    #    treat as Person.
+    if is_source:
+        if any(name_lower.endswith(s) for s in _COMPANY_SUFFIXES):
+            return "Company"
+        if any(kw in name_lower for kw in _SCHOOL_KEYWORDS):
+            return "School"
+        return "Person"
+
+    # 3. Name-based heuristics for target nodes
+    if any(name_lower.endswith(s) for s in _COMPANY_SUFFIXES):
+        return "Company"
+    if any(kw in name_lower for kw in _SCHOOL_KEYWORDS):
+        return "School"
+    if name_lower in _COUNTRY_KEYWORDS or (len(name_lower) == 2 and name_lower.isalpha()):
+        return "Country"
+
+    # 4. Edge context
+    if edge_context == "WORKED_AT":
+        return "Company"
+    if edge_context == "STUDIED_AT":
+        return "School"
+    if edge_context == "LOCATED_IN":
+        return "Country"
+
+    return "Skill"
 
 
 def _edge_label_for(name: str) -> str:
     upper = (name or "").upper()
-    if "WORKED" in upper or "EMPLOYED" in upper:
+    # Employment — Graphiti generates names like WORKS_AT, WORKED_AT,
+    # EMPLOYED_AT, HOLDS_POSITION, HIRED_AS, etc.
+    if any(kw in upper for kw in ("WORKED", "WORKS", "EMPLOYED", "EMPLOY", "HIRED", "POSITION")):
         return "WORKED_AT"
-    if "STUDIED" in upper or "EDUCATED" in upper or "ATTENDED" in upper:
+    if any(kw in upper for kw in ("STUDIED", "STUDIES", "EDUCATED", "ATTENDED", "GRADUATED", "ENROLLED")):
         return "STUDIED_AT"
-    if "SKILL" in upper or "PROFICIENT" in upper or "USED" in upper:
+    if any(kw in upper for kw in ("SKILL", "PROFICIENT", "USES", "USED", "KNOWS", "EXPERTISE")):
         return "HAS_SKILL"
-    if "LOCATED" in upper or "LIVES" in upper:
+    if any(kw in upper for kw in ("LOCATED", "LIVES", "BASED", "RESIDES", "RESIDE")):
         return "LOCATED_IN"
     return "HAS_SKILL"  # safe default
 
@@ -432,8 +525,9 @@ def _merge_results_into_payload(
         target_uuid = fact.get("target_uuid")
         if not source_uuid or not target_uuid:
             continue
-        source_label = _label_for(fact.get("source_attributes") or {}, fact.get("source_labels") or [])
-        target_label = _label_for(fact.get("target_attributes") or {}, fact.get("target_labels") or [])
+        edge_label_str = _edge_label_for(fact.get("edge_label") or fact.get("name") or "")
+        source_label = _label_for(fact.get("source_attributes") or {}, fact.get("source_labels") or [], fact.get("source_name") or "", is_source=True)
+        target_label = _label_for(fact.get("target_attributes") or {}, fact.get("target_labels") or [], fact.get("target_name") or "", edge_context=edge_label_str)
         source_name = fact.get("source_name") or "?"
         target_name = fact.get("target_name") or "?"
         # Override Person nodes' id so the frontend can join back to Postgres.
@@ -461,7 +555,7 @@ def _merge_results_into_payload(
             GraphEdge(
                 source=source_id,
                 target=target_id,
-                label=_edge_label_for(fact.get("edge_label") or fact.get("name") or ""),
+                label=edge_label_str,
                 extra={
                     "fact": fact.get("fact"),
                     "valid_at": _stringify(fact.get("valid_at")),
