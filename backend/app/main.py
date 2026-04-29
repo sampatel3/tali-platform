@@ -624,6 +624,66 @@ def graphiti_search_debug(request: Request):
     return {"query": query, "group_id": group_id, "count": len(list(items)), "results": out}
 
 
+@app.get("/admin/graphiti/cypher-debug")
+def graphiti_cypher_debug(request: Request):
+    """Run the actual Cypher subgraph query and show raw records."""
+    from .platform.config import settings
+    from .candidate_graph import client as graph_client
+
+    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
+    if not admin_secret or request.headers.get("X-Admin-Secret", "") != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not graph_client.is_configured():
+        return {"status": "unconfigured"}
+
+    query = request.query_params.get("q", "full stack developer")
+    org_id = int(request.query_params.get("org_id", "2"))
+    group_id = f"org-{org_id}"
+
+    graphiti = graph_client.get_graphiti()
+
+    # 1. Check what relationship types exist in the graph
+    rel_types = graph_client.run_async(
+        graphiti.driver.execute_query("CALL db.relationshipTypes() YIELD relationshipType RETURN relationshipType LIMIT 20"),
+        timeout=10.0,
+    )
+
+    # 2. Check what properties edges have
+    edge_props = graph_client.run_async(
+        graphiti.driver.execute_query(
+            "MATCH ()-[e]->() WHERE e.group_id = $gid RETURN keys(e) AS props, type(e) AS rel_type LIMIT 3",
+            {"gid": group_id},
+        ),
+        timeout=10.0,
+    )
+
+    # 3. Try the actual subgraph Cypher
+    cypher_result = graph_client.run_async(
+        graphiti.driver.execute_query(
+            """
+            MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity)
+            WHERE e.group_id = $gid
+              AND toLower(e.fact) CONTAINS toLower($q)
+            RETURN s.uuid AS s_uuid, s.name AS s_name,
+                   t.uuid AS t_uuid, t.name AS t_name,
+                   e.fact AS fact
+            LIMIT 5
+            """,
+            {"gid": group_id, "q": query},
+        ),
+        timeout=10.0,
+    )
+
+    return {
+        "group_id": group_id,
+        "query": query,
+        "rel_types": [r["relationshipType"] for r in (rel_types.records or [])],
+        "edge_props_sample": [dict(r) for r in (edge_props.records or [])],
+        "cypher_matches": [dict(r) for r in (cypher_result.records or [])],
+    }
+
+
 @app.post("/admin/graphiti/test-episode")
 def graphiti_test_episode(request: Request):
     """Send one synthetic episode to Graphiti and return success or error detail.
