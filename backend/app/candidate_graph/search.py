@@ -486,7 +486,8 @@ def _label_for(
     if name_lower in _COUNTRY_KEYWORDS or (len(name_lower) == 2 and name_lower.isalpha()):
         return "Country"
 
-    # 4. Edge context
+    # 4. Edge context — only use for WORKED_AT/STUDIED_AT/LOCATED_IN where we
+    #    know the target type; HAS_SKILL default stays Skill.
     if edge_context == "WORKED_AT":
         return "Company"
     if edge_context == "STUDIED_AT":
@@ -499,12 +500,15 @@ def _label_for(
 
 def _edge_label_for(name: str) -> str:
     upper = (name or "").upper()
-    # Employment — Graphiti generates names like WORKS_AT, WORKED_AT,
-    # EMPLOYED_AT, HOLDS_POSITION, HIRED_AS, etc.
-    if any(kw in upper for kw in ("WORKED", "WORKS", "EMPLOYED", "EMPLOY", "HIRED", "POSITION")):
-        return "WORKED_AT"
+    # Education: checked before employment to avoid misclassifying "STUDIED_AT"
     if any(kw in upper for kw in ("STUDIED", "STUDIES", "EDUCATED", "ATTENDED", "GRADUATED", "ENROLLED")):
         return "STUDIED_AT"
+    # Roles/titles: "HOLDS_POSITION", "HAS_TITLE", "ROLE" — target is a skill/role node
+    if any(kw in upper for kw in ("POSITION", "TITLE", "ROLE")):
+        return "HAS_SKILL"
+    # Employment at a company: target is a Company node
+    if any(kw in upper for kw in ("WORKED", "WORKS", "EMPLOYED", "EMPLOY", "HIRED")):
+        return "WORKED_AT"
     if any(kw in upper for kw in ("SKILL", "PROFICIENT", "USES", "USED", "KNOWS", "EXPERTISE")):
         return "HAS_SKILL"
     if any(kw in upper for kw in ("LOCATED", "LIVES", "BASED", "RESIDES", "RESIDE")):
