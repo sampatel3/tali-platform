@@ -1807,12 +1807,10 @@ Disqualifying: No experience with regulated financial data`}
               if (payload.status === 'already_running') {
                 showToast('This role is already being processed.', 'info');
               } else {
+                // No success toast — the persistent BackgroundJobsToaster
+                // already shows the cascade progress in the bottom-right.
+                // Two surfaces for the same event was visual noise.
                 trackRoleProcess?.(numericRoleId);
-                const steps = [];
-                if (body.fetch_cvs) steps.push('fetch CVs');
-                if (body.pre_screen || body.refresh_pre_screen) steps.push('pre-screen');
-                if (body.score && body.score !== 'none') steps.push('score');
-                showToast(`Started: ${steps.join(' → ')}`, 'info');
               }
               setProcessDialogOpen(false);
             } catch (error) {
