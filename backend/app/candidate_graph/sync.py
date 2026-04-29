@@ -83,6 +83,7 @@ def sync_organization(
     organization_id: int,
     *,
     since_year: int | None = None,
+    cv_only: bool = False,
 ) -> dict:
     """Backfill: ingest every candidate + every linked interview for one org.
 
@@ -121,6 +122,11 @@ def sync_organization(
             db.query(Candidate)
             .filter(Candidate.organization_id == organization_id)
             .filter(Candidate.deleted_at.is_(None))
+        )
+    if cv_only:
+        cand_q = cand_q.filter(
+            Candidate.cv_text.isnot(None),
+            Candidate.cv_text != "",
         )
     candidates = cand_q.all()
     out["candidates"]["total"] = len(candidates)
@@ -161,7 +167,12 @@ def sync_organization(
     return out
 
 
-def sync_all_organizations(db: Session, *, since_year: int | None = None) -> dict:
+def sync_all_organizations(
+    db: Session,
+    *,
+    since_year: int | None = None,
+    cv_only: bool = False,
+) -> dict:
     """Backfill every organisation. Used by ``backfill --all-orgs``."""
     if not graph_client.is_configured():
         return {"status": "unconfigured"}
@@ -175,12 +186,13 @@ def sync_all_organizations(db: Session, *, since_year: int | None = None) -> dic
     aggregate = {
         "orgs": len(org_ids),
         "since_year": since_year,
+        "cv_only": cv_only,
         "candidates": {"total": 0, "succeeded": 0, "episodes": 0},
         "interviews": {"total": 0, "episodes": 0},
         "events": {"total": 0, "episodes": 0},
     }
     for org_id in org_ids:
-        result = sync_organization(db, org_id, since_year=since_year)
+        result = sync_organization(db, org_id, since_year=since_year, cv_only=cv_only)
         if not isinstance(result, dict) or "candidates" not in result:
             continue
         for key in ("candidates", "interviews", "events"):

@@ -160,6 +160,16 @@ def run_search(
                 organization_id=organization_id,
                 candidate_ids=candidate_ids,
             )
+            # Fallback: if none of the matched candidates are in the graph yet
+            # (partial backfill), do a broad query so the graph view shows
+            # something useful rather than "No graph data".
+            if not subgraph.nodes:
+                subgraph = graph_search.subgraph_for_query(
+                    organization_id=organization_id,
+                    query=nl_query,
+                )
+            if subgraph and subgraph.nodes:
+                _enrich_graph_scores(db, organization_id, subgraph)
         except Exception as exc:
             logger.warning("Subgraph fetch failed: %s", exc)
             warnings.append(
@@ -223,3 +233,55 @@ def _execute_graph_predicates(
             )
         )
         return None
+
+
+def _enrich_graph_scores(
+    db: Session,
+    organization_id: int,
+    subgraph: "GraphPayload",
+) -> None:
+    """Mutate Person nodes in-place: add cv_match_score from Postgres.
+
+    Uses the best (max) score across all applications for that candidate
+    within the org, so multi-role candidates get their highest score shown.
+    """
+    from sqlalchemy import func
+
+    # IDs may be integer-based ("person:12345") or UUID-based ("person:0e83358e-...")
+    # depending on whether taali_id was stored on the Graphiti entity node.
+    # Only int-based IDs can be joined back to Postgres.
+    person_ids = []
+    for n in subgraph.nodes:
+        if n.label == "Person" and n.id.startswith("person:"):
+            raw = n.id.split(":")[1]
+            try:
+                person_ids.append(int(raw))
+            except ValueError:
+                pass
+
+    if not person_ids:
+        return
+
+    rows = (
+        db.query(
+            CandidateApplication.candidate_id,
+            func.max(CandidateApplication.cv_match_score),
+        )
+        .filter(
+            CandidateApplication.candidate_id.in_(person_ids),
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .group_by(CandidateApplication.candidate_id)
+        .all()
+    )
+    scores_map = {int(r[0]): r[1] for r in rows if r[0] is not None}
+
+    for node in subgraph.nodes:
+        if node.label == "Person" and node.id.startswith("person:"):
+            raw = node.id.split(":")[1]
+            try:
+                cid = int(raw)
+                node.extra["cv_match_score"] = scores_map.get(cid)
+            except ValueError:
+                pass

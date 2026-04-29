@@ -37,6 +37,8 @@ import {
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import { NLSearchBar } from './NLSearchBar';
 import { CandidateGraphView } from './CandidateGraphView';
+import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
+import { GraphStatusChip, PreScreenChip } from './CandidateStatusChips';
 
 const PAGE_SIZE = 50;
 const STAGE_OPTIONS = [
@@ -357,6 +359,16 @@ export const CandidatesDirectoryPage = ({
   const [nlWarnings, setNlWarnings] = useState([]);
   const [nlSubgraph, setNlSubgraph] = useState(null);
   const [viewMode, setViewMode] = useState('list');
+  // Org-wide knowledge-graph sync state. The button lives on this page (not
+  // on a per-role page) because the graph projection is org-scoped.
+  const [syncGraphProgress, setSyncGraphProgress] = useState({
+    status: 'idle', total: 0, synced: 0, errors: 0, refresh: false,
+  });
+  const [syncGraphConfirm, setSyncGraphConfirm] = useState({
+    open: false, bullets: [], title: '', description: '', warning: null,
+    confirmLabel: 'Sync', loading: false, dryRunLoading: false,
+    refresh: false, willProcess: 0,
+  });
   const [refineExpanded, setRefineExpanded] = useState(false);
 
   const [applicationsPayload, setApplicationsPayload] = useState({
@@ -1349,6 +1361,108 @@ export const CandidatesDirectoryPage = ({
     URL.revokeObjectURL(url);
   };
 
+  // ---------------------------------------------------------------------------
+  // Org-wide graph sync — opens a dry-run confirmation, then fires the sync.
+  // Status is polled while running; the BackgroundJobsToaster could later be
+  // extended to surface progress in the bottom-right.
+  // ---------------------------------------------------------------------------
+  const openSyncGraphConfirm = async ({ refresh = false } = {}) => {
+    setSyncGraphConfirm({
+      open: true, bullets: [], title: '', description: '',
+      warning: null, confirmLabel: 'Loading…', loading: false,
+      dryRunLoading: true, refresh, willProcess: 0,
+    });
+    try {
+      const res = await rolesApi.syncGraph({ refresh, dry_run: true });
+      const willProcess = Number(res?.data?.will_process || 0);
+      const totalCv = Number(res?.data?.total_with_cv || 0);
+      const synced = Number(res?.data?.already_synced || 0);
+      const stale = Number(res?.data?.stale_or_new || 0);
+      const neo4jOk = res?.data?.neo4j_configured !== false;
+      setSyncGraphConfirm({
+        open: true,
+        title: refresh ? 'Re-sync entire graph' : 'Sync candidates to graph',
+        description: refresh
+          ? 'Re-project every candidate with a CV into the knowledge graph. Use this if you suspect drift.'
+          : 'Project new and updated candidates into the knowledge graph. Only candidates whose CV has changed since their last sync are re-processed.',
+        bullets: [
+          { label: 'Will sync', value: willProcess },
+          { label: 'New or stale', value: stale },
+          { label: 'Already in graph', value: synced },
+          { label: 'Total with CV', value: totalCv },
+        ],
+        warning: !neo4jOk
+          ? 'Neo4j is not configured for this deployment. Sync cannot run.'
+          : (refresh ? 'Re-syncing is expensive — runs the LLM extraction on every CV.' : null),
+        confirmLabel: willProcess ? `Sync ${willProcess}` : 'Nothing to do',
+        variant: refresh ? 'danger' : 'primary',
+        loading: false,
+        dryRunLoading: false,
+        refresh,
+        willProcess,
+        disabled: !neo4jOk,
+      });
+    } catch (error) {
+      setSyncGraphConfirm({ open: false, bullets: [], loading: false });
+      showToast(getErrorMessage(error, 'Failed to preview graph sync.'), 'error');
+    }
+  };
+
+  const runSyncGraph = async () => {
+    setSyncGraphConfirm((s) => ({ ...s, loading: true }));
+    try {
+      const res = await rolesApi.syncGraph({ refresh: !!syncGraphConfirm.refresh });
+      const payload = res?.data || {};
+      setSyncGraphProgress({
+        status: payload.status || 'started',
+        total: Number(payload.total || 0),
+        synced: Number(payload.synced || 0),
+        errors: Number(payload.errors || 0),
+        refresh: Boolean(payload.refresh || syncGraphConfirm.refresh),
+      });
+      if (payload.status === 'nothing_to_sync') {
+        showToast('Graph is already up to date.', 'info');
+      } else {
+        showToast(
+          `Graph sync started for ${payload.total} candidate${payload.total === 1 ? '' : 's'}.`,
+          'info',
+        );
+      }
+      setSyncGraphConfirm({ open: false, bullets: [], loading: false });
+    } catch (error) {
+      setSyncGraphConfirm((s) => ({ ...s, loading: false }));
+      showToast(getErrorMessage(error, 'Graph sync failed.'), 'error');
+    }
+  };
+
+  // Poll while the sync is running; reload counts when it finishes so the
+  // graph chips on candidate rows update.
+  useEffect(() => {
+    const running = String(syncGraphProgress?.status || '').toLowerCase() === 'running';
+    if (!running) return undefined;
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const res = await rolesApi.syncGraphStatus();
+        if (cancelled) return;
+        const next = res?.data || syncGraphProgress;
+        const wasRunning = running;
+        const nowRunning = String(next?.status || '').toLowerCase() === 'running';
+        setSyncGraphProgress(next);
+        if (wasRunning && !nowRunning) {
+          // Done — refresh the candidate list so chips update.
+          // (loadApplications is the existing list-loader on this page.)
+          if (typeof loadApplications === 'function') void loadApplications();
+        }
+      } catch {
+        // ignore — keep polling.
+      }
+    };
+    const id = window.setInterval(() => { void poll(); }, 3000);
+    return () => { cancelled = true; window.clearInterval(id); };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncGraphProgress?.status]);
+
   const handleOpenInviteCandidate = () => {
     const directRoleId = roleFilterLocked
       ? lockedRoleValue
@@ -1481,6 +1595,19 @@ export const CandidatesDirectoryPage = ({
               {!rolePipelineMode ? (
                 <button type="button" className="btn btn-outline btn-sm" onClick={handleExportCsv}>
                   Export CSV
+                </button>
+              ) : null}
+              {!rolePipelineMode ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => openSyncGraphConfirm({ refresh: false })}
+                  disabled={String(syncGraphProgress?.status || '').toLowerCase() === 'running'}
+                  title="Project new and updated candidates into the knowledge graph (org-wide). Only candidates with a CV are synced."
+                >
+                  {String(syncGraphProgress?.status || '').toLowerCase() === 'running'
+                    ? `Syncing ${syncGraphProgress.synced}/${syncGraphProgress.total}…`
+                    : 'Sync to Graph'}
                 </button>
               ) : null}
               <button
@@ -1939,7 +2066,19 @@ export const CandidatesDirectoryPage = ({
                               {application.workable_sourced ? <WorkableTagSm className="ml-2" /> : null}
                             </div>
                             <div className="e">{application.candidate_email}</div>
-                            {belowThreshold ? (
+                            <div className="row-chips" style={{ display: 'flex', gap: 6, marginTop: 4, flexWrap: 'wrap' }}>
+                              <PreScreenChip
+                                recommendation={application.pre_screen_recommendation}
+                                runAt={application.pre_screen_run_at}
+                                compact
+                              />
+                              <GraphStatusChip
+                                syncedAt={application.graph_synced_at}
+                                stale={!!application.graph_stale}
+                                compact
+                              />
+                            </div>
+                            {belowThreshold && !application.pre_screen_recommendation ? (
                               <div className="below-pill">
                                 <AlertCircle size={8} />
                                 Below threshold
@@ -2150,6 +2289,21 @@ export const CandidatesDirectoryPage = ({
             setRetakeDialogState({ applicationId: null, defaultTaskId: '' });
           }
         }}
+      />
+
+      <ConfirmActionDialog
+        open={syncGraphConfirm.open}
+        title={syncGraphConfirm.title}
+        description={syncGraphConfirm.description}
+        bullets={syncGraphConfirm.bullets}
+        warning={syncGraphConfirm.warning}
+        confirmLabel={syncGraphConfirm.confirmLabel}
+        variant={syncGraphConfirm.variant || 'primary'}
+        loading={syncGraphConfirm.loading}
+        loadingLabel={syncGraphConfirm.dryRunLoading ? 'Loading…' : 'Starting…'}
+        disabled={syncGraphConfirm.dryRunLoading || syncGraphConfirm.disabled || !syncGraphConfirm.willProcess}
+        onClose={() => setSyncGraphConfirm({ open: false, bullets: [], loading: false })}
+        onConfirm={runSyncGraph}
       />
     </div>
   );

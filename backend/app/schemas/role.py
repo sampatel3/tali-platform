@@ -207,6 +207,12 @@ class ApplicationResponse(BaseModel):
     requirements_fit_score: Optional[float] = None
     pre_screen_recommendation: Optional[str] = None
     pre_screen_evidence: Optional[dict[str, Any]] = None
+    pre_screen_run_at: Optional[datetime] = None
+    # Graph sync state — populated when the candidate has a row in
+    # graph_sync_state. graph_stale=True iff the CV was uploaded after the
+    # last graph sync (so the projection is out-of-date).
+    graph_synced_at: Optional[datetime] = None
+    graph_stale: Optional[bool] = None
     auto_reject_state: Optional[str] = None
     auto_reject_reason: Optional[str] = None
     auto_reject_triggered_at: Optional[datetime] = None

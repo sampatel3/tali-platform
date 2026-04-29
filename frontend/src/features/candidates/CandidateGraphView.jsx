@@ -5,12 +5,9 @@ import { X } from 'lucide-react';
 /**
  * Force-directed graph view of NL-search results.
  *
- * Renders {nodes, edges} returned from the API. Uses cytoscape's `cose`
- * layout (built-in, no extra packages). Click any node → side panel.
- *
- * The graph is read-only — all filtering happens via the search bar
- * above. Past ~200 nodes the layout slows; we surface a banner instead
- * of degrading silently.
+ * Person nodes are coloured and sized by cv_match_score (green=high,
+ * amber=medium, red=low, grey=unscored). Company nodes are large hubs so
+ * the cose layout naturally clusters candidates around shared employers.
  *
  * Props:
  *   subgraph: { nodes: [{id,label,name,extra}], edges: [{source,target,label,extra}] }
@@ -37,7 +34,14 @@ export function CandidateGraphView({ subgraph, onSelectCandidate, isLoading = fa
       container: containerRef.current,
       elements,
       style: STYLE,
-      layout: { name: 'cose', animate: false, padding: 30, idealEdgeLength: 80 },
+      layout: {
+        name: 'cose',
+        animate: false,
+        padding: 40,
+        idealEdgeLength: 100,
+        nodeRepulsion: () => 8000,
+        gravity: 0.25,
+      },
       wheelSensitivity: 0.2,
     });
     cy.on('tap', 'node', (event) => {
@@ -81,6 +85,7 @@ export function CandidateGraphView({ subgraph, onSelectCandidate, isLoading = fa
           Showing top {nodeCount} nodes. Refine the query to narrow further.
         </div>
       ) : null}
+      <ScoreLegend />
       <div className="graph-view__canvas" ref={containerRef} />
       {selected ? (
         <GraphSidePanel
@@ -96,6 +101,22 @@ export function CandidateGraphView({ subgraph, onSelectCandidate, isLoading = fa
 
 const MAX_NODES = 200;
 
+/** Map a 0-100 score to a visual band used in cytoscape selectors. */
+function scoreBand(score) {
+  if (score == null) return 'unscored';
+  if (score >= 75) return 'high';
+  if (score >= 50) return 'medium';
+  return 'low';
+}
+
+/** Map score to node diameter (Person nodes only). */
+function scoreSize(score) {
+  if (score == null) return 28;
+  if (score >= 75) return 44;
+  if (score >= 50) return 36;
+  return 28;
+}
+
 function buildElements(subgraph) {
   if (!subgraph || !Array.isArray(subgraph.nodes)) {
     return { elements: [], nodeCount: 0, overflow: false };
@@ -105,12 +126,18 @@ function buildElements(subgraph) {
   const idSet = new Set(nodes.map((n) => n.id));
   const elements = [];
   for (const node of nodes) {
+    const score = node.extra?.cv_match_score ?? null;
+    const band = node.label === 'Person' ? scoreBand(score) : null;
+    const size = node.label === 'Person' ? scoreSize(score) : undefined;
     elements.push({
       data: {
         id: node.id,
         label: node.name,
         kind: node.label,
         extra: node.extra || {},
+        scoreBand: band,
+        score,
+        ...(size !== undefined ? { nodeSize: size } : {}),
       },
     });
   }
@@ -134,6 +161,7 @@ function buildElements(subgraph) {
 }
 
 const STYLE = [
+  // ── Base ──────────────────────────────────────────────────────────────────
   {
     selector: 'node',
     style: {
@@ -149,35 +177,61 @@ const STYLE = [
       height: 28,
     },
   },
+  // ── Person: size driven by data(nodeSize), colour by scoreBand ────────────
   {
     selector: 'node[kind = "Person"]',
     style: {
-      'background-color': '#6c5ce7',
       shape: 'round-rectangle',
-      width: 36,
-      height: 28,
-      color: '#0e0e1a',
+      width: 'data(nodeSize)',
+      height: 'data(nodeSize)',
       'font-weight': 600,
+      color: '#0e0e1a',
     },
   },
+  {
+    selector: 'node[kind = "Person"][scoreBand = "high"]',
+    style: { 'background-color': '#00b894' },   // green
+  },
+  {
+    selector: 'node[kind = "Person"][scoreBand = "medium"]',
+    style: { 'background-color': '#fdcb6e' },   // amber
+  },
+  {
+    selector: 'node[kind = "Person"][scoreBand = "low"]',
+    style: { 'background-color': '#d63031' },   // red
+  },
+  {
+    selector: 'node[kind = "Person"][scoreBand = "unscored"]',
+    style: { 'background-color': '#b2bec3' },   // grey
+  },
+  // ── Company: large hubs so cose clusters candidates around them ───────────
   {
     selector: 'node[kind = "Company"]',
     style: {
       'background-color': '#22c1c3',
       shape: 'ellipse',
+      width: 56,
+      height: 56,
+      'font-size': 12,
+      'font-weight': 700,
+      'text-max-width': 100,
     },
   },
+  // ── Other node types ──────────────────────────────────────────────────────
   {
     selector: 'node[kind = "School"]',
     style: {
       'background-color': '#fdcb6e',
       shape: 'diamond',
+      width: 40,
+      height: 40,
     },
   },
   {
     selector: 'node[kind = "Skill"]',
     style: {
-      'background-color': '#a0a0a0',
+      'background-color': '#dfe6e9',
+      color: '#636e72',
       shape: 'round-tag',
       width: 24,
       height: 24,
@@ -185,44 +239,73 @@ const STYLE = [
     },
   },
   {
+    selector: 'node[kind = "Country"]',
+    style: {
+      'background-color': '#a29bfe',
+      shape: 'hexagon',
+      width: 32,
+      height: 32,
+    },
+  },
+  // ── Edges ─────────────────────────────────────────────────────────────────
+  {
     selector: 'edge',
     style: {
       width: 1.4,
-      'line-color': 'rgba(150,150,160,0.55)',
+      'line-color': 'rgba(150,150,160,0.45)',
       'curve-style': 'bezier',
       'target-arrow-shape': 'none',
-      opacity: 0.85,
+      opacity: 0.8,
     },
   },
   {
     selector: 'edge[label = "WORKED_AT"]',
-    style: {
-      width: 2.2,
-      'line-color': 'rgba(108,92,231,0.55)',
-    },
+    style: { width: 2.4, 'line-color': 'rgba(34,193,195,0.5)' },
   },
   {
     selector: 'edge[label = "STUDIED_AT"]',
-    style: {
-      width: 1.6,
-      'line-color': 'rgba(253,203,110,0.55)',
-    },
+    style: { width: 1.6, 'line-color': 'rgba(253,203,110,0.55)' },
   },
   {
     selector: 'edge[label = "HAS_SKILL"]',
     style: {
       width: 1,
-      'line-color': 'rgba(160,160,160,0.4)',
+      'line-color': 'rgba(160,160,160,0.35)',
       'line-style': 'dashed',
     },
   },
 ];
 
+// ── Legend ────────────────────────────────────────────────────────────────────
+
+function ScoreLegend() {
+  return (
+    <div className="graph-legend">
+      <span className="graph-legend__item graph-legend__item--high">High score ≥75</span>
+      <span className="graph-legend__item graph-legend__item--medium">Medium ≥50</span>
+      <span className="graph-legend__item graph-legend__item--low">Low &lt;50</span>
+      <span className="graph-legend__item graph-legend__item--unscored">Unscored</span>
+      <span className="graph-legend__divider" />
+      <span className="graph-legend__item graph-legend__item--company">Company hub</span>
+    </div>
+  );
+}
+
+// ── Side panel ────────────────────────────────────────────────────────────────
+
 function GraphSidePanel({ node, subgraph, onClose, onSelectCandidate }) {
-  const candidateMatches =
+  const connectedCandidates =
     node.kind === 'Company' || node.kind === 'School'
       ? findCandidatesConnectedTo(subgraph, node.id)
       : [];
+
+  // Sort connected candidates by score descending so top candidates appear first
+  const sortedCandidates = [...connectedCandidates].sort((a, b) => {
+    const sa = a.extra?.cv_match_score ?? -1;
+    const sb = b.extra?.cv_match_score ?? -1;
+    return sb - sa;
+  });
+
   return (
     <aside className="graph-side" role="dialog" aria-label={`${node.kind} details`}>
       <header className="graph-side__head">
@@ -233,34 +316,42 @@ function GraphSidePanel({ node, subgraph, onClose, onSelectCandidate }) {
         </button>
       </header>
       <div className="graph-side__body">
-        {node.kind === 'Person' && node.extra?.headline ? (
-          <p className="graph-side__headline">{node.extra.headline}</p>
-        ) : null}
-        {node.kind === 'Person' && onSelectCandidate ? (
-          <button
-            type="button"
-            className="btn btn-purple btn-sm"
-            onClick={() => onSelectCandidate(node.id.replace(/^person:/, ''))}
-          >
-            Open profile
-          </button>
-        ) : null}
-        {candidateMatches.length > 0 ? (
+        {node.kind === 'Person' && (
+          <>
+            {node.extra?.headline ? (
+              <p className="graph-side__headline">{node.extra.headline}</p>
+            ) : null}
+            <ScoreBadge score={node.score} />
+            {onSelectCandidate ? (
+              <button
+                type="button"
+                className="btn btn-purple btn-sm"
+                onClick={() => onSelectCandidate(node.id.replace(/^person:/, ''))}
+              >
+                Open profile
+              </button>
+            ) : null}
+          </>
+        )}
+        {sortedCandidates.length > 0 ? (
           <div>
-            <h4 className="graph-side__subhead">Connected candidates</h4>
+            <h4 className="graph-side__subhead">
+              Connected candidates ({sortedCandidates.length})
+            </h4>
             <ul className="graph-side__list">
-              {candidateMatches.map((c) => (
-                <li key={c.id}>
+              {sortedCandidates.map((c) => (
+                <li key={c.id} className="graph-side__candidate-row">
+                  <ScoreBadge score={c.extra?.cv_match_score ?? null} compact />
                   {onSelectCandidate ? (
                     <button
                       type="button"
                       className="link"
                       onClick={() => onSelectCandidate(c.id.replace(/^person:/, ''))}
                     >
-                      {c.label || c.id}
+                      {c.name || c.id}
                     </button>
                   ) : (
-                    <span>{c.label || c.id}</span>
+                    <span>{c.name || c.id}</span>
                   )}
                 </li>
               ))}
@@ -272,12 +363,29 @@ function GraphSidePanel({ node, subgraph, onClose, onSelectCandidate }) {
   );
 }
 
+function ScoreBadge({ score, compact = false }) {
+  if (score == null) {
+    return compact ? null : <span className="score-badge score-badge--unscored">Not scored</span>;
+  }
+  const band = scoreBand(score);
+  return (
+    <span className={`score-badge score-badge--${band}`}>
+      {Math.round(score)}
+      {compact ? '' : ' / 100'}
+    </span>
+  );
+}
+
 function findCandidatesConnectedTo(subgraph, nodeId) {
   if (!subgraph) return [];
   const peopleIds = new Set();
   for (const edge of subgraph.edges || []) {
     if (edge.target === nodeId && edge.source.startsWith('person:')) {
       peopleIds.add(edge.source);
+    }
+    // Also catch reverse direction in case Graphiti flips source/target
+    if (edge.source === nodeId && edge.target.startsWith('person:')) {
+      peopleIds.add(edge.target);
     }
   }
   return (subgraph.nodes || []).filter((n) => peopleIds.has(n.id));

@@ -64,6 +64,10 @@ class CandidateApplication(Base):
     requirements_fit_score_100 = Column(Float, nullable=True)
     pre_screen_recommendation = Column(String, nullable=True)
     pre_screen_evidence = Column(JSON, nullable=True)
+    # Set whenever the pre-screen LLM completes (whether passed or "Below
+    # threshold"). Used by batch actions to skip already-pre-screened apps
+    # whose CV hasn't changed since.
+    pre_screen_run_at = Column(DateTime(timezone=True), nullable=True)
     auto_reject_state = Column(String, nullable=True)
     auto_reject_reason = Column(Text, nullable=True)
     auto_reject_triggered_at = Column(DateTime(timezone=True), nullable=True)

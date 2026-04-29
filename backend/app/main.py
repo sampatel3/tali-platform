@@ -370,6 +370,76 @@ def graphiti_health():
     return healthcheck()
 
 
+@app.get("/admin/graphiti/stats")
+def graphiti_stats(request: Request):
+    """Return CV + graph sync counts for operational visibility."""
+    from .platform.config import settings
+    from .platform.database import SessionLocal
+    from .models.candidate import Candidate
+    from .models.graph_sync_state import GraphSyncState
+    from sqlalchemy import func
+
+    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not admin_secret or provided != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    db = SessionLocal()
+    try:
+        total_candidates = db.query(func.count(Candidate.id)).filter(Candidate.deleted_at.is_(None)).scalar()
+        with_cv = db.query(func.count(Candidate.id)).filter(
+            Candidate.deleted_at.is_(None),
+            Candidate.cv_text.isnot(None),
+            Candidate.cv_text != "",
+        ).scalar()
+        synced_to_graph = db.query(func.count(GraphSyncState.candidate_id)).scalar()
+    finally:
+        db.close()
+
+    from .candidate_graph import client as graph_client
+    neo4j_ok = False
+    neo4j_node_count = None
+    if graph_client.is_configured():
+        try:
+            graphiti = graph_client.get_graphiti()
+            result = graph_client.run_async(
+                graphiti.driver.execute_query("MATCH (n) RETURN count(n) AS c"),
+                timeout=10.0,
+            )
+            # neo4j driver returns EagerResult; records[0]["c"] gives the count
+            neo4j_node_count = result.records[0]["c"] if result and result.records else None
+            neo4j_ok = True
+        except Exception as exc:
+            neo4j_node_count = f"error: {exc}"
+
+    sample_companies = []
+    sample_facts = []
+    if neo4j_ok:
+        try:
+            r2 = graph_client.run_async(
+                graphiti.driver.execute_query(
+                    "MATCH (n:Entity) WHERE n.name IS NOT NULL RETURN DISTINCT n.name AS name LIMIT 30"
+                ),
+                timeout=10.0,
+            )
+            sample_companies = [rec["name"] for rec in (r2.records or [])]
+            r3 = graph_client.run_async(
+                graphiti.driver.execute_query(
+                    "MATCH ()-[e:RELATES_TO]->() WHERE e.fact IS NOT NULL RETURN e.fact AS fact LIMIT 10"
+                ),
+                timeout=10.0,
+            )
+            sample_facts = [rec["fact"] for rec in (r3.records or [])]
+        except Exception as exc:
+            sample_companies = [f"error: {exc}"]
+
+    return {
+        "candidates": {"total": total_candidates, "with_cv_text": with_cv},
+        "graph_sync_state": {"synced_candidates": synced_to_graph},
+        "neo4j": {"ok": neo4j_ok, "total_nodes": neo4j_node_count, "sample_entities": sample_companies, "sample_facts": sample_facts},
+    }
+
+
 @app.post("/admin/graphiti/backfill")
 def graphiti_backfill_all(request: Request):
     """Trigger a full Graphiti backfill for all organisations.
@@ -390,13 +460,14 @@ def graphiti_backfill_all(request: Request):
 
     since_year_str = request.query_params.get("since_year")
     since_year = int(since_year_str) if since_year_str and since_year_str.isdigit() else None
+    cv_only = request.query_params.get("cv_only", "false").lower() == "true"
 
     def _run():
         import logging
         log = logging.getLogger("taali.candidate_graph.backfill")
         db = SessionLocal()
         try:
-            result = sync_all_organizations(db, since_year=since_year)
+            result = sync_all_organizations(db, since_year=since_year, cv_only=cv_only)
             log.info("Graphiti backfill complete: %s", result)
         except Exception as _exc:
             log.exception("Graphiti backfill failed: %s: %s", type(_exc).__name__, _exc)
@@ -407,6 +478,7 @@ def graphiti_backfill_all(request: Request):
     return {
         "status": "started",
         "since_year": since_year,
+        "cv_only": cv_only,
         "message": "Backfill running in background — check Railway logs for progress",
     }
 
@@ -479,6 +551,131 @@ def admin_cancel_all_scoring(request: Request):
         }
     finally:
         db.close()
+
+
+@app.get("/admin/graphiti/search-debug")
+def graphiti_search_debug(request: Request):
+    """Raw Graphiti search result shape for debugging the graph view."""
+    from .platform.config import settings
+    from .candidate_graph import client as graph_client
+
+    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
+    if not admin_secret or request.headers.get("X-Admin-Secret", "") != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not graph_client.is_configured():
+        return {"status": "unconfigured"}
+
+    query = request.query_params.get("q", "full stack developer")
+    org_id = int(request.query_params.get("org_id", "0"))
+    group_id = graph_client.group_id_for_org(org_id) if org_id else None
+
+    graphiti = graph_client.get_graphiti()
+    try:
+        results = graph_client.run_async(
+            graphiti.search(
+                query=query,
+                group_ids=[group_id] if group_id else None,
+                num_results=5,
+            ),
+            timeout=15.0,
+        )
+    except Exception as exc:
+        return {"error": str(exc)}
+
+    if results is None:
+        return {"results": None, "count": 0}
+
+    items = results if isinstance(results, (list, tuple)) else getattr(results, "edges", results) or []
+    out = []
+    for item in list(items)[:5]:
+        source = getattr(item, "source_node", None)
+        target = getattr(item, "target_node", None)
+        out.append({
+            "type": type(item).__name__,
+            "uuid": getattr(item, "uuid", None),
+            "fact": getattr(item, "fact", None),
+            "has_source_node": source is not None,
+            "has_target_node": target is not None,
+            "source_uuid": getattr(source, "uuid", None) if source else None,
+            "source_name": getattr(source, "name", None) if source else None,
+            "target_uuid": getattr(target, "uuid", None) if target else None,
+            "target_name": getattr(target, "name", None) if target else None,
+            "group_id": getattr(item, "group_id", None),
+        })
+    return {"query": query, "group_id": group_id, "count": len(list(items)), "results": out}
+
+
+@app.get("/admin/graphiti/cypher-debug")
+def graphiti_cypher_debug(request: Request):
+    """Run the actual Cypher subgraph query and show raw records."""
+    from .platform.config import settings
+    from .candidate_graph import client as graph_client
+
+    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
+    if not admin_secret or request.headers.get("X-Admin-Secret", "") != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not graph_client.is_configured():
+        return {"status": "unconfigured"}
+
+    query = request.query_params.get("q", "full stack developer")
+    org_id = int(request.query_params.get("org_id", "2"))
+    group_id = f"org-{org_id}"
+
+    graphiti = graph_client.get_graphiti()
+    out = {"group_id": group_id, "query": query}
+
+    def safe_records(r):
+        rows = []
+        for rec in (r.records or []):
+            row = {}
+            for k in rec.keys():
+                v = rec[k]
+                row[k] = str(v) if v is not None else None
+            rows.append(row)
+        return rows
+
+    # What relationship types exist?
+    try:
+        r = graph_client.run_async(
+            graphiti.driver.execute_query("MATCH ()-[e]->() RETURN DISTINCT type(e) AS t LIMIT 10"),
+            timeout=10.0,
+        )
+        out["rel_types"] = [str(rec["t"]) for rec in (r.records or [])]
+    except Exception as exc:
+        out["rel_types_error"] = str(exc)
+
+    # Sample edges for this org — any relationship type, no params
+    safe_gid = group_id.replace("'", "")  # sanitise (group_id is always "org-N")
+    try:
+        r = graph_client.run_async(
+            graphiti.driver.execute_query(
+                f"MATCH (s)-[e]->(t) WHERE e.group_id = '{safe_gid}' "
+                f"RETURN type(e) AS rel, e.fact AS fact, s.name AS s, t.name AS t LIMIT 5"
+            ), timeout=10.0,
+        )
+        out["org_edges_sample"] = safe_records(r)
+    except Exception as exc:
+        out["org_edges_error"] = str(exc)
+
+    # Try the actual subgraph Cypher without params
+    safe_q = query.lower().replace("'", "")
+    try:
+        r = graph_client.run_async(
+            graphiti.driver.execute_query(
+                f"MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity) "
+                f"WHERE e.group_id = '{safe_gid}' "
+                f"AND toLower(e.fact) CONTAINS '{safe_q}' "
+                f"RETURN s.uuid AS s_uuid, s.name AS s, t.uuid AS t_uuid, t.name AS t, "
+                f"e.name AS e_name, e.fact AS fact LIMIT 10"
+            ), timeout=10.0,
+        )
+        out["cypher_matches"] = safe_records(r)
+    except Exception as exc:
+        out["cypher_error"] = str(exc)
+
+    return out
 
 
 @app.post("/admin/graphiti/test-episode")

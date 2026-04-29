@@ -435,6 +435,10 @@ def _execute_scoring_v3(
         )
 
         pre = run_pre_screen(cv_text, job_spec_text, requirements)
+        # Always stamp pre_screen_run_at when pre-screen completes (whether the
+        # candidate is filtered or proceeds to full score). Used by the
+        # "Pre-screen new" batch action to skip already-pre-screened apps.
+        application.pre_screen_run_at = datetime.now(timezone.utc)
         threshold = settings.PRE_SCREEN_THRESHOLD
         # Only filter when we have a numeric score AND it's below threshold.
         # None score (parse failure/error) always falls through to v3.

@@ -21,6 +21,8 @@ import {
   Spinner,
   Textarea,
 } from '../../shared/ui/TaaliPrimitives';
+import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
+import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidatesDirectoryPage } from '../candidates/CandidatesDirectoryPage';
 import { candidateReportHref } from '../candidates/CandidateTriageDrawer';
@@ -29,6 +31,8 @@ import { getErrorMessage, trimOrUndefined } from '../candidates/candidatesUiUtil
 
 const EMPTY_PROGRESS = { status: 'idle', total: 0, scored: 0, errors: 0, include_scored: false };
 const EMPTY_FETCH_PROGRESS = { status: 'idle', total: 0, fetched: 0, errors: 0 };
+const EMPTY_PRE_SCREEN_PROGRESS = { status: 'idle', total: 0, processed: 0, errors: 0, refresh: false };
+const EMPTY_CONFIRM = { open: false, action: null, bullets: [], loading: false, dryRunLoading: false };
 const PIPELINE_STAGE_ORDER = [
   { key: 'applied', label: 'Applied', countLabel: 'new' },
   { key: 'invited', label: 'Invited', countLabel: 'awaiting' },
@@ -619,6 +623,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [allTasks, setAllTasks] = useState([]);
   const [roleApplications, setRoleApplications] = useState([]);
   const [fetchCvsProgress, setFetchCvsProgress] = useState(EMPTY_FETCH_PROGRESS);
+  const [preScreenProgress, setPreScreenProgress] = useState(EMPTY_PRE_SCREEN_PROGRESS);
+  const [confirmAction, setConfirmAction] = useState(EMPTY_CONFIRM);
   const [loading, setLoading] = useState(true);
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
   const [criteriaDraft, setCriteriaDraft] = useState('');
@@ -639,12 +645,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     setLoading(true);
     try {
-      const [roleRes, tasksRes, applicationsRes, batchStatusRes, fetchStatusRes] = await Promise.all([
+      const [roleRes, tasksRes, applicationsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes] = await Promise.all([
         rolesApi.get(numericRoleId),
         rolesApi.listTasks(numericRoleId),
         rolesApi.listApplications(numericRoleId, { sort_by: 'pre_screen_score', sort_order: 'desc' }),
         rolesApi.batchScoreStatus(numericRoleId),
         rolesApi.fetchCvsStatus(numericRoleId),
+        rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
       ]);
       const nextRole = roleRes?.data || null;
       setRole(nextRole);
@@ -661,6 +668,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         trackRole?.(numericRoleId);
       }
       setFetchCvsProgress(fetchStatusRes?.data || EMPTY_FETCH_PROGRESS);
+      setPreScreenProgress(preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS);
     } catch (error) {
       setRole(null);
       setRoleTasks([]);
@@ -714,22 +722,35 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [batchScoreProgress?.status, loadRoleWorkspace]);
 
-  // ── Poll fetchCvs progress (this lives locally, not in global context) ────
+  // ── Poll fetchCvs + pre-screen progress (these live locally, not in global context) ────
+  // batch-score progress now lives in the global BackgroundJobsToaster context,
+  // so we only poll fetchCvs and pre-screen here.
   useEffect(() => {
     if (!Number.isFinite(numericRoleId)) return undefined;
     const fetchRunning = String(fetchCvsProgress?.status || '').toLowerCase() === 'running';
-    if (!fetchRunning) return undefined;
+    const preScreenRunning = String(preScreenProgress?.status || '').toLowerCase() === 'running';
+    if (!fetchRunning && !preScreenRunning) return undefined;
 
     let cancelled = false;
     const poll = async () => {
       try {
-        const fetchStatusRes = await rolesApi.fetchCvsStatus(numericRoleId);
+        const [fetchStatusRes, preScreenStatusRes] = await Promise.all([
+          rolesApi.fetchCvsStatus(numericRoleId),
+          rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
+        ]);
         if (cancelled) return;
         const nextFetch = fetchStatusRes?.data || EMPTY_FETCH_PROGRESS;
+        const nextPre = preScreenStatusRes?.data || EMPTY_PRE_SCREEN_PROGRESS;
         const fetchWasRunning = String(fetchCvsProgress?.status || '').toLowerCase() === 'running';
+        const preWasRunning = String(preScreenProgress?.status || '').toLowerCase() === 'running';
         const fetchNowRunning = String(nextFetch.status || '').toLowerCase() === 'running';
+        const preNowRunning = String(nextPre.status || '').toLowerCase() === 'running';
         setFetchCvsProgress(nextFetch);
-        if (fetchWasRunning && !fetchNowRunning) {
+        setPreScreenProgress(nextPre);
+        if (
+          (fetchWasRunning && !fetchNowRunning)
+          || (preWasRunning && !preNowRunning)
+        ) {
           await loadRoleWorkspace();
           setRefreshTick((value) => value + 1);
         }
@@ -747,7 +768,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       cancelled = true;
       window.clearInterval(intervalId);
     };
-  }, [fetchCvsProgress, loadRoleWorkspace, numericRoleId, rolesApi]);
+  }, [fetchCvsProgress, preScreenProgress, loadRoleWorkspace, numericRoleId, rolesApi]);
 
   const activeApplications = useMemo(() => (
     roleApplications.filter((application) => application?.application_outcome === 'open')
@@ -882,39 +903,159 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     });
   }, [activeApplications, thresholdValue]);
 
-  const handleBatchScore = async ({ includeScored = false } = {}) => {
+  // ---------------------------------------------------------------------------
+  // Confirmation flow for batch actions
+  //
+  // Each batch action (fetch CVs, pre-screen, score, rescore, refresh
+  // pre-screen) goes through the same 3-step flow:
+  //   1. User clicks button → openConfirm({ action: 'pre_screen_new' })
+  //   2. We fire the action's dry_run, populate `bullets`, show the dialog
+  //   3. On confirm → call the action without dry_run, close the dialog
+  // ---------------------------------------------------------------------------
+  const openConfirm = async (action) => {
     if (!Number.isFinite(numericRoleId)) return;
+    setConfirmAction({
+      open: true,
+      action,
+      bullets: [],
+      loading: false,
+      dryRunLoading: true,
+    });
     try {
-      const res = await rolesApi.batchScore(numericRoleId, includeScored ? { include_scored: true } : {});
-      const payload = res?.data || EMPTY_PROGRESS;
-      if (payload.status === 'nothing_to_score') {
-        showToast(includeScored ? 'No CVs available to score.' : 'No newly added CVs need scoring.', 'info');
-        return;
+      let bullets = [];
+      let title = '';
+      let description = '';
+      let warning = null;
+      let confirmLabel = 'Run';
+      let variant = 'primary';
+      if (action === 'fetch_cvs') {
+        const dr = await rolesApi.fetchCvs(numericRoleId, { dry_run: true });
+        const willFetch = Number(dr?.data?.will_fetch || 0);
+        title = 'Fetch CVs from Workable';
+        description = `Pull missing CVs for candidates in this role.`;
+        bullets = [{ label: 'Will fetch', value: willFetch }];
+        confirmLabel = `Fetch ${willFetch} CV${willFetch === 1 ? '' : 's'}`;
+        if (willFetch === 0) confirmLabel = 'Nothing to do';
+      } else if (action === 'pre_screen_new' || action === 'pre_screen_refresh') {
+        const refresh = action === 'pre_screen_refresh';
+        const dr = await rolesApi.batchPreScreen(numericRoleId, { dry_run: true, refresh });
+        const willProcess = Number(dr?.data?.will_process || 0);
+        const noCv = Number(dr?.data?.total_without_cv || 0);
+        title = refresh ? 'Refresh pre-screen' : 'Pre-screen new candidates';
+        description = refresh
+          ? 'Re-run pre-screen on every candidate with a CV. Existing scores remain.'
+          : 'Run pre-screen on candidates that have a CV but have not been pre-screened yet (or whose CV was uploaded after the last pre-screen).';
+        bullets = [
+          { label: 'Will pre-screen', value: willProcess },
+          ...(noCv ? [{ label: 'Skipped (no CV)', value: noCv }] : []),
+        ];
+        if (refresh) warning = 'Existing pre-screen results will be overwritten.';
+        confirmLabel = willProcess
+          ? `Pre-screen ${willProcess}`
+          : 'Nothing to do';
+      } else if (action === 'score_new' || action === 'score_rescore') {
+        const includeScored = action === 'score_rescore';
+        const dr = await rolesApi.batchScore(numericRoleId, { include_scored: includeScored, dry_run: true });
+        const willFetch = Number(dr?.data?.will_fetch_cv || 0);
+        const willPre = Number(dr?.data?.will_pre_screen || 0);
+        const willScore = Number(dr?.data?.will_score || 0);
+        title = includeScored ? 'Re-score all candidates' : 'Score new candidates';
+        description = includeScored
+          ? 'Re-score every candidate with a CV. Pre-screen runs again only for candidates whose CV has changed.'
+          : 'For each candidate: fetch CV if missing, pre-screen if not yet done, then score. Skips candidates already scored or marked Below threshold.';
+        bullets = [
+          { label: 'Will fetch CV', value: willFetch },
+          { label: 'Will pre-screen', value: willPre },
+          { label: 'Will score', value: willScore },
+        ];
+        if (includeScored) warning = 'Existing scores will be overwritten.';
+        variant = includeScored ? 'danger' : 'primary';
+        confirmLabel = willScore
+          ? (includeScored ? `Re-score ${willScore}` : `Score ${willScore}`)
+          : 'Nothing to do';
+      } else {
+        title = 'Confirm';
+        description = 'Confirm this action.';
       }
-      // Hand off to the global context — it will poll status and own the
-      // progress numbers shown in both this page and the global toaster.
-      trackRole?.(numericRoleId);
+      setConfirmAction({
+        open: true,
+        action,
+        bullets,
+        title,
+        description,
+        warning,
+        confirmLabel,
+        variant,
+        loading: false,
+        dryRunLoading: false,
+      });
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to start CV scoring.'), 'error');
+      setConfirmAction(EMPTY_CONFIRM);
+      showToast(getErrorMessage(error, 'Failed to preview action.'), 'error');
     }
   };
 
-  const handleFetchCvs = async () => {
+  const closeConfirm = () => setConfirmAction(EMPTY_CONFIRM);
+
+  const runConfirmedAction = async () => {
     if (!Number.isFinite(numericRoleId)) return;
+    const action = confirmAction.action;
+    setConfirmAction((s) => ({ ...s, loading: true }));
     try {
-      const res = await rolesApi.fetchCvs(numericRoleId);
-      setFetchCvsProgress({
-        status: res?.data?.status || 'started',
-        total: Number(res?.data?.total || 0),
-        fetched: Number(res?.data?.fetched || 0),
-        errors: Number(res?.data?.errors || 0),
-      });
-      // No success toast — the persistent BackgroundJobsToaster surfaces
-      // the fetch progress in the bottom-right.
+      if (action === 'fetch_cvs') {
+        const res = await rolesApi.fetchCvs(numericRoleId);
+        setFetchCvsProgress({
+          status: res?.data?.status || 'started',
+          total: Number(res?.data?.total || 0),
+          fetched: Number(res?.data?.fetched || 0),
+          errors: Number(res?.data?.errors || 0),
+        });
+      } else if (action === 'pre_screen_new' || action === 'pre_screen_refresh') {
+        const refresh = action === 'pre_screen_refresh';
+        const res = await rolesApi.batchPreScreen(numericRoleId, { refresh });
+        const payload = res?.data || EMPTY_PRE_SCREEN_PROGRESS;
+        setPreScreenProgress({
+          status: payload.status || 'started',
+          total: Number(payload.total || 0),
+          processed: Number(payload.processed || 0),
+          errors: Number(payload.errors || 0),
+          refresh: Boolean(payload.refresh || refresh),
+        });
+        if (payload.status === 'nothing_to_pre_screen') {
+          showToast('No candidates need pre-screening right now.', 'info');
+        }
+      } else if (action === 'score_new' || action === 'score_rescore') {
+        const includeScored = action === 'score_rescore';
+        const res = await rolesApi.batchScore(numericRoleId, includeScored ? { include_scored: true } : {});
+        const payload = res?.data || EMPTY_PROGRESS;
+        setBatchScoreProgress({
+          status: payload.status || 'started',
+          total: Number(payload.total || payload.total_target || 0),
+          scored: Number(payload.scored || 0),
+          errors: Number(payload.errors || 0),
+          include_scored: Boolean(payload.include_scored || includeScored),
+        });
+        if (payload.status === 'nothing_to_score') {
+          showToast(includeScored ? 'No CVs available to score.' : 'No newly added CVs need scoring.', 'info');
+        } else {
+          // Hand off to the global job-status context — it owns the polling
+          // and renders progress in the BackgroundJobsToaster.
+          trackRole?.(numericRoleId);
+        }
+      }
+      setConfirmAction(EMPTY_CONFIRM);
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to fetch CVs from Workable.'), 'error');
+      setConfirmAction((s) => ({ ...s, loading: false }));
+      showToast(getErrorMessage(error, 'Action failed.'), 'error');
     }
   };
+
+  // Backwards-compatible wrappers used by existing buttons elsewhere on the
+  // page. New buttons should go through openConfirm() directly.
+  const handleBatchScore = ({ includeScored = false } = {}) =>
+    openConfirm(includeScored ? 'score_rescore' : 'score_new');
+
+  const handleFetchCvs = () => openConfirm('fetch_cvs');
 
   const handleSaveRoleConfig = async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -1232,7 +1373,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   : `${unscoredApplications.length} new since last run`}
               </div>
             </div>
-            <div className="sa-actions">
+            <div className="sa-actions action-toolbar">
               {role?.source === 'workable' ? (
                 <button
                   type="button"
@@ -1251,6 +1392,42 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   )}
                 </button>
               ) : null}
+              {/* Pre-screen — always visible. Cheap LLM-only pass; surfaces
+                  candidates as Below threshold/Manual review/Proceed/Strong
+                  match without running the expensive v3 score. */}
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => openConfirm('pre_screen_new')}
+                disabled={String(preScreenProgress?.status || '').toLowerCase() === 'running'}
+                title="Run pre-screen on candidates that have a CV but haven't been pre-screened (or whose CV changed). Idempotent — safe to click anytime."
+              >
+                {String(preScreenProgress?.status || '').toLowerCase() === 'running' && !preScreenProgress?.refresh ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" />
+                    Pre-screening {preScreenProgress.processed}/{preScreenProgress.total}
+                  </>
+                ) : (
+                  <>Pre-screen</>
+                )}
+              </button>
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => openConfirm('pre_screen_refresh')}
+                disabled={String(preScreenProgress?.status || '').toLowerCase() === 'running'}
+                title="Re-run pre-screen on every candidate with a CV. Existing scores remain — only the pre-screen result is overwritten."
+              >
+                {String(preScreenProgress?.status || '').toLowerCase() === 'running' && preScreenProgress?.refresh ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" />
+                    Refreshing {preScreenProgress.processed}/{preScreenProgress.total}
+                  </>
+                ) : (
+                  <>Refresh pre-screen</>
+                )}
+              </button>
+              <span className="action-toolbar__divider" aria-hidden="true" />
               {unscoredApplications.length > 0 ? (
                 <button
                   type="button"
@@ -1258,7 +1435,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   onClick={() => handleBatchScore({ includeScored: false })}
                   disabled={String(batchScoreProgress?.status || '').toLowerCase() === 'running'}
                 >
-                  Score {unscoredApplications.length} new only
+                  Score {unscoredApplications.length} new
                 </button>
               ) : null}
               <button
@@ -1637,6 +1814,21 @@ Disqualifying: No experience with regulated financial data`}
           error={candidateSheetError}
           onClose={() => setCandidateSheetOpen(false)}
           onSubmit={handleCandidateSubmit}
+        />
+
+        <ConfirmActionDialog
+          open={confirmAction.open}
+          title={confirmAction.title}
+          description={confirmAction.description}
+          bullets={confirmAction.bullets}
+          warning={confirmAction.warning}
+          confirmLabel={confirmAction.confirmLabel || 'Confirm'}
+          variant={confirmAction.variant || 'primary'}
+          loading={confirmAction.loading}
+          loadingLabel={confirmAction.dryRunLoading ? 'Loading…' : 'Starting…'}
+          disabled={confirmAction.dryRunLoading}
+          onClose={closeConfirm}
+          onConfirm={runConfirmedAction}
         />
       </div>
     </div>
