@@ -151,6 +151,9 @@ def _invalidate_stale_cv_match_scores() -> None:
     """Null out cv_match_score on rows whose cached score was produced
     under an older PROMPT_VERSION. Idempotent: re-running with no drift
     is a fast no-op. Wrapped so failures don't block startup."""
+    if os.environ.get("DISABLE_STALE_SCORE_INVALIDATION", "").lower() == "true":
+        _log("Stale CV score invalidation disabled via DISABLE_STALE_SCORE_INVALIDATION")
+        return
     try:
         from app.cv_matching import PROMPT_VERSION
         from app.platform.database import SessionLocal
