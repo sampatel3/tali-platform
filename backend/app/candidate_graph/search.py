@@ -99,11 +99,11 @@ def candidate_ids_matching_all(
 def subgraph_for_candidates(
     *, organization_id: int, candidate_ids: Iterable[int]
 ) -> GraphPayload:
-    """Return a graph payload covering the given candidates and their
-    immediate connections (companies, schools, skills, mentioned people).
+    """Return a graph payload for specific candidates via direct Cypher.
 
-    Uses Graphiti's per-candidate hybrid search, capped to ``SUBGRAPH_LIMIT``
-    total nodes so the cytoscape view stays readable.
+    Looks up Episode nodes by the stable episode-name pattern
+    ``candidate-{id}-*`` and returns all edges connected to the entities
+    those episodes introduced. Falls back to an empty payload on error.
     """
     ids = list({int(c) for c in candidate_ids})
     if not ids or not graph_client.is_configured():
@@ -111,49 +111,31 @@ def subgraph_for_candidates(
 
     graphiti = graph_client.get_graphiti()
     group_id = graph_client.group_id_for_org(organization_id)
-
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
 
-    # 25-second wall-clock budget; 10s per-candidate call timeout.
-    # Returns partial results when budget is exhausted rather than hanging.
-    WALL_BUDGET = 25.0
-    PER_CALL_TIMEOUT = 10.0
-    deadline = time.monotonic() + WALL_BUDGET
-
-    for candidate_id in ids[:50]:  # bound the per-call work
-        remaining = deadline - time.monotonic()
-        if remaining <= 0:
-            logger.info(
-                "subgraph_for_candidates: time budget exhausted at %d nodes", len(nodes)
-            )
-            break
-        try:
-            results = graph_client.run_async(
-                graphiti.search(
-                    query=f"facts about candidate {candidate_id}",
-                    group_ids=[group_id],
-                    num_results=20,
-                ),
-                timeout=min(PER_CALL_TIMEOUT, remaining),
-            )
-        except Exception as exc:
-            logger.debug("subgraph search failed candidate_id=%s: %s", candidate_id, exc)
-            continue
-        _merge_results_into_payload(results, nodes, edges, anchor_taali_id=candidate_id)
-        if len(nodes) >= SUBGRAPH_LIMIT:
-            break
+    # Build episode-name prefixes for the requested candidates.
+    # Each candidate contributes episodes named "candidate-{id}-profile",
+    # "candidate-{id}-cv", etc.  We match via STARTS WITH so all episode
+    # types are covered without enumerating them.
+    try:
+        result = graph_client.run_async(
+            _cypher_subgraph_by_episodes(graphiti.driver, group_id, ids[:50]),
+            timeout=25.0,
+        )
+        _merge_neo4j_records(result, nodes, edges)
+    except Exception as exc:
+        logger.warning("subgraph_for_candidates cypher failed: %s", exc)
 
     return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
 
 
 def subgraph_for_query(*, organization_id: int, query: str) -> GraphPayload:
-    """Broad fallback: search Graphiti with the raw NL query string.
+    """Return a graph payload for a free-text query via direct Cypher.
 
-    Used when the per-candidate subgraph is empty because the matched
-    candidates haven't been synced to the graph yet. Returns whatever
-    Graphiti already knows about that matches the query, giving useful
-    graph output during partial backfill.
+    Searches edge facts by substring match — much faster than the Graphiti
+    Python search path because it avoids vector embedding and returns nodes
+    with their full data already joined.
     """
     if not query or not graph_client.is_configured():
         return GraphPayload()
@@ -163,15 +145,114 @@ def subgraph_for_query(*, organization_id: int, query: str) -> GraphPayload:
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
     try:
-        results = graph_client.run_async(
-            graphiti.search(query=query, group_ids=[group_id], num_results=SUBGRAPH_LIMIT),
+        result = graph_client.run_async(
+            _cypher_subgraph_by_query(graphiti.driver, group_id, query, limit=SUBGRAPH_LIMIT),
             timeout=15.0,
         )
-        _merge_results_into_payload(results, nodes, edges)
+        _merge_neo4j_records(result, nodes, edges)
     except Exception as exc:
-        logger.warning("subgraph_for_query failed: %s", exc)
+        logger.warning("subgraph_for_query cypher failed: %s", exc)
 
     return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
+
+
+# ---------------------------------------------------------------------------
+# Direct Cypher helpers — bypass graphiti.search() which returns EntityEdge
+# objects with source_node/target_node = None (not populated on search results).
+# ---------------------------------------------------------------------------
+
+
+async def _cypher_subgraph_by_query(
+    driver, group_id: str, query: str, limit: int = 100
+):
+    """Edges whose fact text contains the query substring, with nodes joined."""
+    return await driver.execute_query(
+        """
+        MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity)
+        WHERE e.group_id = $group_id
+          AND toLower(e.fact) CONTAINS toLower($query)
+        RETURN
+          s.uuid AS s_uuid, s.name AS s_name, properties(s) AS s_props,
+          t.uuid AS t_uuid, t.name AS t_name, properties(t) AS t_props,
+          e.uuid AS e_uuid, e.name AS e_name, e.fact AS e_fact,
+          e.valid_at AS e_valid_at, e.invalid_at AS e_invalid_at
+        LIMIT $lim
+        """,
+        {"group_id": group_id, "query": query, "lim": limit},
+    )
+
+
+async def _cypher_subgraph_by_episodes(
+    driver, group_id: str, candidate_ids: list[int]
+):
+    """Edges introduced by episodes for the given Postgres candidate IDs."""
+    # Episode names are stable: "candidate-{id}-profile", "candidate-{id}-cv", …
+    # We match any episode whose name starts with one of our prefixes.
+    prefixes = [f"candidate-{cid}-" for cid in candidate_ids]
+    return await driver.execute_query(
+        """
+        UNWIND $prefixes AS prefix
+        MATCH (ep:Episode {group_id: $group_id})
+        WHERE ep.name STARTS WITH prefix
+        MATCH (ep)-[:MENTIONS]->(s:Entity)-[e:RELATES_TO]->(t:Entity)
+        WHERE e.group_id = $group_id
+        RETURN
+          s.uuid AS s_uuid, s.name AS s_name, properties(s) AS s_props,
+          t.uuid AS t_uuid, t.name AS t_name, properties(t) AS t_props,
+          e.uuid AS e_uuid, e.name AS e_name, e.fact AS e_fact,
+          e.valid_at AS e_valid_at, e.invalid_at AS e_invalid_at
+        LIMIT 200
+        """,
+        {"group_id": group_id, "prefixes": prefixes},
+    )
+
+
+def _merge_neo4j_records(result, nodes: dict, edges: list) -> None:
+    """Build GraphNode/GraphEdge objects from raw Cypher records."""
+    if result is None:
+        return
+    for record in result.records or []:
+        s_uuid = record.get("s_uuid")
+        t_uuid = record.get("t_uuid")
+        if not s_uuid or not t_uuid:
+            continue
+        s_name = record.get("s_name") or "?"
+        t_name = record.get("t_name") or "?"
+        s_props = dict(record.get("s_props") or {})
+        t_props = dict(record.get("t_props") or {})
+
+        s_label = _label_for(s_props, [])
+        t_label = _label_for(t_props, [])
+        s_id = _node_id_for(s_uuid, s_label, s_props, None)
+        t_id = _node_id_for(t_uuid, t_label, t_props, None)
+
+        if s_id not in nodes:
+            nodes[s_id] = GraphNode(
+                id=s_id,
+                label=s_label,
+                name=s_name,
+                extra={"uuid": s_uuid, "headline": s_props.get("headline")},
+            )
+        if t_id not in nodes:
+            nodes[t_id] = GraphNode(
+                id=t_id,
+                label=t_label,
+                name=t_name,
+                extra={"uuid": t_uuid},
+            )
+
+        edges.append(
+            GraphEdge(
+                source=s_id,
+                target=t_id,
+                label=_edge_label_for(record.get("e_name") or ""),
+                extra={
+                    "fact": record.get("e_fact"),
+                    "valid_at": _stringify(record.get("e_valid_at")),
+                    "invalid_at": _stringify(record.get("e_invalid_at")),
+                },
+            )
+        )
 
 
 def colleague_neighbourhood(
