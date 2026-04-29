@@ -412,10 +412,31 @@ def graphiti_stats(request: Request):
         except Exception as exc:
             neo4j_node_count = f"error: {exc}"
 
+    sample_companies = []
+    sample_facts = []
+    if neo4j_ok:
+        try:
+            r2 = graph_client.run_async(
+                graphiti.driver.execute_query(
+                    "MATCH (n:Entity) WHERE n.name IS NOT NULL RETURN DISTINCT n.name AS name LIMIT 30"
+                ),
+                timeout=10.0,
+            )
+            sample_companies = [rec["name"] for rec in (r2.records or [])]
+            r3 = graph_client.run_async(
+                graphiti.driver.execute_query(
+                    "MATCH ()-[e:RELATES_TO]->() WHERE e.fact IS NOT NULL RETURN e.fact AS fact LIMIT 10"
+                ),
+                timeout=10.0,
+            )
+            sample_facts = [rec["fact"] for rec in (r3.records or [])]
+        except Exception as exc:
+            sample_companies = [f"error: {exc}"]
+
     return {
         "candidates": {"total": total_candidates, "with_cv_text": with_cv},
         "graph_sync_state": {"synced_candidates": synced_to_graph},
-        "neo4j": {"ok": neo4j_ok, "total_nodes": neo4j_node_count},
+        "neo4j": {"ok": neo4j_ok, "total_nodes": neo4j_node_count, "sample_entities": sample_companies, "sample_facts": sample_facts},
     }
 
 
