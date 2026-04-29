@@ -2351,21 +2351,59 @@ def batch_score_role(
             )
             .all()
         )
-        will_fetch = sum(1 for a in all_apps if not (a.cv_text or "").strip() and (a.source or "") == "workable")
-        will_pre_screen = sum(
-            1 for a in all_apps
-            if (a.cv_text or "").strip()
-            and (a.pre_screen_recommendation is None or (a.pre_screen_run_at is None))
-        )
+
+        # The cascade is fetch-CV → pre-screen → score. So a candidate that
+        # currently has no CV but has source=workable will be fetched, then
+        # pre-screened, then scored. The dry_run counts must account for this
+        # — otherwise pre_screen=0 looks wrong when the user is about to fetch
+        # 5 CVs that will all need pre-screening.
+        def _has_cv(a):
+            return bool((a.cv_text or "").strip())
+
+        def _will_have_cv_after_cascade(a):
+            return _has_cv(a) or (a.source or "") == "workable"
+
+        will_fetch = sum(1 for a in all_apps if not _has_cv(a) and (a.source or "") == "workable")
+
+        # Pre-screen runs on candidates that will end up with a CV AND don't
+        # have an up-to-date pre-screen result yet. For will-be-fetched
+        # candidates that's always true (no CV → no pre-screen). For ones
+        # that already have a CV, "stale" = CV uploaded after pre-screen ran.
+        def _needs_pre_screen(a):
+            if not _will_have_cv_after_cascade(a):
+                return False
+            if a.pre_screen_recommendation is None or a.pre_screen_run_at is None:
+                return True
+            if a.cv_uploaded_at is not None and a.cv_uploaded_at > a.pre_screen_run_at:
+                return True
+            return False
+
+        will_pre_screen = sum(1 for a in all_apps if _needs_pre_screen(a))
+
         if include_scored:
-            will_score = sum(1 for a in all_apps if (a.cv_text or "").strip())
+            # Rescore everyone who'll have a CV.
+            will_score = sum(1 for a in all_apps if _will_have_cv_after_cascade(a))
         else:
-            will_score = sum(
-                1 for a in all_apps
-                if (a.cv_text or "").strip()
-                and a.cv_match_score is None
-                and (a.pre_screen_recommendation or "") != "Below threshold"
-            )
+            # Score: must have CV (or be about to fetch), not already scored,
+            # and not be Below threshold from a current pre-screen.
+            def _needs_score(a):
+                if not _will_have_cv_after_cascade(a):
+                    return False
+                if a.cv_match_score is not None:
+                    # Already scored — only "stale CV" forces a rescore here.
+                    if a.cv_match_scored_at is not None and a.cv_uploaded_at is not None and a.cv_uploaded_at > a.cv_match_scored_at:
+                        return True
+                    return False
+                if (a.pre_screen_recommendation or "") == "Below threshold":
+                    # Will-be-fetched candidates have rec=None so they pass
+                    # this check; only candidates currently rejected get
+                    # excluded.
+                    if a.pre_screen_run_at is not None and (a.cv_uploaded_at is None or a.cv_uploaded_at <= a.pre_screen_run_at):
+                        return False
+                return True
+
+            will_score = sum(1 for a in all_apps if _needs_score(a))
+
         return {
             "will_fetch_cv": int(will_fetch),
             "will_pre_screen": int(will_pre_screen),

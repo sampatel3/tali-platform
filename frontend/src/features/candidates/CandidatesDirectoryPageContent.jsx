@@ -329,7 +329,7 @@ export const CandidatesDirectoryPage = ({
 }) => {
   const rolesApi = apiClient.roles;
   const { showToast } = useToast();
-  const { trackRole } = useJobStatus() ?? {};
+  const { trackRole, trackGraphSync } = useJobStatus() ?? {};
   const [searchParams] = useSearchParams();
   const isShowcase = searchParams.get('demo') === '1' && searchParams.get('showcase') === '1';
   const onNavigate = isShowcase ? () => {} : rawOnNavigate;
@@ -1427,6 +1427,9 @@ export const CandidatesDirectoryPage = ({
           `Graph sync started for ${payload.total} candidate${payload.total === 1 ? '' : 's'}.`,
           'info',
         );
+        // Hand off to the global toaster so it shows in the bottom-right
+        // even if the user navigates away from this page.
+        trackGraphSync?.();
       }
       setSyncGraphConfirm({ open: false, bullets: [], loading: false });
     } catch (error) {

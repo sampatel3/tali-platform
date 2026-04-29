@@ -612,7 +612,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const rolesApi = apiClient.roles;
   const tasksApi = 'tasks' in apiClient ? apiClient.tasks : null;
   const { showToast } = useToast();
-  const { jobs, trackRole } = useJobStatus() ?? {};
+  const {
+    jobs,
+    trackRole,
+    trackRoleFetchCvs,
+    trackRolePreScreen,
+  } = useJobStatus() ?? {};
   void onViewCandidate;
 
   const numericRoleId = Number(roleId);
@@ -1004,12 +1009,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     try {
       if (action === 'fetch_cvs') {
         const res = await rolesApi.fetchCvs(numericRoleId);
+        const payload = res?.data || EMPTY_FETCH_PROGRESS;
         setFetchCvsProgress({
-          status: res?.data?.status || 'started',
-          total: Number(res?.data?.total || 0),
-          fetched: Number(res?.data?.fetched || 0),
-          errors: Number(res?.data?.errors || 0),
+          status: payload.status || 'started',
+          total: Number(payload.total || 0),
+          fetched: Number(payload.fetched || 0),
+          errors: Number(payload.errors || 0),
         });
+        if (payload.status !== 'already_running' && Number(payload.total || 0) > 0) {
+          // Hand off to the global toaster — it polls /fetch-cvs/status and
+          // shows the row in the bottom-right.
+          trackRoleFetchCvs?.(numericRoleId);
+        }
       } else if (action === 'pre_screen_new' || action === 'pre_screen_refresh') {
         const refresh = action === 'pre_screen_refresh';
         const res = await rolesApi.batchPreScreen(numericRoleId, { refresh });
@@ -1023,6 +1034,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         });
         if (payload.status === 'nothing_to_pre_screen') {
           showToast('No candidates need pre-screening right now.', 'info');
+        } else {
+          trackRolePreScreen?.(numericRoleId);
         }
       } else if (action === 'score_new' || action === 'score_rescore') {
         const includeScored = action === 'score_rescore';
