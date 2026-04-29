@@ -147,6 +147,33 @@ def subgraph_for_candidates(
     return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
 
 
+def subgraph_for_query(*, organization_id: int, query: str) -> GraphPayload:
+    """Broad fallback: search Graphiti with the raw NL query string.
+
+    Used when the per-candidate subgraph is empty because the matched
+    candidates haven't been synced to the graph yet. Returns whatever
+    Graphiti already knows about that matches the query, giving useful
+    graph output during partial backfill.
+    """
+    if not query or not graph_client.is_configured():
+        return GraphPayload()
+
+    graphiti = graph_client.get_graphiti()
+    group_id = graph_client.group_id_for_org(organization_id)
+    nodes: dict[str, GraphNode] = {}
+    edges: list[GraphEdge] = []
+    try:
+        results = graph_client.run_async(
+            graphiti.search(query=query, group_ids=[group_id], num_results=SUBGRAPH_LIMIT),
+            timeout=15.0,
+        )
+        _merge_results_into_payload(results, nodes, edges)
+    except Exception as exc:
+        logger.warning("subgraph_for_query failed: %s", exc)
+
+    return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
+
+
 def colleague_neighbourhood(
     *,
     organization_id: int,

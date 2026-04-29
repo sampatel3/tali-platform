@@ -160,6 +160,14 @@ def run_search(
                 organization_id=organization_id,
                 candidate_ids=candidate_ids,
             )
+            # Fallback: if none of the matched candidates are in the graph yet
+            # (partial backfill), do a broad query so the graph view shows
+            # something useful rather than "No graph data".
+            if not subgraph.nodes:
+                subgraph = graph_search.subgraph_for_query(
+                    organization_id=organization_id,
+                    query=nl_query,
+                )
             if subgraph and subgraph.nodes:
                 _enrich_graph_scores(db, organization_id, subgraph)
         except Exception as exc:
