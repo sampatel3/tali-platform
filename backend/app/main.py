@@ -644,38 +644,51 @@ def graphiti_cypher_debug(request: Request):
     graphiti = graph_client.get_graphiti()
     out = {"group_id": group_id, "query": query}
 
+    def safe_records(r):
+        rows = []
+        for rec in (r.records or []):
+            row = {}
+            for k in rec.keys():
+                v = rec[k]
+                row[k] = str(v) if v is not None else None
+            rows.append(row)
+        return rows
+
     # What relationship types exist?
     try:
         r = graph_client.run_async(
-            graphiti.driver.execute_query(
-                "MATCH ()-[e]->() RETURN DISTINCT type(e) AS t LIMIT 10"
-            ), timeout=10.0,
+            graphiti.driver.execute_query("MATCH ()-[e]->() RETURN DISTINCT type(e) AS t LIMIT 10"),
+            timeout=10.0,
         )
-        out["rel_types"] = [rec["t"] for rec in (r.records or [])]
+        out["rel_types"] = [str(rec["t"]) for rec in (r.records or [])]
     except Exception as exc:
         out["rel_types_error"] = str(exc)
 
-    # Sample edges for this org — any type
+    # Sample edges for this org — any relationship type, no params
+    safe_gid = group_id.replace("'", "")  # sanitise (group_id is always "org-N")
     try:
         r = graph_client.run_async(
             graphiti.driver.execute_query(
-                "MATCH (s)-[e]->(t) WHERE e.group_id = $gid RETURN type(e) AS rel, e.fact AS fact, s.name AS s, t.name AS t LIMIT 5",
-                {"gid": group_id},
+                f"MATCH (s)-[e]->(t) WHERE e.group_id = '{safe_gid}' "
+                f"RETURN type(e) AS rel, e.fact AS fact, s.name AS s, t.name AS t LIMIT 5"
             ), timeout=10.0,
         )
-        out["org_edges_sample"] = [dict(rec) for rec in (r.records or [])]
+        out["org_edges_sample"] = safe_records(r)
     except Exception as exc:
         out["org_edges_error"] = str(exc)
 
-    # Try the actual Cypher we're using
+    # Try the actual subgraph Cypher without params
+    safe_q = query.lower().replace("'", "")
     try:
         r = graph_client.run_async(
             graphiti.driver.execute_query(
-                "MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity) WHERE e.group_id = $gid AND toLower(e.fact) CONTAINS toLower($q) RETURN s.name AS s, t.name AS t, e.fact AS fact LIMIT 5",
-                {"gid": group_id, "q": query},
+                f"MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity) "
+                f"WHERE e.group_id = '{safe_gid}' "
+                f"AND toLower(e.fact) CONTAINS '{safe_q}' "
+                f"RETURN s.uuid AS s_uuid, s.name AS s, t.uuid AS t_uuid, t.name AS t, e.fact AS fact LIMIT 5"
             ), timeout=10.0,
         )
-        out["cypher_matches"] = [dict(rec) for rec in (r.records or [])]
+        out["cypher_matches"] = safe_records(r)
     except Exception as exc:
         out["cypher_error"] = str(exc)
 
