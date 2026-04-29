@@ -571,6 +571,59 @@ def admin_batch_score_all(request: Request):
         db.close()
 
 
+@app.get("/admin/graphiti/search-debug")
+def graphiti_search_debug(request: Request):
+    """Raw Graphiti search result shape for debugging the graph view."""
+    from .platform.config import settings
+    from .candidate_graph import client as graph_client
+
+    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
+    if not admin_secret or request.headers.get("X-Admin-Secret", "") != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    if not graph_client.is_configured():
+        return {"status": "unconfigured"}
+
+    query = request.query_params.get("q", "full stack developer")
+    org_id = int(request.query_params.get("org_id", "0"))
+    group_id = graph_client.group_id_for_org(org_id) if org_id else None
+
+    graphiti = graph_client.get_graphiti()
+    try:
+        results = graph_client.run_async(
+            graphiti.search(
+                query=query,
+                group_ids=[group_id] if group_id else None,
+                num_results=5,
+            ),
+            timeout=15.0,
+        )
+    except Exception as exc:
+        return {"error": str(exc)}
+
+    if results is None:
+        return {"results": None, "count": 0}
+
+    items = results if isinstance(results, (list, tuple)) else getattr(results, "edges", results) or []
+    out = []
+    for item in list(items)[:5]:
+        source = getattr(item, "source_node", None)
+        target = getattr(item, "target_node", None)
+        out.append({
+            "type": type(item).__name__,
+            "uuid": getattr(item, "uuid", None),
+            "fact": getattr(item, "fact", None),
+            "has_source_node": source is not None,
+            "has_target_node": target is not None,
+            "source_uuid": getattr(source, "uuid", None) if source else None,
+            "source_name": getattr(source, "name", None) if source else None,
+            "target_uuid": getattr(target, "uuid", None) if target else None,
+            "target_name": getattr(target, "name", None) if target else None,
+            "group_id": getattr(item, "group_id", None),
+        })
+    return {"query": query, "group_id": group_id, "count": len(list(items)), "results": out}
+
+
 @app.post("/admin/graphiti/test-episode")
 def graphiti_test_episode(request: Request):
     """Send one synthetic episode to Graphiti and return success or error detail.
