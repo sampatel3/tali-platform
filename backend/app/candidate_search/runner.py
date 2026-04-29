@@ -160,6 +160,8 @@ def run_search(
                 organization_id=organization_id,
                 candidate_ids=candidate_ids,
             )
+            if subgraph and subgraph.nodes:
+                _enrich_graph_scores(db, organization_id, subgraph)
         except Exception as exc:
             logger.warning("Subgraph fetch failed: %s", exc)
             warnings.append(
@@ -223,3 +225,44 @@ def _execute_graph_predicates(
             )
         )
         return None
+
+
+def _enrich_graph_scores(
+    db: Session,
+    organization_id: int,
+    subgraph: "GraphPayload",
+) -> None:
+    """Mutate Person nodes in-place: add cv_match_score from Postgres.
+
+    Uses the best (max) score across all applications for that candidate
+    within the org, so multi-role candidates get their highest score shown.
+    """
+    from sqlalchemy import func
+
+    person_ids = [
+        int(n.id.split(":")[1])
+        for n in subgraph.nodes
+        if n.label == "Person" and n.id.startswith("person:")
+    ]
+    if not person_ids:
+        return
+
+    rows = (
+        db.query(
+            CandidateApplication.candidate_id,
+            func.max(CandidateApplication.cv_match_score),
+        )
+        .filter(
+            CandidateApplication.candidate_id.in_(person_ids),
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.deleted_at.is_(None),
+        )
+        .group_by(CandidateApplication.candidate_id)
+        .all()
+    )
+    scores_map = {int(r[0]): r[1] for r in rows if r[0] is not None}
+
+    for node in subgraph.nodes:
+        if node.label == "Person" and node.id.startswith("person:"):
+            cid = int(node.id.split(":")[1])
+            node.extra["cv_match_score"] = scores_map.get(cid)

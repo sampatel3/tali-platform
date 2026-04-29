@@ -6681,3 +6681,67 @@ body.interview-view .page {
 .graph-side__list .link:hover {
   text-decoration: underline;
 }
+
+/* ── Score badges ──────────────────────────────────────────────────────────── */
+.score-badge {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.score-badge--high    { background: #d4fae8; color: #00704a; }
+.score-badge--medium  { background: #fef3cd; color: #8a6200; }
+.score-badge--low     { background: #fde8e8; color: #b00020; }
+.score-badge--unscored { background: #f0f0f0; color: #888; }
+
+/* ── Graph score legend ────────────────────────────────────────────────────── */
+.graph-legend {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  font-size: 11px;
+  flex-wrap: wrap;
+}
+.graph-legend__item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: #555;
+}
+.graph-legend__item::before {
+  content: '';
+  display: inline-block;
+  width: 12px;
+  height: 12px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.graph-legend__item--high::before    { background: #00b894; }
+.graph-legend__item--medium::before  { background: #fdcb6e; }
+.graph-legend__item--low::before     { background: #d63031; }
+.graph-legend__item--unscored::before { background: #b2bec3; }
+.graph-legend__item--company::before { background: #22c1c3; border-radius: 50%; }
+.graph-legend__divider {
+  width: 1px;
+  height: 14px;
+  background: #ddd;
+  margin: 0 4px;
+}
+
+/* ── Candidate row in side panel (score + name inline) ─────────────────────── */
+.graph-side__candidate-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 0;
+}
+.graph-side__candidate-row .score-badge {
+  margin-bottom: 0;
+  padding: 1px 6px;
+  font-size: 11px;
+  min-width: 28px;
+  text-align: center;
+}
