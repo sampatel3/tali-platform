@@ -718,7 +718,7 @@ def list_role_applications(
     query = (
         db.query(CandidateApplication)
         .options(
-            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.candidate).joinedload(Candidate.graph_sync_state),
             joinedload(CandidateApplication.organization),
             joinedload(CandidateApplication.role),
             joinedload(CandidateApplication.interviews),
@@ -2005,6 +2005,9 @@ def _try_fetch_cv_from_workable(
 # In-memory progress store keyed by role_id
 _batch_score_progress: dict[int, dict] = {}
 _batch_fetch_cvs_progress: dict[int, dict] = {}
+_batch_pre_screen_progress: dict[int, dict] = {}
+# Org-wide graph sync — keyed by organization_id
+_sync_graph_progress: dict[int, dict] = {}
 
 
 # --------------------------------------------------------------------------- #
@@ -2207,6 +2210,22 @@ def _run_batch_score(role_id: int, org_id: int, *, include_scored: bool = False,
                     progress["scored"] = idx + 1
                     continue
 
+                # Idempotency: if not forcing a rescore, skip applications that
+                # are already scored OR were filtered "Below threshold" by a
+                # previous pre-screen run (with no CV change since). Cuts the
+                # batch loop down to actual work that needs doing.
+                if not include_scored:
+                    if app.cv_match_score is not None:
+                        progress["scored"] = idx + 1
+                        continue
+                    if (
+                        (app.pre_screen_recommendation or "") == "Below threshold"
+                        and app.pre_screen_run_at is not None
+                        and (app.cv_uploaded_at is None or app.cv_uploaded_at <= app.pre_screen_run_at)
+                    ):
+                        progress["scored"] = idx + 1
+                        continue
+
                 # Route through the orchestrator: cache hits skip Claude, misses
                 # call v4 (with criteria) or v3 (without). Inline path keeps the
                 # legacy thread-loop behaviour intact when Celery is disabled.
@@ -2264,6 +2283,10 @@ def batch_score_role(
         default=None,
         description="ISO date (e.g. 2026-01-01). Only process candidates whose Workable application date is on or after this date.",
     ),
+    dry_run: bool = Query(
+        default=False,
+        description="Return counts of what would be processed (fetch-CV / pre-screen / score), without starting a job.",
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -2271,10 +2294,45 @@ def batch_score_role(
 
     Default behavior scores only unscored applications. include_scored=true enables
     a full re-score pass for the role. applied_after filters to a specific applicant cohort.
+    The cascade does fetch-CV (if missing) → pre-screen (if not run) → score, skipping
+    each step that's already complete unless include_scored=true.
     """
     role = get_role(role_id, current_user.organization_id, db)
     if not role_has_job_spec(role):
         raise HTTPException(status_code=400, detail="Upload job spec before batch scoring")
+
+    if dry_run:
+        all_apps = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.role_id == role_id,
+                CandidateApplication.organization_id == current_user.organization_id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .all()
+        )
+        will_fetch = sum(1 for a in all_apps if not (a.cv_text or "").strip() and (a.source or "") == "workable")
+        will_pre_screen = sum(
+            1 for a in all_apps
+            if (a.cv_text or "").strip()
+            and (a.pre_screen_recommendation is None or (a.pre_screen_run_at is None))
+        )
+        if include_scored:
+            will_score = sum(1 for a in all_apps if (a.cv_text or "").strip())
+        else:
+            will_score = sum(
+                1 for a in all_apps
+                if (a.cv_text or "").strip()
+                and a.cv_match_score is None
+                and (a.pre_screen_recommendation or "") != "Below threshold"
+            )
+        return {
+            "will_fetch_cv": int(will_fetch),
+            "will_pre_screen": int(will_pre_screen),
+            "will_score": int(will_score),
+            "total": len(all_apps),
+            "include_scored": bool(include_scored),
+        }
 
     existing = _batch_score_progress.get(role_id, {})
     if existing.get("status") == "running":
@@ -3106,6 +3164,7 @@ def _run_batch_fetch_cvs(role_id: int, org_id: int) -> None:
 @router.post("/roles/{role_id}/fetch-cvs")
 def batch_fetch_cvs_role(
     role_id: int,
+    dry_run: bool = Query(default=False, description="Return the count of applications that need a CV fetched, without starting a job."),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -3114,6 +3173,22 @@ def batch_fetch_cvs_role(
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org or not org.workable_connected:
         raise HTTPException(status_code=400, detail="Workable is not connected")
+
+    if dry_run:
+        to_fetch_count = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.role_id == role_id,
+                CandidateApplication.organization_id == current_user.organization_id,
+                CandidateApplication.deleted_at.is_(None),
+                CandidateApplication.source == "workable",
+            )
+            .filter(
+                (CandidateApplication.cv_text.is_(None)) | (CandidateApplication.cv_text == "")
+            )
+            .count()
+        )
+        return {"will_fetch": int(to_fetch_count)}
 
     existing = _batch_fetch_cvs_progress.get(role_id, {})
     if existing.get("status") == "running":
@@ -3178,6 +3253,396 @@ def cancel_batch_fetch_cvs(
         "ok": bool(set_ok),
         "role_id": role_id,
         "status": progress.get("status", "idle"),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Batch pre-screen — runs the cheap pre-screen LLM only (no full v3 score).
+# Same threading + in-memory progress pattern as batch-score.
+# ---------------------------------------------------------------------------
+
+
+def _select_pre_screen_targets(
+    db: Session, *, role_id: int, organization_id: int, refresh: bool
+):
+    """Return (apps_query, count_only) for pre-screen.
+
+    refresh=False  → only apps that need pre-screen (no run yet OR CV is newer
+                     than last pre-screen) AND have a CV.
+    refresh=True   → all apps with a CV in this role.
+    """
+    from ...services.pre_screening_service import application_needs_pre_screen
+
+    base = (
+        db.query(CandidateApplication)
+        .options(
+            joinedload(CandidateApplication.candidate),
+            joinedload(CandidateApplication.role),
+        )
+        .filter(
+            CandidateApplication.role_id == role_id,
+            CandidateApplication.organization_id == organization_id,
+            CandidateApplication.deleted_at.is_(None),
+            CandidateApplication.cv_text.isnot(None),
+            CandidateApplication.cv_text != "",
+        )
+    )
+    if refresh:
+        return base.all()
+    # Pre-filter cheaply at SQL: never_run OR stale-cv
+    candidates = base.all()
+    return [a for a in candidates if application_needs_pre_screen(a)]
+
+
+def _run_batch_pre_screen(role_id: int, org_id: int, *, refresh: bool = False) -> None:
+    """Background worker: run pre-screen LLM only on selected apps."""
+    from ...services.pre_screening_service import execute_pre_screen_only
+
+    db = SessionLocal()
+    try:
+        org = db.query(Organization).filter(Organization.id == org_id).first()
+        role = db.query(Role).filter(Role.id == role_id, Role.organization_id == org_id).first()
+        if not org or not role:
+            return
+        apps = _select_pre_screen_targets(
+            db, role_id=role_id, organization_id=org_id, refresh=refresh
+        )
+        total = len(apps)
+        progress = _batch_pre_screen_progress.get(role_id, {})
+        progress.update({"total": total, "processed": 0, "errors": 0, "status": "running", "refresh": bool(refresh)})
+        _batch_pre_screen_progress[role_id] = progress
+
+        for idx, app in enumerate(apps):
+            try:
+                result = execute_pre_screen_only(app)
+                if result.get("status") == "error":
+                    progress["errors"] = progress.get("errors", 0) + 1
+                # Auto-reject hook for "Below threshold" — same as the regular
+                # score path, so manual pre-screen runs trigger Workable
+                # disqualify when configured.
+                run_auto_reject_if_needed(
+                    db=db, org=org, app=app, role=role, actor_type="system"
+                )
+                db.flush()
+            except Exception:
+                logger.exception("Batch pre-screen failed for application_id=%s", app.id)
+                progress["errors"] = progress.get("errors", 0) + 1
+            progress["processed"] = idx + 1
+            _batch_pre_screen_progress[role_id] = progress
+            if (idx + 1) % 5 == 0:
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        progress["status"] = "completed"
+        _batch_pre_screen_progress[role_id] = progress
+    except Exception:
+        logger.exception("Batch pre-screen failed for role_id=%s", role_id)
+        progress = _batch_pre_screen_progress.get(role_id, {})
+        progress["status"] = "failed"
+        _batch_pre_screen_progress[role_id] = progress
+    finally:
+        db.close()
+
+
+@router.post("/roles/{role_id}/batch-pre-screen")
+def batch_pre_screen_role(
+    role_id: int,
+    refresh: bool = Query(default=False, description="Re-run pre-screen for all applications, not just unscreened/stale."),
+    dry_run: bool = Query(default=False, description="Return the count of applications that would be processed, without starting a job."),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Start background pre-screen for a role.
+
+    Default: only applications that have a CV and either have never been
+    pre-screened or whose CV was uploaded after the last pre-screen.
+    refresh=true: all applications with a CV in the role.
+    dry_run=true: returns ``{will_process, total_with_cv, total_without_cv}``
+    so the UI can populate a confirmation dialog.
+    """
+    role = get_role(role_id, current_user.organization_id, db)
+    if not role_has_job_spec(role):
+        raise HTTPException(status_code=400, detail="Upload job spec before batch pre-screen")
+
+    if dry_run:
+        targets = _select_pre_screen_targets(
+            db, role_id=role_id, organization_id=current_user.organization_id, refresh=refresh
+        )
+        without_cv = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.role_id == role_id,
+                CandidateApplication.organization_id == current_user.organization_id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .filter(
+                (CandidateApplication.cv_text.is_(None)) | (CandidateApplication.cv_text == "")
+            )
+            .count()
+        )
+        return {
+            "will_process": len(targets),
+            "total_without_cv": int(without_cv),
+            "refresh": bool(refresh),
+        }
+
+    existing = _batch_pre_screen_progress.get(role_id, {})
+    if existing.get("status") == "running":
+        return {
+            "status": "already_running",
+            "total": existing.get("total", 0),
+            "processed": existing.get("processed", 0),
+        }
+
+    # Count for the response; the worker recomputes its own list to avoid
+    # races between this count and what it processes.
+    target_count = len(
+        _select_pre_screen_targets(
+            db, role_id=role_id, organization_id=current_user.organization_id, refresh=refresh
+        )
+    )
+    if target_count == 0:
+        return {"status": "nothing_to_pre_screen", "total": 0, "refresh": bool(refresh)}
+
+    _batch_pre_screen_progress[role_id] = {
+        "total": target_count,
+        "processed": 0,
+        "errors": 0,
+        "status": "running",
+        "refresh": bool(refresh),
+        "started_at": datetime.now(timezone.utc),
+    }
+    thread = threading.Thread(
+        target=_run_batch_pre_screen,
+        args=(role_id, current_user.organization_id),
+        kwargs={"refresh": refresh},
+        daemon=True,
+    )
+    thread.start()
+    return {"status": "started", "total": target_count, "refresh": bool(refresh)}
+
+
+@router.get("/roles/{role_id}/batch-pre-screen/status")
+def batch_pre_screen_status(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    get_role(role_id, current_user.organization_id, db)
+    progress = _batch_pre_screen_progress.get(role_id, {})
+    return {
+        "status": progress.get("status", "idle"),
+        "total": progress.get("total", 0),
+        "processed": progress.get("processed", 0),
+        "errors": progress.get("errors", 0),
+        "refresh": bool(progress.get("refresh", False)),
+    }
+
+
+# ---------------------------------------------------------------------------
+# Org-wide graph sync — projects Postgres candidates to Neo4j via Graphiti.
+# Filter: has CV, and either never synced OR CV is newer than last sync.
+# Uses a per-org threading worker, status by organization_id.
+# ---------------------------------------------------------------------------
+
+
+def _select_graph_sync_candidates(
+    db: Session, *, organization_id: int, refresh: bool
+) -> list[int]:
+    """Return ordered list of candidate ids to (re)sync to the graph."""
+    from ...models.candidate import Candidate
+    from ...models.graph_sync_state import GraphSyncState
+
+    q = (
+        db.query(Candidate.id, Candidate.cv_uploaded_at, GraphSyncState.last_synced_at)
+        .outerjoin(GraphSyncState, GraphSyncState.candidate_id == Candidate.id)
+        .filter(
+            Candidate.organization_id == organization_id,
+            Candidate.deleted_at.is_(None),
+            Candidate.cv_text.isnot(None),
+            Candidate.cv_text != "",
+        )
+    )
+    out: list[int] = []
+    for cid, cv_uploaded_at, last_synced_at in q.all():
+        if refresh:
+            out.append(int(cid))
+            continue
+        if last_synced_at is None:
+            out.append(int(cid))
+            continue
+        # Stale: CV uploaded after last sync.
+        if cv_uploaded_at is not None and cv_uploaded_at > last_synced_at:
+            out.append(int(cid))
+    return out
+
+
+def _run_sync_graph(org_id: int, *, refresh: bool = False) -> None:
+    """Background worker: project candidates → Neo4j and update graph_sync_state."""
+    from ...candidate_graph import sync as graph_sync
+    from ...candidate_graph import client as graph_client
+
+    db = SessionLocal()
+    try:
+        if not graph_client.is_configured():
+            progress = _sync_graph_progress.get(org_id, {})
+            progress["status"] = "failed"
+            progress["error"] = "neo4j_not_configured"
+            _sync_graph_progress[org_id] = progress
+            return
+
+        candidate_ids = _select_graph_sync_candidates(
+            db, organization_id=org_id, refresh=refresh
+        )
+        total = len(candidate_ids)
+        progress = _sync_graph_progress.get(org_id, {})
+        progress.update({"total": total, "synced": 0, "errors": 0, "status": "running", "refresh": bool(refresh)})
+        _sync_graph_progress[org_id] = progress
+
+        # Delegate per-candidate work to the existing sync module so logic
+        # stays in one place. ``sync_candidate`` is idempotent (Graphiti
+        # dedupes by content fingerprint) and updates graph_sync_state on
+        # success.
+        from ...models.candidate import Candidate
+
+        for idx, cid in enumerate(candidate_ids):
+            try:
+                cand = db.query(Candidate).filter(Candidate.id == cid).first()
+                if cand is None:
+                    progress["errors"] = progress.get("errors", 0) + 1
+                else:
+                    sent = graph_sync.sync_candidate(cand, db=db, include_cv_text=True)
+                    if sent == 0:
+                        # Treat as error if Graphiti dropped everything (likely
+                        # due to LLM extraction failure / API credit issues).
+                        progress["errors"] = progress.get("errors", 0) + 1
+            except Exception:
+                logger.exception("Graph sync failed for candidate_id=%s", cid)
+                progress["errors"] = progress.get("errors", 0) + 1
+            progress["synced"] = idx + 1
+            _sync_graph_progress[org_id] = progress
+            if (idx + 1) % 5 == 0:
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+        progress["status"] = "completed"
+        _sync_graph_progress[org_id] = progress
+    except Exception:
+        logger.exception("Sync graph failed for org_id=%s", org_id)
+        progress = _sync_graph_progress.get(org_id, {})
+        progress["status"] = "failed"
+        _sync_graph_progress[org_id] = progress
+    finally:
+        db.close()
+
+
+@router.post("/candidates/sync-graph")
+def sync_graph_org(
+    refresh: bool = Query(default=False, description="Re-sync all candidates with a CV (not just new/stale)."),
+    dry_run: bool = Query(default=False, description="Return counts without starting a job."),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Org-wide: sync candidates with a CV to the knowledge graph (Neo4j via Graphiti).
+
+    Default: candidates never synced OR with a CV uploaded after the last sync.
+    refresh=true: all candidates with a CV in the org.
+    """
+    from ...candidate_graph import client as graph_client
+
+    org_id = current_user.organization_id
+    if dry_run:
+        from ...models.candidate import Candidate
+        from ...models.graph_sync_state import GraphSyncState
+
+        new_or_stale = _select_graph_sync_candidates(
+            db, organization_id=org_id, refresh=False
+        )
+        total_with_cv = (
+            db.query(Candidate)
+            .filter(
+                Candidate.organization_id == org_id,
+                Candidate.deleted_at.is_(None),
+                Candidate.cv_text.isnot(None),
+                Candidate.cv_text != "",
+            )
+            .count()
+        )
+        synced_count = (
+            db.query(GraphSyncState)
+            .join(Candidate, Candidate.id == GraphSyncState.candidate_id)
+            .filter(Candidate.organization_id == org_id)
+            .count()
+        )
+        return {
+            "will_process": len(new_or_stale) if not refresh else int(total_with_cv),
+            "total_with_cv": int(total_with_cv),
+            "already_synced": int(synced_count),
+            "stale_or_new": len(new_or_stale),
+            "refresh": bool(refresh),
+            "neo4j_configured": graph_client.is_configured(),
+        }
+
+    if not graph_client.is_configured():
+        raise HTTPException(status_code=400, detail="Neo4j is not configured for this deployment.")
+
+    existing = _sync_graph_progress.get(org_id, {})
+    if existing.get("status") == "running":
+        return {
+            "status": "already_running",
+            "total": existing.get("total", 0),
+            "synced": existing.get("synced", 0),
+        }
+
+    candidate_ids = _select_graph_sync_candidates(
+        db, organization_id=org_id, refresh=refresh
+    )
+    if not candidate_ids:
+        return {"status": "nothing_to_sync", "total": 0, "refresh": bool(refresh)}
+
+    _sync_graph_progress[org_id] = {
+        "total": len(candidate_ids),
+        "synced": 0,
+        "errors": 0,
+        "status": "running",
+        "refresh": bool(refresh),
+        "started_at": datetime.now(timezone.utc),
+    }
+    thread = threading.Thread(
+        target=_run_sync_graph,
+        args=(org_id,),
+        kwargs={"refresh": refresh},
+        daemon=True,
+    )
+    thread.start()
+    return {"status": "started", "total": len(candidate_ids), "refresh": bool(refresh)}
+
+
+@router.get("/candidates/sync-graph/status")
+def sync_graph_status(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Poll the org-wide graph sync progress."""
+    progress = _sync_graph_progress.get(current_user.organization_id, {})
+    return {
+        "status": progress.get("status", "idle"),
+        "total": progress.get("total", 0),
+        "synced": progress.get("synced", 0),
+        "errors": progress.get("errors", 0),
+        "refresh": bool(progress.get("refresh", False)),
+        "error": progress.get("error"),
     }
 
 

@@ -275,3 +275,118 @@ def mark_auto_reject_state(
     app.auto_reject_state = sanitize_text_for_storage(str(state or "").strip()) or None
     app.auto_reject_reason = sanitize_text_for_storage(str(reason or "").strip()) or None
     app.auto_reject_triggered_at = _utcnow() if triggered else None
+
+
+# ---------------------------------------------------------------------------
+# Standalone pre-screen — runs the cheap pre-screen LLM and persists results
+# without triggering the v3 full-score path. Used by the "Pre-screen new" and
+# "Refresh pre-screen" batch actions, where we explicitly want to decouple
+# pre-screen from scoring.
+# ---------------------------------------------------------------------------
+
+def execute_pre_screen_only(app: CandidateApplication) -> dict[str, Any]:
+    """Run the pre-screen LLM for one application and persist the result.
+
+    Returns ``{status, score, recommendation, decision, reason}`` where
+    ``status`` is one of ``ok | skipped | error``. Does NOT touch
+    ``cv_match_score`` / ``cv_match_details`` / ``cv_match_scored_at`` so
+    a subsequent score job can still run cleanly.
+
+    Idempotency: caller is expected to filter by ``pre_screen_run_at``
+    before invoking. This function always runs the LLM (the underlying
+    ``run_pre_screen`` has its own cache, so duplicates are cheap).
+    """
+    if app is None or app.id is None:
+        return {"status": "skipped", "reason": "no_application"}
+
+    cv_text = (app.cv_text or "").strip()
+    role = app.role
+    job_spec_text = ((role.job_spec_text if role else None) or "").strip()
+    if not cv_text:
+        return {"status": "skipped", "reason": "no_cv"}
+    if not job_spec_text:
+        return {"status": "skipped", "reason": "no_job_spec"}
+
+    from ..cv_matching.runner_pre_screen import run_pre_screen
+    from ..cv_matching.schemas import Priority, RequirementInput
+
+    requirements: list[RequirementInput] = []
+    for c in sorted((role.criteria or []), key=lambda c: getattr(c, "ordering", 0)):
+        if getattr(c, "deleted_at", None) is not None:
+            continue
+        text = str(c.text or "").strip()
+        if not text:
+            continue
+        requirements.append(
+            RequirementInput(
+                id=f"crit_{int(c.id)}",
+                requirement=text,
+                priority=Priority.MUST_HAVE if bool(c.must_have) else Priority.STRONG_PREFERENCE,
+            )
+        )
+
+    try:
+        pre = run_pre_screen(cv_text, job_spec_text, requirements)
+    except Exception as exc:  # noqa: BLE001 — guard the LLM call
+        return {"status": "error", "reason": f"pre_screen_failed: {exc}"[:200]}
+
+    score = pre.score
+    recommendation = pre_screen_recommendation_label(score)
+
+    # Persist on the application. We deliberately do NOT touch cv_match_*
+    # so a subsequent score job can still run.
+    app.pre_screen_score_100 = score
+    app.requirements_fit_score_100 = score  # parity with snapshot fallback
+    app.pre_screen_recommendation = recommendation
+    app.pre_screen_evidence = sanitize_json_for_storage(
+        {
+            "summary": sanitize_text_for_storage(str(pre.reason or "").strip()) or None,
+            "matching_skills": [],
+            "missing_skills": [],
+            "concerns": [],
+            "score_rationale_bullets": [],
+            "requirements_coverage": {},
+            "requirements_assessment": [],
+            "decision": pre.decision,
+            "trace_id": pre.trace_id,
+            "prompt_version": pre.prompt_version,
+            "cache_hit": pre.cache_hit,
+        }
+    )
+    app.pre_screen_run_at = _utcnow()
+
+    # Keep rank_score in sync so the directory list orders correctly even
+    # before a full score is run.
+    if score is not None:
+        app.rank_score = score
+
+    return {
+        "status": "ok",
+        "score": score,
+        "recommendation": recommendation,
+        "decision": pre.decision,
+        "reason": pre.reason,
+        "cache_hit": pre.cache_hit,
+    }
+
+
+def application_needs_pre_screen(app: CandidateApplication) -> bool:
+    """True if pre-screen should be (re-)run for this application.
+
+    Logic:
+    - No CV → not needed (and impossible).
+    - Never pre-screened → needed.
+    - CV uploaded after the last pre-screen → needed (stale).
+    - Otherwise → not needed.
+    """
+    if app is None:
+        return False
+    if not (app.cv_text or "").strip():
+        return False
+    last_run = getattr(app, "pre_screen_run_at", None)
+    if last_run is None:
+        return app.pre_screen_recommendation is None
+    cv_uploaded = getattr(app, "cv_uploaded_at", None)
+    if cv_uploaded is not None and cv_uploaded > last_run:
+        return True
+    return False

@@ -61,13 +61,48 @@ export const roles = {
   batchScore: (roleId, options = {}) => api.post(
     `/roles/${roleId}/batch-score`,
     null,
-    { params: { include_scored: options.include_scored === true ? true : undefined } },
+    {
+      params: {
+        include_scored: options.include_scored === true ? true : undefined,
+        dry_run: options.dry_run === true ? true : undefined,
+      },
+    },
   ),
   batchScoreStatus: (roleId) => api.get(`/roles/${roleId}/batch-score/status`),
   cancelBatchScore: (roleId) => api.post(`/roles/${roleId}/batch-score/cancel`),
+  // Pre-screen — runs the cheap pre-screen LLM only (no full v3 score).
+  // Use refresh=true to re-run for already-pre-screened apps.
+  batchPreScreen: (roleId, options = {}) => api.post(
+    `/roles/${roleId}/batch-pre-screen`,
+    null,
+    {
+      params: {
+        refresh: options.refresh === true ? true : undefined,
+        dry_run: options.dry_run === true ? true : undefined,
+      },
+    },
+  ),
+  batchPreScreenStatus: (roleId) => api.get(`/roles/${roleId}/batch-pre-screen/status`),
   cancelFetchCvs: (roleId) => api.post(`/roles/${roleId}/fetch-cvs/cancel`),
-  fetchCvs: (roleId) => api.post(`/roles/${roleId}/fetch-cvs`),
+  fetchCvs: (roleId, options = {}) => api.post(
+    `/roles/${roleId}/fetch-cvs`,
+    null,
+    { params: { dry_run: options.dry_run === true ? true : undefined } },
+  ),
   fetchCvsStatus: (roleId) => api.get(`/roles/${roleId}/fetch-cvs/status`),
+  // Org-wide knowledge-graph sync. Lives on /candidates/* not /roles/* because
+  // the graph projection is org-scoped, not role-scoped.
+  syncGraph: (options = {}) => api.post(
+    `/candidates/sync-graph`,
+    null,
+    {
+      params: {
+        refresh: options.refresh === true ? true : undefined,
+        dry_run: options.dry_run === true ? true : undefined,
+      },
+    },
+  ),
+  syncGraphStatus: () => api.get(`/candidates/sync-graph/status`),
   createAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments`, data),
   retakeAssessment: (applicationId, data) => api.post(`/applications/${applicationId}/assessments/retake`, data),
 };

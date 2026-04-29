@@ -6745,3 +6745,75 @@ body.interview-view .page {
   min-width: 28px;
   text-align: center;
 }
+
+/* ── Confirm-action dialog (batch-action confirmation) ───────────────────── */
+.confirm-action__bullets {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+.confirm-action__bullet {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  background: rgba(0, 0, 0, 0.03);
+  border-radius: 6px;
+  font-size: 13px;
+}
+.confirm-action__bullet-label { color: var(--taali-text, #2d3436); }
+.confirm-action__bullet-value {
+  font-weight: 600;
+  color: var(--taali-text, #2d3436);
+  font-variant-numeric: tabular-nums;
+}
+.confirm-action__warning {
+  margin: 8px 0 0;
+  padding: 8px 10px;
+  background: rgba(253, 203, 110, 0.18);
+  border: 1px solid rgba(253, 203, 110, 0.45);
+  border-radius: 6px;
+  color: #735c10;
+  font-size: 12.5px;
+}
+
+/* ── Pre-screen recommendation chip + Graph status chip ──────────────────── */
+.ps-chip, .graph-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+.ps-chip { background: rgba(0, 0, 0, 0.06); color: #555; }
+.ps-chip--strong   { background: rgba(0, 184, 148, 0.18); color: #00604a; }
+.ps-chip--proceed  { background: rgba(116, 185, 255, 0.22); color: #1d4f8a; }
+.ps-chip--review   { background: rgba(253, 203, 110, 0.28); color: #6a5008; }
+.ps-chip--rejected { background: rgba(214, 48, 49, 0.18); color: #8a1d1d; }
+.ps-chip--unrun    { background: rgba(178, 190, 195, 0.30); color: #555; }
+
+.graph-chip { background: rgba(0, 0, 0, 0.06); color: #555; }
+.graph-chip--in    { background: rgba(0, 184, 148, 0.18); color: #00604a; }
+.graph-chip--stale { background: rgba(253, 203, 110, 0.28); color: #6a5008; }
+.graph-chip--none  { background: rgba(178, 190, 195, 0.30); color: #555; }
+
+/* ── Action toolbar grouping for the job page ─────────────────────────────── */
+.action-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.action-toolbar__divider {
+  width: 1px;
+  height: 18px;
+  background: rgba(0, 0, 0, 0.12);
+  margin: 0 4px;
+}

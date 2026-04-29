@@ -30,6 +30,43 @@ from .pipeline_service import (
 )
 
 
+def _graph_state_for(app: CandidateApplication) -> tuple[datetime | None, bool | None]:
+    """Return ``(last_synced_at, stale)`` for the candidate's graph_sync_state.
+
+    Reads from the relationship if eagerly loaded; otherwise returns
+    ``(None, None)``. We deliberately do NOT issue a fresh DB query per row
+    because this is called inside the list-applications hot path. Callers
+    that want this populated should load it via the join in their query.
+
+    ``stale=True`` iff the CV was uploaded after the last graph sync.
+    """
+    candidate = getattr(app, "candidate", None)
+    if candidate is None:
+        return None, None
+    state = None
+    # graph_sync_state is a 1:1 relationship on Candidate via candidate_id.
+    # Access lazily so it works whether the caller eager-loaded it or not;
+    # SQLAlchemy will issue one extra SELECT per candidate when not loaded.
+    try:
+        state = getattr(candidate, "graph_sync_state", None)
+    except Exception:
+        return None, None
+    if state is None or getattr(state, "last_synced_at", None) is None:
+        return None, None
+    last = state.last_synced_at
+    cv_uploaded = candidate.cv_uploaded_at or app.cv_uploaded_at
+    stale = bool(cv_uploaded and cv_uploaded > last)
+    return last, stale
+
+
+def _graph_synced_at_for(app: CandidateApplication) -> datetime | None:
+    return _graph_state_for(app)[0]
+
+
+def _graph_stale_for(app: CandidateApplication) -> bool | None:
+    return _graph_state_for(app)[1]
+
+
 def _normalize_cv_match_score_for_response(score: float | None, details: dict | None) -> float | None:
     if score is None:
         return None
@@ -753,6 +790,9 @@ def application_to_response(
         requirements_fit_score=pre_screen.get("requirements_fit_score"),
         pre_screen_recommendation=pre_screen.get("pre_screen_recommendation"),
         pre_screen_evidence=pre_screen.get("pre_screen_evidence"),
+        pre_screen_run_at=getattr(app, "pre_screen_run_at", None),
+        graph_synced_at=_graph_synced_at_for(app),
+        graph_stale=_graph_stale_for(app),
         auto_reject_state=app.auto_reject_state,
         auto_reject_reason=app.auto_reject_reason,
         auto_reject_triggered_at=app.auto_reject_triggered_at,
