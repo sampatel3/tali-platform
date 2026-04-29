@@ -412,6 +412,75 @@ def graphiti_backfill_all(request: Request):
 
 
 
+@app.post("/admin/cv-score/cancel-all")
+def admin_cancel_all_scoring(request: Request):
+    """Emergency: cancel ALL pending/running cv_score_jobs across every role.
+
+    Sets Redis cancel flags for every role that has active jobs, then bulk-marks
+    all PENDING and RUNNING jobs as error=cancelled_by_recruiter.
+
+    Uses X-Admin-Secret header for auth.
+    """
+    from .platform.config import settings as _settings
+    from .platform.database import SessionLocal
+    from .models.cv_score_job import CvScoreJob, SCORE_JOB_PENDING, SCORE_JOB_RUNNING, SCORE_JOB_ERROR
+    from datetime import datetime, timezone
+
+    admin_secret = getattr(_settings, "ADMIN_SECRET", "") or ""
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not admin_secret or provided != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    db = SessionLocal()
+    try:
+        now = datetime.now(timezone.utc)
+        # Find every role with active jobs
+        active_role_ids = [
+            row[0]
+            for row in db.query(CvScoreJob.role_id)
+            .filter(CvScoreJob.status.in_([SCORE_JOB_PENDING, SCORE_JOB_RUNNING]))
+            .distinct()
+            .all()
+        ]
+
+        # Set Redis cancel flags
+        redis_ok = []
+        redis_fail = []
+        try:
+            import redis as _redis  # type: ignore
+            r = _redis.Redis.from_url(_settings.REDIS_URL)
+            for rid in active_role_ids:
+                try:
+                    r.set(f"batch_score:cancel:{rid}", "1", ex=3600)
+                    redis_ok.append(rid)
+                except Exception:
+                    redis_fail.append(rid)
+        except Exception as exc:
+            redis_fail = active_role_ids
+            pass
+
+        # Bulk-mark all active jobs as cancelled
+        cancelled_count = (
+            db.query(CvScoreJob)
+            .filter(CvScoreJob.status.in_([SCORE_JOB_PENDING, SCORE_JOB_RUNNING]))
+            .update(
+                {"status": SCORE_JOB_ERROR, "error_message": "cancelled_by_recruiter", "finished_at": now},
+                synchronize_session=False,
+            )
+        )
+        db.commit()
+
+        return {
+            "ok": True,
+            "roles_cancelled": active_role_ids,
+            "jobs_cancelled": cancelled_count,
+            "redis_flags_set": redis_ok,
+            "redis_flags_failed": redis_fail,
+        }
+    finally:
+        db.close()
+
+
 @app.post("/admin/graphiti/test-episode")
 def graphiti_test_episode(request: Request):
     """Send one synthetic episode to Graphiti and return success or error detail.
