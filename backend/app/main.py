@@ -370,6 +370,55 @@ def graphiti_health():
     return healthcheck()
 
 
+@app.get("/admin/graphiti/stats")
+def graphiti_stats(request: Request):
+    """Return CV + graph sync counts for operational visibility."""
+    from .platform.config import settings
+    from .platform.database import SessionLocal
+    from .models.candidate import Candidate
+    from .models.graph_sync_state import GraphSyncState
+    from sqlalchemy import func
+
+    admin_secret = getattr(settings, "ADMIN_SECRET", "") or ""
+    provided = request.headers.get("X-Admin-Secret", "")
+    if not admin_secret or provided != admin_secret:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    db = SessionLocal()
+    try:
+        total_candidates = db.query(func.count(Candidate.id)).filter(Candidate.deleted_at.is_(None)).scalar()
+        with_cv = db.query(func.count(Candidate.id)).filter(
+            Candidate.deleted_at.is_(None),
+            Candidate.cv_text.isnot(None),
+            Candidate.cv_text != "",
+        ).scalar()
+        synced_to_graph = db.query(func.count(GraphSyncState.candidate_id)).scalar()
+    finally:
+        db.close()
+
+    from .candidate_graph import client as graph_client
+    neo4j_ok = False
+    neo4j_node_count = None
+    if graph_client.is_configured():
+        try:
+            graphiti = graph_client.get_graphiti()
+            result = graph_client.run_async(
+                graphiti.driver.execute_query("MATCH (n) RETURN count(n) AS c"),
+                timeout=10.0,
+            )
+            # neo4j driver returns EagerResult; records[0]["c"] gives the count
+            neo4j_node_count = result.records[0]["c"] if result and result.records else None
+            neo4j_ok = True
+        except Exception as exc:
+            neo4j_node_count = f"error: {exc}"
+
+    return {
+        "candidates": {"total": total_candidates, "with_cv_text": with_cv},
+        "graph_sync_state": {"synced_candidates": synced_to_graph},
+        "neo4j": {"ok": neo4j_ok, "total_nodes": neo4j_node_count},
+    }
+
+
 @app.post("/admin/graphiti/backfill")
 def graphiti_backfill_all(request: Request):
     """Trigger a full Graphiti backfill for all organisations.
