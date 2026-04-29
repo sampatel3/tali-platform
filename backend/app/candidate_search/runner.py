@@ -247,11 +247,18 @@ def _enrich_graph_scores(
     """
     from sqlalchemy import func
 
-    person_ids = [
-        int(n.id.split(":")[1])
-        for n in subgraph.nodes
-        if n.label == "Person" and n.id.startswith("person:")
-    ]
+    # IDs may be integer-based ("person:12345") or UUID-based ("person:0e83358e-...")
+    # depending on whether taali_id was stored on the Graphiti entity node.
+    # Only int-based IDs can be joined back to Postgres.
+    person_ids = []
+    for n in subgraph.nodes:
+        if n.label == "Person" and n.id.startswith("person:"):
+            raw = n.id.split(":")[1]
+            try:
+                person_ids.append(int(raw))
+            except ValueError:
+                pass
+
     if not person_ids:
         return
 
@@ -272,5 +279,9 @@ def _enrich_graph_scores(
 
     for node in subgraph.nodes:
         if node.label == "Person" and node.id.startswith("person:"):
-            cid = int(node.id.split(":")[1])
-            node.extra["cv_match_score"] = scores_map.get(cid)
+            raw = node.id.split(":")[1]
+            try:
+                cid = int(raw)
+                node.extra["cv_match_score"] = scores_map.get(cid)
+            except ValueError:
+                pass
