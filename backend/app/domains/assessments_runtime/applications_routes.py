@@ -3880,10 +3880,60 @@ def sync_graph_status(
 
 
 _PROCESS_CANCEL_PREFIX = "process_role:cancel:"
+_PROCESS_PROGRESS_PREFIX = "process_role:progress:"
+# 30 minute TTL is plenty for the longest expected cascade. Re-written every
+# time the worker updates progress so it stays alive while running.
+_PROCESS_PROGRESS_TTL_SECONDS = 1800
 
 
 def is_process_cancelled(role_id: int) -> bool:
     return _is_cancelled(_PROCESS_CANCEL_PREFIX, role_id)
+
+
+def _write_process_progress(role_id: int, progress: dict) -> None:
+    """Mirror process progress to Redis so other uvicorn workers see it.
+
+    With workers=2 the worker that runs the daemon thread holds the in-memory
+    dict, but status polls round-robin to both workers. Without Redis the
+    other worker returns ``idle`` and the toaster row flickers in/out.
+    """
+    import json as _json
+    client = _redis_client()
+    if client is None:
+        return
+    try:
+        # Convert datetime to iso so json can encode it.
+        safe = dict(progress)
+        if isinstance(safe.get("started_at"), datetime):
+            safe["started_at"] = safe["started_at"].isoformat()
+        client.set(
+            f"{_PROCESS_PROGRESS_PREFIX}{role_id}",
+            _json.dumps(safe, default=str),
+            ex=_PROCESS_PROGRESS_TTL_SECONDS,
+        )
+    except Exception:
+        pass
+
+
+def _read_process_progress(role_id: int) -> dict | None:
+    import json as _json
+    client = _redis_client()
+    if client is None:
+        return None
+    try:
+        raw = client.get(f"{_PROCESS_PROGRESS_PREFIX}{role_id}")
+        if raw is None:
+            return None
+        return _json.loads(raw)
+    except Exception:
+        return None
+
+
+def _set_process_progress(role_id: int, progress: dict) -> None:
+    """Update both the in-memory dict (fast path on the worker that owns it)
+    and Redis (visible to all workers)."""
+    _set_process_progress(role_id, progress)
+    _write_process_progress(role_id, progress)
 
 
 def _empty_process_progress() -> dict:
@@ -4029,13 +4079,13 @@ def _run_process(
         role = db.query(Role).filter(Role.id == role_id, Role.organization_id == org_id).first()
         if not org or not role:
             progress["status"] = "failed"
-            _process_progress[role_id] = progress
+            _set_process_progress(role_id, progress)
             return
 
         progress["role_name"] = role.name
         progress["status"] = "running"
         progress["current_step"] = None
-        _process_progress[role_id] = progress
+        _set_process_progress(role_id, progress)
 
         # ── Step 1: Fetch CVs ────────────────────────────────────────────
         if fetch_cvs:
@@ -4053,7 +4103,7 @@ def _run_process(
             )
             apps_to_fetch = [a for a in apps_to_fetch if not (a.cv_text or "").strip()]
             progress["fetch"]["total"] = len(apps_to_fetch)
-            _process_progress[role_id] = progress
+            _set_process_progress(role_id, progress)
 
             for idx, app in enumerate(apps_to_fetch):
                 if is_process_cancelled(role_id):
@@ -4063,7 +4113,7 @@ def _run_process(
                         db.commit()
                     except Exception:
                         db.rollback()
-                    _process_progress[role_id] = progress
+                    _set_process_progress(role_id, progress)
                     return
                 try:
                     success = False
@@ -4084,7 +4134,7 @@ def _run_process(
                     logger.exception("Process fetch failed for application_id=%s", app.id)
                     progress["fetch"]["errors"] += 1
                 progress["fetch"]["attempted"] = idx + 1
-                _process_progress[role_id] = progress
+                _set_process_progress(role_id, progress)
                 if (idx + 1) % 3 == 0:
                     try:
                         db.commit()
@@ -4102,7 +4152,7 @@ def _run_process(
                 db, role_id=role_id, organization_id=org_id, refresh=refresh_pre_screen
             )
             progress["pre_screen"]["total"] = len(apps)
-            _process_progress[role_id] = progress
+            _set_process_progress(role_id, progress)
 
             for idx, app in enumerate(apps):
                 if is_process_cancelled(role_id):
@@ -4112,7 +4162,7 @@ def _run_process(
                         db.commit()
                     except Exception:
                         db.rollback()
-                    _process_progress[role_id] = progress
+                    _set_process_progress(role_id, progress)
                     return
                 try:
                     result = execute_pre_screen_only(app)
@@ -4126,7 +4176,7 @@ def _run_process(
                     logger.exception("Process pre-screen failed for application_id=%s", app.id)
                     progress["pre_screen"]["errors"] += 1
                 progress["pre_screen"]["processed"] = idx + 1
-                _process_progress[role_id] = progress
+                _set_process_progress(role_id, progress)
                 if (idx + 1) % 5 == 0:
                     try:
                         db.commit()
@@ -4160,7 +4210,7 @@ def _run_process(
                 apps_query = apps_query.filter(CandidateApplication.cv_match_score.is_(None))
             apps = apps_query.all()
             progress["score"]["total"] = len(apps)
-            _process_progress[role_id] = progress
+            _set_process_progress(role_id, progress)
 
             job_spec_text = ((role.job_spec_text if role else None) or "").strip()
             for idx, app in enumerate(apps):
@@ -4171,7 +4221,7 @@ def _run_process(
                         db.commit()
                     except Exception:
                         db.rollback()
-                    _process_progress[role_id] = progress
+                    _set_process_progress(role_id, progress)
                     return
                 try:
                     cv_text = (app.cv_text or "").strip()
@@ -4179,12 +4229,12 @@ def _run_process(
                         # Can't score without inputs — count as filtered for visibility.
                         progress["score"]["filtered"] += 1
                         progress["score"]["scored"] = idx + 1
-                        _process_progress[role_id] = progress
+                        _set_process_progress(role_id, progress)
                         continue
                     if not include_scored:
                         if app.cv_match_score is not None:
                             progress["score"]["scored"] = idx + 1
-                            _process_progress[role_id] = progress
+                            _set_process_progress(role_id, progress)
                             continue
                         if (
                             (app.pre_screen_recommendation or "") == "Below threshold"
@@ -4193,7 +4243,7 @@ def _run_process(
                         ):
                             progress["score"]["filtered"] += 1
                             progress["score"]["scored"] = idx + 1
-                            _process_progress[role_id] = progress
+                            _set_process_progress(role_id, progress)
                             continue
                     job = enqueue_score(db, app, force=include_scored)
                     if job is not None and job.status == "error":
@@ -4209,7 +4259,7 @@ def _run_process(
                     logger.exception("Process score failed for application_id=%s", app.id)
                     progress["score"]["errors"] += 1
                 progress["score"]["scored"] = idx + 1
-                _process_progress[role_id] = progress
+                _set_process_progress(role_id, progress)
                 if (idx + 1) % 5 == 0:
                     try:
                         db.commit()
@@ -4222,11 +4272,11 @@ def _run_process(
 
         progress["current_step"] = None
         progress["status"] = "completed"
-        _process_progress[role_id] = progress
+        _set_process_progress(role_id, progress)
     except Exception:
         logger.exception("Process cascade failed for role_id=%s", role_id)
         progress["status"] = "failed"
-        _process_progress[role_id] = progress
+        _set_process_progress(role_id, progress)
     finally:
         db.close()
 
@@ -4289,7 +4339,7 @@ def process_role(
         "started_at": datetime.now(timezone.utc).isoformat(),
         "score": {**progress["score"], "mode": score_mode},
     })
-    _process_progress[role_id] = progress
+    _set_process_progress(role_id, progress)
     _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
 
     thread = threading.Thread(
@@ -4313,9 +4363,21 @@ def process_role_status(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Combined cascade progress for the unified Process action."""
-    get_role(role_id, current_user.organization_id, db)
-    progress = _process_progress.get(role_id) or _empty_process_progress()
+    """Combined cascade progress for the unified Process action.
+
+    Reads from Redis when this uvicorn worker doesn't have the in-memory
+    progress dict (the daemon thread runs in only one worker; status polls
+    round-robin to all workers, so we need a shared store).
+    """
+    role = get_role(role_id, current_user.organization_id, db)
+    # In-memory fast path — same worker that owns the daemon thread.
+    progress = _process_progress.get(role_id)
+    if not progress:
+        # Cross-worker / cross-restart fallback.
+        progress = _read_process_progress(role_id) or _empty_process_progress()
+    # Always include role_name so the toaster never falls back to "Role #N".
+    progress = dict(progress)
+    progress.setdefault("role_name", role.name)
     return progress
 
 
@@ -4330,7 +4392,7 @@ def process_role_cancel(
     progress = _process_progress.get(role_id, {})
     if progress.get("status") == "running":
         progress["status"] = "cancelling"
-        _process_progress[role_id] = progress
+        _set_process_progress(role_id, progress)
     return {"ok": True, "role_id": role_id, "status": progress.get("status", "idle")}
 
 
