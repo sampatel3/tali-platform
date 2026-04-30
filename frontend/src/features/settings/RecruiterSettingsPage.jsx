@@ -251,6 +251,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingCosts, setBillingCosts] = useState(null);
   const [billingCredits, setBillingCredits] = useState(null);
+  const [billingBreakdown, setBillingBreakdown] = useState(null);
+  const [billingEvents, setBillingEvents] = useState([]);
   const [billingLoading, setBillingLoading] = useState(false);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [emailTemplatePreview, setEmailTemplatePreview] = useState(DEFAULT_INVITE_TEMPLATE);
@@ -329,14 +331,24 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const loadBilling = useCallback(async () => {
     setBillingLoading(true);
     try {
-      const [usageRes, costsRes, creditsRes] = await Promise.all([billingApi.usage(), billingApi.costs(), billingApi.credits()]);
+      const [usageRes, costsRes, creditsRes, breakdownRes, eventsRes] = await Promise.all([
+        billingApi.usage(),
+        billingApi.costs(),
+        billingApi.credits(),
+        billingApi.usageBreakdown(30),
+        billingApi.usageEvents(50),
+      ]);
       setBillingUsage(usageRes?.data || null);
       setBillingCosts(costsRes?.data || null);
       setBillingCredits(creditsRes?.data || null);
+      setBillingBreakdown(breakdownRes?.data || null);
+      setBillingEvents(eventsRes?.data?.events || []);
     } catch {
       setBillingUsage(null);
       setBillingCosts(null);
       setBillingCredits(null);
+      setBillingBreakdown(null);
+      setBillingEvents([]);
     } finally {
       setBillingLoading(false);
     }
@@ -767,7 +779,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const base = `${window.location.origin}/settings/billing`;
     setCheckoutLoading(true);
     try {
-      const res = await billingApi.createCheckoutSession({
+      const res = await billingApi.topup({
         success_url: `${base}?payment=success`,
         cancel_url: base,
         pack_id: packId,
@@ -1013,17 +1025,26 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     ? new Date(new Date(orgData.workable_last_sync_at).getTime() + Number(workableConfig.sync_interval_minutes || 30) * 60000)
     : null;
   const lastSyncSummary = orgData?.workable_last_sync_summary || {};
+  // Usage-based pricing (post 2026-04-29). Balance is in micro-credits
+  // ($0.000001 per credit). Packs come pre-shaped from the backend.
   const creditsBalance = Number(billingCredits?.credits_balance ?? orgData?.credits_balance ?? 0);
-  const packCatalog = billingCredits?.packs || {
-    starter_5: { label: 'Starter (5 credits)', credits: 5 },
-    growth_10: { label: 'Growth (10 credits)', credits: 10 },
-    scale_20: { label: 'Scale (20 credits)', credits: 20 },
+  const balanceUsd = Number(billingCredits?.credits_balance_usd ?? creditsBalance / 1_000_000);
+  const balanceLow = balanceUsd > 0 && balanceUsd < 1.0;
+  const creditPacks = Array.isArray(billingCredits?.packs) ? billingCredits.packs : [];
+  const featureBreakdown = billingBreakdown?.by_feature || [];
+  const breakdownTotalUsd =
+    featureBreakdown.reduce((sum, row) => sum + Number(row.credits_charged || 0), 0) / 1_000_000;
+  const breakdownTotalEvents = featureBreakdown.reduce(
+    (sum, row) => sum + Number(row.event_count || 0), 0,
+  );
+  const FEATURE_LABELS = {
+    prescreen: 'Pre-screening',
+    score: 'CV scoring',
+    assessment: 'Assessment workspace',
+    other: 'Other',
   };
-  const usageHistory = billingUsage?.usage || [];
-  const monthlyCost = Number(billingUsage?.total_cost || 0);
-  const spendSummary = billingCosts?.summary || {};
-  const thresholdConfig = billingCosts?.thresholds || {};
-  const thresholdStatus = billingCosts?.threshold_status || {};
+  const formatUsd = (n) => `$${Number(n || 0).toFixed(2)}`;
+  const formatUsd6 = (n) => `$${Number(n || 0).toFixed(4)}`;
 
   const navigateToSection = (sectionId) => {
     const next = canonicalSection(sectionId);
@@ -1895,66 +1916,115 @@ Disqualifying: No experience with regulated financial data`}
                     <>
                       <div className="settings-billing-summary">
                         <div className="settings-billing-card">
-                          <div className="settings-summary-label">Current plan</div>
-                          <div className="settings-summary-value">{orgData?.plan || 'Pay per use'}</div>
-                          <div className="settings-summary-note">Total usage {toAedWithUsdLabel(monthlyCost)} across {usageHistory.length} assessments.</div>
-                        </div>
-                        <div className="settings-billing-card">
-                          <div className="settings-summary-label">Credits balance</div>
-                          <div className="settings-summary-value">{creditsBalance}</div>
-                          <div className="settings-summary-note">Add more credits for upcoming hiring bursts.</div>
-                        </div>
-                        <div className="settings-billing-card">
-                          <div className="settings-summary-label">Daily spend threshold</div>
-                          <div className="settings-summary-value">{toAedWithUsdLabel(thresholdConfig.daily_spend_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
+                          <div className="settings-summary-label">Current balance</div>
+                          <div
+                            className="settings-summary-value"
+                            style={balanceLow ? { color: 'var(--taali-danger)' } : undefined}
+                          >
+                            {formatUsd(balanceUsd)}
+                          </div>
                           <div className="settings-summary-note">
-                            Today: {toAedWithUsdLabel(Number(spendSummary.daily_spend_usd || 0), null, { maximumFractionDigits: 2 })} · {thresholdStatus.daily_spend_exceeded ? 'Exceeded' : 'Within threshold'}
+                            {balanceLow
+                              ? 'Balance is running low — top up to keep scoring & assessments running.'
+                              : 'Pay-as-you-go usage pricing · USD'}
+                          </div>
+                        </div>
+                        <div className="settings-billing-card">
+                          <div className="settings-summary-label">Last 30 days</div>
+                          <div className="settings-summary-value">{formatUsd(breakdownTotalUsd)}</div>
+                          <div className="settings-summary-note">
+                            {breakdownTotalEvents} billable Claude {breakdownTotalEvents === 1 ? 'call' : 'calls'}
+                          </div>
+                        </div>
+                        <div className="settings-billing-card">
+                          <div className="settings-summary-label">Plan</div>
+                          <div className="settings-summary-value">Pay-as-you-go</div>
+                          <div className="settings-summary-note">
+                            Pre-screen at cost · Scoring &amp; assessments at 3× Claude tokens
                           </div>
                         </div>
                       </div>
                       <div className="settings-credit-packs">
-                        {Object.entries(packCatalog).map(([packId, pack]) => (
+                        {creditPacks.length === 0 ? (
+                          <div className="settings-summary-note" style={{ padding: '8px 0' }}>
+                            No top-up packs available — contact support.
+                          </div>
+                        ) : creditPacks.map((pack) => (
                           <button
-                            key={packId}
+                            key={pack.pack_id}
                             type="button"
                             className="settings-credit-pack"
-                            onClick={() => handleAddCredits(packId)}
+                            onClick={() => handleAddCredits(pack.pack_id)}
                             disabled={checkoutLoading}
                           >
-                            <span>{pack.label || packId}</span>
+                            <span>
+                              {pack.label}
+                              {pack.bonus_pct ? ` · +${pack.bonus_pct}% bonus` : ''}
+                            </span>
                             <span className="settings-credit-pack-meta">
                               {checkoutLoading ? <Spinner size={14} /> : <CreditCard size={14} />}
-                              +{pack.credits || 0}
+                              ${pack.price_usd}
                             </span>
                           </button>
                         ))}
                       </div>
+
+                      {featureBreakdown.length > 0 ? (
+                        <div className="settings-billing-summary" style={{ marginTop: 16 }}>
+                          {featureBreakdown.map((row) => {
+                            const usd = Number(row.credits_charged || 0) / 1_000_000;
+                            const tokens =
+                              Number(row.input_tokens || 0) + Number(row.output_tokens || 0);
+                            return (
+                              <div key={row.feature} className="settings-billing-card">
+                                <div className="settings-summary-label">
+                                  {FEATURE_LABELS[row.feature] || row.feature}
+                                </div>
+                                <div className="settings-summary-value">{formatUsd(usd)}</div>
+                                <div className="settings-summary-note">
+                                  {row.event_count} calls · {tokens.toLocaleString()} tokens
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      ) : null}
+
                       <div className="settings-usage-table">
                         <div className="settings-usage-head">
-                          <h3>Usage history</h3>
+                          <h3>Recent activity</h3>
                         </div>
                         <table>
                           <thead>
                             <tr>
                               <th>Date</th>
-                              <th>Candidate</th>
-                              <th>Task</th>
+                              <th>Feature</th>
+                              <th>Tokens</th>
                               <th>Cost</th>
                             </tr>
                           </thead>
                           <tbody>
-                            {usageHistory.length === 0 ? (
+                            {billingEvents.length === 0 ? (
                               <tr>
-                                <td colSpan={4} className="empty">No usage yet. Completed assessments will appear here.</td>
+                                <td colSpan={4} className="empty">
+                                  No usage yet. Activity from prescreening, scoring, and assessments will appear here.
+                                </td>
                               </tr>
-                            ) : usageHistory.map((row, index) => (
-                              <tr key={row.assessment_id ?? index}>
-                                <td>{row.date}</td>
-                                <td>{row.candidate}</td>
-                                <td>{row.task}</td>
-                                <td>{toAedWithUsdLabel(row.cost)}</td>
-                              </tr>
-                            ))}
+                            ) : billingEvents.map((row) => {
+                              const date = row.created_at ? new Date(row.created_at).toLocaleString() : '—';
+                              const totalTokens = Number(row.input_tokens || 0) + Number(row.output_tokens || 0);
+                              return (
+                                <tr key={row.id}>
+                                  <td>{date}</td>
+                                  <td>
+                                    {FEATURE_LABELS[row.feature] || row.feature}
+                                    {row.cache_hit ? <span style={{ marginLeft: 6, color: 'var(--taali-muted)', fontSize: '0.75rem' }}>(cache)</span> : null}
+                                  </td>
+                                  <td>{totalTokens.toLocaleString()}</td>
+                                  <td>{formatUsd6(row.credits_charged_usd)}</td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
