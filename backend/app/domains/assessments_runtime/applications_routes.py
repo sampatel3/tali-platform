@@ -4273,16 +4273,29 @@ def _process_dry_run(
 
     # Graph sync step — count candidates of THIS role who'll need a sync.
     # The graph sync runs per-candidate, not per-application, so we
-    # de-dupe by candidate_id.
+    # de-dupe by candidate_id. Cascade-aware: when the fetch step is on,
+    # candidates whose Candidate.cv_text is currently empty but whose
+    # app.source=workable will end up with a CV after fetch and need
+    # their first graph sync — the selector won't return them today
+    # (it filters on Candidate.cv_text != None), so we add them in.
     will_graph_sync = 0
     if sync_graph:
-        # Use the same selector the worker will use, scoped to this role.
-        graph_targets = _select_graph_sync_candidates(
-            db,
-            organization_id=organization_id,
-            refresh=refresh_graph,
-            role_id=role_id,
+        graph_targets: set[int] = set(
+            _select_graph_sync_candidates(
+                db,
+                organization_id=organization_id,
+                refresh=refresh_graph,
+                role_id=role_id,
+            )
         )
+        if fetch_cvs:
+            for a in apps:
+                if (
+                    not has_cv(a)
+                    and (a.source or "") == "workable"
+                    and a.candidate_id is not None
+                ):
+                    graph_targets.add(int(a.candidate_id))
         will_graph_sync = len(graph_targets)
 
     return {
