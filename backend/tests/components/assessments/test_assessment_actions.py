@@ -156,21 +156,26 @@ def test_start_assessment_consumes_credit_once(client, db, monkeypatch):
 
     monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
-    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
 
+    # Usage-based pricing (post-2026-04-29): starting an assessment no
+    # longer deducts a flat credit. Charging happens per Claude call via
+    # ``usage_metering_service.record_event``. Balance stays unchanged
+    # by the start itself; ``credit_consumed_at`` is still stamped to
+    # mark the assessment as billing-active.
     first = client.post(f"/api/v1/assessments/token/{a['token']}/start")
     assert first.status_code == 200, first.text
     db.refresh(org)
-    assert org.credits_balance == 1
+    assert org.credits_balance == 2
 
     second = client.post(f"/api/v1/assessments/token/{a['token']}/start")
     assert second.status_code == 200, second.text
     db.refresh(org)
-    assert org.credits_balance == 1
+    assert org.credits_balance == 2
 
 
-def test_start_assessment_requires_credit_when_lemon_enabled(client, db, monkeypatch):
+def test_start_assessment_blocks_when_org_has_no_credits(client, db, monkeypatch):
+    """Candidate-side start gate: zero balance + meter live → 402."""
     headers = _register_and_login(client)
     task = _create_task(client, headers)
     a = _create_assessment(client, headers, task["id"])
@@ -194,7 +199,7 @@ def test_start_assessment_requires_credit_when_lemon_enabled(client, db, monkeyp
 
     monkeypatch.setattr(assessments_api.settings, "E2B_API_KEY", "test-e2b-key")
     monkeypatch.setattr(assessments_svc.settings, "E2B_API_KEY", "test-e2b-key")
-    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+    monkeypatch.setattr(assessments_svc.settings, "USAGE_METER_LIVE", True)
     monkeypatch.setattr(assessments_svc, "E2BService", FakeE2BService)
 
     resp = client.post(f"/api/v1/assessments/token/{a['token']}/start")
@@ -216,7 +221,7 @@ def test_preview_assessment_reports_credit_block_when_org_has_no_credits(client,
 
     import app.components.assessments.service as assessments_svc
 
-    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+    monkeypatch.setattr(assessments_svc.settings, "USAGE_METER_LIVE", True)
 
     resp = client.get(f"/api/v1/assessments/token/{a['token']}/preview")
     assert resp.status_code == 200, resp.text

@@ -253,9 +253,9 @@ def test_reject_role_assessment_creation_without_available_credits(client, db, m
     org.credits_balance = 0
     db.commit()
 
-    import app.components.assessments.service as assessments_svc
+    import app.services.usage_metering_service as ums
 
-    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+    monkeypatch.setattr(ums.settings, "USAGE_METER_LIVE", True)
 
     resp = client.post(
         f"/api/v1/applications/{app['id']}/assessments",
@@ -350,11 +350,14 @@ def test_role_assessment_retake_voids_previous_attempt(client, db):
     assert old_row.id in history_ids
 
 
-def test_role_assessment_retake_reuses_pending_credit_reservation(client, db, monkeypatch):
-    headers, email = auth_headers(client)
-    task = create_task_via_api(client, headers, name="Retake reserved credit task").json()
-    role = client.post("/api/v1/roles", json={"name": "Retake reserved credit role"}, headers=headers).json()
-    spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Retake reserved credit requirements"), "text/plain")}
+def test_role_assessment_retake_succeeds_with_balance(client, db):
+    """Usage-based pricing: a retake succeeds as long as the org has any
+    balance. The legacy "reserve a credit on creation, reuse on retake"
+    invariant is replaced by per-Claude-call ledger debits."""
+    headers, _ = auth_headers(client)
+    task = create_task_via_api(client, headers, name="Retake task").json()
+    role = client.post("/api/v1/roles", json={"name": "Retake role"}, headers=headers).json()
+    spec_file = {"file": ("job-spec.txt", io.BytesIO(b"Retake requirements"), "text/plain")}
     assert client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=spec_file, headers=headers).status_code == 200
     assert client.post(f"/api/v1/roles/{role['id']}/tasks", json={"task_id": task["id"]}, headers=headers).status_code == 200
     app = client.post(
@@ -363,17 +366,7 @@ def test_role_assessment_retake_reuses_pending_credit_reservation(client, db, mo
         headers=headers,
     ).json()
 
-    user = db.query(User).filter(User.email == email).first()
-    assert user is not None
-    org = db.query(Organization).filter(Organization.id == user.organization_id).first()
-    assert org is not None
-    org.credits_balance = 1
-    db.commit()
-
-    import app.components.assessments.service as assessments_svc
-
-    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
-
+    # Free-tier signup grant is plenty for both attempts in shadow mode.
     first = client.post(
         f"/api/v1/applications/{app['id']}/assessments",
         json={"task_id": task["id"], "duration_minutes": 45},

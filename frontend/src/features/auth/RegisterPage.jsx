@@ -110,7 +110,7 @@ export const RegisterPage = ({ onNavigate }) => {
         <AuthCard
           kicker="CREATE ACCOUNT"
           title={<>Start hiring with <em>evidence</em>.</>}
-          subtitle="90 seconds to set up. No credit card. Your first 5 assessments are free."
+          subtitle="90 seconds to set up. No credit card. $1.50 of free credits — try the full platform."
           widthClassName="max-w-[560px]"
         >
           {error ? (

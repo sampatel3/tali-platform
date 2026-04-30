@@ -79,19 +79,22 @@ class TestBilling:
         r = client.get("/api/v1/billing/usage")
         assert r.status_code == 401
 
-    def test_create_checkout_session(self, client):
+    def test_create_topup_session(self, client):
+        """Stripe top-up replaces the legacy Lemon /checkout-session."""
         h = _auth_headers(client)
-        r = client.post("/api/v1/billing/checkout-session", json={
+        r = client.post("/api/v1/billing/topup", json={
             "success_url": "https://example.com/success",
             "cancel_url": "https://example.com/cancel",
+            "pack_id": "starter_20",
         }, headers=h)
-        # Stripe may not be configured; 503 if disabled
+        # Stripe may not be configured in tests; 503 expected
         assert r.status_code in [200, 400, 500, 503]
 
-    def test_create_checkout_no_auth(self, client):
-        r = client.post("/api/v1/billing/checkout-session", json={
+    def test_create_topup_no_auth(self, client):
+        r = client.post("/api/v1/billing/topup", json={
             "success_url": "https://example.com/success",
             "cancel_url": "https://example.com/cancel",
+            "pack_id": "starter_20",
         })
         assert r.status_code == 401
 

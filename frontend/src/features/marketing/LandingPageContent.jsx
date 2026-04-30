@@ -653,6 +653,107 @@ export const LandingPage = ({ onNavigate }) => {
         </div>
       </section>
 
+      <section id="pricing" className="border-t border-[var(--line)] bg-[var(--bg)]">
+        <div className={`${containerClass} py-20`}>
+          <div className="mb-10 max-w-[640px]">
+            <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--mute)]">
+              Pricing
+            </div>
+            <h2 className="mt-2 font-[var(--font-display)] text-[42px] leading-[1.05] tracking-[-0.02em] text-[var(--ink)]">
+              Pay only for what you use.
+            </h2>
+            <p className="mt-4 text-[16px] leading-7 text-[var(--ink-2)]">
+              Usage-based pricing — like Anthropic, OpenAI, Cursor. New users get $1.50 of free credits to try the full
+              platform. After that, top up whenever you run out. No subscriptions, no monthly minimums.
+            </p>
+          </div>
+
+          <div className="grid gap-5 lg:grid-cols-[1fr_1fr_1fr_1fr]">
+            {/* Free tier card */}
+            <div className="rounded-lg border border-[var(--line)] bg-white p-6">
+              <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
+                Free trial
+              </div>
+              <div className="mt-2 font-[var(--font-display)] text-[36px] leading-none tracking-[-0.02em] text-[var(--ink)]">
+                $1.50
+              </div>
+              <div className="mt-1 text-[13px] text-[var(--mute)]">credits on signup</div>
+              <ul className="mt-5 flex flex-col gap-2 text-[14px] text-[var(--ink-2)]">
+                <li>1 job spec</li>
+                <li>~100 candidates pre-screened</li>
+                <li>~30 candidates fully scored</li>
+                <li>3 assessment workspace runs</li>
+                <li>No card required</li>
+              </ul>
+            </div>
+
+            {/* Pack cards */}
+            {[
+              { label: 'Starter', price: '$20', credits: '$20', bonus: null, blurb: '~1,300 scored candidates' },
+              { label: 'Growth', price: '$100', credits: '$110', bonus: '+10% bonus', blurb: '~7,300 scored candidates' },
+              { label: 'Scale', price: '$500', credits: '$600', bonus: '+20% bonus', blurb: '~40,000 scored candidates' },
+            ].map((pack) => (
+              <div key={pack.label} className="rounded-lg border border-[var(--line)] bg-white p-6">
+                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
+                  {pack.label}
+                </div>
+                <div className="mt-2 font-[var(--font-display)] text-[36px] leading-none tracking-[-0.02em] text-[var(--ink)]">
+                  {pack.price}
+                </div>
+                <div className="mt-1 text-[13px] text-[var(--mute)]">
+                  {pack.credits} of credits{pack.bonus ? ` • ${pack.bonus}` : ''}
+                </div>
+                <div className="mt-4 text-[14px] text-[var(--ink-2)]">{pack.blurb}</div>
+                <div className="mt-5 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
+                  One-time payment • USD
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {/* What you get */}
+          <div className="mt-12 rounded-lg border border-[var(--line)] bg-white p-8">
+            <h3 className="font-[var(--font-display)] text-[24px] tracking-[-0.02em] text-[var(--ink)]">
+              What you get on every plan
+            </h3>
+            <div className="mt-6 grid gap-6 md:grid-cols-2 lg:grid-cols-4">
+              {[
+                {
+                  title: 'Candidate ingestion',
+                  body: 'Pull from Workable or upload CVs directly. Parsed, deduped, and queued automatically.',
+                },
+                {
+                  title: 'AI pre-screening',
+                  body: 'Cheap Claude pass that filters obvious mismatches before you spend on full scoring. Priced at cost.',
+                },
+                {
+                  title: 'CV scoring',
+                  body: 'Evidence-grounded scores with per-requirement breakdown. Cached so re-runs are free.',
+                },
+                {
+                  title: 'Assessment workspace',
+                  body: 'Live Claude-Code coding sandbox per candidate, with prompt-quality scoring and fraud signals.',
+                },
+              ].map((feature) => (
+                <div key={feature.title}>
+                  <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--purple)]">
+                    {feature.title}
+                  </div>
+                  <p className="mt-2 text-[14px] leading-6 text-[var(--ink-2)]">{feature.body}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Pricing math note */}
+          <div className="mt-8 max-w-[760px] font-[var(--font-mono)] text-[11px] leading-6 text-[var(--mute)]">
+            Pricing math: pre-screening is billed at Anthropic's raw token cost (no markup). CV scoring and
+            assessment workspace runs are billed at 3× token cost — covers infra, support, and ongoing R&amp;D.
+            Every Claude call is itemized in your settings &gt; billing tab.
+          </div>
+        </div>
+      </section>
+
       <footer className="border-t border-[var(--line)] bg-[var(--ink)] text-[var(--bg)]">
         <div className={`${containerClass} py-14`}>
           <div className="grid gap-10 lg:grid-cols-[1.1fr_.9fr_.9fr_.9fr]">

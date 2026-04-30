@@ -420,3 +420,9 @@ class CVMatchOutput(BaseModel):
     calibrated_p_advance: float | None = None
     # Self-consistency uncertainty band on borderline cases (None otherwise).
     score_std: float | None = None
+
+    # Token usage (populated by the runner, used by usage_metering_service).
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0

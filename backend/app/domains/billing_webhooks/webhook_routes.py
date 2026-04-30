@@ -10,7 +10,6 @@ import stripe
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from ...components.integrations.lemon.service import LemonService
 from ...models.application_interview import ApplicationInterview
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
@@ -27,11 +26,7 @@ from ...services.fireflies_service import (
     verify_fireflies_webhook_signature,
 )
 from ...services.interview_support_service import refresh_application_interview_support
-from ...services.credit_ledger_service import (
-    append_credit_ledger_entry,
-    resolve_pack,
-    resolve_pack_by_variant,
-)
+from ...services.credit_ledger_service import append_credit_ledger_entry
 
 router = APIRouter(prefix="/webhooks", tags=["Webhooks"])
 
@@ -249,104 +244,6 @@ async def fireflies_webhook(request: Request, db: Session = Depends(get_db)):
     }
 
 
-@router.post("/lemon")
-async def lemon_webhook(request: Request, db: Session = Depends(get_db)):
-    """Handle incoming Lemon Squeezy webhooks and credit org balances."""
-    if settings.MVP_DISABLE_LEMON:
-        raise HTTPException(status_code=503, detail="Lemon integration is disabled for MVP")
-    if not settings.LEMON_WEBHOOK_SECRET:
-        raise HTTPException(status_code=503, detail="Lemon webhook secret is not configured")
-
-    payload_raw = await request.body()
-    signature = request.headers.get("X-Signature", "")
-    if not LemonService.verify_signature(payload=payload_raw, signature=signature, secret=settings.LEMON_WEBHOOK_SECRET):
-        raise HTTPException(status_code=401, detail="Invalid webhook signature")
-
-    payload = await request.json()
-    event_name = _nested_get(payload, "meta", "event_name") or payload.get("event_name")
-    data = payload.get("data") or {}
-    attributes = data.get("attributes") or {}
-
-    # Process payment-complete style events only.
-    status = str(attributes.get("status") or "").lower()
-    if event_name not in {"order_created", "order_paid"} and status not in {"paid"}:
-        return {"status": "ignored", "event_name": event_name}
-
-    custom = (
-        attributes.get("custom_data")
-        or _nested_get(attributes, "checkout_data", "custom")
-        or _nested_get(payload, "meta", "custom_data")
-        or {}
-    )
-    org_id_raw = custom.get("org_id")
-    if not org_id_raw:
-        # Fallback: infer from first order item custom payloads if present.
-        first_item = _nested_get(attributes, "first_order_item") or {}
-        org_id_raw = (
-            _nested_get(first_item, "custom_data", "org_id")
-            or _nested_get(first_item, "checkout_data", "custom", "org_id")
-        )
-    if not org_id_raw:
-        raise HTTPException(status_code=400, detail="org_id missing in webhook payload")
-
-    try:
-        org_id = int(org_id_raw)
-    except Exception as exc:
-        raise HTTPException(status_code=400, detail="Invalid org_id in webhook payload") from exc
-
-    org = db.query(Organization).filter(Organization.id == org_id).first()
-    if not org:
-        raise HTTPException(status_code=404, detail="Organization not found")
-
-    pack_id = custom.get("pack_id")
-    credits_raw = custom.get("credits")
-    credits: int | None = None
-    if credits_raw is not None:
-        try:
-            credits = int(credits_raw)
-        except Exception:
-            credits = None
-    if credits is None and pack_id:
-        pack = resolve_pack(str(pack_id))
-        if pack:
-            credits = int(pack["credits"])
-    if credits is None:
-        variant_id = (
-            _nested_get(attributes, "first_order_item", "variant_id")
-            or _nested_get(data, "relationships", "variant", "data", "id")
-        )
-        if variant_id:
-            resolved = resolve_pack_by_variant(str(variant_id))
-            if resolved:
-                pack_id, pack = resolved
-                credits = int(pack["credits"])
-    if not credits or credits <= 0:
-        raise HTTPException(status_code=400, detail="Unable to resolve credits for webhook event")
-
-    order_ref = str(data.get("id") or _nested_get(payload, "meta", "event_id") or "")
-    if not order_ref:
-        order_ref = str(_nested_get(attributes, "identifier") or "")
-    if not order_ref:
-        raise HTTPException(status_code=400, detail="Unable to resolve webhook order reference")
-    external_ref = f"lemon:order:{order_ref}"
-
-    _, created = append_credit_ledger_entry(
-        db,
-        organization=org,
-        delta=credits,
-        reason="lemon_purchase",
-        external_ref=external_ref,
-        metadata={
-            "event_name": event_name,
-            "pack_id": pack_id,
-            "credits": credits,
-        },
-    )
-    if created:
-        db.commit()
-    return {"status": "received", "credited": bool(created), "credits": credits}
-
-
 @router.post("/stripe")
 async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     """Handle incoming Stripe webhooks."""
@@ -367,12 +264,42 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     event_type = event["type"]
     data = event.get("data", {}).get("object", {})
 
-    if event_type == "payment_intent.succeeded":
-        org_id = (data.get("metadata") or {}).get("org_id")
-        if org_id:
-            org = db.query(Organization).filter(Organization.id == int(org_id)).first()
-            if org:
-                org.assessments_used = max((org.assessments_used or 0) - 1, 0)
+    if event_type == "checkout.session.completed":
+        # Top-up checkout completed. Grant credits idempotently using the
+        # session id as the external ref. Metadata was stamped on the session
+        # by ``topup_service.create_topup_checkout_session``.
+        from ...services.usage_metering_service import grant_credits as _grant_credits
+        from ...models.usage_grant import GRANT_TOPUP
+
+        metadata = data.get("metadata") or {}
+        org_id_raw = metadata.get("org_id")
+        pack_id = metadata.get("pack_id")
+        credits_raw = metadata.get("credits")
+        session_id = data.get("id")
+        payment_status = data.get("payment_status")
+
+        if (
+            org_id_raw
+            and pack_id
+            and credits_raw
+            and session_id
+            and payment_status == "paid"
+        ):
+            try:
+                org_id_int = int(org_id_raw)
+                credits_int = int(credits_raw)
+            except Exception:
+                org_id_int = None
+                credits_int = 0
+            if org_id_int and credits_int > 0:
+                _grant_credits(
+                    db,
+                    organization_id=org_id_int,
+                    grant_type=GRANT_TOPUP,
+                    credits=credits_int,
+                    external_ref=f"stripe:checkout:{session_id}",
+                    metadata={"pack_id": pack_id, "session_id": session_id},
+                )
                 db.commit()
     elif event_type == "customer.subscription.deleted":
         customer_id = data.get("customer")

@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, JSON, Text
+from sqlalchemy import BigInteger, Column, Integer, String, Boolean, DateTime, JSON, Text
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from ..platform.database import Base
@@ -28,9 +28,18 @@ class Organization(Base):
     fireflies_single_account_mode = Column(Boolean, default=True, nullable=False)
     stripe_customer_id = Column(String)
     stripe_subscription_id = Column(String)
-    billing_provider = Column(String, default="lemon")
+    billing_provider = Column(String, default="stripe")
     billing_config = Column(JSON, nullable=True)
-    credits_balance = Column(Integer, default=0)
+    # Balance in micro-credits (1 credit = $0.000001 USD). Was Integer (whole
+    # credits, 25 AED each) under the legacy Lemon-Squeezy model; switched to
+    # BigInteger usage-based on 2026-04-29.
+    credits_balance = Column(BigInteger, default=0)
+    # Anthropic Workspace key (Admin-API-provisioned, Taali-owned). All Claude
+    # calls for this org route through this key; Anthropic dashboard reports
+    # cost per workspace. Provisioned lazily on first billed action.
+    anthropic_workspace_id = Column(String, nullable=True)
+    anthropic_workspace_key_encrypted = Column(Text, nullable=True)
+    anthropic_workspace_provisioning_failed_at = Column(DateTime(timezone=True), nullable=True)
     default_assessment_duration_minutes = Column(Integer, default=30, nullable=False)
     invite_email_template = Column(Text, nullable=True)
     # Org-wide default for the per-role additional_requirements field used by
@@ -42,8 +51,6 @@ class Organization(Base):
     ai_tooling_config = Column(JSON, nullable=True)
     notification_preferences = Column(JSON, nullable=True)
     plan = Column(String, default="pay_per_use")
-    assessments_used = Column(Integer, default=0)
-    assessments_limit = Column(Integer, default=None)
     # Enterprise access controls
     allowed_email_domains = Column(JSON, nullable=True)  # ["company.com", "subsidiary.org"]
     sso_enforced = Column(Boolean, default=False)

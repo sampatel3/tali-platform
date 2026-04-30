@@ -181,6 +181,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [billingUsage, setBillingUsage] = useState(null);
   const [billingCosts, setBillingCosts] = useState(null);
   const [billingCredits, setBillingCredits] = useState(null);
+  const [billingBreakdown, setBillingBreakdown] = useState(null);
+  const [billingEvents, setBillingEvents] = useState([]);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [workableSaving, setWorkableSaving] = useState(false);
   const [workableSyncLoading, setWorkableSyncLoading] = useState(false);
@@ -278,11 +280,19 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     let cancelled = false;
     const fetchUsage = async () => {
       try {
-        const [usageRes, costsRes, creditsRes] = await Promise.all([billingApi.usage(), billingApi.costs(), billingApi.credits()]);
+        const [usageRes, costsRes, creditsRes, breakdownRes, eventsRes] = await Promise.all([
+          billingApi.usage(),
+          billingApi.costs(),
+          billingApi.credits(),
+          billingApi.usageBreakdown(30),
+          billingApi.usageEvents(50),
+        ]);
         if (!cancelled) {
           setBillingUsage(usageRes.data);
           setBillingCosts(costsRes.data);
           setBillingCredits(creditsRes.data);
+          setBillingBreakdown(breakdownRes.data);
+          setBillingEvents(eventsRes.data?.events || []);
         }
       } catch (err) {
         console.warn('Failed to fetch billing usage:', err.message);
@@ -381,7 +391,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const base = `${window.location.origin}/settings`;
     setCheckoutLoading(true);
     try {
-      const res = await billingApi.createCheckoutSession({
+      const res = await billingApi.topup({
         success_url: `${base}?payment=success`,
         cancel_url: base,
         pack_id: packId,
@@ -1524,90 +1534,143 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     </div>
   );
 
+  const balanceUsd = Number(billingCredits?.credits_balance_usd ?? 0);
+  const balanceLow = balanceUsd > 0 && balanceUsd < 1.0;
+  const featureBreakdown = billingBreakdown?.by_feature || [];
+  const FEATURE_LABELS = {
+    prescreen: 'Pre-screening',
+    score: 'CV scoring',
+    assessment: 'Assessment workspace',
+    other: 'Other',
+  };
+  const formatUsd = (n) => `$${Number(n || 0).toFixed(2)}`;
+  const formatUsd6 = (n) => `$${Number(n || 0).toFixed(6).replace(/0+$/, '0').replace(/\.$/, '.0')}`;
+
   const BillingSettingsTab = () => (
     <div>
       <Panel className="mb-5 p-4">
         <div className="flex items-start justify-between flex-wrap gap-4">
           <div>
-            <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Current Plan</div>
-            <div className="text-xl font-bold text-[var(--taali-text)]">{billingPlan}</div>
+            <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Current balance</div>
+            <div className={`text-3xl font-bold ${balanceLow ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-purple)]'}`}>
+              {formatUsd(balanceUsd)}
+            </div>
+            <div className="font-mono text-xs text-[var(--taali-muted)] mt-1">
+              Pay-as-you-go usage pricing • USD
+            </div>
+            {balanceLow ? (
+              <div className="mt-2 text-xs text-[var(--taali-danger)]">
+                Balance is running low. Top up to keep scoring &amp; assessments running.
+              </div>
+            ) : null}
           </div>
           <div className="text-right">
-            <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Total usage</div>
-            <div className="text-2xl font-bold text-[var(--taali-purple)]">{toAedWithUsdLabel(monthlyCost)}</div>
-            <div className="font-mono text-xs text-[var(--taali-muted)]">{monthlyAssessments} assessments</div>
-          </div>
-          <div className="text-right">
-            <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Credits balance</div>
-            <div className="text-2xl font-bold text-[var(--taali-purple)]">{creditsBalance}</div>
+            <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Last 30 days</div>
+            <div className="text-2xl font-bold text-[var(--taali-text)]">
+              {formatUsd(
+                featureBreakdown.reduce((s, r) => s + Number(r.credits_charged || 0), 0) / 1_000_000,
+              )}
+            </div>
+            <div className="font-mono text-xs text-[var(--taali-muted)]">
+              {featureBreakdown.reduce((s, r) => s + Number(r.event_count || 0), 0)} billable events
+            </div>
           </div>
         </div>
-        <div className="mt-4 grid gap-3 md:grid-cols-3">
-          {Object.entries(packCatalog).map(([packId, pack]) => (
-            <Button
-              key={packId}
-              type="button"
-              variant="secondary"
-              className="flex items-center justify-between gap-2 !px-4 !py-3 bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
-              onClick={() => handleAddCredits(packId)}
-              disabled={checkoutLoading}
-            >
-              <span>{pack.label || packId}</span>
-              <span className="inline-flex items-center gap-1">
-                {checkoutLoading ? <Spinner size={14} /> : <CreditCard size={14} />}
-                +{pack.credits || 0}
-              </span>
-            </Button>
-          ))}
+        <div className="mt-5 border-t border-[var(--taali-border-soft)] pt-4">
+          <div className="font-mono text-xs text-[var(--taali-muted)] mb-2">Top up credits</div>
+          <div className="grid gap-3 md:grid-cols-3">
+            {(billingCredits?.packs || []).map((pack) => (
+              <Button
+                key={pack.pack_id}
+                type="button"
+                variant="secondary"
+                className="flex flex-col items-start gap-1 !px-4 !py-3 bg-[var(--taali-inverse-bg)] text-[var(--taali-inverse-text)] hover:opacity-90"
+                onClick={() => handleAddCredits(pack.pack_id)}
+                disabled={checkoutLoading}
+              >
+                <span className="flex w-full items-center justify-between">
+                  <span className="font-bold">{pack.label}</span>
+                  <span className="font-mono text-sm">${pack.price_usd}</span>
+                </span>
+                <span className="font-mono text-xs opacity-80">
+                  {checkoutLoading ? <Spinner size={12} /> : <CreditCard size={12} />}
+                  &nbsp;${pack.credits_granted_usd?.toFixed?.(0) ?? Math.round((pack.credits_granted || 0) / 1_000_000)} of credits
+                  {pack.bonus_pct ? ` (+${pack.bonus_pct}% bonus)` : ''}
+                </span>
+              </Button>
+            ))}
+          </div>
         </div>
       </Panel>
 
-      <div className="mb-5 grid gap-4 md:grid-cols-2">
-        <Panel className="p-4">
-          <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Daily spend threshold</div>
-          <div className="text-xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.daily_spend_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
-          <div className={`font-mono text-xs mt-2 ${thresholdStatus.daily_spend_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
-            Today: {toAedWithUsdLabel(Number(spendSummary.daily_spend_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.daily_spend_exceeded ? 'Exceeded' : 'Within threshold'}
+      <Panel className="mb-5 p-4">
+        <h3 className="mb-3 text-base font-bold text-[var(--taali-text)]">Usage by feature (last 30 days)</h3>
+        {featureBreakdown.length === 0 ? (
+          <div className="font-mono text-sm text-[var(--taali-muted)]">
+            No usage yet. Score a candidate or run an assessment to see activity here.
           </div>
-        </Panel>
-        <Panel className="p-4">
-          <div className="font-mono text-xs text-[var(--taali-muted)] mb-1">Cost / completed assessment threshold</div>
-          <div className="text-xl font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(thresholdConfig.cost_per_completed_assessment_usd ?? 0, null, { maximumFractionDigits: 2 })}</div>
-          <div className={`font-mono text-xs mt-2 ${thresholdStatus.cost_per_completed_assessment_exceeded ? 'text-[var(--taali-danger)]' : 'text-[var(--taali-success)]'}`}>
-            Current: {toAedWithUsdLabel(Number(spendSummary.cost_per_completed_assessment_usd || 0), null, { maximumFractionDigits: 2 })} • {thresholdStatus.cost_per_completed_assessment_exceeded ? 'Exceeded' : 'Within threshold'}
+        ) : (
+          <div className="grid gap-3 md:grid-cols-3">
+            {featureBreakdown.map((row) => {
+              const usd = Number(row.credits_charged || 0) / 1_000_000;
+              const tokens = Number(row.input_tokens || 0) + Number(row.output_tokens || 0);
+              return (
+                <div key={row.feature} className="rounded border border-[var(--taali-border-soft)] p-3">
+                  <div className="font-mono text-xs text-[var(--taali-muted)]">
+                    {FEATURE_LABELS[row.feature] || row.feature}
+                  </div>
+                  <div className="mt-1 text-lg font-bold text-[var(--taali-text)]">
+                    {formatUsd(usd)}
+                  </div>
+                  <div className="font-mono text-xs text-[var(--taali-muted)] mt-1">
+                    {row.event_count} calls • {tokens.toLocaleString()} tokens
+                  </div>
+                </div>
+              );
+            })}
           </div>
-        </Panel>
-      </div>
+        )}
+      </Panel>
 
       <TableShell>
         <div className="flex items-center justify-between gap-3 border-b border-[var(--taali-border-soft)] px-4 py-3">
-          <h3 className="font-bold text-[var(--taali-text)]">Usage History</h3>
+          <h3 className="font-bold text-[var(--taali-text)]">Recent activity</h3>
+          <span className="font-mono text-xs text-[var(--taali-muted)]">
+            Most recent {billingEvents.length} events
+          </span>
         </div>
         <table className="w-full">
           <thead>
             <tr>
               <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Date</th>
-              <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Candidate</th>
-              <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Task</th>
+              <th className="px-4 py-2.5 text-left font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Feature</th>
+              <th className="px-4 py-2.5 text-right font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Tokens</th>
               <th className="px-4 py-2.5 text-right font-mono text-[11px] font-bold uppercase text-[var(--taali-text)]">Cost</th>
             </tr>
           </thead>
           <tbody>
-            {usageHistory.length === 0 ? (
+            {billingEvents.length === 0 ? (
               <tr>
                 <td colSpan={4} className="px-6 py-8 font-mono text-sm text-[var(--taali-muted)] text-center">
-                  No usage yet. Completed assessments will appear here.
+                  No usage yet. Activity from prescreening, scoring, and assessments will appear here.
                 </td>
               </tr>
             ) : (
-              usageHistory.map((row, i) => (
-                <tr key={row.assessment_id ?? i} className="border-b border-[var(--taali-border-muted)] hover:bg-[var(--taali-bg)]">
-                  <td className="px-4 py-2.5 font-mono text-sm text-[var(--taali-text)]">{row.date}</td>
-                  <td className="px-4 py-2.5 text-sm text-[var(--taali-text)]">{row.candidate}</td>
-                  <td className="px-4 py-2.5 font-mono text-sm text-[var(--taali-text)]">{row.task}</td>
-                  <td className="px-4 py-2.5 text-right font-mono text-sm font-bold text-[var(--taali-text)]">{toAedWithUsdLabel(row.cost)}</td>
-                </tr>
-              ))
+              billingEvents.map((row) => {
+                const date = row.created_at ? new Date(row.created_at).toLocaleString() : '—';
+                const totalTokens = Number(row.input_tokens || 0) + Number(row.output_tokens || 0);
+                return (
+                  <tr key={row.id} className="border-b border-[var(--taali-border-muted)] hover:bg-[var(--taali-bg)]">
+                    <td className="px-4 py-2.5 font-mono text-xs text-[var(--taali-text)]">{date}</td>
+                    <td className="px-4 py-2.5 text-sm text-[var(--taali-text)]">
+                      {FEATURE_LABELS[row.feature] || row.feature}
+                      {row.cache_hit ? <span className="ml-2 font-mono text-xs text-[var(--taali-muted)]">(cache)</span> : null}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-mono text-sm text-[var(--taali-text)]">{totalTokens.toLocaleString()}</td>
+                    <td className="px-4 py-2.5 text-right font-mono text-sm font-bold text-[var(--taali-text)]">{formatUsd6(row.credits_charged_usd)}</td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

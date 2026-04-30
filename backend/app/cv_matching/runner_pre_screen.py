@@ -42,6 +42,11 @@ class PreScreenResult:
     trace_id: str
     cache_hit: bool
     score: float | None = None  # 0-100 numeric pre-screen score (v2.0+)
+    # Token usage (populated by the runner, used by usage_metering_service).
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
 
 def compute_pre_screen_cache_key(
@@ -250,6 +255,16 @@ def run_pre_screen(
     except (AttributeError, IndexError):
         raw = ""
 
+    usage = getattr(response, "usage", None)
+    in_tok = int(getattr(usage, "input_tokens", 0) or 0) if usage else 0
+    out_tok = int(getattr(usage, "output_tokens", 0) or 0) if usage else 0
+    cache_read_tok = (
+        int(getattr(usage, "cache_read_input_tokens", 0) or 0) if usage else 0
+    )
+    cache_creation_tok = (
+        int(getattr(usage, "cache_creation_input_tokens", 0) or 0) if usage else 0
+    )
+
     text = _strip_json_fences(raw)
     decision: PreScreenDecision = "error"
     reason = ""
@@ -288,6 +303,10 @@ def run_pre_screen(
         trace_id=trace_id,
         cache_hit=False,
         score=parsed_score,
+        input_tokens=in_tok,
+        output_tokens=out_tok,
+        cache_read_tokens=cache_read_tok,
+        cache_creation_tokens=cache_creation_tok,
     )
     if not skip_cache and decision != "error":
         _cache_set(cache_key, result, score=parsed_score)

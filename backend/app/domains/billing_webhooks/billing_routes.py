@@ -1,4 +1,4 @@
-"""Billing: usage history, cost observability, and Lemon credit checkout."""
+"""Billing: usage history, cost observability, and Stripe credit top-ups."""
 from datetime import datetime, timedelta, timezone
 import json
 
@@ -6,7 +6,10 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session, joinedload
 from pydantic import BaseModel
 
-from ...components.integrations.lemon.service import LemonService
+from ...components.integrations.stripe.topup_service import (
+    StripeTopupError,
+    create_topup_checkout_session,
+)
 from ...platform.database import get_db
 from ...deps import get_current_user
 from ...platform.config import settings
@@ -16,7 +19,14 @@ from ...models.organization import Organization
 from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
-from ...services.credit_ledger_service import lemon_pack_catalog, resolve_pack
+from ...models.usage_event import UsageEvent
+from ...services.pricing_service import (
+    CREDIT_PACKS,
+    CREDITS_PER_USD,
+    FREE_TIER,
+    resolve_pack as _resolve_pack,
+)
+from ...services.usage_metering_service import usage_summary as _usage_summary
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
 
@@ -25,6 +35,12 @@ class CheckoutSessionCreate(BaseModel):
     success_url: str
     cancel_url: str
     pack_id: str = "starter_5"
+
+
+class TopupCreate(BaseModel):
+    success_url: str
+    cancel_url: str
+    pack_id: str
 
 
 def _safe_json_size_bytes(payload) -> int:
@@ -321,6 +337,18 @@ def get_costs(
     }
 
 
+def _serialize_pack(pack) -> dict:
+    return {
+        "pack_id": pack.pack_id,
+        "label": pack.label,
+        "price_usd": pack.price_usd,
+        "price_usd_cents": pack.price_usd_cents,
+        "credits_granted": pack.credits_granted,
+        "credits_granted_usd": round(pack.credits_granted / CREDITS_PER_USD, 2),
+        "bonus_pct": pack.bonus_pct,
+    }
+
+
 @router.get("/credits")
 def get_credits(
     db: Session = Depends(get_db),
@@ -336,51 +364,107 @@ def get_credits(
         .limit(50)
         .all()
     )
+    balance = int(org.credits_balance or 0)
     return {
-        "billing_provider": org.billing_provider or "lemon",
-        "credits_balance": int(org.credits_balance or 0),
-        "packs": lemon_pack_catalog(),
+        "billing_provider": "stripe",
+        "credits_balance": balance,
+        "credits_balance_usd": round(balance / CREDITS_PER_USD, 2),
+        "free_tier_credits": FREE_TIER.credits,
+        "packs": [_serialize_pack(p) for p in CREDIT_PACKS],
         "entries": [_serialize_ledger_entry(entry) for entry in entries],
     }
 
 
-@router.post("/checkout-session")
-def create_checkout_session(
-    body: CheckoutSessionCreate,
+@router.get("/usage-breakdown")
+def get_usage_breakdown(
+    period_days: int = 30,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Create a Lemon checkout session URL for a selected credit pack."""
-    if settings.MVP_DISABLE_LEMON:
-        raise HTTPException(status_code=503, detail="Billing is disabled for MVP pilot")
-    if not settings.LEMON_API_KEY or not settings.LEMON_STORE_ID:
-        raise HTTPException(status_code=503, detail="Lemon billing is not configured")
+    """Per-feature usage summary for the settings billing tab. Returns
+    counts/tokens/credits grouped by feature for the trailing
+    ``period_days`` window."""
+    org_id = current_user.organization_id
+    if not org_id:
+        return {"balance_credits": 0, "by_feature": [], "period_days": period_days}
+    since = datetime.now(timezone.utc) - timedelta(days=max(1, int(period_days)))
+    summary = _usage_summary(db, organization_id=int(org_id), since=since)
+    summary["period_days"] = period_days
+    summary["balance_credits_usd"] = round(
+        summary.get("balance_credits", 0) / CREDITS_PER_USD, 2
+    )
+    return summary
+
+
+@router.get("/usage-events")
+def get_usage_events(
+    limit: int = 50,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Paginated usage event log for the settings billing tab consumption
+    table. Newest first."""
+    org_id = current_user.organization_id
+    if not org_id:
+        return {"events": []}
+    rows = (
+        db.query(UsageEvent)
+        .filter(UsageEvent.organization_id == org_id)
+        .order_by(UsageEvent.created_at.desc(), UsageEvent.id.desc())
+        .limit(min(int(limit or 50), 200))
+        .all()
+    )
+    return {
+        "events": [
+            {
+                "id": e.id,
+                "feature": e.feature,
+                "model": e.model,
+                "entity_id": e.entity_id,
+                "input_tokens": e.input_tokens,
+                "output_tokens": e.output_tokens,
+                "cost_usd": round(int(e.cost_usd_micro or 0) / 1_000_000, 6),
+                "credits_charged": int(e.credits_charged or 0),
+                "credits_charged_usd": round(
+                    int(e.credits_charged or 0) / CREDITS_PER_USD, 6
+                ),
+                "cache_hit": bool(e.cache_hit),
+                "created_at": e.created_at.isoformat() if e.created_at else None,
+            }
+            for e in rows
+        ],
+    }
+
+
+@router.post("/topup")
+def create_topup(
+    body: TopupCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Create a Stripe Checkout session for a credit-pack top-up. Returns
+    the URL the frontend should redirect to. Replaces the legacy Lemon
+    checkout flow."""
+    if not settings.STRIPE_API_KEY:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
     org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
     if not org:
         raise HTTPException(status_code=404, detail="Organization not found")
-    pack = resolve_pack(body.pack_id)
-    if not pack:
+    if _resolve_pack(body.pack_id) is None:
         raise HTTPException(status_code=400, detail="Invalid pack_id")
-
     try:
-        lemon = LemonService(api_key=settings.LEMON_API_KEY, store_id=settings.LEMON_STORE_ID)
-        checkout_url = lemon.create_checkout(
-            variant_id=str(pack["variant_id"]),
+        url = create_topup_checkout_session(
+            org_id=int(org.id),
+            customer_email=current_user.email,
+            pack_id=body.pack_id,
             success_url=body.success_url,
             cancel_url=body.cancel_url,
-            email=current_user.email,
-            test_mode=bool(settings.LEMON_TEST_MODE),
-            custom={
-                "org_id": str(org.id),
-                "pack_id": body.pack_id,
-                "credits": int(pack["credits"]),
-                "source": "taali",
-            },
         )
-        org.billing_provider = "lemon"
-        db.commit()
-        return {"url": checkout_url}
-    except Exception:
+    except StripeTopupError as exc:
         import logging as _logging
-        _logging.getLogger("taali.billing").exception("Lemon checkout session error")
-        raise HTTPException(status_code=502, detail="Payment service error. Please try again.")
+        _logging.getLogger("taali.billing").exception("Stripe topup error: %s", exc)
+        raise HTTPException(status_code=502, detail="Payment service error. Please try again.") from exc
+
+    org.billing_provider = "stripe"
+    db.commit()
+    return {"url": url}

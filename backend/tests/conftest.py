@@ -14,7 +14,6 @@ warnings.filterwarnings(
 os.environ["DATABASE_URL"] = "sqlite:///file:taalitest?mode=memory&cache=shared"
 # Keep external integrations disabled by default for unit/API tests. Individual
 # tests can opt-in by monkeypatching settings.
-os.environ["MVP_DISABLE_LEMON"] = "true"
 os.environ["MVP_DISABLE_WORKABLE"] = "true"
 os.environ["MVP_DISABLE_STRIPE"] = "true"
 os.environ["MVP_DISABLE_CELERY"] = "true"

@@ -32,8 +32,9 @@ class TestOrganizationModel:
         assert org.slug == "acme-corp"
         assert org.workable_connected is False
         assert org.plan == "pay_per_use"
-        assert org.assessments_used == 0
-        assert org.assessments_limit is None
+        # assessments_used / assessments_limit dropped 2026-04-29 with the
+        # move to usage-based pricing — replaced by usage_events rollups.
+        assert org.credits_balance == 0
 
     def test_organization_slug_unique(self, db):
         org1 = Organization(name="Org One", slug="unique-slug")
