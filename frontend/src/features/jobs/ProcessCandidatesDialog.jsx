@@ -35,6 +35,8 @@ export function ProcessCandidatesDialog({
     pre_screen: true,
     refresh_pre_screen: false,
     score: 'new',
+    sync_graph: false,
+    refresh_graph: false,
     ...(defaults || {}),
   }));
   const [counts, setCounts] = useState(null);
@@ -51,6 +53,8 @@ export function ProcessCandidatesDialog({
       pre_screen: true,
       refresh_pre_screen: false,
       score: 'new',
+      sync_graph: false,
+      refresh_graph: false,
       ...(defaults || {}),
     });
     setSubmitting(false);
@@ -71,6 +75,8 @@ export function ProcessCandidatesDialog({
           pre_screen: !!opts.pre_screen,
           refresh_pre_screen: !!opts.refresh_pre_screen,
           score: opts.score || 'none',
+          sync_graph: !!opts.sync_graph,
+          refresh_graph: !!opts.refresh_graph,
         };
         const res = await rolesApi.processRole(roleId, body, { dry_run: true });
         setCounts(res?.data ?? null);
@@ -97,17 +103,20 @@ export function ProcessCandidatesDialog({
   const fetchUnavailable = Number(counts?.fetch_cvs?.no_cv_no_workable ?? 0);
   const preScreenCount = Number(counts?.pre_screen?.will_run ?? 0);
   const scoreCount = Number(counts?.score?.will_run ?? 0);
+  const graphSyncCount = Number(counts?.graph_sync?.will_run ?? 0);
 
   const willDoSomething = (
     (opts.fetch_cvs && fetchCount > 0)
     || ((opts.pre_screen || opts.refresh_pre_screen) && preScreenCount > 0)
     || (opts.score !== 'none' && scoreCount > 0)
+    || (opts.sync_graph && graphSyncCount > 0)
   );
 
   const stepCount = (
     (opts.fetch_cvs ? 1 : 0)
     + (opts.pre_screen || opts.refresh_pre_screen ? 1 : 0)
     + (opts.score !== 'none' ? 1 : 0)
+    + (opts.sync_graph ? 1 : 0)
   );
 
   const confirmLabel = (() => {
@@ -267,6 +276,43 @@ export function ProcessCandidatesDialog({
                 </div>
               </div>
             </label>
+            {/* Graph sync — per-role: projects this job's candidates with a
+                CV into the Graphiti / Neo4j knowledge graph. Skips candidates
+                already synced (same CV) so it's safe to leave on. */}
+            <label className="process-row">
+              <input
+                type="checkbox"
+                checked={!!opts.sync_graph}
+                onChange={(e) => setOpts((s) => ({ ...s, sync_graph: e.target.checked }))}
+              />
+              <div className="process-row__body">
+                <div className="process-row__title">Sync candidates to knowledge graph</div>
+                <div className="process-row__sub">
+                  {opts.sync_graph && graphSyncCount === 0
+                    ? 'All candidates with a CV on this role are already in the graph and up to date.'
+                    : `Project this job's candidates with a CV into Neo4j via Graphiti. Skips candidates already synced (same CV).`}
+                </div>
+              </div>
+              <div className="process-row__count">
+                {opts.sync_graph ? graphSyncCount : ''}
+              </div>
+            </label>
+            {opts.sync_graph ? (
+              <label className="process-row" style={{ marginLeft: 24 }}>
+                <input
+                  type="checkbox"
+                  checked={!!opts.refresh_graph}
+                  onChange={(e) => setOpts((s) => ({ ...s, refresh_graph: e.target.checked }))}
+                />
+                <div className="process-row__body">
+                  <div className="process-row__title">Force re-sync (ignore last_synced_at)</div>
+                  <div className="process-row__sub">
+                    Re-projects every candidate even if their CV hasn't changed since the last sync.
+                    Use only when you suspect drift.
+                  </div>
+                </div>
+              </label>
+            ) : null}
           </div>
         ) : null}
       </div>

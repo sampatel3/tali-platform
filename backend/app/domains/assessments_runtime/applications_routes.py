@@ -3799,9 +3799,17 @@ def batch_pre_screen_status(
 
 
 def _select_graph_sync_candidates(
-    db: Session, *, organization_id: int, refresh: bool
+    db: Session,
+    *,
+    organization_id: int,
+    refresh: bool,
+    role_id: int | None = None,
 ) -> list[int]:
-    """Return ordered list of candidate ids to (re)sync to the graph."""
+    """Return ordered list of candidate ids to (re)sync to the graph.
+
+    When ``role_id`` is provided, restricts to candidates who have an
+    application against that role (used by the per-role Process flow).
+    """
     from ...models.candidate import Candidate
     from ...models.graph_sync_state import GraphSyncState
 
@@ -3815,6 +3823,20 @@ def _select_graph_sync_candidates(
             Candidate.cv_text != "",
         )
     )
+    if role_id is not None:
+        # Restrict to candidates with an application on this role. Use a
+        # subquery to keep the SELECT distinct (a candidate could have
+        # multiple applications on the same role due to legacy duplicates).
+        app_subq = (
+            db.query(CandidateApplication.candidate_id)
+            .filter(
+                CandidateApplication.role_id == role_id,
+                CandidateApplication.organization_id == organization_id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .subquery()
+        )
+        q = q.filter(Candidate.id.in_(app_subq))
     out: list[int] = []
     for cid, cv_uploaded_at, last_synced_at in q.all():
         if refresh:
@@ -4154,6 +4176,7 @@ def _empty_process_progress() -> dict:
         "fetch": {"attempted": 0, "fetched": 0, "unavailable": 0, "errors": 0, "total": 0},
         "pre_screen": {"total": 0, "processed": 0, "errors": 0},
         "score": {"total": 0, "scored": 0, "filtered": 0, "errors": 0, "mode": "none"},
+        "graph_sync": {"total": 0, "synced": 0, "errors": 0},
     }
 
 
@@ -4166,6 +4189,8 @@ def _process_dry_run(
     pre_screen: bool,
     refresh_pre_screen: bool,
     score_mode: str,
+    sync_graph: bool = False,
+    refresh_graph: bool = False,
 ) -> dict:
     """Compute counts for each cascade step without starting the worker.
 
@@ -4246,6 +4271,20 @@ def _process_dry_run(
     else:
         will_score = 0
 
+    # Graph sync step — count candidates of THIS role who'll need a sync.
+    # The graph sync runs per-candidate, not per-application, so we
+    # de-dupe by candidate_id.
+    will_graph_sync = 0
+    if sync_graph:
+        # Use the same selector the worker will use, scoped to this role.
+        graph_targets = _select_graph_sync_candidates(
+            db,
+            organization_id=organization_id,
+            refresh=refresh_graph,
+            role_id=role_id,
+        )
+        will_graph_sync = len(graph_targets)
+
     return {
         "fetch_cvs": {
             "will_attempt": int(will_fetch),
@@ -4259,6 +4298,10 @@ def _process_dry_run(
             "will_run": int(will_score),
             "mode": score_mode,
         },
+        "graph_sync": {
+            "will_run": int(will_graph_sync),
+            "refresh": bool(refresh_graph),
+        },
         "total_candidates": len(apps),
     }
 
@@ -4271,8 +4314,14 @@ def _run_process(
     pre_screen: bool,
     refresh_pre_screen: bool,
     score_mode: str,
+    sync_graph: bool = False,
+    refresh_graph: bool = False,
 ) -> None:
-    """Background worker: cascade fetch → pre-screen → score for one role.
+    """Background worker: cascade fetch → pre-screen → score → graph sync.
+
+    Each step is independently toggleable. ``sync_graph`` runs the
+    Graphiti projection for the candidates of THIS role only (not the
+    whole org).
 
     Updates ``_process_progress[role_id]`` in real time so the status endpoint
     can report combined progress.
@@ -4480,6 +4529,68 @@ def _run_process(
             except Exception:
                 db.rollback()
 
+        # ── Step 4: Graph sync ───────────────────────────────────────────
+        if sync_graph:
+            from ...candidate_graph import sync as graph_sync_module
+            from ...candidate_graph import client as graph_client
+            from ...models.candidate import Candidate as _Candidate
+
+            progress["current_step"] = "graph_sync"
+            _set_process_progress(role_id, progress)
+
+            if not graph_client.is_configured():
+                # Not configured — record as a single error rather than failing
+                # the whole process.
+                progress["graph_sync"]["errors"] = 1
+                _set_process_progress(role_id, progress)
+            else:
+                candidate_ids = _select_graph_sync_candidates(
+                    db,
+                    organization_id=org_id,
+                    refresh=refresh_graph,
+                    role_id=role_id,
+                )
+                progress["graph_sync"]["total"] = len(candidate_ids)
+                _set_process_progress(role_id, progress)
+
+                for idx, cid in enumerate(candidate_ids):
+                    if is_process_cancelled(role_id):
+                        progress["status"] = "cancelled"
+                        _clear_cancel_flag(_PROCESS_CANCEL_PREFIX, role_id)
+                        try:
+                            db.commit()
+                        except Exception:
+                            db.rollback()
+                        _set_process_progress(role_id, progress)
+                        return
+                    try:
+                        cand = db.query(_Candidate).filter(_Candidate.id == cid).first()
+                        if cand is None:
+                            progress["graph_sync"]["errors"] += 1
+                        else:
+                            sent = graph_sync_module.sync_candidate(
+                                cand, db=db, include_cv_text=True
+                            )
+                            if sent == 0:
+                                # Graphiti returned no episodes — likely an
+                                # LLM extraction issue. Count as error so it
+                                # surfaces in the toaster, but don't bail.
+                                progress["graph_sync"]["errors"] += 1
+                    except Exception:
+                        logger.exception("Process graph sync failed for candidate_id=%s", cid)
+                        progress["graph_sync"]["errors"] += 1
+                    progress["graph_sync"]["synced"] = idx + 1
+                    _set_process_progress(role_id, progress)
+                    if (idx + 1) % 5 == 0:
+                        try:
+                            db.commit()
+                        except Exception:
+                            db.rollback()
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+
         progress["current_step"] = None
         progress["status"] = "completed"
         _set_process_progress(role_id, progress)
@@ -4499,7 +4610,7 @@ def process_role(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Run the cascade: fetch CVs → pre-screen → score, all configurable.
+    """Run the cascade: fetch CVs → pre-screen → score → graph sync.
 
     Body:
       - ``fetch_cvs`` (bool, default false)
@@ -4507,6 +4618,12 @@ def process_role(
       - ``refresh_pre_screen`` (bool, default false) — overrides pre_screen,
         forces re-run for every candidate with a CV
       - ``score`` ("none" | "new" | "all", default "none")
+      - ``sync_graph`` (bool, default false) — project this role's candidates
+        with a CV into the knowledge graph (Graphiti / Neo4j). Per-role,
+        not org-wide; a candidate already synced from another role is
+        skipped unless their CV changed since.
+      - ``refresh_graph`` (bool, default false) — re-sync every candidate
+        regardless of last_synced_at. Use when you suspect drift.
 
     With ``?dry_run=true`` returns the per-step counts that would result.
     """
@@ -4515,9 +4632,11 @@ def process_role(
     pre_screen = bool(payload.get("pre_screen"))
     refresh_pre_screen = bool(payload.get("refresh_pre_screen"))
     score_mode = str(payload.get("score") or "none").lower()
+    sync_graph = bool(payload.get("sync_graph"))
+    refresh_graph = bool(payload.get("refresh_graph"))
     if score_mode not in ("none", "new", "all"):
         raise HTTPException(status_code=400, detail="score must be one of: none, new, all")
-    if not (fetch_cvs or pre_screen or refresh_pre_screen or score_mode != "none"):
+    if not (fetch_cvs or pre_screen or refresh_pre_screen or score_mode != "none" or sync_graph):
         raise HTTPException(status_code=400, detail="Pick at least one step to run")
 
     if (pre_screen or refresh_pre_screen or score_mode != "none") and not role_has_job_spec(role):
@@ -4532,6 +4651,8 @@ def process_role(
             pre_screen=pre_screen,
             refresh_pre_screen=refresh_pre_screen,
             score_mode=score_mode,
+            sync_graph=sync_graph,
+            refresh_graph=refresh_graph,
         )
         counts["role_name"] = role.name
         return counts
@@ -4560,6 +4681,8 @@ def process_role(
             "pre_screen": pre_screen,
             "refresh_pre_screen": refresh_pre_screen,
             "score_mode": score_mode,
+            "sync_graph": sync_graph,
+            "refresh_graph": refresh_graph,
         },
         daemon=True,
     )

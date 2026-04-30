@@ -1600,19 +1600,12 @@ export const CandidatesDirectoryPage = ({
                   Export CSV
                 </button>
               ) : null}
-              {!rolePipelineMode ? (
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={() => openSyncGraphConfirm({ refresh: false })}
-                  disabled={String(syncGraphProgress?.status || '').toLowerCase() === 'running'}
-                  title="Project new and updated candidates into the knowledge graph (org-wide). Only candidates with a CV are synced."
-                >
-                  {String(syncGraphProgress?.status || '').toLowerCase() === 'running'
-                    ? `Syncing ${syncGraphProgress.synced}/${syncGraphProgress.total}…`
-                    : 'Sync to Graph'}
-                </button>
-              ) : null}
+              {/* Graph sync was previously here as an org-wide button, but
+                  recruiters only ever wanted to sync the candidates of a
+                  specific role. The action has moved to the Process
+                  candidates dialog under Advanced on each job page.
+                  Keeping the org-wide /candidates/sync-graph endpoint for
+                  ops use. */}
               <button
                 type="button"
                 className="btn btn-purple btn-sm"

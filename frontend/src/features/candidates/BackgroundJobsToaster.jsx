@@ -121,8 +121,10 @@ function JobRow({ entry, onCancel, onDismiss }) {
     const prePros = Number(data?.pre_screen?.processed ?? 0);
     const scoreTotal = Number(data?.score?.total ?? 0);
     const scorePros = Number(data?.score?.scored ?? 0);
-    total = fetchTotal + preTotal + scoreTotal;
-    processed = fetchAttempted + prePros + scorePros;
+    const graphTotal = Number(data?.graph_sync?.total ?? 0);
+    const graphPros = Number(data?.graph_sync?.synced ?? 0);
+    total = fetchTotal + preTotal + scoreTotal + graphTotal;
+    processed = fetchAttempted + prePros + scorePros + graphPros;
   } else if (kind === 'score') {
     const scored = Number(data?.scored ?? 0);
     const preScreenedOut = Number(data?.pre_screened_out ?? 0);
@@ -145,6 +147,7 @@ function JobRow({ entry, onCancel, onDismiss }) {
         if (step === 'fetch') return 'Fetching CVs';
         if (step === 'pre_screen') return 'Pre-screening';
         if (step === 'score') return 'Scoring';
+        if (step === 'graph_sync') return 'Syncing to knowledge graph';
         return 'Processing';
       }
       if (kind === 'fetch') return 'Fetching CVs';
@@ -200,6 +203,14 @@ function JobRow({ entry, onCancel, onDismiss }) {
         if (scoreErrors) annot.push(`${scoreErrors} err`);
         if (annot.length) s += ` (${annot.join(', ')})`;
         parts.push(s);
+      }
+      const graphTotal = Number(data?.graph_sync?.total ?? 0);
+      const graphPros = Number(data?.graph_sync?.synced ?? 0);
+      const graphErrors = Number(data?.graph_sync?.errors ?? 0);
+      if (graphTotal > 0) {
+        let g = `Graph ${graphPros}/${graphTotal}`;
+        if (graphErrors) g += ` (${graphErrors} err)`;
+        parts.push(g);
       }
       if (parts.length === 0) return 'starting…';
       return parts.join(' · ');
