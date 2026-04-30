@@ -27,6 +27,14 @@ from .cv_score_job import (
 from .task import Task
 from .session import AssessmentSession
 from .billing_credit_ledger import BillingCreditLedger
+from .usage_event import UsageEvent
+from .usage_grant import (
+    GRANT_FREE_TIER,
+    GRANT_MANUAL,
+    GRANT_PROMO,
+    GRANT_TOPUP,
+    UsageGrant,
+)
 from .workable_sync_run import WorkableSyncRun
 from .graph_sync_state import GraphSyncState
 from .background_job_run import (
@@ -67,6 +75,12 @@ __all__ = [
     "Task",
     "AssessmentSession",
     "BillingCreditLedger",
+    "UsageEvent",
+    "UsageGrant",
+    "GRANT_FREE_TIER",
+    "GRANT_PROMO",
+    "GRANT_MANUAL",
+    "GRANT_TOPUP",
     "WorkableSyncRun",
     "GraphSyncState",
     "BackgroundJobRun",

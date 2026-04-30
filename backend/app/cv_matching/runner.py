@@ -73,6 +73,8 @@ class _RunContext:
     cache_hit: bool = False
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_creation_tokens: int = 0
 
 
 def _hash_text(text: str) -> str:
@@ -133,6 +135,12 @@ def _call_claude(client, *, messages: list[dict], ctx: _RunContext) -> str:
     if usage is not None:
         ctx.input_tokens = int(getattr(usage, "input_tokens", 0) or 0)
         ctx.output_tokens = int(getattr(usage, "output_tokens", 0) or 0)
+        ctx.cache_read_tokens = int(
+            getattr(usage, "cache_read_input_tokens", 0) or 0
+        )
+        ctx.cache_creation_tokens = int(
+            getattr(usage, "cache_creation_input_tokens", 0) or 0
+        )
 
     raw_text = ""
     try:
@@ -371,6 +379,10 @@ def run_cv_match(
         model_version=MODEL_VERSION,
         trace_id=ctx.trace_id,
         calibrated_p_advance=calibrated_p_advance,
+        input_tokens=ctx.input_tokens,
+        output_tokens=ctx.output_tokens,
+        cache_read_tokens=ctx.cache_read_tokens,
+        cache_creation_tokens=ctx.cache_creation_tokens,
     )
 
     if not skip_cache:

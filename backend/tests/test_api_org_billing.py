@@ -321,58 +321,74 @@ def test_billing_credits_success(client):
     assert isinstance(payload["entries"], list)
 
 
-def test_lemon_webhook_idempotent_crediting(client, db, monkeypatch):
-    headers, email = auth_headers(client, email="lemon-owner@example.com", organization_name="Lemon Org")
-    owner = db.query(User).filter(User.email == email).first()
-    assert owner is not None
-    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
-    assert org is not None
-
-    monkeypatch.setattr(webhook_routes.settings, "MVP_DISABLE_LEMON", False)
-    monkeypatch.setattr(webhook_routes.settings, "LEMON_WEBHOOK_SECRET", "test-lemon-secret")
-
-    payload = {
-        "meta": {"event_name": "order_created"},
-        "data": {
-            "id": "order_123",
-            "attributes": {
-                "status": "paid",
-                "custom_data": {
-                    "org_id": str(org.id),
-                    "credits": 7,
-                    "pack_id": "starter_5",
-                },
-            },
-        },
-    }
-    raw = json.dumps(payload).encode("utf-8")
-    signature = hmac.new(b"test-lemon-secret", raw, hashlib.sha256).hexdigest()
-
-    first = client.post("/api/v1/webhooks/lemon", data=raw, headers={"X-Signature": signature, "Content-Type": "application/json"})
-    assert first.status_code == 200, first.text
-    assert first.json()["credited"] is True
-
-    second = client.post("/api/v1/webhooks/lemon", data=raw, headers={"X-Signature": signature, "Content-Type": "application/json"})
-    assert second.status_code == 200, second.text
-    assert second.json()["credited"] is False
-
-    db.refresh(org)
-    assert org.credits_balance == 7
-
-
-def test_checkout_session_accepts_pack_id(client, monkeypatch):
+def test_topup_endpoint_requires_stripe_key(client, monkeypatch):
+    """Replaces the legacy Lemon checkout test. With STRIPE_API_KEY unset,
+    the new Stripe-based top-up endpoint returns 503."""
     headers, _ = auth_headers(client)
-    monkeypatch.setattr(billing_routes.settings, "MVP_DISABLE_LEMON", True)
+    monkeypatch.setattr(billing_routes.settings, "STRIPE_API_KEY", "")
     resp = client.post(
-        "/api/v1/billing/checkout-session",
+        "/api/v1/billing/topup",
         json={
             "success_url": "https://example.com/success",
             "cancel_url": "https://example.com/cancel",
-            "pack_id": "starter_5",
+            "pack_id": "starter_20",
         },
         headers=headers,
     )
     assert resp.status_code == 503
+
+
+def test_topup_endpoint_rejects_unknown_pack(client, monkeypatch):
+    headers, _ = auth_headers(client)
+    monkeypatch.setattr(billing_routes.settings, "STRIPE_API_KEY", "sk_test_x")
+    resp = client.post(
+        "/api/v1/billing/topup",
+        json={
+            "success_url": "https://example.com/success",
+            "cancel_url": "https://example.com/cancel",
+            "pack_id": "nonexistent_pack",
+        },
+        headers=headers,
+    )
+    assert resp.status_code == 400
+
+
+def test_signup_grants_free_tier_credits(client, db):
+    """Each new org receives the $1.50 free-tier credit grant on signup,
+    visible immediately on the credits endpoint."""
+    headers, email = auth_headers(
+        client, email="freetier@example.com", organization_name="Free Tier Org"
+    )
+    owner = db.query(User).filter(User.email == email).first()
+    org = db.query(Organization).filter(Organization.id == owner.organization_id).first()
+    assert org.credits_balance == 1_500_000  # $1.50 in micro-credits
+
+    resp = client.get("/api/v1/billing/credits", headers=headers)
+    assert resp.status_code == 200
+    payload = resp.json()
+    assert payload["credits_balance"] == 1_500_000
+    assert payload["credits_balance_usd"] == 1.5
+    assert payload["free_tier_credits"] == 1_500_000
+    assert len(payload["packs"]) == 3
+
+
+def test_usage_breakdown_endpoint_empty(client):
+    """The /usage-breakdown endpoint returns the expected envelope shape
+    when an org has no usage events yet."""
+    headers, _ = auth_headers(client)
+    resp = client.get("/api/v1/billing/usage-breakdown", headers=headers)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["balance_credits"] == 1_500_000  # free tier grant
+    assert body["by_feature"] == []
+    assert body["period_days"] == 30
+
+
+def test_usage_events_endpoint_empty(client):
+    headers, _ = auth_headers(client)
+    resp = client.get("/api/v1/billing/usage-events", headers=headers)
+    assert resp.status_code == 200
+    assert resp.json() == {"events": []}
 
 
 # ---------------------------------------------------------------------------

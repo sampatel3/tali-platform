@@ -583,45 +583,31 @@ def get_assessment_creation_gate(
         raise HTTPException(status_code=404, detail="Organization not found")
 
     credits_balance = int(org.credits_balance or 0)
-    if settings.MVP_DISABLE_LEMON:
+
+    # Usage-based gate: in shadow mode (USAGE_METER_LIVE=False) we never
+    # block assessment creation — Claude calls still record events but the
+    # ledger isn't debited, so balance can stay at the free-tier grant
+    # indefinitely. In live mode we reject when the org's balance can't
+    # cover the per-assessment reservation estimate.
+    from ...services.pricing_service import Feature, estimate_reservation
+    from ...services.usage_metering_service import (
+        InsufficientCreditsError,
+        reserve as _meter_reserve,
+    )
+
+    try:
+        reservation = _meter_reserve(
+            db, organization_id=organization_id, feature=Feature.ASSESSMENT
+        )
+    except InsufficientCreditsError as exc:
         return {
-            "can_create": True,
-            "reason": None,
-            "message": None,
+            "can_create": False,
+            "reason": "insufficient_credits",
+            "message": ORG_INSUFFICIENT_CREDITS_MESSAGE,
             "organization": org,
             "credits_balance": credits_balance,
             "reserved_pending_assessments": 0,
-            "remaining_capacity": credits_balance,
-        }
-
-    now = utcnow()
-    reserved_query = db.query(Assessment).filter(
-        Assessment.organization_id == organization_id,
-        Assessment.is_voided.is_(False),
-        Assessment.is_demo.is_(False),
-        Assessment.credit_consumed_at.is_(None),
-        Assessment.status == AssessmentStatus.PENDING,
-        (Assessment.expires_at.is_(None)) | (Assessment.expires_at >= now),
-    )
-    if exclude_assessment_id is not None:
-        reserved_query = reserved_query.filter(Assessment.id != exclude_assessment_id)
-    reserved_pending_assessments = reserved_query.count()
-    remaining_capacity = credits_balance - reserved_pending_assessments
-    if remaining_capacity <= 0:
-        reason = "insufficient_credits" if credits_balance <= 0 else "credits_reserved"
-        message = (
-            ORG_INSUFFICIENT_CREDITS_MESSAGE
-            if reason == "insufficient_credits"
-            else ORG_RESERVED_CREDITS_MESSAGE
-        )
-        return {
-            "can_create": False,
-            "reason": reason,
-            "message": message,
-            "organization": org,
-            "credits_balance": credits_balance,
-            "reserved_pending_assessments": reserved_pending_assessments,
-            "remaining_capacity": remaining_capacity,
+            "remaining_capacity": credits_balance - exc.required,
         }
 
     return {
@@ -630,8 +616,8 @@ def get_assessment_creation_gate(
         "message": None,
         "organization": org,
         "credits_balance": credits_balance,
-        "reserved_pending_assessments": reserved_pending_assessments,
-        "remaining_capacity": remaining_capacity,
+        "reserved_pending_assessments": 0,
+        "remaining_capacity": credits_balance - reservation,
     }
 
 
@@ -644,7 +630,13 @@ def get_assessment_start_gate(
     """Return whether a candidate can begin the assessment right now."""
     was_pending = assessment.status == AssessmentStatus.PENDING
     is_demo = bool(getattr(assessment, "is_demo", False))
-    if not was_pending or settings.MVP_DISABLE_LEMON or is_demo:
+    # Demo assessments and resumed-in-progress assessments don't gate on
+    # credits — only fresh starts do. In shadow mode (USAGE_METER_LIVE=False)
+    # the gate is also a no-op, since the ledger isn't being debited and
+    # we shouldn't block flows on a balance that isn't yet meaningful. The
+    # real usage-based gate runs in ``usage_metering_service.reserve()``
+    # before each Claude call when the meter is live.
+    if not was_pending or is_demo or not settings.USAGE_METER_LIVE:
         return {"can_start": True, "reason": None, "message": None, "organization": None}
 
     org_query = db.query(Organization).filter(Organization.id == assessment.organization_id)
@@ -692,16 +684,11 @@ def start_or_resume_assessment(
     org = start_gate.get("organization")
     if not start_gate.get("can_start"):
         raise HTTPException(status_code=402, detail=INSUFFICIENT_CREDITS_DETAIL)
-    if was_pending and org is not None and getattr(assessment, "credit_consumed_at", None) is None:
-        append_credit_ledger_entry(
-            db,
-            organization=org,
-            delta=-1,
-            reason="assessment_started",
-            external_ref=f"assessment_start:{assessment.id}",
-            assessment_id=assessment.id,
-            metadata={"assessment_id": assessment.id, "reason": "assessment_started"},
-        )
+    if was_pending and getattr(assessment, "credit_consumed_at", None) is None:
+        # Usage-based pricing: per-Claude-call ledger debits replace the
+        # legacy "1 credit per assessment start" deduction. We still stamp
+        # ``credit_consumed_at`` so other code can detect a billing-active
+        # assessment, but no ledger entry fires here.
         assessment.credit_consumed_at = utcnow()
     try:
         e2b = E2BService(settings.E2B_API_KEY)

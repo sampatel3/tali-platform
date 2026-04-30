@@ -14,11 +14,14 @@ from fastapi_users.db import SQLAlchemyUserDatabase
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+from ...models.billing_credit_ledger import BillingCreditLedger
 from ...models.user import User
 from ...models.organization import Organization
+from ...models.usage_grant import GRANT_FREE_TIER, UsageGrant
 from ...platform.config import settings
 from ...platform.database import get_async_db
 from ...domains.integrations_notifications.adapters import build_email_adapter
+from ...services.pricing_service import FREE_TIER
 
 logger = logging.getLogger("taali.auth")
 
@@ -71,7 +74,30 @@ class UserManager(IntegerIDMixin, BaseUserManager[User, int]):
             suffix += 1
 
         org = Organization(name=organization_name, slug=slug)
+        # Free-tier credit grant on signup. Idempotent on external_ref so a
+        # retry can't double-grant. The grant + ledger entry write together
+        # in this transaction with the org create — if the user creation
+        # fails downstream, the grant rolls back too.
+        org.credits_balance = FREE_TIER.credits
         session.add(org)
+        await session.flush()
+
+        external_ref = f"free_tier:{org.id}"
+        grant = UsageGrant(
+            organization_id=org.id,
+            grant_type=GRANT_FREE_TIER,
+            credits_granted=FREE_TIER.credits,
+            external_ref=external_ref,
+        )
+        ledger = BillingCreditLedger(
+            organization_id=org.id,
+            delta=FREE_TIER.credits,
+            balance_after=FREE_TIER.credits,
+            reason=f"grant:{GRANT_FREE_TIER}",
+            external_ref=external_ref,
+        )
+        session.add(grant)
+        session.add(ledger)
         await session.flush()
         return org
 

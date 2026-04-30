@@ -8,7 +8,6 @@ from .brand import brand_email_from
 @dataclass(frozen=True)
 class MvpFeatureFlags:
     disable_stripe: bool
-    disable_lemon: bool
     disable_workable: bool
     disable_celery: bool
     disable_claude_scoring: bool
@@ -60,6 +59,17 @@ class Settings(BaseSettings):
     # Cost model defaults (all overridable via environment)
     CLAUDE_INPUT_COST_PER_MILLION_USD: float = 0.25
     CLAUDE_OUTPUT_COST_PER_MILLION_USD: float = 1.25
+
+    # Usage-based pricing (2026-04-29 cutover from Lemon Squeezy).
+    # When False, every Claude call writes a usage_events row but the
+    # ledger is NOT debited and gates do NOT block — shadow mode for
+    # validating attribution numbers against Anthropic's dashboard. Flip
+    # to True (Phase 6) once shadow data confirms the meter is accurate.
+    USAGE_METER_LIVE: bool = False
+    # Anthropic Admin API key for provisioning per-org workspace keys.
+    # Empty = workspace provisioning disabled, all calls fall back to
+    # ANTHROPIC_API_KEY (the shared Taali key).
+    ANTHROPIC_ADMIN_API_KEY: str = ""
     E2B_COST_PER_HOUR_USD: float = 0.30
     EMAIL_COST_PER_SEND_USD: float = 0.01
     STORAGE_COST_PER_GB_MONTH_USD: float = 0.023
@@ -119,19 +129,6 @@ class Settings(BaseSettings):
     # Stripe
     STRIPE_API_KEY: str = ""
     STRIPE_WEBHOOK_SECRET: str = ""
-
-    # Lemon Squeezy
-    LEMON_API_KEY: str = ""
-    LEMON_STORE_ID: str = ""
-    LEMON_WEBHOOK_SECRET: str = ""
-    LEMON_TEST_MODE: bool = False
-    # JSON object keyed by UI pack id:
-    # {"starter_5":{"variant_id":"12345","credits":5,"label":"Starter (5 credits)"}, ...}
-    LEMON_PACKS_JSON: str = (
-        '{"starter_5":{"variant_id":"0","credits":5,"label":"Starter (5 credits)"},'
-        '"growth_10":{"variant_id":"0","credits":10,"label":"Growth (10 credits)"},'
-        '"scale_20":{"variant_id":"0","credits":20,"label":"Scale (20 credits)"}}'
-    )
 
     # Resend
     RESEND_API_KEY: str = ""
@@ -227,9 +224,10 @@ class Settings(BaseSettings):
     # Recommended: 30 (catches only clear mismatches).
     PRE_SCREEN_THRESHOLD: int = 30
 
-    # MVP feature flags (default to MVP-safe behavior)
-    MVP_DISABLE_STRIPE: bool = True
-    MVP_DISABLE_LEMON: bool = True
+    # MVP feature flags (default to MVP-safe behavior).
+    # Stripe is now the live payment processor for credit top-ups; default
+    # changed True → False as part of the 2026-04-29 usage-pricing cutover.
+    MVP_DISABLE_STRIPE: bool = False
     MVP_DISABLE_WORKABLE: bool = True
     MVP_DISABLE_CELERY: bool = True
     MVP_DISABLE_CLAUDE_SCORING: bool = True
@@ -241,7 +239,6 @@ class Settings(BaseSettings):
     def mvp_flags(self) -> MvpFeatureFlags:
         return MvpFeatureFlags(
             disable_stripe=self.MVP_DISABLE_STRIPE,
-            disable_lemon=self.MVP_DISABLE_LEMON,
             disable_workable=self.MVP_DISABLE_WORKABLE,
             disable_celery=self.MVP_DISABLE_CELERY,
             disable_claude_scoring=self.MVP_DISABLE_CLAUDE_SCORING,

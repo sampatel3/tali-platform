@@ -1,2 +1,0 @@
-"""Lemon Squeezy integration package."""
-

@@ -292,6 +292,33 @@ def chat_with_claude(
         budget_limit_usd=effective_budget_limit,
         prompts=prompts,
     )
+
+    # Record usage event (shadow mode in Phase 2; ledger-debiting in Phase 6).
+    # Wrapped in try/except so a metering failure can't break a candidate's
+    # active assessment session.
+    try:
+        import logging as _logging
+
+        from ...services.pricing_service import Feature
+        from ...services.usage_metering_service import record_event as _meter_record_event
+
+        if assessment.organization_id:
+            _meter_record_event(
+                db,
+                organization_id=int(assessment.organization_id),
+                feature=Feature.ASSESSMENT,
+                model=getattr(claude, "model", "") or "",
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                entity_id=f"assessment:{assessment.id}",
+            )
+    except Exception:
+        import logging as _logging
+        _logging.getLogger("taali.usage_metering").exception(
+            "usage_metering record_event failed for assessment=%s",
+            getattr(assessment, "id", None),
+        )
+
     db.commit()
 
     return {

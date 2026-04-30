@@ -119,7 +119,10 @@ def test_create_assessment_no_auth_401(client):
     assert resp.status_code == 401
 
 
-def test_create_assessment_requires_available_credits_when_lemon_enabled(client, monkeypatch):
+def test_create_assessment_blocks_when_meter_live_and_balance_zero(client, monkeypatch):
+    """Usage-based pricing: with USAGE_METER_LIVE=True and zero balance, the
+    pre-flight reservation in ``get_assessment_creation_gate`` raises
+    InsufficientCreditsError → 402. Replaces the legacy Lemon credit gate."""
     headers, email = auth_headers(client)
     task = create_task_via_api(client, headers).json()
 
@@ -131,49 +134,13 @@ def test_create_assessment_requires_available_credits_when_lemon_enabled(client,
         org.credits_balance = 0
         db.commit()
 
-    import app.components.assessments.service as assessments_svc
+    import app.services.usage_metering_service as ums
 
-    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
+    monkeypatch.setattr(ums.settings, "USAGE_METER_LIVE", True)
 
     resp = create_assessment_via_api(client, headers, task["id"])
     assert resp.status_code == 402
     assert "purchase credits" in resp.json()["detail"].lower()
-
-
-def test_create_assessment_blocks_when_pending_invites_already_reserve_remaining_credits(client, monkeypatch):
-    headers, email = auth_headers(client)
-    task = create_task_via_api(client, headers).json()
-
-    with TestingSessionLocal() as db:
-        user = db.query(User).filter(User.email == email).first()
-        assert user is not None
-        org = db.query(Organization).filter(Organization.id == user.organization_id).first()
-        assert org is not None
-        org.credits_balance = 1
-        db.commit()
-
-    import app.components.assessments.service as assessments_svc
-
-    monkeypatch.setattr(assessments_svc.settings, "MVP_DISABLE_LEMON", False)
-
-    first = create_assessment_via_api(
-        client,
-        headers,
-        task["id"],
-        candidate_email="reserved-1@example.com",
-        candidate_name="Reserved One",
-    )
-    assert first.status_code == 201, first.text
-
-    second = create_assessment_via_api(
-        client,
-        headers,
-        task["id"],
-        candidate_email="reserved-2@example.com",
-        candidate_name="Reserved Two",
-    )
-    assert second.status_code == 402
-    assert "reserved for pending assessments" in second.json()["detail"].lower()
 
 
 # ---------------------------------------------------------------------------

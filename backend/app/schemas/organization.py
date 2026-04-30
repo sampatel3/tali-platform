@@ -128,9 +128,7 @@ class OrgResponse(BaseModel):
     active_claude_model: str
     active_claude_scoring_model: str
     plan: str
-    assessments_used: int
-    assessments_limit: Optional[int] = None
-    billing_provider: str = "lemon"
+    billing_provider: str = "stripe"
     credits_balance: int = 0
     default_assessment_duration_minutes: int = 30
     invite_email_template: Optional[str] = None

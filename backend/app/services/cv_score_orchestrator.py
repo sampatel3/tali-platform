@@ -51,7 +51,14 @@ from .fit_matching_service import (
     calculate_cv_job_match_sync,
     calculate_cv_job_match_v4_sync,
 )
+from .claude_client_resolver import get_client_for_org as _resolve_anthropic_client
+from .pricing_service import Feature
 from .spec_normalizer import normalize_spec
+from .usage_metering_service import (
+    InsufficientCreditsError,
+    record_event as _meter_record_event,
+    reserve as _meter_reserve,
+)
 
 logger = logging.getLogger("taali.cv_score_orchestrator")
 
@@ -195,6 +202,28 @@ def enqueue_score(
         return None
     if not settings.ANTHROPIC_API_KEY:
         return None
+
+    # Pre-flight credit gate. In shadow mode (USAGE_METER_LIVE=False) this
+    # is a no-op. In live mode, orgs without enough balance get a silent
+    # skip — the caller (batch loops or single-app routes) sees None and
+    # can render the 402 surface separately if needed.
+    try:
+        _meter_reserve(
+            db,
+            organization_id=int(getattr(application, "organization_id", 0) or 0) or None,
+            feature=Feature.SCORE,
+        )
+    except InsufficientCreditsError:
+        logger.info(
+            "enqueue_score skipped for application=%s: insufficient credits",
+            application.id,
+        )
+        return None
+    except Exception:  # pragma: no cover — defensive, never block scoring on metering
+        logger.exception(
+            "enqueue_score reserve check failed for application=%s",
+            application.id,
+        )
 
     if not force:
         existing = _latest_job(db, application.id)
@@ -424,6 +453,12 @@ def _execute_scoring_v3(
                 )
             )
 
+    # Resolve the org's Anthropic client once (workspace-scoped key when
+    # provisioned; falls back to shared Taali key otherwise). Reused for
+    # both pre-screen and the full v3 call so a freshly-provisioned key
+    # is used consistently within a single scoring job.
+    org_client = _resolve_anthropic_client(getattr(application, "organization", None))
+
     # Two-tier scoring gate. When enabled, the cheap pre-screen runs
     # first; candidates scoring below PRE_SCREEN_THRESHOLD skip v3.
     # Error/parse failures always fall through. Recruiter manual rescores
@@ -434,11 +469,23 @@ def _execute_scoring_v3(
             run_pre_screen,
         )
 
-        pre = run_pre_screen(cv_text, job_spec_text, requirements)
+        pre = run_pre_screen(cv_text, job_spec_text, requirements, client=org_client)
         # Always stamp pre_screen_run_at when pre-screen completes (whether the
         # candidate is filtered or proceeds to full score). Used by the
         # "Pre-screen new" batch action to skip already-pre-screened apps.
         application.pre_screen_run_at = datetime.now(timezone.utc)
+        _record_usage_safe(
+            db,
+            organization_id=getattr(application, "organization_id", None),
+            feature=Feature.PRESCREEN,
+            model=V3_MODEL_VERSION,
+            input_tokens=pre.input_tokens,
+            output_tokens=pre.output_tokens,
+            cache_read_tokens=pre.cache_read_tokens,
+            cache_creation_tokens=pre.cache_creation_tokens,
+            cache_hit=pre.cache_hit,
+            entity_id=f"application:{application.id}",
+        )
         threshold = settings.PRE_SCREEN_THRESHOLD
         # Only filter when we have a numeric score AND it's below threshold.
         # None score (parse failure/error) always falls through to v3.
@@ -476,8 +523,20 @@ def _execute_scoring_v3(
             )
             return
 
-    output = run_cv_match(cv_text, job_spec_text, requirements)
+    output = run_cv_match(cv_text, job_spec_text, requirements, client=org_client)
     job.cache_hit = "hit" if getattr(output, "cache_hit", False) else "miss"
+    _record_usage_safe(
+        db,
+        organization_id=getattr(application, "organization_id", None),
+        feature=Feature.SCORE,
+        model=V3_MODEL_VERSION,
+        input_tokens=int(getattr(output, "input_tokens", 0) or 0),
+        output_tokens=int(getattr(output, "output_tokens", 0) or 0),
+        cache_read_tokens=int(getattr(output, "cache_read_tokens", 0) or 0),
+        cache_creation_tokens=int(getattr(output, "cache_creation_tokens", 0) or 0),
+        cache_hit=bool(getattr(output, "cache_hit", False)),
+        entity_id=f"application:{application.id}",
+    )
 
     if output.scoring_status == ScoringStatus.FAILED:
         job.status = SCORE_JOB_ERROR
@@ -508,6 +567,24 @@ def _execute_scoring_v3(
         trace_id=output.trace_id or f"job-{job.id}",
         cache_hit="hit" if getattr(output, "cache_hit", False) else "miss",
     )
+
+
+def _record_usage_safe(db: Session, *, organization_id, **kwargs) -> None:
+    """Record a usage_events row, swallowing errors. Telemetry must never
+    fail a scoring job — if metering is broken, log and continue.
+
+    No-op when organization_id is missing (e.g. legacy applications without
+    an org link) — those would constitute orphan usage rows.
+    """
+    if not organization_id:
+        return
+    try:
+        _meter_record_event(db, organization_id=int(organization_id), **kwargs)
+    except Exception:
+        logger.exception(
+            "usage_metering record_event failed for org=%s feature=%s",
+            organization_id, kwargs.get("feature"),
+        )
 
 
 def mark_role_scores_stale(db: Session, role_id: int) -> int:
