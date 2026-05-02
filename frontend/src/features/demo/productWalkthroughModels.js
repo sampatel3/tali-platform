@@ -1004,14 +1004,145 @@ export const CANDIDATES_DIRECTORY_SHOWCASE = [
     pipeline_stage_updated_at: '2026-04-26T09:16:00.000Z',
     schema_version: 1,
   },
+  // Below-threshold row — demonstrates the auto-reject pre-screen path.
+  // pre_screen_recommendation drives the red "Below threshold" chip.
+  {
+    id: 88113,
+    candidate_id: 22113,
+    candidate_name: 'Owen Caldwell',
+    candidate_email: 'owen.caldwell@example.com',
+    role_id: 7001,
+    role_name: 'AI Engineer',
+    pipeline_stage: 'applied',
+    application_outcome: 'rejected',
+    pre_screen_score: 38,
+    taali_score: null,
+    score_summary: { assessment_status: 'auto_rejected' },
+    score_status: 'done',
+    source: 'workable',
+    workable_candidate_id: 'wkbl-cand-103',
+    workable_stage: 'Sourced',
+    workable_score_raw: 41,
+    pre_screen_recommendation: 'Below threshold',
+    pre_screen_run_at: '2026-04-27T07:46:00.000Z',
+    auto_reject_reason: 'Pre-screen 38 below role threshold 55',
+    created_at: '2026-04-27T07:42:00.000Z',
+    pipeline_stage_updated_at: '2026-04-27T07:46:00.000Z',
+    schema_version: 1,
+  },
 ];
+
+// Pre-screen recommendation buckets derived from pre_screen_score so the
+// showcase rows render the same chips a live tenant would. Kept here so the
+// short-circuit in loadApplications can inline-augment each row deterministically.
+export const CANDIDATES_DIRECTORY_PRE_SCREEN_RUN_AT = '2026-04-27T07:46:00.000Z';
+export const CANDIDATES_DIRECTORY_GRAPH_SYNC_AT = '2026-04-26T17:30:00.000Z';
+
+// Knowledge-graph subgraph for the showcase NL search ("AI engineers with
+// release-safety experience in regulated industries"). Cytoscape-format
+// nodes/edges. Person ids match candidate_id on the rows above so clicking
+// a node selects the matching application.
+export const CANDIDATES_DIRECTORY_NL_QUERY = 'AI engineers with production GenAI release-safety experience in regulated industries';
+
+export const CANDIDATES_DIRECTORY_PARSED_FILTER = {
+  skills: ['LLM evaluation', 'Release safety', 'Prompt design'],
+  industries: ['health-tech', 'fintech'],
+  seniority: 'senior',
+  raw_phrase: 'AI engineers with production GenAI release-safety experience in regulated industries',
+};
+
+export const CANDIDATES_DIRECTORY_NL_WARNINGS = [
+  {
+    code: 'fuzzy_match',
+    message: '"regulated industries" matched to health-tech and fintech in the graph; broader matches available — refine the chip to widen.',
+  },
+];
+
+export const CANDIDATES_DIRECTORY_NL_SUBGRAPH = {
+  nodes: [
+    // Person nodes — id matches candidate_id on the rows above
+    { id: 'p:22101', label: 'Person', name: 'Priya Raman', extra: { cv_match_score: 86 } },
+    { id: 'p:22102', label: 'Person', name: 'Diego Alvarez', extra: { cv_match_score: 78 } },
+    { id: 'p:22103', label: 'Person', name: 'Hannah Okonkwo', extra: { cv_match_score: 72 } },
+    { id: 'p:22106', label: 'Person', name: 'Theo Becker', extra: { cv_match_score: 79 } },
+    { id: 'p:22107', label: 'Person', name: 'Aisha Bello', extra: { cv_match_score: 74 } },
+    { id: 'p:22110', label: 'Person', name: 'Ravi Shah', extra: { cv_match_score: 81 } },
+
+    // Company hubs — these cluster candidates around shared employers
+    { id: 'c:helix', label: 'Company', name: 'Helix Health' },
+    { id: 'c:lighthouse', label: 'Company', name: 'Lighthouse FinCrime' },
+    { id: 'c:polaris', label: 'Company', name: 'Polaris Labs' },
+    { id: 'c:atlasai', label: 'Company', name: 'Atlas AI' },
+    { id: 'c:meridian', label: 'Company', name: 'Meridian Bank' },
+
+    // Skills
+    { id: 's:llm-eval', label: 'Skill', name: 'LLM evaluation' },
+    { id: 's:release-safety', label: 'Skill', name: 'Release safety' },
+    { id: 's:prompt-design', label: 'Skill', name: 'Prompt design' },
+    { id: 's:retrieval', label: 'Skill', name: 'Retrieval grounding' },
+
+    // Schools
+    { id: 'sc:edinburgh', label: 'School', name: 'University of Edinburgh' },
+    { id: 'sc:imperial', label: 'School', name: 'Imperial College London' },
+  ],
+  edges: [
+    // Priya Raman — the standing-report candidate. Worked at all three clusters.
+    { source: 'p:22101', target: 'c:helix', label: 'WORKED_AT' },
+    { source: 'p:22101', target: 'c:lighthouse', label: 'WORKED_AT' },
+    { source: 'p:22101', target: 'c:polaris', label: 'WORKED_AT' },
+    { source: 'p:22101', target: 's:llm-eval', label: 'HAS_SKILL' },
+    { source: 'p:22101', target: 's:release-safety', label: 'HAS_SKILL' },
+    { source: 'p:22101', target: 's:prompt-design', label: 'HAS_SKILL' },
+    { source: 'p:22101', target: 's:retrieval', label: 'HAS_SKILL' },
+    { source: 'p:22101', target: 'sc:edinburgh', label: 'STUDIED_AT' },
+    { source: 'p:22101', target: 'sc:imperial', label: 'STUDIED_AT' },
+
+    // Diego Alvarez — Lighthouse + Atlas AI cluster
+    { source: 'p:22102', target: 'c:lighthouse', label: 'WORKED_AT' },
+    { source: 'p:22102', target: 'c:atlasai', label: 'WORKED_AT' },
+    { source: 'p:22102', target: 's:prompt-design', label: 'HAS_SKILL' },
+    { source: 'p:22102', target: 's:llm-eval', label: 'HAS_SKILL' },
+
+    // Hannah Okonkwo — Helix
+    { source: 'p:22103', target: 'c:helix', label: 'WORKED_AT' },
+    { source: 'p:22103', target: 's:release-safety', label: 'HAS_SKILL' },
+
+    // Theo Becker — Atlas AI + Meridian
+    { source: 'p:22106', target: 'c:atlasai', label: 'WORKED_AT' },
+    { source: 'p:22106', target: 'c:meridian', label: 'WORKED_AT' },
+    { source: 'p:22106', target: 's:retrieval', label: 'HAS_SKILL' },
+
+    // Aisha Bello — Lighthouse + Helix
+    { source: 'p:22107', target: 'c:lighthouse', label: 'WORKED_AT' },
+    { source: 'p:22107', target: 'c:helix', label: 'WORKED_AT' },
+    { source: 'p:22107', target: 's:prompt-design', label: 'HAS_SKILL' },
+
+    // Ravi Shah — Atlas AI
+    { source: 'p:22110', target: 'c:atlasai', label: 'WORKED_AT' },
+    { source: 'p:22110', target: 's:llm-eval', label: 'HAS_SKILL' },
+    { source: 'p:22110', target: 'sc:edinburgh', label: 'STUDIED_AT' },
+  ],
+};
 
 // Aggregate stage counts derived from CANDIDATES_DIRECTORY_SHOWCASE — used by
 // the directory's stage-filter chips. Kept in sync manually with the seed list above.
+// (Includes the auto-rejected row 88113 in the totals.)
 export const CANDIDATES_DIRECTORY_STAGE_COUNTS = {
-  all: 12,
-  applied: 6,
+  all: 13,
+  applied: 7,
   invited: 2,
   in_assessment: 3,
   review: 2,
+};
+
+// Helper: derive a pre-screen recommendation bucket from the row's score.
+// Lets the showcase short-circuit attach pre_screen_recommendation /
+// pre_screen_run_at to every row without bloating the seed array.
+export const derivePreScreenRecommendation = (preScreenScore, threshold = 55) => {
+  const score = Number(preScreenScore);
+  if (!Number.isFinite(score)) return null;
+  if (score < threshold) return 'Below threshold';
+  if (score >= 85) return 'Strong match';
+  if (score >= 70) return 'Proceed';
+  return 'Manual review';
 };

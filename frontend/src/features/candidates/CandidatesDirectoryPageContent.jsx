@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowRight,
+  Loader2,
   RefreshCw,
   Search,
 } from 'lucide-react';
@@ -13,8 +14,39 @@ import { useJobStatus } from '../../contexts/JobStatusContext';
 import {
   CANDIDATES_DIRECTORY_SHOWCASE,
   CANDIDATES_DIRECTORY_STAGE_COUNTS,
+  CANDIDATES_DIRECTORY_NL_QUERY,
+  CANDIDATES_DIRECTORY_PARSED_FILTER,
+  CANDIDATES_DIRECTORY_NL_SUBGRAPH,
+  CANDIDATES_DIRECTORY_NL_WARNINGS,
+  CANDIDATES_DIRECTORY_PRE_SCREEN_RUN_AT,
+  CANDIDATES_DIRECTORY_GRAPH_SYNC_AT,
   JOBS_SHOWCASE,
+  derivePreScreenRecommendation,
 } from '../demo/productWalkthroughModels';
+
+// Augment showcase candidate rows with pre-screen + graph-sync fields so the
+// PreScreenChip and GraphStatusChip render in showcase mode without bloating
+// the seed array. The augmented row is what the directory short-circuit feeds
+// into applicationsPayload.
+const augmentShowcaseApplication = (row, index) => {
+  if (!row) return row;
+  // Make one row visibly graph-stale (CV updated since last graph sync) and
+  // one row not yet in the graph (no graph_synced_at) so all three graph
+  // states appear in the demo.
+  let graphSyncedAt = CANDIDATES_DIRECTORY_GRAPH_SYNC_AT;
+  let graphStale = false;
+  if (index === 1) graphStale = true;          // Diego — graph stale
+  if (index === 4) graphSyncedAt = null;       // Sofia — not in graph yet
+  return {
+    ...row,
+    pre_screen_recommendation:
+      row.pre_screen_recommendation
+      || derivePreScreenRecommendation(row.pre_screen_score),
+    pre_screen_run_at: row.pre_screen_run_at || CANDIDATES_DIRECTORY_PRE_SCREEN_RUN_AT,
+    graph_synced_at: row.graph_synced_at || graphSyncedAt,
+    graph_stale: row.graph_stale ?? graphStale,
+  };
+};
 import {
   Button,
   EmptyState,
@@ -313,6 +345,114 @@ const getStatusChip = (application) => {
 };
 
 const toCsvValue = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
+
+// Showcase-only animated banner that simulates a Process job in flight on the
+// candidates pane: fetches CVs, pre-screens, scores, then syncs to the
+// knowledge graph. Motion sequence runs once on mount and lands in a
+// "Synced N minutes ago" steady state. Pure visual — no API calls fire.
+const SHOWCASE_PROCESS_STEPS = [
+  { label: 'Fetching CVs from Workable', total: 13, ms: 1100 },
+  { label: 'Pre-screening against role spec', total: 13, ms: 1500 },
+  { label: 'Scoring CV → job fit', total: 13, ms: 1700 },
+  { label: 'Syncing to knowledge graph', total: 13, ms: 1300 },
+];
+
+const ShowcaseProcessBanner = () => {
+  const [stepIndex, setStepIndex] = useState(0);
+  const [progress, setProgress] = useState(0);
+  const [done, setDone] = useState(false);
+
+  useEffect(() => {
+    if (done) return undefined;
+    const step = SHOWCASE_PROCESS_STEPS[stepIndex];
+    if (!step) return undefined;
+    const tickMs = Math.max(60, Math.floor(step.ms / step.total));
+    const handle = window.setInterval(() => {
+      setProgress((current) => {
+        if (current + 1 >= step.total) {
+          window.clearInterval(handle);
+          if (stepIndex + 1 >= SHOWCASE_PROCESS_STEPS.length) {
+            setDone(true);
+          } else {
+            setStepIndex(stepIndex + 1);
+            setProgress(0);
+          }
+          return step.total;
+        }
+        return current + 1;
+      });
+    }, tickMs);
+    return () => window.clearInterval(handle);
+  }, [stepIndex, done]);
+
+  if (done) {
+    return (
+      <div
+        className="showcase-process-banner showcase-process-banner--done"
+        style={{
+          marginBottom: '16px',
+          padding: '12px 16px',
+          borderRadius: '12px',
+          border: '1px solid var(--taali-success-border, rgba(16, 185, 129, 0.25))',
+          background: 'var(--taali-success-soft, rgba(16, 185, 129, 0.08))',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '12px',
+          fontSize: '13.5px',
+          color: 'var(--ink-2)',
+        }}
+      >
+        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--taali-success, #10b981)' }} />
+        <span>
+          <b style={{ color: 'var(--ink)' }}>Process complete.</b> 13 candidates fetched, pre-screened, scored, and synced to the knowledge graph just now.
+        </span>
+      </div>
+    );
+  }
+
+  const step = SHOWCASE_PROCESS_STEPS[stepIndex];
+  const pct = Math.round((progress / step.total) * 100);
+  return (
+    <div
+      className="showcase-process-banner"
+      style={{
+        marginBottom: '16px',
+        padding: '12px 16px',
+        borderRadius: '12px',
+        border: '1px solid var(--taali-border, rgba(124, 58, 237, 0.18))',
+        background: 'var(--taali-surface-subtle, rgba(124, 58, 237, 0.06))',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13.5px' }}>
+        <Loader2 size={14} className="animate-spin" style={{ color: 'var(--purple, #7c3aed)' }} aria-hidden />
+        <span style={{ fontWeight: 600, color: 'var(--ink)' }}>
+          Process running · Step {stepIndex + 1} / {SHOWCASE_PROCESS_STEPS.length}
+        </span>
+        <span style={{ color: 'var(--mute)' }}>{step.label} · {progress} / {step.total}</span>
+      </div>
+      <div
+        style={{
+          height: '4px',
+          borderRadius: '999px',
+          background: 'rgba(124, 58, 237, 0.12)',
+          overflow: 'hidden',
+        }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: '100%',
+            background: 'var(--purple, #7c3aed)',
+            transition: 'width 200ms linear',
+          }}
+        />
+      </div>
+    </div>
+  );
+};
 
 export const CandidatesDirectoryPage = ({
   onNavigate: rawOnNavigate,
@@ -655,12 +795,17 @@ export const CandidatesDirectoryPage = ({
 
   const loadApplications = useCallback(async ({ preferredApplicationId = null } = {}) => {
     if (isShowcase) {
+      const showcaseItems = CANDIDATES_DIRECTORY_SHOWCASE.map(augmentShowcaseApplication);
       setApplicationsPayload({
-        items: CANDIDATES_DIRECTORY_SHOWCASE,
-        total: CANDIDATES_DIRECTORY_SHOWCASE.length,
+        items: showcaseItems,
+        total: showcaseItems.length,
         limit: PAGE_SIZE,
         offset: 0,
       });
+      setParsedFilter(CANDIDATES_DIRECTORY_PARSED_FILTER);
+      setNlSubgraph(CANDIDATES_DIRECTORY_NL_SUBGRAPH);
+      setNlWarnings(CANDIDATES_DIRECTORY_NL_WARNINGS);
+      setNlQuery((current) => current || CANDIDATES_DIRECTORY_NL_QUERY);
       setStageCounts({ ...CANDIDATES_DIRECTORY_STAGE_COUNTS });
       setApplicationsError('');
       setLoadingApplications(false);
@@ -1619,6 +1764,8 @@ export const CandidatesDirectoryPage = ({
         ) : null}
 
         {prelude ? <div className="mb-4 space-y-4">{prelude}</div> : null}
+
+        {isShowcase ? <ShowcaseProcessBanner /> : null}
 
         <NLSearchBar
           nlQuery={nlQuery}
