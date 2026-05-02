@@ -152,10 +152,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     if (isShowcase) {
       setRoles(JOBS_SHOWCASE);
       setOrgData(JOBS_SHOWCASE_ORG);
-      setSyncing(false);
+      // Show a brief "Syncing now" pulse on first load, then settle into the
+      // static "Synced X min ago" state. Pure visual — no API calls fire.
+      setSyncing(true);
       setSyncRunId(null);
       setError('');
       setLoading(false);
+      window.setTimeout(() => setSyncing(false), 2500);
       return;
     }
     setLoading(true);
