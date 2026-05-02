@@ -5205,17 +5205,25 @@ body.interview-view .page {
   background: var(--bg);
 }
 
-.wt-frame[data-pane="candidate"] .wt-stage iframe {
-  width: 125%;
-  height: 125%;
-  transform: scale(0.8);
+/* Render the recruiter-side panes (jobs, candidates) and the candidate
+   workspace at a full desktop viewport (~1500px effective width) so the
+   pages don't trigger their responsive-stack layouts inside the iframe.
+   Width 142% × scale 0.704 ≈ 1.0 visible (no overflow), 142% native viewport. */
+.wt-frame[data-pane="jobs"] .wt-stage iframe,
+.wt-frame[data-pane="candidates"] .wt-stage iframe,
+.wt-frame[data-pane="workspace"] .wt-stage iframe {
+  width: 142%;
+  height: 142%;
+  transform: scale(0.704);
   transform-origin: top left;
 }
 
+/* Standing report has a narrower native layout, so a smaller scale-up is
+   enough — keeps text readable without forcing extra whitespace. */
 .wt-frame[data-pane="report"] .wt-stage iframe {
-  width: 112%;
-  height: 112%;
-  transform: scale(0.893);
+  width: 118%;
+  height: 118%;
+  transform: scale(0.847);
   transform-origin: top left;
 }
 
