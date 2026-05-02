@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowRight,
+  CheckCircle2,
   Loader2,
   RefreshCw,
   Search,
@@ -346,16 +347,118 @@ const getStatusChip = (application) => {
 
 const toCsvValue = (value) => `"${String(value ?? '').replaceAll('"', '""')}"`;
 
-// Showcase-only animated banner that simulates a Process job in flight on the
-// candidates pane: fetches CVs, pre-screens, scores, then syncs to the
-// knowledge graph. Motion sequence runs once on mount and lands in a
-// "Synced N minutes ago" steady state. Pure visual — no API calls fire.
+// Showcase-only cascade timeline that simulates a Process job in flight on
+// the candidates pane: fetches CVs, parses, pre-screens, scores, syncs to the
+// knowledge graph, and refreshes standing reports. Each step renders as a
+// row with its state (queued / running / completed), live counter, and a
+// summary line that appears once the step finishes. Pure visual — no API
+// calls fire.
 const SHOWCASE_PROCESS_STEPS = [
-  { label: 'Fetching CVs from Workable', total: 13, ms: 1100 },
-  { label: 'Pre-screening against role spec', total: 13, ms: 1500 },
-  { label: 'Scoring CV → job fit', total: 13, ms: 1700 },
-  { label: 'Syncing to knowledge graph', total: 13, ms: 1300 },
+  {
+    title: 'Fetch CVs from Workable',
+    running: 'Pulling CVs for candidates without one on file…',
+    result: '5 CVs fetched (3.2 MB) · 8 already on file',
+    total: 13,
+    ms: 1400,
+  },
+  {
+    title: 'Parse and normalise CV sections',
+    running: 'Extracting profile, experience, education, skills…',
+    result: 'Sectioned 13 / 13 · 0 parse failures',
+    total: 13,
+    ms: 1100,
+  },
+  {
+    title: 'Pre-screen against role spec',
+    running: 'Running cheap LLM gate against requirements + threshold…',
+    result: '4 strong match · 6 proceed · 2 manual review · 1 below threshold (auto-rejected)',
+    total: 13,
+    ms: 1700,
+  },
+  {
+    title: 'Score CV → job fit (v3)',
+    running: 'Generating role-fit rationale, requirements assessment, and rank score…',
+    result: 'Median role-fit 76 · top score 86 (Priya Raman, AI Engineer)',
+    total: 12,
+    ms: 2100,
+  },
+  {
+    title: 'Sync to knowledge graph (Graphiti / Neo4j)',
+    running: 'Projecting candidates as nodes with WORKED_AT / HAS_SKILL / STUDIED_AT edges…',
+    result: '12 nodes added · 47 edges · 1 candidate marked stale (CV updated since last sync)',
+    total: 12,
+    ms: 1500,
+  },
+  {
+    title: 'Refresh standing reports + rank scores',
+    running: 'Recalculating directory rank, stage counts, and triage chips…',
+    result: 'Directory ready · top 3 candidates surfaced for review',
+    total: 13,
+    ms: 900,
+  },
 ];
+
+const ProcessStepRow = ({ step, state, progress }) => {
+  const isDone = state === 'done';
+  const isRunning = state === 'running';
+  const counter = isDone
+    ? `${step.total} / ${step.total}`
+    : isRunning
+      ? `${progress} / ${step.total}`
+      : `0 / ${step.total}`;
+  return (
+    <li
+      style={{
+        display: 'grid',
+        gridTemplateColumns: '20px 1fr auto',
+        gap: '12px',
+        padding: '10px 0',
+        borderTop: '1px solid var(--taali-border, rgba(124, 58, 237, 0.10))',
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'center', paddingTop: '2px' }}>
+        {isDone ? (
+          <CheckCircle2 size={16} style={{ color: 'var(--taali-success, #10b981)' }} aria-hidden />
+        ) : isRunning ? (
+          <Loader2 size={16} className="animate-spin" style={{ color: 'var(--purple, #7c3aed)' }} aria-hidden />
+        ) : (
+          <span
+            aria-hidden
+            style={{
+              display: 'inline-block',
+              width: '12px',
+              height: '12px',
+              borderRadius: '50%',
+              border: '1.5px solid var(--mute, #999)',
+              marginTop: '2px',
+              opacity: 0.5,
+            }}
+          />
+        )}
+      </div>
+      <div>
+        <div style={{ fontSize: '13.5px', fontWeight: 600, color: isDone || isRunning ? 'var(--ink)' : 'var(--mute)' }}>
+          {step.title}
+        </div>
+        <div style={{ fontSize: '12.5px', color: 'var(--mute)', marginTop: '2px', lineHeight: 1.45 }}>
+          {isDone ? step.result : isRunning ? step.running : 'Queued'}
+        </div>
+      </div>
+      <div
+        style={{
+          fontSize: '12px',
+          fontFamily: 'var(--font-mono, ui-monospace)',
+          color: isDone ? 'var(--taali-success, #10b981)' : isRunning ? 'var(--ink)' : 'var(--mute)',
+          alignSelf: 'flex-start',
+          paddingTop: '2px',
+          letterSpacing: '0.02em',
+        }}
+      >
+        {counter}
+      </div>
+    </li>
+  );
+};
 
 const ShowcaseProcessBanner = () => {
   const [stepIndex, setStepIndex] = useState(0);
@@ -366,7 +469,7 @@ const ShowcaseProcessBanner = () => {
     if (done) return undefined;
     const step = SHOWCASE_PROCESS_STEPS[stepIndex];
     if (!step) return undefined;
-    const tickMs = Math.max(60, Math.floor(step.ms / step.total));
+    const tickMs = Math.max(50, Math.floor(step.ms / step.total));
     const handle = window.setInterval(() => {
       setProgress((current) => {
         if (current + 1 >= step.total) {
@@ -385,71 +488,88 @@ const ShowcaseProcessBanner = () => {
     return () => window.clearInterval(handle);
   }, [stepIndex, done]);
 
-  if (done) {
-    return (
-      <div
-        className="showcase-process-banner showcase-process-banner--done"
-        style={{
-          marginBottom: '16px',
-          padding: '12px 16px',
-          borderRadius: '12px',
-          border: '1px solid var(--taali-success-border, rgba(16, 185, 129, 0.25))',
-          background: 'var(--taali-success-soft, rgba(16, 185, 129, 0.08))',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '12px',
-          fontSize: '13.5px',
-          color: 'var(--ink-2)',
-        }}
-      >
-        <span style={{ width: '8px', height: '8px', borderRadius: '50%', background: 'var(--taali-success, #10b981)' }} />
-        <span>
-          <b style={{ color: 'var(--ink)' }}>Process complete.</b> 13 candidates fetched, pre-screened, scored, and synced to the knowledge graph just now.
-        </span>
-      </div>
-    );
-  }
+  const completed = done ? SHOWCASE_PROCESS_STEPS.length : stepIndex;
+  const overallPct = Math.round((completed / SHOWCASE_PROCESS_STEPS.length) * 100);
 
-  const step = SHOWCASE_PROCESS_STEPS[stepIndex];
-  const pct = Math.round((progress / step.total) * 100);
   return (
     <div
       className="showcase-process-banner"
       style={{
-        marginBottom: '16px',
-        padding: '12px 16px',
-        borderRadius: '12px',
-        border: '1px solid var(--taali-border, rgba(124, 58, 237, 0.18))',
-        background: 'var(--taali-surface-subtle, rgba(124, 58, 237, 0.06))',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '8px',
+        marginBottom: '20px',
+        padding: '16px 18px',
+        borderRadius: '14px',
+        border: `1px solid ${done ? 'var(--taali-success-border, rgba(16, 185, 129, 0.25))' : 'var(--taali-border, rgba(124, 58, 237, 0.18))'}`,
+        background: done
+          ? 'var(--taali-success-soft, rgba(16, 185, 129, 0.06))'
+          : 'var(--taali-surface-subtle, rgba(124, 58, 237, 0.05))',
       }}
     >
-      <div style={{ display: 'flex', alignItems: 'center', gap: '10px', fontSize: '13.5px' }}>
-        <Loader2 size={14} className="animate-spin" style={{ color: 'var(--purple, #7c3aed)' }} aria-hidden />
-        <span style={{ fontWeight: 600, color: 'var(--ink)' }}>
-          Process running · Step {stepIndex + 1} / {SHOWCASE_PROCESS_STEPS.length}
-        </span>
-        <span style={{ color: 'var(--mute)' }}>{step.label} · {progress} / {step.total}</span>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '10px' }}>
+        {done ? (
+          <CheckCircle2 size={18} style={{ color: 'var(--taali-success, #10b981)' }} aria-hidden />
+        ) : (
+          <Loader2 size={18} className="animate-spin" style={{ color: 'var(--purple, #7c3aed)' }} aria-hidden />
+        )}
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: '14px', fontWeight: 600, color: 'var(--ink)' }}>
+            {done
+              ? 'Process complete · 13 candidates ingested end-to-end'
+              : `Process running · Step ${stepIndex + 1} of ${SHOWCASE_PROCESS_STEPS.length}`}
+          </div>
+          <div style={{ fontSize: '12.5px', color: 'var(--mute)', marginTop: '2px' }}>
+            {done
+              ? 'Fetch → Parse → Pre-screen → Score → Graph sync → Standing reports — finished just now.'
+              : 'Cascade running on the AI Engineer role · started 8 seconds ago'}
+          </div>
+        </div>
+        <div
+          style={{
+            fontSize: '12px',
+            fontFamily: 'var(--font-mono, ui-monospace)',
+            color: 'var(--mute)',
+            letterSpacing: '0.02em',
+          }}
+        >
+          {completed} / {SHOWCASE_PROCESS_STEPS.length} steps
+        </div>
       </div>
+
       <div
         style={{
-          height: '4px',
+          height: '3px',
           borderRadius: '999px',
           background: 'rgba(124, 58, 237, 0.12)',
           overflow: 'hidden',
+          marginBottom: '6px',
         }}
       >
         <div
           style={{
-            width: `${pct}%`,
+            width: `${overallPct}%`,
             height: '100%',
-            background: 'var(--purple, #7c3aed)',
-            transition: 'width 200ms linear',
+            background: done ? 'var(--taali-success, #10b981)' : 'var(--purple, #7c3aed)',
+            transition: 'width 240ms linear',
           }}
         />
       </div>
+
+      <ol style={{ listStyle: 'none', margin: 0, padding: 0 }}>
+        {SHOWCASE_PROCESS_STEPS.map((step, idx) => {
+          const state = done || idx < stepIndex
+            ? 'done'
+            : idx === stepIndex
+              ? 'running'
+              : 'queued';
+          return (
+            <ProcessStepRow
+              key={step.title}
+              step={step}
+              state={state}
+              progress={state === 'running' ? progress : 0}
+            />
+          );
+        })}
+      </ol>
     </div>
   );
 };
