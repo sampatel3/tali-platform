@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import re
+import unicodedata
 from dataclasses import dataclass
 from typing import Sequence
 
@@ -103,15 +104,41 @@ _lru: dict[str, ArchetypeRubric] = {}
 _LRU_CAPACITY = 256
 
 
+# Smart-quote / typographic-character → ASCII fold. Two JDs that differ only
+# in whether the recruiter pasted from Word (curly quotes) vs typed in plain
+# text (straight quotes) should share a cached rubric. We do not strip
+# punctuation — "AWS, Azure" vs "AWS Azure" can carry meaning.
+_TYPOGRAPHIC_FOLD = {
+    "‘": "'", "’": "'", "‚": "'", "‛": "'",  # single quotes
+    "“": '"', "”": '"', "„": '"', "‟": '"',  # double quotes
+    "–": "-", "—": "-", "−": "-",  # en/em/minus dash
+    "…": "...",  # horizontal ellipsis
+    " ": " ", " ": " ", " ": " ",  # non-breaking / narrow / thin space
+    "​": "", "‌": "", "‍": "", "﻿": "",  # zero-width chars
+}
+_TYPOGRAPHIC_RE = re.compile("|".join(re.escape(c) for c in _TYPOGRAPHIC_FOLD))
+
+
 def _normalise(text: str) -> str:
-    """Lowercase + collapse all whitespace runs to single spaces.
+    """Canonicalize a JD before hashing for cache lookup.
+
+    Steps:
+    1. Unicode NFC (collapse combining-mark variations).
+    2. Fold typographic characters (curly quotes, en/em-dashes, NBSP, ZWJ) to
+       ASCII equivalents — eliminates spurious cache misses when a JD is
+       pasted from Word vs typed in plain text.
+    3. Lowercase.
+    4. Collapse whitespace.
 
     Trade-off: lighter-touch normalisation gives more cache hits but more
     false-positives (two JDs that look similar but aren't actually the
-    same role share a rubric). This is the conservative middle ground.
+    same role share a rubric). This is the conservative middle ground —
+    we change *encoding* artefacts but never *content*.
     """
     if not text:
         return ""
+    text = unicodedata.normalize("NFC", text)
+    text = _TYPOGRAPHIC_RE.sub(lambda m: _TYPOGRAPHIC_FOLD[m.group(0)], text)
     return re.sub(r"\s+", " ", text.strip().lower())
 
 

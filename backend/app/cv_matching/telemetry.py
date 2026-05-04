@@ -64,6 +64,13 @@ def emit_trace(
             "model_version": MODEL_VERSION,
             "input_tokens": ctx.input_tokens,
             "output_tokens": ctx.output_tokens,
+            # Anthropic prompt-cache accounting. ``cache_read_tokens`` are
+            # billed at ~10% of the standard input rate; high cache_read
+            # vs cache_creation ratios indicate the static role block is
+            # staying warm across candidates. Roll these up per role to
+            # tune the cache_control TTL.
+            "cache_read_tokens": ctx.cache_read_tokens,
+            "cache_creation_tokens": ctx.cache_creation_tokens,
             "latency_ms": latency_ms,
             "retry_count": ctx.retry_count,
             "validation_failures": ctx.validation_failures,

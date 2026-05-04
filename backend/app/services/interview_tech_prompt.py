@@ -306,6 +306,16 @@ def generate_tech_questions(
         logger.warning("Tech interview prompt call failed: %s", exc)
         return None
 
+    usage = getattr(response, "usage", None)
+    if usage is not None:
+        logger.info(
+            "Tech interview prompt usage: input=%d output=%d cache_read=%d cache_write=%d",
+            int(getattr(usage, "input_tokens", 0) or 0),
+            int(getattr(usage, "output_tokens", 0) or 0),
+            int(getattr(usage, "cache_read_input_tokens", 0) or 0),
+            int(getattr(usage, "cache_creation_input_tokens", 0) or 0),
+        )
+
     raw = ""
     try:
         raw = response.content[0].text  # type: ignore[attr-defined]

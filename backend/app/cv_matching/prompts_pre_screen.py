@@ -109,9 +109,12 @@ def build_pre_screen_messages(
 ) -> list[dict]:
     """Build messages with prompt-caching blocks for the pre-screen call.
 
-    Block 1 (cache_control="ephemeral"): JD + must-haves + scoring rules —
-    identical for every candidate in a role batch.
+    Block 1 (cache_control="ephemeral", ttl=1h): JD + must-haves + scoring
+    rules — identical for every candidate in a role batch.
     Block 2 (no cache_control): candidate CV — unique per candidate.
+
+    1h TTL keeps the cache warm across queue delays and trickling intake;
+    breaks even at ≥3 candidates per role, which we virtually always have.
     """
     static_block = _PRE_SCREEN_STATIC_TEMPLATE.format(
         prompt_version=PRE_SCREEN_PROMPT_VERSION,
@@ -128,7 +131,7 @@ def build_pre_screen_messages(
                 {
                     "type": "text",
                     "text": static_block,
-                    "cache_control": {"type": "ephemeral"},
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
                 },
                 {
                     "type": "text",

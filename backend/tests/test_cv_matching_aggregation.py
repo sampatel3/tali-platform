@@ -113,6 +113,14 @@ def test_compute_role_fit_weighting():
 
 
 def test_worked_example_5_reqs():
+    # Priority weights: must_have=0.70, strong_pref=0.40, nice_to_have=0.15.
+    # All rids non-"jd_req_" → 1.5× recruiter bump, cancels uniformly.
+    # req_1 must_have met exact:    eff=0.70, earned=0.70
+    # req_2 must_have partial exact: eff=0.70, earned=0.35
+    # req_3 strong_pref missing:    eff=0.40, earned=0
+    # req_4 constraint:             excluded
+    # req_5 nice_to_have missing:   eff=0.15, earned=0
+    # total=1.95, earned=1.05 → 1.05/1.95 = 53.85
     assessments = [
         _ra("req_1", Priority.MUST_HAVE, Status.MET),
         _ra("req_2", Priority.MUST_HAVE, Status.PARTIALLY_MET),
@@ -120,7 +128,7 @@ def test_worked_example_5_reqs():
         _ra("req_4", Priority.CONSTRAINT, Status.MET),
         _ra("req_5", Priority.NICE_TO_HAVE, Status.MISSING),
     ]
-    assert compute_requirements_match_score(assessments) == 61.76
+    assert compute_requirements_match_score(assessments) == 53.85
 
 
 def test_empty_assessments_returns_neutral_50():
@@ -214,10 +222,11 @@ def test_missing_must_have_no_longer_floors_score():
         _ra("missed", Priority.MUST_HAVE, Status.MISSING),
     ]
     score = compute_requirements_match_score(assessments)
-    # priority weights: must_have=0.70, strong_pref=0.25; total=0.95.
-    # earned: 0 (must_have missing) + 0.25 * 1.0 * 1.0 = 0.25.
-    # 0.25/0.95 * 100 ≈ 26.32. No floor at 40.
-    assert abs(score - 26.32) < 0.1
+    # priority weights: must_have=0.70, strong_pref=0.40. Both rids non-
+    # "jd_req_" → 1.5× recruiter bump; cancels uniformly.
+    # earned: 0 (must_have missing) + 0.40 * 1.0 * 1.0 = 0.40.
+    # total: 0.40 + 0.70 = 1.10 → 0.40/1.10 ≈ 36.36. No floor at 40.
+    assert abs(score - 36.36) < 0.1
 
 
 def test_unknown_must_have_no_longer_floors_score():
@@ -226,9 +235,10 @@ def test_unknown_must_have_no_longer_floors_score():
         _ra("unk", Priority.MUST_HAVE, Status.UNKNOWN),
     ]
     score = compute_requirements_match_score(assessments)
-    # earned: 0.25 (strong_pref met) + 0.70 * 0.3 * 0 (tier missing on
-    # unknown via _ra helper) = 0.25. total=0.95 → 26.32.
-    assert abs(score - 26.32) < 0.1
+    # earned: 0.40 (strong_pref met) + 0.70 * 0.3 * 0 (tier "missing" on
+    # unknown via the _ra helper) = 0.40.
+    # total: 0.40 + 0.70 = 1.10 → 36.36.
+    assert abs(score - 36.36) < 0.1
 
 
 # ---------- recruiter-added requirement weight bump ----------

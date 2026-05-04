@@ -335,14 +335,18 @@ def build_cv_match_messages(
     """Build the Anthropic messages list with prompt-caching blocks.
 
     Returns a single user message with two content blocks:
-    - Block 1 (cache_control="ephemeral"): static per-role content — JD,
-      requirements, archetype, evaluation rules, and output schema.  Cached
-      after the first call; subsequent candidates in the same role batch pay
-      only the cheap cache-read rate.
+    - Block 1 (cache_control="ephemeral", ttl=1h): static per-role content
+      — JD, requirements, archetype, evaluation rules, and output schema.
+      Cached after the first call; subsequent candidates in the same role
+      batch pay only the cheap cache-read rate.
     - Block 2 (no cache_control): the candidate CV — unique per candidate.
 
-    Anthropic caches block 1 for 5 minutes after the last use.  For a batch
-    running at 10 candidates/min the cache stays warm throughout.
+    1-hour TTL trade-off: write premium is 2× (vs 1.25× for the default
+    5-min TTL), so the cache pays back at ≥3 reads instead of ≥2. Recruiter
+    workflows commonly trickle candidates through over many minutes, queue
+    delays span batches, and re-runs after a recruiter edit fall outside
+    a 5-minute window. With ≥3 candidates per role, 1h wins; we very
+    rarely score fewer than that against any given JD.
     """
     static_block = _STATIC_ROLE_BLOCK_TEMPLATE.format(
         prompt_version=prompt_version,
@@ -361,7 +365,7 @@ def build_cv_match_messages(
                 {
                     "type": "text",
                     "text": static_block,
-                    "cache_control": {"type": "ephemeral"},
+                    "cache_control": {"type": "ephemeral", "ttl": "1h"},
                 },
                 {
                     "type": "text",

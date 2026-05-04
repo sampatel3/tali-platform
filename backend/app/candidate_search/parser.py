@@ -112,14 +112,37 @@ def parse_nl_query(query: str, *, client=None) -> ParsedFilter:
             logger.warning("Parser client init failed: %s", exc)
             return _fallback_filter(cleaned_query)
 
+    # System prompt is identical across every parser call (only the user
+    # query changes). We mark it cacheable so successive queries from any
+    # org can hit the cache. The prompt currently sits ~800 tokens, below
+    # Haiku 4.5's 4096-token minimum cacheable prefix — Anthropic silently
+    # skips caching when the prefix is too short, so this is free today
+    # and activates automatically if the prompt grows past the threshold.
+    system_blocks = [
+        {
+            "type": "text",
+            "text": system_prompt,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+
     try:
         response = client.messages.create(
             model=MODEL_VERSION,
             max_tokens=PARSER_MAX_TOKENS,
             temperature=PARSER_TEMPERATURE,
-            system=system_prompt,
+            system=system_blocks,
             messages=[{"role": "user", "content": user_prompt}],
         )
+        usage = getattr(response, "usage", None)
+        if usage is not None:
+            cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+            cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+            input_tok = int(getattr(usage, "input_tokens", 0) or 0)
+            logger.debug(
+                "Parser usage: input=%d cache_read=%d cache_write=%d",
+                input_tok, cache_read, cache_write,
+            )
         raw_text = ""
         try:
             raw_text = response.content[0].text  # type: ignore[attr-defined]
