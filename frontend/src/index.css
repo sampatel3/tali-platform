@@ -5227,6 +5227,20 @@ body.interview-view .page {
   transform-origin: top left;
 }
 
+/* On phones, the desktop-scale trick produces an unreadable miniature.
+   Render each iframe at its own viewport width so the inner page can use
+   its native responsive layout. The user can scroll within the iframe. */
+@media (max-width: 768px) {
+  .wt-frame[data-pane="jobs"] .wt-stage iframe,
+  .wt-frame[data-pane="candidates"] .wt-stage iframe,
+  .wt-frame[data-pane="workspace"] .wt-stage iframe,
+  .wt-frame[data-pane="report"] .wt-stage iframe {
+    width: 100%;
+    height: 100%;
+    transform: none;
+  }
+}
+
 .wt-tip {
   position: absolute;
   right: 16px;

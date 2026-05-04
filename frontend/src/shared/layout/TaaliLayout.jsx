@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { LogOut, Moon, Sun } from 'lucide-react';
+import { LogOut, Menu, Moon, Sun, X } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { organizations as organizationsApi } from '../../shared/api';
@@ -126,7 +126,7 @@ const AppUser = ({ onNavigate }) => {
 
   return (
     <div className="app-user">
-      <div className="name hidden sm:block">
+      <div className="name !hidden sm:!block">
         <div className="n" title={displayName}>{displayName}</div>
         <div className="sub" title={displayOrgName}>{orgLabel}</div>
       </div>
@@ -152,7 +152,7 @@ export const AppNav = ({ currentPage, onNavigate }) => (
   <div className="app-nav">
     <div className="app-nav-inner">
       <TaaliLogo onClick={() => onNavigate('landing')} />
-      <div className="app-tabs hidden md:inline-flex">
+      <div className="app-tabs !hidden md:!inline-flex">
         {APP_TABS.map((tab) => (
           <button
             key={tab.id}
@@ -176,40 +176,100 @@ export const AppShell = ({ currentPage, onNavigate, children }) => (
   </div>
 );
 
-export const MarketingNav = ({ onNavigate }) => (
-  <div className="app-nav">
-    <div className="app-nav-inner">
-      <TaaliLogo onClick={() => onNavigate('landing')} />
-      <div className="row hidden md:flex" style={{ gap: 32 }}>
-        {MARKETING_TABS.map((tab) => (
-          <button
-            key={tab.id}
-            type="button"
-            className="btn btn-ghost btn-sm"
-            onClick={() => navigateToMarketingSection(tab.id, onNavigate)}
-          >
-            {tab.label}
+export const MarketingNav = ({ onNavigate }) => {
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return undefined;
+    const onKey = (event) => {
+      if (event.key === 'Escape') setMobileMenuOpen(false);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mobileMenuOpen]);
+
+  const closeMenu = () => setMobileMenuOpen(false);
+
+  return (
+    <div className="app-nav">
+      <div className="app-nav-inner">
+        <TaaliLogo onClick={() => { closeMenu(); onNavigate('landing'); }} />
+        <div className="row !hidden md:!flex" style={{ gap: 32 }}>
+          {MARKETING_TABS.map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              className="btn btn-ghost btn-sm"
+              onClick={() => navigateToMarketingSection(tab.id, onNavigate)}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+        <div className="row" style={{ gap: 10 }}>
+          <button type="button" className="btn btn-ghost btn-sm !hidden sm:!inline-flex" onClick={() => onNavigate('login')}>
+            Sign in
           </button>
-        ))}
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => { closeMenu(); onNavigate('demo'); }}>
+            Book a demo <span className="arrow">→</span>
+          </button>
+          <div className="!hidden md:!block">
+            <ThemeToggleButton />
+          </div>
+          <button
+            type="button"
+            className="icon-btn md:!hidden"
+            aria-label={mobileMenuOpen ? 'Close menu' : 'Open menu'}
+            aria-expanded={mobileMenuOpen}
+            aria-controls="marketing-mobile-menu"
+            onClick={() => setMobileMenuOpen((open) => !open)}
+          >
+            {mobileMenuOpen ? <X size={16} strokeWidth={1.8} /> : <Menu size={16} strokeWidth={1.8} />}
+          </button>
+        </div>
       </div>
-      <div className="row" style={{ gap: 10 }}>
-        <button type="button" className="btn btn-ghost btn-sm hidden sm:inline-flex" onClick={() => onNavigate('login')}>
-          Sign in
-        </button>
-        <button type="button" className="btn btn-primary btn-sm" onClick={() => onNavigate('demo')}>
-          Book a demo <span className="arrow">→</span>
-        </button>
-        <ThemeToggleButton />
-      </div>
+
+      {mobileMenuOpen ? (
+        <div
+          id="marketing-mobile-menu"
+          className="md:!hidden border-t border-[var(--line)] bg-[var(--bg)] px-5 pb-5 pt-3"
+        >
+          <div className="flex flex-col">
+            {MARKETING_TABS.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                className="w-full rounded-[10px] px-3 py-3 text-left text-[15px] font-medium text-[var(--ink)] transition hover:bg-[var(--bg-3)]"
+                onClick={() => {
+                  closeMenu();
+                  navigateToMarketingSection(tab.id, onNavigate);
+                }}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div className="mt-3 flex items-center gap-3 border-t border-[var(--line)] pt-4">
+            <button
+              type="button"
+              className="btn btn-outline btn-sm flex-1 justify-center"
+              onClick={() => { closeMenu(); onNavigate('login'); }}
+            >
+              Sign in
+            </button>
+            <ThemeToggleButton />
+          </div>
+        </div>
+      ) : null}
     </div>
-  </div>
-);
+  );
+};
 
 export const CandidateMiniNav = ({ label = 'Candidate assessment · secure session', onHomeClick = null }) => (
   <div className="app-nav">
     <div className="app-nav-inner">
       <TaaliLogo onClick={onHomeClick || (() => {})} />
-      <div className="hidden md:block mono-label">{label}</div>
+      <div className="!hidden md:!block mono-label">{label}</div>
       <ThemeToggleButton />
     </div>
   </div>
