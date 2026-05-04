@@ -539,17 +539,35 @@ export const LandingPage = ({ onNavigate }) => {
             </div>
           </div>
 
-          <AssessmentRuntimePreviewView
-            className="mt-6 shadow-[var(--shadow-lg)]"
-            taskName={runtimeShowcase.taskName}
-            taskRole={runtimeShowcase.taskRole}
-            taskContext={runtimeShowcase.taskContext}
-            repoFiles={runtimeShowcase.repoFiles}
-            initialSelectedRepoPath={runtimeShowcase.initialSelectedRepoPath}
-            initialClaudePrompt={runtimeShowcase.initialClaudePrompt}
-            claudeConversation={runtimeShowcase.claudeConversation}
-            output={runtimeShowcase.output}
-          />
+          <div className="mt-6 hidden md:block">
+            <AssessmentRuntimePreviewView
+              className="shadow-[var(--shadow-lg)]"
+              taskName={runtimeShowcase.taskName}
+              taskRole={runtimeShowcase.taskRole}
+              taskContext={runtimeShowcase.taskContext}
+              repoFiles={runtimeShowcase.repoFiles}
+              initialSelectedRepoPath={runtimeShowcase.initialSelectedRepoPath}
+              initialClaudePrompt={runtimeShowcase.initialClaudePrompt}
+              claudeConversation={runtimeShowcase.claudeConversation}
+              output={runtimeShowcase.output}
+            />
+          </div>
+
+          <div className="mt-6 rounded-[18px] border border-dashed border-[var(--line)] bg-[var(--bg-2)] p-6 text-center md:hidden">
+            <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">
+              Live runtime preview
+            </div>
+            <p className="mt-3 text-[14px] leading-6 text-[var(--ink-2)]">
+              The interactive workspace — file tree, editor, terminal, and AI panel — is best viewed on a larger screen.
+            </p>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm mt-5"
+              onClick={() => onNavigate('demo')}
+            >
+              Open the walkthrough <span className="arrow">→</span>
+            </button>
+          </div>
 
           <div className="mt-6 grid gap-4 md:grid-cols-3">
             {runtimeSignalCards.map((card) => (
