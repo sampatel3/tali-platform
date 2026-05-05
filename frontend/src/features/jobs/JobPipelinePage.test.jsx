@@ -110,19 +110,39 @@ describe('JobPipelinePage', () => {
     apiClient.tasks.list.mockResolvedValue({ data: [] });
   });
 
+  // The scoring panel collapses by default (showing only the summary row);
+  // recruiters expand it via an "Edit" toggle to see the full criteria +
+  // threshold editor. Tests that assert on those internals expand it first.
+  const expandScoringPanel = async () => {
+    const editToggle = await screen.findByRole('button', { name: /^Edit$/, expanded: false });
+    fireEvent.click(editToggle);
+  };
+
+  // Default view is the candidates table; pipeline kanban is opt-in. Tests
+  // that assert on kanban cards switch to the Pipeline tab first.
+  const switchToPipelineView = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: /^Pipeline$/i }));
+  };
+
   it('does not treat an unset reject threshold as 0 percent', async () => {
     renderPipeline();
+    await expandScoringPanel();
 
     await screen.findByRole('heading', { name: /Reject threshold/i, level: 3 });
 
     expect(screen.getByText(/the saved threshold/i)).toBeInTheDocument();
     expect(screen.queryByText(/below 0%/i)).not.toBeInTheDocument();
     expect(screen.getByRole('slider', { name: /Reject threshold/i })).toBeInTheDocument();
-    expect(screen.queryByRole('spinbutton')).not.toBeInTheDocument();
+    // The threshold renders as a slider only — no spinbutton inside the
+    // scoring panel. The agent bar's budget input is its own spinbutton
+    // outside this scope and isn't what we're guarding against.
+    const scorePanel = document.getElementById('role-scoring-panel');
+    expect(within(scorePanel).queryByRole('spinbutton')).not.toBeInTheDocument();
   });
 
   it('shows stage-aware card signals instead of pre-screen scores in early stages', async () => {
     renderPipeline();
+    await switchToPipelineView();
 
     const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
     const reviewCard = (await screen.findByText('Priya Anand')).closest('.kanban-card');
@@ -141,6 +161,7 @@ describe('JobPipelinePage', () => {
   it('opens the full report directly from kanban cards', async () => {
     const onNavigate = vi.fn();
     renderPipeline({ onNavigate });
+    await switchToPipelineView();
 
     const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
     expect(appliedCard).toHaveAttribute('href', '/candidates/1?from=jobs/101');
@@ -227,6 +248,7 @@ Banking transformation experience
     apiClient.roles.update.mockResolvedValue({ data: { ...baseRole, additional_requirements: 'Payments experience' } });
 
     renderPipeline();
+    await expandScoringPanel();
 
     await screen.findByRole('heading', { name: /Scoring criteria/i, level: 3 });
     fireEvent.click(screen.getByRole('button', { name: /Edit criteria/i }));
