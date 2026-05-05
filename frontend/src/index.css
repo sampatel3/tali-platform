@@ -2323,6 +2323,27 @@ html[data-theme="dark"] {
 .score-action .sa-meta {
   font-size: 12.5px;
   color: var(--mute);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.score-action .sa-meta b {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.score-panel.is-collapsed .score-action {
+  border-bottom: 0;
+}
+
+.score-panel.is-collapsed {
+  margin-bottom: 14px;
+}
+
+.score-panel .sa-summary {
+  min-width: 0;
 }
 
 .score-action .sa-actions {
@@ -2670,6 +2691,22 @@ html[data-theme="dark"] {
   align-items: center;
   margin-bottom: 18px;
   flex-wrap: wrap;
+}
+
+/* Stack below the AgentTopBar (sticky at top:0, ~78px tall) so tabs remain
+   reachable while the candidates table or kanban scrolls past. */
+.sub-tabs-sticky {
+  position: sticky;
+  top: 78px;
+  z-index: 30;
+  padding: 10px 14px;
+  margin: 4px 0 14px;
+  background: color-mix(in oklab, var(--bg) 88%, transparent);
+  backdrop-filter: saturate(180%) blur(10px);
+  -webkit-backdrop-filter: saturate(180%) blur(10px);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: 0 2px 6px -3px rgba(0, 0, 0, 0.08);
 }
 
 .sub-tabs .seg {
@@ -6659,32 +6696,75 @@ button.eng-badge-button:focus-visible {
 .nl-search__form {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   background: var(--taali-bg-elev, #ffffff);
   border: 1px solid var(--taali-border, #e2e2e8);
-  border-radius: 12px;
-  padding: 6px 8px 6px 12px;
+  border-radius: 14px;
+  padding: 8px 10px 8px 14px;
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.03);
+  transition: border-color 180ms ease, box-shadow 240ms ease, transform 180ms ease;
+}
+
+@keyframes nl-search-focus-ring {
+  0%   { box-shadow: 0 0 0 0 rgba(108, 92, 231, 0.35); }
+  100% { box-shadow: 0 0 0 6px rgba(108, 92, 231, 0); }
 }
 
 .nl-search__form:focus-within {
   border-color: var(--taali-purple, #6c5ce7);
-  box-shadow: 0 0 0 2px rgba(108, 92, 231, 0.18);
+  box-shadow:
+    0 0 0 3px rgba(108, 92, 231, 0.18),
+    0 4px 14px -8px rgba(108, 92, 231, 0.30);
+  animation: nl-search-focus-ring 600ms ease-out 1;
 }
 
 .nl-search__icon {
-  color: var(--taali-purple, #6c5ce7);
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, #6c5ce7 0%, #ec4899 100%);
+  color: #ffffff;
+  box-shadow: 0 2px 8px -2px rgba(108, 92, 231, 0.50);
 }
 
 .nl-search__input {
   flex: 1;
   border: none;
   outline: none;
-  font-size: 14px;
+  font-size: 15.5px;
   background: transparent;
-  padding: 8px 4px;
+  padding: 10px 4px;
   color: inherit;
+  min-height: 24px;
+}
+
+.nl-search__input::placeholder {
+  color: var(--taali-muted, #9099a6);
+}
+
+.nl-search__kbd {
+  display: none;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--taali-muted, #9099a6);
+  background: var(--taali-bg-soft, #f3f3f7);
+  border: 1px solid var(--taali-border, #e2e2e8);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  padding: 2px 6px;
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.nl-search__form:not(:focus-within) .nl-search__kbd {
+  display: inline-flex;
 }
 
 .nl-search__clear {
@@ -6712,43 +6792,42 @@ button.eng-badge-button:focus-visible {
   flex-shrink: 0;
 }
 
-.nl-search__suggestions {
-  position: absolute;
-  top: 56px;
-  left: 0;
-  right: 0;
-  z-index: 10;
-  background: var(--taali-bg-elev, #ffffff);
-  border: 1px solid var(--taali-border, #e2e2e8);
-  border-radius: 10px;
-  padding: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.08);
+.nl-search__pills {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  padding: 0 4px;
 }
 
-.nl-search__suggestions-label {
-  font-size: 11px;
+.nl-search__pills-label {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.08em;
   color: var(--taali-muted, #9099a6);
-  padding: 4px 8px;
+  margin-right: 2px;
 }
 
-.nl-search__suggestion {
-  background: transparent;
-  border: none;
-  text-align: left;
-  padding: 8px 10px;
-  border-radius: 6px;
-  cursor: pointer;
-  font-size: 13px;
-  color: inherit;
-}
-
-.nl-search__suggestion:hover {
+.nl-search__pill {
   background: var(--taali-bg-soft, #f3f3f7);
+  border: 1px solid var(--taali-border, #e2e2e8);
+  color: var(--taali-text, #1a1a2e);
+  font-size: 12.5px;
+  font-weight: 500;
+  padding: 4px 10px;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: background 160ms ease, border-color 160ms ease, transform 120ms ease;
+}
+
+.nl-search__pill:hover {
+  background: rgba(108, 92, 231, 0.08);
+  border-color: rgba(108, 92, 231, 0.35);
+}
+
+.nl-search__pill:active {
+  transform: translateY(1px);
 }
 
 .nl-search__chips {

@@ -644,7 +644,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [refreshTick, setRefreshTick] = useState(0);
   const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
-  const [activeView, setActiveView] = useState('pipeline');
+  const [activeView, setActiveView] = useState('table');
+  const [scoringExpanded, setScoringExpanded] = useState(false);
   const [roleSheetOpen, setRoleSheetOpen] = useState(false);
   const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
   const [roleSheetError, setRoleSheetError] = useState('');
@@ -1380,27 +1381,56 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           </div>
         </div>
 
-        <div className="score-panel" id="role-scoring-panel">
+        <div className="sub-tabs sub-tabs-sticky">
+          <div className="seg">
+            <button type="button" className={activeView === 'table' ? 'active' : ''} onClick={() => setActiveView('table')}>Candidates table</button>
+            <button type="button" className={activeView === 'pipeline' ? 'active' : ''} onClick={() => setActiveView('pipeline')}>Pipeline</button>
+            <button type="button" className={activeView === 'role-fit' ? 'active' : ''} onClick={() => setActiveView('role-fit')}>Role fit</button>
+            <button type="button" className={activeView === 'activity' ? 'active' : ''} onClick={() => setActiveView('activity')}>Activity</button>
+          </div>
+          <div className="row">
+            <div className="filter-chip"><span className="mono">Filter</span> · All stages</div>
+            <div className="filter-chip"><span className="mono">Sort</span> · Composite</div>
+          </div>
+        </div>
+
+        <div className={`score-panel ${scoringExpanded ? 'is-expanded' : 'is-collapsed'}`} id="role-scoring-panel">
           <div className="score-action">
             <div className="sa-icon">
               <Sparkles size={20} />
             </div>
-            <div>
-              <div className="sa-label">CV scoring · manual trigger</div>
+            <div className="sa-summary">
+              <div className="sa-label">CV scoring</div>
               <div className="sa-headline">Score {activeApplications.length} CVs against this role&apos;s criteria</div>
               <div className="sa-meta">
-                Last run: {lastScoredAt ? lastScoredAt.toLocaleString() : 'not yet scored'} ·
-                {' '}
-                {batchScoreProgress?.status === 'running'
-                  ? `${batchScoreProgress.scored}/${batchScoreProgress.total} scored`
-                  : `${unscoredApplications.length} new since last run`}
+                <span><b>Reject &lt; {currentThresholdValue != null ? `${currentThresholdValue}%` : '—'}</b></span>
+                <span aria-hidden>·</span>
+                <span><b>{recruiterCriteria.length || 'Job spec'}</b> {recruiterCriteria.length ? 'criteria' : 'only'}</span>
+                <span aria-hidden>·</span>
+                <span><b>{unscoredApplications.length}</b> unscreened</span>
+                <span aria-hidden>·</span>
+                <span>Last run {lastScoredAt ? lastScoredAt.toLocaleDateString() : 'never'}</span>
               </div>
             </div>
             <div className="sa-actions action-toolbar">
-              {/* Single button replaces Fetch CVs / Pre-screen / Refresh / Score
-                  new / Re-score all. The dialog lets the user pick which
-                  steps to run. The cascade (fetch → pre-screen → score)
-                  always runs in order. */}
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={() => setScoringExpanded((v) => !v)}
+                aria-expanded={scoringExpanded}
+                aria-controls="score-grid-region"
+              >
+                <Edit3 size={13} />
+                {scoringExpanded ? 'Hide' : 'Edit'}
+                <ChevronDown
+                  size={13}
+                  style={{
+                    marginLeft: 2,
+                    transition: 'transform 180ms ease',
+                    transform: scoringExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
+                  }}
+                />
+              </button>
               <button
                 type="button"
                 className="btn btn-purple btn-sm"
@@ -1423,13 +1453,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                       </>
                     );
                   }
-                  return <>Process candidates</>;
+                  return <>Score {activeApplications.length} candidates</>;
                 })()}
               </button>
             </div>
           </div>
 
-          <div className="score-grid">
+          <div className="score-grid" id="score-grid-region" hidden={!scoringExpanded}>
             <div className="sp-col">
               <div className="criteria-head">
                 <div>
@@ -1581,23 +1611,6 @@ Disqualifying: No experience with regulated financial data`}
             <div className="k">Interview focus</div>
             <div className="v">{Array.isArray(role?.interview_focus?.questions) ? role.interview_focus.questions.length : 0}</div>
             <div className="d">Generated prompts</div>
-          </div>
-        </div>
-
-        <div className="sub-tabs">
-          <div className="seg">
-            <button type="button" className={activeView === 'pipeline' ? 'active' : ''} onClick={() => setActiveView('pipeline')}>Pipeline</button>
-            <button type="button" className={activeView === 'table' ? 'active' : ''} onClick={() => setActiveView('table')}>Candidates table</button>
-            <button type="button" className={activeView === 'role-fit' ? 'active' : ''} onClick={() => setActiveView('role-fit')}>Role fit</button>
-            <button type="button" className={activeView === 'activity' ? 'active' : ''} onClick={() => setActiveView('activity')}>Activity</button>
-          </div>
-          <div className="row">
-            <div className="filter-chip"><span className="mono">Filter</span> · All stages</div>
-            <div className="filter-chip"><span className="mono">Sort</span> · Composite</div>
-            <div className="pipeline-invite-hint">Use the candidates table to select a candidate and send a Taali assessment.</div>
-            <button type="button" className="btn btn-outline btn-sm" onClick={() => setActiveView('table')}>
-              Open candidates table
-            </button>
           </div>
         </div>
 

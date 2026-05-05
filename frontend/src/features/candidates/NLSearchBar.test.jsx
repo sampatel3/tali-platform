@@ -72,10 +72,21 @@ describe('NLSearchBar', () => {
     expect(props.onClear).toHaveBeenCalled();
   });
 
-  it('renders example queries on focus when query is empty', () => {
+  it('renders quick filter pills when the query is empty and submits one when clicked', () => {
+    const { props } = renderBar();
+    expect(screen.getByText('UAE-based')).toBeInTheDocument();
+    expect(screen.getByText('5+ yrs FinTech')).toBeInTheDocument();
+    expect(screen.getByText('SAFe')).toBeInTheDocument();
+    fireEvent.mouseDown(screen.getByRole('button', { name: 'UAE-based' }));
+    expect(props.onSubmit).toHaveBeenCalledWith('UAE-based candidates');
+  });
+
+  it('focuses the input when the user presses ⌘K / Ctrl+K', () => {
     renderBar();
-    fireEvent.focus(screen.getByLabelText(/natural-language candidate search/i));
-    expect(screen.getByText(/AWS Glue experience, based in UK/i)).toBeInTheDocument();
+    const input = screen.getByLabelText(/natural-language candidate search/i);
+    expect(document.activeElement).not.toBe(input);
+    fireEvent.keyDown(window, { key: 'k', metaKey: true });
+    expect(document.activeElement).toBe(input);
   });
 
   it('toggles view mode', () => {

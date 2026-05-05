@@ -250,7 +250,7 @@ const OnStateBar = ({ role, status, onRefresh, persistRole, saving, settingsOpen
   return (
     <>
       <div
-        className="agent-bar agent-bar-on"
+        className={`agent-bar agent-bar-on ${paused ? 'is-paused' : 'is-active'}`}
         style={{
           position: 'sticky',
           top: 0,
@@ -258,12 +258,10 @@ const OnStateBar = ({ role, status, onRefresh, persistRole, saving, settingsOpen
           margin: '0 0 16px',
           borderRadius: 14,
           padding: '14px 18px',
-          background: paused
-            ? 'linear-gradient(135deg, color-mix(in srgb, var(--amber, #d97706) 12%, transparent) 0%, color-mix(in srgb, var(--amber, #d97706) 4%, transparent) 100%)'
-            : 'linear-gradient(135deg, var(--purple) 0%, color-mix(in srgb, var(--purple) 80%, #000 0%) 100%)',
           color: paused ? 'var(--ink)' : '#fff',
           border: paused ? '1px solid color-mix(in srgb, var(--amber, #d97706) 35%, transparent)' : '1px solid color-mix(in srgb, var(--purple) 70%, #000 0%)',
-          boxShadow: '0 6px 20px -10px color-mix(in srgb, var(--purple) 60%, transparent)',
+          isolation: 'isolate',
+          overflow: 'hidden',
         }}
       >
         <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 14 }}>
@@ -447,6 +445,53 @@ const OnStateBar = ({ role, status, onRefresh, persistRole, saving, settingsOpen
             0% { transform: scale(1); opacity: 0.65; }
             70% { transform: scale(1.4); opacity: 0; }
             100% { transform: scale(1.4); opacity: 0; }
+          }
+          @keyframes agent-aurora {
+            0%   { background-position: 0% 50%, 100% 50%, 50% 0%; }
+            50%  { background-position: 100% 50%, 0% 50%, 50% 100%; }
+            100% { background-position: 0% 50%, 100% 50%, 50% 0%; }
+          }
+          @keyframes agent-rise {
+            from { transform: translateY(6px); opacity: 0; }
+            to   { transform: translateY(0);   opacity: 1; }
+          }
+          .agent-bar-on {
+            animation: agent-rise 360ms cubic-bezier(0.2, 0.7, 0.2, 1) both;
+          }
+          .agent-bar-on.is-active {
+            background:
+              radial-gradient(ellipse 60% 120% at 12% 50%, rgba(167, 139, 250, 0.55) 0%, transparent 60%),
+              radial-gradient(ellipse 50% 130% at 88% 40%, rgba(244, 114, 182, 0.40) 0%, transparent 65%),
+              radial-gradient(ellipse 70% 100% at 50% 110%, rgba(99, 102, 241, 0.45) 0%, transparent 70%),
+              linear-gradient(135deg, var(--purple) 0%, color-mix(in srgb, var(--purple) 80%, #000 0%) 100%);
+            background-size: 220% 220%, 200% 240%, 220% 200%, 100% 100%;
+            background-position: 0% 50%, 100% 50%, 50% 0%, 0 0;
+            animation: agent-rise 360ms cubic-bezier(0.2, 0.7, 0.2, 1) both,
+                       agent-aurora 18s ease-in-out infinite;
+            box-shadow:
+              0 12px 28px -14px color-mix(in srgb, var(--purple) 70%, transparent),
+              0 4px 10px -4px color-mix(in srgb, var(--purple) 40%, transparent),
+              inset 0 1px 0 rgba(255, 255, 255, 0.10);
+          }
+          .agent-bar-on.is-paused {
+            background:
+              linear-gradient(135deg,
+                color-mix(in srgb, var(--amber, #d97706) 12%, transparent) 0%,
+                color-mix(in srgb, var(--amber, #d97706) 4%, transparent) 100%);
+            box-shadow: 0 6px 20px -10px color-mix(in srgb, var(--amber, #d97706) 50%, transparent);
+          }
+          .agent-bar-on.is-active::before {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background-image:
+              linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+              linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+            background-size: 24px 24px;
+            mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, #000 40%, transparent 100%);
+            -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, #000 40%, transparent 100%);
+            pointer-events: none;
+            z-index: -1;
           }
         `}</style>
       </div>

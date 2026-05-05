@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Sparkles, X, Network, List as ListIcon } from 'lucide-react';
 
 /**
@@ -17,11 +17,10 @@ import { Sparkles, X, Network, List as ListIcon } from 'lucide-react';
  *   onViewModeChange(next):  toggle handler
  *   isLoading:      shows a "thinking..." subtle indicator
  */
-const EXAMPLE_QUERIES = [
-  'AWS Glue experience, based in UK',
-  '5+ years, worked in Europe, large enterprise',
-  'Worked at Google or Meta in last 3 years',
-  'Python and Kubernetes, in production',
+const QUICK_PILLS = [
+  { label: 'UAE-based', query: 'UAE-based candidates' },
+  { label: '5+ yrs FinTech', query: '5+ years experience in FinTech' },
+  { label: 'SAFe', query: 'SAFe certified or experienced' },
 ];
 
 export function NLSearchBar({
@@ -36,11 +35,27 @@ export function NLSearchBar({
   isLoading = false,
 }) {
   const [draft, setDraft] = useState(nlQuery || '');
-  const [focused, setFocused] = useState(false);
+  const inputRef = useRef(null);
 
   useEffect(() => {
     setDraft(nlQuery || '');
   }, [nlQuery]);
+
+  // ⌘K / Ctrl+K focuses the search input from anywhere on the page.
+  useEffect(() => {
+    const onKeyDown = (event) => {
+      const key = String(event.key || '').toLowerCase();
+      if (key !== 'k') return;
+      if (!(event.metaKey || event.ctrlKey)) return;
+      const input = inputRef.current;
+      if (!input) return;
+      event.preventDefault();
+      input.focus();
+      input.select?.();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
 
   const submit = (event) => {
     event.preventDefault();
@@ -49,23 +64,30 @@ export function NLSearchBar({
     onSubmit(cleaned);
   };
 
+  const runPill = (pill) => {
+    setDraft(pill.query);
+    onSubmit(pill.query);
+  };
+
   const chips = buildChips(parsedFilter);
   const hasChips = chips.length > 0;
-  const showSuggestions = focused && !nlQuery && !draft.trim();
+  const showPills = !nlQuery && !draft.trim() && !hasChips;
 
   return (
     <div className="nl-search">
       <form onSubmit={submit} className="nl-search__form">
-        <Sparkles size={16} className="nl-search__icon" aria-hidden />
+        <span className="nl-search__icon" aria-hidden>
+          <Sparkles size={18} />
+        </span>
         <input
+          ref={inputRef}
           className="nl-search__input"
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setTimeout(() => setFocused(false), 150)}
           placeholder="Ask anything — e.g. 'AWS Glue experience, worked in Europe, 5+ years'"
           aria-label="Natural-language candidate search"
         />
+        <kbd className="nl-search__kbd" aria-hidden title="Focus shortcut">⌘K</kbd>
         {nlQuery ? (
           <button
             type="button"
@@ -102,21 +124,20 @@ export function NLSearchBar({
         </div>
       </form>
 
-      {showSuggestions ? (
-        <div className="nl-search__suggestions" role="listbox">
-          <div className="nl-search__suggestions-label">Try:</div>
-          {EXAMPLE_QUERIES.map((example) => (
+      {showPills ? (
+        <div className="nl-search__pills" role="group" aria-label="Quick filters">
+          <span className="nl-search__pills-label">Try:</span>
+          {QUICK_PILLS.map((pill) => (
             <button
-              key={example}
+              key={pill.label}
               type="button"
-              className="nl-search__suggestion"
+              className="nl-search__pill"
               onMouseDown={(event) => {
                 event.preventDefault();
-                setDraft(example);
-                onSubmit(example);
+                runPill(pill);
               }}
             >
-              {example}
+              {pill.label}
             </button>
           ))}
         </div>
