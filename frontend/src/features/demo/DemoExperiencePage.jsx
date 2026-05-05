@@ -45,7 +45,54 @@ const PANE_NARRATIVE = {
   candidates: 'Triage your shortlist — every candidate scored and ranked.',
   chat: 'Ask plain-English questions across your whole candidate pool.',
   profile: 'Send your client a clean, shareable verdict in one click.',
-  workspace: 'See exactly what candidates work in.',
+  workspace: 'The candidate side — every prompt, edit, and test run captured for scoring.',
+};
+
+// Slim "why this matters to a recruiter" caption above each pane. Headline
+// frames what the recruiter gets out of it; outcomes are the placement /
+// time-saving / client-trust wins, not feature lists. Three outcomes max so
+// the strip stays one row and never pushes the iframe below the fold.
+const PANE_VALUE = {
+  jobs: {
+    headline: 'Stop juggling tabs to know where every role stands.',
+    outcomes: [
+      'See pipeline volume per role at a glance',
+      'Spot stalled roles before your client asks',
+      'No double-entry — Workable stays the source of truth',
+    ],
+  },
+  candidates: {
+    headline: 'Walk in with a ranked shortlist instead of a CV pile.',
+    outcomes: [
+      'Every CV scored against the role the moment it lands',
+      'Pre-screen weeds out the obvious nos for you',
+      'Search in plain English, not boolean strings',
+    ],
+  },
+  chat: {
+    headline: 'Pull a shortlist for a new brief in seconds, not hours.',
+    outcomes: [
+      'Reuse every past placement and search you’ve done',
+      'No saved searches to maintain or remember',
+      'Answers come with the candidates attached',
+    ],
+  },
+  workspace: {
+    headline: 'Watch how your candidates think, not just what they ship.',
+    outcomes: [
+      'Every prompt, edit, file open, and test run is captured automatically',
+      'Real IDE, real repo, real AI tools — no toy puzzles, no installs for the candidate',
+      'Becomes the AI-collaboration evidence that backs every score you send your client',
+    ],
+  },
+  profile: {
+    headline: 'Send a candidate to your client without writing a 30-line email.',
+    outcomes: [
+      'One link, one clear verdict — your client knows what to do',
+      'Internal scoring and recruiter notes stay internal',
+      'Looks more polished than the PDF reports your competitors send',
+    ],
+  },
 };
 
 // Slim "why this matters to a recruiter" caption above each pane. Headline
