@@ -2099,6 +2099,37 @@ def _try_fetch_cv_from_workable(
             app.id,
         )
 
+    # Sibling-application propagation. A candidate may have applied to
+    # multiple roles, each with its own application row. Workable stores
+    # one CV per candidate, so all sibling applications should reflect
+    # the same file_url / cv_text. Without this loop, fetching the CV
+    # under app=A would leave app=B (same candidate) pointing at a
+    # stale local-disk URL — exactly the drift that produced 1.1k dead
+    # rows after the Tigris cutover.
+    #
+    # We only overwrite siblings whose cv_file_url is *not* already an
+    # https URL, so manual per-application uploads (which are
+    # https-backed when storage is configured) stay untouched.
+    if candidate:
+        siblings = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.candidate_id == candidate.id,
+                CandidateApplication.id != app.id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .all()
+        )
+        for sibling in siblings:
+            if (sibling.cv_file_url or "").startswith("https://"):
+                continue
+            sibling.cv_file_url = file_url
+            sibling.cv_filename = filename
+            sibling.cv_text = extracted
+            sibling.cv_uploaded_at = now
+            if candidate.cv_sections is not None:
+                sibling.cv_sections = candidate.cv_sections
+
     return True
 
 
