@@ -30,8 +30,8 @@ export const candidates = {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
   },
-  downloadDocument: (candidateId, docType) =>
-    api.get(`/candidates/${candidateId}/documents/${docType}`, { responseType: 'blob' }),
+  downloadDocument: (candidateId, docType, config = {}) =>
+    api.get(`/candidates/${candidateId}/documents/${docType}`, { responseType: 'blob', ...config }),
 
   // cv_match_v3.0 override capture (Phase 9). Stub-only — UI not yet built.
   // payload: {
