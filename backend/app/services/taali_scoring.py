@@ -2,9 +2,42 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..platform.config import settings
+
 TAALI_SCORING_RUBRIC_VERSION = "taali_v3_role_fit_blended"
-ROLE_FIT_WEIGHTS = {"cv_fit": 0.5, "requirements_fit": 0.5}
-TAALI_WEIGHTS = {"assessment": 0.5, "role_fit": 0.5}
+
+
+def _role_fit_weights() -> dict[str, float]:
+    return {
+        "cv_fit": float(settings.TAALI_WEIGHT_CV_FIT),
+        "requirements_fit": float(settings.TAALI_WEIGHT_REQUIREMENTS_FIT),
+    }
+
+
+def _taali_weights() -> dict[str, float]:
+    return {
+        "assessment": float(settings.TAALI_WEIGHT_ASSESSMENT),
+        "role_fit": float(settings.TAALI_WEIGHT_ROLE_FIT),
+    }
+
+
+# Public dict-shaped views for callers that read weights for breakdown payloads.
+# These are recomputed on each access so settings overrides take effect without
+# a process restart at module import time.
+class _WeightView(dict):
+    def __init__(self, getter):
+        self._getter = getter
+        super().__init__(getter())
+
+    def __getitem__(self, key):
+        return self._getter()[key]
+
+    def get(self, key, default=None):
+        return self._getter().get(key, default)
+
+
+ROLE_FIT_WEIGHTS = _WeightView(_role_fit_weights)
+TAALI_WEIGHTS = _WeightView(_taali_weights)
 
 
 def normalize_score_100(value: Any) -> float | None:

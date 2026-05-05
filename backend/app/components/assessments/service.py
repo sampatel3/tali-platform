@@ -192,6 +192,54 @@ def _clone_assessment_branch_into_workspace(sandbox: Any, assessment: Assessment
         return False
 
 
+def _read_sandbox_repo_files(sandbox: Any, repo_root: str, max_files: int = 200, max_bytes: int = 500_000) -> Dict[str, Any] | None:
+    """Read the live repo file tree from the sandbox.
+
+    Returns a `repo_structure` dict matching the shape of `task.repo_structure`
+    (so the candidate UI can rehydrate the editor with the latest content),
+    or `None` on failure.
+    """
+    try:
+        result = sandbox.run_code(
+            "import json, os, pathlib\n"
+            f"repo_root = pathlib.Path({repo_root!r})\n"
+            f"MAX_FILES = {int(max_files)}\n"
+            f"MAX_BYTES = {int(max_bytes)}\n"
+            "files = {}\n"
+            "skipped = []\n"
+            "if repo_root.exists():\n"
+            "  for path in sorted(repo_root.rglob('*')):\n"
+            "    if not path.is_file():\n"
+            "      continue\n"
+            "    rel = path.relative_to(repo_root).as_posix()\n"
+            "    if rel.startswith('.git/') or rel == '.git' or '/.git/' in '/'+rel:\n"
+            "      continue\n"
+            "    if len(files) >= MAX_FILES:\n"
+            "      skipped.append(rel)\n"
+            "      continue\n"
+            "    try:\n"
+            "      raw = path.read_bytes()\n"
+            "      if len(raw) > MAX_BYTES:\n"
+            "        skipped.append(rel)\n"
+            "        continue\n"
+            "      files[rel] = raw.decode('utf-8', 'replace')\n"
+            "    except Exception:\n"
+            "      skipped.append(rel)\n"
+            "print(json.dumps({'files': files, 'skipped': skipped}))\n"
+        )
+        out = _execution_stdout_text(result).strip().splitlines()
+        if not out:
+            return None
+        payload = json.loads(out[-1])
+        files = payload.get("files") or {}
+        if not isinstance(files, dict) or not files:
+            return None
+        return {"files": files}
+    except Exception:
+        logger.exception("Failed to read sandbox repo files repo_root=%s", repo_root)
+        return None
+
+
 def _materialize_task_repository(sandbox: Any, task: Task) -> None:
     """Write repo files into sandbox and initialise git branch for candidates."""
     repo_files = _repo_files_from_structure(task.repo_structure)
@@ -494,6 +542,7 @@ def pause_assessment_timer(assessment: Assessment, pause_reason: str, db: Sessio
     try:
         db.commit()
     except Exception:
+        logger.exception("Failed to commit assessment timer pause assessment_id=%s", assessment.id)
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to pause assessment timer")
 
@@ -518,6 +567,7 @@ def resume_assessment_timer(assessment: Assessment, db: Session, resume_reason: 
     try:
         db.commit()
     except Exception:
+        logger.exception("Failed to commit assessment timer resume assessment_id=%s", assessment.id)
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to resume assessment timer")
 
@@ -550,6 +600,7 @@ def store_cv_upload(assessment: Assessment, upload: UploadFile, db: Session) -> 
     try:
         db.commit()
     except Exception:
+        logger.exception("Failed to commit CV metadata assessment_id=%s", assessment.id)
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to store CV metadata")
 
@@ -751,11 +802,12 @@ def start_or_resume_assessment(
                 )
         db.commit()
     except Exception:
+        logger.exception("Failed to commit assessment start assessment_id=%s", assessment.id)
         db.rollback()
         try:
             e2b.close_sandbox(sandbox)
         except Exception:
-            pass
+            logger.exception("Failed to close E2B sandbox after start failure assessment_id=%s", assessment.id)
         raise HTTPException(status_code=500, detail="Failed to start assessment session")
     task = db.query(Task).filter(Task.id == assessment.task_id).first()
     if not task:
@@ -811,6 +863,7 @@ def start_or_resume_assessment(
         try:
             db.commit()
         except Exception:
+            logger.exception("Failed to commit workspace bootstrap log assessment_id=%s", assessment.id)
             db.rollback()
             raise HTTPException(status_code=500, detail="Failed to persist assessment workspace bootstrap logs")
         if not bootstrap_result.get("success") and bootstrap_result.get("must_succeed"):
@@ -820,6 +873,15 @@ def start_or_resume_assessment(
             )
 
     resume_code = resume_code_for_assessment(assessment, task.starter_code or "")
+
+    # On resume, return the candidate's *current* workspace state instead of
+    # the static template — otherwise reloading the assessment shows their
+    # edits as missing.
+    repo_structure_for_response = task.repo_structure
+    if not started_now:
+        live_repo_structure = _read_sandbox_repo_files(sandbox, _workspace_repo_root(task))
+        if live_repo_structure:
+            repo_structure_for_response = live_repo_structure
 
     effective_budget_limit = resolve_effective_budget_limit_usd(
         is_demo=bool(getattr(assessment, "is_demo", False)),
@@ -850,7 +912,7 @@ def start_or_resume_assessment(
             "task_key": task.task_key,
             "role": task.role,
             "scenario": task.scenario,
-            "repo_structure": task.repo_structure,
+            "repo_structure": repo_structure_for_response,
             "rubric_categories": candidate_rubric_view(task.evaluation_rubric),
             "evaluation_rubric": None,
             "extra_data": None,

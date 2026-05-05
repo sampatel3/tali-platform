@@ -176,8 +176,13 @@ class CodeExecutionRequest(BaseModel):
 
 
 class RepoFileSaveRequest(BaseModel):
-    path: str = Field(min_length=1, max_length=500)
-    content: str = Field(default="", max_length=500000)
+    # Single-file form (legacy). Either (path + content) or `files` must be set.
+    path: Optional[str] = Field(default=None, max_length=500)
+    content: Optional[str] = Field(default=None, max_length=500000)
+    # Multi-file form: full snapshot of in-browser repo state. Used by the
+    # Claude prompt sync path so unsaved changes in non-selected files are
+    # also visible to Claude inside the live workspace.
+    files: List[RepoFileSnapshotEntry] = Field(default_factory=list)
 
 
 class ClaudeRequest(BaseModel):

@@ -36,10 +36,13 @@ def time_remaining_seconds(assessment: Assessment) -> int:
     if not assessment.started_at:
         return total
     paused_seconds = int(getattr(assessment, "total_paused_seconds", 0) or 0)
-    if getattr(assessment, "is_timer_paused", False) and getattr(assessment, "paused_at", None):
-        paused_at = ensure_utc(assessment.paused_at)
-        if paused_at:
-            paused_seconds += max(0, int((utcnow() - paused_at).total_seconds()))
+    # Trust paused_at as the source of truth: if it's set we're inside an
+    # un-closed pause window regardless of the is_timer_paused flag (which
+    # could be desynced after a partial commit). resume_assessment_timer
+    # always clears paused_at when flipping the flag back.
+    paused_at = ensure_utc(getattr(assessment, "paused_at", None))
+    if paused_at:
+        paused_seconds += max(0, int((utcnow() - paused_at).total_seconds()))
     elapsed = int((utcnow() - ensure_utc(assessment.started_at)).total_seconds()) - paused_seconds
     return max(0, total - max(0, elapsed))
 
@@ -251,12 +254,15 @@ def build_breakdown(assessment: Assessment) -> Dict[str, Any]:
         if "applied_caps" in sb:
             breakdown["appliedCaps"] = sb.get("applied_caps") or []
 
-    # Recommendation badge
+    # Recommendation badge — read 0-100 columns in priority order. The legacy
+    # `score` (0-10) column is never used as a source of truth because every
+    # post-MVP scoring path also writes the 0-100 columns; falling through to
+    # `score * 10` masked badge regressions when the new columns were missing.
     score_100 = getattr(assessment, "taali_score", None)
     if score_100 is None:
         score_100 = getattr(assessment, "assessment_score", None)
     if score_100 is None:
-        score_100 = assessment.final_score or (assessment.score * 10 if assessment.score else None)
+        score_100 = getattr(assessment, "final_score", None)
     if score_100 is not None:
         if score_100 >= 80:
             breakdown["recommendation"] = "STRONG HIRE"

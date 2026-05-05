@@ -1,11 +1,10 @@
 import api from './httpClient';
 
-const buildTerminalWsUrl = (assessmentId, assessmentToken) => {
+const buildTerminalWsUrl = (assessmentId) => {
   const rawApi = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '');
   const origin = rawApi || (typeof window !== 'undefined' ? window.location.origin : '');
   const wsOrigin = origin.replace(/^http:/i, 'ws:').replace(/^https:/i, 'wss:');
-  const token = encodeURIComponent(assessmentToken || '');
-  return `${wsOrigin}/api/v1/assessments/${assessmentId}/terminal/ws?token=${token}`;
+  return `${wsOrigin}/api/v1/assessments/${assessmentId}/terminal/ws`;
 };
 
 export const assessments = {
@@ -36,7 +35,7 @@ export const assessments = {
     api.post(`/assessments/${id}/claude`, payload, {
       headers: { 'X-Assessment-Token': assessmentToken },
     }),
-  terminalWsUrl: (id, assessmentToken) => buildTerminalWsUrl(id, assessmentToken),
+  terminalWsUrl: (id /*, assessmentToken */) => buildTerminalWsUrl(id),
   submit: (id, payloadOrFinalCode, assessmentToken, metadata = {}) =>
     api.post(
       `/assessments/${id}/submit`,

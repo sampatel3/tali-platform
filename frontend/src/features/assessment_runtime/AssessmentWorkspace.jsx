@@ -101,7 +101,8 @@ function sanitizeClaudeMessage(content) {
 class RuntimeSurfaceBoundary extends React.Component {
   constructor(props) {
     super(props);
-    this.state = { hasError: false };
+    this.state = { hasError: false, errorKey: 0 };
+    this.reset = this.reset.bind(this);
   }
 
   static getDerivedStateFromError() {
@@ -113,11 +114,22 @@ class RuntimeSurfaceBoundary extends React.Component {
     console.error('Runtime surface failed to load', error);
   }
 
+  reset() {
+    // Bump errorKey so children remount with a fresh attempt at lazy import.
+    this.setState((s) => ({ hasError: false, errorKey: s.errorKey + 1 }));
+  }
+
   render() {
     if (this.state.hasError) {
-      return this.props.fallback;
+      const fallback = this.props.fallback;
+      if (typeof fallback === 'function') return fallback({ retry: this.reset });
+      return fallback;
     }
-    return this.props.children;
+    return (
+      <React.Fragment key={this.state.errorKey}>
+        {this.props.children}
+      </React.Fragment>
+    );
   }
 }
 
@@ -133,6 +145,7 @@ const EditorFallback = ({
   isTimerPaused,
   saving = false,
   showTerminalAction = false,
+  onRetry = null,
 }) => (
   <div className="flex h-full flex-col bg-[var(--bg-2)]">
     <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--line)] px-5 py-3">
@@ -174,8 +187,17 @@ const EditorFallback = ({
       </div>
     </div>
     <div className="flex-1 overflow-hidden p-4">
-      <div className="mb-3 rounded-[12px] border border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-3 py-2 font-mono text-[11px] text-[var(--taali-warning)]">
-        Advanced editor unavailable in this browser. Using a plain text fallback.
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-2 rounded-[12px] border border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] px-3 py-2 font-mono text-[11px] text-[var(--taali-warning)]">
+        <span>Advanced editor unavailable in this browser. Using a plain text fallback.</span>
+        {onRetry ? (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-full border border-[var(--taali-warning-border)] bg-[var(--bg-2)] px-2.5 py-1 text-[11px] font-medium text-[var(--taali-warning)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)]"
+          >
+            Try again
+          </button>
+        ) : null}
       </div>
       <textarea
         value={editorContent ?? assessmentStarterCode ?? ''}
@@ -196,10 +218,21 @@ const EditorLoadingFallback = () => (
   </div>
 );
 
-const TerminalFallback = () => (
+const TerminalFallback = ({ onRetry = null } = {}) => (
   <div className="flex h-full flex-col bg-[var(--ink)] text-[var(--taali-inverse-text)]">
     <div className="border-b border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] px-4 py-3">
-      <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--purple-soft)]">Claude Code CLI</div>
+      <div className="flex items-center justify-between gap-3">
+        <div className="font-mono text-[11px] uppercase tracking-[0.12em] text-[var(--purple-soft)]">Claude Code CLI</div>
+        {onRetry ? (
+          <button
+            type="button"
+            onClick={onRetry}
+            className="rounded-full border border-[color-mix(in_oklab,var(--taali-inverse-text)_10%,transparent)] bg-[color-mix(in_oklab,var(--taali-inverse-text)_5%,transparent)] px-3 py-1 font-mono text-[10.5px] uppercase tracking-[0.08em] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)] transition-colors hover:border-[var(--purple)] hover:text-[var(--purple)]"
+          >
+            Retry
+          </button>
+        ) : null}
+      </div>
       <div className="mt-1 text-[12px] text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">Terminal preview is unavailable in this browser.</div>
     </div>
     <div className="p-4 font-mono text-[12px] leading-6 text-[color-mix(in_oklab,var(--taali-inverse-text)_70%,transparent)]">
@@ -521,7 +554,7 @@ export const AssessmentWorkspace = ({
             <div className="flex h-full min-h-[420px] flex-col">
               <div className="min-h-0 flex-1">
                 <RuntimeSurfaceBoundary
-                  fallback={(
+                  fallback={({ retry }) => (
                     <EditorFallback
                       assessmentStarterCode={assessmentStarterCode}
                       editorContent={editorContent}
@@ -534,6 +567,7 @@ export const AssessmentWorkspace = ({
                       isTimerPaused={isTimerPaused}
                       saving={savingRepoFile}
                       showTerminalAction={showTerminal}
+                      onRetry={retry}
                     />
                   )}
                 >
@@ -764,7 +798,7 @@ export const AssessmentWorkspace = ({
                   onRestartTerminal={showRestartTerminal ? onRestartTerminal : undefined}
                   onClose={() => onToggleTerminal?.()}
                 >
-                  <RuntimeSurfaceBoundary fallback={<TerminalFallback />}>
+                  <RuntimeSurfaceBoundary fallback={({ retry }) => <TerminalFallback onRetry={retry} />}>
                     <Suspense fallback={<TerminalLoadingFallback />}>
                       <LazyAssessmentTerminal
                         events={terminalEvents}

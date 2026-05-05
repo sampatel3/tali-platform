@@ -345,5 +345,68 @@ class AssessmentRepositoryService:
             clone_command=f"git clone --branch {selected_branch} {repo_url}",
         )
 
-    def archive_assessment(self, assessment_id: int) -> Dict[str, Any]:
-        return {"assessment_id": assessment_id, "archived": True, "mode": "mock" if self.mock_mode else "github"}
+    def archive_assessment(
+        self,
+        assessment_id: int,
+        *,
+        repo_url: str | None = None,
+        branch_name: str | None = None,
+    ) -> Dict[str, Any]:
+        """Delete the candidate's assessment branch on GitHub.
+
+        The branch is the only assessment-specific artefact we ever create on
+        a task repo (templates live on `main` and are reused). Deleting it
+        keeps the task repo clean and avoids unbounded ref growth. Caller is
+        responsible for first persisting any state they want to keep
+        (`git_evidence`, `final_repo_state` SHA, code_snapshots).
+        """
+        result: Dict[str, Any] = {
+            "assessment_id": assessment_id,
+            "archived": False,
+            "mode": "mock" if self.mock_mode else "github",
+        }
+
+        if not branch_name:
+            result["error"] = "missing_branch_name"
+            return result
+
+        if self.mock_mode:
+            # Local mock branches are throwaway; nothing to delete.
+            result["archived"] = True
+            return result
+
+        repo_name = self._repo_name_from_url(repo_url) if repo_url else None
+        if not repo_name:
+            result["error"] = "missing_repo_url"
+            return result
+
+        try:
+            response = self._request(
+                "DELETE",
+                f"/repos/{self.github_org}/{repo_name}/git/refs/heads/{branch_name}",
+                expected_statuses=(204, 404, 422),
+            )
+        except AssessmentRepositoryError as exc:
+            result["error"] = str(exc)
+            return result
+
+        if response.status_code in (204, 404):
+            # 204 = deleted, 404 = already gone — both are success for our purposes.
+            result["archived"] = True
+            result["branch_deleted"] = response.status_code == 204
+        else:
+            result["error"] = self._response_message(response) or f"http_{response.status_code}"
+        return result
+
+    @staticmethod
+    def _repo_name_from_url(repo_url: str | None) -> str | None:
+        if not repo_url:
+            return None
+        candidate = str(repo_url).rstrip("/")
+        if candidate.endswith(".git"):
+            candidate = candidate[:-4]
+        if "://" in candidate:
+            candidate = candidate.split("://", 1)[1]
+        # Strip the host + org prefix, keeping the final path segment.
+        name = candidate.rsplit("/", 1)[-1]
+        return name or None

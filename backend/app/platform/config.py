@@ -235,6 +235,14 @@ class Settings(BaseSettings):
     MVP_DISABLE_PROCTORING: bool = True
     SCORING_V2_ENABLED: bool = False
 
+    # TAALI score blending. assessment vs. role-fit (0.0..1.0 each); role-fit
+    # is a 50/50 mix of CV fit and requirements fit. Weights are normalized in
+    # taali_scoring.weighted_average_100, so any pair that's > 0 works.
+    TAALI_WEIGHT_ASSESSMENT: float = 0.5
+    TAALI_WEIGHT_ROLE_FIT: float = 0.5
+    TAALI_WEIGHT_CV_FIT: float = 0.5
+    TAALI_WEIGHT_REQUIREMENTS_FIT: float = 0.5
+
     @property
     def mvp_flags(self) -> MvpFeatureFlags:
         return MvpFeatureFlags(

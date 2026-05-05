@@ -399,9 +399,13 @@ describe('AssessmentPage tracking metadata', () => {
     });
 
     await waitFor(() => expect(mockSaveRepoFile).toHaveBeenCalledTimes(1));
+    // Claude prompt path now syncs the FULL in-browser snapshot (not just the
+    // selected file) so Claude in the live terminal sees edits to every file.
     expect(mockSaveRepoFile.mock.calls[0][1]).toMatchObject({
-      path: 'src/main.py',
-      content: 'print("hi")',
+      files: [
+        { path: 'README.md', content: '# Demo repo' },
+        { path: 'src/main.py', content: 'print("hi")' },
+      ],
     });
     await waitFor(() => {
       expect(sentMessages.some((message) => (

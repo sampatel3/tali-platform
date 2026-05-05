@@ -235,11 +235,36 @@ def _cli_budget_snapshot(budget_limit_usd: float | None, input_tokens: int, outp
 
 
 def _extract_ws_token(websocket: WebSocket) -> str:
-    query_token = websocket.query_params.get("token")
-    if query_token:
-        return query_token
+    # Header is preferred — it doesn't show up in webserver/proxy access logs.
     header_token = websocket.headers.get("x-assessment-token")
-    return header_token or ""
+    if header_token:
+        return header_token
+    query_token = websocket.query_params.get("token")
+    return query_token or ""
+
+
+async def _await_init_token(websocket: WebSocket, timeout_seconds: float = 5.0) -> str:
+    """Wait for the candidate's first message and pull the token from it.
+
+    Browsers cannot set custom headers on WebSocket handshakes, so the only
+    log-safe channel for token authentication is the first WebSocket frame.
+    Returns the token string, or "" if the message isn't valid JSON within the
+    timeout.
+    """
+    try:
+        raw = await asyncio.wait_for(websocket.receive_text(), timeout=timeout_seconds)
+    except (asyncio.TimeoutError, Exception):
+        return ""
+    try:
+        payload = json.loads(raw)
+    except (TypeError, ValueError):
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    if str(payload.get("type") or "").lower() != "init":
+        return ""
+    token = payload.get("token")
+    return str(token or "")
 
 
 async def _ws_send_json(websocket: WebSocket, payload: dict) -> None:
@@ -314,6 +339,11 @@ async def terminal_ws(
 ):
     await websocket.accept()
     token = _extract_ws_token(websocket)
+    if not token:
+        # Browsers can't send custom headers on the WS handshake — fall back to
+        # reading the token off the first init message instead of leaking it
+        # via the URL query string.
+        token = await _await_init_token(websocket)
     assessment = db.query(Assessment).filter(
         Assessment.id == assessment_id,
         Assessment.status == AssessmentStatus.IN_PROGRESS,

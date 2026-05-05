@@ -165,6 +165,13 @@ export default function AssessmentPage({
   const ignoredClaudeRequestIdsRef = useRef(new Set());
   const claudePromptSlowTimerRef = useRef(null);
   const claudePromptStallTimerRef = useRef(null);
+  // Always points at the latest handleSubmit so the timer interval doesn't
+  // capture a stale closure when handleSubmit's deps change mid-assessment.
+  const handleSubmitRef = useRef(null);
+  // Same pattern for the pre-timeout snapshot push — declared early so the
+  // shared timer effect can read it via ref without circular dependencies.
+  const preTimeoutSnapshotRef = useRef(null);
+  const preTimeoutSnapshotFlushedRef = useRef(false);
 
   const showTimeMilestoneNotice = useCallback((message, tone) => {
     setTimeMilestoneNotice({ message, tone });
@@ -332,8 +339,18 @@ export default function AssessmentPage({
       setTimeLeft((prev) => {
         if (prev <= 1) {
           clearInterval(timerRef.current);
-          handleSubmit(true);
+          // Read from the ref so we always invoke the latest handleSubmit
+          // (its deps include things that change during the assessment, like
+          // tabSwitchCount and the repo snapshot helpers).
+          handleSubmitRef.current?.(true);
           return 0;
+        }
+        // 30s before zero, push the full in-browser snapshot to the sandbox
+        // so even if the server-side timeout finalizer fires first, the
+        // captured git diff reflects the candidate's latest unsaved edits.
+        if (prev <= 31 && !preTimeoutSnapshotFlushedRef.current) {
+          preTimeoutSnapshotFlushedRef.current = true;
+          preTimeoutSnapshotRef.current?.();
         }
         return prev - 1;
       });
@@ -557,6 +574,13 @@ export default function AssessmentPage({
   const handleRestartTerminal = useCallback(async () => {
     const id = assessment?.id || assessmentId;
     if (!id || terminalRestarting) return;
+    // Confirm with the candidate before discarding an in-flight Claude prompt.
+    if (pendingClaudeRequestIdRef.current) {
+      const proceed = typeof window !== 'undefined'
+        ? window.confirm('A Claude prompt is still running. Restarting the terminal will cancel it. Continue?')
+        : true;
+      if (!proceed) return;
+    }
     setTerminalRestarting(true);
     setTerminalConnected(false);
     setTerminalEvents([]);
@@ -619,7 +643,7 @@ export default function AssessmentPage({
 
     const connect = () => {
       if (disposed) return;
-      const wsUrl = assessments.terminalWsUrl(id, assessmentTokenForApi);
+      const wsUrl = assessments.terminalWsUrl(id);
       const ws = new WebSocket(wsUrl);
       terminalWsRef.current = ws;
 
@@ -627,7 +651,9 @@ export default function AssessmentPage({
         if (disposed) return;
         reconnectAttempts = 0;
         setTerminalConnected(true);
-        ws.send(JSON.stringify({ type: 'init' }));
+        // Send the assessment token in the init frame so it never appears in
+        // proxy/CDN access logs (URLs do, WebSocket frame bodies don't).
+        ws.send(JSON.stringify({ type: 'init', token: assessmentTokenForApi }));
         clearHeartbeat();
         heartbeatInterval = setInterval(() => {
           if (ws.readyState === WebSocket.OPEN) {
@@ -865,6 +891,36 @@ export default function AssessmentPage({
     }
   }, [buildRepoSnapshot, selectedRepoPath, assessment, assessmentId, assessmentTokenForApi]);
 
+  // Sync the entire in-browser repo snapshot (every modified file) to the
+  // sandbox. Used before sending Claude prompts in the terminal flow so Claude
+  // sees the candidate's latest edits to non-selected files too.
+  const syncAllRepoFilesToWorkspace = useCallback(async (code) => {
+    codeRef.current = code;
+    const repoSnapshot = buildRepoSnapshot(code);
+    setRepoFilesState(repoSnapshot);
+
+    const id = assessment?.id || assessmentId;
+    if (!id || !assessmentTokenForApi || repoSnapshot.length === 0) {
+      return { success: true, repoSnapshot };
+    }
+
+    setSavingRepoFile(true);
+    try {
+      await assessments.saveRepoFile(
+        id,
+        { files: repoSnapshot },
+        assessmentTokenForApi,
+      );
+      return { success: true, repoSnapshot };
+    } catch (err) {
+      const detail = err?.response?.data?.detail;
+      const errorMessage = `Save error: ${detail?.message || detail || err.message}`;
+      return { success: false, repoSnapshot, errorMessage };
+    } finally {
+      setSavingRepoFile(false);
+    }
+  }, [buildRepoSnapshot, assessment, assessmentId, assessmentTokenForApi]);
+
   const handleSave = useCallback(async (code) => {
     if (demoMode) {
       setDemoSaveCount((prev) => prev + 1);
@@ -903,7 +959,9 @@ export default function AssessmentPage({
     let awaitingTerminalReply = false;
     try {
       if (showTerminal) {
-        const syncResult = await syncSelectedRepoFileToWorkspace(codeRef.current, { announceSuccess: false });
+        // Push ALL in-browser edits (not just the selected file) so Claude in
+        // the live terminal sees the candidate's full working state.
+        const syncResult = await syncAllRepoFilesToWorkspace(codeRef.current);
         if (!syncResult?.success) {
           throw new Error(syncResult?.errorMessage || 'Claude could not sync the latest file state into the workspace.');
         }
@@ -986,7 +1044,7 @@ export default function AssessmentPage({
     showTerminal,
     claudePromptPasted,
     sendTerminalPayload,
-    syncSelectedRepoFileToWorkspace,
+    syncAllRepoFilesToWorkspace,
     startClaudePromptTimers,
     clearClaudePromptTimers,
   ]);
@@ -1065,6 +1123,28 @@ export default function AssessmentPage({
       selectedRepoPath,
     ],
   );
+
+  // Mirror the latest handleSubmit into the ref consumed by the timer
+  // interval so the timer never invokes a stale closure.
+  useEffect(() => {
+    handleSubmitRef.current = handleSubmit;
+  }, [handleSubmit]);
+
+  // Same idea for the pre-timeout snapshot pusher — fire-and-forget so the
+  // timer never blocks on the network.
+  useEffect(() => {
+    preTimeoutSnapshotRef.current = () => {
+      // Best-effort; surface errors to the candidate as a one-off output line
+      // but never throw out of the timer.
+      syncAllRepoFilesToWorkspace(codeRef.current).catch(() => undefined);
+    };
+  }, [syncAllRepoFilesToWorkspace]);
+
+  // If the assessment changes (or the candidate starts a new one), allow the
+  // pre-timeout snapshot to fire again on the new run.
+  useEffect(() => {
+    preTimeoutSnapshotFlushedRef.current = false;
+  }, [assessment?.id, assessmentId]);
 
   const totalDurationSeconds = Math.max(1, Number((assessment?.duration_minutes || 30) * 60));
   const remainingRatio = Math.max(0, Math.min(1, timeLeft / totalDurationSeconds));

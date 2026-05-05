@@ -640,6 +640,7 @@ def start_demo_assessment(
     try:
         db.commit()
     except Exception:
+        logger.exception("Failed to commit demo assessment creation")
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create demo assessment")
 
@@ -676,6 +677,7 @@ def request_demo_walkthrough(
     try:
         db.commit()
     except Exception:
+        logger.exception("Failed to commit demo request")
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to save demo request")
 
@@ -791,6 +793,7 @@ def execute_code(
     try:
         db.commit()
     except Exception:
+        logger.exception("Failed to commit code_execute timeline event assessment_id=%s", assessment.id)
         db.rollback()
     return result
 
@@ -810,36 +813,49 @@ def save_repo_file(
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    safe_path = _sanitize_repo_path(data.path)
-    if not safe_path:
-        raise HTTPException(status_code=400, detail="Invalid repository file path")
+    files_to_sync: dict[str, str] = {}
+    if data.files:
+        for entry in data.files:
+            safe = _sanitize_repo_path(entry.path)
+            if not safe:
+                raise HTTPException(status_code=400, detail=f"Invalid repository file path: {entry.path!r}")
+            files_to_sync[safe] = str(entry.content or "")
+    elif data.path is not None:
+        safe = _sanitize_repo_path(data.path)
+        if not safe:
+            raise HTTPException(status_code=400, detail="Invalid repository file path")
+        files_to_sync[safe] = str(data.content or "")
+    else:
+        raise HTTPException(status_code=400, detail="Provide `path`+`content` or `files`")
 
     e2b = build_sandbox_adapter()
     sandbox, repo_root = _connect_assessment_sandbox(e2b, assessment, task, db)
-    _sync_repo_files_to_sandbox(
-        sandbox,
-        repo_root,
-        {safe_path: str(data.content or "")},
-    )
+    _sync_repo_files_to_sandbox(sandbox, repo_root, files_to_sync)
 
+    primary_path = next(iter(files_to_sync), "")
     append_assessment_timeline_event(
         assessment,
         "repo_file_save",
         {
             "session_id": assessment.e2b_session_id,
-            "path": safe_path,
-            "content_length": len(str(data.content or "")),
+            "path": primary_path,
+            "paths": list(files_to_sync.keys()),
+            "file_count": len(files_to_sync),
+            "content_length": sum(len(v) for v in files_to_sync.values()),
         },
     )
     try:
         db.commit()
     except Exception:
+        logger.exception("Failed to commit repo_file_save timeline event assessment_id=%s", assessment.id)
         db.rollback()
 
     return {
         "success": True,
-        "path": safe_path,
-        "message": f"Saved {safe_path}",
+        "path": primary_path,
+        "paths": list(files_to_sync.keys()),
+        "file_count": len(files_to_sync),
+        "message": f"Saved {len(files_to_sync)} file(s)" if len(files_to_sync) != 1 else f"Saved {primary_path}",
     }
 
 

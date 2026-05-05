@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Type
 
 from fastapi import HTTPException
+
+logger = logging.getLogger("taali.assessments")
 from sqlalchemy.orm import Session
 
 from ...components.notifications.service import send_results_notification_sync
@@ -299,7 +302,6 @@ def submit_assessment_impl(
     else:
         sandbox = e2b.create_sandbox()
 
-    sandbox.files.write("/tmp/solution.py", final_code)
     test_results = _run_task_test_runner(e2b, sandbox, task, repo_root)
     if not isinstance(test_results, dict) or (
         int(test_results.get("passed", 0) or 0) == 0
@@ -560,6 +562,15 @@ def submit_assessment_impl(
         task_scoring_hints = task_extra_data.get("scoring_hints")
 
     score_weights = dict(task.score_weights or {})
+    # CV-match contribution is layered in via the TAALI role-fit blend below,
+    # so the inner composite always treats cv_match weight as zero. If a task
+    # configures a non-zero cv_match weight it would be double-counted; clamp.
+    if score_weights.get("cv_match"):
+        logger.warning(
+            "Task %s configured cv_match weight=%s — ignored; CV fit applies via taali role_fit blend",
+            getattr(task, "task_key", task.id),
+            score_weights.get("cv_match"),
+        )
     score_weights["cv_match"] = 0.0
 
     composite = calculate_mvp_score(
@@ -598,9 +609,11 @@ def submit_assessment_impl(
         score_mode = "assessment_plus_role_fit" if role_fit_score_100 is not None else "assessment_only_fallback"
 
     # --- 4. Persist ---
+    completion_ts = datetime.now(timezone.utc)
     assessment.status = AssessmentStatus.COMPLETED
     assessment.completed_due_to_timeout = False
-    assessment.completed_at = datetime.now(timezone.utc)
+    assessment.completed_at = completion_ts
+    assessment.scored_at = completion_ts
     assessment.score = assessment_score_10
     assessment.final_score = assessment_score_100
     assessment.assessment_score = assessment_score_100
