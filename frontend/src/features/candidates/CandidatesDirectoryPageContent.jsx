@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
+import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import {
@@ -2306,6 +2307,7 @@ export const CandidatesDirectoryPage = ({
                         onClick={(event) => handleCandidateRowClick(event, application)}
                         onAuxClick={(event) => handleCandidateRowAuxClick(event, application)}
                         onKeyDown={(event) => handleCandidateRowKeyDown(event, application)}
+                        onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
                       >
                         <div>
                           <input

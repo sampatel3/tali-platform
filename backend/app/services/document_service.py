@@ -185,6 +185,22 @@ def load_stored_document_bytes(file_url: str | None) -> bytes | None:
     return None
 
 
+def stored_document_s3_key(file_url: str | None) -> str | None:
+    """Extract the S3 key from a stored file_url, or None for non-S3 URLs.
+
+    Used by download endpoints that redirect to a presigned URL instead
+    of streaming bytes back through FastAPI.
+    """
+    location = str(file_url or "").strip()
+    if not location:
+        return None
+    parsed = urlparse(location)
+    if parsed.scheme in {"http", "https"} and parsed.netloc.endswith("amazonaws.com"):
+        key = parsed.path.lstrip("/")
+        return key or None
+    return None
+
+
 def sanitize_text_for_storage(value: str | None) -> str:
     """Strip NUL and non-printable control characters unsafe for DB text fields."""
     if value is None:
