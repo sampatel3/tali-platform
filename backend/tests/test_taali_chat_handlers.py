@@ -196,6 +196,12 @@ def test_graph_search_returns_candidates_from_graph(db):
 
     ids = {a["application_id"] for a in out["applications"]}
     assert target_app.id in ids
+    # The graph topology (nodes + edges) is also surfaced for inline
+    # visualisation. Source-of-truth shape so the React side can call
+    # cytoscape.layout against it.
+    assert "graph" in out
+    assert {n["id"] for n in out["graph"]["nodes"]} >= {"person-1", "person-2"}
+    assert any(e["source"] == "person-1" and e["target"] == "company-1" for e in out["graph"]["edges"])
     # Cross-org candidate id (999999) must not surface — even via graph hits.
     assert all(a["candidate_id"] == target_app.candidate_id for a in out["applications"])
     assert any("Stripe" in f["fact"] for f in out["graph_facts"])

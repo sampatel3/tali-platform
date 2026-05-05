@@ -181,12 +181,14 @@ TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
         "name": "graph_search_candidates",
         "description": (
             "Knowledge-graph search across the org's temporal subgraph. "
-            "Returns candidates whose stored facts mention the query plus the "
-            "actual fact strings so you can cite specifics. Use for graph-"
-            "shaped questions ('colleagues of X', 'people who worked at "
-            "startups before joining Big Tech'). Returns warnings: "
-            "[{code: 'neo4j_unavailable'}] when graph is not configured — "
-            "fall back to nl_search_candidates."
+            "Returns candidates whose stored facts mention the query, the "
+            "actual fact strings so you can cite specifics, AND the matching "
+            "subgraph (nodes + edges) which the chat UI renders as an inline "
+            "force-directed graph. Use for graph-shaped questions: "
+            "'colleagues of X', 'people who worked at startups before joining "
+            "Big Tech', 'engineers whose CVs mention tool Y'. Returns "
+            "warnings: [{code: 'neo4j_unavailable'}] when graph is not "
+            "configured — fall back to nl_search_candidates."
         ),
         "input_schema": {
             "type": "object",

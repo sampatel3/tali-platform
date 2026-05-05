@@ -452,6 +452,7 @@ def graph_search_candidates(
         return {
             "applications": [],
             "graph_facts": _facts_from_payload(payload, limit=10),
+            "graph": _graph_topology(payload),
             "warnings": [],
         }
 
@@ -477,8 +478,36 @@ def graph_search_candidates(
     return {
         "applications": [application_summary(a) for a in capped],
         "graph_facts": _facts_from_payload(payload, limit=10),
+        "graph": _graph_topology(payload),
         "warnings": [],
     }
+
+
+def _graph_topology(payload) -> dict[str, Any]:
+    """Convert a GraphPayload into a thin ``{nodes, edges}`` shape for
+    inline visualisation in the chat UI. Hard-cap at 60 nodes / 100 edges
+    so an over-broad query can't blow up the React renderer."""
+    nodes_out: list[dict[str, Any]] = []
+    edges_out: list[dict[str, Any]] = []
+    for node in (payload.nodes or [])[:60]:
+        nodes_out.append(
+            {
+                "id": node.id,
+                "label": node.label,
+                "name": node.name,
+                "extra": node.extra if isinstance(node.extra, dict) else {},
+            }
+        )
+    for edge in (payload.edges or [])[:100]:
+        edges_out.append(
+            {
+                "source": edge.source,
+                "target": edge.target,
+                "label": edge.label,
+                "fact": (edge.extra or {}).get("fact") if isinstance(edge.extra, dict) else None,
+            }
+        )
+    return {"nodes": nodes_out, "edges": edges_out}
 
 
 def _facts_from_payload(payload, *, limit: int) -> list[dict[str, str]]:
