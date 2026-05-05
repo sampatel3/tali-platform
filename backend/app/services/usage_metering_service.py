@@ -101,6 +101,7 @@ def record_event(
     cache_creation_tokens: int = 0,
     cache_hit: bool = False,
     user_id: Optional[int] = None,
+    role_id: Optional[int] = None,
     entity_id: Optional[str] = None,
     metadata: Optional[dict] = None,
 ) -> UsageEvent:
@@ -138,6 +139,7 @@ def record_event(
     event = UsageEvent(
         organization_id=organization_id,
         user_id=user_id,
+        role_id=role_id,
         feature=feature_enum.value,
         entity_id=entity_id,
         model=model,

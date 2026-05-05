@@ -306,6 +306,7 @@ def chat_with_claude(
             _meter_record_event(
                 db,
                 organization_id=int(assessment.organization_id),
+                role_id=getattr(assessment, "role_id", None),
                 feature=Feature.ASSESSMENT,
                 model=getattr(claude, "model", "") or "",
                 input_tokens=input_tokens,

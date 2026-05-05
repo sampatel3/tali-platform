@@ -87,7 +87,8 @@ class RoleUpdate(BaseModel):
     agent_action_allowlist: Optional[list[str]] = None
     agent_token_budget_per_cycle: Optional[int] = Field(default=None, ge=1_000, le=500_000)
     agent_decision_budget_per_cycle: Optional[int] = Field(default=None, ge=1, le=200)
-    agent_usd_budget_monthly_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    # Universal monthly USD cap (cents) for ALL Anthropic spend on the role.
+    monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
 
 
 class RoleCriterionResponse(BaseModel):
@@ -128,7 +129,7 @@ class RoleResponse(BaseModel):
     agent_action_allowlist: Optional[list[str]] = None
     agent_token_budget_per_cycle: Optional[int] = None
     agent_decision_budget_per_cycle: Optional[int] = None
-    agent_usd_budget_monthly_cents: Optional[int] = None
+    monthly_usd_budget_cents: Optional[int] = None
     agent_paused_at: Optional[datetime] = None
     agent_paused_reason: Optional[str] = None
     agent_last_run_at: Optional[datetime] = None

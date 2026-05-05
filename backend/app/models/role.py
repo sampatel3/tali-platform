@@ -57,7 +57,10 @@ class Role(Base):
     agent_action_allowlist = Column(JSON, nullable=True)
     agent_token_budget_per_cycle = Column(Integer, nullable=True)
     agent_decision_budget_per_cycle = Column(Integer, nullable=True)
-    agent_usd_budget_monthly_cents = Column(Integer, nullable=True)
+    # Universal monthly USD cap covering ALL Anthropic spend on this role
+    # (scoring, pre-screen, assessment, agent). Required when activating
+    # agentic mode; optional otherwise. Stored as cents.
+    monthly_usd_budget_cents = Column(Integer, nullable=True)
     agent_paused_at = Column(DateTime(timezone=True), nullable=True)
     agent_paused_reason = Column(Text, nullable=True)
     agent_last_run_at = Column(DateTime(timezone=True), nullable=True)
