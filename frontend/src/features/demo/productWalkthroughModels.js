@@ -248,6 +248,18 @@ export const AI_SHOWCASE_APPLICATION = {
       },
     ],
   },
+  client_share_summary: {
+    role: 'AI Engineer',
+    verdict: 'Strong match — recommended',
+    verdict_band: 'strong',
+    score_100: 81,
+    highlights: [
+      'Led a regulated GenAI launch end-to-end across two NHS trusts and shipped it within the safety bar set by clinical and legal stakeholders.',
+      'Owns the postmortem framework adopted org-wide for AI features at Helix Health.',
+      'Ran the prompt registry and red-team review process for production prompts at Lighthouse FinCrime.',
+    ],
+    shared_at: '2026-04-21T11:08:00.000Z',
+  },
   interview_prep: {
     stageOne: [
       {

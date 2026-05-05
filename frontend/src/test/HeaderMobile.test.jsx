@@ -58,16 +58,16 @@ describe('DashboardNav mobile header', () => {
       .filter((button) => button.className.includes('dashboard-nav-mobile-link'));
     expect(mobileLinks.map((button) => button.textContent)).toEqual([
       'Jobs',
-      'Candidates',
+      'Chat',
       'Tasks',
       'Reporting',
       'Settings',
     ]);
     expect(within(mobileMenu).getByRole('menuitem', { name: 'Tasks' })).toHaveClass('active');
 
-    fireEvent.click(within(mobileMenu).getByRole('menuitem', { name: 'Candidates' }));
+    fireEvent.click(within(mobileMenu).getByRole('menuitem', { name: /Chat/ }));
 
-    expect(onNavigate).toHaveBeenCalledWith('candidates');
+    expect(onNavigate).toHaveBeenCalledWith('chat');
     expect(document.querySelector('.dashboard-nav-mobile')).not.toBeInTheDocument();
   });
 });

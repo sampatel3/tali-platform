@@ -222,7 +222,7 @@ export const LandingPage = ({ onNavigate }) => {
                 type="button"
                 className="btn btn-outline btn-lg"
                 onClick={() => {
-                  window.location.href = '/c/demo?view=interview&k=demo-token&showcase=1';
+                  window.location.href = '/c/demo?view=client&k=demo-token&showcase=1';
                 }}
               >
                 See a sample report
@@ -245,8 +245,7 @@ export const LandingPage = ({ onNavigate }) => {
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-dashed border-[var(--line)] px-2 pb-4">
               <div className="flex flex-wrap gap-1 font-[var(--font-mono)] text-xs text-[var(--mute)]">
                 <span className="rounded-[8px] bg-[var(--bg-3)] px-3 py-1.5 text-[var(--ink)]">Overview</span>
-                <span className="px-3 py-1.5">Assessment</span>
-                <span className="px-3 py-1.5">Interview prep</span>
+                <span className="px-3 py-1.5">CV &amp; match</span>
               </div>
               <div className="flex shrink-0 items-center gap-2 font-[var(--font-mono)] text-xs text-[var(--ink-2)]">
                 <span className="h-2 w-2 rounded-full bg-[var(--green)] shadow-[0_0_0_3px_color-mix(in_oklab,var(--green)_25%,transparent)]" />

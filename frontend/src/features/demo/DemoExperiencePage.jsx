@@ -38,13 +38,62 @@ const scrollToWalkthrough = () => {
 };
 
 const REPORT_SHOWCASE_TOKEN = 'demo-token';
-const REPORT_SHOWCASE_TABS = new Set(['overview', 'assessment', 'prep']);
+const REPORT_SHOWCASE_TABS = new Set(['overview', 'cv']);
 
 const PANE_NARRATIVE = {
-  jobs: 'Open roles you’re hiring for, with Workable sync.',
-  candidates: 'Every candidate scored, filterable, and ranked.',
-  report: 'Standing report with assessment + interview transcript.',
-  workspace: 'The exact surface candidates use to solve the task.',
+  jobs: 'See every role you’re hiring for in one place.',
+  candidates: 'Triage your shortlist — every candidate scored and ranked.',
+  chat: 'Ask plain-English questions across your whole candidate pool.',
+  profile: 'Send your client a clean, shareable verdict in one click.',
+  workspace: 'See exactly what candidates work in.',
+};
+
+const PANE_NOTES = {
+  jobs: {
+    what: 'See every role you’re hiring for at a glance — synced from Workable so you don’t double-enter anything.',
+    bullets: [
+      'One card per role with how many candidates are at each stage',
+      'Click into a role to see its full pipeline',
+      'Filter to just the roles you’re actively working on',
+      'New Workable candidates land here automatically',
+    ],
+  },
+  candidates: {
+    what: 'Every candidate across every role, already scored and ranked — so you can spend your time on the shortlist instead of digging.',
+    bullets: [
+      'See a fit score on every candidate the moment their CV lands',
+      'Filter by role, stage, or outcome; sort by any score',
+      'Search in plain English — “senior backend with payments experience”',
+      'Triage straight from the row — open, advance, reject without leaving the page',
+    ],
+  },
+  chat: {
+    what: 'Ask Taali questions about your candidates in plain English. You get the actual people, ranked, with the evidence that backs each answer.',
+    bullets: [
+      'Ask things like “AI engineers with release-safety experience in fintech”',
+      'See the matching candidates inline, with their score and stage — not a wall of text',
+      'See how candidates connect across companies, skills, and schools',
+      'Each conversation stays in the sidebar so you can pick it back up later',
+    ],
+  },
+  workspace: {
+    what: 'See exactly what candidates work in — the same browser-based workspace they use to take the assessment. No installs on your side, none on theirs.',
+    bullets: [
+      'Real repo, editor, terminal, and AI assistant in one window',
+      'Task brief and time remaining stay visible at the top',
+      'Everything they do is captured automatically and scored on submit',
+      'The candidate sees exactly what you’re looking at right now',
+    ],
+  },
+  profile: {
+    what: 'The clean, client-safe link you send to your hiring client. Your internal notes, scoring breakdown, and interview prep stay hidden — they see the verdict and the candidate’s background.',
+    bullets: [
+      'A clear top-line verdict so your client knows what to do next',
+      '“Why we’re sharing this candidate” summary at the top',
+      'Candidate background — experience, education, skills — laid out cleanly',
+      'No internal scoring, no recruiter notes, no interview prep visible',
+    ],
+  },
 };
 
 export const DemoExperiencePage = ({ onNavigate }) => {
@@ -62,26 +111,32 @@ export const DemoExperiencePage = ({ onNavigate }) => {
     jobs: {
       key: 'jobs',
       label: 'Jobs you’re hiring for',
-      urlLabel: 'taali.ai/jobs · recruiter workspace',
+      urlLabel: 'taali.ai/jobs · your open roles',
       src: '/jobs?demo=1&showcase=1',
     },
     candidates: {
       key: 'candidates',
       label: 'Candidates flowing in',
-      urlLabel: 'taali.ai/candidates · scored & filterable',
+      urlLabel: 'taali.ai/candidates · scored & ranked',
       src: '/candidates?demo=1&showcase=1',
     },
-    report: {
-      key: 'report',
-      label: 'Standing report',
-      urlLabel: 'taali.ai/c/demo · hiring team report',
-      src: `/c/demo?view=interview&k=${REPORT_SHOWCASE_TOKEN}&showcase=1`,
+    chat: {
+      key: 'chat',
+      label: 'Ask about your candidates',
+      urlLabel: 'taali.ai/chat · plain-English candidate search',
+      src: '/showcase/chat',
     },
     workspace: {
       key: 'workspace',
       label: 'Candidate workspace',
-      urlLabel: 'taali.ai/assess/demo · candidate workspace',
+      urlLabel: 'taali.ai/assess/demo · the candidate experience',
       src: '/assessment/live?demo=1&showcase=1',
+    },
+    profile: {
+      key: 'profile',
+      label: 'Client-share profile',
+      urlLabel: 'taali.ai/c/demo · what your client sees',
+      src: `/c/demo?view=client&k=${REPORT_SHOWCASE_TOKEN}&showcase=1`,
     },
   }), []);
 
@@ -107,10 +162,14 @@ export const DemoExperiencePage = ({ onNavigate }) => {
           && frameUrl.searchParams.get('showcase') === '1';
       }
 
-      if (pane.key === 'report') {
+      if (pane.key === 'chat') {
+        allowed = sameRoute;
+      }
+
+      if (pane.key === 'profile') {
         const tab = frameUrl.searchParams.get('tab') || 'overview';
         allowed = sameRoute
-          && frameUrl.searchParams.get('view') === 'interview'
+          && frameUrl.searchParams.get('view') === 'client'
           && frameUrl.searchParams.get('k') === REPORT_SHOWCASE_TOKEN
           && frameUrl.searchParams.get('showcase') === '1'
           && REPORT_SHOWCASE_TABS.has(tab);
@@ -175,10 +234,10 @@ export const DemoExperiencePage = ({ onNavigate }) => {
                 See Taali <em>end to end.</em>
               </h1>
               <p className="lede">
-                Open the candidate workspace and the hiring-team report on this page. No fake provisioning, no live candidate launch, just the product flow.
+                Walk through what you can do with Taali — see your jobs board, triage your candidates, ask questions in plain English, watch the candidate experience, and send a clean verdict to your client.
               </p>
               <p className="lede-sub">
-                Built from the same surfaces candidates and recruiters use after sign in.
+                Click through it like a customer would. No setup, no fake data screens — just the product.
               </p>
 
               <div className="demo-preview">
@@ -274,15 +333,15 @@ export const DemoExperiencePage = ({ onNavigate }) => {
               <div className="l">
                 <div className="kicker">01 · PRODUCT WALKTHROUGH</div>
                 <h2>
-                  What candidates and hiring teams <em>actually see.</em>
+                  Try the five things <em>you’ll do most.</em>
                 </h2>
                 <p>
-                  Thanks, {submittedLead.fullName.split(/\s+/)[0] || submittedLead.fullName}. The frames below are real app routes using deterministic demo data.
+                  Thanks, {submittedLead.fullName.split(/\s+/)[0] || submittedLead.fullName}. Click through each pane below — these are live screens, not videos.
                 </p>
               </div>
               <div className="r">
-                <b>This walkthrough covers</b>
-                The full hiring loop: jobs board, candidates flowing in with Workable sync and CV scoring, the standing report with interview transcript evidence, and the candidate workspace.
+                <b>What you can do here</b>
+                Open your jobs board, sort and filter candidates, ask Taali questions in plain English, see the candidate experience, and send your client a clean shareable verdict.
               </div>
             </div>
 
@@ -300,27 +359,55 @@ export const DemoExperiencePage = ({ onNavigate }) => {
               ))}
             </div>
 
-            {Object.entries(panes).map(([key, pane]) => (
-              <div key={key} className={`wt-pane ${activePane === key ? 'active' : ''}`}>
-                <div className="wt-frame" data-pane={key}>
-                  <div className="wt-chrome">
-                    <span className="dots" aria-hidden="true"><i /><i /><i /></span>
-                    <span className="url"><span className="lock">●</span>{pane.urlLabel}</span>
-                    <span className="wt-locked-badge">Locked preview</span>
-                  </div>
-                  <div className="wt-stage">
-                    <iframe
-                      title={pane.label}
-                      src={pane.src}
-                      sandbox="allow-scripts allow-same-origin"
-                      referrerPolicy="no-referrer"
-                      onLoad={handleShowcaseFrameLoad(pane)}
-                    />
-                    <div className="wt-tip"><span className="dot" /> {PANE_NARRATIVE[key] || 'Interactive demo surface'}</div>
+            {Object.entries(panes).map(([key, pane]) => {
+              const notes = PANE_NOTES[key];
+              return (
+                <div key={key} className={`wt-pane ${activePane === key ? 'active' : ''}`}>
+                  {notes ? (
+                    <div className="mb-4 grid gap-5 rounded-[18px] border border-[var(--line)] bg-[var(--bg-2)] p-5 shadow-[var(--shadow-sm)] md:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] md:p-6">
+                      <div>
+                        <div className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.12em] text-[var(--purple)]">
+                          What you’re looking at
+                        </div>
+                        <p className="mt-3 text-[14.5px] leading-7 text-[var(--ink-2)]">
+                          {notes.what}
+                        </p>
+                      </div>
+                      <div>
+                        <div className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.12em] text-[var(--purple)]">
+                          Key functionality
+                        </div>
+                        <ul className="mt-3 space-y-2 text-[13.5px] leading-6 text-[var(--ink-2)]">
+                          {notes.bullets.map((bullet) => (
+                            <li key={bullet} className="relative pl-5">
+                              <span className="absolute left-0 top-[9px] h-1.5 w-1.5 rounded-full bg-[var(--purple)]" aria-hidden="true" />
+                              {bullet}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    </div>
+                  ) : null}
+                  <div className="wt-frame" data-pane={key}>
+                    <div className="wt-chrome">
+                      <span className="dots" aria-hidden="true"><i /><i /><i /></span>
+                      <span className="url"><span className="lock">●</span>{pane.urlLabel}</span>
+                      <span className="wt-locked-badge">Locked preview</span>
+                    </div>
+                    <div className="wt-stage">
+                      <iframe
+                        title={pane.label}
+                        src={pane.src}
+                        sandbox="allow-scripts allow-same-origin"
+                        referrerPolicy="no-referrer"
+                        onLoad={handleShowcaseFrameLoad(pane)}
+                      />
+                      <div className="wt-tip"><span className="dot" /> {PANE_NARRATIVE[key] || 'Interactive demo surface'}</div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             <div className="wt-foot">
               <button type="button" className="exit" onClick={() => setSubmittedLead(null)}>← Back to form</button>
