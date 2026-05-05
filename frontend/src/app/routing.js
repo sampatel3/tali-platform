@@ -16,6 +16,10 @@ export const pathForPage = (page, options = {}) => {
       return '/dashboard';
     case 'jobs':
       return '/jobs';
+    case 'copilot':
+      return options.copilotConversationId
+        ? `/copilot/${encodeURIComponent(options.copilotConversationId)}`
+        : '/copilot';
     case 'job-pipeline':
       return options.roleId
         ? `/jobs/${encodeURIComponent(options.roleId)}`

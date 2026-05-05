@@ -23,6 +23,7 @@ const pickOrganizationName = (user) => String(
 
 const NAV_ITEMS = [
   { id: 'jobs', label: 'Jobs' },
+  { id: 'copilot', label: 'Copilot', badge: 'New' },
   { id: 'candidates', label: 'Candidates' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'reporting', label: 'Reporting' },
