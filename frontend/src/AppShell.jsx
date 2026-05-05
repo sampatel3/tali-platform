@@ -235,11 +235,25 @@ function AppContent() {
   }, [defaultRecruiterRoute, isAuthenticated, location.pathname, navigate, nextRedirectPath]);
 
   useEffect(() => {
-    if (
-      !authLoading &&
-      !isAuthenticated &&
-      isProtectedRecruiterPath(location.pathname, location.search)
-    ) {
+    if (authLoading || isAuthenticated) return;
+    // Hard bypass for the showcase routes loaded inside the marketing demo
+    // iframes. The structured `isProtectedRecruiterPath` check above is
+    // supposed to handle this, but in practice the React-router `location`
+    // can be a render behind on a hard navigation, which makes the bypass
+    // miss and bounces the iframe to /login. Looking at the live browser
+    // URL is the only thing that's consistently correct on first paint.
+    if (typeof window !== 'undefined') {
+      const liveSearch = window.location.search || '';
+      const livePath = window.location.pathname || '';
+      if (
+        liveSearch.includes('showcase=1')
+        && liveSearch.includes('demo=1')
+        && (livePath === '/jobs' || livePath === '/candidates')
+      ) {
+        return;
+      }
+    }
+    if (isProtectedRecruiterPath(location.pathname, location.search)) {
       const nextPath = `${location.pathname}${location.search}${location.hash}`;
       navigate(`/login?next=${encodeURIComponent(nextPath)}`, { replace: true });
     }
