@@ -95,53 +95,6 @@ const PANE_VALUE = {
   },
 };
 
-// Slim "why this matters to a recruiter" caption above each pane. Headline
-// frames what the recruiter gets out of it; outcomes are the placement /
-// time-saving / client-trust wins, not feature lists. Three outcomes max so
-// the strip stays one row and never pushes the iframe below the fold.
-const PANE_VALUE = {
-  jobs: {
-    headline: 'Stop juggling tabs to know where every role stands.',
-    outcomes: [
-      'See pipeline volume per role at a glance',
-      'Spot stalled roles before your client asks',
-      'No double-entry — Workable stays the source of truth',
-    ],
-  },
-  candidates: {
-    headline: 'Walk in with a ranked shortlist instead of a CV pile.',
-    outcomes: [
-      'Every CV scored against the role the moment it lands',
-      'Pre-screen weeds out the obvious nos for you',
-      'Search in plain English, not boolean strings',
-    ],
-  },
-  chat: {
-    headline: 'Pull a shortlist for a new brief in seconds, not hours.',
-    outcomes: [
-      'Reuse every past placement and search you’ve done',
-      'No saved searches to maintain or remember',
-      'Answers come with the candidates attached',
-    ],
-  },
-  workspace: {
-    headline: 'Show your client the assessment they’re actually paying for.',
-    outcomes: [
-      'Real coding work, not multiple-choice quizzes',
-      'Same workspace candidates use — no installs, no excuses',
-      'Builds trust with technical hiring managers',
-    ],
-  },
-  profile: {
-    headline: 'Send a candidate to your client without writing a 30-line email.',
-    outcomes: [
-      'One link, one clear verdict — your client knows what to do',
-      'Internal scoring and recruiter notes stay internal',
-      'Looks more polished than the PDF reports your competitors send',
-    ],
-  },
-};
-
 export const DemoExperiencePage = ({ onNavigate }) => {
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState('');
