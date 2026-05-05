@@ -805,10 +805,15 @@ def get_application_detail(
     return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
 
 
-@router.get("/applications/share/{share_token}", response_model=ApplicationDetailResponse)
+@router.get("/applications/share/{share_token}")
 def get_application_detail_by_share_token(
     share_token: str,
     include_cv_text: bool = Query(False, description="Include full CV extracted text for viewer"),
+    view: str = Query(
+        default="interview",
+        pattern="^(interview|client)$",
+        description="`interview` (default, hiring-manager view) or `client` (external; scrubs recruiter notes/transcripts and adds a 'why shared' summary).",
+    ),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_optional_current_user),
 ):
@@ -817,7 +822,11 @@ def get_application_detail_by_share_token(
         org_id=current_user.organization_id if current_user else None,
         db=db,
     )
-    return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
+    return application_detail_payload(
+        app,
+        include_cv_text=include_cv_text,
+        client_safe=(view == "client"),
+    )
 
 
 @router.post("/applications/{application_id}/share-link", response_model=ApplicationReportShareLinkResponse)
@@ -2097,6 +2106,37 @@ def _try_fetch_cv_from_workable(
             "CV section parsing failed for application_id=%s — falling back to raw text",
             app.id,
         )
+
+    # Sibling-application propagation. A candidate may have applied to
+    # multiple roles, each with its own application row. Workable stores
+    # one CV per candidate, so all sibling applications should reflect
+    # the same file_url / cv_text. Without this loop, fetching the CV
+    # under app=A would leave app=B (same candidate) pointing at a
+    # stale local-disk URL — exactly the drift that produced 1.1k dead
+    # rows after the Tigris cutover.
+    #
+    # We only overwrite siblings whose cv_file_url is *not* already an
+    # https URL, so manual per-application uploads (which are
+    # https-backed when storage is configured) stay untouched.
+    if candidate:
+        siblings = (
+            db.query(CandidateApplication)
+            .filter(
+                CandidateApplication.candidate_id == candidate.id,
+                CandidateApplication.id != app.id,
+                CandidateApplication.deleted_at.is_(None),
+            )
+            .all()
+        )
+        for sibling in siblings:
+            if (sibling.cv_file_url or "").startswith("https://"):
+                continue
+            sibling.cv_file_url = file_url
+            sibling.cv_filename = filename
+            sibling.cv_text = extracted
+            sibling.cv_uploaded_at = now
+            if candidate.cv_sections is not None:
+                sibling.cv_sections = candidate.cv_sections
 
     return True
 
