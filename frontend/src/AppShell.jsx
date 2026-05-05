@@ -59,8 +59,8 @@ const AssessmentsPage = lazy(() =>
 const CandidatesDirectoryPage = lazy(() =>
   import('./features/candidates/CandidatesDirectoryPage').then((m) => ({ default: m.CandidatesDirectoryPage }))
 );
-const CopilotPage = lazy(() =>
-  import('./features/copilot/CopilotPage').then((m) => ({ default: m.CopilotPage }))
+const ChatPage = lazy(() =>
+  import('./features/chat/ChatPage').then((m) => ({ default: m.ChatPage }))
 );
 const CandidateStandingReportPage = lazy(() =>
   import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
@@ -333,6 +333,13 @@ function AppContent() {
     );
   };
 
+  // Preserves the conversation id when redirecting from the v1
+  // ``/copilot/:id`` URL to ``/chat/:id``.
+  const RedirectCopilotConvo = () => {
+    const { conversationId } = useParams();
+    return <Navigate to={`/chat/${conversationId}`} replace />;
+  };
+
   const CandidateWelcomeWithIdRoute = () => {
     const { assessmentId } = useParams();
     const token = searchParams.get('token');
@@ -453,26 +460,29 @@ function AppContent() {
         )}
       />
 
-      {/* Tali Copilot — agentic chat over the same MCP tools served at /mcp.
+      {/* Taali Chat — agentic chat over the same MCP tools served at /mcp.
           Backend at /api/v1/taali-chat/*. */}
       <Route
-        path="/copilot"
+        path="/chat"
         element={(
           <Suspense fallback={lazyFallback}>
-            <DashboardNavWithMode currentPage="copilot" onNavigate={navigateToPage} />
-            <CopilotPage />
+            <DashboardNavWithMode currentPage="chat" onNavigate={navigateToPage} />
+            <ChatPage />
           </Suspense>
         )}
       />
       <Route
-        path="/copilot/:conversationId"
+        path="/chat/:conversationId"
         element={(
           <Suspense fallback={lazyFallback}>
-            <DashboardNavWithMode currentPage="copilot" onNavigate={navigateToPage} />
-            <CopilotPage />
+            <DashboardNavWithMode currentPage="chat" onNavigate={navigateToPage} />
+            <ChatPage />
           </Suspense>
         )}
       />
+      {/* Stale-bookmark redirects from the v1 ``/copilot`` URL. */}
+      <Route path="/copilot" element={<Navigate to="/chat" replace />} />
+      <Route path="/copilot/:conversationId" element={<RedirectCopilotConvo />} />
 
       <Route
         path="/candidates/:applicationId"

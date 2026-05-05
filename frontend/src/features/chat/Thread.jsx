@@ -3,9 +3,13 @@ import ReactMarkdown from 'react-markdown';
 import ToolCallCard from './ToolCallCard';
 import CandidateGrid from './CandidateGrid';
 import ComparisonTable from './ComparisonTable';
+import GraphView from './GraphView';
 
 const ToolResultRender = ({ part }) => {
-  // Decide which custom renderer to show for this tool's payload.
+  // Decide which custom renderer(s) to show for this tool's payload. A
+  // graph_search_candidates result can render BOTH a candidate grid (the
+  // hydrated applications) and an inline graph (the underlying nodes +
+  // edges from Graphiti) — they're complementary views of the same hit.
   if (!part.result) return null;
   if (part.toolName === 'compare_applications') {
     return <ComparisonTable payload={part.result} />;
@@ -13,13 +17,20 @@ const ToolResultRender = ({ part }) => {
   if (part.toolName === 'search_applications') {
     if (Array.isArray(part.result)) return <CandidateGrid rows={part.result} />;
   }
-  if (
-    part.toolName === 'nl_search_candidates' ||
-    part.toolName === 'graph_search_candidates'
-  ) {
+  if (part.toolName === 'nl_search_candidates') {
     if (Array.isArray(part.result.applications)) {
       return <CandidateGrid rows={part.result.applications} />;
     }
+  }
+  if (part.toolName === 'graph_search_candidates') {
+    return (
+      <>
+        {Array.isArray(part.result.applications) ? (
+          <CandidateGrid rows={part.result.applications} />
+        ) : null}
+        {part.result.graph ? <GraphView graph={part.result.graph} /> : null}
+      </>
+    );
   }
   return null;
 };

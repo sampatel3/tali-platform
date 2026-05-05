@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import './copilot.css';
+import './chat.css';
 import EmptyState from './EmptyState';
 import Composer from './Composer';
 import Thread from './Thread';
@@ -73,7 +73,7 @@ const stitchToolResults = (rows) => {
     .map(({ _isToolResultEcho, _toolResults, ...rest }) => rest);
 };
 
-const CopilotPage = () => {
+const ChatPage = () => {
   const navigate = useNavigate();
   const { conversationId: routeId } = useParams();
   const conversationId = routeId ? Number(routeId) : null;
@@ -92,7 +92,7 @@ const CopilotPage = () => {
   const onConversationId = useCallback(
     (id) => {
       locallyCreated.current.add(id);
-      if (!conversationId) navigate(`/copilot/${id}`, { replace: true });
+      if (!conversationId) navigate(`/chat/${id}`, { replace: true });
     },
     [conversationId, navigate],
   );
@@ -152,13 +152,13 @@ const CopilotPage = () => {
   }, [isStreaming]);
 
   const onNew = useCallback(() => {
-    navigate('/copilot');
+    navigate('/chat');
     setComposer('');
   }, [navigate]);
 
   const onSelect = useCallback(
     (id) => {
-      navigate(`/copilot/${id}`);
+      navigate(`/chat/${id}`);
     },
     [navigate],
   );
@@ -167,7 +167,7 @@ const CopilotPage = () => {
     async (id) => {
       if (!window.confirm('Delete this conversation?')) return;
       await conversationsApi.remove(id);
-      if (id === conversationId) navigate('/copilot');
+      if (id === conversationId) navigate('/chat');
       refreshConversations();
     },
     [conversationId, navigate, refreshConversations],
@@ -200,7 +200,7 @@ const CopilotPage = () => {
         <header className="cp-head">
           <div className="cp-head-ttl">
             {heading}
-            <span className="sub">Tali Copilot</span>
+            <span className="sub">Taali</span>
           </div>
           <div className="cp-head-grow" />
           <span className="cp-head-pill">
@@ -233,5 +233,5 @@ const CopilotPage = () => {
   );
 };
 
-export default CopilotPage;
-export { CopilotPage };
+export default ChatPage;
+export { ChatPage };

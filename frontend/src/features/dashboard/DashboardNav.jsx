@@ -21,10 +21,13 @@ const pickOrganizationName = (user) => String(
   || ''
 ).trim();
 
+// "Chat" replaces "Candidates" as the canonical entry point for finding
+// and reasoning about candidates. The legacy ``/candidates`` URL still
+// works for direct links / chat result deep-links, it just isn't a
+// top-nav item anymore.
 const NAV_ITEMS = [
   { id: 'jobs', label: 'Jobs' },
-  { id: 'copilot', label: 'Copilot', badge: 'New' },
-  { id: 'candidates', label: 'Candidates' },
+  { id: 'chat', label: 'Chat', badge: 'New' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'reporting', label: 'Reporting' },
   { id: 'settings', label: 'Settings' },
