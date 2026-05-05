@@ -24,7 +24,7 @@ import {
 } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
-import { JobAgentSettings } from './JobAgentSettings';
+import { AgentTopBar } from './AgentTopBar';
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidatesDirectoryPage } from '../candidates/CandidatesDirectoryPage';
@@ -1258,6 +1258,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           All roles
         </button>
 
+        {role ? (
+          <AgentTopBar role={role} onRoleUpdated={(next) => setRole(next)} />
+        ) : null}
+
         <div className="role-hero">
           <div className="watermark">{String(role?.name || 'ROLE').replace(/[^A-Z0-9]/gi, '').slice(0, 3).toUpperCase() || 'ROL'}</div>
           <div className="role-hero-top">
@@ -1752,11 +1756,6 @@ Disqualifying: No experience with regulated financial data`}
           </div>
         ) : (
           <>
-            {role ? (
-              <div className="mb-4">
-                <JobAgentSettings role={role} onRoleUpdated={(next) => setRole(next)} />
-              </div>
-            ) : null}
             <CandidatesDirectoryPage
               onNavigate={onNavigate}
               NavComponent={null}

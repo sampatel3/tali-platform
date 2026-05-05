@@ -1130,8 +1130,16 @@ def download_application_document(
 
     safe_filename = _report_filename_part(filename, "document")
 
-    # Object-storage URL → presigned redirect. Browser caches, supports
-    # range requests for inline PDF preview, frees the API worker.
+    # No-cache headers on every branch. Without these, Railway's edge /
+    # Vercel's edge happily cache 4xx responses by default — once a row
+    # was 410'd before refetch, the cached response keeps serving 410
+    # even after the DB is fixed. Same hazard applies to the redirect
+    # (each presigned URL is short-lived; we don't want it cached).
+    no_cache_headers = {"Cache-Control": "private, no-store, must-revalidate"}
+
+    # Object-storage URL → presigned redirect. Browser caches the file
+    # itself via the presigned URL's own headers; the redirect itself
+    # must NOT be cached because the signature expires.
     s3_key = stored_document_s3_key(file_url)
     if s3_key:
         from ...services.s3_service import generate_presigned_url
@@ -1142,7 +1150,7 @@ def download_application_document(
             download_filename=safe_filename if download else None,
         )
         if presigned:
-            return RedirectResponse(url=presigned, status_code=307)
+            return RedirectResponse(url=presigned, status_code=307, headers=no_cache_headers)
 
     # Local filesystem path — only happens in dev/test (no S3 creds, so
     # process_document_upload fell back to writing to backend/uploads/).
@@ -1159,7 +1167,7 @@ def download_application_document(
             media_type=media_type,
             headers={
                 "Content-Disposition": f'{"attachment" if download else "inline"}; filename="{safe_filename}"',
-                "Cache-Control": "private, max-age=600",
+                **no_cache_headers,
             },
         )
 
@@ -1169,6 +1177,7 @@ def download_application_document(
             "reason": "file_storage_unavailable",
             "message": "CV file is no longer available. Re-fetch from Workable to restore it.",
         },
+        headers=no_cache_headers,
     )
 
 

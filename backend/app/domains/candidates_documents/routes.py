@@ -309,10 +309,18 @@ def download_candidate_document(
         filename = candidate.job_spec_filename or "job-spec"
 
     if not file_url:
-        raise HTTPException(status_code=404, detail="Document not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Document not found",
+            headers={"Cache-Control": "private, no-store, must-revalidate"},
+        )
 
-    # Object-storage URL → presigned redirect. Frees the API worker,
-    # browser caches, supports range requests.
+    # No-cache headers on every branch. Without these, Railway/Vercel
+    # edge caches happily serve a stale 410 long after the DB row was
+    # fixed (which masked the Tigris cutover for ~hours).
+    no_cache_headers = {"Cache-Control": "private, no-store, must-revalidate"}
+
+    # Object-storage URL → presigned redirect.
     from ...services.document_service import stored_document_s3_key
     from ...services.s3_service import generate_presigned_url
 
@@ -320,7 +328,7 @@ def download_candidate_document(
     if s3_key:
         presigned = generate_presigned_url(s3_key, expires_in=600)
         if presigned:
-            return RedirectResponse(url=presigned, status_code=307)
+            return RedirectResponse(url=presigned, status_code=307, headers=no_cache_headers)
 
     # Local filesystem path — dev/test only (S3 creds unset, so the
     # upload path fell back to backend/uploads/). In production, legacy
@@ -328,7 +336,7 @@ def download_candidate_document(
     from pathlib import Path as _Path
     local = _Path(file_url)
     if local.exists() and local.is_file():
-        return FileResponse(path=str(local), filename=filename)
+        return FileResponse(path=str(local), filename=filename, headers=no_cache_headers)
 
     raise HTTPException(
         status_code=410,
@@ -336,4 +344,5 @@ def download_candidate_document(
             "reason": "file_storage_unavailable",
             "message": "CV file is no longer available. Re-fetch from Workable to restore it.",
         },
+        headers=no_cache_headers,
     )

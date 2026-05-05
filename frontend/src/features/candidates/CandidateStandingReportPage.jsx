@@ -479,9 +479,15 @@ const CvDocumentViewer = ({
   }, [applicationId, blobUrl, candidateId]);
 
   useEffect(() => {
-    if (!autoPreview || !filename || !canPreview || blobUrl || loading) return;
+    // Single-shot auto-preview: never re-fire on the same render cycle
+    // once we've attempted a fetch. Without the errorMessage gate the
+    // effect retries forever on failure (loading flips false → effect
+    // re-runs → blobUrl still empty → call again → loop), which
+    // surfaced as 1k+ requests/sec hammering the download endpoint
+    // when a CV row was 410'd by edge cache.
+    if (!autoPreview || !filename || !canPreview || blobUrl || loading || errorMessage) return;
     void ensureBlob();
-  }, [autoPreview, blobUrl, canPreview, ensureBlob, filename, loading]);
+  }, [autoPreview, blobUrl, canPreview, ensureBlob, filename, loading, errorMessage]);
 
   const handleDownload = useCallback(async () => {
     if (!applicationId && !candidateId) return;

@@ -23,11 +23,13 @@ from sqlalchemy.orm import Session
 from ...actions import approve_decision as approve_decision_action
 from ...actions import override_decision as override_decision_action
 from ...actions.types import Actor
+from ...agent_runtime import budget_guard
 from ...deps import get_current_user
 from ...models.agent_decision import AGENT_DECISION_STATUSES, AgentDecision
 from ...models.agent_run import AgentRun
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
+from ...models.candidate_application_event import CandidateApplicationEvent
 from ...models.role import Role
 from ...models.user import User
 from ...platform.database import get_db
@@ -95,6 +97,36 @@ class DiscardBody(BaseModel):
 
 class RunNowBody(BaseModel):
     application_id: Optional[int] = None
+
+
+class AgentStatusActivity(BaseModel):
+    event_type: str
+    reason: Optional[str] = None
+    actor_type: str
+    application_id: Optional[int] = None
+    candidate_name: Optional[str] = None
+    created_at: datetime
+
+
+class AgentStatusCurrentRun(BaseModel):
+    id: int
+    started_at: datetime
+    status: str
+    decisions_emitted: int
+    tools_called: Optional[list[dict[str, Any]]] = None
+
+
+class AgentStatusPayload(BaseModel):
+    role_id: int
+    enabled: bool
+    paused_at: Optional[datetime] = None
+    paused_reason: Optional[str] = None
+    last_run_at: Optional[datetime] = None
+    pending_decisions: int
+    monthly_budget_cents: Optional[int] = None
+    monthly_spent_cents: int
+    current_run: Optional[AgentStatusCurrentRun] = None
+    last_activity: Optional[AgentStatusActivity] = None
 
 
 # ---------------------------------------------------------------------------
@@ -342,6 +374,106 @@ class RunNowResult(BaseModel):
     queued: bool
     task_id: Optional[str] = None
     detail: Optional[str] = None
+
+
+@router.get("/roles/{role_id}/agent/status", response_model=AgentStatusPayload)
+def agent_status(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Consolidated agent state for the role — backs the top bar's poll.
+
+    One call returns: enabled flag, paused state, monthly spend vs cap,
+    in-flight cycle (if any), pending decision count, and the latest
+    agent/recruiter event for the live tick.
+    """
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == current_user.organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if role is None:
+        raise HTTPException(status_code=404, detail=f"role {role_id} not found")
+
+    pending = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.organization_id == current_user.organization_id,
+            AgentDecision.role_id == role_id,
+            AgentDecision.status == "pending",
+        )
+        .count()
+    )
+
+    current_run_row = (
+        db.query(AgentRun)
+        .filter(
+            AgentRun.organization_id == current_user.organization_id,
+            AgentRun.role_id == role_id,
+            AgentRun.status == "running",
+        )
+        .order_by(desc(AgentRun.started_at))
+        .first()
+    )
+    current_run = (
+        AgentStatusCurrentRun(
+            id=int(current_run_row.id),
+            started_at=current_run_row.started_at,
+            status=str(current_run_row.status),
+            decisions_emitted=int(current_run_row.decisions_emitted or 0),
+            tools_called=current_run_row.tools_called,
+        )
+        if current_run_row is not None
+        else None
+    )
+
+    activity_row = (
+        db.query(CandidateApplicationEvent, Candidate)
+        .join(
+            CandidateApplication,
+            CandidateApplication.id == CandidateApplicationEvent.application_id,
+        )
+        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .filter(
+            CandidateApplicationEvent.organization_id == current_user.organization_id,
+            CandidateApplication.role_id == role_id,
+            CandidateApplicationEvent.actor_type.in_(("agent", "recruiter")),
+        )
+        .order_by(desc(CandidateApplicationEvent.created_at))
+        .limit(1)
+        .first()
+    )
+    last_activity = None
+    if activity_row is not None:
+        event, candidate = activity_row
+        last_activity = AgentStatusActivity(
+            event_type=str(event.event_type),
+            reason=event.reason,
+            actor_type=str(event.actor_type),
+            application_id=int(event.application_id),
+            candidate_name=getattr(candidate, "name", None) if candidate else None,
+            created_at=event.created_at,
+        )
+
+    monthly_spent = budget_guard.month_to_date_spend_cents(db, role=role)
+
+    return AgentStatusPayload(
+        role_id=role_id,
+        enabled=bool(role.agentic_mode_enabled),
+        paused_at=role.agent_paused_at,
+        paused_reason=role.agent_paused_reason,
+        last_run_at=role.agent_last_run_at,
+        pending_decisions=pending,
+        monthly_budget_cents=role.monthly_usd_budget_cents,
+        monthly_spent_cents=monthly_spent,
+        current_run=current_run,
+        last_activity=last_activity,
+    )
 
 
 @router.post("/roles/{role_id}/agent/run-now", response_model=RunNowResult)

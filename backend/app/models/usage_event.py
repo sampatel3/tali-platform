@@ -21,6 +21,7 @@ class UsageEvent(Base):
     id = Column(Integer, primary_key=True, index=True)
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    role_id = Column(Integer, ForeignKey("roles.id"), nullable=True)
     feature = Column(String, nullable=False)  # prescreen | score | assessment | other
     entity_id = Column(String, nullable=True)  # application_id / assessment_id
     model = Column(String, nullable=False)
@@ -40,4 +41,5 @@ class UsageEvent(Base):
     __table_args__ = (
         Index("ix_usage_events_org_created", "organization_id", "created_at"),
         Index("ix_usage_events_feature_created", "feature", "created_at"),
+        Index("ix_usage_events_role_created", "role_id", "created_at"),
     )
