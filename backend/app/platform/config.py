@@ -173,11 +173,15 @@ class Settings(BaseSettings):
     # Optional regex for additional allowed CORS origins (e.g. all Vercel previews)
     CORS_ALLOW_ORIGIN_REGEX: Optional[str] = None
 
-    # AWS S3
+    # S3-compatible object storage (AWS S3, Tigris, R2, etc.)
+    # The vars are still named AWS_* for backwards compat, but they
+    # apply to whichever S3-compatible store AWS_S3_ENDPOINT_URL points
+    # at. Leave AWS_S3_ENDPOINT_URL unset for AWS S3.
     AWS_ACCESS_KEY_ID: Optional[str] = None
     AWS_SECRET_ACCESS_KEY: Optional[str] = None
     AWS_S3_BUCKET: Optional[str] = "taali-assessments"
     AWS_REGION: str = "us-east-1"
+    AWS_S3_ENDPOINT_URL: Optional[str] = None
     # Set to True to bypass S3 entirely (creds expired, bucket down, or
     # storage isn't required for the current deploy). Files persist
     # locally only in this mode — fine for cv_text-driven scoring since
