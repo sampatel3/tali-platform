@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import logging
 import mimetypes
 from pathlib import Path
@@ -59,6 +60,7 @@ from ...services.document_service import (
     sanitize_json_for_storage,
     sanitize_text_for_storage,
     save_file_locally,
+    stored_document_s3_key,
 )
 from ...services.candidate_feedback_engine import (
     build_client_application_report_payload,
@@ -998,6 +1000,27 @@ def link_fireflies_interview(
     return _application_interview_response(interview)
 
 
+def _application_report_cache_key(app: CandidateApplication) -> str:
+    """Deterministic key for the cached PDF artefact.
+
+    Combines the timestamps that mutate when the report's contents
+    change. Stale-on-write is fine — we only cache hits avoid the
+    expensive PDF assembly; misses still build fresh.
+    """
+    def _ts(value) -> str:
+        return value.isoformat() if value else "0"
+
+    role = getattr(app, "role", None)
+    parts = [
+        str(app.id or 0),
+        _ts(app.updated_at or app.created_at),
+        _ts(getattr(app, "score_cached_at", None)),
+        _ts(getattr(app, "cv_match_scored_at", None)),
+        _ts(getattr(role, "updated_at", None) if role else None),
+    ]
+    return hashlib.sha256("|".join(parts).encode("utf-8")).hexdigest()
+
+
 @router.get("/applications/{application_id}/report.pdf")
 def download_application_report_pdf(
     application_id: int,
@@ -1005,12 +1028,6 @@ def download_application_report_pdf(
     current_user: User = Depends(get_current_user),
 ):
     app = get_application(application_id, current_user.organization_id, db)
-    organization = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    payload = build_client_application_report_payload(
-        app,
-        organization_name=(organization.name if organization and organization.name else "Employer"),
-    )
-    final_pdf = build_client_assessment_summary_pdf(payload)
     candidate_name = (
         (app.candidate.full_name if getattr(app, "candidate", None) else None)
         or (app.candidate.email if getattr(app, "candidate", None) else "Candidate")
@@ -1019,6 +1036,55 @@ def download_application_report_pdf(
         f"{_report_filename_part(app.role.name if getattr(app, 'role', None) else None, 'Role')}-"
         f"{_report_filename_part(candidate_name, 'Candidate')}.pdf"
     )
+
+    # Cache lookup: if a PDF for this exact (app, score-cache, role)
+    # snapshot already exists in S3, redirect to a presigned URL so the
+    # browser fetches it directly. Skips the 2-10s rebuild on every
+    # repeat download.
+    cache_key = _application_report_cache_key(app)
+    s3_key = f"cached/reports/{cache_key}.pdf"
+    try:
+        from ...services.s3_service import (
+            generate_presigned_url,
+            s3_object_exists,
+            upload_bytes_to_s3,
+        )
+
+        if s3_object_exists(s3_key):
+            presigned = generate_presigned_url(
+                s3_key,
+                expires_in=600,
+                download_filename=filename,
+            )
+            if presigned:
+                return RedirectResponse(url=presigned, status_code=307)
+    except Exception:
+        # Non-fatal: cache miss path below still works.
+        pass
+
+    organization = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
+    payload = build_client_application_report_payload(
+        app,
+        organization_name=(organization.name if organization and organization.name else "Employer"),
+    )
+    final_pdf = build_client_assessment_summary_pdf(payload)
+
+    # Cache write: best-effort upload so the next download is a redirect.
+    try:
+        from ...services.s3_service import upload_bytes_to_s3, generate_presigned_url
+
+        cached_url = upload_bytes_to_s3(final_pdf, s3_key, content_type="application/pdf")
+        if cached_url:
+            presigned = generate_presigned_url(
+                s3_key,
+                expires_in=600,
+                download_filename=filename,
+            )
+            if presigned:
+                return RedirectResponse(url=presigned, status_code=307)
+    except Exception:
+        pass
+
     return Response(
         content=final_pdf,
         media_type="application/pdf",
@@ -1057,7 +1123,28 @@ def download_application_document(
     media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     safe_filename = _report_filename_part(filename, "document")
     disposition = "attachment" if download else "inline"
-    response_headers = {"Content-Disposition": f'{disposition}; filename="{safe_filename}"'}
+    response_headers = {
+        "Content-Disposition": f'{disposition}; filename="{safe_filename}"',
+        "Cache-Control": "private, max-age=600",
+    }
+
+    # Prefer redirecting to a presigned S3 URL: frees the worker, lets the
+    # browser cache, and supports range requests for inline PDF preview.
+    s3_key = stored_document_s3_key(file_url)
+    if s3_key:
+        try:
+            from ...services.s3_service import generate_presigned_url
+
+            presigned = generate_presigned_url(
+                s3_key,
+                expires_in=600,
+                download_filename=safe_filename if download else None,
+            )
+            if presigned:
+                return RedirectResponse(url=presigned, status_code=307)
+        except Exception:
+            # Fall through to byte-streaming on presign failure.
+            pass
 
     stored_bytes = load_stored_document_bytes(file_url)
     if stored_bytes:
@@ -1148,7 +1235,9 @@ def update_application(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update application")
     app = get_application(application_id, current_user.organization_id, db)
-    return application_to_response(app)
+    # PATCH only touches stage/outcome/notes; scoring inputs unchanged,
+    # so reuse the cached interview pack.
+    return application_to_response(app, use_cached_score_summary=True)
 
 
 @router.get("/applications")
@@ -1609,7 +1698,9 @@ def update_application_stage(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update application stage")
-    return application_to_response(app)
+    # Stage transitions don't change scoring inputs; reuse the cached
+    # interview pack so this PATCH doesn't trigger a Claude regeneration.
+    return application_to_response(app, use_cached_score_summary=True)
 
 
 @router.patch("/applications/{application_id}/outcome", response_model=ApplicationResponse)
@@ -1638,7 +1729,7 @@ def update_application_outcome(
                 .first()
             )
         if existing_idempotent:
-            return application_to_response(app)
+            return application_to_response(app, use_cached_score_summary=True)
         initialize_pipeline_event_if_missing(
             db,
             app=app,
@@ -1687,7 +1778,9 @@ def update_application_outcome(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update application outcome")
-    return application_to_response(app)
+    # Outcome changes don't change scoring inputs; reuse the cached
+    # interview pack so the PATCH stays snappy.
+    return application_to_response(app, use_cached_score_summary=True)
 
 
 @router.get("/applications/{application_id}/events", response_model=list[ApplicationEventResponse])
@@ -1909,7 +2002,10 @@ def enrich_application_candidate(
         raise HTTPException(status_code=500, detail="Failed to save enriched profile")
 
     app = get_application(application_id, current_user.organization_id, db)
-    return application_to_response(app)
+    # Enrichment populates candidate profile fields; the CV / criteria
+    # are unchanged, so reuse the cached interview pack to avoid an
+    # inline Claude call on this POST.
+    return application_to_response(app, use_cached_score_summary=True)
 
 
 # ---------------------------------------------------------------------------

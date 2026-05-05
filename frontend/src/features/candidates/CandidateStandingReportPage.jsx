@@ -3,6 +3,7 @@ import { useParams, useSearchParams } from 'react-router-dom';
 import { AlertCircle, Check, Copy, Download, Mail, ExternalLink, Eye } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
+import { getCachedDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import {
   Button,
@@ -433,11 +434,10 @@ const CvDocumentViewer = ({
   const cvModel = useMemo(() => normalizeCvSections({ parsedSections, cvText, application }), [application, cvText, parsedSections]);
   const hasTextFallback = Boolean(cvText || parsedSections || cvModel.summary || cvModel.rawSections.length);
 
-  useEffect(() => {
-    return () => {
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-    };
-  }, [blobUrl]);
+  // Note: blobUrl ownership belongs to the module-level documentCache —
+  // we deliberately do NOT revoke on unmount because the same URL is
+  // reused across mounts (instant re-open) and across the candidate
+  // list hover-prefetch path. The cache TTL handles cleanup.
 
   const ensureBlob = useCallback(async () => {
     if (blobUrl) return blobUrl;
@@ -445,14 +445,10 @@ const CvDocumentViewer = ({
     setLoading(true);
     setErrorMessage('');
     try {
-      const res = applicationId && rolesApi?.downloadApplicationDocument
-        ? await rolesApi.downloadApplicationDocument(applicationId, 'cv')
-        : await candidatesApi?.downloadDocument?.(candidateId, 'cv');
-      if (!res) return '';
-      const blob = new Blob([res.data], mime ? { type: mime } : undefined);
-      const url = URL.createObjectURL(blob);
-      setBlobUrl(url);
-      return url;
+      const result = await getCachedDocumentBlob({ applicationId, candidateId, docType: 'cv' });
+      if (!result?.url) return '';
+      setBlobUrl(result.url);
+      return result.url;
     } catch (err) {
       const status = err?.response?.status;
       const detail = err?.response?.data;
@@ -477,7 +473,7 @@ const CvDocumentViewer = ({
     } finally {
       setLoading(false);
     }
-  }, [applicationId, blobUrl, candidateId, candidatesApi, mime, rolesApi]);
+  }, [applicationId, blobUrl, candidateId]);
 
   useEffect(() => {
     if (!autoPreview || !filename || !canPreview || blobUrl || loading) return;
@@ -489,14 +485,24 @@ const CvDocumentViewer = ({
     setDownloading(true);
     setErrorMessage('');
     let downloadUrl = '';
+    let createdLocalUrl = false;
     try {
-      const res = applicationId && rolesApi?.downloadApplicationDocument
-        ? await rolesApi.downloadApplicationDocument(applicationId, 'cv', { params: { download: true } })
-        : await candidatesApi?.downloadDocument?.(candidateId, 'cv');
-      if (!res) return;
-      const contentType = res?.headers?.['content-type'] || mime || 'application/octet-stream';
-      const blob = res.data instanceof Blob ? res.data : new Blob([res.data], { type: contentType });
-      downloadUrl = URL.createObjectURL(blob);
+      // Reuse the cached inline blob when present — saves a re-download
+      // when the user has already previewed. Falls back to a fresh
+      // attachment-disposition request otherwise.
+      const cached = await getCachedDocumentBlob({ applicationId, candidateId, docType: 'cv' });
+      if (cached?.url) {
+        downloadUrl = cached.url;
+      } else {
+        const res = applicationId && rolesApi?.downloadApplicationDocument
+          ? await rolesApi.downloadApplicationDocument(applicationId, 'cv', { params: { download: true } })
+          : await candidatesApi?.downloadDocument?.(candidateId, 'cv');
+        if (!res) return;
+        const contentType = res?.headers?.['content-type'] || mime || 'application/octet-stream';
+        const blob = res.data instanceof Blob ? res.data : new Blob([res.data], { type: contentType });
+        downloadUrl = URL.createObjectURL(blob);
+        createdLocalUrl = true;
+      }
       const anchor = document.createElement('a');
       anchor.href = downloadUrl;
       anchor.download = downloadName;
@@ -523,7 +529,11 @@ const CvDocumentViewer = ({
         setErrorMessage('Failed to download CV.');
       }
     } finally {
-      if (downloadUrl) window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      // Only revoke URLs we created locally; cached URLs are managed by
+      // documentCache so other components (and re-opens) keep working.
+      if (createdLocalUrl && downloadUrl) {
+        window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+      }
       setDownloading(false);
     }
   }, [applicationId, candidateId, candidatesApi, downloadName, mime, rolesApi]);

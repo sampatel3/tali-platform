@@ -163,6 +163,47 @@ def upload_to_s3(local_path: str, key: str) -> Optional[str]:
         return None
 
 
+def upload_bytes_to_s3(content: bytes, key: str, *, content_type: str = "application/octet-stream") -> Optional[str]:
+    """Upload raw bytes to S3 (no temp file). Returns the S3 URL.
+
+    Used for derived artefacts (cached PDF reports, etc.) that we can
+    regenerate from source data, so a None return is never fatal — the
+    caller falls back to streaming the bytes directly.
+    """
+    client, bucket = _get_client()
+    if client is None:
+        return None
+    try:
+        client.put_object(Bucket=bucket, Key=key, Body=content, ContentType=content_type)
+        return f"https://{bucket}.s3.amazonaws.com/{key}"
+    except Exception as exc:
+        if "InvalidAccessKeyId" in str(exc) or "ExpiredToken" in str(exc):
+            global _health_cache, _health_reason
+            with _probe_lock:
+                if _health_cache is not False:
+                    logger.warning(
+                        "S3 credentials rejected mid-stream — disabling S3 uploads for this process. Error: %s",
+                        exc,
+                    )
+                _health_cache = False
+                _health_reason = f"runtime_failure: {exc}"
+        else:
+            logger.debug("S3 put_object failed for %s: %s", key, exc)
+        return None
+
+
+def s3_object_exists(key: str) -> bool:
+    """HEAD check — used for cached-artefact lookup before redirecting."""
+    client, bucket = _get_client()
+    if client is None:
+        return False
+    try:
+        client.head_object(Bucket=bucket, Key=key)
+        return True
+    except Exception:
+        return False
+
+
 def download_from_s3(key: str) -> Optional[bytes]:
     """Download a file from S3. Returns None when S3 is unavailable."""
     client, bucket = _get_client()
@@ -174,6 +215,46 @@ def download_from_s3(key: str) -> Optional[bytes]:
         return response["Body"].read()
     except Exception as exc:
         logger.debug("S3 download failed for %s: %s", key, exc)
+        return None
+
+
+def generate_presigned_url(
+    key: str,
+    *,
+    expires_in: int = 600,
+    download_filename: str | None = None,
+    response_cache_control: str = "private, max-age=600",
+) -> Optional[str]:
+    """Return a presigned GET URL the browser can fetch directly.
+
+    Lets us redirect CV/document downloads to S3 instead of streaming the
+    bytes through FastAPI — frees the worker, lets the browser cache, and
+    supports range requests for inline PDF preview.
+
+    ``download_filename`` forces an attachment Content-Disposition.
+    Returns None when S3 is unavailable.
+    """
+    client, bucket = _get_client()
+    if client is None:
+        return None
+
+    params: dict[str, str] = {
+        "Bucket": bucket,
+        "Key": key,
+        "ResponseCacheControl": response_cache_control,
+    }
+    if download_filename:
+        safe = download_filename.replace('"', "")
+        params["ResponseContentDisposition"] = f'attachment; filename="{safe}"'
+
+    try:
+        return client.generate_presigned_url(
+            "get_object",
+            Params=params,
+            ExpiresIn=int(expires_in),
+        )
+    except Exception as exc:
+        logger.debug("S3 presign failed for %s: %s", key, exc)
         return None
 
 

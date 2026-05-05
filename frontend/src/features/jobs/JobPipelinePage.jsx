@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
+import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import {
@@ -1615,6 +1616,7 @@ Disqualifying: No experience with regulated financial data`}
                           className="kanban-card text-left"
                           href={candidateReportHref(application, numericRoleId)}
                           onClick={(event) => handlePipelineReportClick(event, application)}
+                          onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
                         >
                           <div className="cc-top">
                             <div className="av">{buildApplicationTitle(application).slice(0, 2).toUpperCase()}</div>
@@ -1675,6 +1677,7 @@ Disqualifying: No experience with regulated financial data`}
                       candidateApplicationId: application.id,
                       ...(Number.isFinite(numericRoleId) ? { fromRoleId: numericRoleId } : {}),
                     })}
+                    onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
                   >
                     <div className="av">{buildApplicationTitle(application).slice(0, 2).toUpperCase()}</div>
                     <div className="rf-main">

@@ -312,6 +312,20 @@ def download_candidate_document(
     if not file_url:
         raise HTTPException(status_code=404, detail="Document not found")
 
+    # Prefer a presigned S3 URL when applicable — browser caches it,
+    # supports range requests, and removes the API worker from the path.
+    try:
+        from ...services.document_service import stored_document_s3_key
+        from ...services.s3_service import generate_presigned_url
+
+        s3_key = stored_document_s3_key(file_url)
+        if s3_key:
+            presigned = generate_presigned_url(s3_key, expires_in=600)
+            if presigned:
+                return RedirectResponse(url=presigned, status_code=307)
+    except Exception:
+        pass
+
     if file_url.startswith("http://") or file_url.startswith("https://"):
         return RedirectResponse(url=file_url, status_code=307)
 

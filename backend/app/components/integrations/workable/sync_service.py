@@ -6,6 +6,7 @@ import ast
 import json
 import logging
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from typing import Any
 
@@ -863,6 +864,29 @@ class WorkableSyncService:
                     if not candidates:
                         logger.info("list_job_candidates returned 0 for job shortcode=%s", job.get("shortcode"))
 
+                    # Parallel-prefetch full payloads + CVs for this job
+                    # before the sequential DB write loop. Turns N serial
+                    # Workable GETs into ~N/PREFETCH_WORKERS waves, which
+                    # is the dominant cost for "full" syncs of any size.
+                    prefetched_payloads: dict[str, dict] = {}
+                    prefetched_resumes: dict[str, tuple[str, bytes]] = {}
+                    if effective_mode == "full" and candidates:
+                        try:
+                            prefetched_payloads = self._prefetch_full_candidate_payloads(candidates)
+                            prefetched_resumes = self._prefetch_candidate_resumes(prefetched_payloads)
+                        except WorkableRateLimitError:
+                            # Re-raise so the per-job try/except below
+                            # records the rate-limit and stops the sync
+                            # the same way it did before parallelisation.
+                            raise
+                        except Exception:
+                            logger.exception(
+                                "Workable prefetch wave failed for job shortcode=%s; falling back to sequential",
+                                job.get("shortcode"),
+                            )
+                            prefetched_payloads = {}
+                            prefetched_resumes = {}
+
                     for idx, candidate_ref in enumerate(candidates):
                         if self._is_cancel_requested(db, org, run):
                             raise WorkableSyncCancelled()
@@ -874,6 +898,7 @@ class WorkableSyncService:
                             f"{idx + 1}/{total_candidates}" if total_candidates else str(idx + 1)
                         )
                         summary["last_request"] = f"syncing candidate {cid}"
+                        cid_key = str(candidate_ref.get("id") or "").strip()
                         try:
                             synced = self._sync_candidate_for_role(
                                 db=db,
@@ -884,6 +909,8 @@ class WorkableSyncService:
                                 now=now,
                                 run=run,
                                 mode=effective_mode,
+                                prefetched_full_payload=prefetched_payloads.get(cid_key),
+                                prefetched_resume=prefetched_resumes.get(cid_key),
                             )
                             summary["candidates_upserted"] += synced.get("candidate_upserted", 0)
                             summary["applications_upserted"] += synced.get("application_upserted", 0)
@@ -991,6 +1018,86 @@ class WorkableSyncService:
             if candidates:
                 return candidates
         return []
+
+    # Workable rate limit is "10 req / 10 sec" per the integration docs.
+    # 3 parallel workers keeps the burst under 1 req/sec on average even
+    # when responses are fast, while still cutting wall-clock for a
+    # 50-candidate "full" sync from ~50s sequential to ~17s.
+    _PREFETCH_WORKERS = 3
+
+    def _prefetch_full_candidate_payloads(
+        self,
+        candidate_refs: list[dict],
+    ) -> dict[str, dict]:
+        """Fan out ``get_candidate`` calls in parallel.
+
+        Returns a ``{candidate_id: full_payload}`` dict that the
+        sequential DB loop can consult instead of making a blocking
+        Workable GET per candidate. Failures are swallowed (the
+        per-candidate flow falls back to the list payload).
+        """
+        ids = [
+            str(ref.get("id") or "").strip()
+            for ref in candidate_refs
+            if str(ref.get("id") or "").strip() and not _is_terminal_candidate(ref)
+        ]
+        if not ids:
+            return {}
+
+        payloads: dict[str, dict] = {}
+
+        def _fetch(cid: str) -> tuple[str, dict | None]:
+            try:
+                return cid, self.client.get_candidate(cid)
+            except WorkableRateLimitError:
+                # Bubble up so the outer loop's rate-limit handling can
+                # pause/abort the whole job. We treat one rate-limit hit
+                # as fatal for the prefetch wave.
+                raise
+            except Exception as exc:
+                logger.debug("Prefetch get_candidate(%s) failed: %s", cid, exc)
+                return cid, None
+
+        with ThreadPoolExecutor(max_workers=self._PREFETCH_WORKERS) as pool:
+            futures = [pool.submit(_fetch, cid) for cid in ids]
+            for fut in as_completed(futures):
+                cid, payload = fut.result()
+                if isinstance(payload, dict) and payload:
+                    payloads[cid] = payload
+        return payloads
+
+    def _prefetch_candidate_resumes(
+        self,
+        payloads_by_id: dict[str, dict],
+    ) -> dict[str, tuple[str, bytes]]:
+        """Fan out resume downloads in parallel for candidates whose
+        full payload exposes a resume_url.
+
+        Returns ``{candidate_id: (filename, bytes)}``. Failures are
+        swallowed; the per-candidate flow will fall back to a sync
+        download or skip the CV entirely.
+        """
+        if not payloads_by_id:
+            return {}
+
+        downloads: dict[str, tuple[str, bytes]] = {}
+
+        def _download(cid: str, payload: dict) -> tuple[str, tuple[str, bytes] | None]:
+            try:
+                return cid, self.client.download_candidate_resume(payload)
+            except WorkableRateLimitError:
+                raise
+            except Exception as exc:
+                logger.debug("Prefetch resume download(%s) failed: %s", cid, exc)
+                return cid, None
+
+        with ThreadPoolExecutor(max_workers=self._PREFETCH_WORKERS) as pool:
+            futures = [pool.submit(_download, cid, p) for cid, p in payloads_by_id.items()]
+            for fut in as_completed(futures):
+                cid, result = fut.result()
+                if result:
+                    downloads[cid] = result
+        return downloads
 
     def _job_details_for_role(self, *, job: dict, role: Role | None = None) -> dict:
         for identifier in self._job_identifiers(job, role):
@@ -1101,6 +1208,8 @@ class WorkableSyncService:
         now: datetime,
         run: WorkableSyncRun | None = None,
         mode: str = "metadata",
+        prefetched_full_payload: dict | None = None,
+        prefetched_resume: tuple[str, bytes] | None = None,
     ) -> dict:
         if self._is_cancel_requested(db, org, run):
             raise WorkableSyncCancelled()
@@ -1114,7 +1223,11 @@ class WorkableSyncService:
 
         candidate_payload = candidate_ref
         if mode == "full":
-            full_payload = self.client.get_candidate(candidate_id)
+            # Prefer the parallel-prefetched payload; fall back to a
+            # blocking GET only if prefetch missed (e.g. failed).
+            full_payload = prefetched_full_payload
+            if full_payload is None:
+                full_payload = self.client.get_candidate(candidate_id)
             if isinstance(full_payload, dict) and full_payload:
                 candidate_payload = {**candidate_ref, **full_payload}
 
@@ -1274,7 +1387,9 @@ class WorkableSyncService:
                 app.cv_text = candidate.cv_text
                 app.cv_uploaded_at = candidate.cv_uploaded_at
             if not (app.cv_text or "").strip():
-                downloaded = self.client.download_candidate_resume(candidate_payload)
+                # Prefer the parallel-prefetched resume; only hit the
+                # network here if prefetch had nothing for this candidate.
+                downloaded = prefetched_resume or self.client.download_candidate_resume(candidate_payload)
                 if downloaded:
                     filename, content = downloaded
                     _store_candidate_resume(
