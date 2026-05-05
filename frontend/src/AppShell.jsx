@@ -62,6 +62,9 @@ const CandidatesDirectoryPage = lazy(() =>
 const ChatPage = lazy(() =>
   import('./features/chat/ChatPage').then((m) => ({ default: m.ChatPage }))
 );
+const ChatShowcaseView = lazy(() =>
+  import('./features/chat/ChatShowcaseView').then((m) => ({ default: m.ChatShowcaseView }))
+);
 const CandidateStandingReportPage = lazy(() =>
   import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
 );
@@ -477,6 +480,16 @@ function AppContent() {
           <Suspense fallback={lazyFallback}>
             <DashboardNavWithMode currentPage="chat" onNavigate={navigateToPage} />
             <ChatPage />
+          </Suspense>
+        )}
+      />
+      {/* Public, auth-free chat preview used by the demo showcase to
+          demonstrate graph topology + tool-call flow without a backend. */}
+      <Route
+        path="/showcase/chat"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ChatShowcaseView />
           </Suspense>
         )}
       />

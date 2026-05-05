@@ -39,13 +39,16 @@ const resolveAssessmentStatus = (application) => (
 
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'assessment', label: 'Assessment' },
+  { id: 'assessment', label: 'Assessment', recruiterPrep: true },
   { id: 'cv', label: 'CV & match' },
-  { id: 'prep', label: 'Interview prep' },
+  { id: 'prep', label: 'Interview prep', recruiterPrep: true },
   { id: 'notes', label: 'Notes & timeline', internalOnly: true },
 ];
 
 const INTERNAL_TABS = new Set(REPORT_TABS.filter((tab) => tab.internalOnly).map((tab) => tab.id));
+const CLIENT_HIDDEN_TABS = new Set(
+  REPORT_TABS.filter((tab) => tab.internalOnly || tab.recruiterPrep).map((tab) => tab.id),
+);
 const REPORT_TAB_IDS = new Set(REPORT_TABS.map((tab) => tab.id));
 
 const CV_VIEWER_PDF_HEIGHT = 860;
@@ -762,7 +765,12 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const sharedRouteToken = String(searchParams.get('k') || '').trim()
     || (routeApplicationKey.startsWith('shr_') ? routeApplicationKey : '');
   const numericApplicationId = Number(routeApplicationKey);
-  const isInterviewView = searchParams.get('view') === 'interview';
+  const viewParam = searchParams.get('view');
+  const isClientView = viewParam === 'client';
+  const isInterviewView = viewParam === 'interview' || isClientView;
+  const hiddenTabs = isClientView
+    ? CLIENT_HIDDEN_TABS
+    : (isInterviewView ? INTERNAL_TABS : new Set());
   const requestedTab = searchParams.get('tab') || 'overview';
   const backFromRoleId = useMemo(() => {
     const match = (searchParams.get('from') || '').match(/^jobs\/(\d+)$/);
@@ -781,11 +789,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
   useEffect(() => {
     const nextTab = REPORT_TAB_IDS.has(requestedTab) ? requestedTab : 'overview';
-    setActiveTab(isInterviewView && INTERNAL_TABS.has(nextTab) ? 'overview' : nextTab);
-  }, [isInterviewView, requestedTab]);
+    setActiveTab(hiddenTabs.has(nextTab) ? 'overview' : nextTab);
+  }, [hiddenTabs, requestedTab]);
 
   const activateTab = useCallback((tabId) => {
-    const safeTab = isInterviewView && INTERNAL_TABS.has(tabId) ? 'overview' : tabId;
+    const safeTab = hiddenTabs.has(tabId) ? 'overview' : tabId;
     setActiveTab(safeTab);
     const nextParams = new URLSearchParams(searchParams);
     if (safeTab === 'overview') {
@@ -794,7 +802,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       nextParams.set('tab', safeTab);
     }
     setSearchParams(nextParams, { replace: true });
-  }, [isInterviewView, searchParams, setSearchParams]);
+  }, [hiddenTabs, searchParams, setSearchParams]);
 
   const loadStandingReport = useCallback(async () => {
     if (routeApplicationKey === 'demo') {
@@ -1148,6 +1156,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
   };
 
+  const handleCopyClientLink = async () => {
+    try {
+      const payload = await loadShareLink({ force: !shareUrl });
+      const baseUrl = payload?.share_url || shareUrl || buildFallbackShareUrl(application?.id || routeApplicationKey, payload?.share_token || sharedRouteToken);
+      if (!baseUrl) throw new Error('Share link unavailable.');
+      const clientUrl = baseUrl.replace('view=interview', 'view=client');
+      await navigator.clipboard.writeText(clientUrl);
+      showToast('External client link copied (recruiter notes hidden).', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to copy client link.'), 'error');
+    }
+  };
+
   const handleEmailShare = async () => {
     try {
       const payload = await loadShareLink({ force: !shareUrl });
@@ -1235,7 +1256,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         {isInterviewView ? (
           <div className="iv-banner">
             <Eye size={16} />
-            <span><b>Interview view.</b> You are seeing the panel-safe version of this Taali report.</span>
+            {isClientView ? (
+              <span><b>Client view.</b> External, client-safe summary — recruiter notes, scoring breakdown, and interview prep are hidden.</span>
+            ) : (
+              <span><b>Interview view.</b> You are seeing the panel-safe version of this Taali report.</span>
+            )}
           </div>
         ) : null}
         {(() => {
@@ -1360,6 +1385,16 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             <button type="button" className="btn btn-outline btn-sm" onClick={handleCopyLink} disabled={shareState.loading || !application?.id}>
               Copy
             </button>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={handleCopyClientLink}
+              disabled={shareState.loading || !application?.id}
+              title="Copy a client-safe link — recruiter notes, internal scoring, and interview prep are hidden."
+            >
+              <ExternalLink size={14} />
+              Copy client link
+            </button>
             <button type="button" className="btn btn-outline btn-sm" onClick={handleEmailShare} disabled={shareState.loading || !application?.id}>
               <Mail size={14} />
               Email to panel
@@ -1369,8 +1404,31 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         </div>
         {shareState.error ? <p className="mt-3 text-xs text-[var(--taali-danger)]">{shareState.error}</p> : null}
 
+        {isClientView && application?.client_share_summary ? (
+          <div className="report-card" style={{ marginTop: 18, borderLeft: '4px solid var(--taali-accent, #4f46e5)' }}>
+            <div className="kicker">Why we&apos;re sharing this candidate</div>
+            <h2 style={{ fontSize: '20px', margin: '8px 0 6px' }}>
+              {application.client_share_summary.verdict}
+            </h2>
+            <p style={{ fontSize: '14px', color: 'var(--ink-2)', margin: '0 0 12px' }}>
+              {`Shared for ${application.client_share_summary.role}.`}
+              {Number.isFinite(Number(application.client_share_summary.score_100))
+                ? ` TAALI score: ${Math.round(Number(application.client_share_summary.score_100))}/100.`
+                : ''}
+            </p>
+            {Array.isArray(application.client_share_summary.highlights)
+              && application.client_share_summary.highlights.length > 0 ? (
+                <ul style={{ paddingLeft: 18, margin: '0 0 8px', fontSize: '14px', lineHeight: 1.6 }}>
+                  {application.client_share_summary.highlights.map((highlight, idx) => (
+                    <li key={idx}>{highlight}</li>
+                  ))}
+                </ul>
+              ) : null}
+          </div>
+        ) : null}
+
         <div className="tabs report-tabs" role="tablist" aria-label="Candidate report sections">
-          {REPORT_TABS.map((tab) => (
+          {REPORT_TABS.filter((tab) => !hiddenTabs.has(tab.id)).map((tab) => (
             <button
               key={tab.id}
               type="button"

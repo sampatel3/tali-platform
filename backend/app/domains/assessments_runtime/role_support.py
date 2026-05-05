@@ -812,7 +812,12 @@ def application_to_response(
     )
 
 
-def application_detail_payload(app: CandidateApplication, *, include_cv_text: bool) -> dict[str, Any]:
+def application_detail_payload(
+    app: CandidateApplication,
+    *,
+    include_cv_text: bool,
+    client_safe: bool = False,
+) -> dict[str, Any]:
     from ...services.candidate_interview_kit import build_candidate_interview_kit_for_application
 
     # Use the cached score summary + cached interview support — the
@@ -836,7 +841,99 @@ def application_detail_payload(app: CandidateApplication, *, include_cv_text: bo
     payload["assessment_preview"] = _assessment_preview_for_application(app)
     payload["assessment_history"] = _assessment_history_for_application(app)
     payload["candidate_interview_kit"] = build_candidate_interview_kit_for_application(app)
+
+    if client_safe:
+        # Strip recruiter-internal fields so an external client share
+        # (e.g. a hiring-manager-at-a-customer link) cannot read recruiter
+        # comments, our internal interview prep, raw assessment transcripts,
+        # or per-stage internal scoring breakdowns. Defense-in-depth: the
+        # frontend client view also hides these tabs.
+        payload["notes"] = None
+        payload["candidate_interview_kit"] = None
+        payload["assessment_history"] = []
+        if isinstance(payload.get("score_summary"), dict):
+            ss = dict(payload["score_summary"])
+            for k in (
+                "rubric_breakdown",
+                "weighting",
+                "internal_notes",
+                "claude_chat_log",
+                "judge_rationale",
+            ):
+                ss.pop(k, None)
+            payload["score_summary"] = ss
+        payload["recruiter_notes"] = None
+        payload["client_share_summary"] = _build_client_share_summary(app, payload)
     return payload
+
+
+def _build_client_share_summary(app: CandidateApplication, payload: dict[str, Any]) -> dict[str, Any]:
+    """Compose a small "why we're sharing this candidate" header for the
+    external client view. Fully derived from existing cached fields — no
+    new Claude calls.
+    """
+    from datetime import datetime, timezone
+
+    role = getattr(app, "role", None)
+    role_name = getattr(role, "name", None) or "this role"
+
+    score_100: float | None = None
+    summary_obj = payload.get("score_summary")
+    if isinstance(summary_obj, dict):
+        for k in ("taali_score_100", "score_100", "overall_score"):
+            v = summary_obj.get(k)
+            if isinstance(v, (int, float)):
+                score_100 = float(v)
+                break
+
+    if score_100 is None and getattr(app, "taali_score_cache_100", None) is not None:
+        try:
+            score_100 = float(app.taali_score_cache_100)
+        except (TypeError, ValueError):
+            score_100 = None
+
+    if score_100 is None:
+        verdict = "Recommended for review"
+        band = "na"
+    elif score_100 >= 85:
+        verdict = "Strong match — recommended"
+        band = "strong"
+    elif score_100 >= 70:
+        verdict = "Good fit — recommended"
+        band = "good"
+    elif score_100 >= 55:
+        verdict = "Standard fit — worth a conversation"
+        band = "standard"
+    else:
+        verdict = "Recommended for review"
+        band = "standard"
+
+    highlights: list[str] = []
+    cv_match = payload.get("cv_match") or {}
+    if isinstance(cv_match, dict):
+        hl = cv_match.get("experience_highlights")
+        if isinstance(hl, list):
+            for item in hl[:3]:
+                text = str(item or "").strip()
+                if text:
+                    highlights.append(text[:240])
+
+    if not highlights and isinstance(summary_obj, dict):
+        bullets = summary_obj.get("highlights") or summary_obj.get("strengths")
+        if isinstance(bullets, list):
+            for item in bullets[:3]:
+                text = str(item or "").strip()
+                if text:
+                    highlights.append(text[:240])
+
+    return {
+        "role": role_name,
+        "verdict": verdict,
+        "verdict_band": band,
+        "score_100": score_100,
+        "highlights": highlights,
+        "shared_at": datetime.now(timezone.utc).isoformat(),
+    }
 
 
 def application_list_payload(app: CandidateApplication, *, include_cv_text: bool) -> dict[str, Any]:

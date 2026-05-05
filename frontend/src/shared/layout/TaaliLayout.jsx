@@ -22,8 +22,10 @@ const APP_TABS = [
 const MARKETING_TABS = [
   { id: 'problem', label: 'The problem' },
   { id: 'platform', label: 'Platform' },
+  { id: 'runtime', label: 'Runtime' },
   { id: 'how-it-works', label: 'How it works' },
   { id: 'proof', label: 'Why Taali' },
+  { id: 'pricing', label: 'Pricing' },
 ];
 
 const initialsFor = (...values) => {
@@ -194,7 +196,7 @@ export const MarketingNav = ({ onNavigate }) => {
     <div className="app-nav">
       <div className="app-nav-inner">
         <TaaliLogo onClick={() => { closeMenu(); onNavigate('landing'); }} />
-        <div className="row !hidden md:!flex" style={{ gap: 32 }}>
+        <div className="row !hidden md:!flex" style={{ gap: 22 }}>
           {MARKETING_TABS.map((tab) => (
             <button
               key={tab.id}

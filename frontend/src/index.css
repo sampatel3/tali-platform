@@ -5211,6 +5211,7 @@ body.interview-view .page {
    Width 142% × scale 0.704 ≈ 1.0 visible (no overflow), 142% native viewport. */
 .wt-frame[data-pane="jobs"] .wt-stage iframe,
 .wt-frame[data-pane="candidates"] .wt-stage iframe,
+.wt-frame[data-pane="chat"] .wt-stage iframe,
 .wt-frame[data-pane="workspace"] .wt-stage iframe {
   width: 142%;
   height: 142%;
@@ -5220,7 +5221,7 @@ body.interview-view .page {
 
 /* Standing report has a narrower native layout, so a smaller scale-up is
    enough — keeps text readable without forcing extra whitespace. */
-.wt-frame[data-pane="report"] .wt-stage iframe {
+.wt-frame[data-pane="profile"] .wt-stage iframe {
   width: 118%;
   height: 118%;
   transform: scale(0.847);
@@ -5233,8 +5234,9 @@ body.interview-view .page {
 @media (max-width: 768px) {
   .wt-frame[data-pane="jobs"] .wt-stage iframe,
   .wt-frame[data-pane="candidates"] .wt-stage iframe,
+  .wt-frame[data-pane="chat"] .wt-stage iframe,
   .wt-frame[data-pane="workspace"] .wt-stage iframe,
-  .wt-frame[data-pane="report"] .wt-stage iframe {
+  .wt-frame[data-pane="profile"] .wt-stage iframe {
     width: 100%;
     height: 100%;
     transform: none;

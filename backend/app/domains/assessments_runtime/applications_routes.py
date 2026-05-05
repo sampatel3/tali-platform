@@ -805,10 +805,15 @@ def get_application_detail(
     return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
 
 
-@router.get("/applications/share/{share_token}", response_model=ApplicationDetailResponse)
+@router.get("/applications/share/{share_token}")
 def get_application_detail_by_share_token(
     share_token: str,
     include_cv_text: bool = Query(False, description="Include full CV extracted text for viewer"),
+    view: str = Query(
+        default="interview",
+        pattern="^(interview|client)$",
+        description="`interview` (default, hiring-manager view) or `client` (external; scrubs recruiter notes/transcripts and adds a 'why shared' summary).",
+    ),
     db: Session = Depends(get_db),
     current_user: User | None = Depends(get_optional_current_user),
 ):
@@ -817,7 +822,11 @@ def get_application_detail_by_share_token(
         org_id=current_user.organization_id if current_user else None,
         db=db,
     )
-    return ApplicationDetailResponse(**application_detail_payload(app, include_cv_text=include_cv_text))
+    return application_detail_payload(
+        app,
+        include_cv_text=include_cv_text,
+        client_safe=(view == "client"),
+    )
 
 
 @router.post("/applications/{application_id}/share-link", response_model=ApplicationReportShareLinkResponse)
