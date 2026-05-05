@@ -695,3 +695,86 @@
   height: 360px;
   background: linear-gradient(180deg, var(--c-bg-2), var(--c-bg-3));
 }
+
+/* ============ confirm modal ============ */
+
+.cp-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: color-mix(in oklab, var(--c-ink) 35%, transparent);
+  backdrop-filter: blur(2px);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  animation: cp-fade-in .12s ease-out;
+}
+.cp-modal {
+  width: min(420px, 100%);
+  background: var(--c-bg-2);
+  border: 1px solid var(--c-line);
+  border-radius: 16px;
+  padding: 22px 24px 18px;
+  box-shadow: 0 2px 0 rgba(29, 23, 48, .04), 0 30px 60px -20px rgba(29, 23, 48, .22);
+  animation: cp-pop-in .14s cubic-bezier(.2, .8, .2, 1);
+}
+.cp-modal-title {
+  font-family: var(--font-display, var(--font-sans, "Geist", "Inter", system-ui, sans-serif));
+  font-weight: 600;
+  font-size: 16px;
+  letter-spacing: -.01em;
+  color: var(--c-ink);
+  margin-bottom: 6px;
+}
+.cp-modal-detail {
+  font-size: 13.5px;
+  line-height: 1.5;
+  color: var(--c-mute);
+  margin-bottom: 18px;
+}
+.cp-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+.cp-btn-ghost,
+.cp-btn-primary,
+.cp-btn-danger {
+  font-family: var(--font-sans, "Geist", "Inter", system-ui, sans-serif);
+  padding: 8px 14px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: background .12s, border-color .12s;
+}
+.cp-btn-ghost {
+  background: transparent;
+  color: var(--c-ink-2);
+}
+.cp-btn-ghost:hover {
+  background: var(--c-bg-3);
+}
+.cp-btn-primary {
+  background: var(--c-purple);
+  color: #fff;
+}
+.cp-btn-primary:hover {
+  background: var(--c-purple-2);
+}
+.cp-btn-danger {
+  background: var(--c-red);
+  color: #fff;
+}
+.cp-btn-danger:hover {
+  background: color-mix(in oklab, var(--c-red) 90%, black);
+}
+@keyframes cp-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+@keyframes cp-pop-in {
+  from { opacity: 0; transform: translateY(4px) scale(.98); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
+}
