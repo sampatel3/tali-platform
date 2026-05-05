@@ -181,7 +181,7 @@ The per-requirement object lists ``evidence_quotes`` and ``reasoning`` BEFORE th
     "missing_skills": ["<skill>", "..."],
     "experience_highlights": ["<specific achievement with context>", "..."],
     "concerns": ["<specific concern with reasoning>", "..."],
-    "summary": "<5-7 sentence factual summary>"
+    "summary": "<exactly 3-4 short sentences (~120 chars each, ~500 chars total max) following the verdict / must-have tally / strong-preference tally / one-screening-question pattern from rule 10. NOT paragraphs. NOT a critique. A scannable exec brief.>"
 }}
 
 ---

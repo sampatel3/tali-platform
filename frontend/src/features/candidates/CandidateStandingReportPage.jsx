@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { AlertCircle, Check, Copy, Download, Mail, ExternalLink, Eye } from 'lucide-react';
+import { AlertCircle, Check, Copy, Download, Mail, ExternalLink, Eye, X } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { getCachedDocumentBlob } from '../../shared/api/documentCache';
@@ -627,6 +627,15 @@ const CvMatchRail = ({
         evidence_quote: 'Probe this in the interview loop.',
       }))
   );
+  // Split gaps into "partial" (some evidence on file but incomplete) and
+  // "missing" (no evidence found, or contradicted). Skill-string fallbacks
+  // have no status so they default to missing.
+  const partialItems = gapItems.filter((item) => (
+    String(item?.status || '').toLowerCase() === 'partially_met'
+  ));
+  const missingItems = gapItems.filter((item) => (
+    String(item?.status || '').toLowerCase() !== 'partially_met'
+  ));
   const requirementTotal = Array.isArray(cvMatchDetails?.requirements_assessment)
     ? cvMatchDetails.requirements_assessment.length
     : matchedItems.length + gapItems.length;
@@ -636,9 +645,35 @@ const CvMatchRail = ({
     ? summaryText.split(/\n{2,}|\r\n{2,}/).map((p) => p.trim()).filter(Boolean)
     : [];
 
+  const renderPartialItem = (item, index) => {
+    const evidence = item?.impact || extractRequirementEvidence(item) || item?.evidence_quote || 'Probe this live.';
+    return (
+      <div key={extractRequirementKey(item, index)} className="rail-item gap">
+        <span className="ic"><AlertCircle size={10} strokeWidth={3} /></span>
+        <span>
+          <span className="t">{item.requirement || item}</span>
+          <span className="ev">{evidence}</span>
+        </span>
+      </div>
+    );
+  };
+
+  const renderMissingItem = (item, index) => {
+    const evidence = item?.impact || extractRequirementEvidence(item) || item?.evidence_quote || 'Probe this live.';
+    return (
+      <div key={extractRequirementKey(item, index)} className="rail-item bad">
+        <span className="ic"><X size={10} strokeWidth={3} /></span>
+        <span>
+          <span className="t">{item.requirement || item}</span>
+          <span className="ev">{evidence}</span>
+        </span>
+      </div>
+    );
+  };
+
   return (
     <section className="cv-rail cv-match-summary" aria-label="CV match summary">
-      <div className="rail-card cv-summary-card">
+      <div className="rail-card cv-summary-bar">
         <div className="rail-score">
           <div className={`num ${(roleFitScore || 0) >= 75 ? 'hi' : 'md'}`}>
             {roleFitScore != null ? Math.round(roleFitScore) : '—'}<sup>%</sup>
@@ -649,79 +684,72 @@ const CvMatchRail = ({
               vs. <b>{application?.role_name || application?.candidate_position || 'target role'}</b>
               {requirementTotal ? <> · <b>{matchedItems.length} of {requirementTotal}</b> evidenced</> : null}
             </div>
+            <div className="rail-meta" style={{ marginTop: '4px' }}>
+              {scoredAt ? `Scored ${new Date(scoredAt).toLocaleDateString()}` : 'Awaiting CV score'}
+              {cvMatchDetails?.score_scale ? ` · ${cvMatchDetails.score_scale}` : ''}
+            </div>
           </div>
         </div>
-        <div className="rail-meta">
-          {scoredAt ? `Scored ${new Date(scoredAt).toLocaleDateString()}` : 'Awaiting CV score'}
-          {cvMatchDetails?.score_scale ? ` · ${cvMatchDetails.score_scale}` : ''}
-        </div>
         {summaryParagraphs.length ? (
-          <div className="rail-summary" style={{ marginTop: '12px', fontSize: '13.5px', lineHeight: 1.6, color: 'var(--ink-2)' }}>
+          <div className="cv-summary-text">
             {summaryParagraphs.map((paragraph, idx) => (
-              <p key={`cv-summary-${idx}`} style={{ margin: idx === 0 ? '0' : '8px 0 0' }}>{paragraph}</p>
+              <p key={`cv-summary-${idx}`}>{paragraph}</p>
             ))}
           </div>
         ) : null}
       </div>
 
-      <div className="rail-card">
-        <div className="rail-section">
-          <div className="rail-head">
-            <span className="lbl">Matched · <b>{matchedItems.length}</b></span>
-            <span className="dot ok" aria-hidden="true" />
-          </div>
-          {matchedItems.length ? matchedItems.map((item, index) => {
-            const evidence = extractRequirementEvidence(item) || item?.evidence_quote || 'Matched evidence on file.';
-            return (
-              <div key={extractRequirementKey(item, index)} className="rail-item ok">
-                <span className="ic"><Check size={10} strokeWidth={3} /></span>
-                <span>
-                  <span className="t">{item.requirement || item}</span>
-                  <span className="ev">{evidence}</span>
-                </span>
-              </div>
-            );
-          }) : (
-            <div className="rail-empty">No matched requirements are attached yet.</div>
-          )}
-        </div>
-      </div>
-
-      <div className="rail-card">
-        <div className="rail-section">
-          <div className="rail-head">
-            <span className="lbl">Missing or unclear · <b>{gapItems.length}</b></span>
-            <span className="dot gap" aria-hidden="true" />
-          </div>
-          {gapItems.length ? gapItems.map((item, index) => {
-            const evidence = item?.impact || extractRequirementEvidence(item) || item?.evidence_quote || 'Probe this live.';
-            // Distinguish missing (red) from partial / unknown (amber /
-            // grey) so a constraint with positive evidence flagged as
-            // "unknown" by the model doesn't read as a hard miss.
-            const status = String(item?.status || '').toLowerCase();
-            const statusLabel = status === 'partially_met' ? 'Partial'
-              : status === 'unknown' ? 'Needs evidence'
-              : 'Missing';
-            return (
-              <div key={extractRequirementKey(item, index)} className="rail-item gap">
-                <span className="ic"><AlertCircle size={10} strokeWidth={3} /></span>
-                <span>
-                  <span className="t">
-                    <span style={{ fontSize: '10px', textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--mute)', marginRight: 6 }}>{statusLabel}</span>
-                    {item.requirement || item}
+      <div className="cv-rail-columns">
+        <div className="rail-card">
+          <div className="rail-section">
+            <div className="rail-head">
+              <span className="lbl">Matched · <b>{matchedItems.length}</b></span>
+              <span className="dot ok" aria-hidden="true" />
+            </div>
+            {matchedItems.length ? matchedItems.map((item, index) => {
+              const evidence = extractRequirementEvidence(item) || item?.evidence_quote || 'Matched evidence on file.';
+              return (
+                <div key={extractRequirementKey(item, index)} className="rail-item ok">
+                  <span className="ic"><Check size={10} strokeWidth={3} /></span>
+                  <span>
+                    <span className="t">{item.requirement || item}</span>
+                    <span className="ev">{evidence}</span>
                   </span>
-                  <span className="ev">{evidence}</span>
-                </span>
-              </div>
-            );
-          }) : (
-            <div className="rail-empty">No CV gaps are attached yet.</div>
-          )}
+                </div>
+              );
+            }) : (
+              <div className="rail-empty">No matched requirements are attached yet.</div>
+            )}
+          </div>
         </div>
 
-        <button type="button" className="rail-jump" onClick={onJumpToPrep}>
-          View interview prep →
-        </button>
+        <div className="rail-card">
+          <div className="rail-section">
+            <div className="rail-head">
+              <span className="lbl">Partial · <b>{partialItems.length}</b></span>
+              <span className="dot gap" aria-hidden="true" />
+            </div>
+            {partialItems.length ? partialItems.map(renderPartialItem) : (
+              <div className="rail-empty">No partial matches.</div>
+            )}
+          </div>
+        </div>
+
+        <div className="rail-card">
+          <div className="rail-section">
+            <div className="rail-head">
+              <span className="lbl">Missing · <b>{missingItems.length}</b></span>
+              <span className="dot bad" aria-hidden="true" />
+            </div>
+            {missingItems.length ? missingItems.map(renderMissingItem) : (
+              <div className="rail-empty">No missing requirements.</div>
+            )}
+          </div>
+
+          <button type="button" className="rail-jump" onClick={onJumpToPrep}>
+            View interview prep →
+          </button>
+        </div>
       </div>
     </section>
   );

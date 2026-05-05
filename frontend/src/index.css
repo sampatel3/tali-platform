@@ -6248,8 +6248,43 @@ button.eng-badge-button:focus-visible {
 }
 
 .cv-match-summary {
-  grid-template-columns: minmax(280px, 0.95fr) repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.cv-rail-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
   align-items: stretch;
+}
+
+.cv-summary-bar {
+  display: grid;
+  grid-template-columns: minmax(220px, 280px) minmax(0, 1fr);
+  gap: 28px;
+  align-items: start;
+}
+
+.cv-summary-bar .rail-score {
+  margin-bottom: 0;
+  padding-bottom: 0;
+  border-bottom: 0;
+}
+
+.cv-summary-bar .cv-summary-text {
+  color: var(--ink-2);
+  font-size: 13.5px;
+  line-height: 1.6;
+  border-left: 1px solid var(--line-2);
+  padding-left: 24px;
+}
+
+.cv-summary-bar .cv-summary-text p {
+  margin: 0;
+}
+
+.cv-summary-bar .cv-summary-text p + p {
+  margin-top: 8px;
 }
 
 .cv-rail .rail-card {
@@ -6259,7 +6294,9 @@ button.eng-badge-button:focus-visible {
   border-radius: var(--radius-lg);
 }
 
-.cv-match-summary .rail-card {
+.cv-rail-columns .rail-card {
+  display: flex;
+  flex-direction: column;
   min-height: 100%;
 }
 
@@ -6352,6 +6389,10 @@ button.eng-badge-button:focus-visible {
   background: var(--amber);
 }
 
+.cv-rail .dot.bad {
+  background: var(--red);
+}
+
 .cv-rail .rail-item {
   display: grid;
   grid-template-columns: 16px 1fr;
@@ -6391,6 +6432,11 @@ button.eng-badge-button:focus-visible {
   background: color-mix(in oklab, var(--amber) 16%, transparent);
 }
 
+.cv-rail .rail-item.bad .ic {
+  color: var(--red);
+  background: color-mix(in oklab, var(--red) 16%, transparent);
+}
+
 .cv-rail .rail-item .t,
 .cv-rail .rail-item .ev {
   display: block;
@@ -6427,8 +6473,20 @@ button.eng-badge-button:focus-visible {
 }
 
 @media (max-width: 1180px) {
-  .cv-match-summary {
+  .cv-rail-columns {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .cv-summary-bar {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 16px;
+  }
+
+  .cv-summary-bar .cv-summary-text {
+    padding-left: 0;
+    border-left: 0;
+    border-top: 1px solid var(--line-2);
+    padding-top: 14px;
   }
 
   .cv-doc {
