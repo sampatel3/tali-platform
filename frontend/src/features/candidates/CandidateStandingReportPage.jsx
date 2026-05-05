@@ -51,7 +51,6 @@ const CLIENT_HIDDEN_TABS = new Set(
 );
 const REPORT_TAB_IDS = new Set(REPORT_TABS.map((tab) => tab.id));
 
-const CV_VIEWER_PDF_HEIGHT = 860;
 const CV_TEXT_PREVIEW_LIMIT = 18000;
 
 const inferCvMime = (filename) => {
@@ -68,7 +67,6 @@ const inferCvMime = (filename) => {
 };
 
 const isCvImageMime = (mime) => String(mime || '').startsWith('image/');
-const canInlinePreviewCv = (mime) => mime === 'application/pdf' || isCvImageMime(mime);
 
 const asCleanText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 
@@ -430,9 +428,7 @@ const CvDocumentViewer = ({
   const [errorMessage, setErrorMessage] = useState('');
 
   const mime = inferCvMime(filename);
-  const isPdf = mime === 'application/pdf';
   const isImage = isCvImageMime(mime);
-  const canPreview = canInlinePreviewCv(mime);
   const downloadName = sanitizeDownloadName(filename, 'candidate-cv');
   const cvModel = useMemo(() => normalizeCvSections({ parsedSections, cvText, application }), [application, cvText, parsedSections]);
   const hasTextFallback = Boolean(cvText || parsedSections || cvModel.summary || cvModel.rawSections.length);
@@ -479,15 +475,15 @@ const CvDocumentViewer = ({
   }, [applicationId, blobUrl, candidateId]);
 
   useEffect(() => {
-    // Single-shot auto-preview: never re-fire on the same render cycle
-    // once we've attempted a fetch. Without the errorMessage gate the
-    // effect retries forever on failure (loading flips false → effect
-    // re-runs → blobUrl still empty → call again → loop), which
-    // surfaced as 1k+ requests/sec hammering the download endpoint
-    // when a CV row was 410'd by edge cache.
-    if (!autoPreview || !filename || !canPreview || blobUrl || loading || errorMessage) return;
+    // Auto-fetch only for image-typed CVs (.png/.jpg/.webp), since the
+    // <img> branch needs the blob to render. PDFs always render via
+    // CvDocumentContent (parsed sections + cv_text) — no need to pull
+    // the binary just to display, and skipping the fetch saves a
+    // request and keeps the original-file Download button purely
+    // user-initiated.
+    if (!autoPreview || !filename || !isImage || blobUrl || loading || errorMessage) return;
     void ensureBlob();
-  }, [autoPreview, blobUrl, canPreview, ensureBlob, filename, loading, errorMessage]);
+  }, [autoPreview, blobUrl, isImage, ensureBlob, filename, loading, errorMessage]);
 
   const handleDownload = useCallback(async () => {
     if (!applicationId && !candidateId) return;
@@ -561,44 +557,42 @@ const CvDocumentViewer = ({
     );
   }
 
+  // Render priority:
+  //  1. Parsed-sections HTML (CvDocumentContent) whenever cv_text or
+  //     cv_sections gives us something — same branded view for every
+  //     candidate, no Chrome PDF-viewer chrome, no layout drift between
+  //     PDF/.docx/.txt sources. The original file is always one click
+  //     away via the Download button below.
+  //  2. <img> for image-only CVs that have no text fallback (rare —
+  //     scanned-photo resumes etc.).
+  //  3. Empty state for everything else.
+  const showImageFallback = blobUrl && isImage && !hasTextFallback;
   return (
-    <article className={`cv-doc ${blobUrl && canPreview ? 'has-embed' : ''}`}>
-      {blobUrl && isPdf ? (
-        <iframe
-          title="Candidate CV"
-          src={blobUrl}
-          className="cv-viewer-frame"
-          style={{ width: '100%', height: CV_VIEWER_PDF_HEIGHT }}
-        />
-      ) : null}
-      {blobUrl && isImage ? (
+    <article className="cv-doc">
+      {hasTextFallback ? (
+        <CvDocumentContent cvModel={cvModel} matchingSkills={cvMatchDetails?.matching_skills || []} />
+      ) : showImageFallback ? (
         <img src={blobUrl} alt="Candidate CV" className="cv-viewer-image" />
-      ) : null}
-      {!blobUrl && loading && canPreview ? (
+      ) : isImage && loading ? (
         <div className="cv-doc-loading">
           <Spinner size={18} />
           <span>Loading CV preview...</span>
         </div>
-      ) : null}
-      {(!blobUrl || !canPreview) && (!loading || !canPreview) ? (
-        hasTextFallback ? (
-          <CvDocumentContent cvModel={cvModel} matchingSkills={cvMatchDetails?.matching_skills || []} />
-        ) : (
-          <div className="cv-doc-empty">
-            <div>
-              <div className="sub">Candidate CV fetched</div>
-              <div className="headline">{filename}</div>
-            </div>
-            <p>This file type cannot be previewed inline yet. Download the original CV to inspect it.</p>
+      ) : (
+        <div className="cv-doc-empty">
+          <div>
+            <div className="sub">Candidate CV fetched</div>
+            <div className="headline">{filename}</div>
           </div>
-        )
-      ) : null}
+          <p>This file type cannot be previewed inline yet. Download the original CV to inspect it.</p>
+        </div>
+      )}
       {errorMessage ? <div className="cv-viewer-error">{errorMessage}</div> : null}
       <div className="cv-doc-filebar">
         <span>{filename}{uploadedAt ? ` · updated ${new Date(uploadedAt).toLocaleDateString()}` : ''}</span>
         <button type="button" className="btn btn-outline btn-sm" onClick={handleDownload} disabled={downloading}>
           <Download size={13} />
-          {downloading ? 'Downloading...' : 'Download'}
+          {downloading ? 'Downloading...' : 'Download original'}
         </button>
       </div>
     </article>
