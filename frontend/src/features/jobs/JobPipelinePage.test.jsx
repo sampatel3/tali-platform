@@ -16,8 +16,12 @@ vi.mock('../../shared/api', () => ({
     listApplications: vi.fn(),
     batchScoreStatus: vi.fn(),
     fetchCvsStatus: vi.fn(),
+    batchPreScreenStatus: vi.fn(),
     update: vi.fn(),
     regenerateInterviewFocus: vi.fn(),
+    fetchCvs: vi.fn(),
+    batchPreScreen: vi.fn(),
+    batchScore: vi.fn(),
   },
   tasks: {
     list: vi.fn(),
@@ -102,6 +106,7 @@ describe('JobPipelinePage', () => {
     apiClient.roles.listApplications.mockResolvedValue({ data: baseApplications });
     apiClient.roles.batchScoreStatus.mockResolvedValue({ data: { status: 'idle', total: 0, scored: 0, errors: 0 } });
     apiClient.roles.fetchCvsStatus.mockResolvedValue({ data: { status: 'idle', total: 0, fetched: 0, errors: 0 } });
+    apiClient.roles.batchPreScreenStatus.mockResolvedValue({ data: { status: 'idle', total: 0, processed: 0, errors: 0 } });
     apiClient.tasks.list.mockResolvedValue({ data: [] });
   });
 

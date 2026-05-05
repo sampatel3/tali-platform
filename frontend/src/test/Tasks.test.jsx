@@ -45,6 +45,15 @@ vi.mock('../shared/api', () => ({
     uploadJobSpec: vi.fn(),
   },
   team: { list: vi.fn(), invite: vi.fn() },
+  roles: {
+    list: vi.fn().mockResolvedValue({ data: [] }),
+    activeBatchScores: vi.fn().mockResolvedValue({ data: { active: [] } }),
+    workableSyncStatus: vi.fn().mockResolvedValue({ data: { sync_in_progress: false } }),
+    syncGraphStatus: vi.fn().mockResolvedValue({ data: { status: 'idle' } }),
+  },
+  scoring: {
+    batchScoreStatus: vi.fn().mockResolvedValue({ data: { status: 'idle' } }),
+  },
   default: {
     interceptors: {
       request: { use: vi.fn() },
@@ -148,9 +157,10 @@ const renderAppOnTasksPage = async () => {
     </AuthProvider>
   );
 
-  // Wait for dashboard to render
+  // Wait for the auth-gated nav to render (default landing is /jobs, but the
+  // Tasks tab appears in the shared DashboardNav on every signed-in page).
   await waitFor(() => {
-    expect(screen.getByText('Assessments', { selector: 'h1' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Tasks$/ })).toBeInTheDocument();
   }, { timeout: 5000 });
 
   // Navigate to Tasks via nav
@@ -244,8 +254,11 @@ describe('TasksPage', () => {
 
     await renderAppOnTasksPage();
 
+    // Loading is now a centered spinner inside .role-group's parent area;
+    // assert by role on the spinner's status semantics (Spinner renders
+    // role="status").
     await waitFor(() => {
-      expect(document.querySelectorAll('.animate-pulse').length).toBeGreaterThan(0);
+      expect(document.querySelector('[role="status"], .spinner, svg.lucide-loader-circle')).toBeTruthy();
     });
   });
 
