@@ -3,7 +3,6 @@ from __future__ import annotations
 import hashlib
 import logging
 import mimetypes
-from pathlib import Path
 import secrets
 import threading
 from datetime import datetime, timedelta, timezone
@@ -55,11 +54,9 @@ from ...components.integrations.workable.service import WorkableRateLimitError, 
 from ...services.document_service import (
     MAX_FILE_SIZE,
     extract_text,
-    load_stored_document_bytes,
     process_document_upload,
     sanitize_json_for_storage,
     sanitize_text_for_storage,
-    save_file_locally,
     stored_document_s3_key,
 )
 from ...services.candidate_feedback_engine import (
@@ -1120,53 +1117,48 @@ def download_application_document(
     if not file_url:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
     safe_filename = _report_filename_part(filename, "document")
-    disposition = "attachment" if download else "inline"
-    response_headers = {
-        "Content-Disposition": f'{disposition}; filename="{safe_filename}"',
-        "Cache-Control": "private, max-age=600",
-    }
 
-    # Prefer redirecting to a presigned S3 URL: frees the worker, lets the
-    # browser cache, and supports range requests for inline PDF preview.
+    # Object-storage URL → presigned redirect. Browser caches, supports
+    # range requests for inline PDF preview, frees the API worker.
     s3_key = stored_document_s3_key(file_url)
     if s3_key:
-        try:
-            from ...services.s3_service import generate_presigned_url
+        from ...services.s3_service import generate_presigned_url
 
-            presigned = generate_presigned_url(
-                s3_key,
-                expires_in=600,
-                download_filename=safe_filename if download else None,
-            )
-            if presigned:
-                return RedirectResponse(url=presigned, status_code=307)
-        except Exception:
-            # Fall through to byte-streaming on presign failure.
-            pass
+        presigned = generate_presigned_url(
+            s3_key,
+            expires_in=600,
+            download_filename=safe_filename if download else None,
+        )
+        if presigned:
+            return RedirectResponse(url=presigned, status_code=307)
 
-    stored_bytes = load_stored_document_bytes(file_url)
-    if stored_bytes:
-        return Response(content=stored_bytes, media_type=media_type, headers=response_headers)
-
-    if file_url.startswith("http://") or file_url.startswith("https://"):
-        return RedirectResponse(url=file_url, status_code=307)
-
-    file_path = Path(file_url).resolve()
-    if not file_path.exists() or not file_path.is_file():
-        # Ephemeral-disk loss (Railway redeploys when S3 is unavailable).
-        # 410 surfaces a recoverable "re-upload from Workable" path; 404
-        # would imply the candidate never had a CV at all.
-        raise HTTPException(
-            status_code=410,
-            detail={
-                "reason": "file_storage_unavailable",
-                "message": "CV file expired from local storage. Re-upload from Workable to restore it.",
+    # Local filesystem path — only happens in dev/test (no S3 creds, so
+    # process_document_upload fell back to writing to backend/uploads/).
+    # Production rows with this shape are legacy ephemeral-disk URLs
+    # whose files no longer exist; the if-branch returns FileResponse
+    # for fresh dev uploads, and the 410 below covers the prod legacy.
+    from pathlib import Path as _Path
+    media_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+    local = _Path(file_url)
+    if local.exists() and local.is_file():
+        return FileResponse(
+            path=str(local),
+            filename=filename,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'{"attachment" if download else "inline"}; filename="{safe_filename}"',
+                "Cache-Control": "private, max-age=600",
             },
         )
 
-    return FileResponse(path=str(file_path), filename=filename, media_type=media_type, headers=response_headers)
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "reason": "file_storage_unavailable",
+            "message": "CV file is no longer available. Re-fetch from Workable to restore it.",
+        },
+    )
 
 
 @router.patch("/applications/{application_id}", response_model=ApplicationResponse)
@@ -2048,20 +2040,24 @@ def _try_fetch_cv_from_workable(
         return False
 
     now = datetime.now(timezone.utc)
-    local_path = save_file_locally(content=content, directory="cv", prefix=f"cv-{app.id or candidate.id}", ext=ext)
-    file_url = local_path
-
-    try:
-        from ...services.s3_service import generate_s3_key, upload_to_s3
-        s3_key = generate_s3_key("cv", app.id, filename)
-        s3_url = upload_to_s3(local_path, s3_key)
-        if s3_url:
-            file_url = s3_url
-    except Exception:
-        pass
-
     extracted = sanitize_text_for_storage(extract_text(content, ext)) if ext in text_exts else ""
     if not extracted and ext not in preview_only_exts:
+        return False
+
+    # Direct upload to object storage. No local-disk hop, no fallback —
+    # if storage is down we skip the row rather than silently writing to
+    # ephemeral Railway disk (which used to wipe on every redeploy).
+    import mimetypes as _mt
+    from ...services.s3_service import generate_s3_key, upload_bytes_to_s3
+    entity_id = app.id or (candidate.id if candidate else 0)
+    s3_key = generate_s3_key("cv", entity_id, filename)
+    content_type = _mt.guess_type(filename)[0] or "application/octet-stream"
+    file_url = upload_bytes_to_s3(content, s3_key, content_type=content_type)
+    if not file_url:
+        logger.warning(
+            "Skipping Workable CV fetch for application=%s — object storage unavailable",
+            app.id,
+        )
         return False
 
     app.cv_file_url = file_url

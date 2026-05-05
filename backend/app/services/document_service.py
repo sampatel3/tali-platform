@@ -333,10 +333,13 @@ def read_upload_content(upload: UploadFile) -> bytes:
 
 
 def save_file_locally(content: bytes, directory: str, prefix: str, ext: str) -> str:
-    """Save file to local filesystem. Returns the file path.
+    """Local-disk fallback for development and tests when no S3 creds
+    are configured.
 
-    NOTE: For production on Railway (ephemeral disk), files should be
-    uploaded to S3 instead. See Phase 4 of PRODUCT_PLAN.md.
+    Production deployments must always have ``AWS_*`` env vars set
+    (which keeps this path inactive). Files written here live on
+    ephemeral disk and will be wiped on container restart — fine for
+    local dev / unit tests, dangerous for prod.
     """
     uploads_dir = Path(__file__).resolve().parents[2] / "uploads" / directory
     uploads_dir.mkdir(parents=True, exist_ok=True)
@@ -346,16 +349,35 @@ def save_file_locally(content: bytes, directory: str, prefix: str, ext: str) -> 
     return str(target_path)
 
 
+def _object_storage_is_configured() -> bool:
+    """True when the operator has wired up S3 credentials.
+
+    A configured-but-unhealthy store is still considered "configured"
+    — production should fail loudly rather than silently fall back to
+    ephemeral disk. Tests / local dev typically leave creds blank,
+    which keeps the local fallback path active.
+    """
+    from ..platform.config import settings
+
+    return bool((settings.AWS_ACCESS_KEY_ID or "").strip() and (settings.AWS_SECRET_ACCESS_KEY or "").strip())
+
+
 def process_document_upload(
     upload: UploadFile,
     entity_id: int,
     doc_type: str,
     allowed_extensions: set[str] | None = None,
 ) -> Dict[str, Any]:
-    """Process a document upload: validate, save, extract text.
+    """Process a document upload: validate, upload to object storage,
+    extract text.
 
-    Saves to S3 when AWS credentials are configured; falls back to local
-    filesystem otherwise (with a warning in logs).
+    Bytes go directly to the configured S3-compatible store (Tigris in
+    production) — no local-disk hop, no temp files. When storage
+    credentials aren't configured (local dev / tests), falls back to
+    writing to ``backend/uploads/`` so the test suite doesn't need a
+    mocked S3 backend. When credentials are configured but the upload
+    fails, raises HTTP 503 so prod misconfigurations surface loudly
+    instead of silently corrupting state.
 
     Args:
         upload: The uploaded file.
@@ -366,36 +388,41 @@ def process_document_upload(
     Returns:
         Dict with file_url, filename, extracted_text.
     """
+    import mimetypes as _mt
+    from .s3_service import generate_s3_key, upload_bytes_to_s3
+
     filename, ext = validate_upload(upload, allowed_extensions)
     content = read_upload_content(upload)
 
-    # Always save locally first (needed for text extraction and as fallback)
-    local_path = save_file_locally(
-        content=content,
-        directory=doc_type,
-        prefix=f"{doc_type}-{entity_id}",
-        ext=ext,
-    )
-
-    # Try S3 upload — returns S3 URL if configured, None otherwise
-    file_url = local_path
-    try:
-        from .s3_service import upload_to_s3, generate_s3_key
-
-        s3_key = generate_s3_key(doc_type, entity_id, filename)
-        s3_url = upload_to_s3(local_path, s3_key)
-        if s3_url:
-            file_url = s3_url
-    except Exception as exc:
-        logger.warning("S3 upload skipped (falling back to local): %s", exc)
+    s3_key = generate_s3_key(doc_type, entity_id, filename)
+    content_type = _mt.guess_type(filename)[0] or "application/octet-stream"
+    file_url = upload_bytes_to_s3(content, s3_key, content_type=content_type)
+    if not file_url:
+        if _object_storage_is_configured():
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "reason": "storage_unavailable",
+                    "message": (
+                        "Object storage is configured but not reachable; cannot save uploads. "
+                        "Check AWS_* env vars and the storage health probe at /health."
+                    ),
+                },
+            )
+        # Dev/test fallback only — prod should never hit this branch.
+        file_url = save_file_locally(
+            content=content,
+            directory=doc_type,
+            prefix=f"{doc_type}-{entity_id}",
+            ext=ext,
+        )
 
     extracted_text = sanitize_text_for_storage(extract_text(content, ext))
     text_preview = extracted_text[:500] + "..." if len(extracted_text) > 500 else extracted_text
 
     logger.info(
-        "Document uploaded: type=%s entity=%s file=%s chars_extracted=%d storage=%s",
-        doc_type, entity_id, filename, len(extracted_text),
-        "s3" if file_url.startswith("https://") else "local",
+        "Document uploaded: type=%s entity=%s file=%s chars_extracted=%d url=%s",
+        doc_type, entity_id, filename, len(extracted_text), file_url,
     )
 
     return {

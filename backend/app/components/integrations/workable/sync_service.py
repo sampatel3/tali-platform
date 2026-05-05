@@ -29,7 +29,10 @@ from ....services.document_service import (
     extract_text,
     sanitize_json_for_storage,
     sanitize_text_for_storage,
-    save_file_locally,
+)
+from ....services.s3_service import (
+    generate_s3_key,
+    upload_bytes_to_s3,
 )
 from ....services.application_events import on_application_created
 from ....services.fit_matching_service import (
@@ -457,6 +460,13 @@ def _store_candidate_resume(
     filename: str,
     content: bytes,
 ) -> bool:
+    """Persist a CV fetched from Workable into the active object store.
+
+    Bytes go straight to S3/Tigris — no local-disk hop, no fallback. If
+    object storage is unavailable, we skip the store and return False so
+    the sync loop logs the candidate and moves on (rather than silently
+    writing to ephemeral Railway disk like it used to).
+    """
     if not content:
         return False
     ext = (filename.rsplit(".", 1)[-1] if "." in filename else "").lower()
@@ -467,12 +477,19 @@ def _store_candidate_resume(
     extracted = sanitize_text_for_storage(extract_text(content, ext)) if ext in text_exts else ""
     if not extracted and ext not in preview_only_exts:
         return False
-    file_url = save_file_locally(
-        content=content,
-        directory="cv",
-        prefix=f"cv-{app.id or candidate.id}",
-        ext=ext,
-    )
+
+    entity_id = app.id or candidate.id
+    s3_key = generate_s3_key("cv", entity_id, filename)
+    import mimetypes as _mt
+    content_type = _mt.guess_type(filename)[0] or "application/octet-stream"
+    file_url = upload_bytes_to_s3(content, s3_key, content_type=content_type)
+    if not file_url:
+        logger.warning(
+            "Skipping CV store for candidate=%s app=%s filename=%s — object storage unavailable",
+            candidate.id, app.id, filename,
+        )
+        return False
+
     now = _now()
     app.cv_file_url = file_url
     app.cv_filename = sanitize_text_for_storage(filename)
@@ -1176,19 +1193,25 @@ class WorkableSyncService:
             if stripped:
                 role.job_spec_text = safe_desc
         db.flush()
-        # Save job spec as an attachment (file) for download and consistent display
+        # Save job spec as an attachment (file) for download and consistent display.
+        # Goes straight to object storage — no local hop, no fallback.
         if (role.job_spec_text or "").strip():
             try:
                 spec_content = (role.job_spec_text or "").strip().encode("utf-8")
-                path = save_file_locally(
-                    content=spec_content,
-                    directory="job_spec",
-                    prefix=f"job-spec-{role.id}",
-                    ext="txt",
-                )
-                role.job_spec_file_url = path
-                role.job_spec_filename = sanitize_text_for_storage(f"job-spec-{role.name or role.id}.txt").replace("/", "-")
-                role.job_spec_uploaded_at = _now()
+                spec_filename = sanitize_text_for_storage(
+                    f"job-spec-{role.name or role.id}.txt"
+                ).replace("/", "-")
+                s3_key = generate_s3_key("job_spec", role.id, spec_filename)
+                spec_url = upload_bytes_to_s3(spec_content, s3_key, content_type="text/plain")
+                if spec_url:
+                    role.job_spec_file_url = spec_url
+                    role.job_spec_filename = spec_filename
+                    role.job_spec_uploaded_at = _now()
+                else:
+                    logger.warning(
+                        "Skipping Workable job-spec store for role_id=%s — object storage unavailable",
+                        role.id,
+                    )
             except Exception:
                 logger.exception("Failed saving Workable job spec file for role_id=%s", role.id)
         if not isinstance(role.screening_pack_template, dict) or not isinstance(role.tech_interview_pack_template, dict):
