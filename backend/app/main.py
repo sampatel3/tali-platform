@@ -56,7 +56,23 @@ async def _lifespan(_app: FastAPI):
             _t.Thread(target=_gc.get_graphiti, name="graphiti-init", daemon=True).start()
     except Exception:
         logger.exception("Failed to start Graphiti background init")
-    yield
+    # FastAPI's custom-lifespan path skips Starlette's auto-propagation to
+    # mounted sub-apps, so the MCP server's StreamableHTTPSessionManager
+    # task group has to be started explicitly here.
+    from .mcp import mcp_app as _mcp_server
+
+    # Lazy-create the session manager (no-op when the streamable_http_app
+    # mount has already done so on first import).
+    if _mcp_server._session_manager is None:
+        _mcp_server.streamable_http_app()
+    try:
+        async with _mcp_server.session_manager.run():
+            yield
+    finally:
+        # The session manager refuses to .run() twice, so drop the singleton
+        # on shutdown so a follow-up lifespan (typical in tests with multiple
+        # TestClient instances) can re-initialize cleanly.
+        _mcp_server._session_manager = None
     # Shutdown — close Graphiti's driver and stop its background loop.
     try:
         from .candidate_graph.client import close
@@ -310,6 +326,14 @@ from .cv_matching.routes import (
 )
 app.include_router(cv_match_admin_router, prefix="/api/v1")
 app.include_router(cv_match_override_router, prefix="/api/v1")
+
+# ---------------------------------------------------------------------------
+# MCP server (read-only) — mounted at /mcp. Bearer JWT auth, same secret as
+# /api/v1/auth/jwt/login. See app/mcp/server.py for the tool surface.
+# ---------------------------------------------------------------------------
+from .mcp import mcp_app as _mcp_server  # noqa: E402
+
+app.mount("/mcp", _mcp_server.streamable_http_app())
 
 
 @app.get("/health")
