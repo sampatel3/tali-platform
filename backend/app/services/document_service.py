@@ -169,36 +169,36 @@ def load_stored_document_bytes(file_url: str | None) -> bytes | None:
             logger.warning("Failed to read local document bytes from %s: %s", location, exc)
             return None
 
-    parsed = urlparse(location)
-    if parsed.scheme in {"http", "https"} and parsed.netloc.endswith("amazonaws.com"):
-        key = parsed.path.lstrip("/")
-        if not key:
-            return None
-        try:
-            from .s3_service import download_from_s3
+    from .s3_service import extract_key_from_url, download_from_s3
 
+    bucket_key = extract_key_from_url(location)
+    if bucket_key:
+        _, key = bucket_key
+        try:
             return download_from_s3(key)
         except Exception as exc:
-            logger.warning("Failed to download S3 document bytes from %s: %s", location, exc)
+            logger.warning("Failed to download object bytes from %s: %s", location, exc)
             return None
 
     return None
 
 
 def stored_document_s3_key(file_url: str | None) -> str | None:
-    """Extract the S3 key from a stored file_url, or None for non-S3 URLs.
+    """Extract the object key from a stored file_url, or None for
+    non-object-store URLs (e.g. local filesystem paths).
 
     Used by download endpoints that redirect to a presigned URL instead
-    of streaming bytes back through FastAPI.
+    of streaming bytes back through FastAPI. Recognises both AWS-style
+    and Tigris/R2/MinIO endpoint-style URLs via
+    ``s3_service.extract_key_from_url``.
     """
-    location = str(file_url or "").strip()
-    if not location:
+    from .s3_service import extract_key_from_url
+
+    bucket_key = extract_key_from_url(file_url or "")
+    if bucket_key is None:
         return None
-    parsed = urlparse(location)
-    if parsed.scheme in {"http", "https"} and parsed.netloc.endswith("amazonaws.com"):
-        key = parsed.path.lstrip("/")
-        return key or None
-    return None
+    _, key = bucket_key
+    return key
 
 
 def sanitize_text_for_storage(value: str | None) -> str:
