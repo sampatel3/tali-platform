@@ -53,6 +53,12 @@ from .taali_chat_message import (
     TAALI_CHAT_ROLES,
     TaaliChatMessage,
 )
+from .agent_run import AGENT_RUN_STATUSES, AGENT_RUN_TRIGGERS, AgentRun
+from .agent_decision import (
+    AGENT_DECISION_STATUSES,
+    AGENT_DECISION_TYPES,
+    AgentDecision,
+)
 
 __all__ = [
     "User",
@@ -102,4 +108,10 @@ __all__ = [
     "TAALI_CHAT_ROLES",
     "ROLE_USER",
     "ROLE_ASSISTANT",
+    "AgentRun",
+    "AGENT_RUN_TRIGGERS",
+    "AGENT_RUN_STATUSES",
+    "AgentDecision",
+    "AGENT_DECISION_TYPES",
+    "AGENT_DECISION_STATUSES",
 ]

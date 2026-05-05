@@ -15,6 +15,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import asc, desc, func, or_
 from sqlalchemy.orm import Session, joinedload
 
+from ...actions import advance_stage as advance_stage_action
+from ...actions.types import Actor
 from ...components.assessments.repository import assessment_to_response, utcnow
 from ...components.assessments.service import get_assessment_creation_gate
 from ...components.integrations.workable.sync_service import _extract_candidate_fields
@@ -1670,23 +1672,13 @@ def update_application_stage(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = get_application(application_id, current_user.organization_id, db)
     try:
-        ensure_pipeline_fields(app)
-        initialize_pipeline_event_if_missing(
+        app = advance_stage_action.run(
             db,
-            app=app,
-            actor_type="system",
-            actor_id=current_user.id,
-            reason="Pipeline initialized before stage patch",
-        )
-        transition_stage(
-            db,
-            app=app,
+            Actor.recruiter(current_user),
+            organization_id=current_user.organization_id,
+            application_id=application_id,
             to_stage=data.pipeline_stage,
-            source="recruiter",
-            actor_type="recruiter",
-            actor_id=current_user.id,
             reason=data.reason or "Recruiter stage update",
             idempotency_key=data.idempotency_key,
             expected_version=data.expected_version,

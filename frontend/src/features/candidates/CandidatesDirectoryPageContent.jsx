@@ -73,6 +73,7 @@ import { NLSearchBar } from './NLSearchBar';
 import { CandidateGraphView } from './CandidateGraphView';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { GraphStatusChip, PreScreenChip } from './CandidateStatusChips';
+import { PendingAgentDecisionsPanel } from './agent/PendingAgentDecisionsPanel';
 
 const PAGE_SIZE = 50;
 const STAGE_OPTIONS = [
@@ -81,6 +82,7 @@ const STAGE_OPTIONS = [
   { value: 'invited', label: 'Invited' },
   { value: 'in_assessment', label: 'In assessment' },
   { value: 'review', label: 'Review' },
+  { value: 'technical_interview', label: 'Technical interview' },
 ];
 const OUTCOME_OPTIONS = [
   { value: 'open', label: 'Open' },
@@ -1887,6 +1889,15 @@ export const CandidatesDirectoryPage = ({
         {prelude ? <div className="mb-4 space-y-4">{prelude}</div> : null}
 
         {isShowcase ? <ShowcaseProcessBanner /> : null}
+
+        {thresholdRole?.agentic_mode_enabled ? (
+          <div className="mb-4">
+            <PendingAgentDecisionsPanel
+              role={thresholdRole}
+              onAfterAction={() => loadApplications()}
+            />
+          </div>
+        ) : null}
 
         <NLSearchBar
           nlQuery={nlQuery}

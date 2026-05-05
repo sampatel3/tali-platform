@@ -333,6 +333,11 @@ from .domains.taali_chat import router as taali_chat_router  # noqa: E402
 
 app.include_router(taali_chat_router, prefix="/api/v1")
 
+# Agentic recruiting: per-job autonomous agent + recruiter approval queue.
+from .domains.agentic import router as agentic_router  # noqa: E402
+
+app.include_router(agentic_router, prefix="/api/v1")
+
 # ---------------------------------------------------------------------------
 # MCP server (read-only) — mounted at /mcp. Bearer JWT auth, same secret as
 # /api/v1/auth/jwt/login. See app/mcp/server.py for the tool surface.

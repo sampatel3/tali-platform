@@ -123,6 +123,34 @@ def on_application_created(
                 application_id,
             )
 
+    # Agent-native: if the role has agentic mode on, fire an autonomous
+    # cycle focused on this application. The task is a no-op when the
+    # role is paused or has agentic mode off, so this is safe to call
+    # unconditionally — we filter early just to skip the round-trip.
+    try:
+        role_id = int(getattr(app, "role_id", 0) or 0)
+        if role_id > 0:
+            from sqlalchemy.orm import Session as _Session
+
+            from ..platform.database import SessionLocal as _SessionLocal
+
+            _db: _Session = _SessionLocal()
+            try:
+                from ..models.role import Role
+
+                role = _db.query(Role).filter(Role.id == role_id).first()
+                if role is not None and bool(getattr(role, "agentic_mode_enabled", False)) and role.agent_paused_at is None:
+                    from ..tasks.agent_tasks import agent_react_to_event
+
+                    agent_react_to_event.delay(role_id=role_id, application_id=application_id)
+            finally:
+                _db.close()
+    except Exception:  # pragma: no cover — defensive
+        logger.exception(
+            "on_application_created agent-trigger enqueue failed application_id=%s",
+            application_id,
+        )
+
     logger.info(
         "on_application_created enqueued application_id=%s score=%s",
         application_id,

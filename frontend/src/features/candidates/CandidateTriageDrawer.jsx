@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 
 import { Button } from '../../shared/ui/TaaliPrimitives';
+import { CandidateAuditTimeline } from './CandidateAuditTimeline';
 import {
   CandidateAvatar,
   WorkableScorePip,
@@ -247,6 +248,12 @@ export function CandidateTriageDrawer({
             </div>
           </div>
         </section>
+
+        {applicationId ? (
+          <section className="candidate-triage-timeline mt-3">
+            <CandidateAuditTimeline applicationId={applicationId} />
+          </section>
+        ) : null}
 
         {onClose ? (
           <button
