@@ -1,12 +1,19 @@
-"""Per-job budget enforcement for the autonomous agent.
+"""Per-job budget enforcement.
 
 Two layers:
-1. Pre-call gate: before each Anthropic round, refuse if the running
-   cycle has already exceeded ``role.agent_token_budget_per_cycle`` or
-   ``role.agent_decision_budget_per_cycle``.
-2. Monthly USD cap: aggregate ``UsageEvent.cost_usd_micro`` for this role
-   in the current calendar month; refuse if over
-   ``role.agent_usd_budget_monthly_cents``. Pauses the role on hit.
+
+1. Pre-call gate (agent loop only): before each Anthropic round, refuse
+   if the running cycle has already exceeded
+   ``role.agent_token_budget_per_cycle`` or
+   ``role.agent_decision_budget_per_cycle``. These are runaway-loop
+   guards, not money — they bound a single cycle's behaviour.
+2. Monthly USD cap (universal): sum ``UsageEvent.cost_usd_micro`` across
+   *all* features (scoring, pre-screen, assessment, agent) for the role
+   in the current calendar month and refuse if over
+   ``role.monthly_usd_budget_cents``. Pauses the role on hit and is
+   checked from every Anthropic-spending entry point that has role
+   context — so when agentic mode is on, the budget covers everything
+   the platform does for that role, not just the agent.
 
 Org-level credit balance is enforced separately by the existing
 ``usage_metering_service`` ledger.
@@ -49,7 +56,7 @@ def role_decision_budget(role: Role) -> int:
 
 
 def role_monthly_usd_cents(role: Role) -> int:
-    return int(role.agent_usd_budget_monthly_cents or DEFAULT_USD_BUDGET_MONTHLY_CENTS)
+    return int(role.monthly_usd_budget_cents or DEFAULT_USD_BUDGET_MONTHLY_CENTS)
 
 
 def check_pre_round(*, role: Role, tokens_used: int, decisions_emitted: int) -> BudgetCheck:
@@ -62,24 +69,36 @@ def check_pre_round(*, role: Role, tokens_used: int, decisions_emitted: int) -> 
     return BudgetCheck(ok=True)
 
 
-def check_monthly_usd(db: Session, *, role: Role) -> BudgetCheck:
-    """Sum agent_autonomous spend this month for the role; compare to cap."""
-    cap_cents = role_monthly_usd_cents(role)
-    if cap_cents <= 0:
-        return BudgetCheck(ok=True)  # 0 means unset
+def month_to_date_spend_cents(db: Session, *, role: Role) -> int:
+    """Sum *all* Anthropic spend on this role for the current month, in cents.
+
+    Aggregates ``UsageEvent.cost_usd_micro`` across every feature
+    (scoring, pre-screen, assessment, agent) where ``role_id`` matches.
+    """
     month_start = _month_start_utc(datetime.now(timezone.utc))
     spent_micro = (
         db.query(func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0))
         .filter(
             UsageEvent.organization_id == role.organization_id,
-            UsageEvent.feature == "agent_autonomous",
-            UsageEvent.entity_id == str(role.id),
+            UsageEvent.role_id == role.id,
             UsageEvent.created_at >= month_start,
         )
         .scalar()
         or 0
     )
-    spent_cents = int(int(spent_micro) / 10_000)  # micro-USD → cents
+    return int(int(spent_micro) / 10_000)  # micro-USD → cents
+
+
+def check_monthly_usd(db: Session, *, role: Role) -> BudgetCheck:
+    """Refuse when month-to-date spend on the role hits its cap.
+
+    Universal: covers scoring + pre-screen + assessment + agent spend
+    on this role, not just the autonomous agent.
+    """
+    cap_cents = role_monthly_usd_cents(role)
+    if cap_cents <= 0:
+        return BudgetCheck(ok=True)  # 0 means unset
+    spent_cents = month_to_date_spend_cents(db, role=role)
     if spent_cents >= cap_cents:
         return BudgetCheck(
             ok=False,

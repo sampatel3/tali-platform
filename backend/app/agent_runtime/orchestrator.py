@@ -187,6 +187,7 @@ def run_cycle(
             event = record_event(
                 db,
                 organization_id=role.organization_id,
+                role_id=int(role.id),
                 feature=Feature.AGENT_AUTONOMOUS,
                 model=model,
                 input_tokens=round_input,

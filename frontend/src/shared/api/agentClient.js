@@ -12,4 +12,7 @@ export const agent = {
 
   // Manual trigger
   runNow: (roleId, body = {}) => api.post(`/roles/${roleId}/agent/run-now`, body),
+
+  // Consolidated bar payload (poll target)
+  status: (roleId) => api.get(`/roles/${roleId}/agent/status`),
 };

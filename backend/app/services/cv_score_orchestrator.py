@@ -225,6 +225,28 @@ def enqueue_score(
             application.id,
         )
 
+    # Universal role-level monthly USD cap. When the recruiter has set a
+    # cap (typically because they activated agentic mode and chose a
+    # budget), every Anthropic call on this role — scoring included —
+    # must check it before spending. Skipped scores show up in the
+    # scoring batch's "skipped" tally; the agent's monthly budget guard
+    # surfaces the same paused state on the bar.
+    try:
+        from .role_budget_gate import can_spend_on_role
+
+        if not can_spend_on_role(db, role=role):
+            logger.info(
+                "enqueue_score skipped for application=%s: role monthly cap reached (role_id=%s)",
+                application.id,
+                role.id,
+            )
+            return None
+    except Exception:  # pragma: no cover — defensive
+        logger.exception(
+            "role_budget_gate check failed for application=%s — proceeding",
+            application.id,
+        )
+
     if not force:
         existing = _latest_job(db, application.id)
         if existing is not None and existing.status in {SCORE_JOB_PENDING, SCORE_JOB_RUNNING}:
@@ -477,6 +499,7 @@ def _execute_scoring_v3(
         _record_usage_safe(
             db,
             organization_id=getattr(application, "organization_id", None),
+            role_id=getattr(application, "role_id", None),
             feature=Feature.PRESCREEN,
             model=V3_MODEL_VERSION,
             input_tokens=pre.input_tokens,
@@ -528,6 +551,7 @@ def _execute_scoring_v3(
     _record_usage_safe(
         db,
         organization_id=getattr(application, "organization_id", None),
+        role_id=getattr(application, "role_id", None),
         feature=Feature.SCORE,
         model=V3_MODEL_VERSION,
         input_tokens=int(getattr(output, "input_tokens", 0) or 0),
