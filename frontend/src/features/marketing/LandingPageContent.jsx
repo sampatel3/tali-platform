@@ -687,7 +687,7 @@ export const LandingPage = ({ onNavigate }) => {
 
           <div className="grid gap-5 lg:grid-cols-[1fr_1fr_1fr_1fr]">
             {/* Free tier card */}
-            <div className="rounded-lg border border-[var(--line)] bg-white p-6">
+            <div className="rounded-lg border border-[var(--line)] bg-[var(--bg-2)] p-6">
               <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
                 Free trial
               </div>
@@ -710,7 +710,7 @@ export const LandingPage = ({ onNavigate }) => {
               { label: 'Growth', price: '$100', credits: '$110', bonus: '+10% bonus', blurb: '~7,300 scored candidates' },
               { label: 'Scale', price: '$500', credits: '$600', bonus: '+20% bonus', blurb: '~40,000 scored candidates' },
             ].map((pack) => (
-              <div key={pack.label} className="rounded-lg border border-[var(--line)] bg-white p-6">
+              <div key={pack.label} className="rounded-lg border border-[var(--line)] bg-[var(--bg-2)] p-6">
                 <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
                   {pack.label}
                 </div>
@@ -729,7 +729,7 @@ export const LandingPage = ({ onNavigate }) => {
           </div>
 
           {/* What you get */}
-          <div className="mt-12 rounded-lg border border-[var(--line)] bg-white p-8">
+          <div className="mt-12 rounded-lg border border-[var(--line)] bg-[var(--bg-2)] p-8">
             <h3 className="font-[var(--font-display)] text-[24px] tracking-[-0.02em] text-[var(--ink)]">
               What you get on every plan
             </h3>
