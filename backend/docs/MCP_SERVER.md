@@ -14,16 +14,19 @@ Once connected, ask Claude things like:
 - "Pull up Sam Patel's profile and every role they've applied for"
 - "Read me the job spec for `tali://role/12`"
 
-## Tool surface (v1: read-only)
+## Tool surface (read-only)
 
 | Tool | Purpose |
 |---|---|
 | `list_roles` | All active roles for your org. Use first to discover `role_id` values. |
 | `get_role` | Job spec, criteria, per-stage open-application counts. |
-| `search_applications` | Score / stage / outcome / text-search filters. Default sort is `taali_score desc` over open applications. |
+| `search_applications` | Score / stage / outcome / simple text filters (matches name/email/position only). Default sort: `taali_score desc` over open applications. |
 | `get_application` | One application with all four scores, evidence, notes. Optional CV text. |
 | `get_candidate` | Cross-role profile + every application that candidate has filed. |
 | `compare_applications` | 2–5 applications side-by-side with the full score legend. |
+| `nl_search_candidates` | **Semantic** search across CV text + JSONB skills/experience + graph predicates + LLM rerank. Use this for *"AWS Glue engineer with 5 years"*, *"senior backend devs in EMEA who've worked at fintechs"*. |
+| `graph_search_candidates` | Knowledge-graph search via Graphiti/Neo4j. Use for *"colleagues of X"*, *"people who worked at startups"*. Returns `warnings: [{code: 'neo4j_unavailable'}]` when graph is not configured. |
+| `get_candidate_cv` | Parsed CV sections + raw text for one candidate. Use when you need to quote a CV verbatim. |
 
 Resources (use as `@`-mentions in claude.ai):
 
@@ -96,14 +99,22 @@ Every tool resolves `current_user` from the bearer token and then filters
 every query by `organization_id == current_user.organization_id`. The
 cross-org isolation is covered by `tests/test_mcp_server.py::test_get_application_cross_org_404`.
 
+## Internal use: Taali Chat
+
+The same tool surface drives the **Taali Chat** in-product chat UI
+(`/api/v1/taali-chat/*`). The chat backend reuses the pure-function
+handlers in `app/mcp/handlers.py` rather than going over HTTP — same
+behaviour, no extra hop. See [TAALI_CHAT.md](TAALI_CHAT.md) for the
+chat-specific endpoint and frontend integration.
+
 ## Not in v1
 
 These are intentionally out of scope and tracked for a later pass:
 
 - Write tools (`advance_stage`, `set_outcome`, `preview_stage_transition`).
 - OAuth 2.1 wrapper for claude.ai connectors.
-- Streaming progress / long-running tool calls.
-- Audit log / usage attribution per MCP call.
+- Streaming progress / long-running tool calls over MCP transport.
+- Audit log / usage attribution per MCP call (Taali Chat does have this).
 
 ## Files
 

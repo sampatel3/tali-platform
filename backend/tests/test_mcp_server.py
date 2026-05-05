@@ -146,7 +146,7 @@ def test_mcp_rejects_invalid_token(client, db):
     assert result.get("isError") is True
 
 
-def test_mcp_lists_six_tools(client, db):
+def test_mcp_lists_all_tools(client, db):
     rpc = _mcp_call(client, {}, "tools/list")
     names = {t["name"] for t in rpc["result"]["tools"]}
     assert names == {
@@ -156,6 +156,9 @@ def test_mcp_lists_six_tools(client, db):
         "get_application",
         "get_candidate",
         "compare_applications",
+        "nl_search_candidates",
+        "graph_search_candidates",
+        "get_candidate_cv",
     }
 
 

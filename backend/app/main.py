@@ -327,6 +327,12 @@ from .cv_matching.routes import (
 app.include_router(cv_match_admin_router, prefix="/api/v1")
 app.include_router(cv_match_override_router, prefix="/api/v1")
 
+# Taali Chat (in-product agentic chat that consumes the same tool surface
+# as the public MCP server).
+from .domains.taali_chat import router as taali_chat_router  # noqa: E402
+
+app.include_router(taali_chat_router, prefix="/api/v1")
+
 # ---------------------------------------------------------------------------
 # MCP server (read-only) — mounted at /mcp. Bearer JWT auth, same secret as
 # /api/v1/auth/jwt/login. See app/mcp/server.py for the tool surface.

@@ -46,6 +46,13 @@ from .background_job_run import (
     SCOPE_KIND_ORG,
     SCOPE_KIND_ROLE,
 )
+from .taali_chat_conversation import TaaliChatConversation
+from .taali_chat_message import (
+    ROLE_ASSISTANT,
+    ROLE_USER,
+    TAALI_CHAT_ROLES,
+    TaaliChatMessage,
+)
 
 __all__ = [
     "User",
@@ -90,4 +97,9 @@ __all__ = [
     "JOB_KINDS",
     "SCOPE_KIND_ROLE",
     "SCOPE_KIND_ORG",
+    "TaaliChatConversation",
+    "TaaliChatMessage",
+    "TAALI_CHAT_ROLES",
+    "ROLE_USER",
+    "ROLE_ASSISTANT",
 ]

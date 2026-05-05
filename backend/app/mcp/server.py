@@ -1,9 +1,14 @@
 """FastMCP server: read-only tools + resources for Tali.
 
-Mounted under ``/mcp`` on the main FastAPI app. Every tool authenticates by
-decoding the bearer JWT off the inbound request and loading the matching
-``User``; org-scoping is enforced on every query via
-``organization_id == current_user.organization_id``.
+Mounted under ``/mcp`` on the main FastAPI app. Each tool authenticates
+the bearer JWT off the inbound request, opens a sync DB session, and
+delegates to a pure-function handler in ``handlers.py``. Org-scoping is
+enforced inside the handlers via ``user.organization_id``.
+
+Adding a tool: add the implementation to ``handlers.py``, then register
+a thin wrapper here that calls it. Both the MCP HTTP surface and the
+in-process copilot orchestrator (``app/copilot/...``) reuse the same
+handlers so behaviour stays consistent.
 """
 
 # NOTE: do NOT add ``from __future__ import annotations`` — FastMCP's tool
@@ -14,30 +19,15 @@ decoding the bearer JWT off the inbound request and loading the matching
 from typing import Any, Literal, Optional
 
 from mcp.server.fastmcp import Context, FastMCP
-from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..platform.database import SessionLocal
+from . import handlers
 from .auth import MCPAuthError, authenticate_request
-from .payloads import (
-    SCORE_FIELDS,
-    application_detail,
-    application_summary,
-    candidate_detail,
-    comparison_row,
-    role_detail,
-    role_summary,
-)
-from .urls import application_url, candidate_url, role_url
 
-# Pipeline / outcome enums — mirrored from
-# ``domains/assessments_runtime/pipeline_service.py`` to avoid an import
-# cycle and keep the schema shown to the LLM stable.
-PIPELINE_STAGES = ("applied", "invited", "in_assessment", "review")
-APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
 ScoreType = Literal["taali", "pre_screen", "rank", "cv_match"]
 SortBy = Literal["taali_score", "pre_screen_score", "rank_score", "cv_match_score", "created_at"]
 SortOrder = Literal["desc", "asc"]
@@ -54,6 +44,13 @@ The default score (``taali``) is the merged primary score on a 0-100 scale.
 score, ``cv_match`` is the CV/job-spec similarity score. Use ``taali`` for
 "score above X" questions unless the user specifies otherwise.
 
+For semantic queries ("AWS Glue engineer with 5+ years", "people who worked
+at YC companies"), use ``nl_search_candidates`` rather than
+``search_applications`` — it parses the query, runs JSONB/CV-text filters,
+and re-ranks with an LLM. ``graph_search_candidates`` queries the temporal
+knowledge graph (Graphiti) for shape-based questions ("colleagues of X",
+"worked at startups").
+
 Every result includes a ``frontend_url`` the user can click to open the
 matching page in the Tali web app.
 """
@@ -68,37 +65,12 @@ mcp_app = FastMCP(
 
 
 # ---------------------------------------------------------------------------
-# Per-tool helpers
+# Per-tool plumbing: open a sync DB session and authenticate the request.
 # ---------------------------------------------------------------------------
 
 
-class _MCPSession:
-    """Bundle a DB session with the authenticated user.
-
-    Used as a context manager so tools always return the connection to the
-    pool even on error paths::
-
-        with _open_session(ctx) as (db, user):
-            ...
-    """
-
-    __slots__ = ("db", "user")
-
-    def __init__(self, db: Session, user) -> None:  # type: ignore[no-untyped-def]
-        self.db = db
-        self.user = user
-
-
-def _request_from_ctx(ctx: Context) -> Any:
-    rc = ctx.request_context
-    request = getattr(rc, "request", None)
-    if request is None:
-        raise MCPAuthError("MCP context has no HTTP request bound")
-    return request
-
-
 class _open_session:  # noqa: N801 — context-manager-as-class is intentional
-    """Open a sync DB session and authenticate the request in one step."""
+    """Sync DB session + authenticated User scoped to one MCP tool call."""
 
     def __init__(self, ctx: Context) -> None:
         self._ctx = ctx
@@ -107,7 +79,9 @@ class _open_session:  # noqa: N801 — context-manager-as-class is intentional
     def __enter__(self) -> tuple[Session, Any]:
         self._db = SessionLocal()
         try:
-            request = _request_from_ctx(self._ctx)
+            request = getattr(self._ctx.request_context, "request", None)
+            if request is None:
+                raise MCPAuthError("MCP context has no HTTP request bound")
             user = authenticate_request(request, self._db)
         except Exception:
             self._db.close()
@@ -119,47 +93,6 @@ class _open_session:  # noqa: N801 — context-manager-as-class is intentional
         if self._db is not None:
             self._db.close()
             self._db = None
-
-
-def _stage_counts_for_role(db: Session, *, organization_id: int, role_id: int) -> dict[str, int]:
-    rows = (
-        db.query(CandidateApplication.pipeline_stage, func.count(CandidateApplication.id))
-        .filter(
-            CandidateApplication.organization_id == organization_id,
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.deleted_at.is_(None),
-            CandidateApplication.application_outcome == "open",
-        )
-        .group_by(CandidateApplication.pipeline_stage)
-        .all()
-    )
-    counts = {stage: 0 for stage in PIPELINE_STAGES}
-    for stage, total in rows:
-        counts[str(stage)] = int(total or 0)
-    return counts
-
-
-def _applications_count(db: Session, *, organization_id: int, role_id: int) -> int:
-    return (
-        db.query(func.count(CandidateApplication.id))
-        .filter(
-            CandidateApplication.organization_id == organization_id,
-            CandidateApplication.role_id == role_id,
-            CandidateApplication.deleted_at.is_(None),
-        )
-        .scalar()
-        or 0
-    )
-
-
-def _normalize_score_input(value: float | None) -> float | None:
-    """Permit either 0-10 or 0-100 thresholds; coerce to 0-100."""
-    if value is None:
-        return None
-    f = float(value)
-    if 0 <= f <= 10:
-        return f * 10.0
-    return f
 
 
 # ---------------------------------------------------------------------------
@@ -181,44 +114,7 @@ def list_roles(
     include_stage_counts: bool = False,
 ) -> list[dict[str, Any]]:
     with _open_session(ctx) as (db, user):
-        roles = (
-            db.query(Role)
-            .filter(
-                Role.organization_id == user.organization_id,
-                Role.deleted_at.is_(None),
-            )
-            .order_by(Role.created_at.desc())
-            .all()
-        )
-        if not roles:
-            return []
-        role_ids = [r.id for r in roles]
-        count_rows = (
-            db.query(CandidateApplication.role_id, func.count(CandidateApplication.id))
-            .filter(
-                CandidateApplication.organization_id == user.organization_id,
-                CandidateApplication.role_id.in_(role_ids),
-                CandidateApplication.deleted_at.is_(None),
-            )
-            .group_by(CandidateApplication.role_id)
-            .all()
-        )
-        counts = {int(rid): int(total) for rid, total in count_rows}
-        out: list[dict[str, Any]] = []
-        for role in roles:
-            stage_counts = (
-                _stage_counts_for_role(db, organization_id=user.organization_id, role_id=role.id)
-                if include_stage_counts
-                else None
-            )
-            out.append(
-                role_summary(
-                    role,
-                    applications_count=counts.get(role.id, 0),
-                    stage_counts=stage_counts,
-                )
-            )
-        return out
+        return handlers.list_roles(db, user, include_stage_counts=include_stage_counts)
 
 
 @mcp_app.tool(
@@ -230,120 +126,45 @@ def list_roles(
 )
 def get_role(ctx: Context, role_id: int) -> dict[str, Any]:
     with _open_session(ctx) as (db, user):
-        role = (
-            db.query(Role)
-            .options(joinedload(Role.criteria))
-            .filter(
-                Role.id == role_id,
-                Role.organization_id == user.organization_id,
-                Role.deleted_at.is_(None),
-            )
-            .first()
-        )
-        if role is None:
-            raise ValueError(f"role {role_id} not found")
-        return role_detail(
-            role,
-            applications_count=_applications_count(
-                db, organization_id=user.organization_id, role_id=role.id
-            ),
-            stage_counts=_stage_counts_for_role(
-                db, organization_id=user.organization_id, role_id=role.id
-            ),
-        )
+        return handlers.get_role(db, user, role_id=role_id)
 
 
 @mcp_app.tool(
     name="search_applications",
     description=(
-        "Search applications across one role (or every role for the org) with "
-        "score, stage, and outcome filters. Default scope returns only "
-        "open applications sorted by ``taali_score`` descending. Use this for "
-        "questions like 'candidates above 70', 'who is in review for role X', "
-        "'top 10 by pre-screen for the senior backend role'."
+        "Filter applications by score / stage / outcome / simple text. Default "
+        "scope returns only open applications sorted by ``taali_score`` desc. "
+        "For semantic queries (skills, years of experience, narrative fit), use "
+        "``nl_search_candidates`` instead — this tool's ``q`` only matches the "
+        "candidate's name/email/position."
     ),
 )
 def search_applications(
     ctx: Context,
-    role_id: int | None = None,
-    min_score: float | None = None,
+    role_id: Optional[int] = None,
+    min_score: Optional[float] = None,
     score_type: ScoreType = "taali",
-    pipeline_stage: str | None = None,
-    application_outcome: str | None = "open",
-    q: str | None = None,
+    pipeline_stage: Optional[str] = None,
+    application_outcome: Optional[str] = "open",
+    q: Optional[str] = None,
     sort_by: SortBy = "taali_score",
     sort_order: SortOrder = "desc",
     limit: int = 25,
 ) -> list[dict[str, Any]]:
-    if score_type not in SCORE_FIELDS:
-        raise ValueError(
-            f"score_type must be one of {sorted(SCORE_FIELDS)}, got {score_type!r}"
-        )
-    if pipeline_stage and pipeline_stage not in PIPELINE_STAGES:
-        raise ValueError(
-            f"pipeline_stage must be one of {list(PIPELINE_STAGES)}, got {pipeline_stage!r}"
-        )
-    if application_outcome and application_outcome not in APPLICATION_OUTCOMES:
-        raise ValueError(
-            f"application_outcome must be one of {list(APPLICATION_OUTCOMES)} or null, got {application_outcome!r}"
-        )
-    limit = max(1, min(int(limit), 100))
-
     with _open_session(ctx) as (db, user):
-        query = (
-            db.query(CandidateApplication)
-            .options(
-                joinedload(CandidateApplication.candidate),
-                joinedload(CandidateApplication.role),
-            )
-            .filter(
-                CandidateApplication.organization_id == user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-            )
+        return handlers.search_applications(
+            db,
+            user,
+            role_id=role_id,
+            min_score=min_score,
+            score_type=score_type,
+            pipeline_stage=pipeline_stage,
+            application_outcome=application_outcome,
+            q=q,
+            sort_by=sort_by,
+            sort_order=sort_order,
+            limit=limit,
         )
-        if role_id is not None:
-            query = query.filter(CandidateApplication.role_id == role_id)
-        if pipeline_stage:
-            query = query.filter(CandidateApplication.pipeline_stage == pipeline_stage)
-        if application_outcome:
-            query = query.filter(CandidateApplication.application_outcome == application_outcome)
-        threshold = _normalize_score_input(min_score)
-        if threshold is not None:
-            score_col = getattr(CandidateApplication, SCORE_FIELDS[score_type])
-            query = query.filter(score_col >= threshold)
-        if q:
-            like = f"%{q.strip()}%"
-            query = query.join(Candidate, CandidateApplication.candidate_id == Candidate.id).filter(
-                or_(
-                    Candidate.full_name.ilike(like),
-                    Candidate.email.ilike(like),
-                    Candidate.position.ilike(like),
-                )
-            )
-
-        # Sort in Python so NULL scores fall to the bottom regardless of
-        # dialect (Postgres NULLS LAST vs SQLite default differ).
-        apps = query.all()
-
-        sort_column_map = {
-            "taali_score": "taali_score_cache_100",
-            "pre_screen_score": "pre_screen_score_100",
-            "rank_score": "rank_score",
-            "cv_match_score": "cv_match_score",
-            "created_at": "created_at",
-        }
-        sort_attr = sort_column_map[sort_by]
-        reverse = sort_order != "asc"
-        from datetime import datetime, timezone
-
-        def _key(app: CandidateApplication) -> Any:
-            value = getattr(app, sort_attr, None)
-            if sort_by == "created_at":
-                return value or datetime.min.replace(tzinfo=timezone.utc)
-            return value if value is not None else float("-inf")
-
-        apps.sort(key=_key, reverse=reverse)
-        return [application_summary(a) for a in apps[:limit]]
 
 
 @mcp_app.tool(
@@ -361,22 +182,9 @@ def get_application(
     include_cv_text: bool = False,
 ) -> dict[str, Any]:
     with _open_session(ctx) as (db, user):
-        app = (
-            db.query(CandidateApplication)
-            .options(
-                joinedload(CandidateApplication.candidate),
-                joinedload(CandidateApplication.role),
-            )
-            .filter(
-                CandidateApplication.id == application_id,
-                CandidateApplication.organization_id == user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-            )
-            .first()
+        return handlers.get_application(
+            db, user, application_id=application_id, include_cv_text=include_cv_text
         )
-        if app is None:
-            raise ValueError(f"application {application_id} not found")
-        return application_detail(app, include_cv_text=include_cv_text)
 
 
 @mcp_app.tool(
@@ -389,19 +197,7 @@ def get_application(
 )
 def get_candidate(ctx: Context, candidate_id: int) -> dict[str, Any]:
     with _open_session(ctx) as (db, user):
-        candidate = (
-            db.query(Candidate)
-            .options(joinedload(Candidate.applications).joinedload(CandidateApplication.role))
-            .filter(
-                Candidate.id == candidate_id,
-                Candidate.organization_id == user.organization_id,
-                Candidate.deleted_at.is_(None),
-            )
-            .first()
-        )
-        if candidate is None:
-            raise ValueError(f"candidate {candidate_id} not found")
-        return candidate_detail(candidate)
+        return handlers.get_candidate(db, user, candidate_id=candidate_id)
 
 
 @mcp_app.tool(
@@ -416,48 +212,77 @@ def compare_applications(
     ctx: Context,
     application_ids: list[int],
 ) -> dict[str, Any]:
-    if not application_ids:
-        raise ValueError("application_ids must contain at least one id")
-    if len(application_ids) > 5:
-        raise ValueError("compare_applications accepts at most 5 ids")
-
     with _open_session(ctx) as (db, user):
-        apps = (
-            db.query(CandidateApplication)
-            .options(
-                joinedload(CandidateApplication.candidate),
-                joinedload(CandidateApplication.role),
-            )
-            .filter(
-                CandidateApplication.id.in_(application_ids),
-                CandidateApplication.organization_id == user.organization_id,
-                CandidateApplication.deleted_at.is_(None),
-            )
-            .all()
+        return handlers.compare_applications(db, user, application_ids=application_ids)
+
+
+@mcp_app.tool(
+    name="nl_search_candidates",
+    description=(
+        "Semantic / natural-language candidate search. Parses the query "
+        "(skills, locations, years of experience, soft criteria, graph "
+        "predicates), runs JSONB + CV-text filters, optionally re-ranks "
+        "the top results with an LLM, and returns application summaries. "
+        "This is the tool to use for questions like 'AWS Glue engineer "
+        "with 5+ years' or 'senior backend devs in EMEA who've worked at "
+        "fintechs'. Set ``role_id`` to scope to a specific role's pool. "
+        "``rerank=False`` skips the rerank pass for speed (still returns "
+        "good results, just not LLM-judged for soft criteria)."
+    ),
+)
+def nl_search_candidates(
+    ctx: Context,
+    query: str,
+    role_id: Optional[int] = None,
+    rerank: bool = True,
+    limit: int = 25,
+) -> dict[str, Any]:
+    with _open_session(ctx) as (db, user):
+        return handlers.nl_search_candidates(
+            db, user, query=query, role_id=role_id, rerank=rerank, limit=limit
         )
-        found_ids = {a.id for a in apps}
-        missing = [aid for aid in application_ids if aid not in found_ids]
-        rows = [comparison_row(a) for a in apps]
-        # Preserve caller's id order so the comparison is deterministic.
-        order = {aid: idx for idx, aid in enumerate(application_ids)}
-        rows.sort(key=lambda r: order.get(r["application_id"], len(order)))
-        return {
-            "applications": rows,
-            "missing_ids": missing,
-            "score_legend": {
-                "taali": "Merged primary score (0-100) — recommended for ranking.",
-                "pre_screen": "Cheap LLM gating score (0-100).",
-                "rank": "Pairwise ranking against role pool (0-100).",
-                "cv_match": "CV-vs-job-spec similarity (0-100).",
-                "workable": "External Workable score, if synced.",
-                "assessment": "Cached assessment-result score (0-100).",
-                "role_fit": "Composite role-fit score (0-100).",
-            },
-        }
+
+
+@mcp_app.tool(
+    name="graph_search_candidates",
+    description=(
+        "Knowledge-graph search across the org's temporal subgraph "
+        "(Graphiti / Neo4j). Returns candidates whose stored facts "
+        "mention the query plus the matching fact strings so you can "
+        "cite specifics. Use this for graph-shaped questions: "
+        "'colleagues of X', 'people who worked at startups before "
+        "joining Big Tech', 'engineers whose CVs mention tool Y'. "
+        "Returns ``warnings: [{code: 'neo4j_unavailable'}]`` when the "
+        "graph is not configured for this deployment — fall back to "
+        "``nl_search_candidates`` in that case."
+    ),
+)
+def graph_search_candidates(
+    ctx: Context,
+    query: str,
+    limit: int = 25,
+) -> dict[str, Any]:
+    with _open_session(ctx) as (db, user):
+        return handlers.graph_search_candidates(db, user, query=query, limit=limit)
+
+
+@mcp_app.tool(
+    name="get_candidate_cv",
+    description=(
+        "Parsed CV sections (work history, education, skills) plus the raw "
+        "extracted CV text for one candidate. Use this when you need to "
+        "quote a candidate's CV verbatim or check specific experience "
+        "details — much cheaper than embedding the full CV in every "
+        "search response."
+    ),
+)
+def get_candidate_cv(ctx: Context, candidate_id: int) -> dict[str, Any]:
+    with _open_session(ctx) as (db, user):
+        return handlers.get_candidate_cv(db, user, candidate_id=candidate_id)
 
 
 # ---------------------------------------------------------------------------
-# Resources
+# Resources (read-only, addressable URIs for @-mention context).
 # ---------------------------------------------------------------------------
 
 
@@ -500,11 +325,7 @@ def _markdown_application(app: CandidateApplication) -> str:
         "",
     ]
     if app.pre_screen_recommendation:
-        parts.extend([
-            "## Pre-screen recommendation",
-            app.pre_screen_recommendation,
-            "",
-        ])
+        parts.extend(["## Pre-screen recommendation", app.pre_screen_recommendation, ""])
     if app.notes:
         parts.extend(["## Notes", app.notes, ""])
     if cv:
@@ -585,14 +406,4 @@ def candidate_cv_resource(candidate_id: str) -> str:
         return (candidate.cv_text or "").strip() or "(no CV on file)"
 
 
-__all__ = [
-    "mcp_app",
-    "PIPELINE_STAGES",
-    "APPLICATION_OUTCOMES",
-    "list_roles",
-    "get_role",
-    "search_applications",
-    "get_application",
-    "get_candidate",
-    "compare_applications",
-]
+__all__ = ["mcp_app"]
