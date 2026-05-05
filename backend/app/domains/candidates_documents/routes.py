@@ -1,4 +1,3 @@
-from pathlib import Path
 
 from datetime import datetime, timezone
 
@@ -312,36 +311,29 @@ def download_candidate_document(
     if not file_url:
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Prefer a presigned S3 URL when applicable — browser caches it,
-    # supports range requests, and removes the API worker from the path.
-    try:
-        from ...services.document_service import stored_document_s3_key
-        from ...services.s3_service import generate_presigned_url
+    # Object-storage URL → presigned redirect. Frees the API worker,
+    # browser caches, supports range requests.
+    from ...services.document_service import stored_document_s3_key
+    from ...services.s3_service import generate_presigned_url
 
-        s3_key = stored_document_s3_key(file_url)
-        if s3_key:
-            presigned = generate_presigned_url(s3_key, expires_in=600)
-            if presigned:
-                return RedirectResponse(url=presigned, status_code=307)
-    except Exception:
-        pass
+    s3_key = stored_document_s3_key(file_url)
+    if s3_key:
+        presigned = generate_presigned_url(s3_key, expires_in=600)
+        if presigned:
+            return RedirectResponse(url=presigned, status_code=307)
 
-    if file_url.startswith("http://") or file_url.startswith("https://"):
-        return RedirectResponse(url=file_url, status_code=307)
+    # Local filesystem path — dev/test only (S3 creds unset, so the
+    # upload path fell back to backend/uploads/). In production, legacy
+    # local-path rows always hit the 410 below because the file is gone.
+    from pathlib import Path as _Path
+    local = _Path(file_url)
+    if local.exists() and local.is_file():
+        return FileResponse(path=str(local), filename=filename)
 
-    file_path = Path(file_url).resolve()
-    if not file_path.exists() or not file_path.is_file():
-        # Local file missing — almost always means the file lived on
-        # ephemeral disk (e.g. Railway) and was lost on redeploy because
-        # S3 was unavailable at upload time. 410 with structured detail
-        # so the UI can render a clear "re-upload required" CTA instead
-        # of a perpetual spinner.
-        raise HTTPException(
-            status_code=410,
-            detail={
-                "reason": "file_storage_unavailable",
-                "message": "CV file expired from local storage. Re-upload from Workable to restore it.",
-            },
-        )
-
-    return FileResponse(path=str(file_path), filename=filename)
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "reason": "file_storage_unavailable",
+            "message": "CV file is no longer available. Re-fetch from Workable to restore it.",
+        },
+    )
