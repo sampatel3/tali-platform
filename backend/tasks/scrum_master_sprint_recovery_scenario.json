@@ -1,0 +1,184 @@
+{
+  "task_id": "scrum_master_sprint_recovery_scenario",
+  "name": "Senior Scrum Master - Sprint Recovery Scenario",
+  "role": "scrum_master",
+  "duration_minutes": 30,
+  "calibration_prompt": "You have 2 minutes. A development team's sprint is 60% through and three stories are blocked. Ask Claude to help you frame the next stand-up: what specifically would you ask, what data would you bring, and what decisions would you push to the team versus escalate? Show how you'd distinguish 'team can solve' blockers from 'needs leadership' blockers in your facilitation language.",
+  "scenario": "You joined Deeplight as a Senior Scrum Master and on your second day a Sprint 47 retro went badly — the team is mid-sprint, three stories are blocked, the PI commit at the end of the sprint is at risk, and the product owner is pushing for over-commitment to recover.\n\n**Message from the Engineering Director:**\n\n> I need a senior Scrum Master who can stabilise the next 5 days, not someone who quotes the Scrum Guide at me.\n>\n> Here's what we know:\n> - Sprint 47 (10 working days, day 6 of 10), capacity 64 points, committed 58, completed 22\n> - Three stories are blocked: SHIP-1142 (waiting on a payments API contract from another team), SHIP-1156 (one engineer out sick for the rest of the sprint), SHIP-1170 (acceptance criteria are wrong, the PO disputes this)\n> - One Program Increment commit (a feature flag rollout to 50% of customers) lands at the end of this sprint\n> - The team's last retro flagged \"PO changes scope mid-sprint\" and \"unclear ownership across squads\" as the top two pains, neither addressed yet\n> - The PO has asked the team to pull in two more stories to 'recover' velocity\n>\n> In 30 minutes I want a written hand-back I can take to the leadership stand-up tomorrow that covers four things:\n> 1. Which blockers belong to the team to solve, which need leadership intervention, and which need a hard conversation with the PO?\n> 2. Should the team accept the PO's request to pull in more stories? Defend your answer.\n> 3. What's your plan for the next stand-up to surface the right signals without blame, and what's your facilitation move at the end-of-sprint review?\n> 4. What goes on the retro action list and what do you stop tracking because it's not making the sprint better?\n>\n> Use the Sprint board export, the team's last retro notes, and the PO's chat log in the repo. There is no code to write — your deliverable is `HANDBACK.md`.\n\n**Your mission:**\nYou are being assessed on facilitation judgment, blocker triage, sprint economics (capacity vs. WIP vs. risk), and how you handle the PO over-commit request. The auto-scoring suite checks that your hand-back addresses every required topic by name; the rubric judges *how well*.",
+  "repo_structure": {
+    "name": "deeplight-sprint-recovery",
+    "files": {
+      ".gitignore": ".venv/\n.pytest_cache/\n__pycache__/\n",
+      "README.md": "# Deeplight Sprint Recovery — Scrum Master Scenario\n\nThis is a non-coding assessment. Your deliverable is `HANDBACK.md`. Read the inputs in this repo, then fill in the hand-back template the Engineering Director will take to leadership stand-up tomorrow.\n\n## Inputs\n- `SPRINT_BOARD.md` — sprint 47 board snapshot (committed, in-progress, blocked, done)\n- `RETRO_NOTES.md` — last retro pain points and stalled action items\n- `PO_CHAT.md` — chat log between the PO and the team about pulling in more stories\n- `RACI.md` — squad ownership matrix (incomplete; ambiguity is part of the test)\n- `LEADERSHIP_BRIEF.md` — what leadership has heard so far and what they're worried about\n\n## Local workflow\n1. `python3 -m venv .venv && source .venv/bin/activate`\n2. `pip install -r requirements.txt`\n3. Edit `HANDBACK.md` directly. Use Claude to think through framing — you can paste excerpts from the inputs.\n4. Run `pytest -q` to check that your hand-back addresses every required topic. Tests check *coverage*, not correctness — the rubric scores how well you addressed each topic.\n\n## What good looks like\n- Specific decisions and recommended actions, not vague Scrum-Guide language\n- Each blocker mapped to an owner with a next step and a deadline\n- The PO over-commit request gets a clear yes/no with reasoning the Director can defend in stand-up\n- A retro action list that prunes the dead ones from `RETRO_NOTES.md`\n",
+      "SPRINT_BOARD.md": "# Sprint 47 — board snapshot (day 6 of 10)\n\nCapacity: 64 points · Committed: 58 · Completed: 22\n\n## Done\n- SHIP-1131 (5 pts) — Add idempotency keys to refunds endpoint\n- SHIP-1138 (3 pts) — Migrate webhook signing to v2\n- SHIP-1141 (8 pts) — Operator dashboard: stuck-jobs view\n- SHIP-1149 (3 pts) — Cleanup: remove deprecated /payments/v1 path\n- SHIP-1153 (3 pts) — Fix flaky settlement reconciliation test\n\n## In progress\n- SHIP-1145 (8 pts) — Cardholder data redaction in audit logs (engineer A, 70% done)\n- SHIP-1158 (5 pts) — Risk team integration: webhook fan-out (engineer B, 30% done)\n- SHIP-1162 (5 pts) — Per-merchant rate limiting (engineer C, 50% done)\n\n## Blocked\n- SHIP-1142 (8 pts) — Settlements API integration with Treasury squad — waiting on the Treasury squad's API contract since day 3\n- SHIP-1156 (5 pts) — Refund retry queue — engineer D out sick from day 7 to end of sprint\n- SHIP-1170 (8 pts) — Customer-facing receipts redesign — PO disputes the acceptance criteria the team wrote\n\n## Not started\n- SHIP-1175 (5 pts) — Logging consolidation\n\n## PI commit (end of sprint)\n- Feature flag: rollout `redacted_audit_logs` to 50% of customers (depends on SHIP-1145 plus a 4-hour ops handoff)\n",
+      "RETRO_NOTES.md": "# Sprint 46 retro notes (last sprint)\n\n## What went well\n- The new in-flight reviewer rota cleared 11 PRs in week 1 (vs. 4 in sprint 45)\n- One bug-bash session caught two regressions before release\n\n## What hurt\n- **PO changes scope mid-sprint** — appeared in retros 44, 45, 46. No action taken. The pattern: the PO accepts a leadership escalation, then asks the team to pull a story in mid-sprint without trade-off conversation.\n- **Unclear ownership across squads** — Treasury squad and Risk squad both touched the settlements path; nobody owns the integration story end-to-end.\n- Stand-ups still drift past 15 minutes when SHIP-style stories are blocked.\n\n## Action items from retro 46 (status as of today)\n- [ ] (carry-over from retro 44) Define a 'scope-change protocol' with the PO — never started\n- [ ] (carry-over from retro 45) Build a one-page squad-ownership matrix — see `RACI.md`, partially done\n- [x] Add 'blocker since' age to the board — done in this sprint\n- [ ] Time-box stand-ups to 15min hard — slipped to 17–20 min\n- [ ] (added retro 46) Have engineering managers attend retro to hear the PO pattern — leadership has not committed yet\n",
+      "PO_CHAT.md": "# Slack thread: #deeplight-payments-team\n\n**PO (Riya), day 5, 16:42**\n> Hey team, sales just landed the Northwind logo and they need the loyalty-points hook on receipts before the Q3 demo on day 14. Can we pull SHIP-1182 (8 pts) and SHIP-1184 (5 pts) into this sprint? It's only 13 points and we have headroom from the cleanup story coming in under estimate.\n\n**Engineer A, day 5, 16:51**\n> We don't have headroom — SHIP-1145 is going long, and SHIP-1162 is 50% with a known integration risk. We're also tracking three blocked stories.\n\n**PO (Riya), day 5, 16:53**\n> Right, but the cleanup story closed 2 points under estimate, and SHIP-1141 closed early. We have ~5 pts of slack and we got Northwind because we move fast.\n\n**Engineer A, day 5, 16:55**\n> Slack on done work doesn't help capacity for the work that's still in progress.\n\n**PO (Riya), day 5, 16:58**\n> Can we at least put 1182 in 'next-up' so it's queued?\n\n**Engineering Manager (Tariq), day 5, 17:05**\n> Let's talk in stand-up tomorrow. Riya, please don't add to the board until we've discussed.\n\n**(Day 6, 09:00 — stand-up. PO has now added SHIP-1182 to the board as 'committed'.)**\n",
+      "RACI.md": "# Squad ownership matrix (incomplete)\n\n| Story            | Responsible                | Accountable        | Consulted                 | Informed       |\n|------------------|----------------------------|--------------------|---------------------------|----------------|\n| SHIP-1142        | Engineer A (Payments)      | EM Tariq           | Treasury squad            | Risk squad     |\n| SHIP-1145        | Engineer A (Payments)      | EM Tariq           | Security                  | Audit, PO      |\n| SHIP-1156        | Engineer D (Payments)      | EM Tariq           | —                         | PO             |\n| SHIP-1158        | Engineer B (Payments)      | EM Tariq           | Risk squad                | PO             |\n| SHIP-1162        | Engineer C (Payments)      | EM Tariq           | —                         | PO             |\n| SHIP-1170        | (disputed — PO vs. team)   | (disputed)         | Design, CX                | EM             |\n| SHIP-1175        | (unassigned)               | EM Tariq           | —                         | —              |\n| **PI commit**    | (unclear — no one named)   | (unclear)          | Ops, Risk, PO             | Leadership     |\n",
+      "LEADERSHIP_BRIEF.md": "# What leadership has heard so far\n\n- The Engineering Director knows two stories are blocked and the PI commit is at risk; she does not know about the third blocker (SHIP-1170 acceptance-criteria dispute).\n- The VP of Product has been told 'Northwind is locked in' and expects the loyalty-points hook on receipts in this sprint.\n- The CFO has flagged that delaying the `redacted_audit_logs` feature-flag rollout costs the company an additional month of compliance reporting overhead.\n- Nobody at the leadership level has yet been told that the 'PO changes scope mid-sprint' pain has shown up in three consecutive retros.\n\nThe Engineering Director has 5 minutes in tomorrow's leadership stand-up. She wants the smallest, sharpest set of asks she can credibly defend.\n",
+      "HANDBACK.md": "# HANDBACK — Sprint 47 recovery brief\n\n> Replace each section's placeholder with your actual recommendation. Be specific — name owners, deadlines, and decisions. The auto-scoring suite checks that every required heading is present and that you used the required keywords; the rubric judges how well you addressed each.\n\n## Sprint health one-liner\n_(One sentence: are we on track, at risk, or off track? Defend with a single number.)_\n\n## Blocker triage\nFor each blocked story state: owner, who needs to act next, what the deadline is, and which category it falls into — *team-solvable*, *needs leadership intervention*, or *needs PO conversation*.\n\n- **SHIP-1142** —\n- **SHIP-1156** —\n- **SHIP-1170** —\n\n## PO over-commit decision\n_(Should the team accept SHIP-1182 / SHIP-1184? Yes or no, with the reasoning the Director can defend in tomorrow's leadership stand-up. Reference capacity, WIP, and risk.)_\n\n## Stand-up plan for tomorrow\n_(What you'll surface, what you'll ask the team, what you'll de-escalate, what you'll escalate. Use the word 'facilitation' — you're being assessed on technique.)_\n\n## End-of-sprint review move\n_(What's your plan to handle the SHIP-1170 acceptance-criteria dispute in the review without it derailing demo? What's your move with the PI commit if SHIP-1145 slips?)_\n\n## Retro action list — keep / cut / add\n_(Take the items in `RETRO_NOTES.md` action-item list and decide which to keep, cut, or sharpen. Add the next action you'd commit to as the new Scrum Master.)_\n\n## What I'm telling leadership\n_(The 3-bullet message you'd put in front of the Engineering Director that she can take into tomorrow's leadership stand-up.)_\n",
+      "facilitation_helpers.py": "\"\"\"Light helpers used by the auto-scoring tests to read the candidate's hand-back.\n\nThe candidate doesn't need to edit this file — it just provides the parsing\nutilities the test suite uses to score *coverage* of the required topics.\n\"\"\"\nfrom __future__ import annotations\n\nimport pathlib\nimport re\nfrom typing import Iterable\n\nROOT = pathlib.Path(__file__).resolve().parent\nHANDBACK = ROOT / 'HANDBACK.md'\n\n\ndef read_handback() -> str:\n    return HANDBACK.read_text(encoding='utf-8') if HANDBACK.exists() else ''\n\n\ndef extract_section(text: str, heading: str) -> str:\n    \"\"\"Return the body of `## heading` up to the next `## ` (or end of file).\"\"\"\n    pattern = rf'^##\\s+{re.escape(heading)}\\s*$'\n    lines = text.splitlines()\n    in_section = False\n    out: list[str] = []\n    for line in lines:\n        if re.match(pattern, line):\n            in_section = True\n            continue\n        if in_section and line.startswith('## '):\n            break\n        if in_section:\n            out.append(line)\n    return '\\n'.join(out).strip()\n\n\ndef section_has_substantive_content(section: str, min_chars: int = 80) -> bool:\n    \"\"\"True if the section contains real content, not just the placeholder italics.\"\"\"\n    cleaned = re.sub(r'_\\([^)]+\\)_', '', section).strip()\n    return len(cleaned) >= min_chars\n\n\ndef section_mentions_any(section: str, keywords: Iterable[str]) -> bool:\n    lower = section.lower()\n    return any(k.lower() in lower for k in keywords)\n",
+      "tests/__init__.py": "",
+      "tests/conftest.py": "import sys\nimport pathlib\n\nimport pytest\n\nROOT = pathlib.Path(__file__).resolve().parent.parent\nif str(ROOT) not in sys.path:\n    sys.path.insert(0, str(ROOT))\n\nfrom facilitation_helpers import read_handback\n\n\n@pytest.fixture(scope='session')\ndef handback() -> str:\n    return read_handback()\n",
+      "tests/test_handback_structure.py": "import pytest\n\nfrom facilitation_helpers import extract_section, section_has_substantive_content\n\nREQUIRED_SECTIONS = [\n    'Sprint health one-liner',\n    'Blocker triage',\n    'PO over-commit decision',\n    'Stand-up plan for tomorrow',\n    'End-of-sprint review move',\n    'Retro action list \\u2014 keep / cut / add',\n    'What I\\u2019m telling leadership',\n]\n\n\n@pytest.mark.parametrize('section_heading', REQUIRED_SECTIONS)\ndef test_section_present_with_substantive_content(handback, section_heading):\n    body = extract_section(handback, section_heading)\n    assert body, f'HANDBACK.md must include section: ## {section_heading}'\n    assert section_has_substantive_content(body), (\n        f'Section {section_heading!r} must contain substantive content (>=80 chars beyond the placeholder).'\n    )\n",
+      "tests/test_handback_topics.py": "from facilitation_helpers import extract_section, section_mentions_any\n\n\ndef test_blocker_triage_addresses_each_story(handback):\n    section = extract_section(handback, 'Blocker triage')\n    for story_id in ('SHIP-1142', 'SHIP-1156', 'SHIP-1170'):\n        assert story_id in section, f'Blocker triage must address {story_id} explicitly.'\n\n\ndef test_po_decision_takes_a_stance(handback):\n    section = extract_section(handback, 'PO over-commit decision').lower()\n    assert any(k in section for k in ('yes', 'no', 'accept', 'decline', 'reject')), (\n        'PO over-commit decision must take a clear stance (yes / no / accept / decline / reject).'\n    )\n    assert any(k in section for k in ('capacity', 'wip', 'work in progress', 'risk', 'scope')), (\n        'PO over-commit decision must reference capacity, WIP, or risk.'\n    )\n\n\ndef test_standup_plan_uses_facilitation_language(handback):\n    section = extract_section(handback, 'Stand-up plan for tomorrow')\n    assert section_mentions_any(section, ['facilitation', 'facilitate']), (\n        \"Stand-up plan must use 'facilitation' or 'facilitate' (the role-specific signal).\"\n    )\n\n\ndef test_review_move_addresses_pi_commit(handback):\n    section = extract_section(handback, 'End-of-sprint review move').lower()\n    assert any(k in section for k in ('pi commit', 'pi commitment', 'feature flag', 'redacted_audit_logs', 'rollout')), (\n        'End-of-sprint review move must address the PI commit / feature-flag rollout.'\n    )\n\n\ndef test_retro_action_list_prunes_or_sharpens(handback):\n    section = extract_section(handback, 'Retro action list \\u2014 keep / cut / add').lower()\n    decisions = sum(k in section for k in ('keep', 'cut', 'drop', 'remove', 'add', 'sharpen', 'replace'))\n    assert decisions >= 2, (\n        'Retro action list must show at least two decisions across keep / cut / add.'\n    )\n\n\ndef test_leadership_message_is_concise(handback):\n    section = extract_section(handback, 'What I\\u2019m telling leadership')\n    bullet_lines = [line for line in section.splitlines() if line.strip().startswith(('-', '*', '\\u2022'))]\n    assert len(bullet_lines) >= 2, (\n        \"'What I'm telling leadership' must use a bulleted format (the Director will read this in stand-up).\"\n    )\n",
+      "requirements.txt": "pytest>=8.0.0\n"
+    }
+  },
+  "evaluation_rubric": {
+    "facilitation_judgment": {
+      "weight": 0.24,
+      "criteria": {
+        "excellent": "Stand-up plan distinguishes 'facilitate the team to solve' from 'escalate' from 'block off entirely'. Names specific facilitation moves (timebox, parking lot, decision-vs-discussion) and uses them deliberately. Identifies the SHIP-1170 acceptance-criteria dispute as a review-time problem, not a stand-up problem.",
+        "good": "Sound facilitation framing but mostly textbook — names the technique without showing how it changes the next-day behaviour.",
+        "poor": "Quotes Scrum Guide language without operational specifics, or treats every blocker as something to escalate."
+      }
+    },
+    "blocker_triage": {
+      "weight": 0.24,
+      "criteria": {
+        "excellent": "Maps each blocker to category (team / leadership / PO), names the owner, and gives a deadline. Recognises that SHIP-1142 is a cross-squad ownership problem (Treasury squad), SHIP-1156 is a capacity problem to manage with the PO, and SHIP-1170 is a hard PO conversation that should not be dressed up as a 'team' issue.",
+        "good": "Categorises 2 of 3 correctly but misclassifies the SHIP-1170 dispute.",
+        "poor": "Treats all three as the same kind of problem or hands them all to leadership."
+      }
+    },
+    "sprint_economics": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Declines the PO's pull-in request with a defensible reason: completed-work slack does not increase capacity for in-progress work; WIP is already high; SHIP-1145 risk threatens the PI commit. Frames this as a trade-off the Director can defend in leadership stand-up, not as 'no because Scrum'.",
+        "good": "Declines but the reasoning is weak (e.g. cites 'velocity' without the WIP / risk specifics).",
+        "poor": "Accepts the pull-in or cannot articulate why slack on done work is not equivalent to capacity for in-progress work."
+      }
+    },
+    "stakeholder_communication": {
+      "weight": 0.18,
+      "criteria": {
+        "excellent": "The 3-bullet leadership message is sharp: clear ask, clear decision the Director needs, clear risk if no decision. Tone is non-blaming and decision-driving. Surfaces the recurring 'PO changes scope mid-sprint' pattern as a leadership-visible issue without making it a personal escalation.",
+        "good": "Clear bullets but one is vague (e.g. 'help us with the PO' without a specific ask).",
+        "poor": "Reads as a status update, not a decision document; or escalates the PO interpersonally instead of structurally."
+      }
+    },
+    "operational_clarity": {
+      "weight": 0.14,
+      "criteria": {
+        "excellent": "Retro action list is honest: cuts 'time-box stand-ups to 15min' (it's a discipline, not an action) or sharpens it; keeps the scope-change protocol but turns it into a concrete next step with an owner; adds one new action that addresses the strongest pain. Deletes nothing without justification.",
+        "good": "Some pruning but keeps a vague action without sharpening it.",
+        "poor": "Adds new actions without cutting any, or keeps every carry-over from prior retros without explanation."
+      }
+    }
+  },
+  "expected_candidate_journey": {
+    "first_8_minutes": [
+      "Read SPRINT_BOARD.md, RETRO_NOTES.md, PO_CHAT.md, RACI.md, and LEADERSHIP_BRIEF.md before drafting anything in HANDBACK.md.",
+      "Identify the three blocker categories (team / leadership / PO) and the PO over-commit dynamic from the chat log.",
+      "Note the missing PI-commit RACI entry and the third-time-on-the-list 'PO changes scope' retro pattern."
+    ],
+    "minutes_8_to_22": [
+      "Draft the blocker triage with explicit owners and deadlines.",
+      "Write the PO decision with a defensible capacity/WIP/risk argument.",
+      "Frame the stand-up plan and the end-of-sprint review move."
+    ],
+    "final_8_minutes": [
+      "Run pytest to confirm every required section is present and the keywords are right.",
+      "Sharpen the retro action list — cut what isn't moving the needle.",
+      "Write the 3-bullet leadership message last so it lands the strongest version of the recommendation."
+    ],
+    "red_flags": [
+      "Quotes the Scrum Guide instead of making decisions.",
+      "Accepts the PO's pull-in request without trade-off conversation.",
+      "Treats SHIP-1170 (acceptance-criteria dispute) as a 'team alignment' problem rather than a hard PO conversation.",
+      "Escalates every blocker to leadership instead of separating team-solvable from leadership-needed.",
+      "Leaves the retro action list untouched or adds new actions without cutting any."
+    ]
+  },
+  "interviewer_signals": {
+    "strong_positive": [
+      "Distinguishes 'completed-work slack' from 'capacity for in-progress work' explicitly when responding to the PO.",
+      "Names the SHIP-1170 issue as a PO conversation, not a team alignment exercise.",
+      "Surfaces the recurring 'PO changes scope mid-sprint' pattern to leadership without making it a personal escalation.",
+      "Cuts at least one carry-over retro action and explains why.",
+      "Closes the missing PI-commit RACI entry as part of the recommendation, not just the blocker triage.",
+      "Hand-back leadership message reads as a decision document, not a status update."
+    ],
+    "red_flags": [
+      "Reproduces Scrum Guide language without operational specifics.",
+      "Quietly accepts the PO's mid-sprint pull-in.",
+      "Categorises every blocker as 'leadership intervention'.",
+      "Adds two new retro actions without removing any of the carry-overs.",
+      "Cannot articulate what changes in tomorrow's stand-up because of their facilitation move.",
+      "Treats the PI commit as unrelated to SHIP-1145's slip risk."
+    ]
+  },
+  "scoring_hints": {
+    "min_reading_time_seconds": 360
+  },
+  "test_runner": {
+    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "working_dir": "/workspace/deeplight-sprint-recovery",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
+    "timeout_seconds": 60
+  },
+  "workspace_bootstrap": {
+    "commands": [
+      "python3 -m venv .venv",
+      "./.venv/bin/python -m pip install --upgrade pip",
+      "./.venv/bin/python -m pip install -r requirements.txt"
+    ],
+    "working_dir": "/workspace/deeplight-sprint-recovery",
+    "timeout_seconds": 180,
+    "must_succeed": true
+  },
+  "role_alignment": {
+    "source_user_email": "sampatel@deeplight.ae",
+    "source_role_name": "Senior Scrum Master",
+    "source_role_identifier": "workable:C9D0B1B53A",
+    "captured_at": "2026-05-04T00:00:00Z",
+    "must_cover": [
+      "Triage blockers and distinguish team-solvable from leadership-needed from PO-conversation problems.",
+      "Defend a sprint-economics decision (capacity vs. WIP vs. risk) against a PO over-commit request.",
+      "Facilitate stand-ups and end-of-sprint reviews with deliberate technique, not Scrum Guide platitudes.",
+      "Communicate sprint risk to engineering leadership in a decision-driving format.",
+      "Maintain retro action lists honestly — keep, cut, or sharpen — rather than letting carry-overs accumulate."
+    ],
+    "must_not_cover": [
+      "Engineering implementation decisions (how to redact audit logs, how to rate-limit, etc.)",
+      "Scrum certification trivia (which Scrum event takes how long, named Scrum Guide values)",
+      "Team performance management or HR-style interventions",
+      "Tooling debates (Jira vs. Linear vs. Asana)"
+    ],
+    "jd_to_signal_map": [
+      {
+        "job_requirement": "Facilitate Scrum events with deliberate technique and protect the team from mid-sprint scope changes.",
+        "task_artifact": "PO_CHAT.md + HANDBACK.md sections 'Stand-up plan' and 'End-of-sprint review move' — candidate must show facilitation moves, not platitudes",
+        "rubric_dimension": "facilitation_judgment"
+      },
+      {
+        "job_requirement": "Triage cross-squad blockers and distinguish what the team owns from what needs leadership intervention.",
+        "task_artifact": "SPRINT_BOARD.md blocked column + RACI.md ambiguity + HANDBACK.md 'Blocker triage' section",
+        "rubric_dimension": "blocker_triage"
+      },
+      {
+        "job_requirement": "Defend sprint scope decisions using capacity, WIP, and risk arguments rather than process language.",
+        "task_artifact": "PO_CHAT.md over-commit request + HANDBACK.md 'PO over-commit decision' section",
+        "rubric_dimension": "sprint_economics"
+      },
+      {
+        "job_requirement": "Communicate sprint risk to leadership in a decision-driving format.",
+        "task_artifact": "LEADERSHIP_BRIEF.md framing + HANDBACK.md 'What I'm telling leadership' section (3-bullet, decision-led)",
+        "rubric_dimension": "stakeholder_communication"
+      },
+      {
+        "job_requirement": "Maintain retro action lists with honesty — prune the items that aren't making the sprint better and sharpen the ones that are.",
+        "task_artifact": "RETRO_NOTES.md carry-over action items + HANDBACK.md 'Retro action list — keep / cut / add' section",
+        "rubric_dimension": "operational_clarity"
+      }
+    ]
+  },
+  "human_testing_checklist": {
+    "candidate_clarity": true,
+    "repo_boot_ok": true,
+    "tests_collect_ok": true,
+    "baseline_failures_meaningful": true,
+    "rubric_matches_role": true,
+    "timebox_realistic": true
+  }
+}

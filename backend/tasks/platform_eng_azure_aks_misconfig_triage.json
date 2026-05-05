@@ -1,0 +1,187 @@
+{
+  "task_id": "platform_eng_azure_aks_misconfig_triage",
+  "name": "Azure Platform Engineer - AKS Misconfiguration Triage",
+  "role": "platform_engineer",
+  "duration_minutes": 30,
+  "calibration_prompt": "You have 2 minutes. The platform team uses Bicep to manage AKS, VNet, and Azure RBAC. Ask Claude to help you reason about a single misconfiguration — when an AKS cluster's managed identity is missing the Network Contributor role on its node-resource-group, what specifically breaks at the LoadBalancer / NSG / cluster autoscaler layer? Show what Azure Portal blade or `az` command you'd inspect first.",
+  "scenario": "You joined Deeplight as a Senior Azure Platform Engineer and were paged into a deploy freeze on your second day.\n\n**Message from the Head of Platform:**\n\n> Our checkout-platform AKS cluster has been refusing new ingress and pod rollouts for 14 hours, and three teams' deploys are blocked. We rolled forward a Bicep PR last night and the symptoms started right after.\n>\n> The on-call has narrowed it to four likely problems but they couldn't tell which combination is real:\n> - **VNet**: pods on new node pools can't reach the Azure SQL private endpoint — looks like a route or NSG changed,\n> - **AKS managed identity**: the cluster identity was 'simplified' in the PR and might be missing Network Contributor on the MC_ resource group,\n> - **Cluster NSG**: an NSG outbound rule was tightened so worker-node ↔ AKS API server communication on TCP 443 now hits a deny,\n> - **AKS version + add-on**: the AKS control-plane version in Bicep doesn't match the node-pool orchestrator version we just upgraded to.\n>\n> The Bicep PR is in `infra/`. The blast radius for any single change is large because we don't have what-if validation in this repo yet — only a Python suite that parses the Bicep JSON output and asserts on the resource graph.\n>\n> You have 30 minutes. I need three things:\n> 1. Confirm which of the four problems are real, with the diagnostic that proves it.\n> 2. Apply the smallest credible Bicep changes to unblock pod scheduling without weakening security posture.\n> 3. Tell me which fixes you'd land now, which need follow-up, and what would have caught this in CI.\n\n**Your mission:**\nYou are being assessed on triage discipline (don't fix-and-pray), Azure networking + RBAC judgment, and your ability to defend each Bicep change as the smallest correct fix under deployment-freeze pressure. There is no real Azure subscription in this exercise — the Python test suite parses your compiled Bicep (we ship `bicep build` output as JSON to keep the harness offline) and asserts on the resource graph.",
+  "repo_structure": {
+    "name": "deeplight-platform-aks",
+    "files": {
+      ".gitignore": ".venv/\n.pytest_cache/\n__pycache__/\n",
+      "README.md": "# Deeplight Platform - AKS Triage\n\nLocal reproduction of a checkout-platform AKS deploy freeze. The Bicep under `infra/` describes the AKS cluster, VNet, NSGs, identity assignments, and managed add-ons. A Python pytest suite parses the precompiled Bicep JSON (no Azure CLI required) and asserts on the IaC structure.\n\n## Local workflow\n1. `python3 -m venv .venv && source .venv/bin/activate`\n2. `pip install -r requirements.txt`\n3. `pytest -q --tb=short`\n\nFix the four candidate problems described in `RUNBOOK.md` until the suite is green. Don't add new resources you can't justify — every change should be traceable to a specific failure.\n\n## How parsing works\nWe ship a precompiled `infra/main.json` produced from `infra/main.bicep`. The candidate edits the Bicep, then either re-runs `python tools/bicep_to_json.py` (which uses a vendored mini-converter — see the script header) or edits the JSON directly. The tests assert on the JSON.\n",
+      "RUNBOOK.md": "# Incident Runbook\n\n## What's broken right now\n- New pods stuck `ContainerCreating` and ingress objects show no External IP for 14h\n- Three product teams' deploys blocked\n- The on-call narrowed it to four candidate problems (see `diagnostics/cluster_status.md`); not all are real\n\n## Constraints\n- No real `az` apply available — pytest parses the compiled Bicep (`infra/main.json`) and validates the resource graph\n- Don't relax security beyond what's necessary (do not, for example, allow 0.0.0.0/0 outbound on the node NSG)\n- The cluster was just upgraded from 1.28 to 1.29 — orchestrator/node-pool versions matter\n\n## What a credible response looks like\n1. Read all of `diagnostics/` before editing\n2. Confirm each candidate problem with a specific signal (NSG flow log, role-assignment list, az aks show, etc.)\n3. Apply the smallest fix per real problem\n4. Explain which problems were red herrings and why\n5. Note what CI check would have caught this (e.g. `az deployment what-if`, OPA Conftest, or a Bicep linter rule)\n",
+      "ARCHITECTURE.md": "# Cluster shape\n\n- Single VNet `checkout-vnet` with three subnets (cluster-subnet, ingress-subnet, db-subnet)\n- AKS control plane v1.29 (just upgraded)\n- One system node pool `system` and one user node pool `payments-workers` (Standard_D4s_v5, 3-9 nodes)\n- Identity:\n  - Cluster managed identity: `aksClusterIdentity`\n  - Node-pool kubelet identity: `aksKubeletIdentity`\n  - Role assignments: `Network Contributor` on the MC_ node-resource-group, `AcrPull` on the ACR, `Reader` on the VNet\n- NSGs:\n  - `cluster-subnet-nsg` — applied to the cluster subnet\n  - `ingress-subnet-nsg` — applied to the ingress subnet\n- Add-ons (managed): azurepolicy, omsagent, ingress-appgw\n",
+      "diagnostics/cluster_status.md": "# Cluster status (snapshot from on-call)\n\n## kubectl describe pod (one of the stuck ones)\n```\nEvents:\n  Warning  FailedCreatePodSandBox  Failed to create pod sandbox: rpc error\n  Warning  NetworkNotReady         network is not ready: container runtime network not ready\n```\n\n## kubectl describe svc (ingress LoadBalancer)\n```\nEvents:\n  Warning  CreatingLoadBalancerFailed  failed to create load balancer: AuthorizationFailed:\n    The client 'xxxx' with object id 'xxxx' does not have authorization to perform action\n    'Microsoft.Network/loadBalancers/write' over scope '/subscriptions/.../resourceGroups/MC_...'.\n```\n\n## az aks show (relevant excerpt)\n```\nkubernetesVersion:           1.29.0\nagentPoolProfiles[*].orchestratorVersion: 1.28.5     # mismatch — was bumped to 1.29.0 in the Portal earlier\nidentityProfile.kubeletidentity:    AcrPull only\nidentityProfile.cluster:            (no Network Contributor on MC_)\n```\n\n## Recent NSG flow logs (filtered)\n```\nDENY  outbound TCP 443  from cluster-subnet  to AzureCloud  rule:tightened-443-out\nDENY  outbound TCP 443  from cluster-subnet  to *           rule:tightened-443-out\n```\n\n## VNet route tables\nUnchanged from last good state. UDRs unchanged.\n",
+      "diagnostics/audit_findings.md": "# Audit findings\n\n- The Bicep PR removed the `Network Contributor` role assignment for the cluster managed identity on the MC_ node-resource-group. Without it, AKS cannot create LoadBalancers or NSGs in the managed RG.\n- The Bicep PR added an NSG rule `tightened-443-out` that denies outbound TCP 443 from the cluster subnet. Worker nodes can no longer reach the AKS API server or Microsoft Container Registry.\n- The agent-pool `orchestratorVersion` in Bicep was left at 1.28.5 even though the control plane was upgraded to 1.29.0. AKS requires the node-pool orchestrator to be within one minor of the control-plane version, but mismatches break add-ons that depend on coordinated upgrades.\n- The VNet route tables / UDRs are unchanged — the on-call's first hypothesis ('VNet routing broke') is a red herring.\n",
+      "diagnostics/recent_pr.diff": "diff --git a/infra/main.bicep b/infra/main.bicep\n@@ -38,9 +38,1 @@ resource clusterNetworkContributor 'Microsoft.Authorization/roleAssignments@2022-04-01'\n-resource clusterNetworkContributor 'Microsoft.Authorization/roleAssignments@2022-04-01' = {\n-  name: guid(aks.id, 'NetworkContributor')\n-  scope: nodeResourceGroup\n-  properties: {\n-    principalId: aks.identity.principalId\n-    principalType: 'ServicePrincipal'\n-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions','4d97b98b-1d4f-4787-a291-c67834d212e7')\n-  }\n-}\n@@ -64,2 +56,11 @@ resource clusterSubnetNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01'\n+      {\n+        name: 'tightened-443-out'\n+        properties: {\n+          access: 'Deny'\n+          direction: 'Outbound'\n+          protocol: 'Tcp'\n+          destinationPortRange: '443'\n+          priority: 100\n+        }\n+      }\n",
+      "infra/main.bicep": "// Source-of-truth Bicep. The candidate edits this file (and ideally\n// regenerates infra/main.json via tools/bicep_to_json.py), but the Python\n// test suite reads infra/main.json so the harness stays offline.\n\nparam location string = 'eastus2'\nparam clusterName string = 'checkout-platform'\nparam clusterVersion string = '1.29.0'\nparam nodePoolVersion string = '1.28.5'  // BUG: should be aligned to clusterVersion\nparam nodeResourceGroupName string = 'MC_checkout_${clusterName}_${location}'\n\nresource clusterIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {\n  name: 'aksClusterIdentity'\n  location: location\n}\n\nresource aks 'Microsoft.ContainerService/managedClusters@2024-02-01' = {\n  name: clusterName\n  location: location\n  identity: { type: 'UserAssigned', userAssignedIdentities: { '${clusterIdentity.id}': {} } }\n  properties: {\n    kubernetesVersion: clusterVersion\n    nodeResourceGroup: nodeResourceGroupName\n    agentPoolProfiles: [\n      { name: 'system', count: 3, vmSize: 'Standard_D4s_v5', mode: 'System', orchestratorVersion: nodePoolVersion }\n      { name: 'payments', count: 3, vmSize: 'Standard_D4s_v5', mode: 'User', orchestratorVersion: nodePoolVersion }\n    ]\n  }\n}\n\n// BUG: this role assignment was removed in the recent PR. Without\n// Network Contributor on the MC_ resource group, AKS cannot manage\n// LoadBalancers / Public IPs / NSGs there.\n// resource clusterNetworkContributor ... (deleted)\n\nresource clusterSubnetNsg 'Microsoft.Network/networkSecurityGroups@2023-09-01' = {\n  name: 'cluster-subnet-nsg'\n  location: location\n  properties: {\n    securityRules: [\n      // BUG: this rule was added in the recent PR and denies all 443 outbound.\n      { name: 'tightened-443-out', properties: { access: 'Deny', direction: 'Outbound', protocol: 'Tcp', destinationPortRange: '443', priority: 100, sourceAddressPrefix: '*', destinationAddressPrefix: '*', sourcePortRange: '*' } }\n    ]\n  }\n}\n",
+      "infra/main.json": "{\n  \"$schema\": \"https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#\",\n  \"contentVersion\": \"1.0.0.0\",\n  \"resources\": [\n    {\n      \"type\": \"Microsoft.ManagedIdentity/userAssignedIdentities\",\n      \"name\": \"aksClusterIdentity\",\n      \"apiVersion\": \"2023-01-31\"\n    },\n    {\n      \"type\": \"Microsoft.ContainerService/managedClusters\",\n      \"name\": \"checkout-platform\",\n      \"apiVersion\": \"2024-02-01\",\n      \"properties\": {\n        \"kubernetesVersion\": \"1.29.0\",\n        \"agentPoolProfiles\": [\n          {\"name\": \"system\", \"orchestratorVersion\": \"1.28.5\"},\n          {\"name\": \"payments\", \"orchestratorVersion\": \"1.28.5\"}\n        ]\n      }\n    },\n    {\n      \"type\": \"Microsoft.Network/networkSecurityGroups\",\n      \"name\": \"cluster-subnet-nsg\",\n      \"apiVersion\": \"2023-09-01\",\n      \"properties\": {\n        \"securityRules\": [\n          {\"name\": \"tightened-443-out\", \"properties\": {\"access\": \"Deny\", \"direction\": \"Outbound\", \"protocol\": \"Tcp\", \"destinationPortRange\": \"443\"}}\n        ]\n      }\n    },\n    {\n      \"type\": \"Microsoft.Network/routeTables\",\n      \"name\": \"checkout-rt\",\n      \"apiVersion\": \"2023-09-01\",\n      \"properties\": {\n        \"routes\": [\n          {\"name\": \"default\", \"properties\": {\"addressPrefix\": \"0.0.0.0/0\", \"nextHopType\": \"Internet\"}}\n        ]\n      }\n    }\n  ]\n}\n",
+      "infra_assertions.py": "\"\"\"Helpers for parsing the compiled Bicep JSON under `infra/main.json`.\n\nThe pytest suite imports from here so the parsing logic stays out of\nconftest.py and is reusable from the candidate's own debugging scripts.\n\"\"\"\nfrom __future__ import annotations\n\nimport json\nimport pathlib\nfrom typing import Any\n\nINFRA_JSON = pathlib.Path(__file__).resolve().parent / 'infra' / 'main.json'\n\n\ndef parse_arm(infra_json: pathlib.Path | None = None) -> list[dict[str, Any]]:\n    path = infra_json or INFRA_JSON\n    with path.open('r', encoding='utf-8') as fp:\n        doc = json.load(fp)\n    resources = doc.get('resources') or []\n    return [r for r in resources if isinstance(r, dict)]\n\n\ndef resources_of_type(parsed: list[dict[str, Any]], type_name: str) -> list[dict[str, Any]]:\n    return [r for r in parsed if r.get('type') == type_name]\n\n\nif __name__ == '__main__':\n    arm = parse_arm()\n    print(json.dumps([{r.get('type'): r.get('name')} for r in arm], indent=2))\n",
+      "tools/bicep_to_json.py": "\"\"\"Tiny stub that reminds the candidate to keep main.json in sync.\n\nWe avoid bundling the real bicep CLI (it's ~50MB and platform-specific).\nThe candidate is expected to either:\n  - hand-edit infra/main.json alongside infra/main.bicep, or\n  - re-run `bicep build infra/main.bicep` locally and copy the output.\n\nThe tests only read infra/main.json — keeping both files in sync is part\nof the assessment's communication signal.\n\"\"\"\nimport sys\n\nprint('No bicep CLI bundled in this offline harness. Either:', file=sys.stderr)\nprint('  - hand-edit infra/main.json to match infra/main.bicep, or', file=sys.stderr)\nprint('  - run `bicep build infra/main.bicep` locally and replace infra/main.json.', file=sys.stderr)\nsys.exit(1)\n",
+      "tests/__init__.py": "",
+      "tests/conftest.py": "import sys\nimport pathlib\n\nimport pytest\n\nROOT = pathlib.Path(__file__).resolve().parent.parent\nif str(ROOT) not in sys.path:\n    sys.path.insert(0, str(ROOT))\n\nfrom infra_assertions import parse_arm\n\n\n@pytest.fixture(scope='session')\ndef arm():\n    return parse_arm()\n",
+      "tests/test_aks_identity.py": "from infra_assertions import resources_of_type\n\n\ndef test_cluster_managed_identity_has_network_contributor_on_mc(arm):\n    \"\"\"AKS needs Network Contributor on its node-resource-group to manage LoadBalancers / NSGs / Public IPs.\"\"\"\n    role_assignments = resources_of_type(arm, 'Microsoft.Authorization/roleAssignments')\n    network_contributor_role_id = '4d97b98b-1d4f-4787-a291-c67834d212e7'\n    has_assignment = any(\n        network_contributor_role_id in str((r.get('properties') or {}).get('roleDefinitionId', ''))\n        for r in role_assignments\n    )\n    assert has_assignment, (\n        'Cluster managed identity must have a Network Contributor (4d97b98b-1d4f-4787-a291-c67834d212e7) '\n        'role assignment scoped to the MC_ resource group; without it AKS cannot create LoadBalancers.'\n    )\n",
+      "tests/test_node_pool_version.py": "from infra_assertions import resources_of_type\n\n\ndef test_agent_pool_orchestrator_matches_control_plane(arm):\n    \"\"\"AKS node-pool orchestrator must be within one minor of the control plane.\"\"\"\n    clusters = resources_of_type(arm, 'Microsoft.ContainerService/managedClusters')\n    assert clusters, 'managedClusters resource must exist'\n    cluster = clusters[0]\n    props = cluster.get('properties') or {}\n    cp_version = props.get('kubernetesVersion', '')\n    cp_major_minor = '.'.join(cp_version.split('.')[:2])\n    pools = props.get('agentPoolProfiles') or []\n    for pool in pools:\n        pool_major_minor = '.'.join(str(pool.get('orchestratorVersion', '')).split('.')[:2])\n        assert pool_major_minor == cp_major_minor, (\n            f\"Agent pool {pool.get('name')!r} orchestratorVersion {pool.get('orchestratorVersion')} \"\n            f\"must match control-plane {cp_version}\"\n        )\n",
+      "tests/test_nsg_egress.py": "from infra_assertions import resources_of_type\n\n\ndef test_cluster_subnet_nsg_does_not_block_443_outbound(arm):\n    nsgs = resources_of_type(arm, 'Microsoft.Network/networkSecurityGroups')\n    cluster_nsg = next((n for n in nsgs if n.get('name') == 'cluster-subnet-nsg'), None)\n    assert cluster_nsg is not None, 'cluster-subnet-nsg must exist'\n    rules = (cluster_nsg.get('properties') or {}).get('securityRules', [])\n    bad_rules = []\n    for rule in rules:\n        rprops = (rule.get('properties') or {})\n        if (\n            rprops.get('direction') == 'Outbound'\n            and rprops.get('access') == 'Deny'\n            and (rprops.get('protocol') == 'Tcp' or rprops.get('protocol') == '*')\n            and str(rprops.get('destinationPortRange') or '') in {'443', '*'}\n        ):\n            bad_rules.append(rule.get('name'))\n    assert not bad_rules, (\n        f'cluster-subnet-nsg must not deny outbound TCP 443 (would block AKS API + MCR + STS); '\n        f'offending rule(s): {bad_rules}'\n    )\n",
+      "tests/test_red_herrings.py": "from infra_assertions import resources_of_type\n\n\ndef test_route_table_default_route_unchanged(arm):\n    \"\"\"VNet routing was the on-call's first hypothesis but is a red herring — assert the default route is intact.\"\"\"\n    rts = resources_of_type(arm, 'Microsoft.Network/routeTables')\n    assert rts, 'route table must exist'\n    routes = (rts[0].get('properties') or {}).get('routes', [])\n    has_default = any(\n        (r.get('properties') or {}).get('addressPrefix') == '0.0.0.0/0'\n        for r in routes\n    )\n    assert has_default, 'Default 0.0.0.0/0 route must remain on the cluster route table.'\n",
+      "requirements.txt": "pytest>=8.0.0\n"
+    }
+  },
+  "evaluation_rubric": {
+    "situational_assessment": {
+      "weight": 0.22,
+      "criteria": {
+        "excellent": "Reads RUNBOOK.md, diagnostics/cluster_status.md, diagnostics/audit_findings.md, and diagnostics/recent_pr.diff before editing. Identifies the three real problems (missing Network Contributor on MC_, NSG 443 deny, node-pool/control-plane version mismatch) and recognises the VNet route hypothesis as a red herring. Maps each kubectl/az signal to a specific Bicep resource.",
+        "good": "Finds two of the three real problems but misses one — typically the version mismatch.",
+        "poor": "Edits Bicep without reading the diagnostics, or chases the route-table red herring."
+      }
+    },
+    "prioritisation_judgment": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Restores LoadBalancer creation first by re-adding the Network Contributor role; lifts the 443 outbound deny; aligns node-pool orchestrator with control plane. Defers any non-blocking cleanup. Calls out that `az deployment what-if` or a Conftest policy would have caught this PR shape.",
+        "good": "Sensible order but leaves the version mismatch for 'later' even though add-on coordination depends on it.",
+        "poor": "Starts with cosmetic Bicep refactors or grants the cluster identity Owner on the subscription instead of scoping Network Contributor to MC_."
+      }
+    },
+    "technical_design": {
+      "weight": 0.22,
+      "criteria": {
+        "excellent": "Role assignment is Network Contributor scoped to the MC_ resource group, not the subscription. NSG fix removes the targeted 443 deny without opening all outbound. Node-pool orchestrator matches control-plane minor. Each change is the smallest credible fix.",
+        "good": "Fixes role and NSG correctly but bumps the orchestrator more aggressively than needed (e.g. straight to a preview).",
+        "poor": "Grants Owner on subscription, removes all NSG rules, or rewrites the cluster module instead of patching the affected resources."
+      }
+    },
+    "implementation_quality": {
+      "weight": 0.18,
+      "criteria": {
+        "excellent": "All four pytest files pass. Bicep + infra/main.json are kept in sync — the candidate either edits both or explains why they edited only the JSON for the time-box. Role-assignment GUID for Network Contributor (4d97b98b-1d4f-4787-a291-c67834d212e7) is correct.",
+        "good": "Suite passes but only main.json was edited; the Bicep is left out of sync without explanation.",
+        "poor": "Tests fail or the candidate edits the test files to make them pass."
+      }
+    },
+    "communication_clarity": {
+      "weight": 0.18,
+      "criteria": {
+        "excellent": "Hand-back is structured for the Head of Platform: which problems were real with the diagnostic that proved each, what was changed, what stays risky, and what CI rule would have caught the regression. Plain-language risk framing alongside the technical specifics.",
+        "good": "Clear engineering summary but no proposed CI/policy backstop.",
+        "poor": "Cannot articulate which fix unblocked which symptom or why the version mismatch mattered."
+      }
+    }
+  },
+  "expected_candidate_journey": {
+    "first_8_minutes": [
+      "Read RUNBOOK.md, diagnostics/cluster_status.md, diagnostics/audit_findings.md, and diagnostics/recent_pr.diff before editing.",
+      "Map signals to Bicep resources: AuthorizationFailed on MC_ → missing role assignment, DENY 443 outbound in NSG flow logs → tightened-443-out rule, orchestratorVersion mismatch in `az aks show` → agentPoolProfiles version drift.",
+      "Confirm route tables are unchanged so the 'VNet routing broke' hypothesis is dismissed."
+    ],
+    "minutes_8_to_22": [
+      "Re-add the Network Contributor role assignment scoped to the MC_ resource group.",
+      "Remove the tightened-443-out NSG rule (or replace it with a properly scoped allow if existing org policy requires explicit allow).",
+      "Align agentPoolProfiles[*].orchestratorVersion with kubernetesVersion."
+    ],
+    "final_8_minutes": [
+      "Run pytest until clean.",
+      "Write the hand-back: what was real, what was a red herring, what fix landed where, and the CI/policy gap that allowed this PR to merge."
+    ],
+    "red_flags": [
+      "Grants Owner / Contributor on the entire subscription instead of Network Contributor scoped to MC_.",
+      "Removes every NSG rule on the cluster subnet to 'just unblock' the cluster.",
+      "Bumps the node-pool orchestrator straight to a preview version without justification.",
+      "Edits the test files to make them pass.",
+      "Cannot defend why the role must be scoped to MC_, not the cluster RG."
+    ]
+  },
+  "interviewer_signals": {
+    "strong_positive": [
+      "Quotes specific Bicep resource names (clusterNetworkContributor, cluster-subnet-nsg, agentPoolProfiles) before editing.",
+      "Knows the Network Contributor role definition GUID (4d97b98b-1d4f-4787-a291-c67834d212e7) or looks it up before assigning.",
+      "Frames the NSG fix as 'remove the deny that's blocking AKS API / MCR / STS' rather than 'open all outbound'.",
+      "Connects the AKS 1.29 control-plane upgrade to the agent-pool version drift without being prompted.",
+      "Proposes a CI rule (Conftest, Azure Policy, or `az deployment what-if`) that would have blocked the regression PR.",
+      "Hand-back distinguishes confirmed-real problems from red herrings with the diagnostic that proved each."
+    ],
+    "red_flags": [
+      "Edits Bicep without reading the diagnostics or recent_pr.diff.",
+      "Grants Owner / Contributor at subscription scope to 'just make it work'.",
+      "Removes every NSG rule instead of the targeted deny.",
+      "Touches the route table or UDRs without evidence either was changed.",
+      "Edits the test files instead of the IaC.",
+      "Picks an agent-pool version newer than the control plane."
+    ]
+  },
+  "scoring_hints": {
+    "min_reading_time_seconds": 240
+  },
+  "test_runner": {
+    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "working_dir": "/workspace/deeplight-platform-aks",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
+    "timeout_seconds": 120
+  },
+  "workspace_bootstrap": {
+    "commands": [
+      "python3 -m venv .venv",
+      "./.venv/bin/python -m pip install --upgrade pip",
+      "./.venv/bin/python -m pip install -r requirements.txt"
+    ],
+    "working_dir": "/workspace/deeplight-platform-aks",
+    "timeout_seconds": 240,
+    "must_succeed": true
+  },
+  "role_alignment": {
+    "source_user_email": "sampatel@deeplight.ae",
+    "source_role_name": "Senior Azure Platform Engineer",
+    "source_role_identifier": "workable:CE0F3B4176",
+    "captured_at": "2026-05-04T00:00:00Z",
+    "must_cover": [
+      "Diagnose Azure networking + RBAC + AKS add-on misconfiguration under deployment-freeze pressure.",
+      "Defend Bicep changes as the smallest correct fix without weakening security posture.",
+      "Apply AKS managed-add-on / control-plane / node-pool version coordination judgment.",
+      "Communicate triage outcome (real problems vs. red herrings) to a non-engineering platform lead.",
+      "Identify the CI/policy gap that allowed a regression PR to merge."
+    ],
+    "must_not_cover": [
+      "Service-mesh or observability platform design (Istio, Dapr, App Insights deep config)",
+      "Multi-region active/active AKS topology",
+      "Cost optimisation of node pools (capacity planning, spot mix)",
+      "Application-layer code beyond what the IaC needs to assert"
+    ],
+    "jd_to_signal_map": [
+      {
+        "job_requirement": "Operate AKS clusters under deployment-freeze pressure and triage RBAC, networking, and add-on regressions.",
+        "task_artifact": "diagnostics/cluster_status.md + diagnostics/recent_pr.diff — incident framing with three real problems and one red herring",
+        "rubric_dimension": "situational_assessment"
+      },
+      {
+        "job_requirement": "Apply least-privilege Azure RBAC role assignments on the correct scope (MC_ resource group, not subscription).",
+        "task_artifact": "infra/main.bicep, infra/main.json, tests/test_aks_identity.py — Network Contributor must be scoped to MC_, not subscription",
+        "rubric_dimension": "technical_design"
+      },
+      {
+        "job_requirement": "Maintain AKS control-plane and node-pool version coordination during cluster upgrades.",
+        "task_artifact": "infra/main.bicep, tests/test_node_pool_version.py — agentPoolProfiles[*].orchestratorVersion must match kubernetesVersion minor",
+        "rubric_dimension": "prioritisation_judgment"
+      },
+      {
+        "job_requirement": "Manage NSG rules so platform connectivity (AKS API, MCR, STS) is preserved while attack surface is minimised.",
+        "task_artifact": "infra/main.bicep, tests/test_nsg_egress.py — the tightened-443-out deny must be removed or correctly scoped",
+        "rubric_dimension": "implementation_quality"
+      },
+      {
+        "job_requirement": "Communicate triage outcomes to non-engineering platform leads and propose backstops to prevent recurrence.",
+        "task_artifact": "RUNBOOK.md — hand-back must distinguish confirmed problems from red herrings and propose a CI/policy rule that would have blocked the regression PR",
+        "rubric_dimension": "communication_clarity"
+      }
+    ]
+  },
+  "human_testing_checklist": {
+    "candidate_clarity": true,
+    "repo_boot_ok": true,
+    "tests_collect_ok": true,
+    "baseline_failures_meaningful": true,
+    "rubric_matches_role": true,
+    "timebox_realistic": true
+  }
+}

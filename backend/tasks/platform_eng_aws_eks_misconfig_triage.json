@@ -1,0 +1,189 @@
+{
+  "task_id": "platform_eng_aws_eks_misconfig_triage",
+  "name": "AWS Platform Engineer - EKS Misconfiguration Triage",
+  "role": "platform_engineer",
+  "duration_minutes": 30,
+  "calibration_prompt": "You have 2 minutes. The platform team uses Terraform to manage EKS, VPC, and IAM. Ask Claude to help you reason about a single misconfiguration — when an EKS managed node group's IAM role is missing the AmazonEKSWorkerNodePolicy attachment, what specifically breaks at the node, control-plane, and pod scheduling layers? Show what command or log line you'd inspect first to confirm the failure mode.",
+  "scenario": "You joined Deeplight as a Senior AWS Platform Engineer and were paged into a deployment freeze on your second day.\n\n**Message from the Head of Platform:**\n\n> Our payments-platform EKS cluster has been refusing new pod schedules for 18 hours and three teams' deploys are blocked. We rolled forward a Terraform PR last night and the symptoms started right after.\n>\n> The on-call has narrowed it to four likely problems but they couldn't tell which combination is real:\n> - **VPC**: pods on new nodes can't reach the RDS subnets — looks like the route table or NACL changed,\n> - **EKS node IAM**: the node group's IAM role was 'simplified' in the PR and might be missing required AWS-managed policies,\n> - **Cluster security group**: a SG rule was tightened so worker-node ↔ control-plane communication is now denied,\n> - **Add-ons**: the aws-vpc-cni and coredns versions in the Terraform manifest don't match the cluster version we just upgraded to.\n>\n> The Terraform PR is in `infra/`. The blast radius for any single change is large because we don't have terratest in this repo yet — only a Python suite that parses the HCL and asserts on the resource graph.\n>\n> You have 30 minutes. I need three things:\n> 1. Confirm which of the four problems are real, with the diagnostic that proves it.\n> 2. Apply the smallest credible Terraform changes to unblock pod scheduling without weakening security posture.\n> 3. Tell me which fixes you'd land now, which need follow-up, and what would have caught this in CI.\n\n**Your mission:**\nYou are being assessed on triage discipline (don't fix-and-pray), AWS networking + IAM judgment, and your ability to defend each Terraform change as the smallest correct fix under deployment-freeze pressure. There is no real AWS account in this exercise — the Python test suite parses your Terraform and asserts on the IaC structure.",
+  "repo_structure": {
+    "name": "deeplight-platform-eks",
+    "files": {
+      ".gitignore": ".venv/\n.pytest_cache/\n__pycache__/\n.terraform/\nterraform.tfstate*\n",
+      "README.md": "# Deeplight Platform - EKS Triage\n\nLocal reproduction of a payments-platform EKS deploy freeze. The Terraform under `infra/` describes the VPC, IAM roles, node group, security groups, and EKS add-ons. A Python pytest suite parses the HCL and asserts on the IaC structure — no AWS credentials, no real apply.\n\n## Local workflow\n1. `python3 -m venv .venv && source .venv/bin/activate`\n2. `pip install -r requirements.txt`\n3. `pytest -q --tb=short`\n\nFix the four candidate problems described in `RUNBOOK.md` until the suite is green. Don't add new resources you can't justify — every change should be traceable to a specific failure.\n",
+      "RUNBOOK.md": "# Incident Runbook\n\n## What's broken right now\n- New pods stuck in `ContainerCreating` on new nodes for 18h\n- Three product teams' deploys blocked\n- The on-call narrowed it to four candidate problems (see `diagnostics/cluster_status.md`); not all are real\n\n## Constraints\n- No real AWS apply available — pytest parses the Terraform and validates the resource graph\n- Don't relax security beyond what's necessary (do not, for example, open 0.0.0.0/0 to the cluster SG)\n- The cluster was just upgraded from 1.28 to 1.29 — add-on versions matter\n\n## What a credible response looks like\n1. Read all of `diagnostics/` before editing\n2. Confirm each candidate problem with a specific signal (failed kubectl describe, IAM policy diff, SG rule, etc.)\n3. Apply the smallest fix per real problem\n4. Explain which problems were red herrings and why\n5. Note what CI check would have caught this (e.g. tflint rule, OPA policy, terratest)\n",
+      "ARCHITECTURE.md": "# Cluster shape\n\n- Single VPC `payments-vpc` with three private subnets across AZs (us-east-1a/b/c)\n- EKS control plane v1.29 (just upgraded)\n- One managed node group `payments-workers` (t3.large, 3-9 nodes)\n- IAM:\n  - `payments_eks_cluster_role` — assumed by the EKS service\n  - `payments_eks_node_role` — assumed by EC2 worker instances\n- Security groups:\n  - `payments_cluster_sg` — applied to control plane\n  - `payments_node_sg` — applied to worker nodes\n- Add-ons (managed): aws-vpc-cni, coredns, kube-proxy\n- Pods need to reach RDS in `payments-rds-sg`\n",
+      "diagnostics/cluster_status.md": "# Cluster status (snapshot from on-call)\n\n## kubectl describe nodes (relevant excerpt)\n```\nConditions:\n  Ready             Unknown   KubeletNotReady\nEvents:\n  Warning  FailedAttachVolume   csi-driver-not-found\n  Warning  NetworkUnavailable   node has no NetworkUnavailable condition cleared\n```\n\n## kubectl describe pod (one of the stuck ones)\n```\nEvents:\n  Warning  FailedCreatePodSandBox  Failed to create pod sandbox: rpc error\n  Warning  NetworkPluginNotReady   networkPlugin cni failed: aws-vpc-cni not initialized\n```\n\n## Recent CloudTrail events (filtered)\n```\nAssumeRole: payments_eks_node_role  (EC2 instance)\n  → succeeded\nDescribeInstances: by aws-vpc-cni-controller\n  → AccessDenied (User is not authorized to perform: ec2:DescribeInstances)\n```\n\n## Add-on versions installed (actual)\n```\naws-vpc-cni:    v1.14.1-eksbuild.1   (cluster is on 1.29; this build supports up to 1.28)\ncoredns:        v1.10.1-eksbuild.5   (1.29 supported)\nkube-proxy:     v1.29.0-eksbuild.1   (1.29 supported)\n```\n\n## VPC route table (worker subnet)\nUnchanged from last good state. NACLs unchanged.\n",
+      "diagnostics/audit_findings.md": "# Audit findings\n\n- The Terraform PR removed the `AmazonEKSWorkerNodePolicy` and `AmazonEC2ContainerRegistryReadOnly` policy attachments from `payments_eks_node_role`. Only `AmazonEKS_CNI_Policy` remains.\n- The Terraform PR tightened `payments_node_sg` egress to deny TCP 443 to anywhere (`0.0.0.0/0`). Worker nodes can no longer reach the EKS control-plane endpoint.\n- The aws-vpc-cni add-on version `v1.14.1-eksbuild.1` does not officially support EKS 1.29.\n- The VPC route tables and NACLs are unchanged — the on-call's first hypothesis ('VPC routing broke') is a red herring.\n",
+      "diagnostics/recent_pr.diff": "diff --git a/infra/iam.tf b/infra/iam.tf\n@@ -22,9 +22,2 @@ resource \"aws_iam_role\" \"payments_eks_node_role\" {\n-resource \"aws_iam_role_policy_attachment\" \"node_worker\" {\n-  role       = aws_iam_role.payments_eks_node_role.name\n-  policy_arn = \"arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy\"\n-}\n-resource \"aws_iam_role_policy_attachment\" \"node_ecr\" {\n-  role       = aws_iam_role.payments_eks_node_role.name\n-  policy_arn = \"arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly\"\n-}\n diff --git a/infra/security.tf b/infra/security.tf\n@@ -14,7 +14,7 @@ resource \"aws_security_group\" \"payments_node_sg\" {\n   egress {\n-    description = \"All egress\"\n-    from_port   = 0\n-    to_port     = 0\n-    protocol    = \"-1\"\n-    cidr_blocks = [\"0.0.0.0/0\"]\n+    description = \"Block 443 egress\"\n+    from_port   = 443\n+    to_port     = 443\n+    protocol    = \"tcp\"\n+    cidr_blocks = []\n   }\n }\ndiff --git a/infra/addons.tf b/infra/addons.tf\n@@ -2,5 +2,5 @@ resource \"aws_eks_addon\" \"vpc_cni\" {\n   cluster_name      = aws_eks_cluster.payments.name\n-  addon_version     = \"v1.15.4-eksbuild.1\"\n+  addon_version     = \"v1.14.1-eksbuild.1\"\n   addon_name        = \"vpc-cni\"\n }\n",
+      "infra/main.tf": "terraform {\n  required_version = \">= 1.5.0\"\n  required_providers {\n    aws = { source = \"hashicorp/aws\", version = \">= 5.0\" }\n  }\n}\n\nresource \"aws_eks_cluster\" \"payments\" {\n  name     = \"payments-platform\"\n  role_arn = aws_iam_role.payments_eks_cluster_role.arn\n  version  = \"1.29\"\n\n  vpc_config {\n    subnet_ids              = [\"subnet-aaa\", \"subnet-bbb\", \"subnet-ccc\"]\n    endpoint_private_access = true\n    endpoint_public_access  = false\n    security_group_ids      = [aws_security_group.payments_cluster_sg.id]\n  }\n}\n\nresource \"aws_eks_node_group\" \"payments_workers\" {\n  cluster_name    = aws_eks_cluster.payments.name\n  node_group_name = \"payments-workers\"\n  node_role_arn   = aws_iam_role.payments_eks_node_role.arn\n  subnet_ids      = [\"subnet-aaa\", \"subnet-bbb\", \"subnet-ccc\"]\n  scaling_config {\n    desired_size = 3\n    max_size     = 9\n    min_size     = 3\n  }\n  instance_types = [\"t3.large\"]\n}\n",
+      "infra/iam.tf": "resource \"aws_iam_role\" \"payments_eks_cluster_role\" {\n  name = \"payments_eks_cluster_role\"\n  assume_role_policy = jsonencode({\n    Version   = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Principal = { Service = \"eks.amazonaws.com\" }\n      Action    = \"sts:AssumeRole\"\n    }]\n  })\n}\n\nresource \"aws_iam_role_policy_attachment\" \"cluster_amazon_eks_cluster_policy\" {\n  role       = aws_iam_role.payments_eks_cluster_role.name\n  policy_arn = \"arn:aws:iam::aws:policy/AmazonEKSClusterPolicy\"\n}\n\nresource \"aws_iam_role\" \"payments_eks_node_role\" {\n  name = \"payments_eks_node_role\"\n  assume_role_policy = jsonencode({\n    Version   = \"2012-10-17\"\n    Statement = [{\n      Effect    = \"Allow\"\n      Principal = { Service = \"ec2.amazonaws.com\" }\n      Action    = \"sts:AssumeRole\"\n    }]\n  })\n}\n\n# BUG: AmazonEKSWorkerNodePolicy and AmazonEC2ContainerRegistryReadOnly were\n# removed in the recent PR. The CNI policy alone is not enough for kubelet\n# to register the node or for ECR pulls.\nresource \"aws_iam_role_policy_attachment\" \"node_cni\" {\n  role       = aws_iam_role.payments_eks_node_role.name\n  policy_arn = \"arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy\"\n}\n",
+      "infra/security.tf": "resource \"aws_security_group\" \"payments_cluster_sg\" {\n  name   = \"payments_cluster_sg\"\n  vpc_id = \"vpc-payments\"\n\n  ingress {\n    description     = \"Worker nodes to control plane (HTTPS)\"\n    from_port       = 443\n    to_port         = 443\n    protocol        = \"tcp\"\n    security_groups = [aws_security_group.payments_node_sg.id]\n  }\n\n  egress {\n    from_port   = 0\n    to_port     = 0\n    protocol    = \"-1\"\n    cidr_blocks = [\"0.0.0.0/0\"]\n  }\n}\n\nresource \"aws_security_group\" \"payments_node_sg\" {\n  name   = \"payments_node_sg\"\n  vpc_id = \"vpc-payments\"\n\n  ingress {\n    description     = \"Pod-to-pod within node SG\"\n    from_port       = 0\n    to_port         = 65535\n    protocol        = \"-1\"\n    self            = true\n  }\n\n  # BUG: this egress block was changed in the recent PR to deny 443 to all\n  # destinations. Worker nodes need 443 to reach the EKS control plane and ECR.\n  egress {\n    description = \"Block 443 egress\"\n    from_port   = 443\n    to_port     = 443\n    protocol    = \"tcp\"\n    cidr_blocks = []\n  }\n}\n",
+      "infra/addons.tf": "# BUG: v1.14.1-eksbuild.1 of aws-vpc-cni is for EKS <= 1.28. The cluster was\n# upgraded to 1.29 — this version does not officially support 1.29 control\n# planes and is the reason CNI is failing to initialize on new nodes.\nresource \"aws_eks_addon\" \"vpc_cni\" {\n  cluster_name  = aws_eks_cluster.payments.name\n  addon_name    = \"vpc-cni\"\n  addon_version = \"v1.14.1-eksbuild.1\"\n}\n\nresource \"aws_eks_addon\" \"coredns\" {\n  cluster_name  = aws_eks_cluster.payments.name\n  addon_name    = \"coredns\"\n  addon_version = \"v1.10.1-eksbuild.5\"\n}\n\nresource \"aws_eks_addon\" \"kube_proxy\" {\n  cluster_name  = aws_eks_cluster.payments.name\n  addon_name    = \"kube-proxy\"\n  addon_version = \"v1.29.0-eksbuild.1\"\n}\n",
+      "infra/vpc.tf": "# Unchanged in the recent PR. Included so the candidate can verify the\n# 'VPC routing broke' hypothesis is a red herring without leaving the repo.\nresource \"aws_route_table\" \"workers\" {\n  vpc_id = \"vpc-payments\"\n\n  route {\n    cidr_block = \"0.0.0.0/0\"\n    nat_gateway_id = \"nat-payments\"\n  }\n}\n\nresource \"aws_route_table_association\" \"workers_a\" {\n  subnet_id      = \"subnet-aaa\"\n  route_table_id = aws_route_table.workers.id\n}\nresource \"aws_route_table_association\" \"workers_b\" {\n  subnet_id      = \"subnet-bbb\"\n  route_table_id = aws_route_table.workers.id\n}\nresource \"aws_route_table_association\" \"workers_c\" {\n  subnet_id      = \"subnet-ccc\"\n  route_table_id = aws_route_table.workers.id\n}\n",
+      "infra_assertions.py": "\"\"\"Shared helpers for parsing the Terraform under `infra/` into a resource graph.\n\nThe pytest suite imports from here so the parsing logic stays out of conftest.py\nand is reusable from the candidate's own debugging scripts.\n\"\"\"\nfrom __future__ import annotations\n\nimport pathlib\nfrom typing import Any\n\nimport hcl2\n\nINFRA_DIR = pathlib.Path(__file__).resolve().parent / 'infra'\n\n\ndef _strip(value: Any) -> Any:\n    \"\"\"python-hcl2 returns identifier and string tokens with their literal quotes.\n\n    Strip wrapping double-quotes so callers can compare against plain strings.\n    Recurses into dicts and lists.\n    \"\"\"\n    if isinstance(value, str):\n        if len(value) >= 2 and value[0] == '\"' and value[-1] == '\"':\n            return value[1:-1]\n        return value\n    if isinstance(value, list):\n        return [_strip(v) for v in value]\n    if isinstance(value, dict):\n        return {_strip(k): _strip(v) for k, v in value.items()}\n    return value\n\n\ndef parse_infra(infra_dir: pathlib.Path | None = None) -> dict[str, dict[str, Any]]:\n    \"\"\"Parse every .tf file in infra/ and return a flat {resource_type: {name: body}} dict.\"\"\"\n    root = infra_dir or INFRA_DIR\n    parsed: dict[str, dict[str, Any]] = {}\n    for tf in sorted(root.glob('*.tf')):\n        with tf.open('r', encoding='utf-8') as fp:\n            doc = hcl2.load(fp)\n        for resource_block in doc.get('resource', []):\n            for resource_type, by_name in resource_block.items():\n                rt = _strip(resource_type)\n                stripped_by_name = {_strip(name): _strip(body) for name, body in by_name.items()}\n                parsed.setdefault(rt, {}).update(stripped_by_name)\n    return parsed\n\n\ndef policy_attachments_for_role(parsed: dict[str, Any], role_name: str) -> list[str]:\n    arns: list[str] = []\n    for _, attach in parsed.get('aws_iam_role_policy_attachment', {}).items():\n        target_role = attach.get('role')\n        if isinstance(target_role, list):\n            target_role = target_role[0] if target_role else ''\n        if isinstance(target_role, str) and role_name in target_role:\n            policy_arn = attach.get('policy_arn')\n            if isinstance(policy_arn, list):\n                policy_arn = policy_arn[0] if policy_arn else ''\n            if isinstance(policy_arn, str):\n                arns.append(policy_arn)\n    return arns\n\n\nif __name__ == '__main__':\n    import json as _json\n    print(_json.dumps({k: list(v.keys()) for k, v in parse_infra().items()}, indent=2))\n",
+      "tests/__init__.py": "",
+      "tests/conftest.py": "import sys\nimport pathlib\n\nimport pytest\n\nROOT = pathlib.Path(__file__).resolve().parent.parent\nif str(ROOT) not in sys.path:\n    sys.path.insert(0, str(ROOT))\n\nfrom infra_assertions import parse_infra\n\n\n@pytest.fixture(scope='session')\ndef terraform():\n    return parse_infra()\n",
+      "tests/test_node_iam.py": "from infra_assertions import policy_attachments_for_role\n\n\ndef test_node_role_has_worker_node_policy(terraform):\n    arns = policy_attachments_for_role(terraform, 'payments_eks_node_role')\n    assert any('AmazonEKSWorkerNodePolicy' in a for a in arns), (\n        'Worker IAM role must attach AmazonEKSWorkerNodePolicy or kubelet cannot register the node.'\n    )\n\n\ndef test_node_role_has_ecr_readonly(terraform):\n    arns = policy_attachments_for_role(terraform, 'payments_eks_node_role')\n    assert any('AmazonEC2ContainerRegistryReadOnly' in a for a in arns), (\n        'Worker IAM role must attach AmazonEC2ContainerRegistryReadOnly so kubelet can pull images from ECR.'\n    )\n\n\ndef test_node_role_keeps_cni_policy(terraform):\n    arns = policy_attachments_for_role(terraform, 'payments_eks_node_role')\n    assert any('AmazonEKS_CNI_Policy' in a for a in arns), (\n        'Worker IAM role must keep AmazonEKS_CNI_Policy for the aws-vpc-cni controller.'\n    )\n",
+      "tests/test_security_groups.py": "def test_node_sg_allows_443_egress_to_control_plane(terraform):\n    sg = terraform.get('aws_security_group', {}).get('payments_node_sg')\n    assert sg is not None, 'payments_node_sg must exist'\n    egress = sg.get('egress')\n    if isinstance(egress, dict):\n        egress = [egress]\n    egress = egress or []\n    blocks_443 = []\n    for rule in egress:\n        from_port = rule.get('from_port')\n        to_port = rule.get('to_port')\n        if isinstance(from_port, list):\n            from_port = from_port[0]\n        if isinstance(to_port, list):\n            to_port = to_port[0]\n        if from_port in (443, 0) and to_port in (443, 0, 65535):\n            cidrs = rule.get('cidr_blocks') or []\n            if isinstance(cidrs, list) and cidrs and cidrs != [[]]:\n                blocks_443.append(rule)\n    assert blocks_443, (\n        'Worker SG must allow TCP 443 egress to reach the EKS control plane / ECR / STS endpoints.'\n    )\n",
+      "tests/test_addons.py": "import re\n\n\ndef test_vpc_cni_addon_version_supports_1_29(terraform):\n    addon = terraform.get('aws_eks_addon', {}).get('vpc_cni')\n    assert addon is not None, 'aws-vpc-cni add-on must be declared'\n    version_value = addon.get('addon_version')\n    if isinstance(version_value, list):\n        version_value = version_value[0]\n    match = re.match(r'v(\\d+)\\.(\\d+)\\.', str(version_value or ''))\n    assert match, f'Unexpected version format: {version_value!r}'\n    major, minor = int(match.group(1)), int(match.group(2))\n    # v1.15+ is the minimum supported by EKS 1.29 (see AWS add-on compatibility matrix).\n    assert (major, minor) >= (1, 15), (\n        f'aws-vpc-cni {version_value} does not support EKS 1.29; bump to v1.15.x or newer.'\n    )\n",
+      "tests/test_red_herrings.py": "def test_route_table_default_route_unchanged(terraform):\n    \"\"\"VPC routing was the on-call's first hypothesis but is a red herring — assert it's intact.\"\"\"\n    rt = terraform.get('aws_route_table', {}).get('workers')\n    assert rt is not None, 'workers route table must exist'\n    routes = rt.get('route') or []\n    if isinstance(routes, dict):\n        routes = [routes]\n    has_default = any(\n        (r.get('cidr_block') == '0.0.0.0/0' if not isinstance(r.get('cidr_block'), list) else r.get('cidr_block')[0] == '0.0.0.0/0')\n        for r in routes\n    )\n    assert has_default, 'Default 0.0.0.0/0 route via NAT must remain on the workers route table.'\n",
+      "requirements.txt": "pytest>=8.0.0\npython-hcl2>=4.3.4\n"
+    }
+  },
+  "evaluation_rubric": {
+    "situational_assessment": {
+      "weight": 0.22,
+      "criteria": {
+        "excellent": "Reads RUNBOOK.md, diagnostics/cluster_status.md, diagnostics/audit_findings.md, and diagnostics/recent_pr.diff before editing. Identifies the three real problems (missing IAM policies, blocked 443 egress, outdated CNI add-on) and recognises the VPC route hypothesis as a red herring. Maps each symptom in the kubectl output to a specific Terraform resource.",
+        "good": "Finds two of the three real problems but misses one — typically either the add-on version or the SG egress restriction.",
+        "poor": "Edits Terraform without reading the diagnostics, or chases the VPC routing red herring."
+      }
+    },
+    "prioritisation_judgment": {
+      "weight": 0.2,
+      "criteria": {
+        "excellent": "Restores pod scheduling first by re-adding AmazonEKSWorkerNodePolicy + AmazonEC2ContainerRegistryReadOnly and unblocking 443 egress; then bumps the CNI add-on. Defers any non-blocking cleanup. Calls out that there should be a tflint/OPA rule preventing this PR shape from ever merging.",
+        "good": "Picks a sensible order but leaves the CNI version mismatch for 'later' even though pods can't initialise networking without it.",
+        "poor": "Starts with cosmetic Terraform refactors or replaces the security group rules with overly-broad allowances (egress 0.0.0.0/0 on all ports) instead of fixing the targeted block."
+      }
+    },
+    "technical_design": {
+      "weight": 0.22,
+      "criteria": {
+        "excellent": "IAM fix re-attaches both managed policies (kubelet + ECR pulls) and keeps the existing CNI policy. SG fix permits TCP 443 egress to the control plane / ECR / STS endpoints without opening all ports. CNI add-on bumped to v1.15.x or newer (the minimum EKS 1.29 supports). Each change is the smallest credible fix.",
+        "good": "Fixes IAM and SG correctly but picks a CNI version that is too aggressive (e.g. latest preview) without explaining why.",
+        "poor": "Opens egress 0.0.0.0/0 on all ports, attaches AdministratorAccess to the node role, or rewrites the cluster module instead of patching the affected resources."
+      }
+    },
+    "implementation_quality": {
+      "weight": 0.18,
+      "criteria": {
+        "excellent": "All four pytest files pass. Terraform is syntactically valid and parses with python-hcl2. No unrelated resources changed. Egress rule is targeted at 443/tcp.",
+        "good": "Suite passes but with stylistic noise — for example unrelated formatting changes to resources that didn't need to be touched.",
+        "poor": "Tests fail or the candidate edits the test files to make them pass instead of fixing the IaC."
+      }
+    },
+    "communication_clarity": {
+      "weight": 0.18,
+      "criteria": {
+        "excellent": "Hand-back is structured for the Head of Platform: which problems were real with the diagnostic that proved each, what was changed, what stays risky, and what CI rule would have caught the regression. Plain-language risk framing alongside the technical specifics.",
+        "good": "Clear engineering summary but no proposed CI/policy backstop to prevent recurrence.",
+        "poor": "Cannot articulate which fix unblocked which symptom or why the CNI add-on version mattered."
+      }
+    }
+  },
+  "expected_candidate_journey": {
+    "first_8_minutes": [
+      "Read RUNBOOK.md, diagnostics/cluster_status.md, diagnostics/audit_findings.md, and diagnostics/recent_pr.diff before editing.",
+      "Map kubectl events to Terraform resources: NetworkPluginNotReady → CNI add-on, AccessDenied (DescribeInstances) → node IAM, FailedCreatePodSandBox → SG egress.",
+      "Confirm the VPC route table is unchanged so the 'routing broke' hypothesis is dismissed."
+    ],
+    "minutes_8_to_22": [
+      "Re-attach AmazonEKSWorkerNodePolicy and AmazonEC2ContainerRegistryReadOnly to payments_eks_node_role.",
+      "Replace the targeted 443-block egress rule with an allow rule scoped to 443/tcp out (or restore the prior all-egress block if defensible).",
+      "Bump aws_eks_addon.vpc_cni to a version that supports EKS 1.29 (v1.15.x+)."
+    ],
+    "final_8_minutes": [
+      "Run pytest until clean.",
+      "Write the hand-back: what was real, what was a red herring, what fix landed where, and the CI/policy gap that allowed this PR to merge."
+    ],
+    "red_flags": [
+      "Opens egress 0.0.0.0/0 on all ports to 'just unblock' the cluster.",
+      "Attaches AdministratorAccess or PowerUserAccess to payments_eks_node_role.",
+      "Changes VPC routes or NACLs that aren't related to any real problem.",
+      "Edits the test files to make them pass.",
+      "Cannot defend why a specific CNI version is the minimum for EKS 1.29."
+    ]
+  },
+  "interviewer_signals": {
+    "strong_positive": [
+      "Quotes specific Terraform resource names (payments_eks_node_role, payments_node_sg, aws_eks_addon.vpc_cni) before editing.",
+      "Identifies the VPC route-table hypothesis as a red herring with a specific signal from the diagnostics.",
+      "Frames the security-group fix as 'least-privilege egress to control plane / ECR / STS' rather than 'open egress'.",
+      "Connects the EKS 1.29 upgrade to the CNI add-on compatibility matrix without being prompted.",
+      "Proposes a tflint or OPA rule that would have caught the regression PR before merge.",
+      "Hand-back distinguishes confirmed-real problems from red herrings with the diagnostic that proved each."
+    ],
+    "red_flags": [
+      "Edits Terraform without reading the diagnostics or the recent_pr.diff.",
+      "Replaces the targeted egress block with `cidr_blocks = [\"0.0.0.0/0\"]` on all ports.",
+      "Attaches AdministratorAccess or PowerUserAccess to the node role to 'just make it work'.",
+      "Modifies the VPC route table or NACLs without evidence either was changed.",
+      "Changes the test files instead of the IaC.",
+      "Picks an aws-vpc-cni preview/beta version without explaining why."
+    ]
+  },
+  "scoring_hints": {
+    "min_reading_time_seconds": 240
+  },
+  "test_runner": {
+    "command": "./.venv/bin/python -m pytest -q --tb=short",
+    "working_dir": "/workspace/deeplight-platform-eks",
+    "parse_pattern": "(?P<passed>\\d+)\\s+passed(?:,\\s+(?P<failed>\\d+)\\s+failed)?",
+    "timeout_seconds": 120
+  },
+  "workspace_bootstrap": {
+    "commands": [
+      "python3 -m venv .venv",
+      "./.venv/bin/python -m pip install --upgrade pip",
+      "./.venv/bin/python -m pip install -r requirements.txt"
+    ],
+    "working_dir": "/workspace/deeplight-platform-eks",
+    "timeout_seconds": 240,
+    "must_succeed": true
+  },
+  "role_alignment": {
+    "source_user_email": "sampatel@deeplight.ae",
+    "source_role_name": "Senior AWS Platform Engineer",
+    "source_role_identifier": "workable:B9E7FE0FD6",
+    "captured_at": "2026-05-04T00:00:00Z",
+    "must_cover": [
+      "Diagnose AWS networking + IAM + EKS add-on misconfiguration under deployment-freeze pressure.",
+      "Defend Terraform changes as the smallest correct fix without weakening security posture.",
+      "Apply EKS managed-add-on version compatibility judgment for 1.29 control planes.",
+      "Communicate triage outcome (real problems vs. red herrings) to a non-engineering platform lead.",
+      "Identify the CI/policy gap that allowed a regression PR to merge."
+    ],
+    "must_not_cover": [
+      "Service-mesh or observability platform design",
+      "Multi-region active/active EKS topology",
+      "Cost optimisation of node groups (capacity planning, Karpenter, spot mix)",
+      "Application-layer code beyond what the IaC needs to assert"
+    ],
+    "jd_to_signal_map": [
+      {
+        "job_requirement": "Operate AWS EKS clusters under deployment-freeze pressure and triage IAM, networking, and add-on regressions.",
+        "task_artifact": "diagnostics/cluster_status.md + diagnostics/recent_pr.diff — incident framing with three real problems and one red herring",
+        "rubric_dimension": "situational_assessment"
+      },
+      {
+        "job_requirement": "Apply least-blast-radius fixes to production IaC without weakening security posture.",
+        "task_artifact": "infra/security.tf, infra/iam.tf — fixes must be the smallest credible change, not broad allow-all rules",
+        "rubric_dimension": "prioritisation_judgment"
+      },
+      {
+        "job_requirement": "Maintain EKS managed-add-on version compatibility with the cluster control-plane version.",
+        "task_artifact": "infra/addons.tf — aws-vpc-cni v1.14.1 must be bumped to v1.15.x+ for EKS 1.29; tests/test_addons.py asserts the minimum version",
+        "rubric_dimension": "technical_design"
+      },
+      {
+        "job_requirement": "Correctly attach AWS-managed IAM policies for EKS worker node groups and ECR pulls.",
+        "task_artifact": "infra/iam.tf — AmazonEKSWorkerNodePolicy and AmazonEC2ContainerRegistryReadOnly must be re-attached; tests/test_node_iam.py asserts each",
+        "rubric_dimension": "implementation_quality"
+      },
+      {
+        "job_requirement": "Communicate triage outcomes to non-engineering platform leads and propose backstops to prevent recurrence.",
+        "task_artifact": "RUNBOOK.md — hand-back must distinguish confirmed problems from red herrings and propose a CI/policy rule that would have blocked the regression PR",
+        "rubric_dimension": "communication_clarity"
+      }
+    ]
+  },
+  "human_testing_checklist": {
+    "candidate_clarity": true,
+    "repo_boot_ok": true,
+    "tests_collect_ok": true,
+    "baseline_failures_meaningful": true,
+    "rubric_matches_role": true,
+    "timebox_realistic": true
+  }
+}
