@@ -270,16 +270,16 @@ def test_tool_call_dispatches_and_emits_result(db):
             )
         )
 
-    # Tool call lifecycle frames: 9 (start), a (delta), b (end), c (result).
-    starts = [f for f in frames if f.startswith("9:")]
-    deltas = [f for f in frames if f.startswith("a:")]
-    ends = [f for f in frames if f.startswith("b:")]
-    results = [f for f in frames if f.startswith("c:")]
-    assert len(starts) == 1 and len(ends) == 1 and len(results) == 1
+    # AI SDK v3 tool-call lifecycle frames: b (streaming-start),
+    # c (args delta), 9 (complete tool_call), a (tool_result).
+    streaming_starts = [f for f in frames if f.startswith("b:")]
+    deltas = [f for f in frames if f.startswith("c:")]
+    completes = [f for f in frames if f.startswith("9:")]
+    results = [f for f in frames if f.startswith("a:")]
+    assert len(streaming_starts) == 1 and len(completes) == 1 and len(results) == 1
     assert deltas, "expected at least one args delta"
     result_payload = json.loads(results[0][2:])
     assert result_payload["toolCallId"] == "toolu_001"
-    assert "isError" not in result_payload
     # The dispatched search_applications must return a list of candidate rows.
     assert isinstance(result_payload["result"], list)
     assert len(result_payload["result"]) == 1
@@ -321,10 +321,15 @@ def test_tool_error_emits_is_error_frame(db):
             )
         )
 
+    # In AI SDK v3 protocol, tool errors flow through the tool_result
+    # payload itself — there's no isError flag at this level. We surface
+    # errors as ``{"error": "...", "tool": "..."}`` inside ``result``.
     error_results = [
         f
         for f in frames
-        if f.startswith("c:") and json.loads(f[2:]).get("isError") is True
+        if f.startswith("a:")
+        and isinstance(json.loads(f[2:]).get("result"), dict)
+        and "error" in json.loads(f[2:])["result"]
     ]
     assert len(error_results) == 1
 

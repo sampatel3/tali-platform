@@ -1,26 +1,33 @@
 """Wire-format adapter: Anthropic stream events -> AI SDK Data Stream Protocol.
 
-The frontend uses ``@assistant-ui/react`` (or Vercel AI SDK), both of which
-speak the AI SDK Data Stream Protocol — newline-delimited tagged frames
-over SSE. Every line looks like ``<type>:<json>\\n`` where ``type`` is a
-single ASCII character or short string. This adapter consumes Anthropic's
-streaming Messages API events and emits the equivalent frames so the
-React side never has to touch Anthropic's wire shape directly.
+The React side uses Vercel AI SDK's ``useChat`` (via ``ai@3.x``) — or the
+``@assistant-ui/react`` adapter on top — both of which speak the v3 Data
+Stream Protocol: newline-delimited tagged frames over
+``Content-Type: text/event-stream``. Every line is ``<prefix>:<json>\\n``.
+
+This adapter consumes Anthropic's streaming Messages API events and emits
+the equivalent frames so the React side never has to know about
+Anthropic's wire shape.
 
 Reference: https://sdk.vercel.ai/docs/ai-sdk-ui/stream-protocol#data-stream-protocol
 
-Frames we emit (subset of the protocol):
-  ``f`` start-step (assistant message id)
-  ``0`` text-delta (one token)
-  ``9`` tool-call-start (tool_use block start)
-  ``a`` tool-call-delta (per-token JSON args delta)
-  ``b`` tool-call-end
-  ``c`` tool-call-result (we emit one once we've run the tool)
-  ``e`` finish-step (stop_reason + usage)
-  ``d`` finish-message (terminal frame)
-  ``2`` data (free-form JSON for our own server-side breadcrumbs:
-        conversation_id assignments, citations, etc.)
-  ``3`` error
+Frames we emit (subset of the v3 protocol):
+  ``f`` start-step                  ``{"messageId": "..."}``
+  ``0`` text-delta                  string
+  ``b`` tool-call-streaming-start   ``{toolCallId, toolName}``
+  ``c`` tool-call-delta             ``{toolCallId, argsTextDelta}``
+  ``9`` tool-call (complete)        ``{toolCallId, toolName, args}``
+  ``a`` tool-result                 ``{toolCallId, result}``
+  ``e`` finish-step                 ``{finishReason, usage, isContinued}``
+  ``d`` finish-message              ``{finishReason, usage}``
+  ``2`` data                        array of JSON (we use this to publish
+                                    the conversation_id back to React)
+  ``3`` error                       string
+
+Earlier drafts of this file used ``9/a/b/c`` for the streaming-start /
+delta / end / result pairs respectively — that order matched my reading
+of an early spec but **not** the actual ``ai`` SDK runtime. The mapping
+above is verified against the v3 useChat client.
 """
 
 from __future__ import annotations
@@ -44,62 +51,68 @@ class Frame:
         return self.body.encode("utf-8")
 
 
+def start_step(*, message_id: str) -> Frame:
+    """``f:`` — emit at the start of every Anthropic round."""
+    return Frame(_frame("f", {"messageId": message_id}))
+
+
 def text_delta(delta: str) -> Frame:
+    """``0:`` — one text token."""
     return Frame(_frame("0", delta))
 
 
-def tool_call_start(*, tool_call_id: str, tool_name: str) -> Frame:
-    return Frame(
-        _frame(
-            "9",
-            {
-                "toolCallId": tool_call_id,
-                "toolName": tool_name,
-            },
-        )
-    )
-
-
-def tool_call_delta(*, tool_call_id: str, args_delta: str) -> Frame:
-    return Frame(
-        _frame(
-            "a",
-            {
-                "toolCallId": tool_call_id,
-                "argsTextDelta": args_delta,
-            },
-        )
-    )
-
-
-def tool_call_end(*, tool_call_id: str, args: dict[str, Any]) -> Frame:
+def tool_call_streaming_start(*, tool_call_id: str, tool_name: str) -> Frame:
+    """``b:`` — start of a streamed tool call. Emitted on Anthropic's
+    ``content_block_start`` for a ``tool_use`` block."""
     return Frame(
         _frame(
             "b",
-            {
-                "toolCallId": tool_call_id,
-                "args": args,
-            },
+            {"toolCallId": tool_call_id, "toolName": tool_name},
         )
     )
 
 
-def tool_call_result(*, tool_call_id: str, result: Any, is_error: bool = False) -> Frame:
-    payload: dict[str, Any] = {
-        "toolCallId": tool_call_id,
-        "result": result,
-    }
-    if is_error:
-        payload["isError"] = True
-    return Frame(_frame("c", payload))
+def tool_call_delta(*, tool_call_id: str, args_text_delta: str) -> Frame:
+    """``c:`` — partial JSON args delta during streaming."""
+    return Frame(
+        _frame(
+            "c",
+            {"toolCallId": tool_call_id, "argsTextDelta": args_text_delta},
+        )
+    )
+
+
+def tool_call(*, tool_call_id: str, tool_name: str, args: dict[str, Any]) -> Frame:
+    """``9:`` — final, complete tool call with parsed args. Emitted on
+    Anthropic's ``content_block_stop`` for a ``tool_use`` block."""
+    return Frame(
+        _frame(
+            "9",
+            {"toolCallId": tool_call_id, "toolName": tool_name, "args": args},
+        )
+    )
+
+
+def tool_result(*, tool_call_id: str, result: Any) -> Frame:
+    """``a:`` — tool execution result (server-side dispatch). For errors,
+    pass a result like ``{"error": "...", "tool": "..."}``; the v3 protocol
+    doesn't have a dedicated ``isError`` flag at this level."""
+    return Frame(
+        _frame(
+            "a",
+            {"toolCallId": tool_call_id, "result": result},
+        )
+    )
 
 
 def data(value: dict[str, Any]) -> Frame:
-    """Free-form server-side data. Use sparingly — frontend has to opt in."""
+    """``2:`` — server-side data payload (e.g. conversation_id). Frontend
+    has to opt in to read these via ``useChat``'s ``data`` field."""
     return Frame(_frame("2", [value]))
 
 
 def error(message: str) -> Frame:
+    """``3:`` — terminal error string."""
     return Frame(_frame("3", message))
 
 
@@ -129,7 +142,7 @@ def finish_message(*, stop_reason: str | None, usage: dict[str, int] | None) -> 
 
 
 def _normalize_stop(stop_reason: str | None) -> str:
-    """Map Anthropic stop reasons to AI SDK finishReason vocabulary."""
+    """Map Anthropic stop reasons to AI SDK ``finishReason`` vocabulary."""
     if stop_reason in {"end_turn", "stop_sequence"}:
         return "stop"
     if stop_reason == "max_tokens":

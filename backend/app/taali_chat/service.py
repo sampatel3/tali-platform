@@ -196,6 +196,11 @@ def run_chat_turn(
     messages: list[dict[str, Any]] = list(history)
 
     for round_index in range(MAX_TOOL_ROUNDS):
+        # Each round is a fresh "step" in AI SDK terms; the message id is
+        # synthetic but useful for the React client when annotating.
+        yield streaming.start_step(
+            message_id=f"msg-{conversation.id}-{uuid.uuid4().hex[:8]}"
+        )
         try:
             assistant_blocks, stop_reason, round_usage = yield from _stream_one_round(
                 client=client,
@@ -247,9 +252,7 @@ def run_chat_turn(
                 logger.exception("Tool %s failed: %s", name, exc)
                 result = {"error": str(exc), "tool": name}
                 is_error = True
-            yield streaming.tool_call_result(
-                tool_call_id=tool_call_id, result=result, is_error=is_error
-            )
+            yield streaming.tool_result(tool_call_id=tool_call_id, result=result)
             tool_results.append(
                 {
                     "type": "tool_result",
@@ -366,7 +369,7 @@ def _stream_one_round(
                     tool_id = block.id
                     tool_args_buffer[tool_id] = ""
                     tool_names[tool_id] = block.name
-                    yield streaming.tool_call_start(
+                    yield streaming.tool_call_streaming_start(
                         tool_call_id=tool_id, tool_name=block.name
                     )
 
@@ -386,7 +389,7 @@ def _stream_one_round(
                     partial = delta.partial_json or ""
                     tool_args_buffer[tool_id] = tool_args_buffer.get(tool_id, "") + partial
                     yield streaming.tool_call_delta(
-                        tool_call_id=tool_id, args_delta=partial
+                        tool_call_id=tool_id, args_text_delta=partial
                     )
 
             elif etype == "content_block_stop":
@@ -398,7 +401,10 @@ def _stream_one_round(
                         args = json.loads(raw) if raw else {}
                     except json.JSONDecodeError:
                         args = {}
-                    yield streaming.tool_call_end(tool_call_id=tool_id, args=args)
+                    name = tool_names.get(tool_id, "")
+                    yield streaming.tool_call(
+                        tool_call_id=tool_id, tool_name=name, args=args
+                    )
 
         # Final message snapshot.
         final = stream.get_final_message()
