@@ -5118,6 +5118,76 @@ body.interview-view .page {
   color: #fff;
 }
 
+.wt-value {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.4fr);
+  gap: 22px;
+  padding: 16px 20px;
+  margin-bottom: 14px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-sm);
+}
+
+.wt-value-head {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.wt-value-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--purple);
+}
+
+.wt-value-headline {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.45;
+  font-weight: 500;
+}
+
+.wt-value-outcomes {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  min-width: 0;
+}
+
+.wt-value-outcomes li {
+  position: relative;
+  padding-left: 18px;
+  color: var(--ink-2);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.wt-value-outcomes li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--purple);
+}
+
+@media (max-width: 768px) {
+  .wt-value {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+}
+
 .wt-frame {
   overflow: hidden;
   background: var(--bg-2);

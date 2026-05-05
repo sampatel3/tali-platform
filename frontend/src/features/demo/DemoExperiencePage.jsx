@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useRef, useState } from 'react';
 
 import { assessments as assessmentsApi } from '../../shared/api';
 import { CandidateMiniNav, MarketingNav } from '../../shared/layout/TaaliLayout';
@@ -48,11 +48,66 @@ const PANE_NARRATIVE = {
   workspace: 'See exactly what candidates work in.',
 };
 
+// Slim "why this matters to a recruiter" caption above each pane. Headline
+// frames what the recruiter gets out of it; outcomes are the placement /
+// time-saving / client-trust wins, not feature lists. Three outcomes max so
+// the strip stays one row and never pushes the iframe below the fold.
+const PANE_VALUE = {
+  jobs: {
+    headline: 'Stop juggling tabs to know where every role stands.',
+    outcomes: [
+      'See pipeline volume per role at a glance',
+      'Spot stalled roles before your client asks',
+      'No double-entry — Workable stays the source of truth',
+    ],
+  },
+  candidates: {
+    headline: 'Walk in with a ranked shortlist instead of a CV pile.',
+    outcomes: [
+      'Every CV scored against the role the moment it lands',
+      'Pre-screen weeds out the obvious nos for you',
+      'Search in plain English, not boolean strings',
+    ],
+  },
+  chat: {
+    headline: 'Pull a shortlist for a new brief in seconds, not hours.',
+    outcomes: [
+      'Reuse every past placement and search you’ve done',
+      'No saved searches to maintain or remember',
+      'Answers come with the candidates attached',
+    ],
+  },
+  workspace: {
+    headline: 'Show your client the assessment they’re actually paying for.',
+    outcomes: [
+      'Real coding work, not multiple-choice quizzes',
+      'Same workspace candidates use — no installs, no excuses',
+      'Builds trust with technical hiring managers',
+    ],
+  },
+  profile: {
+    headline: 'Send a candidate to your client without writing a 30-line email.',
+    outcomes: [
+      'One link, one clear verdict — your client knows what to do',
+      'Internal scoring and recruiter notes stay internal',
+      'Looks more polished than the PDF reports your competitors send',
+    ],
+  },
+};
+
 export const DemoExperiencePage = ({ onNavigate }) => {
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState('');
   const [submittedLead, setSubmittedLead] = useState(null);
   const [activePane, setActivePane] = useState('jobs');
+
+  // One-shot guard: the validator can only reset a given iframe once. The
+  // iframe is sandboxed (allow-scripts allow-same-origin) so even if it
+  // navigates somewhere unexpected, the blast radius is the iframe itself.
+  // Without this guard, a redirect inside the iframe (e.g. a route that
+  // doesn't recognise showcase=1 yet) ping-pongs against frame.src = pane.src
+  // and the user sees the showcase flash.
+  const resetCountsRef = useRef(new Map());
 
   const updateField = (field) => (event) => {
     const value = event.target.type === 'checkbox' ? event.target.checked : event.target.value;
@@ -96,43 +151,62 @@ export const DemoExperiencePage = ({ onNavigate }) => {
     const frame = event.currentTarget;
     if (typeof window === 'undefined') return;
 
+    let frameHref;
     try {
-      const frameUrl = new URL(frame.contentWindow?.location?.href || '', window.location.origin);
-      const intendedUrl = new URL(pane.src, window.location.origin);
-      const sameRoute = frameUrl.pathname === intendedUrl.pathname;
-      let allowed = sameRoute;
-
-      if (pane.key === 'workspace') {
-        allowed = sameRoute
-          && frameUrl.searchParams.get('demo') === '1'
-          && frameUrl.searchParams.get('showcase') === '1';
-      }
-
-      if (pane.key === 'jobs' || pane.key === 'candidates') {
-        allowed = sameRoute
-          && frameUrl.searchParams.get('demo') === '1'
-          && frameUrl.searchParams.get('showcase') === '1';
-      }
-
-      if (pane.key === 'chat') {
-        allowed = sameRoute;
-      }
-
-      if (pane.key === 'profile') {
-        const tab = frameUrl.searchParams.get('tab') || 'overview';
-        allowed = sameRoute
-          && frameUrl.searchParams.get('view') === 'client'
-          && frameUrl.searchParams.get('k') === REPORT_SHOWCASE_TOKEN
-          && frameUrl.searchParams.get('showcase') === '1'
-          && REPORT_SHOWCASE_TABS.has(tab);
-      }
-
-      if (!allowed) {
-        frame.src = pane.src;
-      }
+      frameHref = frame.contentWindow?.location?.href;
     } catch {
-      frame.src = pane.src;
+      // Cross-origin: leave it alone, the sandbox attribute contains it.
+      return;
     }
+    // Empty href means the iframe is mid-init (about:blank) — don't fight it.
+    if (!frameHref) return;
+
+    let frameUrl;
+    try {
+      frameUrl = new URL(frameHref, window.location.origin);
+    } catch {
+      return;
+    }
+
+    const intendedUrl = new URL(pane.src, window.location.origin);
+    const sameRoute = frameUrl.pathname === intendedUrl.pathname;
+    let allowed = sameRoute;
+
+    if (pane.key === 'workspace') {
+      allowed = sameRoute
+        && frameUrl.searchParams.get('demo') === '1'
+        && frameUrl.searchParams.get('showcase') === '1';
+    }
+
+    if (pane.key === 'jobs' || pane.key === 'candidates') {
+      allowed = sameRoute
+        && frameUrl.searchParams.get('demo') === '1'
+        && frameUrl.searchParams.get('showcase') === '1';
+    }
+
+    if (pane.key === 'chat') {
+      allowed = sameRoute;
+    }
+
+    if (pane.key === 'profile') {
+      const tab = frameUrl.searchParams.get('tab') || 'overview';
+      allowed = sameRoute
+        && frameUrl.searchParams.get('view') === 'client'
+        && frameUrl.searchParams.get('k') === REPORT_SHOWCASE_TOKEN
+        && frameUrl.searchParams.get('showcase') === '1'
+        && REPORT_SHOWCASE_TABS.has(tab);
+    }
+
+    if (allowed) return;
+
+    // Only reset src once per pane lifetime. Subsequent reloads land
+    // wherever they land — sandbox keeps the blast radius contained and
+    // the user no longer sees the page flash.
+    const counts = resetCountsRef.current;
+    const used = counts.get(pane.key) || 0;
+    if (used >= 1) return;
+    counts.set(pane.key, used + 1);
+    frame.src = pane.src;
   }, []);
 
   const handleSubmit = (event) => {
@@ -311,27 +385,43 @@ export const DemoExperiencePage = ({ onNavigate }) => {
               ))}
             </div>
 
-            {Object.entries(panes).map(([key, pane]) => (
-              <div key={key} className={`wt-pane ${activePane === key ? 'active' : ''}`}>
-                <div className="wt-frame" data-pane={key}>
-                  <div className="wt-chrome">
-                    <span className="dots" aria-hidden="true"><i /><i /><i /></span>
-                    <span className="url"><span className="lock">●</span>{pane.urlLabel}</span>
-                    <span className="wt-locked-badge">Locked preview</span>
-                  </div>
-                  <div className="wt-stage">
-                    <iframe
-                      title={pane.label}
-                      src={pane.src}
-                      sandbox="allow-scripts allow-same-origin"
-                      referrerPolicy="no-referrer"
-                      onLoad={handleShowcaseFrameLoad(pane)}
-                    />
-                    <div className="wt-tip"><span className="dot" /> {PANE_NARRATIVE[key] || 'Interactive demo surface'}</div>
+            {Object.entries(panes).map(([key, pane]) => {
+              const value = PANE_VALUE[key];
+              return (
+                <div key={key} className={`wt-pane ${activePane === key ? 'active' : ''}`}>
+                  {value ? (
+                    <div className="wt-value">
+                      <div className="wt-value-head">
+                        <span className="wt-value-eyebrow">Why this matters to you</span>
+                        <span className="wt-value-headline">{value.headline}</span>
+                      </div>
+                      <ul className="wt-value-outcomes">
+                        {value.outcomes.map((outcome) => (
+                          <li key={outcome}>{outcome}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  ) : null}
+                  <div className="wt-frame" data-pane={key}>
+                    <div className="wt-chrome">
+                      <span className="dots" aria-hidden="true"><i /><i /><i /></span>
+                      <span className="url"><span className="lock">●</span>{pane.urlLabel}</span>
+                      <span className="wt-locked-badge">Locked preview</span>
+                    </div>
+                    <div className="wt-stage">
+                      <iframe
+                        title={pane.label}
+                        src={pane.src}
+                        sandbox="allow-scripts allow-same-origin"
+                        referrerPolicy="no-referrer"
+                        onLoad={handleShowcaseFrameLoad(pane)}
+                      />
+                      <div className="wt-tip"><span className="dot" /> {PANE_NARRATIVE[key] || 'Interactive demo surface'}</div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
 
             <div className="wt-foot">
               <button type="button" className="exit" onClick={() => setSubmittedLead(null)}>← Back to form</button>
