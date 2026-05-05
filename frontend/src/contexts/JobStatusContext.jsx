@@ -372,6 +372,13 @@ export function JobStatusProvider({ children }) {
   // ── Discovery polling — finds batches started from other pages/tabs ───────
   useEffect(() => {
     if (!rolesApi?.activeBatchScores) return undefined;
+    // Skip polling entirely when there's no auth token. Otherwise the call
+    // 401s, the httpClient's response interceptor reacts to the 401 by
+    // redirecting to /login, and the marketing showcase iframe gets bounced
+    // to the sign-in page even though the demo route is meant to be public.
+    if (typeof window !== 'undefined' && !localStorage.getItem('taali_access_token')) {
+      return undefined;
+    }
     let cancelled = false;
     let timer = null;
 
@@ -405,6 +412,7 @@ export function JobStatusProvider({ children }) {
   // ── One-shot discovery on mount: pick up an in-flight workable sync ───────
   useEffect(() => {
     if (!rolesApi?.workableSyncStatus) return;
+    if (typeof window !== 'undefined' && !localStorage.getItem('taali_access_token')) return;
     let cancelled = false;
     (async () => {
       try {
@@ -424,6 +432,7 @@ export function JobStatusProvider({ children }) {
   // ── One-shot discovery on mount: pick up an in-flight graph sync ──────────
   useEffect(() => {
     if (!rolesApi?.syncGraphStatus) return;
+    if (typeof window !== 'undefined' && !localStorage.getItem('taali_access_token')) return;
     let cancelled = false;
     (async () => {
       try {
