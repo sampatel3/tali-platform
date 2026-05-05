@@ -1,22 +1,35 @@
-/* Tali Copilot — design tokens copied from taali-system.css in the design
-   handoff. Keep this in sync if the system updates. */
+/* Taali Chat — pulls site-wide design tokens from index.css instead of
+   redefining them. Local --c-* aliases below kept so existing rules
+   compile; new rules should reference the canonical --ink, --bg etc.
+   from the global :root. Typography always inherits from
+   ``var(--font-sans)`` / ``var(--font-display)`` / ``var(--font-mono)``
+   — the same Geist stack the rest of the app uses. */
 
 :root {
-  --c-ink: #1d1730;
-  --c-ink-2: #2e2745;
-  --c-mute: #6e6580;
-  --c-mute-2: #9e96ae;
-  --c-line: #e7e0f0;
-  --c-line-2: #f0eaf7;
-  --c-bg: #f7f4fb;
-  --c-bg-2: #ffffff;
-  --c-bg-3: #efe8f7;
-  --c-purple: #7f39fb;
-  --c-purple-2: #6b21e8;
-  --c-purple-soft: #e9ddfe;
-  --c-green: #15a36a;
-  --c-red: #e64a4a;
-  --c-amber: #d88a1c;
+  --c-ink: var(--ink, #1d1730);
+  --c-ink-2: var(--ink-2, #2e2745);
+  --c-mute: var(--mute, #6e6580);
+  --c-mute-2: var(--mute-2, #9e96ae);
+  --c-line: var(--line, #e7e0f0);
+  --c-line-2: var(--line-2, #f0eaf7);
+  --c-bg: var(--bg, #f7f4fb);
+  --c-bg-2: var(--bg-2, #ffffff);
+  --c-bg-3: var(--bg-3, #efe8f7);
+  --c-purple: var(--purple, #7f39fb);
+  --c-purple-2: var(--purple-2, #6b21e8);
+  --c-purple-soft: var(--purple-soft, #e9ddfe);
+  --c-green: var(--green, #15a36a);
+  --c-red: var(--red, #e64a4a);
+  --c-amber: var(--amber, #d88a1c);
+}
+
+/* Anything inside the chat shell inherits the site font stack so the
+   chat never looks "off" relative to the rest of the app. */
+.cp-root,
+.cp-root button,
+.cp-root input,
+.cp-root textarea {
+  font-family: var(--font-sans, "Geist", "Inter", system-ui, sans-serif);
 }
 
 /* ============ shell ============ */
@@ -197,55 +210,90 @@
   flex-direction: column;
   align-items: center;
   padding: 80px 20px 40px;
+  text-align: center;
+}
+.cp-empty-glyph {
+  width: 56px;
+  height: 56px;
+  border-radius: 16px;
+  background: var(--c-ink);
+  color: var(--c-bg);
+  display: grid;
+  place-items: center;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 0 rgba(29, 23, 48, .04), 0 12px 32px rgba(29, 23, 48, .08);
+  position: relative;
+}
+.cp-empty-glyph::after {
+  content: "";
+  position: absolute;
+  bottom: -4px;
+  right: -4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--c-purple);
+  border: 3px solid var(--c-bg);
 }
 .cp-empty-h1 {
-  font-family: ui-serif, "EB Garamond", Georgia, serif;
-  font-style: italic;
-  font-weight: 400;
-  font-size: 38px;
+  font-family: var(--font-display, var(--font-sans, "Geist", "Inter", system-ui, sans-serif));
+  font-weight: 600;
+  font-size: 36px;
+  letter-spacing: -.035em;
+  line-height: 1.05;
   color: var(--c-ink);
   margin: 0 0 8px;
-  text-align: center;
+}
+.cp-empty-h1 em {
+  font-style: normal;
+  color: var(--c-purple);
 }
 .cp-empty-sub {
   color: var(--c-mute);
-  font-size: 14px;
-  margin-bottom: 32px;
+  font-size: 14.5px;
+  line-height: 1.5;
+  margin: 0 0 36px;
+  max-width: 520px;
 }
 .cp-suggest-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 10px;
-  max-width: 760px;
+  max-width: 720px;
   width: 100%;
 }
 @media (max-width: 600px) {
   .cp-suggest-grid { grid-template-columns: 1fr; }
 }
 .cp-suggest {
+  position: relative;
   text-align: left;
   background: var(--c-bg-2);
   border: 1px solid var(--c-line);
-  border-radius: 12px;
+  border-radius: 14px;
   padding: 14px 16px;
   cursor: pointer;
-  font-size: 13.5px;
-  color: var(--c-ink-2);
-  transition: border-color .15s, box-shadow .15s;
+  transition: border-color .15s, transform .08s;
 }
-.cp-suggest:hover {
-  border-color: var(--c-purple);
-  box-shadow: 0 1px 0 rgba(29,23,48,.04), 0 12px 32px rgba(29,23,48,.08);
-}
+.cp-suggest:hover { border-color: var(--c-purple); }
+.cp-suggest:active { transform: translateY(1px); }
 .cp-suggest-tag {
-  display: inline-block;
-  font-family: ui-monospace, SFMono-Regular, monospace;
-  font-size: 10.5px;
-  color: var(--c-purple);
-  background: var(--c-purple-soft);
-  padding: 2px 6px;
-  border-radius: 4px;
-  margin-right: 6px;
+  display: block;
+  margin-bottom: 6px;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 9.5px;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--c-mute);
+  background: transparent;
+  padding: 0;
+  border-radius: 0;
+}
+.cp-suggest-q {
+  display: block;
+  font-size: 13.5px;
+  line-height: 1.4;
+  color: var(--c-ink);
 }
 
 /* ============ messages ============ */
@@ -253,11 +301,12 @@
 .cp-msg-user {
   align-self: flex-end;
   max-width: 80%;
-  padding: 12px 16px;
-  border-radius: 14px 14px 4px 14px;
-  background: var(--c-purple);
-  color: #fff;
+  padding: 12px 18px;
+  border-radius: 14px;
+  background: var(--c-ink);
+  color: var(--c-bg);
   font-size: 14.5px;
+  line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
 }
