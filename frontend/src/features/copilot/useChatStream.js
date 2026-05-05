@@ -45,9 +45,12 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
     setError(null);
   }, []);
 
+  // Replaces the message log with rows hydrated from the persistence
+  // API. We intentionally do NOT clear the ``error`` state here — that
+  // would race with an in-flight stream's error frame (caller is
+  // responsible for resetting it via ``reset()`` when starting fresh).
   const setHistory = useCallback((history) => {
     setMessages(history);
-    setError(null);
   }, []);
 
   const send = useCallback(

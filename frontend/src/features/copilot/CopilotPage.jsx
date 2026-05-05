@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import './copilot.css';
 import EmptyState from './EmptyState';
@@ -81,8 +81,17 @@ const CopilotPage = () => {
   const [conversations, setConversations] = useState([]);
   const [composer, setComposer] = useState('');
 
+  // Conversations created by the current send() flow. Hydrating their
+  // history from the API would race with the in-flight stream — the
+  // assistant placeholder + error state already live in useChatStream's
+  // local state and the API doesn't have the assistant turn until the
+  // stream finishes. We track these here so the hydration effect can
+  // skip them.
+  const locallyCreated = useRef(new Set());
+
   const onConversationId = useCallback(
     (id) => {
+      locallyCreated.current.add(id);
       if (!conversationId) navigate(`/copilot/${id}`, { replace: true });
     },
     [conversationId, navigate],
@@ -104,7 +113,10 @@ const CopilotPage = () => {
     refreshConversations();
   }, [refreshConversations]);
 
-  // When the route id changes, hydrate that conversation.
+  // When the route id changes, hydrate that conversation — UNLESS this
+  // conversation was just created by the current send() flow, in which
+  // case the chat hook's local state is the source of truth (it has the
+  // streaming assistant placeholder; the API only has the user turn).
   useEffect(() => {
     let cancelled = false;
     const run = async () => {
@@ -112,6 +124,7 @@ const CopilotPage = () => {
         reset();
         return;
       }
+      if (locallyCreated.current.has(conversationId)) return;
       try {
         const data = await conversationsApi.get(conversationId);
         if (cancelled) return;
