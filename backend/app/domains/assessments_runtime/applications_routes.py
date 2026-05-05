@@ -15,6 +15,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import asc, desc, func, or_
 from sqlalchemy.orm import Session, joinedload
 
+from ...actions import advance_stage as advance_stage_action
+from ...actions.types import Actor
 from ...components.assessments.repository import assessment_to_response, utcnow
 from ...components.assessments.service import get_assessment_creation_gate
 from ...components.integrations.workable.sync_service import _extract_candidate_fields
@@ -1128,8 +1130,16 @@ def download_application_document(
 
     safe_filename = _report_filename_part(filename, "document")
 
-    # Object-storage URL → presigned redirect. Browser caches, supports
-    # range requests for inline PDF preview, frees the API worker.
+    # No-cache headers on every branch. Without these, Railway's edge /
+    # Vercel's edge happily cache 4xx responses by default — once a row
+    # was 410'd before refetch, the cached response keeps serving 410
+    # even after the DB is fixed. Same hazard applies to the redirect
+    # (each presigned URL is short-lived; we don't want it cached).
+    no_cache_headers = {"Cache-Control": "private, no-store, must-revalidate"}
+
+    # Object-storage URL → presigned redirect. Browser caches the file
+    # itself via the presigned URL's own headers; the redirect itself
+    # must NOT be cached because the signature expires.
     s3_key = stored_document_s3_key(file_url)
     if s3_key:
         from ...services.s3_service import generate_presigned_url
@@ -1140,7 +1150,7 @@ def download_application_document(
             download_filename=safe_filename if download else None,
         )
         if presigned:
-            return RedirectResponse(url=presigned, status_code=307)
+            return RedirectResponse(url=presigned, status_code=307, headers=no_cache_headers)
 
     # Local filesystem path — only happens in dev/test (no S3 creds, so
     # process_document_upload fell back to writing to backend/uploads/).
@@ -1157,7 +1167,7 @@ def download_application_document(
             media_type=media_type,
             headers={
                 "Content-Disposition": f'{"attachment" if download else "inline"}; filename="{safe_filename}"',
-                "Cache-Control": "private, max-age=600",
+                **no_cache_headers,
             },
         )
 
@@ -1167,6 +1177,7 @@ def download_application_document(
             "reason": "file_storage_unavailable",
             "message": "CV file is no longer available. Re-fetch from Workable to restore it.",
         },
+        headers=no_cache_headers,
     )
 
 
@@ -1670,23 +1681,13 @@ def update_application_stage(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    app = get_application(application_id, current_user.organization_id, db)
     try:
-        ensure_pipeline_fields(app)
-        initialize_pipeline_event_if_missing(
+        app = advance_stage_action.run(
             db,
-            app=app,
-            actor_type="system",
-            actor_id=current_user.id,
-            reason="Pipeline initialized before stage patch",
-        )
-        transition_stage(
-            db,
-            app=app,
+            Actor.recruiter(current_user),
+            organization_id=current_user.organization_id,
+            application_id=application_id,
             to_stage=data.pipeline_stage,
-            source="recruiter",
-            actor_type="recruiter",
-            actor_id=current_user.id,
             reason=data.reason or "Recruiter stage update",
             idempotency_key=data.idempotency_key,
             expected_version=data.expected_version,
