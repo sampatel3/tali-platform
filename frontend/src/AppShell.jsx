@@ -59,6 +59,9 @@ const AssessmentsPage = lazy(() =>
 const CandidatesDirectoryPage = lazy(() =>
   import('./features/candidates/CandidatesDirectoryPage').then((m) => ({ default: m.CandidatesDirectoryPage }))
 );
+const CopilotPage = lazy(() =>
+  import('./features/copilot/CopilotPage').then((m) => ({ default: m.CopilotPage }))
+);
 const CandidateStandingReportPage = lazy(() =>
   import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
 );
@@ -446,6 +449,27 @@ function AppContent() {
               onNavigate={navigateToPage}
               NavComponent={DashboardNavWithMode}
             />
+          </Suspense>
+        )}
+      />
+
+      {/* Tali Copilot — agentic chat over the same MCP tools served at /mcp.
+          Backend at /api/v1/taali-chat/*. */}
+      <Route
+        path="/copilot"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <DashboardNavWithMode currentPage="copilot" onNavigate={navigateToPage} />
+            <CopilotPage />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/copilot/:conversationId"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <DashboardNavWithMode currentPage="copilot" onNavigate={navigateToPage} />
+            <CopilotPage />
           </Suspense>
         )}
       />
