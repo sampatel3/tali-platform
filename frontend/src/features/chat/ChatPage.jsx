@@ -5,6 +5,7 @@ import EmptyState from './EmptyState';
 import Composer from './Composer';
 import Thread from './Thread';
 import Sidebar from './Sidebar';
+import ConfirmDialog from './ConfirmDialog';
 import useChatStream from './useChatStream';
 import { conversationsApi } from './api';
 
@@ -80,6 +81,7 @@ const ChatPage = () => {
 
   const [conversations, setConversations] = useState([]);
   const [composer, setComposer] = useState('');
+  const [pendingDeleteId, setPendingDeleteId] = useState(null);
 
   // Conversations created by the current send() flow. Hydrating their
   // history from the API would race with the in-flight stream — the
@@ -163,15 +165,31 @@ const ChatPage = () => {
     [navigate],
   );
 
-  const onDelete = useCallback(
-    async (id) => {
-      if (!window.confirm('Delete this conversation?')) return;
-      await conversationsApi.remove(id);
-      if (id === conversationId) navigate('/chat');
-      refreshConversations();
-    },
-    [conversationId, navigate, refreshConversations],
-  );
+  // Two-step delete: ``onDelete`` opens an in-app confirm dialog,
+  // ``confirmDelete`` performs the actual remove. Replaces the prior
+  // ``window.confirm`` so the dialog matches the design tokens and
+  // doesn't render the browser's native chrome.
+  const onDelete = useCallback((id) => {
+    setPendingDeleteId(id);
+  }, []);
+
+  const confirmDelete = useCallback(async () => {
+    const id = pendingDeleteId;
+    if (id == null) return;
+    setPendingDeleteId(null);
+    await conversationsApi.remove(id);
+    if (id === conversationId) navigate('/chat');
+    refreshConversations();
+  }, [pendingDeleteId, conversationId, navigate, refreshConversations]);
+
+  const cancelDelete = useCallback(() => {
+    setPendingDeleteId(null);
+  }, []);
+
+  const pendingDeleteTitle = useMemo(() => {
+    const found = conversations.find((c) => c.id === pendingDeleteId);
+    return found?.title || null;
+  }, [conversations, pendingDeleteId]);
 
   const submit = useCallback(
     (text) => {
@@ -229,6 +247,19 @@ const ChatPage = () => {
           />
         </div>
       </div>
+      <ConfirmDialog
+        open={pendingDeleteId != null}
+        title="Delete conversation?"
+        detail={
+          pendingDeleteTitle
+            ? `“${pendingDeleteTitle}” will be removed from your sidebar. This can't be undone.`
+            : "This conversation will be removed from your sidebar. This can't be undone."
+        }
+        confirmLabel="Delete"
+        destructive
+        onConfirm={confirmDelete}
+        onCancel={cancelDelete}
+      />
     </div>
   );
 };
