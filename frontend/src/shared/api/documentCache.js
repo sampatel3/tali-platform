@@ -23,9 +23,15 @@ const cacheKey = ({ applicationId, candidateId, docType }) =>
 const isFresh = (entry) => entry && (Date.now() - entry.fetchedAt) < CACHE_TTL_MS;
 
 const fetchBlob = async ({ applicationId, candidateId, docType }) => {
+  // Cache-bust query param. Railway/Vercel edge happily caches 4xx
+  // responses by default — once a row 410'd before being refetched,
+  // the cached 410 served forever even after the DB was fixed. The
+  // backend now sends Cache-Control: no-store but already-cached
+  // entries persist; the timestamp param sidesteps them entirely.
+  const cfg = { params: { _: Date.now() } };
   const res = applicationId
-    ? await rolesApi.downloadApplicationDocument(applicationId, docType)
-    : await candidatesApi.downloadDocument(candidateId, docType);
+    ? await rolesApi.downloadApplicationDocument(applicationId, docType, cfg)
+    : await candidatesApi.downloadDocument(candidateId, docType, cfg);
   if (!res) return null;
   const mime = res?.headers?.['content-type'] || undefined;
   const blob = res.data instanceof Blob
