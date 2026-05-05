@@ -19,19 +19,29 @@ const isAuthEndpoint = (url = '') => (
   || url.includes('/auth/sso-')
 );
 
-const isPublicPath = (pathname = '') => (
-  pathname === '/'
-  || pathname.startsWith('/login')
-  || pathname.startsWith('/register')
-  || pathname.startsWith('/forgot-password')
-  || pathname.startsWith('/reset-password')
-  || pathname.startsWith('/verify-email')
-  || pathname.startsWith('/demo')
-  || pathname.startsWith('/c/')
-  || (/^\/candidates\/shr_[^/]+$/.test(pathname))
-  || pathname.startsWith('/assess/')
-  || pathname.startsWith('/assessment/')
-);
+const isPublicPath = (pathname = '', search = '') => {
+  if (pathname === '/'
+    || pathname.startsWith('/login')
+    || pathname.startsWith('/register')
+    || pathname.startsWith('/forgot-password')
+    || pathname.startsWith('/reset-password')
+    || pathname.startsWith('/verify-email')
+    || pathname.startsWith('/demo')
+    || pathname.startsWith('/c/')
+    || (/^\/candidates\/shr_[^/]+$/.test(pathname))
+    || pathname.startsWith('/assess/')
+    || pathname.startsWith('/assessment/')
+    || pathname.startsWith('/showcase/')) {
+    return true;
+  }
+  // Marketing showcase mode runs the recruiter pages with auth-bypassed
+  // demo data. We must never bounce these to /login on a stray 401, since
+  // they're loaded inside the public marketing iframe.
+  if ((pathname === '/jobs' || pathname === '/candidates') && search.includes('showcase=1') && search.includes('demo=1')) {
+    return true;
+  }
+  return false;
+};
 
 const buildLoginRedirectPath = () => {
   if (typeof window === 'undefined') return '/login';
@@ -60,7 +70,7 @@ api.interceptors.response.use(
       localStorage.removeItem('taali_access_token');
       localStorage.removeItem('taali_user');
       window.dispatchEvent(new Event('auth:logout'));
-      if (typeof window !== 'undefined' && !isPublicPath(window.location.pathname)) {
+      if (typeof window !== 'undefined' && !isPublicPath(window.location.pathname, window.location.search)) {
         window.location.replace(buildLoginRedirectPath());
       }
     }
