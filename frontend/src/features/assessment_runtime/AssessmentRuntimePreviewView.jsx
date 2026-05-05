@@ -161,59 +161,54 @@ export const AssessmentRuntimePreviewView = ({
         onSubmit={() => {}}
       />
 
-      <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto max-w-[1440px] px-4 py-4 lg:px-8 lg:py-5">
-          <AssessmentContextWindow
-            taskName={taskName || 'Assessment workspace'}
-            taskRole={taskRole || 'Preview workspace'}
-            taskContext={taskContext || PREVIEW_TASK_CONTEXT}
-            repoFiles={previewRepoFiles}
-            cloneCommand={null}
-          />
+      <AssessmentContextWindow
+        taskName={taskName || 'Assessment workspace'}
+        taskRole={taskRole || 'Preview workspace'}
+        taskContext={taskContext || PREVIEW_TASK_CONTEXT}
+        repoFiles={previewRepoFiles}
+        cloneCommand={null}
+      />
 
-          <AssessmentWorkspace
-            className="mt-4"
-            hasRepoStructure
-            repoFileTree={repoFileTree}
-            repoPanelCollapsed={repoPanelCollapsed}
-            onToggleRepoPanel={() => setRepoPanelCollapsed((current) => !current)}
-            collapsedRepoDirs={collapsedRepoDirs}
-            toggleRepoDir={toggleRepoDir}
-            selectedRepoPath={selectedRepoPath}
-            onSelectRepoFile={handleSelectRepoFile}
-            assessmentStarterCode={editorContent}
-            editorContent={editorContent}
-            onEditorChange={setEditorContent}
-            onExecute={() => {}}
-            onSave={() => {}}
-            editorLanguage={languageFromPath(selectedRepoPath)}
-            editorFilename={selectedRepoPath}
-            isTimerPaused={false}
-            showTerminal={showTerminal}
-            assistantPanelCollapsed={assistantPanelCollapsed}
-            onToggleAssistantPanel={() => setAssistantPanelCollapsed((current) => !current)}
-            terminalPanelOpen={terminalPanelOpen}
-            onToggleTerminal={() => setTerminalPanelOpen((current) => !current)}
-            outputPanelOpen={outputPanelOpen}
-            onToggleOutput={() => setOutputPanelOpen((current) => !current)}
-            terminalConnected={false}
-            terminalEvents={[]}
-            onTerminalInput={() => {}}
-            onTerminalResize={() => {}}
-            onRestartTerminal={() => {}}
-            terminalRestarting={false}
-            output={output}
-            executing={false}
-            claudeConversation={claudeConversation}
-            claudePrompt={claudePrompt}
-            onClaudePromptChange={setClaudePrompt}
-            onClaudePromptSubmit={() => {}}
-            claudePromptSending={false}
-            claudePromptDisabled={false}
-            lightMode={lightMode}
-          />
-        </div>
-      </div>
+      <AssessmentWorkspace
+        hasRepoStructure
+        repoFileTree={repoFileTree}
+        repoPanelCollapsed={repoPanelCollapsed}
+        onToggleRepoPanel={() => setRepoPanelCollapsed((current) => !current)}
+        collapsedRepoDirs={collapsedRepoDirs}
+        toggleRepoDir={toggleRepoDir}
+        selectedRepoPath={selectedRepoPath}
+        onSelectRepoFile={handleSelectRepoFile}
+        assessmentStarterCode={editorContent}
+        editorContent={editorContent}
+        onEditorChange={setEditorContent}
+        onExecute={() => {}}
+        onSave={() => {}}
+        editorLanguage={languageFromPath(selectedRepoPath)}
+        editorFilename={selectedRepoPath}
+        isTimerPaused={false}
+        showTerminal={showTerminal}
+        assistantPanelCollapsed={assistantPanelCollapsed}
+        onToggleAssistantPanel={() => setAssistantPanelCollapsed((current) => !current)}
+        terminalPanelOpen={terminalPanelOpen}
+        onToggleTerminal={() => setTerminalPanelOpen((current) => !current)}
+        outputPanelOpen={outputPanelOpen}
+        onToggleOutput={() => setOutputPanelOpen((current) => !current)}
+        terminalConnected={false}
+        terminalEvents={[]}
+        onTerminalInput={() => {}}
+        onTerminalResize={() => {}}
+        onRestartTerminal={() => {}}
+        terminalRestarting={false}
+        output={output}
+        executing={false}
+        claudeConversation={claudeConversation}
+        claudePrompt={claudePrompt}
+        onClaudePromptChange={setClaudePrompt}
+        onClaudePromptSubmit={() => {}}
+        claudePromptSending={false}
+        claudePromptDisabled={false}
+        lightMode={lightMode}
+      />
     </div>
   );
 };

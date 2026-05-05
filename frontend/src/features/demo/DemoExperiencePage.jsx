@@ -48,54 +48,6 @@ const PANE_NARRATIVE = {
   workspace: 'See exactly what candidates work in.',
 };
 
-const PANE_NOTES = {
-  jobs: {
-    what: 'See every role you’re hiring for at a glance — synced from Workable so you don’t double-enter anything.',
-    bullets: [
-      'One card per role with how many candidates are at each stage',
-      'Click into a role to see its full pipeline',
-      'Filter to just the roles you’re actively working on',
-      'New Workable candidates land here automatically',
-    ],
-  },
-  candidates: {
-    what: 'Every candidate across every role, already scored and ranked — so you can spend your time on the shortlist instead of digging.',
-    bullets: [
-      'See a fit score on every candidate the moment their CV lands',
-      'Filter by role, stage, or outcome; sort by any score',
-      'Search in plain English — “senior backend with payments experience”',
-      'Triage straight from the row — open, advance, reject without leaving the page',
-    ],
-  },
-  chat: {
-    what: 'Ask Taali questions about your candidates in plain English. You get the actual people, ranked, with the evidence that backs each answer.',
-    bullets: [
-      'Ask things like “AI engineers with release-safety experience in fintech”',
-      'See the matching candidates inline, with their score and stage — not a wall of text',
-      'See how candidates connect across companies, skills, and schools',
-      'Each conversation stays in the sidebar so you can pick it back up later',
-    ],
-  },
-  workspace: {
-    what: 'See exactly what candidates work in — the same browser-based workspace they use to take the assessment. No installs on your side, none on theirs.',
-    bullets: [
-      'Real repo, editor, terminal, and AI assistant in one window',
-      'Task brief and time remaining stay visible at the top',
-      'Everything they do is captured automatically and scored on submit',
-      'The candidate sees exactly what you’re looking at right now',
-    ],
-  },
-  profile: {
-    what: 'The clean, client-safe link you send to your hiring client. Your internal notes, scoring breakdown, and interview prep stay hidden — they see the verdict and the candidate’s background.',
-    bullets: [
-      'A clear top-line verdict so your client knows what to do next',
-      '“Why we’re sharing this candidate” summary at the top',
-      'Candidate background — experience, education, skills — laid out cleanly',
-      'No internal scoring, no recruiter notes, no interview prep visible',
-    ],
-  },
-};
-
 export const DemoExperiencePage = ({ onNavigate }) => {
   const [form, setForm] = useState(initialForm);
   const [error, setError] = useState('');
@@ -359,55 +311,27 @@ export const DemoExperiencePage = ({ onNavigate }) => {
               ))}
             </div>
 
-            {Object.entries(panes).map(([key, pane]) => {
-              const notes = PANE_NOTES[key];
-              return (
-                <div key={key} className={`wt-pane ${activePane === key ? 'active' : ''}`}>
-                  {notes ? (
-                    <div className="mb-4 grid gap-5 rounded-[18px] border border-[var(--line)] bg-[var(--bg-2)] p-5 shadow-[var(--shadow-sm)] md:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)] md:p-6">
-                      <div>
-                        <div className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.12em] text-[var(--purple)]">
-                          What you’re looking at
-                        </div>
-                        <p className="mt-3 text-[14.5px] leading-7 text-[var(--ink-2)]">
-                          {notes.what}
-                        </p>
-                      </div>
-                      <div>
-                        <div className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.12em] text-[var(--purple)]">
-                          Key functionality
-                        </div>
-                        <ul className="mt-3 space-y-2 text-[13.5px] leading-6 text-[var(--ink-2)]">
-                          {notes.bullets.map((bullet) => (
-                            <li key={bullet} className="relative pl-5">
-                              <span className="absolute left-0 top-[9px] h-1.5 w-1.5 rounded-full bg-[var(--purple)]" aria-hidden="true" />
-                              {bullet}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    </div>
-                  ) : null}
-                  <div className="wt-frame" data-pane={key}>
-                    <div className="wt-chrome">
-                      <span className="dots" aria-hidden="true"><i /><i /><i /></span>
-                      <span className="url"><span className="lock">●</span>{pane.urlLabel}</span>
-                      <span className="wt-locked-badge">Locked preview</span>
-                    </div>
-                    <div className="wt-stage">
-                      <iframe
-                        title={pane.label}
-                        src={pane.src}
-                        sandbox="allow-scripts allow-same-origin"
-                        referrerPolicy="no-referrer"
-                        onLoad={handleShowcaseFrameLoad(pane)}
-                      />
-                      <div className="wt-tip"><span className="dot" /> {PANE_NARRATIVE[key] || 'Interactive demo surface'}</div>
-                    </div>
+            {Object.entries(panes).map(([key, pane]) => (
+              <div key={key} className={`wt-pane ${activePane === key ? 'active' : ''}`}>
+                <div className="wt-frame" data-pane={key}>
+                  <div className="wt-chrome">
+                    <span className="dots" aria-hidden="true"><i /><i /><i /></span>
+                    <span className="url"><span className="lock">●</span>{pane.urlLabel}</span>
+                    <span className="wt-locked-badge">Locked preview</span>
+                  </div>
+                  <div className="wt-stage">
+                    <iframe
+                      title={pane.label}
+                      src={pane.src}
+                      sandbox="allow-scripts allow-same-origin"
+                      referrerPolicy="no-referrer"
+                      onLoad={handleShowcaseFrameLoad(pane)}
+                    />
+                    <div className="wt-tip"><span className="dot" /> {PANE_NARRATIVE[key] || 'Interactive demo surface'}</div>
                   </div>
                 </div>
-              );
-            })}
+              </div>
+            ))}
 
             <div className="wt-foot">
               <button type="button" className="exit" onClick={() => setSubmittedLead(null)}>← Back to form</button>
