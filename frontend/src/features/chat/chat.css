@@ -146,6 +146,10 @@
   flex-direction: column;
   min-width: 0;
   background: var(--c-bg);
+  /* Anchor the absolute composer wrap to this column. Without it the
+     wrap escapes to the viewport and slides under the sidebar — making
+     the composer look offset relative to the conversation thread. */
+  position: relative;
 }
 .cp-head {
   height: 56px;
