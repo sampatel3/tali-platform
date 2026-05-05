@@ -45,7 +45,7 @@ const PANE_NARRATIVE = {
   candidates: 'Triage your shortlist — every candidate scored and ranked.',
   chat: 'Ask plain-English questions across your whole candidate pool.',
   profile: 'Send your client a clean, shareable verdict in one click.',
-  workspace: 'See exactly what candidates work in.',
+  workspace: 'The candidate side — every prompt, edit, and test run captured for scoring.',
 };
 
 // Slim "why this matters to a recruiter" caption above each pane. Headline
@@ -78,11 +78,11 @@ const PANE_VALUE = {
     ],
   },
   workspace: {
-    headline: 'Show your client the assessment they’re actually paying for.',
+    headline: 'Watch how your candidates think, not just what they ship.',
     outcomes: [
-      'Real coding work, not multiple-choice quizzes',
-      'Same workspace candidates use — no installs, no excuses',
-      'Builds trust with technical hiring managers',
+      'Every prompt, edit, file open, and test run is captured automatically',
+      'Real IDE, real repo, real AI tools — no toy puzzles, no installs for the candidate',
+      'Becomes the AI-collaboration evidence that backs every score you send your client',
     ],
   },
   profile: {

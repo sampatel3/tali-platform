@@ -97,7 +97,21 @@ const isPublicCandidateSharePath = (pathname, search = '') => {
 };
 
 const isShowcaseRecruiterPath = (pathname, search = '') => {
-  const params = new URLSearchParams(search || '');
+  // Belt-and-braces: also peek at the live browser URL. We've seen the
+  // React-router `location.search` come through empty on the first render
+  // after a hard navigation, which made the auth-redirect useEffect
+  // misfire and bounce the iframe to /login even though the URL clearly
+  // had ?demo=1&showcase=1. Falling back to window.location keeps the
+  // bypass honest in that race.
+  let effectiveSearch = search || '';
+  if (typeof window !== 'undefined') {
+    const liveSearch = window.location.search || '';
+    const livePath = window.location.pathname || '';
+    if (livePath === pathname && liveSearch && !effectiveSearch.includes('showcase=')) {
+      effectiveSearch = liveSearch;
+    }
+  }
+  const params = new URLSearchParams(effectiveSearch);
   if (params.get('demo') !== '1' || params.get('showcase') !== '1') return false;
   return pathname === '/jobs' || pathname === '/candidates';
 };
