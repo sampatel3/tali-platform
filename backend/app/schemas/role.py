@@ -82,6 +82,12 @@ class RoleUpdate(BaseModel):
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
     workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
     auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
+    # Agent-native fields
+    agentic_mode_enabled: Optional[bool] = None
+    agent_action_allowlist: Optional[list[str]] = None
+    agent_token_budget_per_cycle: Optional[int] = Field(default=None, ge=1_000, le=500_000)
+    agent_decision_budget_per_cycle: Optional[int] = Field(default=None, ge=1, le=200)
+    agent_usd_budget_monthly_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
 
 
 class RoleCriterionResponse(BaseModel):
@@ -118,6 +124,14 @@ class RoleResponse(BaseModel):
     workable_disqualify_reason_id: Optional[str] = None
     auto_reject_note_template: Optional[str] = None
     starred_for_auto_sync: bool = False
+    agentic_mode_enabled: bool = False
+    agent_action_allowlist: Optional[list[str]] = None
+    agent_token_budget_per_cycle: Optional[int] = None
+    agent_decision_budget_per_cycle: Optional[int] = None
+    agent_usd_budget_monthly_cents: Optional[int] = None
+    agent_paused_at: Optional[datetime] = None
+    agent_paused_reason: Optional[str] = None
+    agent_last_run_at: Optional[datetime] = None
     tasks_count: int = 0
     applications_count: int = 0
     stage_counts: dict[str, int] = Field(default_factory=dict)
@@ -138,14 +152,14 @@ class ApplicationCreate(BaseModel):
     candidate_name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     candidate_position: Optional[str] = Field(default=None, max_length=200)
     status: Optional[str] = Field(default="applied", max_length=100)
-    pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review"]] = None
+    pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review", "technical_interview"]] = None
     application_outcome: Optional[Literal["open", "rejected", "withdrawn", "hired"]] = None
     notes: Optional[str] = Field(default=None, max_length=4000)
 
 
 class ApplicationUpdate(BaseModel):
     status: Optional[str] = Field(default=None, max_length=100)
-    pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review"]] = None
+    pipeline_stage: Optional[Literal["applied", "invited", "in_assessment", "review", "technical_interview"]] = None
     application_outcome: Optional[Literal["open", "rejected", "withdrawn", "hired"]] = None
     expected_version: Optional[int] = Field(default=None, ge=1)
     notes: Optional[str] = Field(default=None, max_length=4000)
@@ -159,9 +173,9 @@ class ApplicationResponse(BaseModel):
     candidate_id: int
     role_id: int
     status: str
-    pipeline_stage: Literal["applied", "invited", "in_assessment", "review"] = "applied"
+    pipeline_stage: Literal["applied", "invited", "in_assessment", "review", "technical_interview"] = "applied"
     pipeline_stage_updated_at: Optional[datetime] = None
-    pipeline_stage_source: Literal["system", "recruiter", "sync"] = "system"
+    pipeline_stage_source: Literal["system", "recruiter", "sync", "agent"] = "system"
     application_outcome: Literal["open", "rejected", "withdrawn", "hired"] = "open"
     application_outcome_updated_at: Optional[datetime] = None
     external_refs: Optional[dict[str, Any]] = None
@@ -259,7 +273,7 @@ class ApplicationCvUploadResponse(BaseModel):
 
 
 class ApplicationStageUpdate(BaseModel):
-    pipeline_stage: Literal["applied", "invited", "in_assessment", "review"]
+    pipeline_stage: Literal["applied", "invited", "in_assessment", "review", "technical_interview"]
     expected_version: Optional[int] = Field(default=None, ge=1)
     reason: Optional[str] = Field(default=None, max_length=2000)
     idempotency_key: Optional[str] = Field(default=None, max_length=200)

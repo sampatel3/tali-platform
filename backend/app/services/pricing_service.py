@@ -25,6 +25,7 @@ class Feature(str, Enum):
     SCORE = "score"
     ASSESSMENT = "assessment"
     TAALI_CHAT = "taali_chat"
+    AGENT_AUTONOMOUS = "agent_autonomous"
     OTHER = "other"
 
 
@@ -79,6 +80,15 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
         # at a loss. Cache-hit multiplier mirrors other features so prompt
         # caching still benefits the org.
         feature=Feature.TAALI_CHAT,
+        markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.AGENT_AUTONOMOUS: FeaturePricing(
+        # Per-job autonomous recruiting agent. 2× markup — same shape as
+        # taali_chat (recruiter-facing AI) but the agent runs on its own
+        # cadence, so per-job budget caps in agent_runtime/budget_guard
+        # bound the spend separately from this multiplier.
+        feature=Feature.AGENT_AUTONOMOUS,
         markup_multiplier=Decimal("2.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),
@@ -202,6 +212,8 @@ def estimate_reservation(feature: Feature | str) -> int:
         Feature.PRESCREEN: 1_500,    # ~$0.0015
         Feature.SCORE: 30_000,       # ~$0.03 (3× markup)
         Feature.ASSESSMENT: 60_000,  # ~$0.06 per Claude turn (3× markup)
+        Feature.TAALI_CHAT: 10_000,
+        Feature.AGENT_AUTONOMOUS: 20_000,  # ~$0.02 per agent Claude turn
         Feature.OTHER: 5_000,
     }
     if isinstance(feature, str):

@@ -10,6 +10,7 @@ export { analytics } from './analyticsClient';
 export { tasks } from './tasksClient';
 export { candidates } from './candidatesClient';
 export { team } from './teamClient';
+export { agent } from './agentClient';
 export {
   getCachedDocumentBlob,
   prefetchDocumentBlob,

@@ -231,6 +231,20 @@ def update_role(
         role.workable_disqualify_reason_id = updates["workable_disqualify_reason_id"] or None
     if "auto_reject_note_template" in updates:
         role.auto_reject_note_template = updates["auto_reject_note_template"] or None
+    if "agentic_mode_enabled" in updates:
+        role.agentic_mode_enabled = bool(updates["agentic_mode_enabled"])
+        # Re-enabling clears any prior pause so the next event can run.
+        if role.agentic_mode_enabled and role.agent_paused_at is not None:
+            role.agent_paused_at = None
+            role.agent_paused_reason = None
+    if "agent_action_allowlist" in updates:
+        role.agent_action_allowlist = updates["agent_action_allowlist"]
+    if "agent_token_budget_per_cycle" in updates:
+        role.agent_token_budget_per_cycle = updates["agent_token_budget_per_cycle"]
+    if "agent_decision_budget_per_cycle" in updates:
+        role.agent_decision_budget_per_cycle = updates["agent_decision_budget_per_cycle"]
+    if "agent_usd_budget_monthly_cents" in updates:
+        role.agent_usd_budget_monthly_cents = updates["agent_usd_budget_monthly_cents"]
     try:
         if recruiter_criteria_changed:
             sync_recruiter_criteria(db, role)

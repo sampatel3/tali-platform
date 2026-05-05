@@ -24,6 +24,7 @@ import {
 } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
+import { JobAgentSettings } from './JobAgentSettings';
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidatesDirectoryPage } from '../candidates/CandidatesDirectoryPage';
@@ -1750,17 +1751,24 @@ Disqualifying: No experience with regulated financial data`}
             </div>
           </div>
         ) : (
-          <CandidatesDirectoryPage
-            onNavigate={onNavigate}
-            NavComponent={null}
-            lockRoleId={roleId || null}
-            useRolePipelineEndpoint
-            navCurrentPage="jobs"
-            title=""
-            subtitle=""
-            externalRefreshKey={refreshTick}
-            embedded
-          />
+          <>
+            {role ? (
+              <div className="mb-4">
+                <JobAgentSettings role={role} onRoleUpdated={(next) => setRole(next)} />
+              </div>
+            ) : null}
+            <CandidatesDirectoryPage
+              onNavigate={onNavigate}
+              NavComponent={null}
+              lockRoleId={roleId || null}
+              useRolePipelineEndpoint
+              navCurrentPage="jobs"
+              title=""
+              subtitle=""
+              externalRefreshKey={refreshTick}
+              embedded
+            />
+          </>
         )}
 
         <RoleSheet

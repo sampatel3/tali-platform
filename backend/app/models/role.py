@@ -47,6 +47,21 @@ class Role(Base):
         default=False,
         index=True,
     )
+    agentic_mode_enabled = Column(
+        Boolean,
+        nullable=False,
+        server_default="false",
+        default=False,
+        index=True,
+    )
+    agent_action_allowlist = Column(JSON, nullable=True)
+    agent_token_budget_per_cycle = Column(Integer, nullable=True)
+    agent_decision_budget_per_cycle = Column(Integer, nullable=True)
+    agent_usd_budget_monthly_cents = Column(Integer, nullable=True)
+    agent_paused_at = Column(DateTime(timezone=True), nullable=True)
+    agent_paused_reason = Column(Text, nullable=True)
+    agent_last_run_at = Column(DateTime(timezone=True), nullable=True)
+    agent_calibration = Column(JSON, nullable=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -11,13 +11,15 @@ from sqlalchemy.orm import Session
 from ...models.candidate_application import CandidateApplication
 from ...models.candidate_application_event import CandidateApplicationEvent
 
-PIPELINE_STAGES = ("applied", "invited", "in_assessment", "review")
+PIPELINE_STAGES = ("applied", "invited", "in_assessment", "review", "technical_interview")
 APPLICATION_OUTCOMES = ("open", "rejected", "withdrawn", "hired")
-PIPELINE_STAGE_SOURCES = ("system", "recruiter", "sync")
+PIPELINE_STAGE_SOURCES = ("system", "recruiter", "sync", "agent")
 
 _RECRUITER_STAGE_TRANSITIONS = {
     ("applied", "invited"),
     ("review", "invited"),
+    ("review", "technical_interview"),
+    ("technical_interview", "review"),
 }
 _SYSTEM_STAGE_TRANSITIONS = {
     ("invited", "in_assessment"),
