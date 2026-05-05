@@ -581,10 +581,24 @@
   cursor: pointer;
 }
 .cp-error {
-  margin-top: 8px;
-  padding: 8px 12px;
-  border-radius: 8px;
-  background: color-mix(in oklab, var(--c-red) 10%, transparent);
+  margin-top: 4px;
+  padding: 14px 18px;
+  border-radius: 12px;
+  background: color-mix(in oklab, var(--c-red) 10%, var(--c-bg-2));
+  border: 1px solid color-mix(in oklab, var(--c-red) 40%, var(--c-line));
+  color: var(--c-ink);
+  font-size: 13.5px;
+  line-height: 1.55;
+  max-width: 100%;
+}
+.cp-error-title {
+  font-weight: 600;
   color: var(--c-red);
-  font-size: 12.5px;
+  margin-bottom: 4px;
+  font-size: 14px;
+}
+.cp-error-detail {
+  color: var(--c-ink-2);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
