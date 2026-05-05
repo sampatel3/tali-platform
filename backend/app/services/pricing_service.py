@@ -24,6 +24,7 @@ class Feature(str, Enum):
     PRESCREEN = "prescreen"
     SCORE = "score"
     ASSESSMENT = "assessment"
+    TAALI_CHAT = "taali_chat"
     OTHER = "other"
 
 
@@ -70,6 +71,15 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
     Feature.ASSESSMENT: FeaturePricing(
         feature=Feature.ASSESSMENT,
         markup_multiplier=Decimal("3.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.TAALI_CHAT: FeaturePricing(
+        # Recruiter chat. 2× markup — cheaper than scoring (which produces
+        # billable artefacts) but above cost so volume search doesn't run
+        # at a loss. Cache-hit multiplier mirrors other features so prompt
+        # caching still benefits the org.
+        feature=Feature.TAALI_CHAT,
+        markup_multiplier=Decimal("2.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),
     Feature.OTHER: FeaturePricing(
