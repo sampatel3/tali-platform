@@ -1764,11 +1764,26 @@ html[data-theme="dark"] {
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  padding: 22px;
+  padding: 18px 20px;
   box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
   gap: 14px;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
+}
+
+.job-card:hover {
+  border-color: color-mix(in oklab, var(--purple) 25%, var(--line));
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.job-card .role-name {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
 }
 
 .job-card.from-wk {
@@ -1797,31 +1812,32 @@ html[data-theme="dark"] {
 
 .job-stats {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-2);
 }
 
 .js-cell {
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
+  padding: 4px 4px 0;
+  text-align: center;
 }
 
 .js-cell .k {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--mute);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .js-cell .v {
   font-family: var(--font-display);
-  font-size: 24px;
+  font-size: 22px;
   line-height: 1.1;
   margin-top: 2px;
   letter-spacing: -0.02em;
+  color: var(--ink);
 }
 
 .job-foot {
@@ -2643,9 +2659,25 @@ html[data-theme="dark"] {
 
 .stat-row {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 20px;
+}
+
+.stat.has-bar .stat-bar {
+  display: block;
+  height: 6px;
+  background: var(--bg-3);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 4px 0 6px;
+}
+
+.stat.has-bar .stat-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--purple);
+  border-radius: 999px;
 }
 
 .stat {

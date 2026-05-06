@@ -1107,33 +1107,55 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     return scoredDates[0] || null;
   }, [activeApplications]);
 
-  const pipelineStats = useMemo(() => ([
-    {
-      key: 'active',
-      label: 'In pipeline',
-      value: String(role?.active_candidates_count || activeApplications.length || 0),
-      description: `${role?.stage_counts?.review || 0} in review`,
-      highlight: true,
-    },
-    {
-      key: 'unscored',
-      label: 'New CVs',
-      value: String(unscoredApplications.length),
-      description: unscoredApplications.length > 0 ? 'Ready for score-new-only' : 'All visible CVs scored',
-    },
-    {
-      key: 'below-threshold',
-      label: 'Below threshold',
-      value: String(belowThresholdCount),
-      description: thresholdValue != null ? `Threshold ${thresholdValue}/100` : 'Set a reject threshold',
-    },
-    {
-      key: 'tasks',
-      label: 'Assessment tasks',
-      value: String(roleTasks.length),
-      description: roleTasks.length ? `${roleTasks[0]?.name || 'Task'} linked` : 'Link a task before inviting',
-    },
-  ]), [activeApplications.length, belowThresholdCount, role, roleTasks.length, thresholdValue, unscoredApplications.length]);
+  // HANDOFF v2 §4 — Candidates tab KPI row matches canvas exactly:
+  // In pipeline · New CVs · Below threshold · Agent spend (with bar).
+  // The legacy "Assessment tasks" + "Interview focus" tiles are gone —
+  // task linkage shows in the role hero, interview focus is per-candidate.
+  const pipelineStats = useMemo(() => {
+    const monthlySpentCents = Number(role?.agent_monthly_spent_cents || 0);
+    const monthlyBudgetCents = Number(role?.agent_monthly_budget_cents || 0);
+    const spentDollars = Math.round(monthlySpentCents / 100);
+    const budgetDollars = Math.round(monthlyBudgetCents / 100);
+    const spendPct = monthlyBudgetCents > 0
+      ? Math.min(100, Math.round((monthlySpentCents / monthlyBudgetCents) * 100))
+      : null;
+    const eomProjection = spendPct != null && spendPct > 0
+      ? Math.round((spentDollars * 30) / Math.max(1, new Date().getDate()))
+      : null;
+    return [
+      {
+        key: 'active',
+        label: 'In pipeline',
+        value: String(role?.active_candidates_count || activeApplications.length || 0),
+        description: `${role?.stage_counts?.review || 0} in review`,
+        highlight: true,
+      },
+      {
+        key: 'unscored',
+        label: 'New CVs',
+        value: String(unscoredApplications.length),
+        description: unscoredApplications.length > 0 ? 'Ready to score' : 'All visible CVs scored',
+      },
+      {
+        key: 'below-threshold',
+        label: 'Below threshold',
+        value: String(belowThresholdCount),
+        description: thresholdValue != null ? `Auto-flagged at <${thresholdValue}` : 'Set a reject threshold',
+      },
+      {
+        key: 'spend',
+        label: 'Agent spend',
+        // value rendered specially below — we still emit a string fallback
+        // so the .v cell isn't empty when budget is 0.
+        value: budgetDollars > 0 ? `$${spentDollars}` : '—',
+        valueSuffix: budgetDollars > 0 ? `/ $${budgetDollars}` : null,
+        budgetPct: spendPct,
+        description: spendPct != null
+          ? `${spendPct}%${eomProjection != null && budgetDollars > 0 ? ` · projected $${eomProjection} EOM` : ''}`
+          : 'Cap not set',
+      },
+    ];
+  }, [activeApplications.length, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
 
   const groupedApplications = useMemo(() => PIPELINE_STAGE_ORDER.map((stage) => ({
     ...stage,
@@ -1905,17 +1927,25 @@ Disqualifying: No experience with regulated financial data`}
 
         <div className="stat-row">
           {pipelineStats.map((item) => (
-            <div key={item.key} className={`stat ${item.highlight ? 'hi' : ''}`}>
+            <div
+              key={item.key}
+              className={`stat ${item.highlight ? 'hi' : ''} ${item.budgetPct != null ? 'has-bar' : ''}`.trim()}
+            >
               <div className="k">{item.label}</div>
-              <div className="v">{item.value}</div>
+              <div className="v">
+                {item.value}
+                {item.valueSuffix ? (
+                  <span style={{ color: 'var(--mute)', fontSize: 14, marginLeft: 4 }}>{item.valueSuffix}</span>
+                ) : null}
+              </div>
+              {item.budgetPct != null ? (
+                <div className="stat-bar" aria-hidden="true">
+                  <i style={{ width: `${item.budgetPct}%` }} />
+                </div>
+              ) : null}
               <div className="d">{item.description}</div>
             </div>
           ))}
-          <div className="stat">
-            <div className="k">Interview focus</div>
-            <div className="v">{Array.isArray(role?.interview_focus?.questions) ? role.interview_focus.questions.length : 0}</div>
-            <div className="d">Generated prompts</div>
-          </div>
         </div>
 
         {activeView === 'pipeline' ? (

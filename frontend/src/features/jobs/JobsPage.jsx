@@ -31,7 +31,7 @@ import {
 const STAGES = [
   { key: 'applied', label: 'Applied' },
   { key: 'invited', label: 'Invited' },
-  { key: 'in_assessment', label: 'In assessment' },
+  { key: 'in_assessment', label: 'Assessing' },
   { key: 'review', label: 'Review' },
 ];
 
@@ -419,53 +419,54 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
       <div className="mc-page">
+        {/* HANDOFF v2 §4 — Jobs list hero matches canvas (jobs-list artboard):
+            kicker "JOBS", dynamic "{N} active <em>roles</em>" headline,
+            "you're hiring" subtitle, Filter + + New role actions. */}
         <PageHero
-          kicker="01 · ROLE PIPELINE"
-          title="Jobs"
-          subtitle="Manage the recruiter workflow from role-level pipeline views. Every candidate, scored and sorted."
+          kicker="JOBS"
+          title={<>{roles.length} active <em>roles</em></>}
+          subtitle="You're hiring. Star a role to keep its candidates flowing in automatically."
           actions={(
-            <button
-              type="button"
-              className="btn btn-outline"
-              onClick={() => onNavigate('candidates')}
-            >
-              Open candidates
-            </button>
+            <>
+              <button
+                type="button"
+                className="btn btn-outline"
+                onClick={() => document.getElementById('jobs-source-filters')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+              >
+                <Filter size={13} />
+                Filter
+              </button>
+              <button
+                type="button"
+                className="btn btn-purple"
+                onClick={() => {
+                  if (isShowcase) return;
+                  setRoleSheetError('');
+                  setRoleSheetOpen(true);
+                }}
+                disabled={isShowcase}
+                aria-disabled={isShowcase || undefined}
+              >
+                + New role
+              </button>
+            </>
           )}
         />
 
+        {/* Quick search input is kept as an enhancement on top of the
+            canvas spec — the canvas relies on the global ⌘K palette in
+            Shell, but we surface a tighter search-by-name input here too. */}
         <div className="jobs-search">
           <div className="relative grow">
             <Search size={15} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[var(--mute)]" />
             <input
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search jobs…"
+              placeholder="Search jobs by name…"
               aria-label="Search jobs"
               className="pl-11"
             />
           </div>
-          <button
-            type="button"
-            className="btn btn-outline"
-            onClick={() => document.getElementById('jobs-source-filters')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
-          >
-            <Filter size={14} />
-            Filters
-          </button>
-          <button
-            type="button"
-            className="btn btn-purple"
-            onClick={() => {
-              if (isShowcase) return;
-              setRoleSheetError('');
-              setRoleSheetOpen(true);
-            }}
-            disabled={isShowcase}
-            aria-disabled={isShowcase || undefined}
-          >
-            + New role
-          </button>
         </div>
 
         {orgData?.workable_connected ? (
@@ -510,6 +511,10 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           </div>
         ) : null}
 
+        {/* HANDOFF v2 §4 / canvas jobs-list — exactly 4 KPI tiles:
+            ACTIVE ROLES · CANDIDATES IN PIPELINE · YOUR REVIEW QUEUE · BUDGET USED
+            (Last tile rolls up monthly_spent + monthly_budget across the
+            roles the agent is enabled on; mirrors the AgentBar org rollup.) */}
         <div className="mc-jobs-kpis">
           {(() => {
             const activeRoles = roles.length;
@@ -522,11 +527,27 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               (acc, r) => acc + Number(r?.stage_counts?.review || 0),
               0,
             );
+            const reviewRoleCount = roles.filter((r) => Number(r?.stage_counts?.review || 0) > 0).length;
+            const newThisWeek = roles.reduce(
+              (acc, r) => acc + Number(r?.new_candidates_this_week || 0),
+              0,
+            );
+            const monthlySpent = roles.reduce((acc, r) => acc + Number(r?.agent_monthly_spent_cents || 0), 0);
+            const monthlyBudget = roles.reduce((acc, r) => acc + Number(r?.agent_monthly_budget_cents || 0), 0);
+            const budgetPct = monthlyBudget > 0 ? Math.round((monthlySpent / monthlyBudget) * 100) : null;
+            const dollars = (cents) => {
+              const n = Number(cents) / 100;
+              return n >= 100 ? `$${Math.round(n)}` : `$${n.toFixed(0)}`;
+            };
             const tiles = [
               { k: 'ACTIVE ROLES', v: activeRoles, d: starredCount > 0 ? `${starredCount} starred` : 'None starred' },
-              { k: 'CANDIDATES IN PIPELINE', v: pipelineCount, d: 'Across active roles' },
-              { k: 'YOUR REVIEW QUEUE', v: reviewCount, d: reviewCount === 0 ? 'All clear' : `Across ${roles.filter((r) => Number(r?.stage_counts?.review || 0) > 0).length} role${roles.filter((r) => Number(r?.stage_counts?.review || 0) > 0).length === 1 ? '' : 's'}` },
-              { k: 'AGENT BUDGET', v: '—', d: 'Cap set per role' },
+              { k: 'CANDIDATES IN PIPELINE', v: pipelineCount, d: newThisWeek > 0 ? `+${newThisWeek} this week` : 'Across active roles' },
+              { k: 'YOUR REVIEW QUEUE', v: reviewCount, d: reviewCount === 0 ? 'All clear' : `Across ${reviewRoleCount} role${reviewRoleCount === 1 ? '' : 's'}` },
+              {
+                k: 'BUDGET USED',
+                v: budgetPct != null ? `${budgetPct}%` : '—',
+                d: monthlyBudget > 0 ? `${dollars(monthlySpent)} of ${dollars(monthlyBudget)}` : 'Set a per-role cap',
+              },
             ];
             return tiles.map((tile) => (
               <div key={tile.k} className="mc-jobs-kpi">
@@ -586,83 +607,102 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
             {filtered.map((role) => {
               const stageCounts = role?.stage_counts || {};
               const workableRole = String(role?.source || '').toLowerCase() === 'workable';
-              const lastRoleActivity = role?.last_candidate_activity_at || orgData?.workable_last_sync_at || null;
+              const lastRoleActivity = role?.last_candidate_activity_at || role?.updated_at || orgData?.workable_last_sync_at || null;
               const roleBadgeLabel = getRoleBadgeLabel(role);
+              const agentEnabled = Boolean(role?.agentic_mode_enabled);
+              const agentSpent = Number(role?.agent_monthly_spent_cents || 0) / 100;
+              const agentBudget = Number(role?.agent_monthly_budget_cents || 0) / 100;
+              const roleLoc = String(role?.location || role?.workable_location || '').trim();
+              const roleDept = String(role?.department || role?.workable_department || '').trim();
               return (
                 <div
                   key={role.id}
                   className={`job-card ${workableRole ? 'from-wk' : ''}`}
+                  onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
+                  role="button"
+                  tabIndex={0}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      onNavigate('job-pipeline', { roleId: role.id });
+                    }
+                  }}
+                  style={{ cursor: 'pointer' }}
                 >
+                  {/* Card header — canvas jobs-list role-card:
+                      ⭐ star · role-name + #id + WORKABLE pill   ·   AGENT ON $X/$Y
+                      dept · loc · updated ago */}
                   <div className="job-head">
-                    <div>
-                      <h3>
-                        <button
-                          type="button"
-                          className="job-star"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            void handleToggleStar(role);
-                          }}
-                          aria-label={role.starred_for_auto_sync ? 'Unstar role (stop auto-sync)' : 'Star role to enable auto-sync and real-time scoring'}
-                          aria-pressed={Boolean(role.starred_for_auto_sync)}
-                          title={role.starred_for_auto_sync ? 'Auto-sync enabled · click to disable' : 'Star to auto-sync from Workable and score in real-time'}
-                          style={{
-                            background: 'transparent',
-                            border: 'none',
-                            padding: 2,
-                            marginRight: 6,
-                            cursor: 'pointer',
-                            verticalAlign: 'middle',
-                            color: role.starred_for_auto_sync ? 'var(--purple, #7c3aed)' : 'var(--mute, #999)',
-                          }}
-                        >
-                          <Star
-                            size={15}
-                            fill={role.starred_for_auto_sync ? 'currentColor' : 'none'}
-                          />
-                        </button>
-                        {role.name}
-                      </h3>
-                      <div className="sub">
-                        {Number(role.active_candidates_count || role.applications_count || 0)} active candidates
-                        {role?.tasks_count ? ` · ${role.tasks_count} task${role.tasks_count === 1 ? '' : 's'}` : ''}
-                        {role.starred_for_auto_sync ? ' · Auto-sync · 15 min' : ''}
+                    <button
+                      type="button"
+                      className="job-star"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void handleToggleStar(role);
+                      }}
+                      aria-label={role.starred_for_auto_sync ? 'Unstar role (stop auto-sync)' : 'Star role to enable auto-sync and real-time scoring'}
+                      aria-pressed={Boolean(role.starred_for_auto_sync)}
+                      title={role.starred_for_auto_sync ? 'Auto-sync enabled · click to disable' : 'Star to auto-sync from Workable and score in real-time'}
+                      style={{
+                        background: 'transparent',
+                        border: 'none',
+                        padding: 2,
+                        marginTop: 2,
+                        cursor: 'pointer',
+                        flexShrink: 0,
+                        color: role.starred_for_auto_sync ? 'var(--purple)' : 'var(--ink-soft)',
+                      }}
+                    >
+                      <Star
+                        size={16}
+                        strokeWidth={1.5}
+                        fill={role.starred_for_auto_sync ? 'currentColor' : 'none'}
+                      />
+                    </button>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 3, flexWrap: 'wrap' }}>
+                        <h3 className="role-name">{role.name}</h3>
+                        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10, color: 'var(--mute)' }}>#{role.id}</span>
+                        {workableRole ? (
+                          <WorkableTag label="WORKABLE" size="sm" className="wk-tag !border-0 !px-2 !py-1 !text-[9.5px]" />
+                        ) : (
+                          <span className={`chip ${isRoleDraft(role) ? '' : 'purple'}`} style={{ fontSize: 10 }}>
+                            {roleBadgeLabel}
+                          </span>
+                        )}
+                      </div>
+                      <div className="role-meta">
+                        {[
+                          roleDept || null,
+                          roleLoc || null,
+                          lastRoleActivity ? `updated ${formatRelativeDateTime(lastRoleActivity)}` : null,
+                        ].filter(Boolean).join(' · ') || 'No metadata yet'}
                       </div>
                     </div>
-                    {workableRole ? (
-                      <WorkableTag label="WORKABLE" size="sm" className="wk-tag !border-0 !px-2 !py-1 !text-[9.5px]" />
+                    {agentEnabled && agentBudget > 0 ? (
+                      <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--purple)', whiteSpace: 'nowrap' }}>
+                        AGENT ON · ${Math.round(agentSpent)}/${Math.round(agentBudget)}
+                      </div>
                     ) : (
-                      <span className={`chip ${isRoleDraft(role) ? '' : 'purple'}`}>
-                        {roleBadgeLabel}
-                      </span>
+                      <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', whiteSpace: 'nowrap' }}>
+                        AGENT OFF
+                      </div>
                     )}
                   </div>
 
                   <div className="job-stats">
-                    {STAGES.map((stage) => (
-                      <div key={stage.key} className="js-cell">
-                        <div className="k">{stage.label}</div>
-                        <div className="v">{Number(stageCounts?.[stage.key] || 0)}</div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="job-foot">
-                    <div>
-                      {workableRole ? (
-                        <span className="wk-sync">
-                          <span className="pulse" />
-                          Synced {formatRelativeDateTime(lastRoleActivity)}
-                        </span>
-                      ) : null}
-                    </div>
-                    <button
-                      type="button"
-                      className="btn btn-outline btn-sm"
-                      onClick={() => onNavigate('job-pipeline', { roleId: role.id })}
-                    >
-                      Open pipeline <span className="arrow">→</span>
-                    </button>
+                    {STAGES.map((stage) => {
+                      const value = Number(stageCounts?.[stage.key] || 0);
+                      const isReviewActive = stage.key === 'review' && value > 0;
+                      return (
+                        <div key={stage.key} className="js-cell">
+                          <div className="k">{stage.label}</div>
+                          <div className="v" style={isReviewActive ? { color: 'var(--purple)' } : undefined}>
+                            {value}
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               );

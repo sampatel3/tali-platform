@@ -263,7 +263,7 @@ describe('AssessmentsPage', () => {
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /^Jobs/ })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /active roles/i })).toBeInTheDocument();
     }, { timeout: 5000 });
     expect(screen.queryByRole('heading', { name: 'Assessments' })).not.toBeInTheDocument();
   });
@@ -324,7 +324,7 @@ describe('AssessmentsPage', () => {
     renderAppAt('/jobs');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /^Jobs/ })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /active roles/i })).toBeInTheDocument();
     }, { timeout: 5000 });
 
     fireEvent.click(within(screen.getByRole('navigation')).getAllByRole('button', { name: /^Candidates$/ })[0]);
@@ -410,7 +410,7 @@ describe('AssessmentsPage', () => {
     renderAppAt('/jobs');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /^Jobs/ })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /active roles/i })).toBeInTheDocument();
     });
     fireEvent.click(within(screen.getByRole('navigation')).getAllByRole('button', { name: /^Candidates$/ })[0]);
 
@@ -712,7 +712,7 @@ describe('AssessmentsPage', () => {
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/jobs');
-      expect(screen.getByRole('heading', { name: /^Jobs/ })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /active roles/i })).toBeInTheDocument();
     });
   });
 
