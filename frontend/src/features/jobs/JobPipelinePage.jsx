@@ -26,9 +26,12 @@ import {
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import { AgentSettingsPanel } from '../../shared/layout/AgentSettingsPanel';
-import { useAgentStatus } from '../../shared/layout/AgentBar';
+import { AgentBar, useAgentStatus } from '../../shared/layout/AgentBar';
 import { CommandBar } from '../../shared/ui/CommandBar';
-import { AgentRail } from './AgentRail';
+// AgentRail (the legacy left "cockpit rail") was retired with the v3
+// role detail layout — top AgentBar replaces it. Component file stays
+// in the tree until any other surface that may import it is also
+// migrated; remove that import here to avoid unused-import warnings.
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidatesDirectoryPage } from '../candidates/CandidatesDirectoryPage';
@@ -1667,14 +1670,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           }}
         />
 
-        <div className="mc-cockpit">
-          <AgentRail
-            roleId={role?.id}
-            onOpenSettings={() => setAgentPanelOpen(true)}
-            onPending={() => document.getElementById('pipeline-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
-          />
+        {/* HANDOFF v2 §4.2 / canvas jobs-detail-* — role detail is a
+            single-column page with the role-scoped AgentBar at the top
+            (replacing the legacy left "Agent rail" cockpit layout).
+            Shell already hides its global org-scoped AgentBar on this
+            route so we don't double-stack. */}
+        <AgentBar
+          roleId={Number.isFinite(numericRoleId) ? numericRoleId : null}
+          onRunNow={() => {/* TODO: wire to agent.runNow once UX is finalised */}}
+          onPause={() => setAgentPanelOpen(true)}
+        />
 
-          <div className="mc-cockpit-main">
+        <div className="mc-cockpit-main">
         <div className="role-hero">
           <div className="watermark">{String(role?.name || 'ROLE').replace(/[^A-Z0-9]/gi, '').slice(0, 3).toUpperCase() || 'ROL'}</div>
           <div className="role-hero-top">
@@ -1685,12 +1692,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 <span className="chip">{role?.source === 'workable' ? 'Synced from Workable' : 'Created in Taali'}</span>
               </div>
               <h1>{role?.name}<em>.</em></h1>
+              {/* HANDOFF v2 §4 / canvas jobs-detail-* — 4 facts in a row:
+                  Location / Department / Employment / Linked task (purple).
+                  Updated timestamp moves into the meta-line above so the
+                  facts row stays canvas-aligned. */}
               <div className="role-facts">
                 <div className="f"><span className="k">Location</span><span className="v">{roleFactValues.location}</span></div>
                 <div className="f"><span className="k">Department</span><span className="v">{roleFactValues.department}</span></div>
                 <div className="f"><span className="k">Employment</span><span className="v">{roleFactValues.employment}</span></div>
-                <div className="f"><span className="k">Assessment</span><span className="v purple">{roleTasks[0]?.name || 'Task not linked'}</span></div>
-                <div className="f"><span className="k">Updated</span><span className="v">{formatRelativeShort(role?.updated_at || role?.created_at)}</span></div>
+                <div className="f"><span className="k">Linked task</span><span className="v purple">{roleTasks[0]?.name || 'Task not linked'}</span></div>
               </div>
             </div>
 
@@ -2362,7 +2372,6 @@ Disqualifying: No experience with regulated financial data`}
           }}
         />
           </div>
-        </div>
 
         <AgentSettingsPanel
           open={agentPanelOpen}
