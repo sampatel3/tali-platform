@@ -25,7 +25,6 @@ import {
 } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
-import { AgentSettingsPanel } from '../../shared/layout/AgentSettingsPanel';
 import { AgentBar, useAgentStatus } from '../../shared/layout/AgentBar';
 import { CommandBar } from '../../shared/ui/CommandBar';
 // AgentRail (the legacy left "cockpit rail") was retired with the v3
@@ -1021,8 +1020,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
   const [roleSheetError, setRoleSheetError] = useState('');
   const [candidateSheetError, setCandidateSheetError] = useState('');
-  const [agentPanelOpen, setAgentPanelOpen] = useState(false);
-  const [agentSettingsDraft, setAgentSettingsDraft] = useState({});
+  // The legacy slide-out <AgentSettingsPanel> drawer state has been
+  // retired — the canvas-spec Agent settings tab on this page owns
+  // the same controls inline. See the AgentBar onPause handler below.
   const [savingRoleSheet, setSavingRoleSheet] = useState(false);
   const [addingCandidate, setAddingCandidate] = useState(false);
 
@@ -1675,10 +1675,32 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             (replacing the legacy left "Agent rail" cockpit layout).
             Shell already hides its global org-scoped AgentBar on this
             route so we don't double-stack. */}
+        {/* AgentBar Run now / Pause:
+            - Run now triggers `agent.runNow(roleId)` and surfaces a toast.
+            - Pause routes the user to the Agent settings tab on this page,
+              where the canvas-spec hero banner ON/OFF toggle owns the
+              actual pause state. We deliberately do NOT open a separate
+              <AgentSettingsPanel> drawer — having both an inline tab AND
+              a slide-out drawer for the same controls was the duplicate
+              chrome the user flagged. */}
         <AgentBar
           roleId={Number.isFinite(numericRoleId) ? numericRoleId : null}
-          onRunNow={() => {/* TODO: wire to agent.runNow once UX is finalised */}}
-          onPause={() => setAgentPanelOpen(true)}
+          onRunNow={async () => {
+            if (!Number.isFinite(numericRoleId)) return;
+            try {
+              await apiClient.agent.runNow(numericRoleId);
+              showToast('Agent run queued for this role.', 'success');
+            } catch (error) {
+              showToast(getErrorMessage(error, 'Failed to start agent run.'), 'error');
+            }
+          }}
+          onPause={() => {
+            setActiveView('role-fit');
+            const tabsEl = document.querySelector('.sub-tabs-sticky');
+            if (tabsEl && typeof tabsEl.scrollIntoView === 'function') {
+              tabsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+            }
+          }}
         />
 
         <div className="mc-cockpit-main">
@@ -2373,17 +2395,11 @@ Disqualifying: No experience with regulated financial data`}
         />
           </div>
 
-        <AgentSettingsPanel
-          open={agentPanelOpen}
-          onClose={() => setAgentPanelOpen(false)}
-          scope="role"
-          value={agentSettingsDraft}
-          onChange={setAgentSettingsDraft}
-          roleSummary={role ? {
-            name: role.name,
-            must_haves: Array.isArray(role?.must_haves) ? role.must_haves : [],
-          } : null}
-        />
+        {/* The legacy slide-out <AgentSettingsPanel scope="role"> drawer
+            was retired — the canvas-spec Agent settings tab on this page
+            owns the same controls inline (hero banner ON/OFF + budget
+            sidebar + autonomy toggles + reject threshold + must-haves +
+            pause threshold). Surfacing both was duplicate chrome. */}
       </div>
     </div>
   );
