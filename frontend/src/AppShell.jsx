@@ -34,7 +34,7 @@ import {
   ResetPasswordPage,
   VerifyEmailPage,
 } from './features/auth';
-import { DashboardNav } from './features/dashboard/DashboardNav';
+import { Shell as DashboardNav } from './shared/layout/Shell';
 import { ReportingPage } from './features/analytics/AnalyticsPage';
 import { CandidateWelcomePage } from './features/assessment_runtime/CandidateWelcomePage';
 import {
@@ -340,14 +340,14 @@ function AppContent() {
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <Loader2 size={32} className="animate-spin" style={{ color: '#9D00FF' }} />
+        <Loader2 size={32} className="animate-spin" style={{ color: 'var(--purple)' }} />
       </div>
     );
   }
 
   const lazyFallback = (
     <div className="min-h-screen flex items-center justify-center">
-      <Loader2 size={28} className="animate-spin" style={{ color: '#9D00FF' }} />
+      <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
     </div>
   );
   // workflowModeLoading removed — there is no per-org workflow probe anymore.
@@ -559,7 +559,7 @@ function AppContent() {
         element={
           loadingCandidateDetail ? (
             <div className="min-h-screen flex items-center justify-center">
-              <Loader2 size={28} className="animate-spin" style={{ color: '#9D00FF' }} />
+              <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
             </div>
           ) : (
             <Suspense fallback={lazyFallback}>

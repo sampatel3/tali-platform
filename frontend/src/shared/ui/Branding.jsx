@@ -3,7 +3,7 @@ import { BRAND } from '../../config/brand';
 
 const TAALI_MARK_PATH = 'M6 4.5v15M10 4.5v15M14 4.5v15M18 4.5v15M4 18.5L20 5.5';
 const TAALI_CONTAINED_MARK_TRANSFORM = 'translate(2.4 2.4) scale(0.8)';
-const TAALI_LOGO_FILL_CLASS = 'text-[#7F39FB]';
+const TAALI_LOGO_FILL_CLASS = 'text-[var(--purple)]';
 const TAALI_TILE_CORNER_RADIUS = 5.35;
 
 const GLYPH_VARIANTS = {
@@ -46,7 +46,7 @@ const GLYPH_VARIANTS = {
   linesDeep: {
     containerClassName: '',
     defaultBorderClass: '',
-    lineClassName: 'text-[#7F39FB]',
+    lineClassName: 'text-[var(--purple)]',
   },
   linesSoft: {
     containerClassName: '',

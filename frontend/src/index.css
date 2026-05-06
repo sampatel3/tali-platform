@@ -3,18 +3,19 @@
 @tailwind utilities;
 
 :root {
-  --ink: #1d1730;
-  --ink-2: #2e2745;
-  --mute: #6e6580;
+  --ink: #15121a;
+  --ink-2: #3a3343;
+  --ink-soft: #6b6478;
+  --mute: #8b8595;
   --mute-2: #9e96ae;
-  --line: #e7e0f0;
-  --line-2: #f0eaf7;
+  --line: #e8e2ee;
+  --line-2: #f1edf5;
   --bg: #f7f4fb;
   --bg-2: #ffffff;
   --bg-3: #efe8f7;
   --purple: #7f39fb;
   --purple-2: #6b21e8;
-  --purple-soft: #e9ddfe;
+  --purple-soft: #f0e7fb;
   --lime: #c8f169;
   --peach: #ffd1b8;
   --green: #15a36a;
@@ -22,17 +23,17 @@
   --amber: #d88a1c;
   --workable: #2d8cff;
   --workable-dark: #1a5fbf;
-  --shadow-sm: 0 1px 0 rgba(29, 23, 48, 0.04), 0 2px 6px rgba(29, 23, 48, 0.04);
-  --shadow-md: 0 1px 0 rgba(29, 23, 48, 0.04), 0 12px 32px rgba(29, 23, 48, 0.08);
-  --shadow-lg: 0 2px 0 rgba(29, 23, 48, 0.04), 0 30px 60px -20px rgba(29, 23, 48, 0.22);
+  --shadow-sm: 0 1px 2px rgba(21, 18, 26, 0.06);
+  --shadow-md: 0 8px 28px -12px rgba(21, 18, 26, 0.18);
+  --shadow-lg: 0 28px 60px -28px rgba(21, 18, 26, 0.22);
   --radius-sm: 10px;
   --radius: 14px;
   --radius-lg: 22px;
   --radius-xl: 28px;
   --pad-x: 48px;
   --section-y: 96px;
-  --font-display: 'Geist', 'Inter', system-ui, sans-serif;
-  --font-sans: 'Geist', 'Inter', system-ui, sans-serif;
+  --font-display: 'Geist', system-ui, sans-serif;
+  --font-sans: 'Geist', system-ui, sans-serif;
   --font-mono: 'Geist Mono', ui-monospace, monospace;
 
   /* Backwards-compatible variables for existing components. */
@@ -108,6 +109,7 @@
 html[data-theme="dark"] {
   --ink: #f3effb;
   --ink-2: #d9d2e8;
+  --ink-soft: #b9b1cc;
   --mute: #a79cbe;
   --mute-2: #776b8d;
   --line: #2a2340;
@@ -7439,3 +7441,567 @@ button.eng-badge-button:focus-visible {
   cursor: pointer;
 }
 .process-dialog__advanced { padding-left: 0; }
+
+/* ============================================================================
+   Mission Control chrome (Phase 1)
+   Shared shell + agent bar primitives. Class names are mc-* prefixed to
+   avoid collision with the legacy `.app-nav` / `.kicker` / `.chip` styles
+   higher up in this file. Pages opt-in by rendering <Shell /> + <AgentBar />.
+   ========================================================================= */
+
+.mc-shell {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.mc-nav {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 0;
+  padding: 0 24px;
+  background: var(--bg-2);
+  border-bottom: 1px solid var(--line);
+}
+
+.mc-nav-logo {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 18px;
+  letter-spacing: -0.025em;
+  color: var(--ink);
+  margin-right: 28px;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  font-style: normal;
+}
+
+.mc-nav-logo .mc-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--ink);
+  color: var(--bg);
+  display: grid;
+  place-items: center;
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+}
+
+.mc-nav-logo em {
+  color: var(--purple);
+  font-style: normal;
+  font-weight: inherit;
+}
+
+.mc-nav-tabs {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  height: 100%;
+}
+
+.mc-nav-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  height: 100%;
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--mute);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-family: inherit;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  position: relative;
+}
+
+.mc-nav-tab:hover {
+  color: var(--ink-2);
+}
+
+.mc-nav-tab.on {
+  color: var(--ink);
+  border-bottom-color: var(--purple);
+}
+
+.mc-nav-tab .mc-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: var(--purple-soft);
+  color: var(--purple);
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.mc-nav-grow { flex: 1; }
+
+.mc-nav-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.mc-nav-search {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 12px 7px 11px;
+  border-radius: 999px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--mute);
+  min-width: 240px;
+  cursor: pointer;
+}
+
+.mc-nav-search:hover {
+  border-color: var(--ink-soft);
+}
+
+.mc-nav-search kbd {
+  margin-left: auto;
+  display: inline-block;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--bg-2);
+  color: var(--ink-2);
+  font-family: inherit;
+  font-size: 10px;
+}
+
+.mc-icon-btn {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-2);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  position: relative;
+}
+
+.mc-icon-btn:hover {
+  border-color: var(--line);
+  color: var(--purple);
+}
+
+.mc-icon-btn .mc-dot {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--purple);
+  border: 2px solid var(--bg-2);
+}
+
+.mc-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  background: var(--purple-soft);
+  color: var(--purple);
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  border: 0;
+  cursor: pointer;
+}
+
+.mc-avatar-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow-md);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  z-index: 60;
+}
+
+.mc-avatar-menu-header {
+  padding: 10px 12px 8px;
+  border-bottom: 1px solid var(--line-2);
+  margin-bottom: 4px;
+}
+
+.mc-avatar-menu-header .name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.mc-avatar-menu-header .org {
+  font-size: 11.5px;
+  color: var(--mute);
+  margin-top: 2px;
+}
+
+.mc-avatar-menu button {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.mc-avatar-menu button:hover {
+  background: var(--bg);
+  color: var(--purple);
+}
+
+.mc-nav-avatar-wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+/* ================== AGENT BAR (purple aurora) ================== */
+
+.mc-agent-bar {
+  position: relative;
+  border-radius: 14px;
+  color: #fff;
+  overflow: hidden;
+  isolation: isolate;
+  padding: 14px 18px;
+  background:
+    radial-gradient(ellipse 60% 120% at 12% 50%, rgba(167, 139, 250, 0.55) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 130% at 88% 40%, rgba(244, 114, 182, 0.40) 0%, transparent 65%),
+    radial-gradient(ellipse 70% 100% at 50% 110%, rgba(99, 102, 241, 0.45) 0%, transparent 70%),
+    linear-gradient(135deg, var(--purple) 0%, color-mix(in srgb, var(--purple) 80%, #000) 100%);
+  background-size: 220% 220%, 200% 240%, 220% 200%, 100% 100%;
+  background-position: 0% 50%, 100% 50%, 50% 0%, 0 0;
+  box-shadow:
+    0 12px 28px -14px color-mix(in srgb, var(--purple) 70%, transparent),
+    0 4px 10px -4px color-mix(in srgb, var(--purple) 40%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+  animation: mc-aurora 18s ease-in-out infinite;
+}
+
+.mc-agent-bar.is-amber {
+  background:
+    radial-gradient(ellipse 60% 120% at 12% 50%, rgba(255, 209, 102, 0.55) 0%, transparent 60%),
+    radial-gradient(ellipse 50% 130% at 88% 40%, rgba(255, 140, 80, 0.40) 0%, transparent 65%),
+    linear-gradient(135deg, var(--amber) 0%, color-mix(in srgb, var(--amber) 80%, #000) 100%);
+  box-shadow:
+    0 12px 28px -14px color-mix(in srgb, var(--amber) 70%, transparent),
+    inset 0 1px 0 rgba(255, 255, 255, 0.10);
+}
+
+.mc-agent-bar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(255, 255, 255, 0.06) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, 0.06) 1px, transparent 1px);
+  background-size: 24px 24px;
+  mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, #000 40%, transparent 100%);
+  -webkit-mask-image: radial-gradient(ellipse 80% 80% at 50% 50%, #000 40%, transparent 100%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+@keyframes mc-aurora {
+  0% { background-position: 0% 50%, 100% 50%, 50% 0%; }
+  50% { background-position: 100% 50%, 0% 50%, 50% 100%; }
+  100% { background-position: 0% 50%, 100% 50%, 50% 0%; }
+}
+
+@keyframes mc-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.mc-agent-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 14px;
+}
+
+.mc-agent-glyph {
+  width: 38px;
+  height: 38px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.20);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  flex-shrink: 0;
+}
+
+.mc-agent-glyph .mc-pulse-ring {
+  position: absolute;
+  inset: -3px;
+  border-radius: 13px;
+  border: 2px solid rgba(255, 255, 255, 0.55);
+  animation: mc-pulse-ring 1.6s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes mc-pulse-ring {
+  0% { transform: scale(1); opacity: 0.7; }
+  100% { transform: scale(1.25); opacity: 0; }
+}
+
+.mc-agent-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-weight: 600;
+  font-size: 15px;
+  line-height: 1.2;
+}
+
+.mc-agent-pending {
+  background: rgba(255, 255, 255, 0.22);
+  color: #fff;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  letter-spacing: 0.03em;
+}
+
+.mc-agent-tick {
+  font-size: 12.5px;
+  margin-top: 3px;
+  color: rgba(255, 255, 255, 0.85);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 520px;
+}
+
+.mc-agent-budget {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+}
+
+.mc-agent-budget-row {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.mc-agent-budget-bar {
+  height: 7px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.22);
+  overflow: hidden;
+  position: relative;
+}
+
+.mc-agent-budget-bar > i {
+  display: block;
+  height: 100%;
+  background: #fff;
+  border-radius: 4px;
+}
+
+.mc-agent-budget-bar::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 80%;
+  width: 1px;
+  background: rgba(255, 255, 255, 0.45);
+}
+
+.mc-agent-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mc-agent-btn {
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.30);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: inherit;
+}
+
+.mc-agent-btn.is-ghost {
+  background: transparent;
+  border-color: rgba(255, 255, 255, 0.40);
+}
+
+.mc-agent-btn:hover {
+  background: rgba(255, 255, 255, 0.30);
+}
+
+/* ================== AGENT SETTINGS PANEL (slide-out) ================== */
+
+.mc-panel-overlay {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--ink) 35%, transparent);
+  backdrop-filter: blur(2px);
+  z-index: 70;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.mc-panel-overlay.is-closing { pointer-events: none; opacity: 0; transition: opacity 0.15s; }
+
+.mc-panel-drawer {
+  width: min(440px, 100vw);
+  height: 100%;
+  background: var(--bg);
+  border-left: 1px solid var(--line);
+  box-shadow: var(--shadow-lg);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.mc-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mc-panel-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.mc-panel-card {
+  padding: 18px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.mc-panel-kicker {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-bottom: 4px;
+}
+
+.mc-panel-title {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+
+.mc-panel-help {
+  font-size: 12.5px;
+  color: var(--mute);
+  line-height: 1.5;
+  margin-top: 8px;
+}
+
+.mc-switch {
+  width: 38px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--line);
+  border: 0;
+  position: relative;
+  cursor: pointer;
+  transition: background 0.15s;
+  flex-shrink: 0;
+}
+
+.mc-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-2);
+  transition: transform 0.15s;
+}
+
+.mc-switch.on {
+  background: var(--purple);
+}
+
+.mc-switch.on::after {
+  transform: translateX(16px);
+}
+
+.mc-info-callout {
+  padding: 14px 16px;
+  background: var(--purple-soft);
+  border: 1px solid color-mix(in oklab, var(--purple) 25%, transparent);
+  border-radius: 12px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.55;
+  display: flex;
+  gap: 10px;
+}
+
+.mc-info-callout svg { color: var(--purple); flex-shrink: 0; margin-top: 1px; }
+

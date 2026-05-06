@@ -11,6 +11,7 @@ export default {
         taali: {
           ink: 'var(--ink)',
           'ink-2': 'var(--ink-2)',
+          'ink-soft': 'var(--ink-soft)',
           mute: 'var(--mute)',
           'mute-2': 'var(--mute-2)',
           line: 'var(--line)',

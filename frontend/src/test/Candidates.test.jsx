@@ -230,10 +230,15 @@ describe('CandidatesPage', () => {
     expect(screen.getByPlaceholderText('Search by name, email, position, or status')).toBeInTheDocument();
   });
 
-  it('renders the global theme switch inside the candidates top nav', async () => {
+  it('exposes the theme switch inside the avatar menu', async () => {
     await renderAppOnCandidatesPage();
 
-    expect(within(screen.getByRole('navigation')).getAllByRole('group', { name: /theme toggle/i }).length).toBeGreaterThan(0);
+    const avatarBtn = await screen.findByRole('button', { name: /account menu/i }, { timeout: 5000 });
+    await act(async () => {
+      fireEvent.click(avatarBtn);
+    });
+
+    expect(await screen.findByRole('button', { name: /(dark|light) mode/i })).toBeInTheDocument();
   });
 
   it.skip('shows role list and role summary context [TODO: rewrite for jobs-first IA — role mgmt moved to JobsPage]', async () => {
