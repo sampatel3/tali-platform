@@ -10329,6 +10329,85 @@ button.eng-badge-button:focus-visible {
 .mc-report-snapshot-radar-empty b { color: var(--ink); }
 
 /* ===========================================================================
+   Candidate file page header — HANDOFF v2 §5.1 / canvas cand-overview
+   Light header above the tab strip: avatar 72 + CANDIDATE kicker + name +
+   meta line + 3 actions (Open in Workable / Manage links / Share with
+   client). Replaces the legacy dark "STANDING REPORT" hero.
+   =========================================================================== */
+
+.mc-cand-header {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  margin-bottom: 18px;
+  padding: 4px 0 0;
+}
+
+.mc-cand-header-avatar {
+  border-radius: 14px !important;
+  width: 72px !important;
+  height: 72px !important;
+  font-size: 24px !important;
+  font-family: var(--font-display);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.mc-cand-header-id {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mc-cand-header-id .mc-kicker {
+  margin: 0;
+}
+
+.mc-cand-header-name {
+  font-family: var(--font-display);
+  font-size: 42px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin: 4px 0 6px;
+  color: var(--ink);
+  line-height: 1.05;
+}
+
+.mc-cand-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--mute);
+}
+
+.mc-cand-header-meta b {
+  color: var(--ink-2);
+}
+
+.mc-cand-header-sep {
+  opacity: 0.6;
+}
+
+.mc-cand-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+@media (max-width: 880px) {
+  .mc-cand-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+  .mc-cand-header-actions {
+    align-self: stretch;
+  }
+}
+
+/* ===========================================================================
    Candidate Interview prep tab — HANDOFF v2 §5.1 / canvas cand-prep
    Hero banner + STAGE 1 / STAGE 2 kickered groups + question cards
    with LISTEN FOR (green) / CONCERNING IF (red) two-column layout.

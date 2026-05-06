@@ -12,6 +12,7 @@ import {
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import {
+  CandidateAvatar,
   WorkableComparisonCard,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import { ShareModal } from './ShareModal';
@@ -1340,79 +1341,102 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             </button>
           );
         })()}
-        <div className="kicker" style={{ marginBottom: '10px' }}>Candidate standing report</div>
-
-        <div className="report-hero">
-          <div className="meta">
-            <span className="kicker">STANDING REPORT · APPLICATION #{application?.id || '—'}</span>
-            <span className={`chip ${reportModel?.recommendation?.variant === 'success' ? 'green' : reportModel?.recommendation?.variant === 'warning' ? 'amber' : 'purple'}`}>
-              {reportModel?.recommendation?.label || 'Pending review'}
-            </span>
-            {isPreScreenedOut ? (
-              <span className="chip" style={{ background: 'var(--taali-surface-subtle, rgba(100,116,139,0.15))', color: 'var(--ink-2)' }}>
-                Pre-screened out
-              </span>
-            ) : null}
-          </div>
-          {isPreScreenedOut ? (
-            <div
-              data-internal-only
-              style={{
-                marginTop: '14px',
-                padding: '12px 14px',
-                borderRadius: '12px',
-                background: 'var(--taali-surface-subtle, rgba(100,116,139,0.08))',
-                border: '1px solid var(--taali-border, rgba(100,116,139,0.2))',
-                display: 'flex',
-                gap: '12px',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-              }}
+        {/* HANDOFF v2 §5.1 / canvas cand-overview header — light page header
+            with avatar + name + meta line + 3 actions. The 4-tile dark
+            score band that used to live here is redundant now: the new
+            Overview pane (cand-overview hero band) renders ScoreRing +
+            RECOMMENDATION + SIGNAL list on every tab. */}
+        <div className="mc-kicker" style={{ marginBottom: 8 }}>Candidate standing report</div>
+        {isPreScreenedOut ? (
+          <div
+            data-internal-only
+            style={{
+              marginTop: '4px',
+              marginBottom: '14px',
+              padding: '12px 14px',
+              borderRadius: '12px',
+              background: 'var(--taali-surface-subtle, rgba(100,116,139,0.08))',
+              border: '1px solid var(--taali-border, rgba(100,116,139,0.2))',
+              display: 'flex',
+              gap: '12px',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div style={{ fontSize: '13.5px', color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 600 }}>
+              <strong>Filtered out by pre-screen.</strong>{' '}
+              {preScreenReason || 'A cheap pre-screen decided this CV did not plausibly meet the role must-haves.'}
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleRunFullEvaluation}
+              disabled={busyAction === 'rescore'}
             >
-              <div style={{ fontSize: '13.5px', color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 600 }}>
-                <strong>Filtered out by pre-screen.</strong>{' '}
-                {preScreenReason || 'A cheap pre-screen decided this CV did not plausibly meet the role must-haves.'}
-              </div>
+              {busyAction === 'rescore' ? 'Queuing…' : 'Run full evaluation'}
+            </button>
+          </div>
+        ) : null}
+        <header className="mc-cand-header">
+          <CandidateAvatar
+            name={application?.candidate_name || application?.candidate_email || 'Candidate'}
+            size={72}
+            className="mc-cand-header-avatar"
+          />
+          <div className="mc-cand-header-id">
+            <div className="mc-kicker">CANDIDATE</div>
+            <h1 className="mc-cand-header-name">
+              {application?.candidate_name || application?.candidate_email || 'Candidate'}
+            </h1>
+            <div className="mc-cand-header-meta">
+              {[
+                application?.candidate_email,
+                application?.candidate_location,
+                application?.role_name,
+                application?.pipeline_stage
+                  ? `Application: ${String(application.pipeline_stage).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())}`
+                  : null,
+              ].filter(Boolean).map((part, idx, arr) => (
+                <React.Fragment key={`${part}-${idx}`}>
+                  <span>{part}</span>
+                  {idx < arr.length - 1 ? <span className="mc-cand-header-sep">·</span> : null}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+          {!isClientView ? (
+            <div className="mc-cand-header-actions">
+              {application?.workable_profile_url ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
+                >
+                  <ExternalLink size={13} />
+                  Open in Workable
+                </button>
+              ) : null}
               <button
                 type="button"
-                className="btn btn-primary btn-sm"
-                onClick={handleRunFullEvaluation}
-                disabled={busyAction === 'rescore'}
+                className="btn btn-outline btn-sm"
+                onClick={() => setShareModalOpen(true)}
+                disabled={!application?.id}
               >
-                {busyAction === 'rescore' ? 'Queuing…' : 'Run full evaluation'}
+                <Copy size={13} />
+                Manage links
+              </button>
+              <button
+                type="button"
+                className="btn btn-purple btn-sm"
+                onClick={() => setShareModalOpen(true)}
+                disabled={!application?.id}
+              >
+                Share with client
               </button>
             </div>
           ) : null}
-          <h1>
-            {application?.candidate_name || application?.candidate_email || 'Candidate'}
-            {application?.role_name ? (
-              <> · <span style={{ color: 'var(--mute)' }}>{application.role_name}</span></>
-            ) : null}
-          </h1>
-          <div className="report-hero-grid">
-            <div className="c hi">
-              <div className="k">TAALI score</div>
-              <div className="v">{reportModel?.summaryModel?.taaliScore != null ? `${Math.round(reportModel.summaryModel.taaliScore)} / 100` : '—'}</div>
-              <div className="d">{completedAssessment ? 'CV + assessment' : 'Pre-assessment'}</div>
-            </div>
-            <div className="c hi">
-              <div className="k">Role fit</div>
-              <div className="v">{reportModel?.summaryModel?.roleFitScore != null ? `${Math.round(reportModel.summaryModel.roleFitScore)} / 100` : '—'}</div>
-              <div className="d">{application?.role_name || application?.candidate_position || 'Role evidence'}</div>
-            </div>
-            <div className="c">
-              <div className="k">Assessment</div>
-              <div className="v">{reportModel?.summaryModel?.assessmentScore != null ? `${Math.round(reportModel.summaryModel.assessmentScore)} / 100` : '—'}</div>
-              <div className="d">{completedAssessment ? 'Completed signal present' : 'Pending completion'}</div>
-            </div>
-            <div className="c">
-              <div className="k">Workable raw</div>
-              <div className="v">{application?.workable_score_raw != null ? `${Math.round(application.workable_score_raw)} / 100` : '—'}</div>
-              <div className="d">{workableSource ? 'Synced candidate context' : 'Manual application'}</div>
-            </div>
-          </div>
-        </div>
+        </header>
 
         <div className="share-bar" data-internal-only>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1501,17 +1525,23 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             All scores render as integer "nn / 100" per HANDOFF v2 §6. */}
         {(() => {
           const fluencyAxes = computeFluencyAxes(completedAssessment);
+          const taaliScore = reportModel?.summaryModel?.taaliScore;
+          const roleFitScoreVal = reportModel?.summaryModel?.roleFitScore;
+          const assessmentScore = reportModel?.summaryModel?.assessmentScore;
+          // Composite score for the ScoreRing in the hero band — prefer
+          // completed-assessment composite, then taali summary, then
+          // application CV match. The ring is the page's loudest signal,
+          // so falling back through these keeps it from going empty when
+          // an assessment isn't linked yet.
           const compositeScore = (() => {
             if (Number.isFinite(Number(completedAssessment?.score))) {
               const s = Number(completedAssessment.score);
               return s <= 10 ? s * 10 : s;
             }
+            if (Number.isFinite(Number(taaliScore))) return Number(taaliScore);
             if (Number.isFinite(Number(application?.cv_match_score))) return Number(application.cv_match_score);
             return null;
           })();
-          const taaliScore = reportModel?.summaryModel?.taaliScore;
-          const roleFitScoreVal = reportModel?.summaryModel?.roleFitScore;
-          const assessmentScore = reportModel?.summaryModel?.assessmentScore;
           const recommendationLabel = reportModel?.recommendation?.label || 'Continue review';
           const fmtScore = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null);
 
