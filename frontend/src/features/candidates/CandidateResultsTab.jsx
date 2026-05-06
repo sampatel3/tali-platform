@@ -269,7 +269,7 @@ export const CandidateResultsTab = ({
               <div>
                 <div className="font-mono text-xs text-[var(--taali-muted)]">Baseline AI collaboration (calibration)</div>
                 <div className="font-mono text-xl font-bold" style={{ color: scoreColor(calibrationScore) }}>
-                  {calibrationScore.toFixed(1)}/10 · {scoreLabel(calibrationScore)}
+                  {Math.round(calibrationScore * 10)} / 100 · {scoreLabel(calibrationScore)}
                 </div>
               </div>
               <Button type="button" variant="secondary" size="sm" onClick={onOpenOnboarding}>
@@ -333,7 +333,7 @@ export const CandidateResultsTab = ({
                 <div className="flex items-center gap-3">
                   {catScore != null ? (
                     <span className="font-mono text-base font-bold" style={{ color: scoreColor(catScore) }}>
-                      {Number(catScore).toFixed(1)}/10 · {scoreLabel(Number(catScore))}
+                      {Math.round(Number(catScore) * 10)} / 100 · {scoreLabel(Number(catScore))}
                     </span>
                   ) : (
                     <span className="font-mono text-xs text-[var(--taali-muted)]">—</span>
@@ -354,13 +354,13 @@ export const CandidateResultsTab = ({
                           <div
                             className="h-full"
                             style={{
-                              width: `${((Number(metricVal) || 0) / 10) * 100}%`,
+                              width: `${Math.min(100, Math.max(0, (Number(metricVal) || 0) * 10))}%`,
                               backgroundColor: scoreColor(Number(metricVal) || 0),
                             }}
                           />
                         </div>
                         <div className="text-right font-mono text-sm font-bold">
-                          {metricVal != null ? `${Number(metricVal).toFixed(1)}/10` : '—'}
+                          {metricVal != null ? `${Math.round(Number(metricVal) * 10)} / 100` : '—'}
                         </div>
                       </div>
                       {catExplanations[metricKey] ? (

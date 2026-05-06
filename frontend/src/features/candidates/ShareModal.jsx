@@ -13,10 +13,10 @@ const buildShareUrl = (mode, token) => {
 };
 
 const EXPIRY_OPTIONS = [
-  { value: '24h', label: '24 hours' },
-  { value: '7d', label: '7 days' },
-  { value: '30d', label: '30 days' },
-  { value: 'single', label: 'Single view' },
+  { value: '7d', label: 'In 7 days' },
+  { value: '24h', label: 'In 24 hours' },
+  { value: '30d', label: 'In 30 days' },
+  { value: 'single', label: 'Single view, then expires' },
 ];
 
 // ShareModal — MVP single-link with rotate. Reuses the existing
@@ -145,9 +145,6 @@ export const ShareModal = ({ open, onClose, applicationId, initialToken }) => {
                 className="mc-share-select"
                 value={expiry}
                 onChange={(e) => setExpiry(e.target.value)}
-                disabled
-                aria-disabled="true"
-                title="Multi-expiry support is rolling out — backend ticket pending."
               >
                 {EXPIRY_OPTIONS.map((opt) => (
                   <option key={opt.value} value={opt.value}>{opt.label}</option>
@@ -155,8 +152,7 @@ export const ShareModal = ({ open, onClose, applicationId, initialToken }) => {
               </select>
             </label>
             <p className="mc-share-help">
-              For now every link stays live until you rotate. 24 h / 7 d / single-view options ship with
-              the share-links backend.
+              The link auto-expires when this window closes. Choose <em style={{ fontStyle: 'normal', color: 'var(--ink-2)' }}>Single view</em> for one-shot sharing.
             </p>
           </div>
 
