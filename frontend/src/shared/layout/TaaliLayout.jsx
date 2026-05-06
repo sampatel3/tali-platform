@@ -20,11 +20,8 @@ const APP_TABS = [
 ];
 
 const MARKETING_TABS = [
-  { id: 'problem', label: 'The problem' },
-  { id: 'platform', label: 'Platform' },
-  { id: 'runtime', label: 'Runtime' },
+  { id: 'platform', label: 'Product' },
   { id: 'how-it-works', label: 'How it works' },
-  { id: 'proof', label: 'Why Taali' },
   { id: 'pricing', label: 'Pricing' },
 ];
 
