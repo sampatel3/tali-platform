@@ -682,18 +682,23 @@ const CvMatchRail = ({
     <section className="cv-rail cv-match-summary" aria-label="CV match summary">
       <div className="rail-card cv-summary-bar">
         <div className="rail-score">
-          <div className={`num ${(roleFitScore || 0) >= 75 ? 'hi' : 'md'}`}>
-            {roleFitScore != null ? Math.round(roleFitScore) : '—'}<sup>%</sup>
-          </div>
+          {roleFitScore != null ? (
+            <ScoreRing score={Math.round(roleFitScore)} size={96} label="CV MATCH" />
+          ) : (
+            <div className="mc-report-snapshot-score-empty" style={{ width: 96, height: 96 }}>—</div>
+          )}
           <div>
-            <div className="lbl">CV match</div>
-            <div className="meta">
-              vs. <b>{application?.role_name || application?.candidate_position || 'target role'}</b>
-              {requirementTotal ? <> · <b>{matchedItems.length} of {requirementTotal}</b> evidenced</> : null}
+            <div className="mc-kicker" style={{ marginBottom: 6 }}>CV MATCH</div>
+            <div style={{ fontFamily: 'var(--font-display)', fontSize: 20, fontWeight: 600, letterSpacing: '-0.015em', color: 'var(--ink)', lineHeight: 1.2 }}>
+              {requirementTotal
+                ? <>{matchedItems.length} of {requirementTotal} requirements <em style={{ fontStyle: 'normal', color: 'var(--purple)' }}>evidenced</em></>
+                : <>CV evidence summary</>}
             </div>
-            <div className="rail-meta" style={{ marginTop: '4px' }}>
+            <div className="meta" style={{ marginTop: 4 }}>
+              vs. <b>{application?.role_name || application?.candidate_position || 'target role'}</b>
+            </div>
+            <div className="rail-meta" style={{ marginTop: '4px', fontFamily: 'var(--font-mono)', fontSize: 11, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--mute)' }}>
               {scoredAt ? `Scored ${new Date(scoredAt).toLocaleDateString()}` : 'Awaiting CV score'}
-              {cvMatchDetails?.score_scale ? ` · ${cvMatchDetails.score_scale}` : ''}
             </div>
           </div>
         </div>
