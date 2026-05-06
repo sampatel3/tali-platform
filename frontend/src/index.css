@@ -8005,3 +8005,78 @@ button.eng-badge-button:focus-visible {
 
 .mc-info-callout svg { color: var(--purple); flex-shrink: 0; margin-top: 1px; }
 
+/* ================== PAGE LAYOUT + HERO (Phase 2) ================== */
+
+.mc-page {
+  padding: 28px 32px 48px;
+  max-width: 1440px;
+  margin: 0 auto;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.mc-page-narrow {
+  max-width: 1200px;
+}
+
+.mc-page-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 28px;
+  flex-wrap: wrap;
+}
+
+.mc-page-head > :first-child {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mc-page-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.mc-kicker {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--purple);
+  margin-bottom: 10px;
+}
+
+.mc-kicker.is-mute { color: var(--mute); }
+
+.mc-h-display {
+  font-family: var(--font-display);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.02;
+  font-size: clamp(38px, 5.4vw, 60px);
+  color: var(--ink);
+  margin: 0 0 10px;
+}
+
+.mc-h-display em {
+  font-style: normal;
+  color: var(--purple);
+  font-weight: inherit;
+}
+
+.mc-h-display .mc-period {
+  color: var(--purple);
+}
+
+.mc-subtitle {
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--mute);
+  max-width: 720px;
+  margin: 0;
+}
+
