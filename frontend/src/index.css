@@ -63,7 +63,11 @@
   --taali-table-header: color-mix(in oklab, var(--bg) 85%, var(--bg-2));
   --taali-line: var(--line);
   --taali-line-2: var(--line-2);
-  --taali-border: var(--ink);
+  /* All `var(--taali-border)` consumers (Background jobs panel, Workable
+     toaster, settings buttons) want a subtle divider — not an ink-colored
+     hard border. Aliasing to var(--line) keeps the legacy callers working
+     without grep-and-replace. */
+  --taali-border: var(--line);
   --taali-border-soft: color-mix(in oklab, var(--line) 78%, transparent);
   --taali-border-subtle: color-mix(in oklab, var(--ink) 8%, transparent);
   --taali-border-muted: var(--line);
