@@ -56,9 +56,13 @@ class Settings(BaseSettings):
     CLAUDE_CLI_REQUIRE_PROVIDER_USAGE: bool = True
     CLAUDE_CLI_PROVIDER_USAGE_GRACE_OUTPUT_EVENTS: int = 40
 
-    # Cost model defaults (all overridable via environment)
-    CLAUDE_INPUT_COST_PER_MILLION_USD: float = 0.25
-    CLAUDE_OUTPUT_COST_PER_MILLION_USD: float = 1.25
+    # Cost model defaults (all overridable via environment).
+    # Rates match Claude Haiku 4.5 — the model the platform actually
+    # routes to today. The pre-2026 defaults ($0.25 / $1.25) were Haiku
+    # 3.5 rates and produced a ~4x under-count of every billable call,
+    # surfaced by the Anthropic reconciliation panel as -75% drift.
+    CLAUDE_INPUT_COST_PER_MILLION_USD: float = 1.0
+    CLAUDE_OUTPUT_COST_PER_MILLION_USD: float = 5.0
 
     # Usage-based pricing (2026-04-29 cutover from Lemon Squeezy).
     # When False, every Claude call writes a usage_events row but the

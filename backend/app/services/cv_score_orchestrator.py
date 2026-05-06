@@ -349,9 +349,19 @@ def _execute_scoring(
     # Pre-build interview-support pack from the fresh details. Detail
     # endpoint reads this from cache instead of regenerating Claude
     # questions inline (which previously made every page load 20s+).
-    # Skip on cache hits — the pack was built when the score was first
-    # computed, so rebuilding would make an unnecessary Haiku call.
-    if job.cache_hit != "hit":
+    #
+    # Three gates, all required:
+    # 1. Skip on cache hits — pack was built when the score was first
+    #    computed, so rebuilding would make an unnecessary Haiku call.
+    # 2. Skip when the application has no cv_match_score (pre-screen
+    #    filtered, or v3 failed). Building an interview pack for a
+    #    candidate we already rejected wastes ~$0.013 in Haiku 4.5
+    #    spend per candidate — historically the dominant cost driver
+    #    on the platform when imports ran without recruiter intent.
+    # 3. Skip when scoring errored (job.status == ERROR) — same reason.
+    has_real_score = application.cv_match_score is not None
+    job_succeeded = job.status == SCORE_JOB_DONE
+    if job.cache_hit != "hit" and has_real_score and job_succeeded:
         try:
             refresh_application_interview_support(
                 application,
