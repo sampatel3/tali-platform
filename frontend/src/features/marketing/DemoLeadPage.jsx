@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 
+import { TaaliTile } from '../../shared/ui/Branding';
 import { AuthField } from '../auth/AuthShell';
 
 const STEPS = [
@@ -42,7 +43,13 @@ export const DemoLeadPage = ({ onNavigate }) => {
           onClick={() => onNavigate?.('landing')}
           aria-label="Back to landing"
         >
-          <span className="mc-demo-lead-mark">T</span>
+          <TaaliTile
+            className="h-[26px] w-[26px] rounded-[5px]"
+            fillClassName="text-[var(--purple)]"
+            lineClassName="text-white"
+            strokeWidth={2.4}
+            cornerRadius={5}
+          />
           <span>taali<em>.</em></span>
         </button>
         <div className="mc-kicker" style={{ marginBottom: 14 }}>SEE THE AGENT WORK A REAL ROLE · 7 MIN</div>
