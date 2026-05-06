@@ -3358,7 +3358,10 @@ html[data-theme="dark"] {
 .cand-head,
 .cand-row {
   display: grid;
-  grid-template-columns: 28px minmax(230px, 1.65fr) minmax(220px, 1.25fr) minmax(170px, 1.1fr) minmax(124px, 0.86fr) minmax(106px, 0.72fr) minmax(96px, 0.66fr);
+  /* HANDOFF v2 / canvas CandidatesDirectoryPage table:
+     checkbox + Candidate (2fr) + Role (1.6fr) + Stage (1fr) +
+     CV match (0.8fr) + Score (0.8fr) + Status (0.6fr) */
+  grid-template-columns: 28px minmax(220px, 2fr) minmax(180px, 1.6fr) minmax(110px, 1fr) minmax(96px, 0.8fr) minmax(96px, 0.8fr) minmax(88px, 0.6fr);
   gap: 14px;
   align-items: center;
   padding: 14px 22px;
@@ -3448,6 +3451,29 @@ html[data-theme="dark"] {
   font-size: 11.5px;
   font-family: var(--font-mono);
   margin-top: 2px;
+}
+
+/* HANDOFF v2 / canvas CandidatesDirectoryPage — CV match column. */
+.c-cvmatch {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+/* HANDOFF v2 / canvas CandidatesDirectoryPage — Score column.
+   Mono, weight 600, ink color; purple when score >= 80. */
+.c-score {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.c-score.hi { color: var(--purple); }
+
+.c-score .suffix {
+  font-weight: 400;
+  color: var(--mute);
 }
 
 .c-score-unified {
