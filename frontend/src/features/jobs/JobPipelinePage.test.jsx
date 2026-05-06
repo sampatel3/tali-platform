@@ -212,8 +212,15 @@ Banking transformation experience
 
     await screen.findByRole('heading', { name: /Portfolio Lead and Business Manager/i });
 
+    // Hero only shows the role metadata (location, etc.) per HANDOFF v2
+    // §4.4 / canvas jobs-detail-* — the formatted spec body lives on the
+    // Job spec tab, not in the persistent hero.
     expect(screen.getByText('Dubai, United Arab Emirates')).toBeInTheDocument();
     expect(screen.queryByText(/\*\*Location:\*\*/)).not.toBeInTheDocument();
+
+    // Open the Job spec tab to access the formatted description.
+    fireEvent.click(screen.getByRole('button', { name: /^Job spec$/i }));
+
     expect(container.querySelector('.role-desc-summary')).toHaveTextContent(/The Portfolio Lead and Business Manager is a high-impact leadership position/i);
     expect(container.querySelector('.role-desc-summary')).not.toHaveTextContent(/DeepLight AI is a specialist AI and data consultancy/i);
     expect(screen.queryByText(/keeps recruiter scoring/i)).not.toBeInTheDocument();
@@ -280,8 +287,13 @@ Banking transformation experience
     expect(screen.getByRole('heading', { name: /Reject threshold/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Autonomy rules/i })).toBeInTheDocument();
 
+    // HANDOFF v2 §4.4 / canvas jobs-detail-spec — the Job spec tab renders
+    // the formatted Workable-ingested description + "At a glance" sidebar.
+    // The pipeline-activity timeline that previously lived under this label
+    // was a leftover from the v1 5-tab layout and is gone in v2.
     fireEvent.click(screen.getByRole('button', { name: /^Job spec$/i }));
-    expect(await screen.findByRole('heading', { name: /Pipeline activity/i })).toBeInTheDocument();
-    expect(screen.getByText(/Recent candidate movement/i)).toBeInTheDocument();
+    expect(await screen.findByRole('button', { name: /Read full description/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /At a glance/i })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /Pipeline activity/i })).not.toBeInTheDocument();
   });
 });
