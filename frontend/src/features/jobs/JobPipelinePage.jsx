@@ -1253,26 +1253,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     items: activeApplications.filter((application) => String(application?.pipeline_stage || '').toLowerCase() === stage.key),
   })), [activeApplications]);
 
-  const roleFitApplications = useMemo(() => (
-    [...activeApplications].sort((a, b) => {
-      const scoreA = Number(a?.pre_screen_score);
-      const scoreB = Number(b?.pre_screen_score);
-      return (Number.isFinite(scoreB) ? scoreB : -1) - (Number.isFinite(scoreA) ? scoreA : -1);
-    })
-  ), [activeApplications]);
-
-  const activityItems = useMemo(() => (
-    [...activeApplications]
-      .map((application) => ({
-        application,
-        at: application?.updated_at || application?.created_at,
-        stage: String(application?.pipeline_stage || 'applied').replace(/_/g, ' '),
-      }))
-      .filter((item) => item.at)
-      .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
-      .slice(0, 12)
-  ), [activeApplications]);
-
   const recruiterCriteria = useMemo(() => splitCriteriaDraft(criteriaDraft), [criteriaDraft]);
   const parsedJobSpec = useMemo(() => parseJobSpec(
     role?.job_spec_text || role?.description || role?.summary || role?.job_summary || '',
@@ -1761,70 +1741,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               </div>
             </div>
           </div>
-
-          <div className="role-desc">
-            <div className="role-desc-main">
-              {!detailsExpanded && roleSummary ? (
-                <p className="role-desc-summary">{roleSummary}</p>
-              ) : null}
-
-              <button
-                type="button"
-                className={`desc-toggle ${detailsExpanded ? 'open' : ''}`}
-                onClick={() => setDetailsExpanded((current) => !current)}
-              >
-                <span>{detailsExpanded ? 'Hide full description' : 'Read full description'}</span>
-                <ChevronDown className="caret" size={10} />
-              </button>
-
-              <div className={`role-sections ${detailsExpanded ? 'expanded' : ''}`}>
-                <div className="role-spec-source">
-                  {role?.source === 'workable' ? 'Workable ingested job spec' : 'Role job spec'}
-                  {parsedJobSpec.meta.applyUrl ? (
-                    <a href={parsedJobSpec.meta.applyUrl} target="_blank" rel="noreferrer">Open source posting</a>
-                  ) : null}
-                </div>
-                {parsedJobSpec.sections.length ? parsedJobSpec.sections.map((section, index) => (
-                  <FormattedJobSpecSection
-                    key={`${section.title}-${index}`}
-                    section={section}
-                    marker={String(index + 1).padStart(2, '0')}
-                  />
-                )) : (
-                  <div className="role-sec">
-                    <div className="role-sec-title"><span className="marker">01</span>About the role</div>
-                    <p>{roleSummary || 'This recruiter workspace mirrors the job spec, scoring guidance, and active pipeline for the role.'}</p>
-                  </div>
-                )}
-                {recruiterCriteria.length ? (
-                  <div className="role-sec">
-                    <div className="role-sec-title">
-                      <span className="marker">{String((parsedJobSpec.sections.length || 1) + 1).padStart(2, '0')}</span>
-                      Recruiter requirements
-                    </div>
-                    <ul>
-                      {recruiterCriteria.map((criterion, index) => (
-                        <li key={`${criterion}-${index}`}>{criterion}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ) : null}
-              </div>
-            </div>
-
-            <div className="role-highlights">
-              <h4>At a glance</h4>
-              {roleHighlights.map((item) => (
-                <div key={item.title} className="hi">
-                  <div className="icon"><BriefcaseBusiness size={13} /></div>
-                  <div>
-                    <div className="t">{item.title}</div>
-                    <div className="d">{item.description}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
         </div>
 
         <div className="sub-tabs sub-tabs-sticky">
@@ -2221,43 +2137,73 @@ Disqualifying: No experience with regulated financial data`}
             onScrollToReview={() => document.getElementById('pipeline-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
           />
         ) : activeView === 'activity' ? (
-          <div className="activity-view">
-            <div className="activity-head">
-              <div>
-                <h3>Pipeline <em>activity</em></h3>
-                <p>Recent candidate movement and scoring updates for this role.</p>
-              </div>
-              <button type="button" className="btn btn-outline btn-sm" onClick={loadRoleWorkspace}>
-                Refresh activity
+          // HANDOFF v2 §4.4 / canvas jobs-detail-spec — Job spec tab is the
+          // dedicated spec view: workable-ingested description with formatted
+          // sections + recruiter requirements + an "At a glance" sidebar.
+          // The pipeline-activity timeline that previously rendered here was
+          // a leftover from the v1 "Activity" tab; v2 only has 4 tabs and
+          // this one is "Job spec".
+          <div className="role-desc">
+            <div className="role-desc-main">
+              {!detailsExpanded && roleSummary ? (
+                <p className="role-desc-summary">{roleSummary}</p>
+              ) : null}
+
+              <button
+                type="button"
+                className={`desc-toggle ${detailsExpanded ? 'open' : ''}`}
+                onClick={() => setDetailsExpanded((current) => !current)}
+              >
+                <span>{detailsExpanded ? 'Hide full description' : 'Read full description'}</span>
+                <ChevronDown className="caret" size={10} />
               </button>
+
+              <div className={`role-sections ${detailsExpanded ? 'expanded' : ''}`}>
+                <div className="role-spec-source">
+                  {role?.source === 'workable' ? 'Workable ingested job spec' : 'Role job spec'}
+                  {parsedJobSpec.meta.applyUrl ? (
+                    <a href={parsedJobSpec.meta.applyUrl} target="_blank" rel="noreferrer">Open source posting</a>
+                  ) : null}
+                </div>
+                {parsedJobSpec.sections.length ? parsedJobSpec.sections.map((section, index) => (
+                  <FormattedJobSpecSection
+                    key={`${section.title}-${index}`}
+                    section={section}
+                    marker={String(index + 1).padStart(2, '0')}
+                  />
+                )) : (
+                  <div className="role-sec">
+                    <div className="role-sec-title"><span className="marker">01</span>About the role</div>
+                    <p>{roleSummary || 'This recruiter workspace mirrors the job spec, scoring guidance, and active pipeline for the role.'}</p>
+                  </div>
+                )}
+                {recruiterCriteria.length ? (
+                  <div className="role-sec">
+                    <div className="role-sec-title">
+                      <span className="marker">{String((parsedJobSpec.sections.length || 1) + 1).padStart(2, '0')}</span>
+                      Recruiter requirements
+                    </div>
+                    <ul>
+                      {recruiterCriteria.map((criterion, index) => (
+                        <li key={`${criterion}-${index}`}>{criterion}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
+              </div>
             </div>
-            <div className="activity-timeline">
-              {activityItems.length ? activityItems.map((item, index) => (
-                <button
-                  key={`${item.application.id}-${item.at}-${index}`}
-                  type="button"
-                  className="activity-item"
-                  onClick={() => onNavigate('candidate-report', {
-                    candidateApplicationId: item.application.id,
-                    ...(Number.isFinite(numericRoleId) ? { fromRoleId: numericRoleId } : {}),
-                  })}
-                >
-                  <span className="dot" />
-                  <span className="when">{formatRelativeShort(item.at)}</span>
-                  <span className="what">
-                    <b>{buildApplicationTitle(item.application)}</b>
-                    {' moved in '}
-                    {item.stage}
-                  </span>
-                  <span className="score">
-                    {Number.isFinite(Number(item.application?.pre_screen_score))
-                      ? `${formatScore(item.application.pre_screen_score)}/100`
-                      : 'Not scored'}
-                  </span>
-                </button>
-              )) : (
-                <div className="activity-empty">No activity captured for this role yet.</div>
-              )}
+
+            <div className="role-highlights">
+              <h4>At a glance</h4>
+              {roleHighlights.map((item) => (
+                <div key={item.title} className="hi">
+                  <div className="icon"><BriefcaseBusiness size={13} /></div>
+                  <div>
+                    <div className="t">{item.title}</div>
+                    <div className="d">{item.description}</div>
+                  </div>
+                </div>
+              ))}
             </div>
           </div>
         ) : (
