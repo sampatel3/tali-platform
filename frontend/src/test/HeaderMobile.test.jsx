@@ -56,16 +56,18 @@ describe('DashboardNav mobile header', () => {
 
     const mobileLinks = within(mobileMenu).getAllByRole('menuitem')
       .filter((button) => button.className.includes('dashboard-nav-mobile-link'));
+    // Per the v3 nav rename, "Chat" is now "Search" (same `id: chat`,
+    // same /chat route — only the user-facing label moved).
     expect(mobileLinks.map((button) => button.textContent)).toEqual([
       'Jobs',
-      'Chat',
+      'Search',
       'Tasks',
       'Reporting',
       'Settings',
     ]);
     expect(within(mobileMenu).getByRole('menuitem', { name: 'Tasks' })).toHaveClass('active');
 
-    fireEvent.click(within(mobileMenu).getByRole('menuitem', { name: /Chat/ }));
+    fireEvent.click(within(mobileMenu).getByRole('menuitem', { name: /Search/ }));
 
     expect(onNavigate).toHaveBeenCalledWith('chat');
     expect(document.querySelector('.dashboard-nav-mobile')).not.toBeInTheDocument();

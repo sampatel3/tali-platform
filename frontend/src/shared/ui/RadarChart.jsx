@@ -1,9 +1,10 @@
 import React from 'react';
 
 // SVG radar chart per the canvas. Accepts `values` as
-// [{ k: 'sysdesign', label: 'Systems design', v: 8.7 }, …]. Max defaults
-// to 10 so values land on the outer ring at 10/10.
-export const RadarChart = ({ values, max = 10, size = 260 }) => {
+// [{ k: 'sysdesign', label: 'Systems design', v: 87 }, …]. Per HANDOFF
+// v2 §6 every score is on the 0–100 scale, so max defaults to 100 and
+// values land on the outer ring at 100/100.
+export const RadarChart = ({ values, max = 100, size = 260 }) => {
   if (!Array.isArray(values) || values.length < 3) {
     return (
       <div

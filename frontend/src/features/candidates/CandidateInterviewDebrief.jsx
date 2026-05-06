@@ -180,7 +180,7 @@ export const CandidateInterviewDebrief = ({
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div className="font-semibold text-[var(--taali-text)]">{item.dimension || 'Dimension'}</div>
                 {item.score != null ? (
-                  <Badge variant="muted" className="font-mono text-[11px]">{item.score}/10</Badge>
+                  <Badge variant="muted" className="font-mono text-[11px]">{item.score}/100</Badge>
                 ) : null}
               </div>
               {item.pattern ? (
