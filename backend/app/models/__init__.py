@@ -60,6 +60,13 @@ from .agent_decision import (
     AgentDecision,
 )
 from .anthropic_usage_reconciliation import AnthropicUsageReconciliation
+from .share_link import (
+    SHARE_LINK_MODE_CLIENT,
+    SHARE_LINK_MODE_RECRUITER,
+    SHARE_LINK_MODE_SINGLE_VIEW,
+    SHARE_LINK_MODES,
+    ShareLink,
+)
 
 __all__ = [
     "User",
@@ -116,4 +123,9 @@ __all__ = [
     "AGENT_DECISION_TYPES",
     "AGENT_DECISION_STATUSES",
     "AnthropicUsageReconciliation",
+    "ShareLink",
+    "SHARE_LINK_MODE_RECRUITER",
+    "SHARE_LINK_MODE_CLIENT",
+    "SHARE_LINK_MODE_SINGLE_VIEW",
+    "SHARE_LINK_MODES",
 ]
