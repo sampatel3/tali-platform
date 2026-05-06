@@ -50,6 +50,9 @@ const CandidateFeedbackPage = lazy(() =>
 const DemoExperiencePage = lazy(() =>
   import('./features/demo/DemoExperiencePage').then((m) => ({ default: m.DemoExperiencePage }))
 );
+const DemoLeadPage = lazy(() =>
+  import('./features/marketing/DemoLeadPage').then((m) => ({ default: m.DemoLeadPage }))
+);
 const LazyAssessmentResultsPage = lazy(() =>
   import('./features/assessments/AssessmentResultsPage').then((m) => ({ default: m.AssessmentResultsPage }))
 );
@@ -425,6 +428,14 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <DemoExperiencePage onNavigate={navigateToPage} />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/demo-lead"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <DemoLeadPage onNavigate={navigateToPage} />
           </Suspense>
         )}
       />
