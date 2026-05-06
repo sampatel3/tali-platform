@@ -10329,6 +10329,293 @@ button.eng-badge-button:focus-visible {
 .mc-report-snapshot-radar-empty b { color: var(--ink); }
 
 /* ===========================================================================
+   Candidate Interview prep tab — HANDOFF v2 §5.1 / canvas cand-prep
+   Hero banner + STAGE 1 / STAGE 2 kickered groups + question cards
+   with LISTEN FOR (green) / CONCERNING IF (red) two-column layout.
+   =========================================================================== */
+
+.mc-prep-hero {
+  padding: 18px 22px;
+  border-radius: 14px;
+  background: var(--purple-soft);
+  border: 1px solid color-mix(in oklab, var(--purple) 35%, var(--line));
+  margin-bottom: 18px;
+}
+
+.mc-prep-hero .mc-kicker {
+  margin: 0 0 4px;
+  color: var(--purple);
+}
+
+.mc-prep-hero-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 0 0 6px;
+  color: var(--ink);
+}
+
+.mc-prep-hero-body {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+.mc-prep-stage {
+  margin-bottom: 18px;
+}
+
+.mc-prep-stage .mc-kicker {
+  margin: 0 0 10px;
+}
+
+.mc-prep-stage-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.mc-prep-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 22px;
+}
+
+.mc-prep-card-kicker {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--purple);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.mc-prep-card-question {
+  font-family: var(--font-display);
+  font-size: 18px;
+  letter-spacing: -0.015em;
+  font-weight: 500;
+  color: var(--ink);
+  margin: 0 0 14px;
+}
+
+.mc-prep-card-context {
+  margin: -8px 0 14px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--mute);
+}
+
+.mc-prep-card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+@media (max-width: 720px) {
+  .mc-prep-card-grid { grid-template-columns: 1fr; }
+}
+
+.mc-prep-card-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+
+.mc-prep-card-label.is-listen {
+  color: #16a34a;
+}
+
+.mc-prep-card-label.is-concern {
+  color: #dc2626;
+}
+
+.mc-prep-card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.mc-prep-card-list li {
+  position: relative;
+  padding-left: 12px;
+  margin-bottom: 4px;
+}
+
+.mc-prep-card-list li::before {
+  content: '·';
+  position: absolute;
+  left: 0;
+  top: -1px;
+  color: var(--mute);
+  font-weight: 700;
+}
+
+.mc-prep-card-evidence {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--purple-soft);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.mc-prep-card-evidence-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--mute);
+  margin-bottom: 4px;
+}
+
+/* ===========================================================================
+   Candidate Notes & timeline tab — HANDOFF v2 §5.1 / canvas cand-notes
+   Two-col grid: HIRING TEAM NOTES (1.4fr) + AUDIT TIMELINE (1fr) with
+   colored dots on a left vertical line.
+   =========================================================================== */
+
+.mc-notes-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 18px;
+}
+@media (max-width: 880px) {
+  .mc-notes-grid { grid-template-columns: 1fr; }
+}
+
+.mc-notes-col .mc-kicker {
+  margin-bottom: 10px;
+}
+
+.mc-notes-empty {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--bg-2);
+  border: 1px dashed var(--line);
+  font-size: 13px;
+  color: var(--mute);
+  line-height: 1.55;
+  margin-bottom: 8px;
+}
+
+.mc-notes-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 8px;
+}
+
+.mc-notes-card-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.mc-notes-card-who {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.mc-notes-card-role {
+  color: var(--mute);
+  font-weight: 400;
+}
+
+.mc-notes-card-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--mute);
+}
+
+.mc-notes-card-body {
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+.mc-notes-input {
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--bg-2);
+  border: 1px dashed var(--line);
+  margin-top: 6px;
+}
+
+.mc-notes-input textarea {
+  width: 100%;
+  min-height: 60px;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+  color: var(--ink);
+}
+
+.mc-notes-input textarea:disabled {
+  cursor: not-allowed;
+  color: var(--mute);
+}
+
+.mc-notes-input-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.mc-audit-timeline {
+  position: relative;
+  padding-left: 18px;
+  border-left: 2px solid var(--line);
+}
+
+.mc-audit-row {
+  position: relative;
+  margin-bottom: 14px;
+}
+
+.mc-audit-dot {
+  position: absolute;
+  left: -25px;
+  top: 6px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+}
+
+.mc-audit-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--mute);
+  margin-bottom: 2px;
+}
+
+.mc-audit-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  margin-bottom: 2px;
+  color: var(--ink);
+}
+
+.mc-audit-detail {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+/* ===========================================================================
    Role detail Candidates tab toolbar — HANDOFF v2 §4 / canvas
    jobs-detail-candidates. Segmented stage filter + Sort + Score new
    above the embedded candidates table.

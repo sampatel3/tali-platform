@@ -372,32 +372,37 @@ const toBulletList = (value) => {
   return text ? [text] : [];
 };
 
+// PrepQuestionCard — canvas cand-prep card layout:
+//   QUESTION NN · {source}    (mono purple kicker)
+//   {question}                 (display, weight 500)
+//   LISTEN FOR (green mono)    |  CONCERNING IF (red mono)
+//   {listenFor bullets}        |  {concern bullets}
 const PrepQuestionCard = ({ item, number, listenLabel, concernLabel, fallbackConcern }) => {
   const listenItems = toBulletList(item?.listenFor);
   const concernItems = toBulletList(item?.redFlags || item?.followUp);
   const evidenceText = asCleanText(item?.evidence);
   const contextText = asCleanText(item?.context);
   return (
-    <div className="q-card">
-      <div className="q-num">QUESTION {String(number).padStart(2, '0')} · {item?.source || 'Standing report'}</div>
-      <div className="q-text">{item?.question}</div>
+    <div className="mc-prep-card">
+      <div className="mc-prep-card-kicker">
+        QUESTION {String(number).padStart(2, '0')} · {item?.source || 'Standing report'}
+      </div>
+      <div className="mc-prep-card-question">{item?.question}</div>
       {contextText ? (
-        <div className="q-context" style={{ marginTop: '6px', fontSize: '13.5px', lineHeight: 1.55, color: 'var(--mute)' }}>
-          {contextText}
-        </div>
+        <div className="mc-prep-card-context">{contextText}</div>
       ) : null}
-      <div className="q-meta">
+      <div className="mc-prep-card-grid">
         <div>
-          <div className="label">{listenLabel}</div>
-          <ul className="listen">
+          <div className="mc-prep-card-label is-listen">{listenLabel}</div>
+          <ul className="mc-prep-card-list">
             {(listenItems.length ? listenItems : ['Specific examples tied to the candidate evidence.']).map((line, idx) => (
               <li key={`listen-${idx}`}>{line}</li>
             ))}
           </ul>
         </div>
         <div>
-          <div className="label">{concernLabel}</div>
-          <ul className="concerning">
+          <div className="mc-prep-card-label is-concern">{concernLabel}</div>
+          <ul className="mc-prep-card-list">
             {(concernItems.length ? concernItems : [fallbackConcern]).map((line, idx) => (
               <li key={`concern-${idx}`}>{line}</li>
             ))}
@@ -405,11 +410,9 @@ const PrepQuestionCard = ({ item, number, listenLabel, concernLabel, fallbackCon
         </div>
       </div>
       {evidenceText ? (
-        <div className="q-evidence" style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '10px', background: 'var(--taali-surface-subtle, rgba(124, 58, 237, 0.06))', fontSize: '13px', lineHeight: 1.55, color: 'var(--ink-2)' }}>
-          <div className="label" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--mute)', marginBottom: '4px' }}>
-            Anchor in
-          </div>
-          {evidenceText}
+        <div className="mc-prep-card-evidence">
+          <div className="mc-prep-card-evidence-label">ANCHOR IN</div>
+          <div>{evidenceText}</div>
         </div>
       ) : null}
     </div>
@@ -794,6 +797,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [busyAction, setBusyAction] = useState('');
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [applicationEvents, setApplicationEvents] = useState([]);
+  // Notes & timeline tab — local note draft + a tick that lets us refetch
+  // the events feed after a successful save without a full page reload.
+  const [noteDraft, setNoteDraft] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
+  const [eventsRefetchTick, setEventsRefetchTick] = useState(0);
   const [shareState, setShareState] = useState({
     url: '',
     token: '',
@@ -911,7 +919,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
   useEffect(() => {
     void loadStandingReport();
-  }, [loadStandingReport]);
+    // `eventsRefetchTick` is bumped after a recruiter saves a note so the
+    // standing report reloads with the new event in the timeline.
+  }, [loadStandingReport, eventsRefetchTick]);
 
   useEffect(() => {
     if (!sharedRouteToken) return;
@@ -1215,6 +1225,30 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
       showToast(getErrorMessage(err, 'Failed to prepare report email.'), 'error');
     }
   };
+
+  // Save a recruiter note. We persist via assessmentsApi.addNote when an
+  // assessment is linked (it writes a `recruiter_note` event to the
+  // application timeline); we degrade to a toast otherwise. After save
+  // we bump eventsRefetchTick so the timeline picks up the new event.
+  const handleSaveNote = useCallback(async () => {
+    const note = noteDraft.trim();
+    if (!note) return;
+    if (!assessmentId || !assessmentsApi?.addNote) {
+      showToast('Notes are saved against the linked assessment — none is linked yet.', 'info');
+      return;
+    }
+    setSavingNote(true);
+    try {
+      await assessmentsApi.addNote(assessmentId, note);
+      setNoteDraft('');
+      setEventsRefetchTick((prev) => prev + 1);
+      showToast('Note added to the timeline.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to add note.'), 'error');
+    } finally {
+      setSavingNote(false);
+    }
+  }, [assessmentId, assessmentsApi, noteDraft, showToast]);
 
   const handlePostToWorkable = useCallback(async () => {
     if (!assessmentId || !assessmentsApi?.postToWorkable) {
@@ -1788,73 +1822,203 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         </div>
 
         <div className={`pane ${activeTab === 'prep' ? 'active' : ''}`} data-p="prep">
-          <div className="prep-stack">
-            <div className="panel prep-panel">
-              <h2>Stage 1 <em>recruiter screen</em></h2>
-              <p className="sub">Use these to validate claims quickly before the deeper panel loop.</p>
-              <div className="qgroup">
-                {interviewQuestions.stageOne.map((item, index) => (
-                  <PrepQuestionCard
-                    key={`${item.question}-${index}`}
-                    item={item}
-                    number={index + 1}
-                    listenLabel="Listen for"
-                    concernLabel="Follow-up"
-                    fallbackConcern="Ask for one concrete example, artifact, or tradeoff."
-                  />
-                ))}
+          {/* HANDOFF v2 §5.1 / canvas cand-prep — Interview prep is:
+              (1) purple-soft hero banner: READY FOR YOUR PANEL · {N} questions,
+                  anchored in {candidate}'s actual evidence
+              (2) STAGE 1 · RECRUITER SCREEN kicker + question cards
+              (3) STAGE 2 · HIRING PANEL kicker + question cards
+              Each card: mono kicker "QUESTION NN · {source}" + question +
+              two-column LISTEN FOR (green) / CONCERNING IF (red). */}
+          {(() => {
+            const totalQs = (interviewQuestions.stageOne?.length || 0) + (interviewQuestions.stageTwo?.length || 0);
+            const candidateFirstName = String(application?.candidate_name || '').trim().split(/\s+/)[0] || 'this candidate';
+            return (
+              <div className="mc-prep-hero">
+                <div className="mc-kicker">READY FOR YOUR PANEL</div>
+                <div className="mc-prep-hero-title">
+                  {totalQs > 0
+                    ? <>{totalQs} questions, anchored in {candidateFirstName}'s actual <em>evidence</em>.</>
+                    : <>Interview prep <em>builds</em> after the candidate is scored.</>}
+                </div>
+                <p className="mc-prep-hero-body">
+                  {totalQs > 0
+                    ? 'Each question cites the moment in the assessment it came from. Listen-for and concerning-if are calibrated to your role rubric.'
+                    : 'Once the assessment is scored, this tab populates with stage-1 screen and stage-2 panel questions tied to evidence.'}
+                </p>
               </div>
+            );
+          })()}
+
+          <div className="mc-prep-stage">
+            <div className="mc-kicker">STAGE 1 · RECRUITER SCREEN</div>
+            <div className="mc-prep-stage-grid">
+              {interviewQuestions.stageOne.map((item, index) => (
+                <PrepQuestionCard
+                  key={`${item.question}-${index}`}
+                  item={item}
+                  number={index + 1}
+                  listenLabel="LISTEN FOR"
+                  concernLabel="CONCERNING IF"
+                  fallbackConcern="Ask for one concrete example, artifact, or tradeoff."
+                />
+              ))}
             </div>
-            <div className="panel prep-panel">
-              <h2>Stage 2 <em>technical panel</em></h2>
-              <p className="sub">Designed for the hiring panel: probe how the candidate thinks with AI in the actual work.</p>
-              <div className="qgroup">
-                {interviewQuestions.stageTwo.map((item, index) => (
-                  <PrepQuestionCard
-                    key={`${item.question}-${index}`}
-                    item={item}
-                    number={index + 1}
-                    listenLabel="Strong signal"
-                    concernLabel="Concern"
-                    fallbackConcern="Vague answers without links to code, prompts, or decisions."
-                  />
-                ))}
-              </div>
+          </div>
+
+          <div className="mc-prep-stage">
+            <div className="mc-kicker">STAGE 2 · HIRING PANEL</div>
+            <div className="mc-prep-stage-grid">
+              {interviewQuestions.stageTwo.map((item, index) => (
+                <PrepQuestionCard
+                  key={`${item.question}-${index}`}
+                  item={item}
+                  number={index + 1}
+                  listenLabel="LISTEN FOR"
+                  concernLabel="CONCERNING IF"
+                  fallbackConcern="Vague answers without links to code, prompts, or decisions."
+                />
+              ))}
             </div>
           </div>
         </div>
 
         <div className={`pane ${activeTab === 'notes' ? 'active' : ''}`} data-p="notes" data-internal-only>
-          <div className="two-col">
-            <div className="panel">
-              <h2>Team <em>notes</em></h2>
-              <p className="sub">Internal recruiter and hiring-team context stays out of interviewer share mode.</p>
-              <div className="note">
-                <div className="who">Taali <span className="when">system note</span></div>
-                <p>{reportModel?.recruiterSummaryText || 'Add recruiter notes after the panel review.'}</p>
-              </div>
-              <div className="note-input">
-                <textarea placeholder="Add a private team note" disabled />
-                <button type="button" className="btn btn-outline btn-sm" disabled>Save</button>
-              </div>
-            </div>
-            <div className="panel">
-              <h2>Activity <em>timeline</em></h2>
-              <p className="sub">Application events from the role pipeline and assessment lifecycle.</p>
-              <div className="act">
-                {timelineItems.map((item, index) => (
-                  <div key={`${item.title}-${index}`} className="row">
-                    <div className="dot">{index + 1}</div>
-                    <div>
-                      <div className="t">{item.title}</div>
-                      <div className="s">{item.detail}</div>
+          {/* HANDOFF v2 §5.1 / canvas cand-notes — Notes & timeline is:
+              (1) HIRING TEAM NOTES column — note cards (who · role · time + body)
+                  with a dashed-border textarea + "Add note" CTA at the bottom
+              (2) AUDIT TIMELINE column — vertical line + colored dots,
+                  each event has TIME · title · description.
+              We synthesize "hiring team notes" from `recruiter_note` events
+              on the application timeline; saving a new note pushes a
+              recruiter_note event via assessmentsApi.addNote and bumps
+              eventsRefetchTick so the timeline reloads. */}
+          {(() => {
+            // Recruiter notes = events with type "recruiter_note" or whose
+            // metadata carries an explicit note string. Synthesize a
+            // "system note" from the recruiter summary when no real notes
+            // exist yet so the column isn't blank.
+            const recruiterNotes = applicationEvents
+              .filter((event) => {
+                const type = String(event?.event_type || '').toLowerCase();
+                return type === 'recruiter_note'
+                  || type === 'note_added'
+                  || (event?.metadata && typeof event.metadata.note === 'string' && event.metadata.note.trim());
+              })
+              .map((event) => ({
+                key: `note-${event.id || event.created_at}`,
+                who: event?.actor_name || event?.metadata?.actor_name || 'Recruiter',
+                role: event?.actor_role || event?.metadata?.actor_role || 'Hiring team',
+                time: event?.created_at,
+                body: event?.metadata?.note || event?.reason || event?.description || '',
+              }))
+              .filter((note) => note.body && note.body.trim());
+
+            const fmtRelative = (ts) => {
+              if (!ts) return '';
+              const diffMs = Date.now() - new Date(ts).getTime();
+              if (Number.isNaN(diffMs)) return '';
+              const diffMin = Math.round(diffMs / 60000);
+              if (diffMin < 1) return 'just now';
+              if (diffMin < 60) return `${diffMin}m ago`;
+              const diffHr = Math.round(diffMin / 60);
+              if (diffHr < 24) return `${diffHr}h ago`;
+              const diffDay = Math.round(diffHr / 24);
+              if (diffDay < 14) return `${diffDay}d ago`;
+              return new Date(ts).toLocaleDateString();
+            };
+
+            const eventDotColor = (event) => {
+              const type = String(event?.event_type || '').toLowerCase();
+              if (type.includes('reject')) return 'var(--red, #dc2626)';
+              if (type.includes('advance') || type.includes('approved')) return 'var(--green, #16a34a)';
+              if (type.includes('assess')) return '#2563eb';
+              if (type.includes('cv_scored') || type.includes('invite')) return 'var(--purple)';
+              return 'var(--mute)';
+            };
+
+            return (
+              <div className="mc-notes-grid">
+                <div className="mc-notes-col">
+                  <div className="mc-kicker">HIRING TEAM NOTES</div>
+                  {recruiterNotes.length === 0 ? (
+                    <div className="mc-notes-empty">
+                      No hiring team notes yet. Drop a private note to the team below — it'll land in the audit timeline on the right.
                     </div>
-                    <div className="when">{item.when ? new Date(item.when).toLocaleDateString() : '—'}</div>
+                  ) : (
+                    recruiterNotes.map((note) => (
+                      <div key={note.key} className="mc-notes-card">
+                        <div className="mc-notes-card-head">
+                          <span className="mc-notes-card-who">
+                            {note.who}
+                            <span className="mc-notes-card-role"> · {note.role}</span>
+                          </span>
+                          <span className="mc-notes-card-time">{fmtRelative(note.time)}</span>
+                        </div>
+                        <div className="mc-notes-card-body">{note.body}</div>
+                      </div>
+                    ))
+                  )}
+                  <div className="mc-notes-input">
+                    <textarea
+                      value={noteDraft}
+                      onChange={(event) => setNoteDraft(event.target.value)}
+                      placeholder={assessmentId
+                        ? 'Add a note for the hiring team…'
+                        : 'Notes are saved against the linked assessment — link one to enable.'}
+                      disabled={!assessmentId || savingNote}
+                      rows={3}
+                    />
+                    <div className="mc-notes-input-actions">
+                      <button
+                        type="button"
+                        className="btn btn-purple btn-sm"
+                        onClick={handleSaveNote}
+                        disabled={!assessmentId || savingNote || !noteDraft.trim()}
+                      >
+                        {savingNote ? 'Adding…' : 'Add note'}
+                      </button>
+                    </div>
                   </div>
-                ))}
+                </div>
+
+                <div className="mc-notes-col">
+                  <div className="mc-kicker">AUDIT TIMELINE</div>
+                  {applicationEvents.length === 0 ? (
+                    <div className="mc-notes-empty">
+                      Audit events will appear here as the candidate moves through the pipeline.
+                    </div>
+                  ) : (
+                    <div className="mc-audit-timeline">
+                      {applicationEvents.slice(0, 12).map((event, idx) => {
+                        const type = String(event?.event_type || 'activity').replace(/_/g, ' ');
+                        const meta = event?.metadata || {};
+                        let title = type.charAt(0).toUpperCase() + type.slice(1);
+                        if (String(event?.event_type || '').toLowerCase() === 'cv_scored') {
+                          const score = Number(meta.role_fit_score);
+                          if (Number.isFinite(score)) title = `CV scored — ${Math.round(score)} / 100`;
+                        }
+                        const detail = event?.reason || event?.description || meta.note || '';
+                        return (
+                          <div key={event.id || `${event.event_type}-${idx}`} className="mc-audit-row">
+                            <span
+                              className="mc-audit-dot"
+                              aria-hidden="true"
+                              style={{ background: eventDotColor(event) }}
+                            />
+                            <div>
+                              <div className="mc-audit-time">{fmtRelative(event?.created_at).toUpperCase()}</div>
+                              <div className="mc-audit-title">{title}</div>
+                              {detail ? <div className="mc-audit-detail">{detail}</div> : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          </div>
+            );
+          })()}
         </div>
       </div>
       <ShareModal
