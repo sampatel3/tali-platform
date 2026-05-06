@@ -8868,3 +8868,37 @@ button.eng-badge-button:focus-visible {
   margin-bottom: 20px;
 }
 
+/* ================== REPORTING NARRATOR — Phase 6 ================== */
+
+.mc-narrator {
+  position: relative;
+  background: linear-gradient(135deg, var(--purple) 0%, color-mix(in oklab, var(--purple) 80%, #5b3aaa) 100%);
+  color: #fff;
+  border-radius: 16px;
+  padding: 24px 28px;
+  overflow: hidden;
+  isolation: isolate;
+}
+
+.mc-narrator-bg {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(ellipse at top right, rgba(255, 255, 255, 0.18) 0%, transparent 60%);
+  pointer-events: none;
+  z-index: -1;
+}
+
+.mc-narrator p {
+  margin: 0;
+  font-size: 17px;
+  line-height: 1.55;
+  font-weight: 500;
+  max-width: 880px;
+  color: #fff;
+}
+
+.mc-narrator p b {
+  color: #fff;
+  font-weight: 700;
+}
+

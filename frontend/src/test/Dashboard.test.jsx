@@ -723,7 +723,7 @@ describe('AssessmentsPage', () => {
     await waitFor(() => {
       expect(window.location.pathname).toBe('/reporting');
       expect(analyticsApi.get).toHaveBeenCalled();
-      expect(screen.getByRole('heading', { name: 'Reporting' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Your agent in narrative/i })).toBeInTheDocument();
     });
   });
 

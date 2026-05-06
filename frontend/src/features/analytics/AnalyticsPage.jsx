@@ -17,7 +17,8 @@ import {
 import { assessments as assessmentsApi, analytics as analyticsApi, roles as rolesApi, tasks as tasksApi } from '../../shared/api';
 import { getCategoryScoresFromAssessment } from '../../lib/comparisonCategories';
 import { dimensionOrder, getDimensionById } from '../../scoring/scoringDimensions';
-import { Button, PageContainer, PageHeader, Panel, Select, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { PageHero } from '../../shared/layout/PageHero';
+import { Button, Panel, Select, Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const DATE_RANGE_OPTIONS = [
   { value: '7d', label: 'Last 7 days' },
@@ -42,6 +43,18 @@ const getDateRangeParams = (range) => {
 };
 
 const safeNumber = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+
+const buildNarrative = (data, rangeLabel) => {
+  const total = safeNumber(data.total_assessments);
+  const completed = safeNumber(data.completed_count);
+  const avg = safeNumber(data.avg_score, null);
+  if (total === 0) {
+    return `No assessments closed in the ${rangeLabel.toLowerCase()}. Once candidates start completing tasks, the agent will narrate what it advanced, rejected, and flagged.`;
+  }
+  const avgPart = avg != null ? ` Average composite score sat at ${Number(avg).toFixed(1)}/10.` : '';
+  const completionRate = safeNumber(data.completion_rate);
+  return `Across the ${rangeLabel.toLowerCase()}, ${completed} of ${total} assessments closed (${completionRate.toFixed(0)}% completion).${avgPart} Use the panels below to see what shifted, where confidence dropped, and how the funnel held up.`;
+};
 
 export const ReportingPage = ({ onNavigate, NavComponent }) => {
   const [roles, setRoles] = useState([]);
@@ -152,6 +165,25 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
     fullMark: 10,
   }));
 
+  const rangeLabel = DATE_RANGE_OPTIONS.find((opt) => opt.value === dateRange)?.label || 'Last 30 days';
+  const narrative = buildNarrative(data, rangeLabel);
+
+  const funnelStages = useMemo(() => {
+    const total = Math.max(safeNumber(data.total_assessments), 0);
+    const completed = Math.max(safeNumber(data.completed_count), 0);
+    const inFlight = Math.max(total - completed, 0);
+    const highScore = histogramData
+      .filter((b) => /80|60-80|80-100/.test(String(b.range)))
+      .reduce((acc, b) => acc + safeNumber(b.count), 0);
+    const stages = [
+      { label: 'Invited', n: total, p: 100 },
+      { label: 'In assessment', n: inFlight, p: total ? (inFlight / total) * 100 : 0 },
+      { label: 'Completed', n: completed, p: total ? (completed / total) * 100 : 0 },
+      { label: 'Score ≥ 60', n: highScore, p: total ? (highScore / total) * 100 : 0 },
+    ];
+    return stages;
+  }, [data.total_assessments, data.completed_count, histogramData]);
+
   const handleExportCsv = async () => {
     setExporting(true);
     try {
@@ -246,12 +278,11 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
   return (
     <div>
       <NavComponent currentPage="reporting" onNavigate={onNavigate} />
-      <PageContainer density="compact" width="wide">
-        <PageHeader
-          density="compact"
-          className="mb-5"
-          title="Reporting"
-          subtitle="Aggregate reporting across completion trends, score distribution, and dimension performance."
+      <div className="mc-page mc-page-narrow">
+        <PageHero
+          kicker={`MISSION CONTROL · ${rangeLabel.toUpperCase()}`}
+          title={<>Your agent in <em>narrative</em></>}
+          subtitle="What Taali did, what it skipped, and where it was unsure. Not a dashboard — a daily standup in retrospect."
           actions={(
             <Button type="button" variant="secondary" size="sm" onClick={handleExportCsv} disabled={loading || exporting}>
               {exporting ? 'Exporting...' : 'Export CSV'}
@@ -261,47 +292,47 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
 
         <Panel className="mb-5 p-4">
           <div className="grid gap-3 md:grid-cols-4">
-          <label className="block">
-            <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role</span>
-            <Select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
-              <option value="">All roles</option>
-              {roles.map((role) => (
-                <option key={role.id} value={role.id}>{role.name}</option>
-              ))}
-            </Select>
-          </label>
-          <label className="block">
-            <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Task</span>
-            <Select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>
-              <option value="">All tasks</option>
-              {tasks.map((task) => (
-                <option key={task.id} value={task.id}>{task.name}</option>
-              ))}
-            </Select>
-          </label>
-          <label className="block">
-            <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Date range</span>
-            <Select value={dateRange} onChange={(event) => setDateRange(event.target.value)}>
-              {DATE_RANGE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </Select>
-          </label>
-          <div className="flex items-end">
-            <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={() => {
-                setRoleFilter('');
-                setTaskFilter('');
-                setDateRange('30d');
-              }}
-              disabled={!roleFilter && !taskFilter && dateRange === '30d'}
-            >
-              Reset filters
-            </Button>
-          </div>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role</span>
+              <Select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
+                <option value="">All roles</option>
+                {roles.map((role) => (
+                  <option key={role.id} value={role.id}>{role.name}</option>
+                ))}
+              </Select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Task</span>
+              <Select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>
+                <option value="">All tasks</option>
+                {tasks.map((task) => (
+                  <option key={task.id} value={task.id}>{task.name}</option>
+                ))}
+              </Select>
+            </label>
+            <label className="block">
+              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Date range</span>
+              <Select value={dateRange} onChange={(event) => setDateRange(event.target.value)}>
+                {DATE_RANGE_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>{option.label}</option>
+                ))}
+              </Select>
+            </label>
+            <div className="flex items-end">
+              <Button
+                type="button"
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setRoleFilter('');
+                  setTaskFilter('');
+                  setDateRange('30d');
+                }}
+                disabled={!roleFilter && !taskFilter && dateRange === '30d'}
+              >
+                Reset filters
+              </Button>
+            </div>
           </div>
         </Panel>
 
@@ -311,32 +342,39 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
           </div>
         ) : (
           <div className="space-y-5">
+            <section className="mc-narrator">
+              <div className="mc-narrator-bg" aria-hidden="true" />
+              <div className="mc-kicker" style={{ color: 'rgba(255,255,255,0.7)', marginBottom: 6 }}>
+                NARRATOR · WHAT THE AGENT DID
+              </div>
+              <p>{narrative}</p>
+            </section>
+
             <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
               <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Total Assessments</div>
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Decisions made</div>
                 <div className="text-2xl font-bold text-[var(--taali-text)]">{data.total_assessments}</div>
               </Panel>
               <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Avg Score</div>
-                <div className="text-2xl font-bold text-[var(--taali-purple)]">
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Completed</div>
+                <div className="text-2xl font-bold text-[var(--taali-purple)]">{data.completed_count}</div>
+              </Panel>
+              <Panel className="p-4">
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Avg score</div>
+                <div className="text-2xl font-bold text-[var(--taali-text)]">
                   {data.avg_score != null ? `${Number(data.avg_score).toFixed(1)}/10` : '—'}
                 </div>
               </Panel>
               <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Completion Rate</div>
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Completion rate</div>
                 <div className="text-2xl font-bold text-[var(--taali-text)]">{safeNumber(data.completion_rate).toFixed(1)}%</div>
-              </Panel>
-              <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Avg Time</div>
-                <div className="text-2xl font-bold text-[var(--taali-text)]">
-                  {data.avg_time_minutes != null ? `${data.avg_time_minutes}m` : '—'}
-                </div>
               </Panel>
             </div>
 
-            <div className="grid gap-5 lg:grid-cols-2">
+            <div className="grid gap-5 lg:grid-cols-[1.3fr_1fr]">
               <Panel className="p-4">
-                <h2 className="mb-3 font-bold text-base">Completion Rate Trend</h2>
+                <h2 className="mb-1 font-bold text-base">Completion rate trend</h2>
+                <p className="mb-3 text-[12.5px] text-[var(--mute)]">Weekly close rate across the selected range.</p>
                 <div className="h-[260px]">
                   <ResponsiveContainer>
                     <BarChart data={weekly}>
@@ -357,31 +395,85 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                 </div>
               </Panel>
 
-              <Panel className="p-4">
-                <h2 className="mb-3 font-bold text-base">Score Distribution</h2>
-                <div className="h-[260px]">
-                  <ResponsiveContainer>
-                    <BarChart data={histogramData}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--taali-border-muted)" />
-                      <XAxis dataKey="range" tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
-                      <YAxis tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
-                      <Tooltip
-                        contentStyle={{
-                          background: 'var(--taali-surface-elevated)',
-                          border: '1px solid var(--taali-border-soft)',
-                          borderRadius: '16px',
-                          color: 'var(--taali-text)',
-                        }}
-                      />
-                      <Bar dataKey="count" fill="var(--taali-info)" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
-              </Panel>
+              <div className="flex flex-col gap-4">
+                <Panel className="p-4">
+                  <h2 className="mb-1 font-bold text-base">Anomalies</h2>
+                  <p className="mb-3 text-[12.5px] text-[var(--mute)]">Things worth your attention.</p>
+                  {data.total_assessments > 0 ? (
+                    <div className="flex flex-col gap-2">
+                      {data.completion_rate < 50 ? (
+                        <AnomalyRow
+                          tone="amber"
+                          title="Low completion rate"
+                          body={`Only ${safeNumber(data.completion_rate).toFixed(0)}% of invited candidates completed the assessment. Consider revisiting invite copy or task length.`}
+                        />
+                      ) : null}
+                      {data.avg_score != null && data.avg_score < 5 ? (
+                        <AnomalyRow
+                          tone="amber"
+                          title="Average score below mid-band"
+                          body={`Mean composite is ${Number(data.avg_score).toFixed(1)}/10. Either the bar is set high or the candidate pool needs sharpening.`}
+                        />
+                      ) : null}
+                      {data.completion_rate >= 50 && (data.avg_score == null || data.avg_score >= 5) ? (
+                        <p className="text-[12.5px] text-[var(--mute)]">Nothing flagged in the current window.</p>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="text-[12.5px] text-[var(--mute)]">Anomalies appear once the agent has graded enough assessments to spot drift.</p>
+                  )}
+                </Panel>
+
+                <Panel className="p-4">
+                  <h2 className="mb-1 font-bold text-base">Funnel · org-wide</h2>
+                  <p className="mb-3 text-[12.5px] text-[var(--mute)]">From invitation through completion to score ≥ 60.</p>
+                  <div className="flex flex-col gap-2">
+                    {funnelStages.map((stage) => (
+                      <div key={stage.label} className="grid grid-cols-[120px_1fr_auto] items-center gap-3">
+                        <span className="text-[13px] text-[var(--ink-2)]">{stage.label}</span>
+                        <div className="relative h-2.5 rounded-full bg-[var(--bg-3)] overflow-hidden">
+                          <div
+                            className="absolute inset-y-0 left-0 rounded-full"
+                            style={{
+                              width: `${Math.max(0, Math.min(100, stage.p))}%`,
+                              background: 'linear-gradient(90deg, var(--purple), color-mix(in srgb, var(--purple) 60%, var(--lime)))',
+                            }}
+                          />
+                        </div>
+                        <span className="font-[var(--font-mono)] text-[11.5px] text-[var(--ink-2)]">{stage.n}</span>
+                      </div>
+                    ))}
+                  </div>
+                </Panel>
+              </div>
             </div>
 
             <Panel className="p-4">
-              <h2 className="mb-3 font-bold text-base">Per-Dimension Averages</h2>
+              <h2 className="mb-1 font-bold text-base">Score distribution</h2>
+              <p className="mb-3 text-[12.5px] text-[var(--mute)]">Composite scores bucketed into deciles.</p>
+              <div className="h-[260px]">
+                <ResponsiveContainer>
+                  <BarChart data={histogramData}>
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--taali-border-muted)" />
+                    <XAxis dataKey="range" tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
+                    <YAxis tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
+                    <Tooltip
+                      contentStyle={{
+                        background: 'var(--taali-surface-elevated)',
+                        border: '1px solid var(--taali-border-soft)',
+                        borderRadius: '16px',
+                        color: 'var(--taali-text)',
+                      }}
+                    />
+                    <Bar dataKey="count" fill="var(--taali-info)" />
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+            </Panel>
+
+            <Panel className="p-4">
+              <h2 className="mb-1 font-bold text-base">Per-dimension averages</h2>
+              <p className="mb-3 text-[12.5px] text-[var(--mute)]">How candidates score across the eleven scoring axes.</p>
               <div className="h-[320px]">
                 <ResponsiveContainer>
                   <RadarChart data={radarData}>
@@ -395,9 +487,23 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
             </Panel>
           </div>
         )}
-      </PageContainer>
+      </div>
     </div>
   );
 };
+
+const AnomalyRow = ({ tone, title, body }) => (
+  <div className="flex items-start gap-3 rounded-[10px] border border-[var(--line)] bg-[var(--bg)] px-3 py-3">
+    <span
+      className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
+      style={{ background: tone === 'red' ? 'var(--red)' : 'var(--amber)' }}
+      aria-hidden="true"
+    />
+    <div>
+      <div className="text-[13px] font-medium text-[var(--ink)]">{title}</div>
+      <div className="mt-0.5 text-[12px] leading-[1.45] text-[var(--mute)]">{body}</div>
+    </div>
+  </div>
+);
 
 export const AnalyticsPage = ReportingPage;

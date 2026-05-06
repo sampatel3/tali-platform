@@ -1,6 +1,8 @@
 import React, { useMemo, useState } from 'react';
 import { ArrowLeft, Mail } from 'lucide-react';
 
+import { PageHero } from '../../shared/layout/PageHero';
+
 const TAALI_EMAIL = 'hello@taali.ai';
 
 export const BespokeTaskRequestPage = ({ onNavigate, NavComponent = null }) => {
@@ -47,15 +49,11 @@ export const BespokeTaskRequestPage = ({ onNavigate, NavComponent = null }) => {
             Back to task library
           </button>
 
-          <div className="bespoke-hero">
-            <div className="kicker">TASK LIBRARY · BESPOKE REQUEST</div>
-            <h1>Tell us about the task you need.</h1>
-            <p>
-              Share the role, the skills you want to probe, and the scenario you have in mind.
-              Taali&apos;s engineering team will design a bespoke assessment for you, usually within
-              a few working days.
-            </p>
-          </div>
+          <PageHero
+            kicker="REQUEST A BESPOKE TASK"
+            title={<>Don't see your <em>role</em>?</>}
+            subtitle="Tell us what you're hiring for. Our engineers build a hands-on assessment in 3–5 working days. You get a draft to approve before any candidate sees it."
+          />
 
           <form className="bespoke-form" onSubmit={handleSubmit}>
             <label className="bespoke-field">
