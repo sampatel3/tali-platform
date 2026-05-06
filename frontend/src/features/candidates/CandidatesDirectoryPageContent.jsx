@@ -1853,27 +1853,29 @@ export const CandidatesDirectoryPage = ({
   return (
     <div>
       {NavComponent ? <NavComponent currentPage={navCurrentPage} onNavigate={onNavigate} /> : null}
-      <div className={embedded ? '' : 'page'}>
+      <div className={embedded ? '' : 'mc-page mc-page-narrow'}>
         {showPageHead ? (
-          <div className="page-head">
-            <div className="tally-bg" />
+          <header className="mc-page-head">
             <div>
-              <div className="kicker">{rolePipelineMode ? 'ROLE PIPELINE' : '02 · RECRUITER WORKSPACE'}</div>
-              <h1>{headerTitle || 'Candidates'}<em>.</em></h1>
-              <p className="sub">{headerSubtitle}</p>
+              <div className="mc-kicker">
+                {rolePipelineMode ? 'ROLE PIPELINE' : 'CANDIDATES · ALL ROLES'}
+              </div>
+              <h1 className="mc-h-display">
+                {headerTitle || (
+                  <>
+                    Search every <em>candidate</em>
+                  </>
+                )}
+                <span className="mc-period">.</span>
+              </h1>
+              <p className="mc-subtitle">{headerSubtitle || 'Plain-language across CVs, assessment evidence, and your notes.'}</p>
             </div>
-            <div className="row">
+            <div className="mc-page-head-actions">
               {!rolePipelineMode ? (
                 <button type="button" className="btn btn-outline btn-sm" onClick={handleExportCsv}>
                   Export CSV
                 </button>
               ) : null}
-              {/* Graph sync was previously here as an org-wide button, but
-                  recruiters only ever wanted to sync the candidates of a
-                  specific role. The action has moved to the Process
-                  candidates dialog under Advanced on each job page.
-                  Keeping the org-wide /candidates/sync-graph endpoint for
-                  ops use. */}
               <button
                 type="button"
                 className="btn btn-purple btn-sm"
@@ -1883,7 +1885,7 @@ export const CandidatesDirectoryPage = ({
                 + Invite candidate
               </button>
             </div>
-          </div>
+          </header>
         ) : null}
 
         {prelude ? <div className="mb-4 space-y-4">{prelude}</div> : null}
