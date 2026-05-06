@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { AlertTriangle, CheckCircle } from 'lucide-react';
 
 import { auth } from '../../shared/api';
-import { FlowLayout, AuthCard } from './AuthLayout';
+import { AuthShell } from './AuthShell';
 
 export const VerifyEmailPage = ({ onNavigate, token }) => {
   const [status, setStatus] = useState('loading');
@@ -34,74 +34,72 @@ export const VerifyEmailPage = ({ onNavigate, token }) => {
     };
   }, [token]);
 
+  const heroProps = status === 'success'
+    ? { kicker: 'ONE STEP LEFT', title: 'Welcome to Taali', sub: 'Next step: create your first role, or import from Workable.' }
+    : status === 'error'
+      ? { kicker: 'VERIFY EMAIL', title: 'Verification failed', sub: message }
+      : { kicker: 'VERIFY EMAIL', title: 'Verifying your email', sub: 'Please wait a moment.' };
+
   return (
-    <FlowLayout onNavigate={onNavigate} activePane="verify">
-      <AuthCard
-        kicker="VERIFY EMAIL"
-        title={status === 'success'
-          ? <>Welcome to <em>Taali</em>.</>
-          : status === 'error'
-            ? <>Verification <em>failed</em>.</>
-            : <>Verifying your <em>email</em>.</>}
-        subtitle={status === 'success'
-          ? 'Next step: create your first role, or import from Workable.'
-          : status === 'loading'
-            ? 'Please wait a moment.'
-            : message}
-        widthClassName="max-w-[560px]"
-      >
-        {status === 'success' ? (
-          <div className="mb-6 rounded-[14px] border border-[color-mix(in_oklab,var(--green)_30%,var(--line))] bg-[color-mix(in_oklab,var(--green)_10%,var(--bg-2))] p-4">
-            <div className="flex items-start gap-3">
-              <div className="grid h-9 w-9 place-items-center rounded-[10px] bg-[var(--green)] text-[var(--taali-inverse-text)]">
-                <CheckCircle size={18} />
-              </div>
+    <AuthShell {...heroProps}>
+      {status === 'success' ? (
+        <>
+          <div className="mc-auth-success-card" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: 16 }}>
+            <div
+              style={{
+                width: 36,
+                height: 36,
+                borderRadius: 10,
+                background: 'var(--green)',
+                color: '#fff',
+                display: 'grid',
+                placeItems: 'center',
+                flexShrink: 0,
+              }}
+            >
+              <CheckCircle size={16} strokeWidth={1.8} />
+            </div>
+            <div>
+              <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--ink)' }}>Email verified.</p>
+              <p style={{ margin: '4px 0 0', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+                Your account is active. Your workspace is ready.
+              </p>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 18 }}>
+            <button type="button" className="mc-auth-cta" onClick={() => onNavigate('jobs')}>
+              Create your first role →
+            </button>
+            <button type="button" className="mc-auth-cta mc-auth-cta-outline" onClick={() => onNavigate('settings-workable')}>
+              Connect Workable →
+            </button>
+            <button type="button" className="mc-auth-cta mc-auth-cta-outline" onClick={() => onNavigate('demo')}>
+              Take the 2-min tour →
+            </button>
+          </div>
+        </>
+      ) : status === 'error' ? (
+        <>
+          <div className="mc-auth-error-card" role="alert">
+            <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+              <AlertTriangle size={16} strokeWidth={1.8} style={{ color: 'var(--red)', flexShrink: 0, marginTop: 2 }} />
               <div>
-                <p className="text-[15px] font-semibold text-[var(--ink)]">Email verified.</p>
-                <p className="mt-1 text-[13px] leading-6 text-[var(--ink-2)]">Your account is active. Your workspace is ready.</p>
+                <div className="title">This link may have expired</div>
+                <div className="body">{message}</div>
               </div>
             </div>
           </div>
-        ) : null}
-        {status === 'error' ? (
-          <div className="mb-6 rounded-[14px] border border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-4">
-            <div className="flex items-start gap-3">
-              <AlertTriangle size={18} className="mt-0.5 shrink-0 text-[var(--taali-warning)]" />
-              <div>
-                <p className="text-[15px] font-semibold text-[var(--ink)]">This link may have expired</p>
-                <p className="mt-1 text-[13px] leading-6 text-[var(--ink-2)]">{message}</p>
-              </div>
-            </div>
-          </div>
-        ) : null}
-        {status === 'loading' ? (
-          <div className="space-y-3">
-            <div className="h-3 w-1/3 rounded-full bg-[var(--line)]" />
-            <div className="h-3 w-2/3 rounded-full bg-[var(--line)]" />
-            <div className="h-3 w-1/2 rounded-full bg-[var(--line)]" />
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {status === 'success' ? (
-              <>
-                <button type="button" className="btn btn-purple btn-lg w-full justify-between" onClick={() => onNavigate('jobs')}>
-                  Create your first role <span className="arrow">→</span>
-                </button>
-                <button type="button" className="btn btn-outline btn-lg w-full justify-between" onClick={() => onNavigate('settings-workable')}>
-                  Connect Workable <span className="arrow">→</span>
-                </button>
-                <button type="button" className="btn btn-outline btn-lg w-full justify-between" onClick={() => onNavigate('demo')}>
-                  Take the 2-min tour <span className="arrow">→</span>
-                </button>
-              </>
-            ) : (
-              <button type="button" className="btn btn-purple btn-lg w-full justify-center" onClick={() => onNavigate('login')}>
-                Go to sign in <span className="arrow">→</span>
-              </button>
-            )}
-          </div>
-        )}
-      </AuthCard>
-    </FlowLayout>
+          <button type="button" className="mc-auth-cta" onClick={() => onNavigate('login')}>
+            Go to sign in →
+          </button>
+        </>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ height: 12, width: '33%', borderRadius: 999, background: 'var(--line)' }} />
+          <div style={{ height: 12, width: '67%', borderRadius: 999, background: 'var(--line)' }} />
+          <div style={{ height: 12, width: '50%', borderRadius: 999, background: 'var(--line)' }} />
+        </div>
+      )}
+    </AuthShell>
   );
 };

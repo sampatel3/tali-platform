@@ -81,10 +81,10 @@ describe('Demo flow redesign', () => {
   it('renders the restored candidate workspace and how-it-works sections on landing', async () => {
     renderLanding();
 
-    expect(screen.getByRole('heading', { name: /Hire engineers who can\s*ship\s*with AI\./i })).toBeInTheDocument();
-    expect(screen.getByText(/Six-axis AI-collaboration scoring — now live/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /Try the walkthrough/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /See a sample report/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /The recruiter's\s*agent\.\s*Built to hire engineers\s*who ship with AI/i })).toBeInTheDocument();
+    expect(screen.getByText(/AGENTIC-FIRST/i)).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /^Book a demo$/i }).length).toBeGreaterThan(0);
+    expect(screen.getByRole('button', { name: /Try the live walkthrough/i })).toBeInTheDocument();
     expect(screen.getByText(/Strong hire - recommend on-site/i)).toBeInTheDocument();
     expect(screen.getByText(/Maya Chen/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /What your\s*candidate\s*actually sees\./i })).toBeInTheDocument();

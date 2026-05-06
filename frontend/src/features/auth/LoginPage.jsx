@@ -4,7 +4,7 @@ import { AlertTriangle, CheckCircle, Mail } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../shared/api';
-import { SignInLayout, AuthCard } from './AuthLayout';
+import { AuthShell, AuthField } from './AuthShell';
 
 const LOGIN_ERROR_MESSAGES = {
   LOGIN_BAD_CREDENTIALS: 'Incorrect email or password. Please try again.',
@@ -133,117 +133,143 @@ export const LoginPage = ({ onNavigate }) => {
   };
 
   return (
-    <SignInLayout onNavigate={onNavigate}>
-      <AuthCard kicker="01 · SIGN IN" title={<>Sign in<em>.</em></>} subtitle="Access your TAALI dashboard.">
-        {error ? (
-          <div className="mb-5 rounded-[14px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
-            <div className="flex items-start gap-3">
-              <AlertTriangle size={18} className="mt-0.5 shrink-0 text-[var(--taali-danger)]" />
-              <div>
-                <p className="text-sm font-semibold text-[var(--taali-danger)]">Sign-in failed</p>
-                <p className="mt-1 text-sm text-[var(--ink)]">{error}</p>
-              </div>
-            </div>
-            {needsVerification ? (
-              <button
-                type="button"
-                className="btn btn-outline mt-3 w-full justify-center"
-                onClick={handleResendVerification}
-                disabled={resending}
-              >
-                {resending ? 'Sending...' : resent ? (
-                  <>
-                    <CheckCircle size={14} />
-                    Verification email sent
-                  </>
-                ) : (
-                  <>
-                    <Mail size={14} />
-                    Resend verification email
-                  </>
-                )}
-              </button>
-            ) : null}
-          </div>
-        ) : null}
-
-        <div className="space-y-4">
-          <label className="field">
-            <span className="k">Work email</span>
-            <input
-              type="email"
-              placeholder="you@company.com"
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
-          </label>
-          <label className="field">
-            <span className="k">Password</span>
-            <input
-              type="password"
-              placeholder="••••••••"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
-            />
-          </label>
-        </div>
-
-        <div className="mt-6">
-          <button type="button" className="btn btn-purple w-full justify-center py-[13px] text-[14.5px]" onClick={handleLogin} disabled={loading}>
-            {loading ? 'Signing in...' : <>Sign in <span className="arrow">→</span></>}
+    <AuthShell
+      kicker="WELCOME BACK"
+      title="Sign in to Taali"
+      sub="Pick up where you left off. Your agent is waiting."
+      topRight={(
+        <span>
+          New here?{' '}
+          <button
+            type="button"
+            onClick={() => onNavigate('demo')}
+            style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
+          >
+            Book a demo
           </button>
+        </span>
+      )}
+    >
+      {error ? (
+        <div className="mc-auth-error-card" role="alert">
+          <div style={{ display: 'flex', gap: 10, alignItems: 'flex-start' }}>
+            <AlertTriangle size={16} strokeWidth={1.8} style={{ color: 'var(--red)', flexShrink: 0, marginTop: 2 }} />
+            <div style={{ flex: 1 }}>
+              <div className="title">Sign-in failed</div>
+              <div className="body">{error}</div>
+              {needsVerification ? (
+                <button
+                  type="button"
+                  className="mc-auth-cta mc-auth-cta-outline"
+                  style={{ marginTop: 12, height: 36, fontSize: 13 }}
+                  onClick={handleResendVerification}
+                  disabled={resending}
+                >
+                  {resending ? 'Sending...' : resent ? (
+                    <>
+                      <CheckCircle size={14} />
+                      Verification email sent
+                    </>
+                  ) : (
+                    <>
+                      <Mail size={14} />
+                      Resend verification email
+                    </>
+                  )}
+                </button>
+              ) : null}
+            </div>
+          </div>
         </div>
+      ) : null}
 
-        <div className="my-5 flex items-center gap-3 font-[var(--font-mono)] text-[11.5px] uppercase tracking-[0.1em] text-[var(--mute-2)]">
-          <div className="h-px flex-1 bg-[var(--line)]" />
-          <span>or</span>
-          <div className="h-px flex-1 bg-[var(--line)]" />
-        </div>
+      <AuthField
+        label="Work email"
+        name="email"
+        type="email"
+        autoComplete="email"
+        placeholder="you@company.com"
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+      />
+      <AuthField
+        label="Password"
+        name="password"
+        type="password"
+        autoComplete="current-password"
+        placeholder="••••••••"
+        value={password}
+        onChange={(e) => setPassword(e.target.value)}
+      />
 
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 18 }}>
         <button
           type="button"
-          className="flex w-full items-center justify-center gap-2 rounded-[10px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-3 text-sm font-medium text-[var(--ink)] transition-colors hover:border-[var(--ink)]"
-          onClick={() => {
-            setShowSsoInput((prev) => !prev);
-            setSsoMessage('');
-          }}
+          onClick={() => onNavigate('forgot-password')}
+          style={{ background: 'none', border: 0, color: 'var(--purple)', fontSize: 12.5, fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
         >
-          Sign in with SSO
+          Forgot password?
         </button>
+      </div>
 
-        {showSsoInput ? (
-          <div className="mt-3 space-y-2">
-            <input
-              type="email"
-              className="w-full rounded-[10px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-3 text-sm"
-              placeholder="you@company.com"
-              value={ssoEmail}
-              onChange={(event) => setSsoEmail(event.target.value)}
-            />
-            <button
-              type="button"
-              className="btn btn-outline w-full justify-center"
-              onClick={handleSsoCheck}
-              disabled={ssoChecking}
-            >
-              {ssoChecking ? 'Checking SSO...' : 'Continue to SSO'}
-            </button>
-            {ssoMessage ? <p className="text-xs text-[var(--mute)]">{ssoMessage}</p> : null}
-          </div>
-        ) : null}
+      <button
+        type="button"
+        className="mc-auth-cta"
+        onClick={handleLogin}
+        disabled={loading}
+        onKeyDown={(e) => e.key === 'Enter' && handleLogin()}
+      >
+        {loading ? 'Signing in...' : 'Sign in →'}
+      </button>
 
-        <div className="mt-6 text-center text-[13px] text-[var(--mute)]">
-          <button type="button" className="text-[var(--purple)] hover:underline" onClick={() => onNavigate('forgot-password')}>
-            Forgot password?
+      <div className="mc-auth-divider">
+        <span>OR</span>
+      </div>
+
+      <button
+        type="button"
+        className="mc-auth-cta mc-auth-cta-outline"
+        onClick={() => {
+          setShowSsoInput((prev) => !prev);
+          setSsoMessage('');
+        }}
+      >
+        Sign in with SSO
+      </button>
+
+      {showSsoInput ? (
+        <div style={{ marginTop: 12, display: 'flex', flexDirection: 'column', gap: 8 }}>
+          <input
+            type="email"
+            className="mc-auth-input"
+            placeholder="you@company.com"
+            value={ssoEmail}
+            onChange={(event) => setSsoEmail(event.target.value)}
+          />
+          <button
+            type="button"
+            className="mc-auth-cta mc-auth-cta-outline"
+            onClick={handleSsoCheck}
+            disabled={ssoChecking}
+          >
+            {ssoChecking ? 'Checking SSO...' : 'Continue to SSO'}
           </button>
-          <span> · </span>
-          No account?{' '}
-          <button type="button" className="font-medium text-[var(--purple)] hover:underline" onClick={() => onNavigate('register')}>
-            Request access
-          </button>
+          {ssoMessage ? (
+            <p style={{ fontSize: 12, color: 'var(--mute)', margin: 0 }}>{ssoMessage}</p>
+          ) : null}
         </div>
-      </AuthCard>
-    </SignInLayout>
+      ) : null}
+
+      <div style={{ marginTop: 24, textAlign: 'center', fontSize: 13, color: 'var(--mute)' }}>
+        No account?{' '}
+        <button
+          type="button"
+          onClick={() => onNavigate('register')}
+          style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
+        >
+          Request access
+        </button>
+      </div>
+    </AuthShell>
   );
 };
