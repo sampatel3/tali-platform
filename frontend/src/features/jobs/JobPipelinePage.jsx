@@ -930,6 +930,66 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // with monthly_spent_cents + monthly_budget_cents + pending_decisions +
   // last_activity. Polled every 30s, paused when the tab is hidden.
   const { status: agentStatus } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
+  // Pending agent decisions for this role, keyed by application_id so the
+  // Pipeline-tab kanban cards can render the real Approve/Override flow
+  // inline (HANDOFF v2 §4 / canvas jobs-detail-pipeline). Polls every 30s.
+  const [pendingAgentDecisions, setPendingAgentDecisions] = useState({});
+  const [resolvingDecisionId, setResolvingDecisionId] = useState(null);
+  const fetchPendingDecisions = useCallback(async () => {
+    if (!Number.isFinite(numericRoleId)) return;
+    try {
+      const res = await apiClient.agent.listDecisions({
+        role_id: numericRoleId,
+        status: 'pending',
+        limit: 50,
+      });
+      const list = Array.isArray(res?.data) ? res.data : [];
+      setPendingAgentDecisions(
+        list.reduce((acc, decision) => {
+          const appId = Number(decision?.application_id);
+          if (Number.isFinite(appId)) acc[appId] = decision;
+          return acc;
+        }, {}),
+      );
+    } catch {
+      // Quiet failure — the kanban cards just fall back to the
+      // score-based decision verb until next poll succeeds.
+    }
+  }, [numericRoleId]);
+  useEffect(() => {
+    void fetchPendingDecisions();
+    const handle = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void fetchPendingDecisions();
+    }, 30_000);
+    return () => window.clearInterval(handle);
+  }, [fetchPendingDecisions]);
+  const handleApproveDecision = useCallback(async (decisionId) => {
+    if (!decisionId) return;
+    setResolvingDecisionId(decisionId);
+    try {
+      await apiClient.agent.approveDecision(decisionId);
+      showToast(`Approved agent recommendation #${decisionId}`, 'success');
+      await fetchPendingDecisions();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to approve recommendation.'), 'error');
+    } finally {
+      setResolvingDecisionId(null);
+    }
+  }, [fetchPendingDecisions, showToast]);
+  const handleOverrideDecision = useCallback(async (decisionId) => {
+    if (!decisionId) return;
+    setResolvingDecisionId(decisionId);
+    try {
+      await apiClient.agent.overrideDecision(decisionId, { override_action: 'manual_review' });
+      showToast(`Overrode agent recommendation #${decisionId}`, 'info');
+      await fetchPendingDecisions();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to override recommendation.'), 'error');
+    } finally {
+      setResolvingDecisionId(null);
+    }
+  }, [fetchPendingDecisions, showToast]);
   const [role, setRole] = useState(null);
   const [roleTasks, setRoleTasks] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
@@ -2005,6 +2065,19 @@ Disqualifying: No experience with regulated financial data`}
                         : null;
                       const isLive = String(application?.pipeline_stage || '').toLowerCase() === 'in_assessment';
                       const isReview = stage.key === 'review';
+                      // Real pending agent decision (if any) for this candidate.
+                      // When present, the agent block surfaces the actual
+                      // recommendation verb + reasoning + wires Approve /
+                      // Override to apiClient.agent.{approve,override}Decision.
+                      const pendingDecision = pendingAgentDecisions[application?.id] || null;
+                      const decisionResolving = pendingDecision?.id != null
+                        && resolvingDecisionId === pendingDecision.id;
+                      const decisionVerb = pendingDecision?.recommendation
+                        || (compositeScore != null && compositeScore >= 75
+                          ? 'Advance to interview'
+                          : compositeScore != null && compositeScore < 50
+                            ? 'Reject'
+                            : 'Awaiting decision');
                       return (
                         <a
                           key={application.id}
@@ -2042,20 +2115,39 @@ Disqualifying: No experience with regulated financial data`}
                                 <Sparkles size={11} strokeWidth={2} />
                               </div>
                               <div className="cc-agent-body">
-                                <div className="cc-agent-action">
-                                  {compositeScore != null && compositeScore >= 75
-                                    ? 'Advance to interview'
-                                    : compositeScore != null && compositeScore < 50
-                                      ? 'Reject'
-                                      : 'Awaiting decision'}
-                                </div>
+                                <div className="cc-agent-action">{decisionVerb}</div>
                                 <div className="cc-agent-why">
-                                  {resolvePipelineCardFooterStatus(application)}
+                                  {pendingDecision?.reasoning
+                                    || resolvePipelineCardFooterStatus(application)}
                                 </div>
-                                <div className="cc-agent-actions">
-                                  <span className="btn btn-purple btn-xs" role="button">Approve</span>
-                                  <span className="btn btn-outline btn-xs" role="button">Override</span>
-                                </div>
+                                {pendingDecision ? (
+                                  <div className="cc-agent-actions">
+                                    <button
+                                      type="button"
+                                      className="btn btn-purple btn-xs"
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        void handleApproveDecision(pendingDecision.id);
+                                      }}
+                                      disabled={decisionResolving}
+                                    >
+                                      {decisionResolving ? '…' : 'Approve'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-outline btn-xs"
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        void handleOverrideDecision(pendingDecision.id);
+                                      }}
+                                      disabled={decisionResolving}
+                                    >
+                                      Override
+                                    </button>
+                                  </div>
+                                ) : null}
                               </div>
                             </div>
                           ) : null}
@@ -2169,16 +2261,18 @@ Disqualifying: No experience with regulated financial data`}
                 type="button"
                 className="btn btn-outline btn-sm"
                 onClick={() => {
-                  // Toggle between composite and CV-only sort. The directory
-                  // doesn't yet take a controlled sort prop — flag for
-                  // follow-up so this becomes a real toggle, not just a label.
+                  // Toggle between composite (Taali score desc) and CV-match
+                  // recency. `tableSortBy` is the directory's sort key —
+                  // changing it bumps the table key so the embedded
+                  // CandidatesDirectoryPage remounts with the new
+                  // initialSortOption and re-fetches.
                   setTableSortBy((prev) => (prev === 'composite' ? 'cv' : 'composite'));
                 }}
                 aria-label="Sort table"
                 title="Sort"
               >
                 <ArrowUpDown size={12} />
-                Sort: {tableSortBy === 'composite' ? 'composite' : 'CV match'}
+                Sort: {tableSortBy === 'composite' ? 'Taali score' : 'CV match'}
               </button>
               {unscoredApplications.length > 0 ? (
                 <button
@@ -2193,7 +2287,7 @@ Disqualifying: No experience with regulated financial data`}
               ) : null}
             </div>
             <CandidatesDirectoryPage
-              key={`role-pipeline-${roleId}-${tableStageFilter}`}
+              key={`role-pipeline-${roleId}-${tableStageFilter}-${tableSortBy}`}
               onNavigate={onNavigate}
               NavComponent={null}
               lockRoleId={roleId || null}
@@ -2204,6 +2298,7 @@ Disqualifying: No experience with regulated financial data`}
               externalRefreshKey={refreshTick}
               embedded
               initialStageFilter={tableStageFilter === 'all' ? null : tableStageFilter}
+              initialSortOption={tableSortBy === 'cv' ? 'cv_match_scored_at:desc' : 'taali_score:desc'}
             />
           </>
         )}

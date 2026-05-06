@@ -596,6 +596,9 @@ export const CandidatesDirectoryPage = ({
   // changes, the parent should bump `externalRefreshKey` (or remount via
   // key) to re-seed the internal `stageFilters` state.
   initialStageFilter = null,
+  // Initial sort option (one of SORT_OPTIONS values). Same remount
+  // contract as initialStageFilter.
+  initialSortOption = null,
 }) => {
   const rolesApi = apiClient.roles;
   const { showToast } = useToast();
@@ -618,7 +621,12 @@ export const CandidatesDirectoryPage = ({
     initialStageFilter && initialStageFilter !== 'all' ? [String(initialStageFilter)] : []
   ));
   const [outcomeFilters, setOutcomeFilters] = useState(['open']);
-  const [sortOption, setSortOption] = useState(SORT_OPTIONS[0].value);
+  const [sortOption, setSortOption] = useState(() => {
+    if (initialSortOption && SORT_OPTIONS.some((opt) => opt.value === initialSortOption)) {
+      return initialSortOption;
+    }
+    return SORT_OPTIONS[0].value;
+  });
   const [minPreScreenScore, setMinPreScreenScore] = useState('');
   const [search, setSearch] = useState('');
   const [workableOnly, setWorkableOnly] = useState(false);

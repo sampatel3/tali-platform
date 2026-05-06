@@ -143,6 +143,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   const [syncing, setSyncing] = useState(false);
   const [syncRunId, setSyncRunId] = useState(null);
   const [error, setError] = useState('');
+  // HANDOFF v2 §4 — Live agent spend across roles for the BUDGET USED tile.
+  // Fan-out to /roles/{id}/agent/status for every agent-enabled role. Capped
+  // at AGENT_SPEND_FANOUT_LIMIT to keep the request count bounded; orgs with
+  // more agentic roles fall back to the cap-only display.
+  const [agentSpendByRole, setAgentSpendByRole] = useState({});
   const [query, setQuery] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [roleSheetOpen, setRoleSheetOpen] = useState(false);
@@ -203,6 +208,53 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   useEffect(() => {
     void loadJobsHub();
   }, [loadJobsHub]);
+
+  // Fan-out /roles/{id}/agent/status across agent-enabled roles for the
+  // BUDGET USED tile. Bounded to ROLE_FANOUT_LIMIT to keep the request
+  // count predictable for orgs with many agentic roles. Polls every 60s
+  // and pauses on hidden tabs.
+  useEffect(() => {
+    if (isShowcase) return undefined;
+    const ROLE_FANOUT_LIMIT = 20;
+    const POLL_MS = 60_000;
+    const targets = roles
+      .filter((role) => role && role.id != null && role.agentic_mode_enabled)
+      .slice(0, ROLE_FANOUT_LIMIT);
+    if (targets.length === 0) {
+      setAgentSpendByRole({});
+      return undefined;
+    }
+    let cancelled = false;
+    const fetchSpend = async () => {
+      try {
+        const settled = await Promise.allSettled(
+          targets.map((role) => apiClient.agent.status(role.id)),
+        );
+        if (cancelled) return;
+        const next = {};
+        settled.forEach((entry, idx) => {
+          if (entry.status !== 'fulfilled') return;
+          const data = entry.value?.data || {};
+          next[targets[idx].id] = {
+            monthly_spent_cents: Number(data.monthly_spent_cents || 0),
+            monthly_budget_cents: Number(data.monthly_budget_cents || 0),
+          };
+        });
+        setAgentSpendByRole(next);
+      } catch {
+        // Quiet failure — tile falls back to cap-only.
+      }
+    };
+    void fetchSpend();
+    const handle = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void fetchSpend();
+    }, POLL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(handle);
+    };
+  }, [isShowcase, roles]);
 
   useEffect(() => {
     if (isShowcase) {
@@ -532,17 +584,26 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               (acc, r) => acc + Number(r?.new_candidates_this_week || 0),
               0,
             );
-            // Monthly budget CAP per role lives on role.monthly_usd_budget_cents
-            // (the universal Anthropic spend cap). Live SPEND has to come
-            // from /roles/{id}/agent/status — not on the role list payload.
-            // Until we fan-out that endpoint here too (acceptable per
-            // HANDOFF Phase 1 but waiting on a tighter use case), this
-            // tile rolls up the cap totals only and labels accordingly.
-            const monthlyBudget = roles.reduce(
-              (acc, r) => acc + Number(r?.monthly_usd_budget_cents || 0),
-              0,
-            );
+            // BUDGET USED — sum live spend + budget across agent-enabled roles.
+            // Spend comes from the /roles/{id}/agent/status fan-out kept in
+            // `agentSpendByRole`; budget cap falls back to
+            // role.monthly_usd_budget_cents when the status hasn't loaded yet.
             const agentEnabledCount = roles.filter((r) => r?.agentic_mode_enabled).length;
+            let totalSpentCents = 0;
+            let totalBudgetCents = 0;
+            roles.forEach((r) => {
+              if (!r?.agentic_mode_enabled) return;
+              const live = agentSpendByRole?.[r.id];
+              totalSpentCents += Number(live?.monthly_spent_cents || 0);
+              totalBudgetCents += Number(
+                live?.monthly_budget_cents
+                ?? r?.monthly_usd_budget_cents
+                ?? 0,
+              );
+            });
+            const budgetPct = totalBudgetCents > 0
+              ? Math.min(100, Math.round((totalSpentCents / totalBudgetCents) * 100))
+              : null;
             const dollars = (cents) => {
               const n = Number(cents) / 100;
               return n >= 100 ? `$${Math.round(n)}` : `$${n.toFixed(0)}`;
@@ -552,11 +613,13 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               { k: 'CANDIDATES IN PIPELINE', v: pipelineCount, d: newThisWeek > 0 ? `+${newThisWeek} this week` : 'Across active roles' },
               { k: 'YOUR REVIEW QUEUE', v: reviewCount, d: reviewCount === 0 ? 'All clear' : `Across ${reviewRoleCount} role${reviewRoleCount === 1 ? '' : 's'}` },
               {
-                k: 'AGENT BUDGET',
-                v: monthlyBudget > 0 ? dollars(monthlyBudget) : '—',
-                d: agentEnabledCount > 0
-                  ? `${agentEnabledCount} role${agentEnabledCount === 1 ? '' : 's'} with the agent on`
-                  : 'No roles using the agent yet',
+                k: 'BUDGET USED',
+                v: budgetPct != null ? `${budgetPct}%` : '—',
+                d: totalBudgetCents > 0
+                  ? `${dollars(totalSpentCents)} of ${dollars(totalBudgetCents)}`
+                  : agentEnabledCount > 0
+                    ? `${agentEnabledCount} role${agentEnabledCount === 1 ? '' : 's'} with the agent on`
+                    : 'No roles using the agent yet',
               },
             ];
             return tiles.map((tile) => (
@@ -620,11 +683,18 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               const lastRoleActivity = role?.last_candidate_activity_at || role?.updated_at || orgData?.workable_last_sync_at || null;
               const roleBadgeLabel = getRoleBadgeLabel(role);
               const agentEnabled = Boolean(role?.agentic_mode_enabled);
-              // Per-role spend isn't on the /roles list payload — we'd
-              // have to fan out /roles/{id}/agent/status for every card
-              // to fill the "AGENT ON $X/$Y" indicator. Until then we
-              // surface the budget cap only when the agent is enabled.
-              const agentBudget = Number(role?.monthly_usd_budget_cents || 0) / 100;
+              // Live agent status from the /roles/{id}/agent/status fan-out.
+              // When loaded, the indicator shows the canvas-spec
+              // "AGENT ON · $X/$Y"; otherwise falls back to cap-only.
+              const agentLive = agentSpendByRole?.[role.id] || null;
+              const agentBudget = Number(
+                agentLive?.monthly_budget_cents
+                ?? role?.monthly_usd_budget_cents
+                ?? 0,
+              ) / 100;
+              const agentSpent = agentLive
+                ? Number(agentLive.monthly_spent_cents || 0) / 100
+                : null;
               const roleLoc = String(role?.location || role?.workable_location || '').trim();
               const roleDept = String(role?.department || role?.workable_department || '').trim();
               return (
@@ -694,7 +764,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                     </div>
                     {agentEnabled ? (
                       <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--purple)', whiteSpace: 'nowrap' }}>
-                        AGENT ON{agentBudget > 0 ? ` · cap $${Math.round(agentBudget)}` : ''}
+                        {agentSpent != null && agentBudget > 0
+                          ? `AGENT ON · $${Math.round(agentSpent)}/$${Math.round(agentBudget)}`
+                          : agentBudget > 0
+                            ? `AGENT ON · cap $${Math.round(agentBudget)}`
+                            : 'AGENT ON'}
                       </div>
                     ) : (
                       <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', whiteSpace: 'nowrap' }}>
