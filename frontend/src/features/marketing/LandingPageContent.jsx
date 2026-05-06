@@ -442,7 +442,7 @@ export const LandingPage = ({ onNavigate }) => {
                 Want to see how it all fits together?
               </h2>
               <p className="text-[15.5px] leading-[1.6] text-[var(--ink-2)]" style={{ margin: 0, maxWidth: 680 }}>
-                Triage, scoring, plain-English chat, the standing report, ATS sync — there&apos;s a full product
+                Triage, scoring, plain-English search, the standing report, ATS sync — there&apos;s a full product
                 walkthrough pre-loaded with a real role. No card, no installs, no sales call.
               </p>
             </div>

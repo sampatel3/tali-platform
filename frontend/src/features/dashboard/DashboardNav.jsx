@@ -21,13 +21,14 @@ const pickOrganizationName = (user) => String(
   || ''
 ).trim();
 
-// "Chat" replaces "Candidates" as the canonical entry point for finding
-// and reasoning about candidates. The legacy ``/candidates`` URL still
-// works for direct links / chat result deep-links, it just isn't a
-// top-nav item anymore.
+// "Search" is the canonical entry point for finding and reasoning about
+// candidates (formerly "Chat" / before that "Candidates"). The
+// underlying NL-over-everything surface and the `/chat` route are
+// unchanged — only the user-facing label moved to "Search" + the AI
+// badge that lives on it elsewhere in the shell.
 const NAV_ITEMS = [
   { id: 'jobs', label: 'Jobs' },
-  { id: 'chat', label: 'Chat', badge: 'New' },
+  { id: 'chat', label: 'Search', badge: 'AI' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'reporting', label: 'Reporting' },
   { id: 'settings', label: 'Settings' },

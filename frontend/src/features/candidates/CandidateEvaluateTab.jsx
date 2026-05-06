@@ -197,7 +197,7 @@ export const CandidateEvaluateTab = ({
           {aiEvalSuggestion ? (
             <div className="space-y-1 text-sm text-[var(--taali-text)]">
               {aiEvalSuggestion.overall_score != null ? (
-                <div className="font-mono text-xs">Suggested score: {aiEvalSuggestion.overall_score}/10</div>
+                <div className="font-mono text-xs">Suggested score: {aiEvalSuggestion.overall_score}/100</div>
               ) : null}
               {aiEvalSuggestion.verdict ? (
                 <div className="font-mono text-xs">Suggested verdict: {aiEvalSuggestion.verdict}</div>
@@ -215,7 +215,7 @@ export const CandidateEvaluateTab = ({
           <div className="font-mono text-xs text-gray-600">
             Manual overall score:{' '}
             <span className="font-bold text-[var(--taali-text)]">
-              {manualEvalSummary.overall_score != null ? `${manualEvalSummary.overall_score}/10` : '—'}
+              {manualEvalSummary.overall_score != null ? `${manualEvalSummary.overall_score}/100` : '—'}
             </span>
             {manualEvalSummary.completed_due_to_timeout ? (
               <span className="ml-3 text-amber-700">Assessment auto-submitted on timeout.</span>
