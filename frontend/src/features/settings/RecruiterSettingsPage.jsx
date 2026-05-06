@@ -1120,15 +1120,17 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const navigateToSection = (sectionId) => {
     const next = canonicalSection(sectionId);
     setActiveSection(next);
-    const target = sectionRefs.current[next];
-    if (target && typeof target.scrollIntoView === 'function') {
-      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    }
     if (typeof window !== 'undefined' && window.history?.replaceState) {
       const hash = next === 'org' ? '' : `#${next}`;
       // Collapse any /settings/<section> path the user landed on via a
       // legacy deep link onto the canonical /settings#<section> hash.
       window.history.replaceState(null, '', `/settings${hash}`);
+    }
+    // v4 spec: each tab is its own focused page (only the active
+    // section renders), so scroll-into-view is irrelevant. Scroll the
+    // window back to the top so users start at the top of the card.
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' });
     }
   };
 
@@ -1150,32 +1152,40 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
         {orgLoading ? renderLoadingState : (
           <div className="mc-settings">
-            <aside className="mc-settings-rail">
-              <div className="mc-settings-group">Workspace</div>
-              <SettingsNavLink active={activeSection === 'org'} label="Organization" onClick={() => navigateToSection('org')} />
-              <SettingsNavLink active={activeSection === 'scoring'} label="Scoring policy" onClick={() => navigateToSection('scoring')} />
-              <SettingsNavLink active={activeSection === 'ai'} label="AI tooling" onClick={() => navigateToSection('ai')} />
-
-              <div className="mc-settings-group">People</div>
-              <SettingsNavLink active={activeSection === 'members'} label="Members" onClick={() => navigateToSection('members')} />
-              <SettingsNavLink active={activeSection === 'roles'} label="Roles & access" onClick={() => navigateToSection('roles')} />
-
-              <div className="mc-settings-group">Operations</div>
-              <SettingsNavLink active={activeSection === 'jobs'} label="Background jobs" onClick={() => navigateToSection('jobs')} />
-
-              <div className="mc-settings-group">Connected</div>
-              <SettingsNavLink active={activeSection === 'workable'} label="Workable" onClick={() => navigateToSection('workable')} />
-              <SettingsNavLink active={activeSection === 'sso'} label="SSO / SAML" onClick={() => navigateToSection('sso')} />
-              <SettingsNavLink active={activeSection === 'api'} label="API keys" onClick={() => navigateToSection('api')} />
-
-              <div className="mc-settings-group">Account</div>
-              <SettingsNavLink active={activeSection === 'billing'} label="Billing" onClick={() => navigateToSection('billing')} />
-              <SettingsNavLink active={activeSection === 'usage'} label="Usage" onClick={() => navigateToSection('usage')} />
-              <SettingsNavLink active={activeSection === 'notifications'} label="Notifications" onClick={() => navigateToSection('notifications')} />
-            </aside>
+            {/* HANDOFF chat.md §1 — v4 switched Settings from a sticky
+                left rail to a horizontal pill-tab strip matching the
+                Jobs / Chat / Tasks tab vocabulary. Each tab is its own
+                focused page; only the active section renders below. */}
+            <div className="mc-settings-tabs" role="tablist" aria-label="Settings sections">
+              {[
+                { k: 'org', l: 'Organization' },
+                { k: 'scoring', l: 'Scoring policy' },
+                { k: 'ai', l: 'AI tooling' },
+                { k: 'members', l: 'Members' },
+                { k: 'roles', l: 'Roles & access' },
+                { k: 'jobs', l: 'Background jobs' },
+                { k: 'workable', l: 'Workable' },
+                { k: 'sso', l: 'SSO / SAML' },
+                { k: 'api', l: 'API keys' },
+                { k: 'billing', l: 'Billing' },
+                { k: 'usage', l: 'Usage' },
+                { k: 'notifications', l: 'Notifications' },
+              ].map((tab) => (
+                <button
+                  key={tab.k}
+                  type="button"
+                  role="tab"
+                  aria-selected={activeSection === tab.k}
+                  className={`mc-settings-tab ${activeSection === tab.k ? 'on' : ''}`.trim()}
+                  onClick={() => navigateToSection(tab.k)}
+                >
+                  {tab.l}
+                </button>
+              ))}
+            </div>
 
             <main className="mc-settings-main">
-              <div ref={(node) => { sectionRefs.current.org = node; }}>
+              <div ref={(node) => { sectionRefs.current.org = node; }} hidden={activeSection !== "org"}>
                 <SectionPanel
                   id="org"
                   title="Organization"
@@ -1220,7 +1230,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.scoring = node; }}>
+              <div ref={(node) => { sectionRefs.current.scoring = node; }} hidden={activeSection !== "scoring"}>
                 <SectionPanel
                   id="scoring"
                   title="Scoring policy"
@@ -1316,7 +1326,7 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.ai = node; }}>
+              <div ref={(node) => { sectionRefs.current.ai = node; }} hidden={activeSection !== "ai"}>
                 <SectionPanel
                   id="ai"
                   title="AI tooling"
@@ -1406,7 +1416,7 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.members = node; }}>
+              <div ref={(node) => { sectionRefs.current.members = node; }} hidden={activeSection !== "members"}>
                 <SectionPanel
                   id="members"
                   title="Members"
@@ -1453,7 +1463,7 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.roles = node; }}>
+              <div ref={(node) => { sectionRefs.current.roles = node; }} hidden={activeSection !== "roles"}>
                 <SectionPanel
                   id="roles"
                   title="Roles & access"
@@ -1495,7 +1505,7 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.jobs = node; }}>
+              <div ref={(node) => { sectionRefs.current.jobs = node; }} hidden={activeSection !== "jobs"}>
                 <SectionPanel
                   id="jobs"
                   title="Background jobs"
@@ -1505,7 +1515,7 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.workable = node; }}>
+              <div ref={(node) => { sectionRefs.current.workable = node; }} hidden={activeSection !== "workable"}>
                 <SectionPanel
                   id="workable"
                   title="Workable integration"
@@ -1819,7 +1829,7 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.sso = node; }}>
+              <div ref={(node) => { sectionRefs.current.sso = node; }} hidden={activeSection !== "sso"}>
                 <SectionPanel
                   id="sso"
                   title="SSO / SAML"
@@ -1859,7 +1869,7 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.api = node; }}>
+              <div ref={(node) => { sectionRefs.current.api = node; }} hidden={activeSection !== "api"}>
                 <SectionPanel
                   id="api"
                   title="API keys"
@@ -2000,7 +2010,7 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.billing = node; }}>
+              <div ref={(node) => { sectionRefs.current.billing = node; }} hidden={activeSection !== "billing"}>
                 <SectionPanel
                   id="billing"
                   title="Billing"
@@ -2132,7 +2142,7 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.usage = node; }}>
+              <div ref={(node) => { sectionRefs.current.usage = node; }} hidden={activeSection !== "usage"}>
                 <SectionPanel
                   id="usage"
                   title="Usage"
@@ -2142,7 +2152,7 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.notifications = node; }}>
+              <div ref={(node) => { sectionRefs.current.notifications = node; }} hidden={activeSection !== "notifications"}>
                 <SectionPanel
                   id="notifications"
                   title="Notifications"

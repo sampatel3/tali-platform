@@ -442,13 +442,46 @@ export const LandingPage = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* BOTTOM CTA — purple gradient */}
+      {/* WALKTHROUGH TEASER — v4 (HANDOFF chat.md §1) */}
+      <section
+        id="walkthrough"
+        className="border-t border-b border-[var(--line)] bg-[var(--bg-2)]"
+      >
+        <div className={`${containerClass} py-16`}>
+          <div className="grid items-center gap-8 lg:grid-cols-[1fr_auto]">
+            <div>
+              <div className="mc-kicker" style={{ marginBottom: 12 }}>SEE EVERYTHING ELSE</div>
+              <h2
+                className="font-[var(--font-display)] font-semibold text-[var(--ink)]"
+                style={{ fontSize: 'clamp(28px,3.4vw,36px)', letterSpacing: '-0.025em', lineHeight: 1.1, margin: '0 0 12px' }}
+              >
+                Want to see how it all fits together?
+              </h2>
+              <p className="text-[15.5px] leading-[1.6] text-[var(--ink-2)]" style={{ margin: 0, maxWidth: 680 }}>
+                Triage, scoring, plain-English chat, the standing report, ATS sync — there&apos;s a full product
+                walkthrough pre-loaded with a real role. No card, no installs, no sales call.
+              </p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ height: 48, padding: '0 26px', fontSize: 14, whiteSpace: 'nowrap' }}
+              onClick={() => onNavigate('showcase')}
+            >
+              Open the walkthrough →
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* BOTTOM CTA — softened, token-based purple gradient (v4) */}
       <section className="bg-[var(--bg)]">
         <div className={`${containerClass} pb-24 pt-10`}>
           <div
             className="relative overflow-hidden rounded-[18px] px-12 py-14"
             style={{
-              background: 'linear-gradient(135deg, #5b2ca8 0%, #7c3aed 60%, #a78bfa 100%)',
+              background:
+                'linear-gradient(135deg, color-mix(in oklab, var(--purple) 75%, #000) 0%, var(--purple) 60%, var(--purple-lav) 100%)',
               color: '#fff',
             }}
           >
@@ -460,10 +493,10 @@ export const LandingPage = ({ onNavigate }) => {
             <div className="relative flex flex-wrap items-center justify-between gap-8">
               <div>
                 <h2 className="font-[var(--font-display)] text-[clamp(28px,3.6vw,40px)] font-semibold leading-[1.05] tracking-[-0.025em]">
-                  See it work on a real role.
+                  Ready to put the agent to work?
                 </h2>
                 <p className="mt-3 max-w-[520px] text-[16px] leading-[1.55] opacity-85">
-                  No sales call. Tell us who you&apos;d hire next and we&apos;ll spin up a sandbox with your shortlist.
+                  20-minute demo with a founder. We&apos;ll run it on a real role of yours.
                 </p>
               </div>
               <button
@@ -472,7 +505,7 @@ export const LandingPage = ({ onNavigate }) => {
                 style={{ boxShadow: '0 10px 28px -8px rgba(0,0,0,0.3)' }}
                 onClick={() => onNavigate('demo-lead')}
               >
-                Try the live walkthrough →
+                Book a demo →
               </button>
             </div>
           </div>

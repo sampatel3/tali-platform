@@ -1,33 +1,70 @@
 import React, { useState } from 'react';
 
 import { TaaliTile } from '../../shared/ui/Branding';
-import { AuthField } from '../auth/AuthShell';
 
-const STEPS = [
-  { n: '01', t: 'Watch the agent triage', d: '47 candidates scored, paced, and shortlisted in 30 seconds — autonomously.' },
-  { n: '02', t: 'Open an AI-native assessment', d: 'Step into the IDE the candidate used. Replay every prompt and paste.' },
-  { n: '03', t: 'See the standing report', d: 'Score, AI fluency, evidence, interview-ready questions — what your team gets.' },
+// Live agent feed terminal — renders the agent narrating decisions in
+// real time on the dark editorial pane. Pulls colors directly from the
+// v4 dark-purple token family so it stays in sync with auth + reporting.
+const AGENT_FEED_ROWS = [
+  ['00:00', 'var(--purple-lav)', 'agent.start', 'reading 3 new applications…'],
+  ['00:02', '#7dd0a8', 'cv.score', 'maya chen → 92  (cleared all 6 dimensions)'],
+  ['00:04', '#7dd0a8', 'cv.score', 'jordan patel → 88'],
+  ['00:05', '#e8b167', 'cv.score', 'tom liu → 47  (below 55 threshold)'],
+  ['00:06', 'var(--purple-lav)', 'invite.send', 'maya, jordan → 90-min assessment'],
+  ['00:08', 'var(--purple-lav)', 'agent.note', '"jordan: strong system design, weak on ai prompting — flag for hm"'],
 ];
 
+const AgentLiveFeed = () => (
+  <div className="mc-demo-feed">
+    <div className="mc-demo-feed-head">
+      <span className="mc-demo-feed-dot" aria-hidden="true" />
+      <span className="mc-demo-feed-label">TAALI · LIVE AGENT FEED · STRIPE / SR. BACKEND</span>
+      <span className="mc-demo-feed-now">NOW</span>
+    </div>
+    {AGENT_FEED_ROWS.map((row, i) => (
+      <div key={i} className="mc-demo-feed-row" style={{ opacity: 0.4 + i * 0.1 }}>
+        <span className="mc-demo-feed-time">{row[0]}</span>
+        <span className="mc-demo-feed-event" style={{ color: row[1] }}>{row[2]}</span>
+        <span className="mc-demo-feed-msg">{row[3]}</span>
+      </div>
+    ))}
+    <div className="mc-demo-feed-cursor" aria-hidden="true">
+      <span />
+    </div>
+  </div>
+);
+
+const ROLE_OPTIONS = ['Backend', 'Frontend', 'Full-stack', 'ML / AI', 'Staff+', 'Other'];
+const VOLUME_OPTIONS = ['1–5', '6–20', '21–50', '50+'];
+
 // DemoLeadPage — pre-credentials capture before the demo sandbox spins
-// up. Mirrors the canvas layout: editorial pane on the left with the
-// kicker / headline / 3-step preview, form on the right.
+// up. v4 spec: dark editorial pane left, streamlined form right.
 //
-// Submit currently redirects to /demo (the demo experience). When the
+// Submit currently routes into /demo (the demo experience). When the
 // sandbox-seeding API ships, the form payload should drive
 // /demo/sandbox?email=... etc.
 export const DemoLeadPage = ({ onNavigate }) => {
-  const [form, setForm] = useState({ email: '', company: '', role: '', headcount: '' });
+  const [form, setForm] = useState({
+    email: '',
+    name: '',
+    company: '',
+    role: 'Backend',
+    volume: '6–20',
+  });
   const [submitting, setSubmitting] = useState(false);
 
-  const update = (key) => (e) => setForm((prev) => ({ ...prev, [key]: e.target.value }));
+  const update = (key) => (event) => {
+    setForm((prev) => ({ ...prev, [key]: event.target.value }));
+  };
+
+  const setField = (key, value) => {
+    setForm((prev) => ({ ...prev, [key]: value }));
+  };
 
   const handleSubmit = (event) => {
     event.preventDefault();
     if (!form.email.trim()) return;
     setSubmitting(true);
-    // No backend endpoint yet for capturing the lead — route into the
-    // existing demo experience so users get the walkthrough immediately.
     window.setTimeout(() => {
       setSubmitting(false);
       onNavigate?.('demo');
@@ -36,7 +73,11 @@ export const DemoLeadPage = ({ onNavigate }) => {
 
   return (
     <div className="mc-demo-lead">
+      {/* ============== LEFT — STORY ============== */}
       <aside className="mc-demo-lead-editorial">
+        <div className="mc-demo-lead-grid" aria-hidden="true" />
+        <div className="mc-demo-lead-glow" aria-hidden="true" />
+
         <button
           type="button"
           className="mc-demo-lead-logo"
@@ -52,74 +93,152 @@ export const DemoLeadPage = ({ onNavigate }) => {
           />
           <span>taali<em>.</em></span>
         </button>
-        <div className="mc-kicker" style={{ marginBottom: 14 }}>SEE THE AGENT WORK A REAL ROLE · 7 MIN</div>
-        <h1 className="mc-demo-lead-title">
-          Try the live <em>walkthrough</em>.<br />
-          <span style={{ color: 'var(--ink-2)' }}>No sales call.</span>
-        </h1>
-        <p className="mc-demo-lead-sub">
-          We'll spin up a sandbox seeded with a Senior Backend Engineer role and a shortlist of sample
-          candidates. You'll watch the agent triage them autonomously, then open a real AI-native
-          assessment — the IDE, the prompts, the fluency score — exactly as your hiring manager would see it.
-        </p>
-        <ol className="mc-demo-lead-steps">
-          {STEPS.map(({ n, t, d }) => (
-            <li key={n}>
-              <span className="mc-demo-lead-step-num">{n}</span>
-              <div>
-                <div className="mc-demo-lead-step-t">{t}</div>
-                <div className="mc-demo-lead-step-d">{d}</div>
-              </div>
-            </li>
-          ))}
-        </ol>
+
+        <div className="mc-demo-lead-story">
+          <h1 className="mc-demo-lead-title">
+            Let the agent <em>find</em><br />
+            your AI-native hires.<br />
+            <em>You</em> focus on the ones<br />
+            worth your time.
+          </h1>
+          <p className="mc-demo-lead-sub">
+            A recruiter that doesn't sleep. Taali's agent reads every application, runs the
+            assessment, scores six axes of AI-collaboration, and brings you a ranked shortlist by
+            morning. You walk in with a verdict, not an inbox.
+          </p>
+
+          <AgentLiveFeed />
+
+          <p className="mc-demo-lead-quote">
+            "We replaced the first two weeks of every search with Taali. Top of funnel went from a
+            chore to a calendar block."
+            <span className="mc-demo-lead-quote-source">— HEAD OF TALENT, SERIES B INFRA CO.</span>
+          </p>
+        </div>
       </aside>
 
+      {/* ============== RIGHT — THE GATE ============== */}
       <main className="mc-demo-lead-form-pane">
-        <form className="mc-demo-lead-form" onSubmit={handleSubmit}>
-          <span className="mc-demo-lead-tag">NO CARD · NO SALES CALL</span>
-          <h2 className="mc-demo-lead-form-title">Tell us about you</h2>
-          <AuthField
-            label="Work email"
-            name="email"
-            type="email"
-            autoComplete="email"
-            placeholder="sara@company.com"
-            value={form.email}
-            onChange={update('email')}
-            required
-            autoFocus
-          />
-          <AuthField
-            label="Company"
-            name="company"
-            autoComplete="organization"
-            placeholder="Your company"
-            value={form.company}
-            onChange={update('company')}
-          />
-          <AuthField
-            label="Role you're hiring for"
-            name="role"
-            placeholder="Senior Backend Engineer"
-            helper="We'll seed the sandbox with shortlist candidates relevant to this role."
-            value={form.role}
-            onChange={update('role')}
-          />
-          <AuthField
-            label="How many people are on your hiring team?"
-            name="headcount"
-            placeholder="3"
-            value={form.headcount}
-            onChange={update('headcount')}
-          />
-          <button type="submit" className="mc-auth-cta" disabled={submitting}>
-            {submitting ? 'Opening sandbox…' : 'Open the sandbox →'}
-          </button>
-          <p className="mc-demo-lead-foot">
-            We never ask for a card. The sandbox is yours for 7 days, then archived.
+        <div className="mc-demo-lead-topnav">
+          <span>HAVE AN ACCOUNT?</span>
+          <button type="button" onClick={() => onNavigate?.('login')}>Sign in →</button>
+        </div>
+
+        <div className="mc-demo-lead-form-wrap">
+          <span className="mc-demo-lead-tag">
+            <span className="mc-demo-lead-tag-dot" aria-hidden="true" />
+            INTERACTIVE WALKTHROUGH · NO CALL
+          </span>
+
+          <h2 className="mc-demo-lead-form-title">
+            See it run on <em>your</em> role.
+          </h2>
+          <p className="mc-demo-lead-form-sub">
+            Tell us what you're hiring for. We'll preload realistic candidates and walk you through
+            the agent end-to-end — in the next two minutes.
           </p>
-        </form>
+
+          <form className="mc-demo-lead-form" onSubmit={handleSubmit}>
+            <label className="mc-demo-lead-field">
+              <span className="mc-demo-lead-field-label">Work email</span>
+              <input
+                type="email"
+                name="email"
+                autoComplete="email"
+                placeholder="sara@company.com"
+                value={form.email}
+                onChange={update('email')}
+                required
+                autoFocus
+              />
+            </label>
+
+            <div className="mc-demo-lead-grid-2">
+              <label className="mc-demo-lead-field">
+                <span className="mc-demo-lead-field-label">Full name</span>
+                <input
+                  name="name"
+                  autoComplete="name"
+                  placeholder="Sara Park"
+                  value={form.name}
+                  onChange={update('name')}
+                />
+              </label>
+              <label className="mc-demo-lead-field">
+                <span className="mc-demo-lead-field-label">Company</span>
+                <input
+                  name="company"
+                  autoComplete="organization"
+                  placeholder="Acme"
+                  value={form.company}
+                  onChange={update('company')}
+                />
+              </label>
+            </div>
+
+            <div className="mc-demo-lead-field">
+              <span className="mc-demo-lead-field-label">Role you're hiring for</span>
+              <div className="mc-demo-lead-chips" role="radiogroup" aria-label="Role you're hiring for">
+                {ROLE_OPTIONS.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    role="radio"
+                    aria-checked={form.role === option}
+                    onClick={() => setField('role', option)}
+                    className={`mc-demo-lead-chip ${form.role === option ? 'on' : ''}`.trim()}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="mc-demo-lead-field">
+              <span className="mc-demo-lead-field-label">Hiring volume next quarter</span>
+              <div className="mc-demo-lead-segments" role="radiogroup" aria-label="Hiring volume">
+                {VOLUME_OPTIONS.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    role="radio"
+                    aria-checked={form.volume === option}
+                    onClick={() => setField('volume', option)}
+                    className={`mc-demo-lead-segment ${form.volume === option ? 'on' : ''}`.trim()}
+                  >
+                    {option}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <button type="submit" className="mc-demo-lead-cta" disabled={submitting}>
+              {submitting ? 'Opening walkthrough…' : 'Open the live walkthrough →'}
+            </button>
+
+            <div className="mc-demo-lead-trust">
+              <span className="mc-demo-lead-trust-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M12 2L2 7l10 5 10-5-10-5z" />
+                  <path d="M2 17l10 5 10-5" />
+                  <path d="M2 12l10 5 10-5" />
+                </svg>
+              </span>
+              <div>
+                <strong>SOC 2 Type II.</strong> We never use your data to train models. Your candidate
+                pool stays yours.
+              </div>
+            </div>
+          </form>
+
+          <div className="mc-demo-lead-trusted">
+            <span>TRUSTED BY</span>
+            <span>STRIPE</span>
+            <span>LINEAR</span>
+            <span>VERCEL</span>
+            <span>RAMP</span>
+          </div>
+        </div>
       </main>
     </div>
   );
