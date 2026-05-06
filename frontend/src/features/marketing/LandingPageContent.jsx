@@ -10,13 +10,6 @@ import { MarketingNav, TaaliLogo } from '../../shared/layout/TaaliLayout';
 
 const containerClass = 'mx-auto max-w-[1360px] px-6 md:px-10 xl:px-16';
 
-const heroSignals = [
-  { label: 'Prompt quality', width: '91%', value: '9.1' },
-  { label: 'Error recovery', width: '78%', value: '7.8' },
-  { label: 'Context utilization', width: '86%', value: '8.6' },
-  { label: 'Independence', width: '72%', value: '7.2' },
-];
-
 const dashboardCandidates = [
   { name: 'Candidate', status: 'submitted' },
   { name: 'Candidate', status: 'in-progress' },
@@ -157,16 +150,6 @@ const SectionHeading = ({ kicker, title, copy, children = null }) => (
   </div>
 );
 
-const HeroSignalRow = ({ label, width, value }) => (
-  <div className="grid grid-cols-[140px_1fr_38px] items-center gap-3 text-[13.5px]">
-    <span className="text-[var(--ink-2)]">{label}</span>
-    <div className="h-1.5 overflow-hidden rounded-full bg-[var(--bg-3)]">
-      <div className="h-full rounded-full bg-gradient-to-r from-[var(--purple-2)] to-[var(--purple)]" style={{ width }} />
-    </div>
-    <span className="text-right font-[var(--font-mono)] text-[var(--ink)]">{value}</span>
-  </div>
-);
-
 const PlatformCard = ({ kicker, title, body, children, className = '' }) => (
   <div className={`rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)] ${className}`.trim()}>
     <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">{kicker}</div>
@@ -196,126 +179,132 @@ export const LandingPage = ({ onNavigate }) => {
     <div className="min-h-screen bg-[var(--bg)] text-[var(--ink)]">
       <MarketingNav onNavigate={onNavigate} />
 
-      <section className="relative overflow-hidden pb-20 pt-16 md:pb-28 md:pt-20">
-        <div
-          className="pointer-events-none absolute inset-0 opacity-60 tally-bg-soft"
-          style={{ maskImage: 'radial-gradient(60% 60% at 85% 20%, black, transparent 70%)' }}
-        />
-        <div className={`${containerClass} grid gap-12 lg:grid-cols-[1.05fr_.95fr] lg:items-center`}>
-          <div>
-            <div className="mc-kicker" style={{ display: 'inline-flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
-              <span
-                aria-hidden="true"
-                style={{
-                  display: 'inline-flex',
-                  width: 6,
-                  height: 6,
-                  borderRadius: '50%',
-                  background: 'var(--purple)',
-                  boxShadow: '0 0 0 4px var(--purple-soft)',
-                }}
-              />
-              AGENTIC-FIRST · AI-NATIVE HIRING
-            </div>
-            <h1 className="h-display mt-2 text-[clamp(56px,7.3vw,108px)] leading-[0.96]">
-              The recruiter's <em>agent.</em><br />Built to hire engineers<br />who ship with AI<span className="text-[var(--purple)]">.</span>
-            </h1>
-            <p className="mt-5 max-w-[640px] text-[18px] leading-[1.55] text-[var(--ink-2)]">
-              Taali is the first agentic hiring platform — and the only one that measures how candidates actually <em className="text-[var(--ink)] font-medium">use AI</em> on the job. The agent triages your pipeline, runs hands-on assessments in a real IDE, and surfaces calibrated evidence. You stay in charge of every consequential decision.
-            </p>
-            <div className="mt-7 flex flex-wrap gap-3 text-[13px] text-[var(--ink-2)]">
-              {[
-                { k: 'AGENTIC', v: 'Runs your pipeline 24/7 — pauses for your judgment' },
-                { k: 'AI-NATIVE', v: 'The only platform that scores AI fluency in hands-on tasks' },
-              ].map((badge) => (
-                <div
-                  key={badge.k}
-                  className="inline-flex items-center gap-2.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3.5 py-2"
-                >
-                  <span className="font-[var(--font-mono)] text-[10.5px] font-semibold tracking-[0.08em] text-[var(--purple)]">
-                    {badge.k}
-                  </span>
-                  <span>{badge.v}</span>
-                </div>
-              ))}
-            </div>
-            <div className="mt-7 flex flex-wrap gap-3">
-              <button type="button" className="btn btn-primary btn-lg" onClick={() => onNavigate('demo')}>
-                Book a demo
-              </button>
-              <button
-                type="button"
-                className="btn btn-outline btn-lg"
-                onClick={() => {
-                  window.location.href = '/c/demo?view=client&k=demo-token&showcase=1';
-                }}
+      <section className="relative overflow-hidden pb-16 pt-12 md:pb-24 md:pt-16">
+        <div className={containerClass}>
+          <div className="mc-kicker" style={{ display: 'inline-flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+            <span
+              aria-hidden="true"
+              style={{
+                display: 'inline-flex',
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: 'var(--purple)',
+                boxShadow: '0 0 0 4px var(--purple-soft)',
+              }}
+            />
+            AGENTIC-FIRST · AI-NATIVE HIRING
+          </div>
+          <h1
+            className="font-[var(--font-display)] font-semibold"
+            style={{
+              fontSize: 'clamp(44px,6.4vw,72px)',
+              lineHeight: 1.02,
+              letterSpacing: '-0.04em',
+              margin: '0 0 22px',
+              maxWidth: 980,
+            }}
+          >
+            The recruiter&apos;s <em className="not-italic text-[var(--purple)]">agent.</em><br />
+            Built to hire engineers<br />who ship with AI<span className="text-[var(--purple)]">.</span>
+          </h1>
+          <p className="text-[18px] leading-[1.55] text-[var(--ink-2)]" style={{ maxWidth: 640, margin: '0 0 22px' }}>
+            Taali is the first agentic hiring platform — and the only one that measures how candidates actually <em className="not-italic font-medium text-[var(--ink)]">use AI</em> on the job. The agent triages your pipeline, runs hands-on assessments in a real IDE, and surfaces calibrated evidence. You stay in charge of every consequential decision.
+          </p>
+          <div className="flex flex-wrap gap-3 text-[13px] text-[var(--ink-2)]" style={{ marginBottom: 30 }}>
+            {[
+              { k: 'AGENTIC', v: 'Runs your pipeline 24/7 — pauses for your judgment' },
+              { k: 'AI-NATIVE', v: 'The only platform that scores AI fluency in hands-on tasks' },
+            ].map((badge) => (
+              <div
+                key={badge.k}
+                className="inline-flex items-center gap-2.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3.5 py-2"
               >
-                Try the live walkthrough <span className="arrow">→</span>
-              </button>
-            </div>
-            <div className="mt-14 flex max-w-[520px] items-start gap-3 rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-4 text-[13.5px] leading-[1.55] text-[var(--mute)] shadow-[var(--shadow-sm)]">
-              <div className="grid h-7 w-7 shrink-0 place-items-center rounded-[8px] bg-[color-mix(in_oklab,var(--purple)_14%,var(--bg))] text-[var(--purple)]">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                  <path d="M12 2 L4 6 v6 c0 5 3.5 8 8 10 4.5-2 8-5 8-10 V6 z" />
-                  <path d="M9 12 l2 2 4-4" />
-                </svg>
+                <span className="font-[var(--font-mono)] text-[10.5px] font-semibold tracking-[0.08em] text-[var(--purple)]">
+                  {badge.k}
+                </span>
+                <span>{badge.v}</span>
               </div>
-              <div>
-                Built for engineering teams running <b className="text-[var(--ink)]">50+ technical interviews a year</b>. Real tasks, real AI tools, evidence-linked scoring.
-              </div>
-            </div>
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-3" style={{ marginBottom: 48 }}>
+            <button
+              type="button"
+              className="btn btn-primary"
+              style={{ height: 46, padding: '0 22px', fontSize: 14 }}
+              onClick={() => onNavigate('demo-lead')}
+            >
+              Book a demo
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline"
+              style={{ height: 46, padding: '0 22px', fontSize: 14 }}
+              onClick={() => onNavigate('demo')}
+            >
+              Try the live walkthrough <span className="arrow">→</span>
+            </button>
           </div>
 
-          <div className="rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] p-5 shadow-[var(--shadow-lg)]">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-dashed border-[var(--line)] px-2 pb-4">
-              <div className="flex flex-wrap gap-1 font-[var(--font-mono)] text-xs text-[var(--mute)]">
-                <span className="rounded-[8px] bg-[var(--bg-3)] px-3 py-1.5 text-[var(--ink)]">Overview</span>
-                <span className="px-3 py-1.5">CV &amp; match</span>
-              </div>
-              <div className="flex shrink-0 items-center gap-2 font-[var(--font-mono)] text-xs text-[var(--ink-2)]">
-                <span className="h-2 w-2 rounded-full bg-[var(--green)] shadow-[0_0_0_3px_color-mix(in_oklab,var(--green)_25%,transparent)]" />
-                <span>Maya Chen</span>
-              </div>
+          {/* Hero composition — browser frame with AgentBar + 4 KPI tiles */}
+          <div
+            className="overflow-hidden rounded-[16px] border border-[var(--line)] bg-[var(--bg-2)]"
+            style={{ boxShadow: '0 24px 60px -30px rgba(91,44,168,0.35)' }}
+          >
+            <div
+              className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[11px] text-[var(--mute)]"
+            >
+              <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#f06' }} />
+              <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#ffb020' }} />
+              <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#39c66d' }} />
+              <span className="ml-3">app.taali.ai/jobs</span>
             </div>
-
-            <div className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-4 rounded-[var(--radius)] bg-[var(--bg)] p-5 sm:grid-cols-[auto_minmax(0,1fr)_auto]">
-              <div className="relative grid h-[72px] w-[72px] place-items-center">
-                <svg width="72" height="72" viewBox="0 0 72 72" className="absolute inset-0 -rotate-90">
-                  <circle cx="36" cy="36" r="30" fill="none" stroke="var(--bg-3)" strokeWidth="6" />
-                  <circle cx="36" cy="36" r="30" fill="none" stroke="var(--purple)" strokeWidth="6" strokeLinecap="round" strokeDasharray="188.4" strokeDashoffset="34" />
-                </svg>
-                <span className="font-[var(--font-display)] text-2xl leading-none text-[var(--ink)]">8.2</span>
+            <div
+              className="px-6 py-6"
+              style={{ background: 'linear-gradient(180deg, #f9f7fc 0%, #ffffff 100%)' }}
+            >
+              {/* Static AgentBar mock matching the canvas hero composition */}
+              <div className="mc-agent-bar" style={{ marginBottom: 16 }}>
+                <div className="mc-agent-row">
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 320px', minWidth: 0 }}>
+                    <div className="mc-agent-glyph">
+                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                        <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83" />
+                      </svg>
+                      <span className="mc-pulse-ring" aria-hidden="true" />
+                    </div>
+                    <div style={{ minWidth: 0 }}>
+                      <div className="mc-agent-title">
+                        <span>Agentic mode is ON</span>
+                        <span className="mc-agent-pending">3 awaiting your review</span>
+                      </div>
+                      <div className="mc-agent-tick">Advanced Maya Chen to Review · 2m ago · because: assessment 8.4, role-fit 92%, recruiter shortlist match</div>
+                    </div>
+                  </div>
+                  <div className="mc-agent-budget">
+                    <div className="mc-agent-budget-row">
+                      <span>This month</span>
+                      <span style={{ fontWeight: 600 }}>$31 / $50</span>
+                    </div>
+                    <div className="mc-agent-budget-bar">
+                      <i style={{ width: '62%' }} />
+                    </div>
+                  </div>
+                </div>
               </div>
-              <div className="min-w-0">
-                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">Composite · vs your team&apos;s bar</div>
-                <div className="mt-1 text-[17px] font-semibold">Strong hire - recommend on-site</div>
-                <div className="mt-1 text-[13px] text-[var(--mute)]">Top 12% of 47 candidates for this role · scored against your rubric</div>
-              </div>
-              <div className="col-span-2 w-fit rounded-full bg-[color-mix(in_oklab,var(--green)_18%,transparent)] px-3 py-1.5 font-[var(--font-mono)] text-xs text-[var(--green)] sm:col-span-1">
-                Strong hire
-              </div>
-            </div>
-
-            <div className="mt-4 grid gap-3">
-              {heroSignals.map((signal) => (
-                <HeroSignalRow key={signal.label} label={signal.label} width={signal.width} value={signal.value} />
-              ))}
-            </div>
-
-            <div className="mt-4 flex gap-3 rounded-[var(--radius)] border border-dashed border-[color-mix(in_oklab,var(--purple)_28%,var(--line))] bg-[color-mix(in_oklab,var(--purple)_8%,var(--bg-2))] p-4 text-[13.5px] leading-6 text-[var(--ink-2)]">
-              <div className="grid h-7 w-7 shrink-0 place-items-center rounded-[8px] bg-[var(--purple)] text-[var(--taali-inverse-text)]">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" aria-hidden="true">
-                  <path d="M12 2 L14 10 L22 12 L14 14 L12 22 L10 14 L2 12 L10 10 Z" />
-                </svg>
-              </div>
-              <div>
-                <b className="block text-[var(--ink)]">Evidence · prompt 14 of 23</b>
-                <span className="my-1 block leading-[1.5] text-[var(--ink)] italic">
-                  &quot;Before I implement, can you show me where the existing eval-gate is wired so I don&apos;t duplicate the abstraction?&quot;
-                </span>
-                <span className="block font-[var(--font-mono)] text-[11px] tracking-[0.02em] text-[var(--purple)]">
-                  → scored 9.4 on prompt quality · context-aware, ownership signal
-                </span>
+              <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
+                {[
+                  { k: 'CANDIDATES PROCESSED', v: '847', d: 'this week' },
+                  { k: 'INVITATIONS SENT', v: '312', d: 'auto-paced' },
+                  { k: 'AWAITING YOU', v: '7', d: 'review' },
+                  { k: 'BUDGET USED', v: '62%', d: '$31 of $50' },
+                ].map((tile) => (
+                  <div key={tile.k} className="mc-jobs-kpi" style={{ background: 'var(--bg-2)' }}>
+                    <div className="k">{tile.k}</div>
+                    <div className="v">{tile.v}</div>
+                    <div className="d">{tile.d}</div>
+                  </div>
+                ))}
               </div>
             </div>
           </div>

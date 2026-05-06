@@ -73,7 +73,7 @@ describe('Demo flow redesign', () => {
     const onNavigate = vi.fn();
     renderLanding(onNavigate);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Platform' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Product' }));
 
     expect(onNavigate).not.toHaveBeenCalled();
   });
@@ -85,8 +85,9 @@ describe('Demo flow redesign', () => {
     expect(screen.getByText(/AGENTIC-FIRST/i)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /^Book a demo$/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: /Try the live walkthrough/i }).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Strong hire - recommend on-site/i)).toBeInTheDocument();
+    expect(screen.getByText(/Agentic mode is ON/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Maya Chen/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/CANDIDATES PROCESSED/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /What your\s*candidate\s*actually sees\./i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /An autonomous agent in your pipeline/i })).toBeInTheDocument();
     expect(screen.getByText(/HOW THE AGENT WORKS/i)).toBeInTheDocument();
@@ -119,7 +120,7 @@ describe('Demo flow redesign', () => {
     const onNavigate = vi.fn();
     renderDemo(onNavigate);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Platform' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Product' }));
 
     expect(onNavigate).toHaveBeenCalledWith('landing');
     expect(sessionStorage.getItem('taali.pendingMarketingSection')).toBe('platform');
