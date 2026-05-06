@@ -10,6 +10,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { aedToUsd, formatAed } from '../../lib/currency';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
+import { PageHero } from '../../shared/layout/PageHero';
 import {
   Button,
   Panel,
@@ -190,7 +191,7 @@ const ToggleCard = ({ title, description, checked, onChange, badge = null }) => 
 const SettingsNavLink = ({ active, label, onClick }) => (
   <button
     type="button"
-    className={`settings-side-link ${active ? 'active' : ''}`}
+    className={`mc-settings-link ${active ? 'on' : ''}`.trim()}
     onClick={onClick}
   >
     {label}
@@ -1072,45 +1073,40 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="settings" onNavigate={onNavigate} /> : null}
-      <div className="page">
-        <div className="page-head">
-          <div className="tally-bg" />
-          <div>
-            <div className="kicker">04 · RECRUITER WORKSPACE</div>
-            <h1>
-              Settings<em>.</em>
-            </h1>
-            <p className="sub">Workspace, scoring policy, integrations, and access.</p>
-          </div>
-        </div>
+      <div className="mc-page">
+        <PageHero
+          kicker="04 · RECRUITER WORKSPACE"
+          title="Settings"
+          subtitle="Workspace, scoring policy, integrations, and access."
+        />
 
         {orgLoading ? renderLoadingState : (
-          <div className="settings-layout">
-            <aside className="settings-side">
-              <div className="settings-side-group-label">Workspace</div>
+          <div className="mc-settings">
+            <aside className="mc-settings-rail">
+              <div className="mc-settings-group">Workspace</div>
               <SettingsNavLink active={activeSection === 'org'} label="Organization" onClick={() => navigateToSection('org')} />
               <SettingsNavLink active={activeSection === 'scoring'} label="Scoring policy" onClick={() => navigateToSection('scoring')} />
               <SettingsNavLink active={activeSection === 'ai'} label="AI tooling" onClick={() => navigateToSection('ai')} />
 
-              <div className="settings-side-group-label">People</div>
+              <div className="mc-settings-group">People</div>
               <SettingsNavLink active={activeSection === 'members'} label="Members" onClick={() => navigateToSection('members')} />
               <SettingsNavLink active={activeSection === 'roles'} label="Roles & access" onClick={() => navigateToSection('roles')} />
 
-              <div className="settings-side-group-label">Operations</div>
+              <div className="mc-settings-group">Operations</div>
               <SettingsNavLink active={activeSection === 'jobs'} label="Background jobs" onClick={() => navigateToSection('jobs')} />
 
-              <div className="settings-side-group-label">Connected</div>
+              <div className="mc-settings-group">Connected</div>
               <SettingsNavLink active={activeSection === 'workable'} label="Workable" onClick={() => navigateToSection('workable')} />
               <SettingsNavLink active={activeSection === 'sso'} label="SSO / SAML" onClick={() => navigateToSection('sso')} />
               <SettingsNavLink active={activeSection === 'api'} label="API keys" onClick={() => navigateToSection('api')} />
 
-              <div className="settings-side-group-label">Account</div>
+              <div className="mc-settings-group">Account</div>
               <SettingsNavLink active={activeSection === 'billing'} label="Billing" onClick={() => navigateToSection('billing')} />
               <SettingsNavLink active={activeSection === 'usage'} label="Usage" onClick={() => navigateToSection('usage')} />
               <SettingsNavLink active={activeSection === 'notifications'} label="Notifications" onClick={() => navigateToSection('notifications')} />
             </aside>
 
-            <main className="settings-main">
+            <main className="mc-settings-main">
               <div ref={(node) => { sectionRefs.current.org = node; }}>
                 <SectionPanel
                   id="org"

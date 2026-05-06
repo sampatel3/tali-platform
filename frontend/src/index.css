@@ -2695,7 +2695,7 @@ html[data-theme="dark"] {
   flex-wrap: wrap;
 }
 
-/* Stack below the AgentTopBar (sticky at top:0, ~78px tall) so tabs remain
+/* Stack below the global AgentBar (Mission Control chrome) so tabs remain
    reachable while the candidates table or kanban scrolls past. */
 .sub-tabs-sticky {
   position: sticky;
@@ -8386,5 +8386,485 @@ button.eng-badge-button:focus-visible {
   font-size: 13px;
   color: var(--ink-2);
   line-height: 1.5;
+}
+
+/* ================== COMMAND BAR (⌘K) — Phase 4 ================== */
+
+.mc-cmd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--ink);
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 12px;
+  margin-bottom: 22px;
+  font-size: 13.5px;
+  position: relative;
+}
+
+.mc-cmd-prefix {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.10);
+  padding: 3px 7px;
+  border-radius: 5px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.mc-cmd-scope {
+  color: rgba(255, 255, 255, 0.6);
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+  position: relative;
+}
+
+.mc-cmd-scope-btn {
+  background: rgba(255, 255, 255, 0.12);
+  border: 0;
+  color: #fff;
+  font-family: inherit;
+  font-size: 12.5px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.mc-cmd-scope-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  min-width: 140px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: var(--shadow-md);
+  padding: 4px;
+  list-style: none;
+  margin: 0;
+  z-index: 60;
+}
+
+.mc-cmd-scope-option {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.mc-cmd-scope-option:hover { background: var(--bg); color: var(--purple); }
+.mc-cmd-scope-option.on { color: var(--purple); font-weight: 500; }
+
+.mc-cmd-input {
+  flex: 1;
+  background: transparent;
+  border: 0;
+  outline: none;
+  color: #fff;
+  font-family: inherit;
+  font-size: 13.5px;
+}
+
+.mc-cmd-input::placeholder { color: rgba(255, 255, 255, 0.5); }
+
+.mc-cmd-ai {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  background: var(--purple);
+  color: #fff;
+  padding: 3px 8px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  text-transform: uppercase;
+}
+
+/* ================== JOB PIPELINE COCKPIT — Phase 4 ================== */
+
+.mc-cockpit {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 22px;
+  align-items: start;
+}
+
+@media (min-width: 1100px) {
+  .mc-cockpit { grid-template-columns: 320px 1fr; }
+}
+
+.mc-rail {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+  position: sticky;
+  top: 80px;
+}
+
+.mc-rail.tone-amber { border-color: color-mix(in srgb, var(--amber) 30%, var(--line)); }
+.mc-rail.tone-red { border-color: color-mix(in srgb, var(--red) 30%, var(--line)); }
+
+.mc-rail-head {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+}
+
+.mc-rail-orb {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  background: var(--purple);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.mc-rail-orb-pulse {
+  position: absolute;
+  inset: -2px;
+  border-radius: 12px;
+  border: 2px solid var(--purple);
+  opacity: 0.4;
+  animation: mc-pulse-ring 1.6s ease-out infinite;
+}
+
+.mc-rail-title { font-weight: 600; font-size: 14px; color: var(--ink); line-height: 1.2; }
+
+.mc-rail-state {
+  font-size: 11.5px;
+  color: var(--mute);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.mc-rail-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--green);
+  box-shadow: 0 0 6px var(--green);
+}
+
+.mc-rail-tick {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  background: var(--purple-soft);
+  padding: 8px 10px;
+  border-radius: 8px;
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  line-height: 1.4;
+}
+
+.mc-rail-tick-pulse {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--purple);
+  flex-shrink: 0;
+  animation: mc-blink 1.8s ease-in-out infinite;
+}
+
+@keyframes mc-blink {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(1.3); }
+}
+
+.mc-rail-pending {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: linear-gradient(135deg, var(--lime), color-mix(in srgb, var(--lime) 70%, white));
+  border: 1px solid color-mix(in srgb, var(--lime) 60%, var(--ink));
+  border-radius: 10px;
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+  margin-bottom: 14px;
+}
+
+.mc-rail-pending-num {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 700;
+  line-height: 1;
+  color: var(--ink);
+}
+
+.mc-rail-pending-label { font-size: 12px; color: var(--ink-2); line-height: 1.3; }
+
+.mc-rail-budget {
+  border-top: 1px solid var(--line-2);
+  padding-top: 14px;
+  margin-top: 14px;
+}
+
+.mc-rail-budget-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+}
+
+.mc-rail-budget-edit {
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 2px 8px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.mc-rail-budget-amount {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.mc-rail-budget-spent {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.02em;
+}
+
+.mc-rail-budget-of { font-size: 12px; color: var(--mute); }
+
+.mc-rail-budget-meter {
+  position: relative;
+  height: 10px;
+  border-radius: 99px;
+  background: var(--bg-3);
+  overflow: visible;
+  margin-bottom: 6px;
+}
+
+.mc-rail-budget-fill {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: linear-gradient(90deg, var(--purple), color-mix(in srgb, var(--purple) 60%, var(--lime)));
+  border-radius: 99px;
+  z-index: 2;
+}
+
+.mc-rail-budget-projection {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  background: repeating-linear-gradient(
+    45deg,
+    color-mix(in srgb, var(--purple) 14%, transparent),
+    color-mix(in srgb, var(--purple) 14%, transparent) 4px,
+    transparent 4px,
+    transparent 8px
+  );
+  border-radius: 99px;
+  z-index: 1;
+}
+
+.mc-rail-budget-mark {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 1px;
+  background: var(--ink);
+  opacity: 0.4;
+  z-index: 3;
+}
+
+.mc-rail-budget-mark span {
+  position: absolute;
+  top: -14px;
+  left: -10px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  color: var(--mute);
+}
+
+.mc-rail-budget-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin-top: 14px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line-2);
+}
+
+.mc-rail-stat-num {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.mc-rail-stat-lab { font-size: 10.5px; color: var(--mute); margin-top: 2px; }
+
+.mc-rail-spark { width: 100%; height: 36px; margin-top: 12px; }
+
+.mc-rail-spark-cap {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--mute);
+  margin-top: 2px;
+}
+
+.mc-rail-week {
+  border-top: 1px solid var(--line-2);
+  margin-top: 14px;
+  padding-top: 14px;
+}
+
+.mc-rail-week-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.mc-rail-week-grid > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.mc-rail-week-grid .num {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 18px;
+  color: var(--ink);
+  letter-spacing: -0.01em;
+}
+
+.mc-rail-week-grid .lab { font-size: 11px; color: var(--mute); }
+
+.mc-rail-feed {
+  width: 100%;
+  margin-top: 14px;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  text-align: left;
+}
+
+.mc-rail-feed:hover { color: var(--purple); border-color: var(--purple); }
+
+/* ================== SETTINGS SHELL — Phase 5 ================== */
+
+.mc-settings {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+  align-items: start;
+}
+
+@media (min-width: 960px) {
+  .mc-settings { grid-template-columns: 240px 1fr; }
+}
+
+.mc-settings-rail {
+  position: sticky;
+  top: 88px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.mc-settings-group {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--mute);
+  padding: 18px 12px 8px;
+}
+
+.mc-settings-group:first-child { padding-top: 0; }
+
+.mc-settings-link {
+  display: block;
+  text-align: left;
+  padding: 8px 12px;
+  border-radius: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 13.5px;
+  cursor: pointer;
+}
+
+.mc-settings-link:hover { background: var(--bg-3); color: var(--ink); }
+
+.mc-settings-link.on {
+  background: #1a1320;
+  color: #fff;
+}
+
+.mc-settings-main {
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+}
+
+.mc-settings-section {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 24px;
+  scroll-margin-top: 96px;
+}
+
+.mc-settings-section h2 {
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 22px;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+  margin: 0 0 6px;
+}
+
+.mc-settings-section .section-sub {
+  font-size: 13px;
+  color: var(--mute);
+  margin-bottom: 20px;
 }
 

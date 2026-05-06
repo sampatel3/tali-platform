@@ -24,7 +24,9 @@ import {
 } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
-import { AgentTopBar } from './AgentTopBar';
+import { AgentSettingsPanel } from '../../shared/layout/AgentSettingsPanel';
+import { CommandBar } from '../../shared/ui/CommandBar';
+import { AgentRail } from './AgentRail';
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateSheet } from '../candidates/CandidateSheet';
 import { CandidatesDirectoryPage } from '../candidates/CandidatesDirectoryPage';
@@ -650,6 +652,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
   const [roleSheetError, setRoleSheetError] = useState('');
   const [candidateSheetError, setCandidateSheetError] = useState('');
+  const [agentPanelOpen, setAgentPanelOpen] = useState(false);
+  const [agentSettingsDraft, setAgentSettingsDraft] = useState({});
   const [savingRoleSheet, setSavingRoleSheet] = useState(false);
   const [addingCandidate, setAddingCandidate] = useState(false);
 
@@ -1259,10 +1263,24 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           All roles
         </button>
 
-        {role ? (
-          <AgentTopBar role={role} onRoleUpdated={(next) => setRole(next)} />
-        ) : null}
+        <CommandBar
+          initialScope="Candidates"
+          onSubmit={({ scope, query }) => {
+            if (scope === 'Roles') return onNavigate('jobs');
+            if (scope === 'Tasks') return onNavigate('tasks');
+            if (scope === 'Reports') return onNavigate('reporting');
+            onNavigate('chat', { searchQuery: query });
+          }}
+        />
 
+        <div className="mc-cockpit">
+          <AgentRail
+            roleId={role?.id}
+            onOpenSettings={() => setAgentPanelOpen(true)}
+            onPending={() => document.getElementById('pipeline-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          />
+
+          <div className="mc-cockpit-main">
         <div className="role-hero">
           <div className="watermark">{String(role?.name || 'ROLE').replace(/[^A-Z0-9]/gi, '').slice(0, 3).toUpperCase() || 'ROL'}</div>
           <div className="role-hero-top">
@@ -1840,6 +1858,20 @@ Disqualifying: No experience with regulated financial data`}
               showToast(getErrorMessage(error, 'Failed to start.'), 'error');
             }
           }}
+        />
+          </div>
+        </div>
+
+        <AgentSettingsPanel
+          open={agentPanelOpen}
+          onClose={() => setAgentPanelOpen(false)}
+          scope="role"
+          value={agentSettingsDraft}
+          onChange={setAgentSettingsDraft}
+          roleSummary={role ? {
+            name: role.name,
+            must_haves: Array.isArray(role?.must_haves) ? role.must_haves : [],
+          } : null}
         />
       </div>
     </div>
