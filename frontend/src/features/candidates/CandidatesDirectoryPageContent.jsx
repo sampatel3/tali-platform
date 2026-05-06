@@ -1598,12 +1598,22 @@ export const CandidatesDirectoryPage = ({
     || applicationDetailsById[String(retakeDialogState.applicationId)]
     || null
   ), [applicationDetailsById, applications, retakeDialogState.applicationId]);
-  const headerTitle = rolePipelineMode && rolePipelineName
-    ? `${rolePipelineName} pipeline`
-    : title;
-  const headerSubtitle = rolePipelineMode
-    ? 'Active candidates for this role across applied, invited, in assessment, and review.'
-    : subtitle;
+  // When embedded inside a parent surface (e.g. JobPipelinePage's
+  // Candidates tab), the parent already renders the role hero +
+  // tab strip + KPI row. Surfacing another "Senior Scrum Master
+  // pipeline" hero here is duplicate chrome — and so is the NL
+  // search and "TRY" suggestion chips. Suppress the embedded
+  // hero when the consumer passes empty title/subtitle.
+  const headerTitle = embedded
+    ? (typeof title === 'string' && title.trim() ? title : null)
+    : (rolePipelineMode && rolePipelineName
+      ? `${rolePipelineName} pipeline`
+      : title);
+  const headerSubtitle = embedded
+    ? (typeof subtitle === 'string' && subtitle.trim() ? subtitle : null)
+    : (rolePipelineMode
+      ? 'Active candidates for this role across applied, invited, in assessment, and review.'
+      : subtitle);
   const activeStageSegment = effectiveStageFilters.length === 1 ? effectiveStageFilters[0] : 'all';
   const segmentOptions = [
     { value: 'all', label: `All · ${stageCounts.all || applicationsPayload.total || 0}` },
@@ -1911,7 +1921,12 @@ export const CandidatesDirectoryPage = ({
           </div>
         ) : null}
 
-        <NLSearchBar
+        {/* When embedded in JobPipelinePage's Candidates tab the parent's
+            global ⌘K CommandBar already serves as the search surface,
+            and the tab's segmented stage filter is the primary filter.
+            Suppress the directory's own NL search bar to avoid duplicate
+            search inputs on the page (per user feedback). */}
+        {embedded ? null : <NLSearchBar
           nlQuery={nlQuery}
           onSubmit={(q) => {
             setNlQuery(q);
@@ -1953,9 +1968,15 @@ export const CandidatesDirectoryPage = ({
           viewMode={viewMode}
           onViewModeChange={(next) => setViewMode(next)}
           isLoading={loadingApplications && Boolean(nlQuery)}
-        />
+        />}
 
-        <div
+        {/* The candidate-toolbar (segmented stage filter + name search +
+            role chip + sort) is suppressed when embedded — the parent
+            JobPipelinePage already renders a ctable-toolbar above this
+            directory and owns stage filtering via initialStageFilter +
+            sorting via initialSortOption. Showing both creates the
+            duplicate filter rows the user flagged. */}
+        {embedded ? null : <div
           className="candidate-toolbar"
           style={nlQuery && !refineExpanded ? { display: 'none' } : undefined}
         >
@@ -2149,7 +2170,7 @@ export const CandidatesDirectoryPage = ({
               Clear filters
             </button>
           ) : null}
-        </div>
+        </div>}
         {hasThresholdRoleValue && thresholdRole && !rolePipelineMode ? (
           <div className="candidate-toolbar-note">
             CV scored manually ·{' '}
