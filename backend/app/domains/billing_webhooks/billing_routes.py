@@ -20,6 +20,7 @@ from ...models.assessment import Assessment, AssessmentStatus
 from ...models.candidate_application import CandidateApplication
 from ...models.role import Role
 from ...models.usage_event import UsageEvent
+from ...models.anthropic_usage_reconciliation import AnthropicUsageReconciliation
 from ...services.pricing_service import (
     CREDIT_PACKS,
     CREDITS_PER_USD,
@@ -27,6 +28,7 @@ from ...services.pricing_service import (
     resolve_pack as _resolve_pack,
 )
 from ...services.usage_metering_service import usage_summary as _usage_summary
+from sqlalchemy import func
 
 router = APIRouter(prefix="/billing", tags=["Billing"])
 
@@ -433,6 +435,186 @@ def get_usage_events(
             }
             for e in rows
         ],
+    }
+
+
+@router.get("/usage-timeseries")
+def get_usage_timeseries(
+    period_days: int = 30,
+    group_by: str = "model",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Daily token + cost time series for the settings → usage tab.
+
+    ``group_by`` controls the chart break-down:
+    - ``model`` (default) — stacked by Claude model id (matches Console)
+    - ``feature`` — stacked by Tali feature (score / prescreen / chat / ...)
+    - ``user``   — stacked by user_id (per-recruiter spend)
+
+    Returns daily buckets in the org's UTC timeline. The frontend
+    renders these as a stacked bar chart and can flip the grouping
+    without re-fetching by re-aggregating client-side, but for data
+    over many days the server pre-aggregates to keep payloads small.
+    """
+    org_id = current_user.organization_id
+    if not org_id:
+        return {"buckets": [], "period_days": period_days, "group_by": group_by}
+
+    valid_group_by = {"model", "feature", "user"}
+    if group_by not in valid_group_by:
+        group_by = "model"
+
+    period_days = max(1, min(int(period_days), 90))
+    since = datetime.now(timezone.utc) - timedelta(days=period_days)
+
+    day_col = func.date_trunc("day", UsageEvent.created_at).label("bucket_day")
+    if group_by == "feature":
+        group_col = UsageEvent.feature
+    elif group_by == "user":
+        group_col = UsageEvent.user_id
+    else:
+        group_col = UsageEvent.model
+
+    rows = (
+        db.query(
+            day_col,
+            group_col.label("group_key"),
+            func.count(UsageEvent.id).label("event_count"),
+            func.coalesce(func.sum(UsageEvent.input_tokens), 0).label("input_tokens"),
+            func.coalesce(func.sum(UsageEvent.output_tokens), 0).label("output_tokens"),
+            func.coalesce(
+                func.sum(UsageEvent.cache_read_tokens), 0
+            ).label("cache_read_tokens"),
+            func.coalesce(
+                func.sum(UsageEvent.cache_creation_tokens), 0
+            ).label("cache_creation_tokens"),
+            func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0).label("cost_usd_micro"),
+            func.coalesce(func.sum(UsageEvent.credits_charged), 0).label("credits_charged"),
+        )
+        .filter(
+            UsageEvent.organization_id == org_id,
+            UsageEvent.created_at >= since,
+        )
+        .group_by(day_col, group_col)
+        .order_by(day_col.asc())
+        .all()
+    )
+
+    return {
+        "period_days": period_days,
+        "group_by": group_by,
+        "buckets": [
+            {
+                "day": (r.bucket_day.date().isoformat() if r.bucket_day else None),
+                "group_key": (
+                    str(r.group_key) if r.group_key is not None else "unattributed"
+                ),
+                "event_count": int(r.event_count or 0),
+                "input_tokens": int(r.input_tokens or 0),
+                "output_tokens": int(r.output_tokens or 0),
+                "cache_read_tokens": int(r.cache_read_tokens or 0),
+                "cache_creation_tokens": int(r.cache_creation_tokens or 0),
+                "cost_usd": round(int(r.cost_usd_micro or 0) / 1_000_000, 6),
+                "credits_charged_usd": round(
+                    int(r.credits_charged or 0) / CREDITS_PER_USD, 6
+                ),
+            }
+            for r in rows
+        ],
+    }
+
+
+@router.get("/usage-reconciliation")
+def get_usage_reconciliation(
+    period_days: int = 14,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Recent reconciliation rows for this org. Surfaces drift between
+    internal ``usage_events`` and Anthropic billing.
+
+    Returns one row per (date, model). Drift is pre-computed by the
+    daily Celery task; UI flags rows where ``cost_drift_pct`` is null
+    (orphan internal rows) or absolute drift exceeds 1%.
+    """
+    org_id = current_user.organization_id
+    if not org_id:
+        return {"rows": [], "period_days": period_days}
+
+    period_days = max(1, min(int(period_days), 90))
+    since = (datetime.now(timezone.utc) - timedelta(days=period_days)).date()
+
+    rows = (
+        db.query(AnthropicUsageReconciliation)
+        .filter(
+            AnthropicUsageReconciliation.organization_id == org_id,
+            AnthropicUsageReconciliation.usage_date >= since,
+        )
+        .order_by(
+            AnthropicUsageReconciliation.usage_date.desc(),
+            AnthropicUsageReconciliation.model.asc(),
+        )
+        .all()
+    )
+
+    def _serialize(r: AnthropicUsageReconciliation) -> dict:
+        return {
+            "usage_date": r.usage_date.isoformat() if r.usage_date else None,
+            "model": r.model,
+            "anthropic_input_tokens": int(r.anthropic_input_tokens or 0),
+            "anthropic_output_tokens": int(r.anthropic_output_tokens or 0),
+            "anthropic_cache_read_tokens": int(r.anthropic_cache_read_tokens or 0),
+            "anthropic_cache_creation_tokens": int(
+                r.anthropic_cache_creation_tokens or 0
+            ),
+            "anthropic_cost_usd": round(
+                int(r.anthropic_cost_usd_micro or 0) / 1_000_000, 6
+            ),
+            "internal_input_tokens": int(r.internal_input_tokens or 0),
+            "internal_output_tokens": int(r.internal_output_tokens or 0),
+            "internal_cache_read_tokens": int(r.internal_cache_read_tokens or 0),
+            "internal_cache_creation_tokens": int(
+                r.internal_cache_creation_tokens or 0
+            ),
+            "internal_cost_usd": round(
+                int(r.internal_cost_usd_micro or 0) / 1_000_000, 6
+            ),
+            "internal_event_count": int(r.internal_event_count or 0),
+            "tokens_drift_pct": (
+                float(r.tokens_drift_pct) if r.tokens_drift_pct is not None else None
+            ),
+            "cost_drift_pct": (
+                float(r.cost_drift_pct) if r.cost_drift_pct is not None else None
+            ),
+            "reconciled_at": r.reconciled_at.isoformat() if r.reconciled_at else None,
+        }
+
+    serialized = [_serialize(r) for r in rows]
+
+    # Top-line summary so the UI can show "Anthropic billed you $X; we
+    # attributed $Y; drift Z%".
+    totals = {
+        "anthropic_cost_usd": round(
+            sum(int(r.anthropic_cost_usd_micro or 0) for r in rows) / 1_000_000, 6
+        ),
+        "internal_cost_usd": round(
+            sum(int(r.internal_cost_usd_micro or 0) for r in rows) / 1_000_000, 6
+        ),
+        "row_count": len(rows),
+    }
+    if totals["anthropic_cost_usd"] > 0:
+        diff = totals["internal_cost_usd"] - totals["anthropic_cost_usd"]
+        totals["cost_drift_pct"] = round(
+            (diff / totals["anthropic_cost_usd"]) * 100, 3
+        )
+    else:
+        totals["cost_drift_pct"] = None
+
+    return {
+        "period_days": period_days,
+        "totals": totals,
+        "rows": serialized,
     }
 
 

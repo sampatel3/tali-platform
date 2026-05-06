@@ -313,13 +313,20 @@ Job description:
 """
 
 
-def _synthesize_via_sonnet(jd_text: str, client=None) -> ArchetypeRubric | None:
+def _synthesize_via_sonnet(
+    jd_text: str,
+    client=None,
+    *,
+    metering: dict | None = None,
+) -> ArchetypeRubric | None:
     """Call Sonnet to synthesize a fresh archetype rubric. Returns None on failure."""
     if client is None:
         try:
-            from .runner import _resolve_anthropic_client
+            from ..services.claude_client_resolver import get_shared_client
 
-            client = _resolve_anthropic_client()
+            client = get_shared_client(
+                organization_id=(metering or {}).get("organization_id")
+            )
         except Exception as exc:
             logger.warning("Cannot synthesize archetype — no Anthropic client: %s", exc)
             return None
@@ -332,6 +339,7 @@ def _synthesize_via_sonnet(jd_text: str, client=None) -> ArchetypeRubric | None:
             temperature=_GENERATOR_TEMPERATURE,
             system="You are a senior recruiter. Output only JSON.",
             messages=[{"role": "user", "content": prompt}],
+            metering=metering or {"feature": "archetype_synthesis"},
         )
     except Exception as exc:
         logger.warning("Sonnet archetype synthesis failed: %s", exc)
@@ -372,6 +380,7 @@ def synthesize_archetype(
     requirements: Sequence | None = None,
     *,
     client=None,
+    metering: dict | None = None,
 ) -> ArchetypeRubric | None:
     """Return an ArchetypeRubric for this JD.
 
@@ -401,7 +410,7 @@ def synthesize_archetype(
             _lru[cache_key] = from_db
             return from_db
 
-    rubric = _synthesize_via_sonnet(jd_text, client=client)
+    rubric = _synthesize_via_sonnet(jd_text, client=client, metering=metering)
     if rubric is None:
         return None
 

@@ -791,6 +791,7 @@ async def calculate_cv_job_match(
     api_key: str,
     model: Optional[str] = None,
     additional_requirements: Optional[str] = None,
+    metering: dict | None = None,
 ) -> Dict[str, Any]:
     """Analyse CV-to-job-spec fit with a single Claude call.
 
@@ -816,7 +817,13 @@ async def calculate_cv_job_match(
     try:
         from anthropic import Anthropic
 
-        client = Anthropic(api_key=api_key)
+        from .metered_anthropic_client import MeteredAnthropicClient
+
+        client = MeteredAnthropicClient(
+            inner=Anthropic(api_key=api_key),
+            organization_id=(metering or {}).get("organization_id"),
+        )
+        call_metering = {"feature": "fit_matching", **(metering or {})}
 
         # Truncate to manage token costs
         cv_truncated = cv_text[:4000]
@@ -850,6 +857,7 @@ async def calculate_cv_job_match(
                     max_tokens=1024,
                     system="You are an expert recruiter. Respond ONLY with valid JSON.",
                     messages=[{"role": "user", "content": prompt}],
+                    metering=call_metering,
                 )
                 model_used = candidate_model
                 if candidate_model != resolved_model:
@@ -1088,6 +1096,7 @@ def calculate_cv_job_match_sync(
     api_key: str,
     model: Optional[str] = None,
     additional_requirements: Optional[str] = None,
+    metering: dict | None = None,
 ) -> Dict[str, Any]:
     """Synchronous wrapper for calculate_cv_job_match."""
     import asyncio
@@ -1101,6 +1110,7 @@ def calculate_cv_job_match_sync(
                     calculate_cv_job_match(
                         cv_text, job_spec_text, api_key, model,
                         additional_requirements=additional_requirements,
+                        metering=metering,
                     ),
                 )
                 return future.result()
@@ -1109,6 +1119,7 @@ def calculate_cv_job_match_sync(
                 calculate_cv_job_match(
                     cv_text, job_spec_text, api_key, model,
                     additional_requirements=additional_requirements,
+                    metering=metering,
                 )
             )
     except RuntimeError:
@@ -1116,6 +1127,7 @@ def calculate_cv_job_match_sync(
             calculate_cv_job_match(
                 cv_text, job_spec_text, api_key, model,
                 additional_requirements=additional_requirements,
+                metering=metering,
             )
         )
 
@@ -1432,6 +1444,7 @@ def _v4_call_claude(
     client: Any,
     prompt: str,
     resolved_model: str,
+    metering: dict | None = None,
 ) -> tuple[Any, str]:
     response = None
     model_used = resolved_model
@@ -1443,6 +1456,7 @@ def _v4_call_claude(
                 max_tokens=_CV_MATCH_V4_MAX_OUTPUT_TOKENS,
                 system="You are an expert recruiter. Respond ONLY with a single valid JSON object.",
                 messages=[{"role": "user", "content": prompt}],
+                metering={"feature": "fit_matching", **(metering or {})},
             )
             model_used = candidate_model
             if candidate_model != resolved_model:
@@ -1477,6 +1491,7 @@ def calculate_cv_job_match_v4_sync(
     spec_requirements: str,
     api_key: str,
     model: Optional[str] = None,
+    metering: dict | None = None,
 ) -> Dict[str, Any]:
     """Score a CV against structured role criteria with verifiable evidence.
 
@@ -1501,7 +1516,12 @@ def calculate_cv_job_match_v4_sync(
 
     from anthropic import Anthropic
 
-    client = Anthropic(api_key=api_key)
+    from .metered_anthropic_client import MeteredAnthropicClient
+
+    client = MeteredAnthropicClient(
+        inner=Anthropic(api_key=api_key),
+        organization_id=(metering or {}).get("organization_id"),
+    )
     cv_truncated = cv_text[:_CV_MATCH_V4_MAX_CV_CHARS]
     prompt = CV_MATCH_V4_PROMPT.format(
         cv_text=cv_truncated,
@@ -1524,7 +1544,10 @@ def calculate_cv_job_match_v4_sync(
     validated: dict[str, Any] | None = None
     for attempt in range(2):
         response, model_used = _v4_call_claude(
-            client=client, prompt=prompt, resolved_model=resolved_model
+            client=client,
+            prompt=prompt,
+            resolved_model=resolved_model,
+            metering=metering,
         )
         raw_text = response.content[0].text if response.content else ""
         try:

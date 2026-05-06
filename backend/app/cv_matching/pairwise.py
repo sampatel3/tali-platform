@@ -128,6 +128,7 @@ def _call_pairwise(
         temperature=0.0,
         system="You are an expert recruiter. Output only JSON.",
         messages=[{"role": "user", "content": prompt}],
+        metering={"feature": "pairwise_judge"},
     )
     raw = response.content[0].text  # type: ignore[attr-defined]
     try:

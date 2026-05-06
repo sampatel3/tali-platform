@@ -22,6 +22,7 @@ import {
   formatRelativeDateTime,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import BackgroundJobsPanel from './BackgroundJobsPanel';
+import UsagePanel from './UsagePanel';
 
 const WORKABLE_SCOPE_OPTIONS = [
   { id: 'r_jobs', label: 'r_jobs', description: 'Read jobs and roles from Workable.' },
@@ -70,6 +71,7 @@ const SECTION_ALIASES = {
   organization: 'org',
   workable: 'workable',
   billing: 'billing',
+  usage: 'usage',
   team: 'members',
   members: 'members',
   roles: 'roles',
@@ -1041,7 +1043,17 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     prescreen: 'Pre-screening',
     score: 'CV scoring',
     assessment: 'Assessment workspace',
-    other: 'Other',
+    taali_chat: 'Taali Chat',
+    agent_autonomous: 'Autonomous agent',
+    cv_parse: 'CV parsing',
+    cv_rerank: 'Search rerank',
+    search_parse: 'Search query parsing',
+    archetype_synthesis: 'Archetype synthesis',
+    pairwise_judge: 'Pairwise calibration',
+    interview_focus: 'Interview focus',
+    interview_tech: 'Tech interview prompts',
+    fit_matching: 'Fit matching',
+    other: 'Other / unattributed',
   };
   const formatUsd = (n) => `$${Number(n || 0).toFixed(2)}`;
   const formatUsd6 = (n) => `$${Number(n || 0).toFixed(4)}`;
@@ -1094,6 +1106,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
               <div className="settings-side-group-label">Account</div>
               <SettingsNavLink active={activeSection === 'billing'} label="Billing" onClick={() => navigateToSection('billing')} />
+              <SettingsNavLink active={activeSection === 'usage'} label="Usage" onClick={() => navigateToSection('usage')} />
               <SettingsNavLink active={activeSection === 'notifications'} label="Notifications" onClick={() => navigateToSection('notifications')} />
             </aside>
 
@@ -2030,6 +2043,16 @@ Disqualifying: No experience with regulated financial data`}
                       </div>
                     </>
                   )}
+                </SectionPanel>
+              </div>
+
+              <div ref={(node) => { sectionRefs.current.usage = node; }}>
+                <SectionPanel
+                  id="usage"
+                  title="Usage"
+                  subtitle="Per-feature Claude spend, daily breakdowns, and reconciliation against Anthropic billing."
+                >
+                  <UsagePanel />
                 </SectionPanel>
               </div>
 

@@ -123,12 +123,19 @@ _SYSTEM_PROMPT = "You are an expert recruiter. Respond ONLY with valid JSON."
 
 
 def _call_claude(client, *, messages: list[dict], ctx: _RunContext) -> str:
+    # cv_score_orchestrator.score_application records the SCORE usage_event
+    # post-call (it already pulls input_tokens/output_tokens off
+    # CVMatchOutput). We pass `metering={"skip": True}` here to suppress
+    # the auto-meter on the wrapper and avoid double-counting. If the
+    # caller passes a bare anthropic.Anthropic (e.g. tests, evals) the
+    # kwarg is forwarded as-is and ignored — the wrapper is a no-op.
     response = client.messages.create(
         model=MODEL_VERSION,
         max_tokens=OUTPUT_TOKEN_CEILING,
         temperature=TEMPERATURE,
         system=_SYSTEM_PROMPT,
         messages=messages,
+        metering={"skip": True, "metered_by": "cv_score_orchestrator.score_application"},
     )
 
     usage = getattr(response, "usage", None)
@@ -190,6 +197,7 @@ def run_cv_match(
     *,
     client=None,
     skip_cache: bool = False,
+    metering_context: dict | None = None,
 ) -> CVMatchOutput:
     """Run a CV match end-to-end. Returns ``CVMatchOutput``.
 
@@ -240,7 +248,16 @@ def run_cv_match(
     try:
         from .archetype_synthesizer import synthesize_archetype
 
-        archetype = synthesize_archetype(jd_text, requirements, client=client)
+        archetype_metering = (
+            {**(metering_context or {}), "feature": "archetype_synthesis"}
+            if metering_context else None
+        )
+        archetype = synthesize_archetype(
+            jd_text,
+            requirements,
+            client=client,
+            metering=archetype_metering,
+        )
         if archetype is not None:
             archetype_weights = archetype.normalised_dimension_weights()
     except Exception as exc:  # pragma: no cover — defensive

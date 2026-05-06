@@ -100,6 +100,11 @@ class BatchSubmission:
     # validation and cache write-through during retrieval.
     jobs_by_custom_id: dict[str, BatchJob]
     submitted_at: float
+    # Per-job metering context. Optional. Callers that want batch spend
+    # attributed to the right org/role/application populate this map keyed
+    # by custom_id. Missing entries → warning logged on retrieve and the
+    # usage_event for that job is skipped.
+    metering_by_custom_id: dict[str, dict] = field(default_factory=dict)
 
 
 BatchStatus = Literal["in_progress", "ended"]
@@ -347,6 +352,56 @@ def retrieve_cv_match_batch(
             ctx.cache_creation_tokens = int(
                 getattr(usage, "cache_creation_input_tokens", 0) or 0
             )
+
+        # Per-job usage_event recording. The batches API doesn't go
+        # through the metered wrapper (it bypasses messages.create), so
+        # we explicitly record here. Submission tracks the org_id /
+        # role_id per custom_id via ``submission.metering_by_custom_id``
+        # — when callers don't populate it, the row is still recorded
+        # under Feature.SCORE with no org attribution and a logged
+        # warning, surfacing the gap in the usage tab rather than
+        # silently dropping spend.
+        if usage is not None:
+            try:
+                from ..services.usage_metering_service import record_event
+                from ..services.pricing_service import Feature
+                from ..platform.database import SessionLocal
+
+                meter_ctx = (
+                    submission.metering_by_custom_id.get(custom_id)
+                    if hasattr(submission, "metering_by_custom_id")
+                    else None
+                ) or {}
+                org_id = meter_ctx.get("organization_id")
+                if org_id is None:
+                    logger.warning(
+                        "runner_batch: no organization_id for custom_id=%s — "
+                        "usage_event will be skipped. Populate submission.metering_by_custom_id "
+                        "to attribute batch spend correctly.",
+                        custom_id,
+                    )
+                else:
+                    with SessionLocal() as fresh:
+                        record_event(
+                            fresh,
+                            organization_id=int(org_id),
+                            feature=Feature.SCORE,
+                            model=str(getattr(message, "model", MODEL_VERSION)),
+                            input_tokens=ctx.input_tokens,
+                            output_tokens=ctx.output_tokens,
+                            cache_read_tokens=ctx.cache_read_tokens,
+                            cache_creation_tokens=ctx.cache_creation_tokens,
+                            user_id=meter_ctx.get("user_id"),
+                            role_id=meter_ctx.get("role_id"),
+                            entity_id=meter_ctx.get("entity_id") or custom_id,
+                            metadata={"batch_id": submission.batch_id},
+                        )
+                        fresh.commit()
+            except Exception:
+                logger.exception(
+                    "runner_batch: failed to record usage_event for custom_id=%s",
+                    custom_id,
+                )
 
         raw_text = ""
         try:

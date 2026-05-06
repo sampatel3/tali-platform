@@ -57,6 +57,13 @@ def generate_role_interview_focus(self, role_id: int) -> dict:
                 api_key=settings.ANTHROPIC_API_KEY,
                 model=settings.resolved_claude_scoring_model,
                 additional_requirements=(role.additional_requirements or "").strip() or None,
+                metering={
+                    "feature": "interview_focus",
+                    "organization_id": getattr(role, "organization_id", None),
+                    "role_id": int(role.id),
+                    "entity_id": f"role:{role.id}",
+                    "db": db,
+                },
             )
         except Exception:
             logger.exception("generate_role_interview_focus failed role_id=%s", role_id)

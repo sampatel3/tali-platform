@@ -26,6 +26,18 @@ class Feature(str, Enum):
     ASSESSMENT = "assessment"
     TAALI_CHAT = "taali_chat"
     AGENT_AUTONOMOUS = "agent_autonomous"
+    # Granular attribution for the rest of the Claude call sites. Added
+    # 2026-05 when reconciliation against Anthropic billing started — every
+    # billable call must land in a specific bucket so per-cent attribution
+    # is possible from the settings → usage tab.
+    CV_PARSE = "cv_parse"                  # cv_parsing/runner
+    CV_RERANK = "cv_rerank"                # candidate_search/rerank
+    SEARCH_PARSE = "search_parse"          # candidate_search/parser
+    ARCHETYPE_SYNTHESIS = "archetype_synthesis"  # cv_matching/archetype_synthesizer
+    PAIRWISE_JUDGE = "pairwise_judge"      # cv_matching/pairwise + calibrators/judge
+    INTERVIEW_FOCUS = "interview_focus"    # services/interview_focus_service
+    INTERVIEW_TECH = "interview_tech"      # services/interview_tech_prompt
+    FIT_MATCHING = "fit_matching"          # services/fit_matching_service
     OTHER = "other"
 
 
@@ -90,6 +102,51 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
         # bound the spend separately from this multiplier.
         feature=Feature.AGENT_AUTONOMOUS,
         markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    # ---- Granular attribution buckets -------------------------------------
+    # Markup choices follow the same logic as the original tier:
+    # - Internal/prep work (parse, archetype, calibration) at cost (1×).
+    # - Recruiter-facing AI features at 2× (matches taali_chat/agent).
+    # - Deep candidate-job analyses that produce billable artefacts at 3×.
+    Feature.CV_PARSE: FeaturePricing(
+        feature=Feature.CV_PARSE,
+        markup_multiplier=Decimal("1.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.CV_RERANK: FeaturePricing(
+        feature=Feature.CV_RERANK,
+        markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.SEARCH_PARSE: FeaturePricing(
+        feature=Feature.SEARCH_PARSE,
+        markup_multiplier=Decimal("1.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.ARCHETYPE_SYNTHESIS: FeaturePricing(
+        feature=Feature.ARCHETYPE_SYNTHESIS,
+        markup_multiplier=Decimal("1.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.PAIRWISE_JUDGE: FeaturePricing(
+        feature=Feature.PAIRWISE_JUDGE,
+        markup_multiplier=Decimal("1.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.INTERVIEW_FOCUS: FeaturePricing(
+        feature=Feature.INTERVIEW_FOCUS,
+        markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.INTERVIEW_TECH: FeaturePricing(
+        feature=Feature.INTERVIEW_TECH,
+        markup_multiplier=Decimal("2.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.FIT_MATCHING: FeaturePricing(
+        feature=Feature.FIT_MATCHING,
+        markup_multiplier=Decimal("3.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),
     Feature.OTHER: FeaturePricing(
@@ -214,6 +271,14 @@ def estimate_reservation(feature: Feature | str) -> int:
         Feature.ASSESSMENT: 60_000,  # ~$0.06 per Claude turn (3× markup)
         Feature.TAALI_CHAT: 10_000,
         Feature.AGENT_AUTONOMOUS: 20_000,  # ~$0.02 per agent Claude turn
+        Feature.CV_PARSE: 2_000,
+        Feature.CV_RERANK: 5_000,
+        Feature.SEARCH_PARSE: 500,
+        Feature.ARCHETYPE_SYNTHESIS: 8_000,
+        Feature.PAIRWISE_JUDGE: 4_000,
+        Feature.INTERVIEW_FOCUS: 6_000,
+        Feature.INTERVIEW_TECH: 4_000,
+        Feature.FIT_MATCHING: 30_000,
         Feature.OTHER: 5_000,
     }
     if isinstance(feature, str):

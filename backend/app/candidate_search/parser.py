@@ -86,19 +86,24 @@ def _fallback_filter(query: str) -> ParsedFilter:
     )
 
 
-def _resolve_anthropic_client():
-    from anthropic import Anthropic
+def _resolve_anthropic_client(*, organization_id: int | None = None):
+    from ..services.claude_client_resolver import get_shared_client
 
-    from ..platform.config import settings
-
-    api_key = settings.ANTHROPIC_API_KEY
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured")
-    return Anthropic(api_key=api_key)
+    return get_shared_client(organization_id=organization_id)
 
 
-def parse_nl_query(query: str, *, client=None) -> ParsedFilter:
-    """Parse one NL query. Never raises; returns a best-effort ``ParsedFilter``."""
+def parse_nl_query(
+    query: str,
+    *,
+    client=None,
+    metering: dict | None = None,
+) -> ParsedFilter:
+    """Parse one NL query. Never raises; returns a best-effort ``ParsedFilter``.
+
+    ``metering`` should at minimum contain ``organization_id`` and ``user_id``
+    for accurate attribution; defaults to ``{"feature": "search_parse"}``
+    which records the call but without per-org context.
+    """
     cleaned_query = (query or "").strip()
     if not cleaned_query:
         return ParsedFilter(free_text="")
@@ -107,7 +112,9 @@ def parse_nl_query(query: str, *, client=None) -> ParsedFilter:
 
     if client is None:
         try:
-            client = _resolve_anthropic_client()
+            client = _resolve_anthropic_client(
+                organization_id=(metering or {}).get("organization_id"),
+            )
         except Exception as exc:
             logger.warning("Parser client init failed: %s", exc)
             return _fallback_filter(cleaned_query)
@@ -133,6 +140,7 @@ def parse_nl_query(query: str, *, client=None) -> ParsedFilter:
             temperature=PARSER_TEMPERATURE,
             system=system_blocks,
             messages=[{"role": "user", "content": user_prompt}],
+            metering=metering or {"feature": "search_parse"},
         )
         usage = getattr(response, "usage", None)
         if usage is not None:
