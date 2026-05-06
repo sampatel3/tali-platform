@@ -26,7 +26,7 @@ export const RadarChart = ({ values, max = 10, size = 260 }) => {
   }
   const cx = size / 2;
   const cy = size / 2;
-  const r = size / 2 - 30;
+  const r = size / 2 - 44;
   const n = values.length;
   const ang = (i) => (Math.PI * 2 * i) / n - Math.PI / 2;
   const pt = (i, scale) => [cx + Math.cos(ang(i)) * r * scale, cy + Math.sin(ang(i)) * r * scale];
@@ -34,7 +34,14 @@ export const RadarChart = ({ values, max = 10, size = 260 }) => {
   const poly = values.map((d, i) => pt(i, Math.max(0, Math.min(1, d.v / max))).join(',')).join(' ');
 
   return (
-    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} role="img" aria-label="Six-axis fluency radar">
+    <svg
+      width={size}
+      height={size}
+      viewBox={`0 0 ${size} ${size}`}
+      role="img"
+      aria-label="Six-axis fluency radar"
+      style={{ overflow: 'visible' }}
+    >
       {[0.25, 0.5, 0.75, 1].map((s, i) => (
         <polygon
           key={i}

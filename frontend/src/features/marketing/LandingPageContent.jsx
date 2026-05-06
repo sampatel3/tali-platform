@@ -240,7 +240,7 @@ export const LandingPage = ({ onNavigate }) => {
               type="button"
               className="btn btn-outline"
               style={{ height: 46, padding: '0 22px', fontSize: 14 }}
-              onClick={() => onNavigate('demo')}
+              onClick={() => onNavigate('showcase')}
             >
               Try the live walkthrough <span className="arrow">→</span>
             </button>
@@ -423,21 +423,7 @@ export const LandingPage = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* TRUST STRIP */}
-      <section id="proof" className="border-t border-[var(--line)] bg-[var(--bg-2)]">
-        <div className={`${containerClass} flex flex-wrap items-center justify-between gap-12 py-14 text-[var(--mute)]`}>
-          <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.14em]">
-            TRUSTED BY HIRING TEAMS AT
-          </div>
-          <div className="flex flex-wrap gap-12 font-[var(--font-display)] text-[18px] font-medium tracking-[-0.01em] opacity-55">
-            <span>Linear</span>
-            <span>Stripe</span>
-            <span>Ramp</span>
-            <span>Vercel</span>
-            <span>Notion</span>
-          </div>
-        </div>
-      </section>
+      {/* Trust strip removed — early product, no public customer logos. */}
 
       {/* RUNTIME (kept short — anchors the nav 'Runtime' link) */}
       <section id="runtime" className="border-t border-[var(--line)] bg-[var(--bg)]">

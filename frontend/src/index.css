@@ -8089,11 +8089,17 @@ button.eng-badge-button:focus-visible {
 .mc-auth-editorial {
   position: relative;
   overflow: hidden;
-  padding: 28px var(--pad-x) 48px;
+  padding: 0 var(--pad-x) 48px;
   display: flex;
   flex-direction: column;
   background: linear-gradient(160deg, #2d1656 0%, #5b2ca8 55%, #7c3aed 100%);
   color: #fff;
+}
+
+.mc-auth-editorial-logo {
+  /* 64px tall band keeps the tile center-aligned at top=18 across every header */
+  height: 64px;
+  align-items: center !important;
 }
 
 @media (max-width: 1023px) {
@@ -9490,7 +9496,10 @@ button.eng-badge-button:focus-visible {
   display: flex;
   align-items: center;
   gap: 24px;
-  padding: 22px var(--pad-x);
+  /* 64px band — same height as marketing nav + Mission Control nav so the
+     logo never jumps when transitioning between pages */
+  height: 64px;
+  padding: 0 var(--pad-x);
   background: var(--bg-2);
   border-bottom: 1px solid var(--line);
   position: sticky;
@@ -9986,7 +9995,7 @@ button.eng-badge-button:focus-visible {
 }
 
 .mc-demo-lead-editorial {
-  padding: 28px 20px 48px;
+  padding: 0 20px 48px;
   display: flex;
   flex-direction: column;
   background: var(--bg-2);
@@ -9994,22 +10003,24 @@ button.eng-badge-button:focus-visible {
 }
 
 @media (min-width: 768px) {
-  .mc-demo-lead-editorial { padding: 28px var(--pad-x) 48px; }
+  .mc-demo-lead-editorial { padding: 0 var(--pad-x) 48px; }
 }
 
 .mc-demo-lead-logo {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
   font-family: var(--font-display);
   font-size: 18px;
   font-weight: 600;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.025em;
   color: var(--ink);
   background: none;
   border: 0;
   padding: 0;
-  margin: 0 0 48px;
+  /* 64px band keeps the tile centered at top=18 across every header */
+  height: 64px;
+  margin: 0 0 32px;
   cursor: pointer;
   width: fit-content;
 }

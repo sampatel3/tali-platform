@@ -27,14 +27,13 @@ export const AuthShell = ({
         />
         <span>taali<span style={{ opacity: 0.7 }}>.</span></span>
       </div>
-      <blockquote className="mc-auth-quote">
-        <div className="mc-auth-quote-kicker">FROM THE TEAM</div>
+      <div className="mc-auth-quote">
+        <div className="mc-auth-quote-kicker">WHY TAALI</div>
         <p>
-          &ldquo;We hired our first three engineers without a single take-home review meeting. The
-          standing report did the work.&rdquo;
+          A real IDE. Real AI tooling. Real prompts on the record. The only platform that scores how
+          a candidate <span style={{ color: '#fff', fontWeight: 600 }}>uses AI</span> on the job — calibrated to your team&apos;s bar.
         </p>
-        <cite>— Iris Park, Head of Talent · Linear</cite>
-      </blockquote>
+      </div>
       <div className="mc-auth-compliance">
         <span>SOC 2 TYPE II</span>
         <span>·</span>

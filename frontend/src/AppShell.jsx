@@ -426,8 +426,27 @@ function AppContent() {
     <>
       <Routes>
       <Route path="/" element={<LandingPage onNavigate={navigateToPage} />} />
+      {/* /demo is the showcase. /showcase kept as an alias. The legacy
+          DemoExperiencePage walkthrough lives at /demo-walkthrough until
+          we decide to retire it entirely. */}
       <Route
         path="/demo"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <DemoShowcasePage onNavigate={navigateToPage} />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/showcase"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <DemoShowcasePage onNavigate={navigateToPage} />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/demo-walkthrough"
         element={(
           <Suspense fallback={lazyFallback}>
             <DemoExperiencePage onNavigate={navigateToPage} />
@@ -439,14 +458,6 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <DemoLeadPage onNavigate={navigateToPage} />
-          </Suspense>
-        )}
-      />
-      <Route
-        path="/showcase"
-        element={(
-          <Suspense fallback={lazyFallback}>
-            <DemoShowcasePage onNavigate={navigateToPage} />
           </Suspense>
         )}
       />
