@@ -156,6 +156,9 @@ describe('SettingsPage recruiter surface', () => {
           no_ai_baseline_enabled: true,
           claude_credit_per_candidate_usd: 12,
           session_timeout_minutes: 60,
+          // Settings → AI tooling now also persists the org-default agent
+          // panel state (HANDOFF Phase 5). Null when no defaults staged.
+          agent_defaults: null,
         },
         default_assessment_duration_minutes: 45,
       });

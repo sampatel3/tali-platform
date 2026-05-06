@@ -10,6 +10,7 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { aedToUsd, formatAed } from '../../lib/currency';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
+import { AgentSettingsPanel } from '../../shared/layout/AgentSettingsPanel';
 import { PageHero } from '../../shared/layout/PageHero';
 import {
   Button,
@@ -234,6 +235,25 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     defaultAssessmentMinutes: 30,
   });
   const [aiSaving, setAiSaving] = useState(false);
+  // Org-default agent settings drawer (HANDOFF Phase 5 — Settings → AI tooling
+  // embeds the same panel used on the role detail "Agent settings" tab, but
+  // scoped to org defaults). State lives here so the form's onChange persists
+  // to the same orgData.ai_tooling_config blob that handleSaveAiTooling writes.
+  const [agentDefaultsOpen, setAgentDefaultsOpen] = useState(false);
+  const agentDefaultsValue = useMemo(() => {
+    const cfg = orgData?.ai_tooling_config?.agent_defaults || {};
+    return {
+      enabled: cfg.enabled !== false,
+      budget_cents: Number.isFinite(cfg.budget_cents) ? cfg.budget_cents : 5000,
+      pause_threshold_pct: Number.isFinite(cfg.pause_threshold_pct) ? cfg.pause_threshold_pct : 80,
+      autonomy: {
+        auto_invite_above: cfg.autonomy?.auto_invite_above !== false,
+        auto_reject_below: cfg.autonomy?.auto_reject_below !== false,
+        auto_advance_high_score: Boolean(cfg.autonomy?.auto_advance_high_score),
+        passive_outbound: Boolean(cfg.autonomy?.passive_outbound),
+      },
+    };
+  }, [orgData?.ai_tooling_config?.agent_defaults]);
   const [notificationPreferencesForm, setNotificationPreferencesForm] = useState(DEFAULT_NOTIFICATION_PREFERENCES);
   const [notificationsSaving, setNotificationsSaving] = useState(false);
   const [accessForm, setAccessForm] = useState({
@@ -628,6 +648,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
           no_ai_baseline_enabled: Boolean(aiToolingForm.no_ai_baseline_enabled),
           claude_credit_per_candidate_usd: Number(aiToolingForm.claude_credit_per_candidate_usd || 0),
           session_timeout_minutes: Number(aiToolingForm.session_timeout_minutes || 60),
+          // Preserve any agent_defaults the panel has staged on this org so a
+          // form-save doesn't clobber drawer-saved values, and vice versa.
+          agent_defaults: orgData?.ai_tooling_config?.agent_defaults || null,
         },
         default_assessment_duration_minutes: Math.max(15, Math.min(180, Number(aiToolingForm.defaultAssessmentMinutes || 30))),
       });
@@ -637,6 +660,28 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       showToast(getErrorMessage(error, 'Failed to save AI tooling settings.'), 'error');
     } finally {
       setAiSaving(false);
+    }
+  };
+
+  const handleAgentDefaultsChange = async (next) => {
+    // Persist immediately on every drawer change so the panel feels live —
+    // the panel is built around optimistic UI elsewhere too.
+    setOrgData((prev) => {
+      const cfg = prev?.ai_tooling_config || {};
+      return {
+        ...(prev || {}),
+        ai_tooling_config: { ...cfg, agent_defaults: next },
+      };
+    });
+    try {
+      await orgsApi.update({
+        ai_tooling_config: {
+          ...(orgData?.ai_tooling_config || {}),
+          agent_defaults: next,
+        },
+      });
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to save agent defaults.'), 'error');
     }
   };
 
@@ -1312,6 +1357,28 @@ Disqualifying: No experience with regulated financial data`}
                     <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveAiTooling} disabled={aiSaving}>
                       {aiSaving ? 'Saving...' : 'Save AI tooling'}
                     </button>
+                  </div>
+
+                  {/* HANDOFF Phase 5 — embed the same agent panel used on
+                      role detail, scoped to org-wide defaults. Per-role
+                      overrides win over these defaults. */}
+                  <div className="settings-top-gap" style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
+                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
+                      <div>
+                        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>Agent defaults</div>
+                        <div className="settings-inline-note" style={{ marginTop: 4 }}>
+                          Budget, autonomy, and pause threshold every new role inherits. Per-role
+                          overrides on the role detail's Agent settings tab win.
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        className="btn btn-outline btn-sm"
+                        onClick={() => setAgentDefaultsOpen(true)}
+                      >
+                        Open agent defaults
+                      </button>
+                    </div>
                   </div>
                 </SectionPanel>
               </div>
@@ -2207,6 +2274,14 @@ Disqualifying: No experience with regulated financial data`}
           </Panel>
         </div>
       ) : null}
+
+      <AgentSettingsPanel
+        open={agentDefaultsOpen}
+        onClose={() => setAgentDefaultsOpen(false)}
+        scope="org"
+        value={agentDefaultsValue}
+        onChange={handleAgentDefaultsChange}
+      />
     </div>
   );
 };

@@ -21,6 +21,7 @@ import {
   subscribeThemePreference,
 } from '../../lib/themePreference';
 import { TaaliTile } from '../ui/Branding';
+import { AgentBar } from './AgentBar';
 import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 
 const NAV_TABS = [
@@ -142,7 +143,13 @@ export const Shell = ({ currentPage, onNavigate }) => {
     onNavigate?.('landing');
   };
 
+  // Hide the global AgentBar on the role detail page — that page renders
+  // its own role-scoped AgentBar / cockpit rail and an extra org bar would
+  // double-stack. Same logic for the role pipeline at /jobs/:roleId.
+  const hideGlobalAgentBar = resolvedPage === 'role-detail' || resolvedPage === 'role-pipeline';
+
   return (
+    <>
     <header className="mc-nav" role="banner">
       <button
         type="button"
@@ -208,6 +215,12 @@ export const Shell = ({ currentPage, onNavigate }) => {
         </div>
       </div>
     </header>
+    {hideGlobalAgentBar ? null : (
+      <div className="mc-agent-bar-wrap">
+        <AgentBar />
+      </div>
+    )}
+    </>
   );
 };
 

@@ -7687,6 +7687,13 @@ button.eng-badge-button:focus-visible {
 
 /* ================== AGENT BAR (purple aurora) ================== */
 
+/* Wrapper rendered globally inside Shell so the agent bar sits between
+   the top nav and the page content with the same horizontal padding the
+   rest of the recruiter UI uses. */
+.mc-agent-bar-wrap {
+  padding: 12px var(--pad-x) 0;
+}
+
 .mc-agent-bar {
   position: relative;
   border-radius: 14px;
