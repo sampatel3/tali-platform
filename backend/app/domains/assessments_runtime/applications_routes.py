@@ -2097,7 +2097,16 @@ def _try_fetch_cv_from_workable(
     try:
         from ...cv_parsing import parse_cv
 
-        parsed = parse_cv(extracted)
+        parsed = parse_cv(
+            extracted,
+            metering={
+                "feature": "cv_parse",
+                "organization_id": getattr(app, "organization_id", None),
+                "role_id": getattr(app, "role_id", None),
+                "entity_id": f"application:{app.id}",
+                "db": db,
+            },
+        )
         sections_blob = parsed.model_dump(mode="json")
         app.cv_sections = sections_blob
         if candidate:

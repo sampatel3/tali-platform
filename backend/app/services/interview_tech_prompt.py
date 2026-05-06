@@ -265,6 +265,7 @@ def generate_tech_questions(
     recruiter_notes: str | None = None,
     pre_screen_evidence: dict | None = None,
     client=None,
+    metering: dict | None = None,
 ) -> list[dict[str, Any]] | None:
     """Run the LLM call. Returns a list of normalized question dicts on
     success, or ``None`` on any failure (so the caller can keep its
@@ -288,8 +289,12 @@ def generate_tech_questions(
     if client is None:
         try:
             from anthropic import Anthropic
+            from .metered_anthropic_client import MeteredAnthropicClient
 
-            client = Anthropic(api_key=api_key)
+            client = MeteredAnthropicClient(
+                inner=Anthropic(api_key=api_key),
+                organization_id=(metering or {}).get("organization_id"),
+            )
         except Exception as exc:  # pragma: no cover — defensive
             logger.warning("Failed to build Anthropic client for tech interview prompt: %s", exc)
             return None
@@ -301,6 +306,7 @@ def generate_tech_questions(
             temperature=0,
             system="You are an expert technical interviewer. Respond ONLY with valid JSON.",
             messages=[{"role": "user", "content": prompt}],
+            metering={"feature": "interview_tech", **(metering or {})},
         )
     except Exception as exc:
         logger.warning("Tech interview prompt call failed: %s", exc)

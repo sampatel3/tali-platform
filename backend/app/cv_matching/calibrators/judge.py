@@ -77,9 +77,9 @@ def judge_advance_probability(
     """Run Sonnet as a senior recruiter, return P(advance). None on failure."""
     if client is None:
         try:
-            from ..runner import _resolve_anthropic_client
+            from ...services.claude_client_resolver import get_shared_client
 
-            client = _resolve_anthropic_client()
+            client = get_shared_client()
         except Exception as exc:
             logger.warning("Cannot judge — no Anthropic client: %s", exc)
             return None
@@ -96,6 +96,7 @@ def judge_advance_probability(
             temperature=_JUDGE_TEMPERATURE,
             system="You are a senior recruiter. Output only JSON.",
             messages=[{"role": "user", "content": prompt}],
+            metering={"feature": "pairwise_judge"},
         )
     except Exception as exc:
         logger.warning("Judge call failed: %s", exc)

@@ -514,6 +514,12 @@ def submit_assessment_impl(
                         )
                 except Exception:
                     criteria_payload = []
+            fit_metering = {
+                "feature": "fit_matching",
+                "organization_id": getattr(application, "organization_id", None),
+                "role_id": getattr(application, "role_id", None),
+                "entity_id": f"application:{application.id}",
+            }
             if criteria_payload:
                 spec = normalize_spec(job_spec_text)
                 try:
@@ -524,6 +530,7 @@ def submit_assessment_impl(
                         spec_requirements=spec.requirements,
                         api_key=settings_obj.ANTHROPIC_API_KEY,
                         model=settings_obj.resolved_claude_scoring_model,
+                        metering=fit_metering,
                     )
                 except CvMatchValidationError as exc:
                     scoring_errors.append({"component": "cv_job_match", "error": exc.reason})
@@ -539,6 +546,7 @@ def submit_assessment_impl(
                     api_key=settings_obj.ANTHROPIC_API_KEY,
                     model=settings_obj.resolved_claude_scoring_model,
                     additional_requirements=additional,
+                    metering=fit_metering,
                 )
         elif candidate and (not cv_text or not job_spec_text):
             scoring_errors.append(

@@ -41,6 +41,15 @@ celery_app.conf.update(
             "task": "app.tasks.assessment_tasks.send_assessment_expiry_reminders",
             "schedule": 86400.0,
         },
+        # Anthropic billing reconciliation. Runs once a day; pulls the
+        # last 48h so late-arriving Anthropic data on the previous day
+        # gets re-checked. Crontab would be tighter than `schedule:
+        # 86400.0` (which drifts), but the project doesn't use
+        # ``celery.schedules.crontab`` elsewhere — keeping it consistent.
+        "anthropic-usage-reconciliation-daily": {
+            "task": "app.tasks.reconciliation_tasks.reconcile_anthropic_usage",
+            "schedule": 86400.0,
+        },
     },
 )
 

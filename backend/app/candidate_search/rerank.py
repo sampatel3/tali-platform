@@ -42,15 +42,13 @@ def _strip_json_fences(raw: str) -> str:
     return text
 
 
-def _resolve_anthropic_client():
-    from anthropic import Anthropic
+def _resolve_anthropic_client(*, organization_id: int | None = None):
+    """Build a metered Anthropic client. ``organization_id`` is bound at
+    construction so every rerank call records to the right org without
+    each call repeating it."""
+    from ..services.claude_client_resolver import get_shared_client
 
-    from ..platform.config import settings
-
-    api_key = settings.ANTHROPIC_API_KEY
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured")
-    return Anthropic(api_key=api_key)
+    return get_shared_client(organization_id=organization_id)
 
 
 def _build_candidate_summary(candidate: Candidate, application: CandidateApplication) -> dict:
@@ -153,6 +151,7 @@ def _evaluate_one(
     graph: dict | None,
     client,
     metrics: dict | None = None,
+    metering: dict | None = None,
 ) -> bool:
     """Return True iff Claude marks the candidate as a match. Defaults to False on error.
 
@@ -185,6 +184,7 @@ def _evaluate_one(
             temperature=RERANK_TEMPERATURE,
             system=_SYSTEM_PROMPT,
             messages=messages,
+            metering=metering or {"feature": "cv_rerank"},
         )
         if metrics is not None:
             usage = getattr(response, "usage", None)
@@ -233,7 +233,7 @@ def rerank_application_ids(
 
     if client is None:
         try:
-            client = _resolve_anthropic_client()
+            client = _resolve_anthropic_client(organization_id=organization_id)
         except Exception as exc:
             logger.warning("Rerank client init failed; dropping rerank: %s", exc)
             # Fall back to keeping the input list — better to over-include
@@ -268,6 +268,12 @@ def rerank_application_ids(
             graph=graph,
             client=client,
             metrics=metrics,
+            metering={
+                "feature": "cv_rerank",
+                "organization_id": organization_id,
+                "entity_id": f"application:{app_id}",
+                "db": db,
+            },
         ):
             kept.append(int(app_id))
 

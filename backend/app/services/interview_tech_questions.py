@@ -168,6 +168,12 @@ def maybe_generate_tech_questions(
             transcript_text=latest_screening_transcript_text(application),
             recruiter_notes=str(getattr(application, "notes", "") or "").strip() or None,
             pre_screen_evidence=pre_screen_evidence,
+            metering={
+                "feature": "interview_tech",
+                "organization_id": getattr(application, "organization_id", None),
+                "role_id": getattr(application, "role_id", None),
+                "entity_id": f"application:{application.id}",
+            },
         )
     except Exception:  # pragma: no cover — defensive
         return None

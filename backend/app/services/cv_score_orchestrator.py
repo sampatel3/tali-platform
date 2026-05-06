@@ -546,7 +546,22 @@ def _execute_scoring_v3(
             )
             return
 
-    output = run_cv_match(cv_text, job_spec_text, requirements, client=org_client)
+    # Archetype synthesis uses Sonnet and is metered separately by the
+    # wrapper using ``metering_context``. The score call itself is metered
+    # by ``_record_usage_safe`` below — the runner sets metering={skip}.
+    archetype_metering_context = {
+        "organization_id": getattr(application, "organization_id", None),
+        "role_id": getattr(application, "role_id", None),
+        "entity_id": f"application:{application.id}",
+        "db": db,
+    }
+    output = run_cv_match(
+        cv_text,
+        job_spec_text,
+        requirements,
+        client=org_client,
+        metering_context=archetype_metering_context,
+    )
     job.cache_hit = "hit" if getattr(output, "cache_hit", False) else "miss"
     _record_usage_safe(
         db,

@@ -39,18 +39,17 @@ def _strip_json_fences(raw: str) -> str:
 
 
 def _resolve_anthropic_client():
-    """Build an Anthropic client. Per memory, key is settings.ANTHROPIC_API_KEY."""
-    from anthropic import Anthropic
+    """Build a metered Anthropic client. Org context is unavailable to the
+    parser (it's called from upload paths and assessment routes that may
+    not have an org loaded), so the meter falls back to the shared key
+    with no organization_id. Callers that DO have an org context should
+    pass a pre-built client via the ``client=`` kwarg."""
+    from ..services.claude_client_resolver import get_shared_client
 
-    from ..platform.config import settings
-
-    api_key = settings.ANTHROPIC_API_KEY
-    if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY is not configured")
-    return Anthropic(api_key=api_key)
+    return get_shared_client()
 
 
-def _call_claude(client, *, prompt: str) -> str:
+def _call_claude(client, *, prompt: str, metering: dict | None = None) -> str:
     system = "You are a CV parser. Respond ONLY with valid JSON."
     response = client.messages.create(
         model=MODEL_VERSION,
@@ -58,6 +57,7 @@ def _call_claude(client, *, prompt: str) -> str:
         temperature=TEMPERATURE,
         system=system,
         messages=[{"role": "user", "content": prompt}],
+        metering=metering or {"feature": "cv_parse"},
     )
     try:
         return response.content[0].text  # type: ignore[attr-defined]
@@ -70,6 +70,7 @@ def parse_cv(
     *,
     client=None,
     skip_cache: bool = False,
+    metering: dict | None = None,
 ) -> ParsedCV:
     """Parse extracted CV text into structured sections.
 
@@ -77,6 +78,14 @@ def parse_cv(
         cv_text: text extracted from the candidate's CV (PDF/DOCX/TXT).
         client: optional pre-built Anthropic client (used by tests).
         skip_cache: bypass the parse cache (used by re-parse triggers).
+        metering: optional metering kwargs forwarded to the Claude call.
+            Callers with org context should pass at least
+            ``{"feature": Feature.CV_PARSE, "organization_id": org.id,
+            "user_id": user.id, "entity_id": str(application_id)}`` so
+            the usage_event is attributed correctly. If absent, the call
+            still records (default: ``{"feature": "cv_parse"}``) but
+            without per-org / per-application attribution — fine for
+            tests, not fine for production.
 
     Returns:
         ParsedCV. Always returns; never raises. On failure the result has
@@ -132,7 +141,7 @@ def parse_cv(
     current_prompt = prompt
     for attempt in range(MAX_RETRIES + 1):
         try:
-            raw = _call_claude(client, prompt=current_prompt)
+            raw = _call_claude(client, prompt=current_prompt, metering=metering)
         except Exception as exc:
             logger.exception("CV parse Claude call failed (attempt %d)", attempt + 1)
             return ParsedCV.failed(

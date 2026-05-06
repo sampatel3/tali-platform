@@ -59,6 +59,7 @@ from .agent_decision import (
     AGENT_DECISION_TYPES,
     AgentDecision,
 )
+from .anthropic_usage_reconciliation import AnthropicUsageReconciliation
 
 __all__ = [
     "User",
@@ -114,4 +115,5 @@ __all__ = [
     "AgentDecision",
     "AGENT_DECISION_TYPES",
     "AGENT_DECISION_STATUSES",
+    "AnthropicUsageReconciliation",
 ]

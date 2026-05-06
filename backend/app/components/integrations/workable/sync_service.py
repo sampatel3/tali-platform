@@ -526,6 +526,12 @@ def _compute_cv_match_for_application(app: CandidateApplication) -> bool:
         except Exception:
             criteria_payload = []
 
+    fit_metering = {
+        "feature": "fit_matching",
+        "organization_id": getattr(app, "organization_id", None),
+        "role_id": getattr(app, "role_id", None),
+        "entity_id": f"application:{app.id}",
+    }
     if criteria_payload:
         spec = normalize_spec(job_spec_text)
         try:
@@ -536,6 +542,7 @@ def _compute_cv_match_for_application(app: CandidateApplication) -> bool:
                 spec_requirements=spec.requirements,
                 api_key=settings.ANTHROPIC_API_KEY,
                 model=settings.resolved_claude_scoring_model,
+                metering=fit_metering,
             )
         except CvMatchValidationError:
             return False
@@ -546,6 +553,7 @@ def _compute_cv_match_for_application(app: CandidateApplication) -> bool:
             api_key=settings.ANTHROPIC_API_KEY,
             model=settings.resolved_claude_scoring_model,
             additional_requirements=(role.additional_requirements or "").strip() or None if role else None,
+            metering=fit_metering,
         )
     raw_details = result.get("match_details", {}) if isinstance(result, dict) else {}
     normalized_score = _normalize_cv_match_score_100(

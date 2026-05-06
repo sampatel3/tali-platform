@@ -178,6 +178,7 @@ def generate_interview_focus_sync(
     additional_requirements: str | None = None,
     cv_text: str | None = None,
     cv_match_details: Dict[str, Any] | None = None,
+    metering: dict | None = None,
 ) -> Dict[str, Any] | None:
     """Generate structured interview focus guidance.
 
@@ -190,9 +191,22 @@ def generate_interview_focus_sync(
         return None
 
     try:
+        # Hand-rolled bare-SDK client here (rather than the resolver) so we
+        # honour the explicit ``api_key`` argument used by callers that
+        # pre-resolve org keys themselves. We wrap it in MeteredAnthropicClient
+        # so the call still records to ``usage_events``.
         from anthropic import Anthropic
+        from .metered_anthropic_client import MeteredAnthropicClient
 
-        client = Anthropic(api_key=api_key)
+        meter_org_id = (metering or {}).get("organization_id")
+        client = MeteredAnthropicClient(
+            inner=Anthropic(api_key=api_key),
+            organization_id=meter_org_id,
+        )
+        call_metering = {
+            "feature": "interview_focus",
+            **(metering or {}),
+        }
         resolved_model = (model or settings.resolved_claude_scoring_model).strip()
         model_candidates = candidate_models_for(resolved_model)
         prompt = INTERVIEW_FOCUS_PROMPT.format(
@@ -218,6 +232,7 @@ def generate_interview_focus_sync(
                     max_tokens=1400,
                     system="You are an expert recruiter. Respond ONLY with valid JSON.",
                     messages=[{"role": "user", "content": prompt}],
+                    metering=call_metering,
                 )
                 model_used = candidate_model
                 if candidate_model != resolved_model:

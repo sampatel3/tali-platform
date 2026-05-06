@@ -81,7 +81,14 @@ def run_search(
     parsed = cache_module.get(cache_key)
     if parsed is None:
         try:
-            parsed = parse_nl_query(nl_query, client=parser_client)
+            parsed = parse_nl_query(
+                nl_query,
+                client=parser_client,
+                metering={
+                    "feature": "search_parse",
+                    "organization_id": organization_id,
+                },
+            )
         except Exception as exc:  # pragma: no cover — parser already swallows
             logger.warning("Parser raised: %s", exc)
             parsed = ParsedFilter(keywords=[nl_query.strip()], free_text=nl_query.strip())

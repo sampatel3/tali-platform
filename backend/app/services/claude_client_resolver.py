@@ -30,6 +30,7 @@ from ..models.organization import Organization
 from ..platform.config import settings
 from ..platform.database import SessionLocal
 from ..platform.secrets import decrypt_text, encrypt_text
+from .metered_anthropic_client import MeteredAnthropicClient
 
 logger = logging.getLogger("taali.claude_client_resolver")
 
@@ -41,10 +42,31 @@ def _shared_api_key() -> str:
     return key
 
 
-def get_shared_client() -> Anthropic:
+def get_shared_client(
+    *, organization_id: Optional[int] = None
+) -> MeteredAnthropicClient:
     """Anthropic client using the Taali-wide ``ANTHROPIC_API_KEY``. Use only
     for flows without an org context (admin scripts, archetype synthesis
-    that's shared across orgs, etc.)."""
+    that's shared across orgs, etc.).
+
+    If the caller *does* know the org context (even though it's using the
+    shared key), pass ``organization_id`` so the meter still attributes
+    the spend correctly. Otherwise the wrapper will skip recording with
+    a logged warning.
+    """
+    inner = Anthropic(api_key=_shared_api_key())
+    return MeteredAnthropicClient(
+        inner=inner, organization_id=organization_id
+    )
+
+
+def get_raw_shared_client() -> Anthropic:
+    """Bare ``anthropic.Anthropic`` client with no metering wrapper.
+
+    Reserved for flows that intentionally bypass metering (e.g. internal
+    admin tools, the reconciliation service hitting the Admin API). Most
+    code should use ``get_client_for_org`` or ``get_shared_client``.
+    """
     return Anthropic(api_key=_shared_api_key())
 
 
@@ -131,29 +153,39 @@ def _provision_for_org_safe(org: Organization) -> Optional[str]:
     return provisioned.api_key_plaintext
 
 
-def get_client_for_org(org: Optional[Organization]) -> Anthropic:
-    """Return an Anthropic client scoped to ``org``'s workspace key when
-    available, otherwise the shared Taali key.
+def get_client_for_org(org: Optional[Organization]) -> MeteredAnthropicClient:
+    """Return a metered Anthropic client scoped to ``org``'s workspace key
+    when available, otherwise the shared Taali key.
+
+    The returned client auto-records ``usage_events`` rows for every
+    ``messages.create`` / ``messages.stream`` call when the caller passes
+    a ``metering={...}`` kwarg. See ``metered_anthropic_client`` for the
+    full kwarg schema.
 
     Lazy provisioning: if the org has no workspace key and Admin API is
     configured, attempt to provision one now. Any failure falls back to
     the shared key without raising.
     """
+    org_id = int(org.id) if org is not None else None
+
+    def _wrap(inner: Anthropic) -> MeteredAnthropicClient:
+        return MeteredAnthropicClient(inner=inner, organization_id=org_id)
+
     if org is None:
-        return Anthropic(api_key=_shared_api_key())
+        return _wrap(Anthropic(api_key=_shared_api_key()))
 
     existing = _decrypted_workspace_key(org)
     if existing:
-        return Anthropic(api_key=existing)
+        return _wrap(Anthropic(api_key=existing))
 
     # Skip retry if a recent attempt failed — checked at the call site so
     # we don't hammer Admin API on every Claude call. A scheduled retry
     # task can clear the timestamp later.
     failed_at = getattr(org, "anthropic_workspace_provisioning_failed_at", None)
     if failed_at is not None:
-        return Anthropic(api_key=_shared_api_key())
+        return _wrap(Anthropic(api_key=_shared_api_key()))
 
     plaintext = _provision_for_org_safe(org)
     if plaintext:
-        return Anthropic(api_key=plaintext)
-    return Anthropic(api_key=_shared_api_key())
+        return _wrap(Anthropic(api_key=plaintext))
+    return _wrap(Anthropic(api_key=_shared_api_key()))

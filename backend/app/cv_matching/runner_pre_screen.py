@@ -231,12 +231,21 @@ def run_pre_screen(
     messages = build_pre_screen_messages(cv_text, jd_text, requirements)
     started = time.monotonic()
     try:
+        # Pre-screen usage_event is recorded by cv_score_orchestrator.score_application
+        # using the tokens it pulls off ``PreScreenResult``. The runner skips
+        # to avoid double-counting; if a caller bypasses the orchestrator
+        # they should pass `client` from a metered resolver and override
+        # this kwarg via the wrapper-aware client.
         response = client.messages.create(
             model=MODEL_VERSION,
             max_tokens=256,
             temperature=0,
             system="You are a fast hiring pre-screener. Respond ONLY with valid JSON.",
             messages=messages,
+            metering={
+                "skip": True,
+                "metered_by": "cv_score_orchestrator.score_application",
+            },
         )
     except Exception as exc:
         logger.warning("Pre-screen Claude call failed: %s", exc)
