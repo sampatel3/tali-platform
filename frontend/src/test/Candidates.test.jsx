@@ -642,7 +642,7 @@ describe('CandidatesPage', () => {
       expect(screen.getByLabelText('Shareable report link')).toHaveValue(expectedVisibleShareUrl);
     });
 
-    fireEvent.click(screen.getByRole('button', { name: 'Copy' }));
+    fireEvent.click(screen.getByRole('button', { name: /Copy interview link/i }));
 
     await waitFor(() => {
       expect(clipboardWriteText).toHaveBeenCalledWith(expectedCopiedShareUrl);

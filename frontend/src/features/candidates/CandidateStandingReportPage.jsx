@@ -14,6 +14,7 @@ import {
 import {
   WorkableComparisonCard,
 } from '../../shared/ui/RecruiterDesignPrimitives';
+import { ShareModal } from './ShareModal';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES } from './assessmentViewModels';
 import {
@@ -780,6 +781,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busyAction, setBusyAction] = useState('');
+  const [shareModalOpen, setShareModalOpen] = useState(false);
   const [applicationEvents, setApplicationEvents] = useState([]);
   const [shareState, setShareState] = useState({
     url: '',
@@ -1410,18 +1412,18 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             className="link"
           />
           <div className="row">
-            <button type="button" className="btn btn-outline btn-sm" onClick={handleCopyLink} disabled={shareState.loading || !application?.id}>
-              Copy
-            </button>
             <button
               type="button"
-              className="btn btn-outline btn-sm"
-              onClick={handleCopyClientLink}
+              className="btn btn-purple btn-sm"
+              onClick={() => setShareModalOpen(true)}
               disabled={shareState.loading || !application?.id}
-              title="Copy a client-safe link — recruiter notes, internal scoring, and interview prep are hidden."
             >
               <ExternalLink size={14} />
-              Copy client link
+              Share report
+            </button>
+            <button type="button" className="btn btn-outline btn-sm" onClick={handleCopyLink} disabled={shareState.loading || !application?.id}>
+              <Copy size={14} />
+              Copy interview link
             </button>
             <button type="button" className="btn btn-outline btn-sm" onClick={handleEmailShare} disabled={shareState.loading || !application?.id}>
               <Mail size={14} />
@@ -1793,6 +1795,12 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           </div>
         </div>
       </div>
+      <ShareModal
+        open={shareModalOpen}
+        onClose={() => setShareModalOpen(false)}
+        applicationId={application?.id}
+        initialToken={shareState?.token || ''}
+      />
     </div>
   );
 };
