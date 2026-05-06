@@ -532,9 +532,17 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               (acc, r) => acc + Number(r?.new_candidates_this_week || 0),
               0,
             );
-            const monthlySpent = roles.reduce((acc, r) => acc + Number(r?.agent_monthly_spent_cents || 0), 0);
-            const monthlyBudget = roles.reduce((acc, r) => acc + Number(r?.agent_monthly_budget_cents || 0), 0);
-            const budgetPct = monthlyBudget > 0 ? Math.round((monthlySpent / monthlyBudget) * 100) : null;
+            // Monthly budget CAP per role lives on role.monthly_usd_budget_cents
+            // (the universal Anthropic spend cap). Live SPEND has to come
+            // from /roles/{id}/agent/status — not on the role list payload.
+            // Until we fan-out that endpoint here too (acceptable per
+            // HANDOFF Phase 1 but waiting on a tighter use case), this
+            // tile rolls up the cap totals only and labels accordingly.
+            const monthlyBudget = roles.reduce(
+              (acc, r) => acc + Number(r?.monthly_usd_budget_cents || 0),
+              0,
+            );
+            const agentEnabledCount = roles.filter((r) => r?.agentic_mode_enabled).length;
             const dollars = (cents) => {
               const n = Number(cents) / 100;
               return n >= 100 ? `$${Math.round(n)}` : `$${n.toFixed(0)}`;
@@ -544,9 +552,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               { k: 'CANDIDATES IN PIPELINE', v: pipelineCount, d: newThisWeek > 0 ? `+${newThisWeek} this week` : 'Across active roles' },
               { k: 'YOUR REVIEW QUEUE', v: reviewCount, d: reviewCount === 0 ? 'All clear' : `Across ${reviewRoleCount} role${reviewRoleCount === 1 ? '' : 's'}` },
               {
-                k: 'BUDGET USED',
-                v: budgetPct != null ? `${budgetPct}%` : '—',
-                d: monthlyBudget > 0 ? `${dollars(monthlySpent)} of ${dollars(monthlyBudget)}` : 'Set a per-role cap',
+                k: 'AGENT BUDGET',
+                v: monthlyBudget > 0 ? dollars(monthlyBudget) : '—',
+                d: agentEnabledCount > 0
+                  ? `${agentEnabledCount} role${agentEnabledCount === 1 ? '' : 's'} with the agent on`
+                  : 'No roles using the agent yet',
               },
             ];
             return tiles.map((tile) => (
@@ -610,8 +620,11 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
               const lastRoleActivity = role?.last_candidate_activity_at || role?.updated_at || orgData?.workable_last_sync_at || null;
               const roleBadgeLabel = getRoleBadgeLabel(role);
               const agentEnabled = Boolean(role?.agentic_mode_enabled);
-              const agentSpent = Number(role?.agent_monthly_spent_cents || 0) / 100;
-              const agentBudget = Number(role?.agent_monthly_budget_cents || 0) / 100;
+              // Per-role spend isn't on the /roles list payload — we'd
+              // have to fan out /roles/{id}/agent/status for every card
+              // to fill the "AGENT ON $X/$Y" indicator. Until then we
+              // surface the budget cap only when the agent is enabled.
+              const agentBudget = Number(role?.monthly_usd_budget_cents || 0) / 100;
               const roleLoc = String(role?.location || role?.workable_location || '').trim();
               const roleDept = String(role?.department || role?.workable_department || '').trim();
               return (
@@ -679,9 +692,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
                         ].filter(Boolean).join(' · ') || 'No metadata yet'}
                       </div>
                     </div>
-                    {agentEnabled && agentBudget > 0 ? (
+                    {agentEnabled ? (
                       <div style={{ textAlign: 'right', fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--purple)', whiteSpace: 'nowrap' }}>
-                        AGENT ON · ${Math.round(agentSpent)}/${Math.round(agentBudget)}
+                        AGENT ON{agentBudget > 0 ? ` · cap $${Math.round(agentBudget)}` : ''}
                       </div>
                     ) : (
                       <div style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'var(--mute)', whiteSpace: 'nowrap' }}>

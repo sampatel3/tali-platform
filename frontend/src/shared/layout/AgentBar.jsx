@@ -26,9 +26,12 @@ const formatTick = (status) => {
   return summary;
 };
 
-// Internal hook — polls /roles/{roleId}/agent/status every POLL_INTERVAL_MS
-// and pauses when the tab is hidden so we don't burn quota in background tabs.
-const useAgentStatus = (roleId) => {
+// Polls /roles/{roleId}/agent/status every POLL_INTERVAL_MS and pauses
+// when the tab is hidden so we don't burn quota in background tabs.
+// Exported so callers (JobPipelinePage budget tile, role detail rail)
+// can read the same payload AgentBar consumes — `monthly_spent_cents`,
+// `monthly_budget_cents`, `pending_decisions`, `last_activity`, etc.
+export const useAgentStatus = (roleId) => {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
   const cancelledRef = useRef(false);

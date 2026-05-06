@@ -1923,11 +1923,33 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               recruiter_note event via assessmentsApi.addNote and bumps
               eventsRefetchTick so the timeline reloads. */}
           {(() => {
-            // Recruiter notes = events with type "recruiter_note" or whose
-            // metadata carries an explicit note string. Synthesize a
-            // "system note" from the recruiter summary when no real notes
-            // exist yet so the column isn't blank.
-            const recruiterNotes = applicationEvents
+            // Recruiter notes are persisted by POST /assessments/{id}/notes,
+            // which appends `{event_type: "note", text, author, timestamp}`
+            // to `assessment.timeline` (a JSON column). They are NOT
+            // emitted to the application_events table. So we read both
+            // sources: assessment.timeline first (real persisted notes)
+            // and applicationEvents as a fallback for any future
+            // recruiter_note event-type emissions.
+            const timelineNotes = (() => {
+              const entries = Array.isArray(completedAssessment?.timeline)
+                ? completedAssessment.timeline
+                : [];
+              return entries
+                .filter((entry) => {
+                  const type = String(entry?.event_type || entry?.type || '').toLowerCase();
+                  if (type !== 'note' && type !== 'recruiter_note') return false;
+                  return Boolean((entry?.text || entry?.prompt || '').trim());
+                })
+                .map((entry, idx) => ({
+                  key: `tl-note-${entry.timestamp || entry.time || idx}`,
+                  who: entry?.author || 'Recruiter',
+                  role: 'Hiring team',
+                  time: entry?.timestamp || entry?.time,
+                  body: entry?.text || entry?.prompt || '',
+                }))
+                .filter((note) => note.body && note.body.trim());
+            })();
+            const eventNotes = applicationEvents
               .filter((event) => {
                 const type = String(event?.event_type || '').toLowerCase();
                 return type === 'recruiter_note'
@@ -1935,13 +1957,19 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                   || (event?.metadata && typeof event.metadata.note === 'string' && event.metadata.note.trim());
               })
               .map((event) => ({
-                key: `note-${event.id || event.created_at}`,
+                key: `evt-note-${event.id || event.created_at}`,
                 who: event?.actor_name || event?.metadata?.actor_name || 'Recruiter',
                 role: event?.actor_role || event?.metadata?.actor_role || 'Hiring team',
                 time: event?.created_at,
                 body: event?.metadata?.note || event?.reason || event?.description || '',
               }))
               .filter((note) => note.body && note.body.trim());
+            // Newest first across both sources.
+            const recruiterNotes = [...timelineNotes, ...eventNotes].sort((a, b) => {
+              const ta = a.time ? new Date(a.time).getTime() : 0;
+              const tb = b.time ? new Date(b.time).getTime() : 0;
+              return tb - ta;
+            });
 
             const fmtRelative = (ts) => {
               if (!ts) return '';

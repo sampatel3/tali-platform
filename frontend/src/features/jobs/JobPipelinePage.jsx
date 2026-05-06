@@ -26,6 +26,7 @@ import {
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import { AgentSettingsPanel } from '../../shared/layout/AgentSettingsPanel';
+import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { CommandBar } from '../../shared/ui/CommandBar';
 import { AgentRail } from './AgentRail';
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
@@ -620,6 +621,7 @@ const FormattedJobSpecSection = ({ section, marker }) => {
 const RoleAgentSettingsTab = ({
   role,
   agentEnabled,
+  agentStatus = null,
   criteriaDraft,
   setCriteriaDraft,
   thresholdDraft,
@@ -639,8 +641,15 @@ const RoleAgentSettingsTab = ({
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
   const thresholdDisplay = Math.max(0, Math.min(100, sliderValue));
   const mustHaves = Array.isArray(role?.must_haves) ? role.must_haves : [];
-  const monthlyBudgetCents = Number(role?.agent_monthly_budget_cents ?? 5000);
-  const monthlySpentCents = Number(role?.agent_monthly_spent_cents ?? 0);
+  // Budget cap is the role.monthly_usd_budget_cents column on the role
+  // record; live spend comes from /roles/{id}/agent/status. Default cap
+  // ($50) only applies when the role hasn't set one yet.
+  const monthlyBudgetCents = Number(
+    agentStatus?.monthly_budget_cents
+    ?? role?.monthly_usd_budget_cents
+    ?? 5000
+  );
+  const monthlySpentCents = Number(agentStatus?.monthly_spent_cents ?? 0);
   const budgetPct = monthlyBudgetCents > 0
     ? Math.min(100, Math.round((monthlySpentCents / monthlyBudgetCents) * 100))
     : 0;
@@ -917,6 +926,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const numericRoleId = Number(roleId);
   // Batch progress is owned by the global JobStatusContext — single source of truth.
   const batchScoreProgress = jobs?.[numericRoleId] ?? EMPTY_PROGRESS;
+  // Live agent status for THIS role — backend serves /roles/{id}/agent/status
+  // with monthly_spent_cents + monthly_budget_cents + pending_decisions +
+  // last_activity. Polled every 30s, paused when the tab is hidden.
+  const { status: agentStatus } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
   const [role, setRole] = useState(null);
   const [roleTasks, setRoleTasks] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
@@ -1118,9 +1131,15 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // In pipeline · New CVs · Below threshold · Agent spend (with bar).
   // The legacy "Assessment tasks" + "Interview focus" tiles are gone —
   // task linkage shows in the role hero, interview focus is per-candidate.
+  // Spend pulls from /roles/{id}/agent/status (live), budget cap is the
+  // role.monthly_usd_budget_cents column.
   const pipelineStats = useMemo(() => {
-    const monthlySpentCents = Number(role?.agent_monthly_spent_cents || 0);
-    const monthlyBudgetCents = Number(role?.agent_monthly_budget_cents || 0);
+    const monthlySpentCents = Number(agentStatus?.monthly_spent_cents || 0);
+    const monthlyBudgetCents = Number(
+      agentStatus?.monthly_budget_cents
+      ?? role?.monthly_usd_budget_cents
+      ?? 0
+    );
     const spentDollars = Math.round(monthlySpentCents / 100);
     const budgetDollars = Math.round(monthlyBudgetCents / 100);
     const spendPct = monthlyBudgetCents > 0
@@ -1162,7 +1181,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           : 'Cap not set',
       },
     ];
-  }, [activeApplications.length, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
+  }, [activeApplications.length, agentStatus, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
 
   const groupedApplications = useMemo(() => PIPELINE_STAGE_ORDER.map((stage) => ({
     ...stage,
@@ -2060,6 +2079,7 @@ Disqualifying: No experience with regulated financial data`}
           <RoleAgentSettingsTab
             role={role}
             agentEnabled={role?.agentic_mode_enabled !== false}
+            agentStatus={agentStatus}
             criteriaDraft={criteriaDraft}
             setCriteriaDraft={setCriteriaDraft}
             thresholdDraft={thresholdDraft}
