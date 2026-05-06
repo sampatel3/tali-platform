@@ -221,9 +221,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const sectionRefs = useRef({});
   const workableSyncPollRef = useRef(null);
 
+  // HANDOFF v2 §11 — Settings is one page with internal anchor scroll.
+  // We still derive the initial section from the URL path so legacy
+  // deep links like /settings/billing keep working, but `activeSection`
+  // is state-driven after that and updates via in-page navigation
+  // (the rail clicks update hash, not history). See navigateToSection.
   const pathSegment = location.pathname.replace(/^\/settings\/?/, '').split('/')[0];
-  const activeSection = canonicalSection(pathSegment);
+  const initialHashSection = (typeof window !== 'undefined' && window.location.hash)
+    ? canonicalSection(String(window.location.hash).replace(/^#/, ''))
+    : null;
+  const initialSection = initialHashSection || canonicalSection(pathSegment);
 
+  const [activeSection, setActiveSection] = useState(initialSection);
   const [orgData, setOrgData] = useState(null);
   const [orgLoading, setOrgLoading] = useState(true);
   const [workspaceForm, setWorkspaceForm] = useState(DEFAULT_WORKSPACE_SETTINGS);
@@ -592,10 +601,13 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     };
   }, [fetchWorkableSyncStatus, workableActiveRunId, workableSyncInProgress]);
 
+  // After the initial load, scroll to whichever section was selected
+  // (initial section comes from the URL path or hash). After mount,
+  // navigateToSection handles its own scroll on click — this effect
+  // only fires once when the page becomes ready.
   useEffect(() => {
     if (orgLoading) return;
-    const targetSection = canonicalSection(pathSegment);
-    const target = sectionRefs.current[targetSection];
+    const target = sectionRefs.current[activeSection];
     if (!target) return;
     const timer = window.setTimeout(() => {
       if (typeof target.scrollIntoView === 'function') {
@@ -603,7 +615,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       }
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [orgLoading, pathSegment]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [orgLoading]);
 
   const handleSaveWorkspace = async () => {
     setWorkspaceSaving(true);
@@ -1106,7 +1119,17 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
   const navigateToSection = (sectionId) => {
     const next = canonicalSection(sectionId);
-    navigate(next === 'org' ? '/settings' : `/settings/${next}`);
+    setActiveSection(next);
+    const target = sectionRefs.current[next];
+    if (target && typeof target.scrollIntoView === 'function') {
+      target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+    if (typeof window !== 'undefined' && window.history?.replaceState) {
+      const hash = next === 'org' ? '' : `#${next}`;
+      // Collapse any /settings/<section> path the user landed on via a
+      // legacy deep link onto the canonical /settings#<section> hash.
+      window.history.replaceState(null, '', `/settings${hash}`);
+    }
   };
 
   const renderLoadingState = (

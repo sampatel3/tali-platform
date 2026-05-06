@@ -73,6 +73,15 @@ vi.mock('../shared/api', () => ({
     regenerateInterviewFocus: vi.fn(),
   },
   team: { list: vi.fn(), invite: vi.fn() },
+  agent: {
+    listDecisions: vi.fn().mockResolvedValue({ data: [] }),
+    approveDecision: vi.fn(),
+    overrideDecision: vi.fn(),
+    discardPending: vi.fn(),
+    listRuns: vi.fn().mockResolvedValue({ data: [] }),
+    runNow: vi.fn(),
+    status: vi.fn().mockResolvedValue({ data: {} }),
+  },
   default: {
     interceptors: {
       request: { use: vi.fn() },

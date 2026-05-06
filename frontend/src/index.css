@@ -10408,6 +10408,59 @@ button.eng-badge-button:focus-visible {
 }
 
 /* ===========================================================================
+   Reporting decisions feed — HANDOFF v2 / canvas reporting-v2
+   Reverse-chronological log: time · colored dot · title + reasoning.
+   =========================================================================== */
+
+.mc-decisions-feed {
+  display: flex;
+  flex-direction: column;
+  margin-top: 6px;
+}
+
+.mc-decisions-row {
+  display: grid;
+  grid-template-columns: 56px 22px 1fr;
+  gap: 10px;
+  padding: 12px 0;
+  border-bottom: 1px solid var(--line-2);
+  align-items: flex-start;
+}
+
+.mc-decisions-row:last-child {
+  border-bottom: 0;
+}
+
+.mc-decisions-row-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--mute);
+  letter-spacing: 0.04em;
+  padding-top: 3px;
+}
+
+.mc-decisions-row-dot {
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  display: inline-block;
+  margin-top: 2px;
+}
+
+.mc-decisions-row-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.mc-decisions-row-body {
+  font-size: 12px;
+  color: var(--mute);
+  line-height: 1.45;
+  margin-top: 1px;
+}
+
+/* ===========================================================================
    Candidate Interview prep tab — HANDOFF v2 §5.1 / canvas cand-prep
    Hero banner + STAGE 1 / STAGE 2 kickered groups + question cards
    with LISTEN FOR (green) / CONCERNING IF (red) two-column layout.
