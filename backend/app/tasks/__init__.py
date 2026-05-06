@@ -26,6 +26,12 @@ from .automation_tasks import (
     run_application_auto_reject,
 )
 from .workable_tasks import run_workable_sync_run_task
+# Eager-import reconciliation_tasks so the daily Anthropic billing
+# reconciliation beat task lands in the worker registry. Same trap as
+# the imports above — beat will fire ``reconcile_anthropic_usage`` on
+# schedule, but without this import the worker rejects it as
+# unregistered and drops the run.
+from .reconciliation_tasks import reconcile_anthropic_usage
 
 __all__ = [
     "celery_app",
@@ -42,4 +48,5 @@ __all__ = [
     "generate_application_interview_pack",
     "run_application_auto_reject",
     "run_workable_sync_run_task",
+    "reconcile_anthropic_usage",
 ]
