@@ -477,6 +477,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
         <PageHero
           kicker="JOBS"
           title={<>{roles.length} active <em>roles</em></>}
+          period={false}
           subtitle="You're hiring. Star a role to keep its candidates flowing in automatically."
           actions={(
             <>

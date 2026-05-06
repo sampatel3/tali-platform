@@ -33,7 +33,9 @@ import { CommandBar } from '../../shared/ui/CommandBar';
 // migrated; remove that import here to avoid unused-import warnings.
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateSheet } from '../candidates/CandidateSheet';
-import { CandidatesDirectoryPage } from '../candidates/CandidatesDirectoryPage';
+// CandidatesDirectoryPage is no longer embedded on the role detail —
+// the Candidates tab now renders a canvas-spec inline ctable directly.
+// Standalone /candidates route still uses the directory.
 import { candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { RoleSheet } from '../candidates/RoleSheet';
 import { getErrorMessage, trimOrUndefined } from '../candidates/candidatesUiUtils';
@@ -2318,20 +2320,129 @@ Disqualifying: No experience with regulated financial data`}
                 </button>
               ) : null}
             </div>
-            <CandidatesDirectoryPage
-              key={`role-pipeline-${roleId}-${tableStageFilter}-${tableSortBy}`}
-              onNavigate={onNavigate}
-              NavComponent={null}
-              lockRoleId={roleId || null}
-              useRolePipelineEndpoint
-              navCurrentPage="jobs"
-              title=""
-              subtitle=""
-              externalRefreshKey={refreshTick}
-              embedded
-              initialStageFilter={tableStageFilter === 'all' ? null : tableStageFilter}
-              initialSortOption={tableSortBy === 'cv' ? 'cv_match_scored_at:desc' : 'taali_score:desc'}
-            />
+            {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — clean
+                ctable with Candidate / Score / Stage / Status / Agent /
+                View →. Filtered by tableStageFilter, sorted client-side
+                by tableSortBy. The full CandidatesDirectoryPage was too
+                heavy here — it carried bulk-action chrome, pagination,
+                NL-search, and filter chips that don't belong on the
+                role detail page. The standalone /candidates route still
+                uses the directory. */}
+            {(() => {
+              const activeStage = tableStageFilter;
+              const filteredApps = activeStage === 'all'
+                ? activeApplications
+                : activeApplications.filter((a) => String(a?.pipeline_stage || '').toLowerCase() === activeStage);
+              const cmpScore = (a) => {
+                const raw = a?.score_summary?.taali_score
+                  ?? a?.taali_score
+                  ?? a?.assessment_score
+                  ?? a?.cv_match_score;
+                return Number.isFinite(Number(raw)) ? Number(raw) : -1;
+              };
+              const cmpCv = (a) => {
+                const raw = a?.cv_match_scored_at;
+                return raw ? new Date(raw).getTime() : 0;
+              };
+              const sorted = [...filteredApps].sort((a, b) => (
+                tableSortBy === 'cv' ? cmpCv(b) - cmpCv(a) : cmpScore(b) - cmpScore(a)
+              ));
+              if (sorted.length === 0) {
+                return (
+                  <div className="ctable-wrap">
+                    <div className="ctable-empty">
+                      No candidates match the current filter. Try widening the stage segment above.
+                    </div>
+                  </div>
+                );
+              }
+              return (
+                <div className="ctable-wrap">
+                  <table className="ctable">
+                    <thead>
+                      <tr>
+                        <th>Candidate</th>
+                        <th>Score</th>
+                        <th>Stage</th>
+                        <th>Status</th>
+                        <th>Agent</th>
+                        <th aria-label="Open" />
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {sorted.map((application) => {
+                        const stage = String(application?.pipeline_stage || '').toLowerCase();
+                        const compositeRaw = application?.score_summary?.taali_score
+                          ?? application?.taali_score
+                          ?? application?.assessment_score
+                          ?? application?.cv_match_score;
+                        const score = Number.isFinite(Number(compositeRaw)) ? Math.round(Number(compositeRaw)) : null;
+                        const scoreClass = score == null ? '' : score >= 80 ? 'hi' : score >= 60 ? 'mid' : 'lo';
+                        const stageLabel = (PIPELINE_STAGE_ORDER.find((s) => s.key === stage)?.label) || (stage ? stage.replace(/_/g, ' ') : '—');
+                        const statusText = resolvePipelineCardFooterStatus(application);
+                        const pendingDecision = pendingAgentDecisions[application?.id] || null;
+                        const agentLabel = pendingDecision?.recommendation
+                          || (stage === 'review' && score != null && score >= 75 ? 'Advance recommended'
+                            : stage === 'review' && score != null && score < 50 ? 'Reject recommended'
+                            : null);
+                        const isAgentRow = Boolean(agentLabel) && stage === 'review';
+                        return (
+                          <tr
+                            key={application.id}
+                            className={isAgentRow ? 'agent-row' : ''}
+                            onClick={(event) => handlePipelineReportClick(event, application)}
+                            onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <td>
+                              <div className="name">{buildApplicationTitle(application)}</div>
+                              <div className="sub">
+                                {application?.candidate_position
+                                  || application?.candidate_email
+                                  || 'No position captured'}
+                              </div>
+                            </td>
+                            <td>
+                              {score != null ? (
+                                <span className={`score-pill ${scoreClass}`}>{score}</span>
+                              ) : (
+                                <span className="score-pill mid" style={{ opacity: 0.5 }}>—</span>
+                              )}
+                            </td>
+                            <td>
+                              <span className="stage-pill">{stageLabel}</span>
+                            </td>
+                            <td className="ctable-status">{statusText}</td>
+                            <td>
+                              {agentLabel ? (
+                                <span className="ai-action">
+                                  <Sparkles size={11} strokeWidth={2} />
+                                  {agentLabel}
+                                </span>
+                              ) : (
+                                <span className="ctable-em">—</span>
+                              )}
+                            </td>
+                            <td>
+                              <a
+                                href={candidateReportHref(application, numericRoleId)}
+                                className="btn btn-ghost btn-sm"
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handlePipelineReportClick(event, application);
+                                }}
+                              >
+                                View →
+                              </a>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              );
+            })()}
           </>
         )}
 

@@ -10809,6 +10809,148 @@ button.eng-badge-button:focus-visible {
   opacity: 0.8;
 }
 
+/* Canvas-spec candidate table — Candidate / Score / Stage / Status /
+   Agent / View →. Sits below the .ctable-toolbar on the role detail
+   Candidates tab. Score-pill colours by tier (hi >= 80 / mid >= 60 /
+   lo otherwise). agent-row tints the row purple-soft when the agent
+   has a recommendation queued. */
+
+.ctable-wrap {
+  border: 1px solid var(--line);
+  border-top: 0;
+  border-radius: 0 0 12px 12px;
+  background: var(--bg-2);
+  overflow: hidden;
+}
+
+.ctable {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.ctable thead th {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--mute);
+  text-transform: uppercase;
+  text-align: left;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--line-2);
+  background: var(--bg);
+  font-weight: 500;
+}
+
+.ctable tbody tr {
+  border-bottom: 1px solid var(--line-2);
+  transition: background 0.12s ease;
+}
+
+.ctable tbody tr:last-child {
+  border-bottom: 0;
+}
+
+.ctable tbody tr:hover {
+  background: color-mix(in oklab, var(--purple) 4%, var(--bg-2));
+}
+
+.ctable tbody tr.agent-row {
+  background: color-mix(in oklab, var(--purple) 3%, var(--bg-2));
+}
+
+.ctable tbody td {
+  padding: 12px 14px;
+  vertical-align: middle;
+  font-size: 13px;
+  color: var(--ink);
+}
+
+.ctable td .name {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.ctable td .sub {
+  font-size: 11.5px;
+  color: var(--mute);
+  margin-top: 1px;
+}
+
+.score-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 36px;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  background: var(--bg-3);
+  color: var(--ink-2);
+}
+
+.score-pill.hi {
+  background: color-mix(in oklab, #16a34a 18%, transparent);
+  color: #15803d;
+}
+
+.score-pill.mid {
+  background: color-mix(in oklab, #f59e0b 18%, transparent);
+  color: #b45309;
+}
+
+.score-pill.lo {
+  background: color-mix(in oklab, #dc2626 18%, transparent);
+  color: #b91c1c;
+}
+
+.stage-pill {
+  display: inline-flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 9px;
+  border-radius: 999px;
+  background: var(--bg-3);
+  color: var(--ink-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.ctable .ctable-status {
+  color: var(--mute);
+  font-size: 12.5px;
+}
+
+.ctable .ctable-em {
+  color: var(--mute);
+  opacity: 0.5;
+}
+
+.ai-action {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--purple);
+  background: var(--purple-soft);
+  padding: 3px 8px;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+
+.ctable-empty {
+  padding: 28px 18px;
+  text-align: center;
+  color: var(--mute);
+  font-size: 13px;
+}
+
 /* ===========================================================================
    Candidate Overview tab — HANDOFF v2 §5.1 / canvas cand-overview
    Hero band + signal cards + 6-dim bar grid + 4-card evidence row.
