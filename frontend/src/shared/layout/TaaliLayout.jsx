@@ -210,7 +210,7 @@ export const MarketingNav = ({ onNavigate }) => {
           <button type="button" className="btn btn-ghost btn-sm !hidden sm:!inline-flex" onClick={() => onNavigate('login')}>
             Sign in
           </button>
-          <button type="button" className="btn btn-primary btn-sm" onClick={() => { closeMenu(); onNavigate('demo'); }}>
+          <button type="button" className="btn btn-primary btn-sm" onClick={() => { closeMenu(); onNavigate('demo-lead'); }}>
             Book a demo <span className="arrow">→</span>
           </button>
           <div className="!hidden md:!block">

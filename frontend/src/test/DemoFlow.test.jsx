@@ -88,7 +88,8 @@ describe('Demo flow redesign', () => {
     expect(screen.getByText(/Agentic mode is ON/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Maya Chen/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/CANDIDATES PROCESSED/i)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /What your\s*candidate\s*actually sees\./i })).toBeInTheDocument();
+    // "What your candidate actually sees" section was removed in v4 (HANDOFF chat.md)
+    // — the showcase now embeds the real candidate workspace iframe instead.
     expect(screen.getByRole('heading', { name: /An autonomous agent in your pipeline/i })).toBeInTheDocument();
     expect(screen.getByText(/HOW THE AGENT WORKS/i)).toBeInTheDocument();
     expect(screen.getByText(/We're the only platform that measures it\./i)).toBeInTheDocument();
