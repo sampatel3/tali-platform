@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom';
 import {
   ArrowLeft,
+  ArrowUpDown,
   BriefcaseBusiness,
   Check,
   ChevronDown,
@@ -933,6 +934,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [activeView, setActiveView] = useState('table');
+  // HANDOFF v2 §4 / canvas jobs-detail-candidates — primary stage filter
+  // for the Candidates tab. The segmented row above the table toggles
+  // this; the embedded directory re-mounts via key so its internal
+  // `stageFilters` re-seeds from the new initial value.
+  const [tableStageFilter, setTableStageFilter] = useState('all');
+  const [tableSortBy, setTableSortBy] = useState('composite');
   const [scoringExpanded, setScoringExpanded] = useState(false);
   const [roleSheetOpen, setRoleSheetOpen] = useState(false);
   const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
@@ -1714,10 +1721,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             <button type="button" className={activeView === 'activity' ? 'active' : ''} onClick={() => setActiveView('activity')}>Job spec</button>
             <button type="button" className={activeView === 'role-fit' ? 'active' : ''} onClick={() => setActiveView('role-fit')}>Agent settings</button>
           </div>
-          <div className="row">
-            <div className="filter-chip"><span className="mono">Filter</span> · All stages</div>
-            <div className="filter-chip"><span className="mono">Sort</span> · Composite</div>
-          </div>
         </div>
 
         <div className={`score-panel ${scoringExpanded ? 'is-expanded' : 'is-collapsed'}`} id="role-scoring-panel">
@@ -1960,34 +1963,83 @@ Disqualifying: No experience with regulated financial data`}
                       <div className="title"><span className="dot" />{stage.label}</div>
                       <div className="count">{stage.items.length} · {stage.countLabel}</div>
                     </div>
+                    {/* HANDOFF v2 §4 / canvas jobs-detail-pipeline — kanban
+                        card per v3:
+                          avatar · name + position
+                          CV n% · score · ago [· LIVE]
+                          (review stage only) agent recommendation block:
+                            Advance / Reject + reasoning + Approve · Override
+                        Approve/Override are surfaced in the
+                        PendingAgentDecisionsPanel above the table for now;
+                        the in-card buttons are deep-link entry points. */}
                     {visibleItems.map((application) => {
                       const cardSignal = resolvePipelineCardSignal(application);
+                      const cvPct = Number.isFinite(Number(application?.cv_match_score))
+                        ? Math.round(Number(application.cv_match_score))
+                        : null;
+                      const compositeRaw = application?.score_summary?.taali_score
+                        ?? application?.taali_score
+                        ?? application?.assessment_score
+                        ?? null;
+                      const compositeScore = Number.isFinite(Number(compositeRaw))
+                        ? Math.round(Number(compositeRaw))
+                        : null;
+                      const isLive = String(application?.pipeline_stage || '').toLowerCase() === 'in_assessment';
+                      const isReview = stage.key === 'review';
                       return (
                         <a
                           key={application.id}
-                          className="kanban-card text-left"
+                          className={`kanban-card text-left ${isReview ? 'is-review' : ''}`}
                           href={candidateReportHref(application, numericRoleId)}
                           onClick={(event) => handlePipelineReportClick(event, application)}
                           onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
                         >
                           <div className="cc-top">
                             <div className="av">{buildApplicationTitle(application).slice(0, 2).toUpperCase()}</div>
-                            <div>
+                            <div className="cc-id">
                               <div className="n">{buildApplicationTitle(application)}</div>
-                              <div className="e">{application?.candidate_email || 'No email captured'}</div>
+                              <div className="pos">
+                                {application?.candidate_position
+                                  || application?.candidate_email
+                                  || 'No position captured'}
+                              </div>
                             </div>
-                            <div className={`sc ${cardSignal.toneClass}`}>{cardSignal.label}</div>
                           </div>
-                          <div className="cc-meta">
-                            <span className={`tag ${application?.workable_sourced ? 'a' : ''}`}>{application?.workable_sourced ? 'Workable' : 'Taali'}</span>
-                            {application?.candidate_location ? (
-                              <span className="tag"><MapPin size={10} />{application.candidate_location}</span>
-                            ) : null}
+                          <div className="cc-line">
+                            {cvPct != null ? <span>CV {cvPct}%</span> : <span className="mute">No CV score</span>}
+                            {compositeScore != null ? <>
+                              <span className="dot-sep">·</span>
+                              <span className="score-pip">{compositeScore}</span>
+                            </> : null}
+                            <span className="cc-line-grow" />
+                            <span>
+                              {formatRelativeShort(application?.updated_at || application?.created_at)}
+                              {isLive ? <span className="live-pip"> · LIVE</span> : null}
+                            </span>
                           </div>
-                          <div className="cc-foot">
-                            <span>{formatRelativeShort(application?.created_at || application?.updated_at)}</span>
-                            <span>{resolvePipelineCardFooterStatus(application)}</span>
-                          </div>
+                          {isReview ? (
+                            <div className="cc-agent">
+                              <div className="cc-agent-glyph" aria-hidden="true">
+                                <Sparkles size={11} strokeWidth={2} />
+                              </div>
+                              <div className="cc-agent-body">
+                                <div className="cc-agent-action">
+                                  {compositeScore != null && compositeScore >= 75
+                                    ? 'Advance to interview'
+                                    : compositeScore != null && compositeScore < 50
+                                      ? 'Reject'
+                                      : 'Awaiting decision'}
+                                </div>
+                                <div className="cc-agent-why">
+                                  {resolvePipelineCardFooterStatus(application)}
+                                </div>
+                                <div className="cc-agent-actions">
+                                  <span className="btn btn-purple btn-xs" role="button">Approve</span>
+                                  <span className="btn btn-outline btn-xs" role="button">Override</span>
+                                </div>
+                              </div>
+                            </div>
+                          ) : null}
                         </a>
                       );
                     })}
@@ -2064,7 +2116,64 @@ Disqualifying: No experience with regulated financial data`}
           </div>
         ) : (
           <>
+            {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — segmented
+                stage filter + Sort + Score new toolbar above the table.
+                Stage counts read off groupedApplications (already memoized).
+                Sort is currently a label-only display until the directory
+                exposes a controlled sort-by; "Score new" is wired to the
+                same handler the score panel uses. */}
+            <div className="ctable-toolbar">
+              <div className="seg" role="tablist" aria-label="Filter candidates by stage">
+                {[
+                  { key: 'all', label: 'All', count: activeApplications.length },
+                  ...PIPELINE_STAGE_ORDER.map((stage) => {
+                    const items = (groupedApplications.find((g) => g.key === stage.key)?.items) || [];
+                    return { key: stage.key, label: stage.label, count: items.length };
+                  }),
+                ].map((seg) => (
+                  <button
+                    key={seg.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={tableStageFilter === seg.key}
+                    className={tableStageFilter === seg.key ? 'on' : ''}
+                    onClick={() => setTableStageFilter(seg.key)}
+                  >
+                    {seg.label}
+                    {seg.count > 0 ? <span className="ct"> ({seg.count})</span> : null}
+                  </button>
+                ))}
+              </div>
+              <div className="ctable-toolbar-grow" />
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => {
+                  // Toggle between composite and CV-only sort. The directory
+                  // doesn't yet take a controlled sort prop — flag for
+                  // follow-up so this becomes a real toggle, not just a label.
+                  setTableSortBy((prev) => (prev === 'composite' ? 'cv' : 'composite'));
+                }}
+                aria-label="Sort table"
+                title="Sort"
+              >
+                <ArrowUpDown size={12} />
+                Sort: {tableSortBy === 'composite' ? 'composite' : 'CV match'}
+              </button>
+              {unscoredApplications.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn-purple btn-sm"
+                  onClick={() => handleBatchScore({ includeScored: false })}
+                  disabled={savingRoleConfig}
+                >
+                  <Sparkles size={12} />
+                  Score new ({unscoredApplications.length})
+                </button>
+              ) : null}
+            </div>
             <CandidatesDirectoryPage
+              key={`role-pipeline-${roleId}-${tableStageFilter}`}
               onNavigate={onNavigate}
               NavComponent={null}
               lockRoleId={roleId || null}
@@ -2074,6 +2183,7 @@ Disqualifying: No experience with regulated financial data`}
               subtitle=""
               externalRefreshKey={refreshTick}
               embedded
+              initialStageFilter={tableStageFilter === 'all' ? null : tableStageFilter}
             />
           </>
         )}

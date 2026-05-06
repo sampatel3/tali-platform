@@ -590,6 +590,12 @@ export const CandidatesDirectoryPage = ({
   prelude = null,
   externalRefreshKey = 0,
   embedded = false,
+  // Single-stage filter passed in by a parent (e.g. JobPipelinePage's
+  // segmented "All / Review / In assessment / Invited / Applied" toolbar
+  // per HANDOFF v2 §4 / canvas jobs-detail-candidates). When this prop
+  // changes, the parent should bump `externalRefreshKey` (or remount via
+  // key) to re-seed the internal `stageFilters` state.
+  initialStageFilter = null,
 }) => {
   const rolesApi = apiClient.roles;
   const { showToast } = useToast();
@@ -608,7 +614,9 @@ export const CandidatesDirectoryPage = ({
   const [roleFilters, setRoleFilters] = useState(() => (
     defaultRoleFilter === 'all' ? [] : [String(defaultRoleFilter)]
   ));
-  const [stageFilters, setStageFilters] = useState([]);
+  const [stageFilters, setStageFilters] = useState(() => (
+    initialStageFilter && initialStageFilter !== 'all' ? [String(initialStageFilter)] : []
+  ));
   const [outcomeFilters, setOutcomeFilters] = useState(['open']);
   const [sortOption, setSortOption] = useState(SORT_OPTIONS[0].value);
   const [minPreScreenScore, setMinPreScreenScore] = useState('');

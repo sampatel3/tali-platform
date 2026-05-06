@@ -1459,6 +1459,12 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         </div>
 
         <div className={`pane ${activeTab === 'overview' ? 'active' : ''}`} data-p="overview">
+        {/* HANDOFF v2 §5.1 / canvas cand-overview — Overview tab is:
+            (1) hero band: ScoreRing | RECOMMENDATION + body | SIGNAL list,
+            (2) two-up: STRONGEST SIGNAL · WORTH PROBING,
+            (3) DIMENSION SCORES — six rolled-up bars (0–100),
+            (4) four evidence cards: AI USAGE · CODE & GIT · TIMELINE · DOCUMENTS.
+            All scores render as integer "nn / 100" per HANDOFF v2 §6. */}
         {(() => {
           const fluencyAxes = computeFluencyAxes(completedAssessment);
           const compositeScore = (() => {
@@ -1469,181 +1475,212 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             if (Number.isFinite(Number(application?.cv_match_score))) return Number(application.cv_match_score);
             return null;
           })();
-          if (compositeScore == null && !fluencyAxes) return null;
+          const taaliScore = reportModel?.summaryModel?.taaliScore;
+          const roleFitScoreVal = reportModel?.summaryModel?.roleFitScore;
+          const assessmentScore = reportModel?.summaryModel?.assessmentScore;
+          const recommendationLabel = reportModel?.recommendation?.label || 'Continue review';
+          const fmtScore = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null);
+
+          // 6-dimension labels (long form, matches canvas DIMENSION SCORES)
+          const DIM_LONG_LABELS = {
+            sysdesign: 'Systems design',
+            codecraft: 'Code craft',
+            reasoning: 'Reasoning under pressure',
+            aicollab: 'AI collaboration',
+            release: 'Release safety',
+            communication: 'Communication',
+          };
+          const dimensions = fluencyAxes
+            ? fluencyAxes.map((axis) => ({
+                key: axis.k,
+                label: DIM_LONG_LABELS[axis.k] || axis.label,
+                value: Math.round(Number(axis.v || 0)),
+                hasSignal: axis.hasSignal,
+              }))
+            : [];
+
+          const topRisk = riskItems[0] || null;
+          const topStrength = strengthItems[0] || null;
+          const strongestTitle = reportModel?.strongestSignalTitle && reportModel.strongestSignalTitle !== '—'
+            ? reportModel.strongestSignalTitle
+            : (topStrength?.label || 'Signal building');
+          const strongestDesc = reportModel?.strongestSignalDescription
+            || 'Strongest evidence will appear once the candidate has been scored against this role.';
+
           return (
-            <div className="mc-report-snapshot">
-              <div className="mc-report-snapshot-score">
-                {compositeScore != null ? (
-                  <ScoreRing score={Math.round(compositeScore)} size={140} />
-                ) : (
-                  <div className="mc-report-snapshot-score-empty">Score pending</div>
-                )}
-                <div className="mc-report-snapshot-score-meta">
-                  <div className="mc-kicker">COMPOSITE · 0–100</div>
-                  <div className="mc-report-snapshot-score-label">
-                    {reportModel?.recommendation?.label || 'Standing report'}
+            <>
+              {/* (1) Hero band */}
+              <div className="mc-overview-hero">
+                <div className="mc-overview-hero-score">
+                  {compositeScore != null ? (
+                    <ScoreRing score={Math.round(compositeScore)} size={140} />
+                  ) : (
+                    <div className="mc-report-snapshot-score-empty" style={{ width: 140, height: 140 }}>
+                      Score pending
+                    </div>
+                  )}
+                </div>
+                <div className="mc-overview-hero-body">
+                  <div className="mc-kicker">RECOMMENDATION</div>
+                  <div className="mc-overview-hero-recommendation">{recommendationLabel}</div>
+                  <p className="mc-overview-hero-summary">
+                    {reportModel?.recruiterSummaryText
+                      || 'Recommendation copy will populate once role-fit and assessment evidence are scored.'}
+                  </p>
+                </div>
+                <div className="mc-overview-hero-signal">
+                  <div className="mc-kicker">SIGNAL</div>
+                  <div className="mc-overview-signal-row">
+                    <span>TAALI</span>
+                    <span className="mc-overview-signal-val">
+                      {fmtScore(taaliScore) ?? '—'}
+                      <span className="mc-overview-signal-suffix">/ 100</span>
+                    </span>
+                  </div>
+                  <div className="mc-overview-signal-row">
+                    <span>Role fit</span>
+                    <span className="mc-overview-signal-val">
+                      {fmtScore(roleFitScoreVal) ?? '—'}
+                      <span className="mc-overview-signal-suffix">/ 100</span>
+                    </span>
+                  </div>
+                  <div className="mc-overview-signal-row">
+                    <span>Assessment</span>
+                    <span className="mc-overview-signal-val">
+                      {fmtScore(assessmentScore) ?? '—'}
+                      <span className="mc-overview-signal-suffix">/ 100</span>
+                    </span>
                   </div>
                 </div>
               </div>
-              <div className="mc-report-snapshot-radar">
-                <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>AI FLUENCY · 6 DIMENSIONS</div>
-                {fluencyAxes ? (
-                  <RadarChart values={fluencyAxes} max={100} size={260} />
-                ) : (
-                  <div className="mc-report-snapshot-radar-empty">
-                    <p><b>Scoring pending.</b></p>
-                    <p>The fluency radar fills in once the candidate finishes the assessment runtime — we roll up prompt quality, error recovery, context utilization, independence, design thinking, and written communication into the six canvas axes.</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })()}
-        <div className="report-body">
-          <div>
-            <div className="report-card">
-              <div className="kicker">Verdict</div>
-              <h2 style={{ fontSize: '28px', margin: '10px 0 12px' }}>
-                {reportModel?.recommendation?.label || 'Continue review'}. <em>With context.</em>
-              </h2>
-              <p style={{ fontSize: '15.5px', lineHeight: 1.6, color: 'var(--ink-2)', margin: '0 0 14px' }}>
-                {reportModel?.recruiterSummaryText}
-              </p>
-              <p style={{ fontSize: '14.5px', lineHeight: 1.6, color: 'var(--mute)', margin: 0 }}>
-                <b style={{ color: 'var(--ink-2)' }}>Watch-out.</b> {reportModel?.integritySummaryText}
-              </p>
-            </div>
 
-            <div className="report-card">
-              <h2>Top <em>strengths</em></h2>
-              <p className="sub">Ranked by the strongest dimensions currently visible in this standing report.</p>
-              {strengthItems.length ? strengthItems.map((item, index) => {
-                const isCvHighlight = item.source === 'cv_match';
-                const numericValue = Number.isFinite(Number(item?.value)) ? Number(item.value) : null;
-                return (
-                  <div key={item.key} className="rank-row">
-                    <div className="rk">{String(index + 1).padStart(2, '0')}</div>
-                    <div>
-                      <div className="t">{item.label}</div>
-                      <div className="s">
-                        {isCvHighlight
-                          ? 'Highlight extracted from the candidate CV during scoring. Probe for ownership and outcomes during interviews.'
-                          : index === 0
-                            ? reportModel?.strongestSignalDescription
-                            : `Score signal remains strong in ${String(item.label || '').toLowerCase()} across the current evidence set.`}
-                      </div>
-                      {index === 0 && !isCvHighlight ? (
-                        <div className="evidence-block">
-                          <div className="turn">Evidence</div>
-                          {reportModel?.evidenceSections?.roleFit?.description || reportModel?.evidenceSections?.assessment?.description || 'Standing report evidence is attached directly to the linked recruiter and assessment records.'}
+              {/* (2) Strongest signal + Worth probing */}
+              <div className="mc-overview-signals">
+                <div className="mc-overview-signal-card">
+                  <div className="mc-kicker">STRONGEST SIGNAL</div>
+                  <div className="mc-overview-signal-card-title">{strongestTitle}</div>
+                  <p className="mc-overview-signal-card-body">{strongestDesc}</p>
+                </div>
+                <div className="mc-overview-signal-card">
+                  <div className="mc-kicker">WORTH PROBING</div>
+                  <div className="mc-overview-signal-card-title">
+                    {topRisk?.title || 'No probes flagged'}
+                  </div>
+                  <p className="mc-overview-signal-card-body">
+                    {topRisk?.description
+                      || 'No high-priority gaps surfaced. Run the panel against the strongest evidence to validate the recommendation.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* (3) Dimension scores — six bars */}
+              {dimensions.length ? (
+                <div className="mc-overview-dimensions">
+                  <div className="mc-kicker">DIMENSION SCORES</div>
+                  <div className="mc-overview-dimensions-grid">
+                    {dimensions.map((dim) => (
+                      <div key={dim.key} className="mc-overview-dim-row">
+                        <span className="mc-overview-dim-label">{dim.label}</span>
+                        <div className="mc-overview-dim-bar" aria-hidden="true">
+                          <i style={{ width: `${Math.max(0, Math.min(100, dim.value))}%` }} />
                         </div>
-                      ) : null}
-                    </div>
-                    <div className="pct">
-                      {isCvHighlight ? <span className="chip purple">CV match</span> : (numericValue != null ? `${Math.round(numericValue * 10)} / 100` : '—')}
-                    </div>
+                        <span className="mc-overview-dim-score">
+                          {dim.hasSignal ? dim.value : '—'}
+                          {dim.hasSignal ? <span className="mc-overview-dim-suffix">/100</span> : null}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                );
-              }) : (
-                <div className="rank-row">
-                  <div className="rk">01</div>
-                  <div>
-                    <div className="t">{reportModel?.strongestSignalTitle || 'Signal building'}</div>
-                    <div className="s">{reportModel?.strongestSignalDescription}</div>
-                  </div>
-                  <div className="pct">—</div>
+                </div>
+              ) : (
+                <div className="mc-overview-dimensions mc-overview-dimensions-empty">
+                  <div className="mc-kicker">DIMENSION SCORES</div>
+                  <p className="mc-overview-dim-empty">
+                    Six-dimension breakdown (Systems design, Code craft, Reasoning under pressure, AI
+                    collaboration, Release safety, Communication) appears once the candidate completes
+                    the assessment.
+                  </p>
                 </div>
               )}
-            </div>
 
-            <div className="report-card">
-              <h2>Risks to <em>probe</em></h2>
-              <p className="sub">Use these in the panel loop so the decision stays evidence-based.</p>
-              {riskItems.map((item, index) => (
-                <div key={`${item.title}-${index}`} className="rank-row">
-                  <div className="rk" style={{ color: 'var(--amber)' }}>{String(index + 1).padStart(2, '0')}</div>
-                  <div>
-                    <div className="t">{item.title}</div>
-                    <div className="s">{item.description}</div>
+              {/* (4) Evidence row — four cards */}
+              <div className="mc-overview-evidence">
+                {[
+                  { kicker: 'AI USAGE', section: reportModel?.evidenceSections?.aiUsage },
+                  { kicker: 'CODE & GIT', section: reportModel?.evidenceSections?.codeAndGit },
+                  { kicker: 'TIMELINE', section: reportModel?.evidenceSections?.timeline },
+                  { kicker: 'DOCUMENTS', section: reportModel?.evidenceSections?.documents },
+                ].map(({ kicker, section }) => {
+                  const headline = section?.items?.[0]
+                    || section?.title
+                    || 'Evidence pending';
+                  const description = section?.description
+                    || 'Evidence appears here once the candidate is scored.';
+                  return (
+                    <div key={kicker} className="mc-overview-evidence-card">
+                      <div className="mc-kicker">{kicker}</div>
+                      <div className="mc-overview-evidence-headline">{headline}</div>
+                      <p className="mc-overview-evidence-body">{description}</p>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Internal-only footer: Workable comparison + quick links + status.
+                  Hidden on isClient external shared views. */}
+              {!isClientView ? (
+                <div className="mc-overview-footer" data-internal-only>
+                  {workableConnected && workableSource ? (
+                    <WorkableComparisonCard
+                      workableRawScore={application?.workable_score_raw}
+                      taaliScore={reportModel?.summaryModel?.taaliScore}
+                      posted={Boolean(completedAssessment?.posted_to_workable)}
+                      postedAt={completedAssessment?.posted_to_workable_at || null}
+                      workableProfileUrl={application?.workable_profile_url || ''}
+                      scorePrecedence={orgData?.workable_config?.score_precedence || 'workable_first'}
+                      onPost={assessmentId && !completedAssessment?.posted_to_workable ? handlePostToWorkable : null}
+                      posting={busyAction === 'workable'}
+                    />
+                  ) : null}
+                  <div className="mc-overview-footer-row">
+                    <div className="mc-overview-footer-status">
+                      <div className="mc-kicker is-mute">STANDING REPORT STATUS</div>
+                      <p>
+                        {completedAssessment
+                          ? 'Assessment completed. This report combines role-fit evidence with final assessment signal.'
+                          : 'Assessment not completed yet. This report stays anchored to CV, role-fit, and recruiter-facing evidence already on file.'}
+                      </p>
+                    </div>
+                    <div className="mc-overview-footer-links">
+                      {canOpenAssessmentDetail ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => onNavigate('candidate-detail', { candidateDetailAssessmentId: assessmentId })}
+                        >
+                          Open assessment detail
+                          <ExternalLink size={13} />
+                        </Button>
+                      ) : null}
+                      {application?.workable_profile_url ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
+                        >
+                          View on Workable
+                          <ExternalLink size={13} />
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
-                  <div className="pct amber">Probe</div>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div className="report-card">
-              <h2>Signal <em>breakdown</em></h2>
-              <p className="sub">Dimension-level scoring behind the standing recommendation.</p>
-              {(reportModel?.dimensionEntries || []).map((item) => (
-                <div key={item.key} className="dimension-row">
-                  <div className="dimension-row-head">
-                    <span className="dimension-name">{item.label}</span>
-                    <span className="dimension-score">{Math.round(Number(item.value || 0) * 10)} / 100</span>
-                  </div>
-                  <div className="bar">
-                    <i style={{ width: `${Math.max(0, Math.min(100, Number(item.value || 0) * 10))}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="report-card" data-internal-only>
-              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Quick links</div>
-              <div className="mt-3 space-y-2">
-                {canOpenAssessmentDetail ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    className="w-full justify-between"
-                    onClick={() => onNavigate('candidate-detail', { candidateDetailAssessmentId: assessmentId })}
-                  >
-                    Open assessment detail
-                    <ExternalLink size={14} />
-                  </Button>
-                ) : null}
-                {application?.workable_profile_url ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    className="w-full justify-between"
-                    onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
-                  >
-                    View on Workable
-                    <ExternalLink size={14} />
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-
-            {workableConnected && workableSource ? (
-              <div data-internal-only>
-                <WorkableComparisonCard
-                  workableRawScore={application?.workable_score_raw}
-                  taaliScore={reportModel?.summaryModel?.taaliScore}
-                  posted={Boolean(completedAssessment?.posted_to_workable)}
-                  postedAt={completedAssessment?.posted_to_workable_at || null}
-                  workableProfileUrl={application?.workable_profile_url || ''}
-                  scorePrecedence={orgData?.workable_config?.score_precedence || 'workable_first'}
-                  onPost={assessmentId && !completedAssessment?.posted_to_workable ? handlePostToWorkable : null}
-                  posting={busyAction === 'workable'}
-                />
-              </div>
-            ) : null}
-
-            <div className="report-card">
-              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Standing report status</div>
-              <div className="mt-2 text-sm text-[var(--taali-text)]">
-                {completedAssessment
-                  ? 'Assessment completed. This report now combines role-fit evidence with final assessment signal.'
-                  : 'Assessment not completed yet. This report stays anchored to CV, role-fit, and recruiter-facing evidence already on file.'}
-              </div>
-            </div>
-          </div>
-        </div>
+              ) : null}
+            </>
+          );
+        })()}
         </div>
 
         <div className={`pane ${activeTab === 'assessment' ? 'active' : ''}`} data-p="assessment">
