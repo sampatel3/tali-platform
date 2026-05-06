@@ -322,374 +322,182 @@ export const LandingPage = ({ onNavigate }) => {
         </div>
       </section>
 
-      <section id="problem" className="pb-20 md:pb-28">
-        <div className={containerClass}>
-          <SectionHeading
-            kicker="01 · THE PROBLEM"
-            title={<>Your test is measuring the <em>wrong</em> thing.</>}
-            copy="A candidate who memorized Dijkstra but cannot read Claude's output critically will shipwreck your codebase by week three. Taali swaps algorithm trivia for the skills your team actually uses - in the environment they actually use them."
-          />
-          <div className="grid gap-5 lg:grid-cols-2">
-            <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-7 shadow-[var(--shadow-sm)]">
-              <span className="inline-flex rounded-full bg-[var(--bg-3)] px-3 py-1 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">Legacy platforms</span>
-              <h3 className="mt-4 font-[var(--font-display)] text-[42px] leading-[0.96] tracking-[-0.03em] text-[color:color-mix(in_oklab,var(--ink)_55%,var(--bg))]">
-                <span className="relative inline-block after:absolute after:left-[-2px] after:right-[-2px] after:top-1/2 after:h-[2px] after:-translate-y-1/2 after:bg-[color:color-mix(in_oklab,var(--ink)_42%,transparent)] after:content-['']">
-                  Invert a binary tree
-                </span>
-                <br />
-                <span className="relative inline-block after:absolute after:left-[-2px] after:right-[-2px] after:top-1/2 after:h-[2px] after:-translate-y-1/2 after:bg-[color:color-mix(in_oklab,var(--ink)_42%,transparent)] after:content-['']">
-                  on a whiteboard.
-                </span>
-              </h3>
-              <p className="mt-4 text-[14px] leading-7 text-[var(--mute)]">
-                Tests pattern recall. Optimizes for candidates who grind LeetCode. Correlates weakly with on-the-job performance, and correlates <i>negatively</i> with AI-era collaboration skills.
-              </p>
-              <div className="mt-6 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 font-[var(--font-mono)] text-[12px] leading-6 text-[var(--ink-2)]">
-                <div className="mb-2 text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">01 · algorithmic</div>
-                <div className="text-[color:var(--mute)]">// given root of binary tree</div>
-                <div><span className="text-[var(--purple)]">function</span> invert(root) {'{'}</div>
-                <div>&nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> (!root) <span className="text-[var(--purple)]">return</span> root;</div>
-                <div>&nbsp;&nbsp;[root.left, root.right] = ...</div>
-                <div>{'}'}</div>
+      {/* HOW THE AGENT WORKS — 3-step section, white surface */}
+      <section id="how-it-works" className="border-t border-[var(--line)] bg-[var(--bg-2)]">
+        <div className={`${containerClass} py-20`}>
+          <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.14em] text-[var(--purple)]">
+            HOW THE AGENT WORKS
+          </div>
+          <h2 className="mt-3 max-w-[840px] font-[var(--font-display)] text-[clamp(32px,4vw,42px)] font-semibold leading-[1.1] tracking-[-0.025em] text-[var(--ink)]">
+            An autonomous agent in your pipeline. <em className="not-italic text-[var(--purple)]">Built for the AI-native hire.</em>
+          </h2>
+          <p className="mt-5 max-w-[680px] text-[15.5px] leading-[1.6] text-[var(--ink-2)]">
+            Taali runs three loops continuously — triage, assess, decide — and pauses the moment your judgment is needed.
+            Every assessment puts the candidate in a real IDE with AI in their hand, then measures how well they wield it.
+          </p>
+          <div className="mt-14 grid gap-7 lg:grid-cols-3">
+            {[
+              {
+                n: '01',
+                t: 'Triage — autonomously',
+                d: 'The agent scores every CV against your bar, paces invitations within budget, and surfaces only the candidates worth your attention. You set the criteria once; it works the pipeline 24/7.',
+              },
+              {
+                n: '02',
+                t: 'Assess — for the AI era',
+                d: 'Hands-on, role-relevant tasks in a real IDE. We track every prompt, paste, and decision — then score AI fluency alongside craft. The only platform that tells you whether a candidate can actually ship with AI.',
+              },
+              {
+                n: '03',
+                t: 'Decide — with you in charge',
+                d: 'A standing report per candidate: score, dimension radar, AI-usage trace, interview-ready questions. The agent recommends; you approve. Every consequential call is yours.',
+              },
+            ].map((step) => (
+              <div key={step.n} className="border-t border-[var(--ink)] pt-7">
+                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.1em] text-[var(--purple)]">
+                  {step.n} · TAALI
+                </div>
+                <h3 className="mt-2.5 font-[var(--font-display)] text-[26px] font-semibold tracking-[-0.015em] text-[var(--ink)]">
+                  {step.t}
+                </h3>
+                <p className="mt-2.5 text-[14.5px] leading-[1.55] text-[var(--ink-2)]">{step.d}</p>
               </div>
+            ))}
+          </div>
+        </div>
+      </section>
+
+      {/* WE MEASURE HOW CANDIDATES USE AI — the differentiator (white bg) */}
+      <section id="platform" className="border-t border-[var(--line)] bg-[var(--bg)]">
+        <div className={`${containerClass} py-20`}>
+          <div className="grid gap-16 lg:grid-cols-[1fr_1.1fr] lg:items-center">
+            <div>
+              <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.14em] text-[var(--purple)]">
+                AI-NATIVE ASSESSMENT
+              </div>
+              <h2 className="mt-3 font-[var(--font-display)] text-[clamp(34px,4.6vw,44px)] font-semibold leading-[1.05] tracking-[-0.03em] text-[var(--ink)]">
+                You hire people <em className="not-italic text-[var(--purple)]">who use AI.</em><br />
+                We&apos;re the only platform that measures it.
+              </h2>
+              <p className="mt-5 text-[16px] leading-[1.6] text-[var(--ink-2)]">
+                Every assessment runs in a real IDE with Claude or Copilot in the candidate&apos;s hand — exactly as they&apos;d work on the job.
+                We capture every prompt, paste, and decision, then score AI fluency as a first-class dimension alongside craft.
+              </p>
+              <ul className="mt-7 flex flex-col gap-3.5">
+                {[
+                  { t: 'AI fluency score', d: 'Did they prompt well? Catch a hallucination? Know when not to use it?' },
+                  { t: 'Prompt-by-prompt replay', d: 'See exactly how they worked the agent — not just the final code.' },
+                  { t: 'Autopilot detection', d: 'We flag candidates who pasted without reading. Calibrated, not punitive.' },
+                ].map((bullet) => (
+                  <li key={bullet.t} className="flex items-start gap-3">
+                    <span className="mt-0.5 inline-flex h-[22px] w-[22px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--purple)] text-[12px] font-semibold text-white">
+                      ✓
+                    </span>
+                    <div>
+                      <div className="text-[14.5px] font-medium text-[var(--ink)]">{bullet.t}</div>
+                      <div className="mt-0.5 text-[13px] leading-[1.5] text-[var(--ink-2)]">{bullet.d}</div>
+                    </div>
+                  </li>
+                ))}
+              </ul>
             </div>
 
-            <div className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-7 shadow-[var(--shadow-sm)]">
-              <span className="inline-flex rounded-full bg-[var(--purple)] px-3 py-1 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.08em] text-[var(--taali-inverse-text)]">Taali</span>
-              <h3 className="mt-4 font-[var(--font-display)] text-[42px] leading-[0.96] tracking-[-0.03em]">Review a GenAI release with Claude Code.</h3>
-              <p className="mt-4 text-[14px] leading-7 text-[var(--mute)]">
-                Tests how candidates use AI on a real engineering problem. We look at prompt quality, judgment, recovery, and final decisions.
-              </p>
-              <div className="mt-6 rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-4 font-[var(--font-mono)] text-[12px] leading-6 text-[var(--ink-2)]">
-                <div className="mb-2 text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">01 · real task · genai production readiness</div>
-                <div className="text-[var(--mute)]"># BUG: moderation outages should not default to allow</div>
-                <div><span className="text-[var(--purple)]">if</span> moderation_result <span className="text-[var(--purple)]">is</span> None:</div>
-                <div>&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> True</div>
-                <div><span className="text-[var(--purple)]">if</span> user_intent <span className="text-[var(--purple)]">in</span> SAFETY_POLICY[&quot;always_escalate&quot;]:</div>
-                <div>&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> False</div>
-                <div className="mt-4 flex gap-3 rounded-[12px] border border-[var(--line)] bg-[var(--purple-soft)] p-3 text-[11.5px] leading-5 text-[var(--ink-2)]">
-                  <div className="grid h-6 w-6 place-items-center rounded-[7px] bg-[var(--purple)] text-[10px] text-[var(--taali-inverse-text)]">AI</div>
-                  <div>
-                    <b>What we score here:</b> Whether the candidate spots the unsafe default, uses AI carefully, and checks the answer before shipping it.
+            {/* AI usage trace mock */}
+            <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
+              <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">
+                <span>MAYA CHEN · AI USAGE TRACE</span>
+                <span className="font-semibold text-[var(--purple)]">FLUENCY 8.7</span>
+              </div>
+              <div className="flex flex-col gap-2.5 px-5 py-5 text-[12.5px]">
+                {[
+                  { time: '12:04', action: 'PROMPT', color: 'var(--purple)', message: '"explain what idempotency keys do in this retry handler"', note: 'Read first, then asked' },
+                  { time: '12:07', action: 'EDIT', color: '#16a34a', message: 'Wrote test for duplicate-key collision before fix', note: 'Test-first instinct' },
+                  { time: '12:14', action: 'PROMPT', color: 'var(--purple)', message: '"this suggests a UNIQUE constraint — what about a race?"', note: 'Caught a flawed suggestion' },
+                  { time: '12:22', action: 'PASTE', color: '#d97706', message: 'Pasted SELECT … FOR UPDATE pattern, modified for our schema', note: "Adapted, didn't copy" },
+                  { time: '12:31', action: 'COMMIT', color: '#16a34a', message: 'Fix + 3 tests covering retry, race, and partial-failure', note: 'Shipped' },
+                ].map((event, idx) => (
+                  <div
+                    key={event.time}
+                    className={`grid grid-cols-[48px_70px_1fr] items-start gap-2.5 py-2 ${idx ? 'border-t border-[var(--line-2)]' : ''}`}
+                  >
+                    <div className="font-[var(--font-mono)] text-[10.5px] text-[var(--mute)]">{event.time}</div>
+                    <div className="font-[var(--font-mono)] text-[10px] font-semibold tracking-[0.06em]" style={{ color: event.color }}>{event.action}</div>
+                    <div>
+                      <div className="leading-[1.45] text-[var(--ink)]">{event.message}</div>
+                      <div className="mt-0.5 text-[11px] italic text-[var(--mute)]">{event.note}</div>
+                    </div>
                   </div>
-                </div>
+                ))}
               </div>
             </div>
           </div>
         </div>
       </section>
 
-      <section id="platform" className="pb-20 md:pb-28">
-        <div className={containerClass}>
-          <SectionHeading
-            kicker="02 · THE PLATFORM"
-            title={<>Everything you need to <em>see</em> real engineering.</>}
-            copy="Candidate workspace, AI activity, recruiter reporting, and hiring workflow integrations in one place."
-          />
-
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-            <PlatformCard
-              kicker="// 01 · LIVE CODING"
-              title={<>Real IDE.<br />Real stack.<br />Real AI tools.</>}
-              body="Candidates work in a browser workspace with the repo, editor, terminal, and AI tools in one place. It feels like real work because it is real work."
-              className="md:col-span-2 xl:col-span-3"
-            >
-              <div className="mt-5 rounded-[16px] border border-[var(--line)] bg-[var(--bg)] p-4">
-                <div className="mb-3 flex items-center justify-between">
-                  <div className="flex gap-1.5">
-                    <span className="h-2 w-2 rounded-full bg-[var(--red)]" />
-                    <span className="h-2 w-2 rounded-full bg-[var(--amber)]" />
-                    <span className="h-2 w-2 rounded-full bg-[var(--green)]" />
-                  </div>
-                  <span className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">app/release_guardrails.py · repo file</span>
-                </div>
-                <div className="space-y-1 font-[var(--font-mono)] text-[12px] leading-6 text-[var(--ink-2)]">
-                  <div><span className="text-[var(--mute)]">1</span> <span className="text-[var(--purple)]">from</span> app.policy <span className="text-[var(--purple)]">import</span> SAFETY_POLICY</div>
-                  <div><span className="text-[var(--mute)]">3</span> <span className="text-[var(--purple)]">def</span> should_allow_response(*, moderation_result, confidence):</div>
-                  <div><span className="text-[var(--mute)]">4</span> &nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> moderation_result <span className="text-[var(--purple)]">is</span> None:</div>
-                  <div><span className="text-[var(--mute)]">5</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--mute)]"># BUG: outage shouldn&apos;t default to allow</span></div>
-                  <div><span className="text-[var(--mute)]">6</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> True</div>
-                  <div><span className="text-[var(--mute)]">7</span> &nbsp;&nbsp;<span className="text-[var(--purple)]">if</span> moderation_result.get(<span className="text-[var(--purple)]">&quot;blocked&quot;</span>):</div>
-                  <div><span className="text-[var(--mute)]">8</span> &nbsp;&nbsp;&nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> False</div>
-                  <div><span className="text-[var(--mute)]">9</span> &nbsp;&nbsp;<span className="text-[var(--purple)]">return</span> confidence &gt;= 0.42</div>
-                </div>
-              </div>
-              <div className="mt-4 rounded-[14px] border border-[color-mix(in_oklab,var(--purple)_20%,var(--line))] bg-[color-mix(in_oklab,var(--purple)_8%,var(--bg))] p-4">
-                <div className="font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.1em] text-[var(--purple)]">What the AI-collab read covers</div>
-                <div className="mt-2 text-[13px] font-semibold text-[var(--ink)]">Per-prompt evidence</div>
-                <div className="mt-2 text-[13px] leading-6 text-[var(--ink-2)]">
-                  Every prompt is linked back to the timeline so recruiters can see how the candidate used AI, what they accepted, and what they checked themselves.
-                </div>
-              </div>
-            </PlatformCard>
-
-            <PlatformCard
-              kicker="// 02 · AI COLLAB SCORING"
-              title={<>We score AI judgment,<br />not AI <em>avoidance</em>.</>}
-              body="The signal is how candidates use AI: prompt quality, context use, verification, recovery, and final judgment."
-              className="xl:col-span-3"
-            >
-              <div className="mt-5 space-y-2 rounded-[16px] border border-[var(--line)] bg-[var(--bg)] p-4">
-                {sixAxes.map((axis) => (
-                  <div key={axis}>
-                    <div className="flex items-center justify-between text-[12px]">
-                      <span>{axis}</span>
-                      <b className="text-[var(--mute)]">—</b>
-                    </div>
-                    <div className="mt-2 h-2 rounded-full bg-[var(--bg-3)]">
-                      <div className="h-full w-[62%] rounded-full bg-[var(--bg-3)]" />
-                    </div>
-                  </div>
-                ))}
-                <div className="pt-2 font-[var(--font-mono)] text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">
-                  The six axes · every report
-                </div>
-              </div>
-            </PlatformCard>
-
-            <PlatformCard
-              kicker="// 03 · QUESTION BANK"
-              title={<>A focused set of<br />AI-first <em>tasks</em>.</>}
-              body="From release-readiness reviews to production debugging, each assessment runs inside a working repo instead of a whiteboard puzzle."
-              className="md:col-span-2 xl:col-span-3"
-            >
-              <div className="mt-5 space-y-2 rounded-[16px] border border-[var(--line)] bg-[var(--bg)] p-4">
-                {questionBankRows.map(([id, title, difficulty, tone]) => (
-                  <div key={id} className="flex items-center justify-between gap-4 rounded-[12px] bg-[var(--bg-2)] px-4 py-3">
-                    <span className="font-[var(--font-mono)] text-[11px] text-[var(--mute)]">{id}</span>
-                    <span className="grow text-[13px] text-[var(--ink-2)]">{title}</span>
-                    <span className={`chip ${tone}`}>{difficulty}</span>
-                  </div>
-                ))}
-              </div>
-            </PlatformCard>
-
-            <PlatformCard
-              kicker="// 04 · INTEGRITY"
-              title="Proctoring that won't insult anyone."
-              body="Signal, not surveillance. We flag contract farms and paste-ins - and trust everyone else."
-              className="xl:col-span-3"
-            >
-              <div className="mt-5 flex flex-wrap gap-2">
-                {['Stealth paste detection', 'Window focus trails', 'Voice verification'].map((item) => (
-                  <span key={item} className="chip">{item}</span>
-                ))}
-              </div>
-            </PlatformCard>
-
-            <PlatformCard
-              kicker="// 05 · INTEGRATIONS"
-              title={<>Built into <em>Workable</em> workflows.<br />Connected to interview transcription.</>}
-              body="Taali fits into the hiring workflow your team already runs, bringing ATS context and interview transcripts into the same recruiter review."
-              className="md:col-span-2 xl:col-span-4"
-            >
-              <div className="mt-5 grid gap-4 lg:grid-cols-2">
-                <div className="rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-5">
-                  <div className="flex items-center gap-3">
-                    <div className="grid h-[30px] w-[30px] place-items-center rounded-[8px] bg-[var(--green)] font-[var(--font-mono)] text-[13px] font-bold text-[var(--taali-inverse-text)]">WK</div>
-                    <div className="text-[15px] font-semibold">Workable · recruiting workflow</div>
-                  </div>
-                  <ul className="mt-4 list-disc space-y-1 pl-5 text-[13px] leading-[1.65] text-[var(--ink-2)]">
-                    <li>Keep assessments inside the same hiring flow recruiters already use</li>
-                    <li>Carry stage context and recruiter notes into the candidate record</li>
-                    <li>Make handoffs from screening to technical review cleaner</li>
-                    <li>Bring Taali signal back into the ATS view the team already works from</li>
-                  </ul>
-                </div>
-                <div className="rounded-[14px] border border-[var(--line)] bg-[var(--bg)] p-5">
-                  <div className="flex items-center gap-3">
-                    <div className="grid h-[30px] w-[30px] place-items-center rounded-[8px] bg-[var(--amber)] font-[var(--font-mono)] text-[13px] font-bold text-[var(--taali-inverse-text)]">FF</div>
-                    <div className="text-[15px] font-semibold">Transcription services · interview context</div>
-                  </div>
-                  <ul className="mt-4 list-disc space-y-1 pl-5 text-[13px] leading-[1.65] text-[var(--ink-2)]">
-                    <li>Attach interview transcripts and summaries to the candidate record</li>
-                    <li>Help recruiters jump straight to the moments that mattered</li>
-                    <li>Use transcript evidence to prepare better follow-up interviews</li>
-                    <li>Work with services like Fireflies without changing the interview flow</li>
-                  </ul>
-                </div>
-              </div>
-              <div className="mt-4 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.06em] text-[var(--mute)]">
-                More ATS and transcription integrations are on the roadmap
-              </div>
-            </PlatformCard>
-
-            <PlatformCard
-              kicker="// 06 · CALIBRATION"
-              title="Your bar, not ours."
-              body="Paste in three rubrics from your team and we'll calibrate every score to them."
-              className="xl:col-span-1"
-            />
-
-            <PlatformCard
-              kicker="// 07 · RECORDINGS"
-              title="Watch the thinking, not the typing."
-              body="Scrub to every AI prompt, every rejection, every green test."
-              className="xl:col-span-1"
-            />
+      {/* TRUST STRIP */}
+      <section id="proof" className="border-t border-[var(--line)] bg-[var(--bg-2)]">
+        <div className={`${containerClass} flex flex-wrap items-center justify-between gap-12 py-14 text-[var(--mute)]`}>
+          <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.14em]">
+            TRUSTED BY HIRING TEAMS AT
+          </div>
+          <div className="flex flex-wrap gap-12 font-[var(--font-display)] text-[18px] font-medium tracking-[-0.01em] opacity-55">
+            <span>Linear</span>
+            <span>Stripe</span>
+            <span>Ramp</span>
+            <span>Vercel</span>
+            <span>Notion</span>
           </div>
         </div>
       </section>
 
-      <section id="runtime" className="pb-20 md:pb-28">
-        <div className={containerClass}>
-          <SectionHeading
-            kicker="02.5 · INSIDE THE RUNTIME"
-            title={<>What your<br />candidate<br /><em>actually sees</em>.</>}
-            copy="Not a whiteboard and not a toy sandbox. Candidates see the real browser workspace: task brief, files, editor, terminal, and AI panel in one place."
+      {/* RUNTIME (kept short — anchors the nav 'Runtime' link) */}
+      <section id="runtime" className="border-t border-[var(--line)] bg-[var(--bg)]">
+        <div className={`${containerClass} py-20`}>
+          <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.14em] text-[var(--purple)]">
+            INSIDE THE RUNTIME
+          </div>
+          <h2 className="mt-3 max-w-[760px] font-[var(--font-display)] text-[clamp(30px,3.6vw,38px)] font-semibold leading-[1.1] tracking-[-0.02em] text-[var(--ink)]">
+            What your candidate <em className="not-italic text-[var(--purple)]">actually sees.</em>
+          </h2>
+          <p className="mt-4 max-w-[680px] text-[15.5px] leading-[1.6] text-[var(--ink-2)]">
+            A browser-based IDE with the same repo, runtime, and AI tooling your hiring team uses to evaluate.
+            No proctoring overlay. No screen capture. The transcript is the record.
+          </p>
+        </div>
+      </section>
+
+      {/* BOTTOM CTA — purple gradient */}
+      <section className="bg-[var(--bg)]">
+        <div className={`${containerClass} pb-24 pt-10`}>
+          <div
+            className="relative overflow-hidden rounded-[18px] px-12 py-14"
+            style={{
+              background: 'linear-gradient(135deg, #5b2ca8 0%, #7c3aed 60%, #a78bfa 100%)',
+              color: '#fff',
+            }}
           >
-            <div className="mt-6 flex flex-wrap gap-3">
-              <button type="button" className="btn btn-primary btn-lg" onClick={() => onNavigate('demo')}>
-                See the product <span className="arrow">→</span>
-              </button>
-              <button type="button" className="btn btn-outline btn-lg" onClick={() => onNavigate('demo')}>
-                Book a demo
-              </button>
-            </div>
-          </SectionHeading>
-
-          <div className="rounded-[18px] border border-[var(--line)] bg-[var(--bg-2)] p-5">
-            <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.1em] text-[var(--purple)]">Assessment example</div>
-            <h3 className="mt-3 font-[var(--font-display)] text-[32px] leading-[1.02] tracking-[-0.03em]">
-              {showcaseAssessment.title}
-            </h3>
-            <p className="mt-3 max-w-[900px] text-[14px] leading-7 text-[var(--mute)]">
-              {showcaseAssessment.description}
-            </p>
-            <div className="mt-4 flex flex-wrap gap-5 font-[var(--font-mono)] text-[12px] text-[var(--mute)]">
-              <span>{showcaseAssessment.durationLabel}</span>
-              <span>{showcaseAssessment.stack}</span>
-              <span>{showcaseAssessment.tools}</span>
-            </div>
-          </div>
-
-          <div className="mt-6 hidden md:block">
-            <AssessmentRuntimePreviewView
-              className="shadow-[var(--shadow-lg)]"
-              taskName={runtimeShowcase.taskName}
-              taskRole={runtimeShowcase.taskRole}
-              taskContext={runtimeShowcase.taskContext}
-              repoFiles={runtimeShowcase.repoFiles}
-              initialSelectedRepoPath={runtimeShowcase.initialSelectedRepoPath}
-              initialClaudePrompt={runtimeShowcase.initialClaudePrompt}
-              claudeConversation={runtimeShowcase.claudeConversation}
-              output={runtimeShowcase.output}
-            />
-          </div>
-
-          <div className="mt-6 rounded-[18px] border border-dashed border-[var(--line)] bg-[var(--bg-2)] p-6 text-center md:hidden">
-            <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">
-              Live runtime preview
-            </div>
-            <p className="mt-3 text-[14px] leading-6 text-[var(--ink-2)]">
-              The interactive workspace — file tree, editor, terminal, and AI panel — is best viewed on a larger screen.
-            </p>
-            <button
-              type="button"
-              className="btn btn-outline btn-sm mt-5"
-              onClick={() => onNavigate('demo')}
-            >
-              Open the walkthrough <span className="arrow">→</span>
-            </button>
-          </div>
-
-          <div className="mt-6 grid gap-4 md:grid-cols-3">
-            {runtimeSignalCards.map((card) => (
-              <div key={card.title} className="rounded-[18px] border border-[var(--line)] bg-[var(--bg-2)] p-5 shadow-[var(--shadow-sm)]">
-                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.1em] text-[var(--purple)]">{card.title}</div>
-                <p className="mt-3 text-[13px] leading-6 text-[var(--ink-2)]">{card.body}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section id="how-it-works" className="pb-20 md:pb-28">
-        <div className={containerClass}>
-          <SectionHeading
-            kicker="03 · HOW IT WORKS"
-            title={<>From job requirement<br />to <em>confident</em> hire.</>}
-            copy="Four clear steps. Low coordination overhead. Your team keeps the hiring workflow it already uses, while Taali adds the assessment signal underneath it."
-          />
-
-          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-            {howItWorksSteps.map((step) => (
-              <div key={step.step} className="rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg-2)] p-6 shadow-[var(--shadow-sm)]">
-                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple)]">{step.step}</div>
-                <h3 className="mt-4 font-[var(--font-display)] text-[30px] leading-[1.02] tracking-[-0.03em]">{step.title}</h3>
-                <p className="mt-4 text-[14px] leading-7 text-[var(--mute)]">{step.body}</p>
-                <div className="mt-5 rounded-[14px] border border-dashed border-[var(--line)] bg-[var(--bg)] px-4 py-3 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
-                  {step.meta}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </section>
-
-      <section id="proof" className="pb-20 md:pb-28">
-        <div className={containerClass}>
-          <div className="rounded-[var(--radius-xl)] bg-[var(--ink)] px-8 py-10 text-[var(--bg)] shadow-[var(--shadow-lg)] md:px-12 md:py-12">
-            <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--purple-2)]">04 · WHAT&apos;S DIFFERENT</div>
-            <h2 className="mt-4 max-w-[820px] font-[var(--font-display)] text-[clamp(36px,4.8vw,60px)] leading-[0.95] tracking-[-0.04em]">
-              Real stack. Real AI. Every keystroke. <em>Your bar.</em>
-            </h2>
-            <div className="mt-8 grid gap-6 md:grid-cols-2 xl:grid-cols-4">
-              {proofItems.map((item) => (
-                <div key={item.title}>
-                  <div className="text-[42px] font-semibold tracking-[-0.03em] text-[var(--lime)]">{item.title}</div>
-                  <p className="mt-3 text-[15px] leading-7 text-[var(--taali-inverse-text)] opacity-70">{item.body}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="pb-20 md:pb-28">
-        <div className={containerClass}>
-          <div className="relative overflow-hidden rounded-[var(--radius-xl)] border border-[var(--line)] bg-[var(--bg-2)] px-8 py-10 shadow-[var(--shadow-md)] md:grid md:grid-cols-[1fr_320px] md:gap-8 md:px-10 md:py-12">
             <div
-              className="pointer-events-none absolute inset-0 opacity-60 tally-bg-soft"
-              style={{ maskImage: 'radial-gradient(60% 80% at 85% 50%, black, transparent 70%)' }}
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0"
+              style={{ background: 'radial-gradient(600px 280px at 80% 20%, rgba(255,255,255,0.18), transparent 60%)' }}
             />
-            <div className="relative">
-              <div className="kicker">05 · GET STARTED</div>
-              <h3 className="mt-4 font-[var(--font-display)] text-[clamp(34px,4.8vw,58px)] leading-[0.95] tracking-[-0.04em]">
-                See Taali run on a <em>real</em> role of yours.
-              </h3>
-              <p className="mt-4 max-w-[560px] text-[15px] leading-7 text-[var(--mute)]">
-                We&apos;ll walk through the recruiter workflow, reporting surfaces, and settings using a role close to yours, then map the product to your hiring process in about 30 minutes.
-              </p>
-              <div className="mt-6 flex flex-wrap gap-3">
-                <button type="button" className="btn btn-primary btn-lg" onClick={() => onNavigate('demo')}>
-                  Book a demo <span className="arrow">→</span>
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-outline btn-lg"
-                  onClick={() => {
-                    window.location.href = 'mailto:hello@taali.ai?subject=Talk%20to%20founders';
-                  }}
-                >
-                  Talk to founders
-                </button>
+            <div className="relative flex flex-wrap items-center justify-between gap-8">
+              <div>
+                <h2 className="font-[var(--font-display)] text-[clamp(28px,3.6vw,40px)] font-semibold leading-[1.05] tracking-[-0.025em]">
+                  See it work on a real role.
+                </h2>
+                <p className="mt-3 max-w-[520px] text-[16px] leading-[1.55] opacity-85">
+                  No sales call. Tell us who you&apos;d hire next and we&apos;ll spin up a sandbox with your shortlist.
+                </p>
               </div>
-            </div>
-            <div className="relative mt-8 rounded-[var(--radius-lg)] border border-[var(--line)] bg-[var(--bg)] p-5 md:mt-0">
-              <div className="mb-2 text-sm font-semibold">A typical demo</div>
-              {[
-                ['ROLE', 'One of yours, calibrated'],
-                ['PRODUCT', 'Recruiter workflow + reports'],
-                ['DURATION', '~30 min walkthrough'],
-                ['INTEGRATIONS', 'Workable + Fireflies fit'],
-                ['DEBRIEF', 'With a Taali specialist'],
-              ].map(([key, value]) => (
-                <div key={key} className="flex items-center justify-between border-b border-[var(--line-2)] py-3 last:border-b-0">
-                  <span className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">{key}</span>
-                  <span className="text-sm text-[var(--ink-2)]">{value}</span>
-                </div>
-              ))}
+              <button
+                type="button"
+                className="inline-flex h-12 items-center gap-2 rounded-full bg-white px-7 text-[14px] font-semibold text-[var(--purple)]"
+                style={{ boxShadow: '0 10px 28px -8px rgba(0,0,0,0.3)' }}
+                onClick={() => onNavigate('demo-lead')}
+              >
+                Try the live walkthrough →
+              </button>
             </div>
           </div>
         </div>

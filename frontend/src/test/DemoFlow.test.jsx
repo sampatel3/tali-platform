@@ -84,12 +84,14 @@ describe('Demo flow redesign', () => {
     expect(screen.getByRole('heading', { name: /The recruiter's\s*agent\.\s*Built to hire engineers\s*who ship with AI/i })).toBeInTheDocument();
     expect(screen.getByText(/AGENTIC-FIRST/i)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /^Book a demo$/i }).length).toBeGreaterThan(0);
-    expect(screen.getByRole('button', { name: /Try the live walkthrough/i })).toBeInTheDocument();
+    expect(screen.getAllByRole('button', { name: /Try the live walkthrough/i }).length).toBeGreaterThan(0);
     expect(screen.getByText(/Strong hire - recommend on-site/i)).toBeInTheDocument();
-    expect(screen.getByText(/Maya Chen/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Maya Chen/i).length).toBeGreaterThan(0);
     expect(screen.getByRole('heading', { name: /What your\s*candidate\s*actually sees\./i })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /From job requirement\s*to confident\s*hire\./i })).toBeInTheDocument();
-    expect(screen.getByText(/Start from the job requirement\./i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /An autonomous agent in your pipeline/i })).toBeInTheDocument();
+    expect(screen.getByText(/HOW THE AGENT WORKS/i)).toBeInTheDocument();
+    expect(screen.getByText(/We're the only platform that measures it\./i)).toBeInTheDocument();
+    expect(screen.getByText(/AI USAGE TRACE/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'How it works' })).toBeInTheDocument();
   });
 
