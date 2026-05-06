@@ -8,12 +8,15 @@ import cytoscape from 'cytoscape';
 // returned subgraph (Person, Company, School, Skill, Country nodes
 // with WORKED_AT / STUDIED_AT / HAS_SKILL / LOCATED_IN edges).
 
+// Cytoscape renders to <canvas> — it does not resolve CSS custom properties.
+// Keep these literals in sync with the design tokens in colors_and_type.css /
+// :root in index.css (--purple, --ink, --green, --orange, --mute).
 const NODE_COLOR = {
   Person: '#7F39FB',
-  Company: '#1D1730',
+  Company: '#15121a',
   School: '#15A36A',
   Skill: '#D88A1C',
-  Country: '#6E6580',
+  Country: '#8b8595',
 };
 
 const buildElements = (graph) => {
@@ -49,7 +52,7 @@ const STYLE = [
     style: {
       'background-color': (ele) => NODE_COLOR[ele.data('kind')] || '#9E96AE',
       label: 'data(label)',
-      color: '#1D1730',
+      color: '#15121a',
       'font-size': '10px',
       'font-family': 'Geist, Inter, system-ui, sans-serif',
       'text-valign': 'bottom',

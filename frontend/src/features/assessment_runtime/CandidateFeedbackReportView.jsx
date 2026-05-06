@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Download, ExternalLink } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 
 import { BrandLabel, Logo } from '../../shared/ui/Branding';
 import { Badge, Button, Panel, cx } from '../../shared/ui/TaaliPrimitives';
@@ -14,8 +14,6 @@ const clampPercent = (value) => {
 export const CandidateFeedbackReportView = ({
   payload,
   onLinkedInShare = null,
-  onDownloadPdf = null,
-  downloadingPdf = false,
   embedded = false,
 }) => {
   const feedback = payload?.feedback || {};
@@ -40,9 +38,6 @@ export const CandidateFeedbackReportView = ({
   const benchmarkLabel = feedback?.overall_percentile_label
     || (benchmark?.available ? null : 'Benchmark coming soon');
   const handleLinkedInShare = onLinkedInShare || (() => {});
-  const handleDownloadPdf = onDownloadPdf || (() => {});
-
-  const isDownloadDisabled = Boolean(onDownloadPdf) && downloadingPdf;
 
   return (
     <div className={cx(embedded ? 'bg-[var(--taali-bg)]' : 'min-h-screen bg-[var(--taali-bg)]')}>
@@ -73,10 +68,6 @@ export const CandidateFeedbackReportView = ({
               <Button type="button" variant="secondary" size="sm" onClick={handleLinkedInShare}>
                 <ExternalLink size={14} />
                 Share on LinkedIn
-              </Button>
-              <Button type="button" variant="secondary" size="sm" onClick={handleDownloadPdf} disabled={isDownloadDisabled}>
-                <Download size={14} />
-                {downloadingPdf ? 'Preparing PDF...' : 'Download PDF'}
               </Button>
             </div>
           </div>

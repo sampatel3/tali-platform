@@ -105,7 +105,7 @@ const resolvePipelineCardSignal = (application) => {
   if (stage === 'in_assessment') {
     const normalizedStatus = String(application?.status || '').toLowerCase();
     return {
-      label: normalizedStatus.includes('pause') ? '⏸' : '🟢',
+      label: normalizedStatus.includes('pause') ? 'Paused' : 'Live',
       toneClass: '',
     };
   }

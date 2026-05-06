@@ -44,10 +44,10 @@ const SHOWCASE_GRAPH = {
     { id: 'p2', label: 'Person', name: 'Daniel Okafor' },
     { id: 'p3', label: 'Person', name: 'Maya Chen' },
     { id: 'p4', label: 'Person', name: 'Tomás Alvarez' },
-    { id: 'c1', label: 'Company', name: 'Stripe' },
-    { id: 'c2', label: 'Company', name: 'Airbnb' },
-    { id: 'c3', label: 'Company', name: 'Brex' },
-    { id: 'c4', label: 'Company', name: 'Helix Health' },
+    { id: 'c1', label: 'Company', name: 'Helix Pay' },
+    { id: 'c2', label: 'Company', name: 'Wander' },
+    { id: 'c3', label: 'Company', name: 'Ledger' },
+    { id: 'c4', label: 'Company', name: 'Caldera Health' },
     { id: 's1', label: 'Skill', name: 'Postgres' },
     { id: 's2', label: 'Skill', name: 'Python' },
     { id: 's3', label: 'Skill', name: 'Distributed systems' },
@@ -146,7 +146,7 @@ const SHOWCASE_MESSAGES = [
       'Looking across your candidates for anyone who worked at a YC company and has hands-on Postgres.',
     tool: SHOWCASE_TOOL_PART,
     tailText:
-      "**14 candidates** match. Top hits all have hands-on Postgres in production at a YC-backed company. **Priya Raman** is the strongest signal — Stripe + Helix Health, Postgres-heavy infra ownership.\n\nWant me to compare the top three side-by-side, or open Priya's standing report?",
+      "**14 candidates** match. Top hits all have hands-on Postgres in production at a YC-backed company. **Priya Raman** is the strongest signal — Helix Pay + Caldera Health, Postgres-heavy infra ownership.\n\nWant me to compare the top three side-by-side, or open Priya's standing report?",
   },
 ];
 

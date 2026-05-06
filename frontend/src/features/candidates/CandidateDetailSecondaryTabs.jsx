@@ -1,11 +1,13 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
   MessageSquare,
   PlayCircle,
   StickyNote,
   TerminalSquare,
+  X,
 } from 'lucide-react';
 import {
   ResponsiveContainer,
@@ -248,7 +250,9 @@ export const CandidateCvFitTab = ({
           <div className="space-y-3 font-mono text-sm">
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <span>{sourceRecord.cv_uploaded || sourceRecord.cv_filename ? '✅' : '❌'}</span>
+                {sourceRecord.cv_uploaded || sourceRecord.cv_filename
+                  ? <Check size={15} className="text-[var(--taali-success)]" aria-label="Uploaded" />
+                  : <X size={15} className="text-[var(--taali-muted)]" aria-label="Not uploaded" />}
                 <span>CV: {sourceRecord.candidate_cv_filename || sourceRecord.cv_filename || 'Not uploaded'}</span>
               </div>
               {(sourceRecord.candidate_cv_filename || sourceRecord.cv_filename) ? (
@@ -264,7 +268,9 @@ export const CandidateCvFitTab = ({
             </div>
             <div className="flex items-center justify-between gap-3">
               <div className="flex items-center gap-3">
-                <span>{sourceRecord.candidate_job_spec_filename || sourceRecord.role_job_spec_filename ? '✅' : '❌'}</span>
+                {sourceRecord.candidate_job_spec_filename || sourceRecord.role_job_spec_filename
+                  ? <Check size={15} className="text-[var(--taali-success)]" aria-label="Uploaded" />
+                  : <X size={15} className="text-[var(--taali-muted)]" aria-label="Not uploaded" />}
                 <span>Job Specification: {sourceRecord.candidate_job_spec_filename || sourceRecord.role_job_spec_filename || 'Not uploaded'}</span>
               </div>
               {(sourceRecord.candidate_job_spec_filename || sourceRecord.role_job_spec_filename) ? (

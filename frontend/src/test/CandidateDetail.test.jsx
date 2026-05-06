@@ -808,7 +808,6 @@ describe('CandidateDetailPage', () => {
     expect(screen.getByRole('button', { name: /Decision Advance/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Decision Hold/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Decision Reject/i })).toBeInTheDocument();
-    expect(screen.getByText('Download report')).toBeInTheDocument();
   });
 
   it('evaluate tab saves the recruiter evaluation payload', async () => {
@@ -866,39 +865,6 @@ describe('CandidateDetailPage', () => {
         })
       );
     });
-  });
-
-  it('Download report action calls report API and downloads the PDF', async () => {
-    assessmentsApi.downloadReport.mockResolvedValue({
-      data: new Blob(['pdf-content']),
-      headers: { 'content-type': 'application/pdf' },
-    });
-    const createObjectUrlMock = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:report');
-    const revokeObjectUrlMock = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
-    const originalCreateElement = document.createElement.bind(document);
-    const anchor = originalCreateElement('a');
-    const clickMock = vi.spyOn(anchor, 'click').mockImplementation(() => {});
-    const createElementMock = vi.spyOn(document, 'createElement').mockImplementation((tagName, options) => {
-      if (String(tagName).toLowerCase() === 'a') {
-        return anchor;
-      }
-      return originalCreateElement(tagName, options);
-    });
-
-    await renderCandidateDetail();
-    fireEvent.click(screen.getByRole('tab', { name: /Evaluate/i }));
-
-    fireEvent.click(screen.getByText('Download report'));
-
-    await waitFor(() => {
-      expect(assessmentsApi.downloadReport).toHaveBeenCalledWith(1);
-      expect(createObjectUrlMock).toHaveBeenCalled();
-      expect(clickMock).toHaveBeenCalled();
-    });
-
-    createElementMock.mockRestore();
-    createObjectUrlMock.mockRestore();
-    revokeObjectUrlMock.mockRestore();
   });
 
   it('Delete button exists and calls remove API after confirm', async () => {
@@ -993,33 +959,6 @@ describe('CandidateDetailPage', () => {
       expect(screen.getByText('taali@fireflies.ai')).toBeInTheDocument();
       expect(screen.getByRole('link', { name: 'Open transcript source' })).toBeInTheDocument();
     });
-  });
-
-  it('downloads the client report for pre-assessment candidates from the application route', async () => {
-    const createObjectUrlMock = vi.spyOn(URL, 'createObjectURL').mockReturnValue('blob:pending-report');
-    const revokeObjectUrlMock = vi.spyOn(URL, 'revokeObjectURL').mockImplementation(() => {});
-    const originalCreateElement = document.createElement.bind(document);
-    const anchor = originalCreateElement('a');
-    const clickMock = vi.spyOn(anchor, 'click').mockImplementation(() => {});
-    const createElementMock = vi.spyOn(document, 'createElement').mockImplementation((tagName, options) => {
-      if (String(tagName).toLowerCase() === 'a') {
-        return anchor;
-      }
-      return originalCreateElement(tagName, options);
-    });
-
-    await renderPendingCandidateDetail();
-    fireEvent.click(screen.getAllByRole('button', { name: 'Download report' })[0]);
-
-    await waitFor(() => {
-      expect(rolesApi.downloadApplicationReport).toHaveBeenCalledWith(12);
-      expect(createObjectUrlMock).toHaveBeenCalled();
-      expect(clickMock).toHaveBeenCalled();
-    });
-
-    createElementMock.mockRestore();
-    createObjectUrlMock.mockRestore();
-    revokeObjectUrlMock.mockRestore();
   });
 
   it('renders assessment metadata in results tab', async () => {

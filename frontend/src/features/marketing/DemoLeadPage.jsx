@@ -58,9 +58,9 @@ export const DemoLeadPage = ({ onNavigate }) => {
           <span style={{ color: 'var(--ink-2)' }}>No sales call.</span>
         </h1>
         <p className="mc-demo-lead-sub">
-          We'll spin up a sandbox seeded with the Senior Backend Engineer role at Stripe. You'll watch the
-          agent triage candidates autonomously, then open a real AI-native assessment — the IDE, the
-          prompts, the fluency score — exactly as your hiring manager would see it.
+          We'll spin up a sandbox seeded with a Senior Backend Engineer role and a shortlist of sample
+          candidates. You'll watch the agent triage them autonomously, then open a real AI-native
+          assessment — the IDE, the prompts, the fluency score — exactly as your hiring manager would see it.
         </p>
         <ol className="mc-demo-lead-steps">
           {STEPS.map(({ n, t, d }) => (
@@ -94,7 +94,7 @@ export const DemoLeadPage = ({ onNavigate }) => {
             label="Company"
             name="company"
             autoComplete="organization"
-            placeholder="Linear"
+            placeholder="Your company"
             value={form.company}
             onChange={update('company')}
           />

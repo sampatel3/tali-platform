@@ -1,4 +1,5 @@
 import React from 'react';
+import { AlertTriangle } from 'lucide-react';
 
 export const AssessmentRuntimeAlerts = ({
   showTabWarning,
@@ -27,8 +28,9 @@ export const AssessmentRuntimeAlerts = ({
 
     {proctoringEnabled && (
       <div className="border-b border-[var(--taali-warning-border)] bg-[var(--taali-warning-soft)] p-2 text-center">
-        <span className="font-mono text-xs font-bold text-[var(--taali-warning)]">
-          ⚠ This assessment is proctored — tab switches and browser focus are being recorded
+        <span className="inline-flex items-center justify-center gap-1.5 font-mono text-xs font-bold text-[var(--taali-warning)]">
+          <AlertTriangle size={13} aria-hidden="true" />
+          This assessment is proctored — tab switches and browser focus are being recorded
         </span>
       </div>
     )}
