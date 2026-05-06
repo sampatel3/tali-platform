@@ -762,7 +762,7 @@ export const AssessmentResultsPage = ({
       '## Probing Questions',
     ];
     (debrief.probing_questions || []).forEach((item) => {
-      lines.push(`### ${item.dimension || 'Dimension'} (${item.score ?? 'N/A'}/10)`);
+      lines.push(`### ${item.dimension || 'Dimension'} (${item.score ?? 'N/A'}/100)`);
       if (item.pattern) lines.push(item.pattern);
       if (item.question) lines.push(`- Question: ${item.question}`);
       if (item.what_to_listen_for) lines.push(`- What to listen for: ${item.what_to_listen_for}`);
@@ -1418,7 +1418,7 @@ export const AssessmentResultsPage = ({
                         <div className="min-w-0">
                           <div className="font-medium text-[var(--taali-text)]">{option.name}</div>
                           <div className="font-mono text-xs text-[var(--taali-muted)]">
-                            {option.task}{option.role ? ` · ${option.role}` : ''}{option.score != null ? ` · ${option.score}/10` : ''}
+                            {option.task}{option.role ? ` · ${option.role}` : ''}{option.score != null ? ` · ${option.score}/100` : ''}
                           </div>
                         </div>
                       </label>

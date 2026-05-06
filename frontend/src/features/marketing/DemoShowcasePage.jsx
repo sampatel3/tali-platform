@@ -66,7 +66,7 @@ const SHOWCASE_TABS = [
   {
     k: 'chat',
     n: '04',
-    label: 'Plain-English chat',
+    label: 'Plain-English search',
     sub: 'Query your pipeline in english',
     src: '/showcase/chat',
     urlLabel: 'taali.ai/chat · plain-English candidate search',

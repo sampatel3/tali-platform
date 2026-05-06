@@ -24,9 +24,12 @@ import { TaaliTile } from '../ui/Branding';
 import { AgentBar } from './AgentBar';
 import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 
+// Nav: "Search" replaces the v3 "Chat" label — same NL-over-everything
+// surface, keeps the same `id: chat` and `/chat` route to preserve deep
+// links and badge ("AI") so the entry point stays visually unchanged.
 const NAV_TABS = [
   { id: 'jobs',      label: 'Jobs',      Icon: Briefcase },
-  { id: 'chat',      label: 'Chat',      Icon: MessageSquare, badge: 'AI' },
+  { id: 'chat',      label: 'Search',    Icon: MessageSquare, badge: 'AI' },
   { id: 'tasks',     label: 'Tasks',     Icon: CheckSquare },
   { id: 'reporting', label: 'Reporting', Icon: LineChart },
   { id: 'settings',  label: 'Settings',  Icon: SettingsIcon },

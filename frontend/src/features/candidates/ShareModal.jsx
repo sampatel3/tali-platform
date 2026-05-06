@@ -19,10 +19,14 @@ const EXPIRY_OPTIONS = [
   { value: 'single', label: 'Single view, then expires' },
 ];
 
-// ShareModal — MVP single-link with rotate. Reuses the existing
-// CandidateApplication.report_share_token. The expiry picker is rendered
-// disabled with a "coming soon" hint until the multi-link backend ships
-// (see plan for the share_links table).
+// ShareModal — single-link MVP backed by
+// CandidateApplication.report_share_token. Surfaces the canvas-spec
+// 4-option expiry picker (7d / 24h / 30d / single-view) + 2-mode toggle
+// (client / recruiter), and a Rotate control that revokes the
+// previous link in place. The full multi-link contract from HANDOFF v2
+// §3 (share_links table + per-link revoke + active-link list in the
+// report footer) is the next iteration; the picker UI is already
+// canvas-aligned so swapping the backend is purely additive.
 export const ShareModal = ({ open, onClose, applicationId, initialToken }) => {
   const [token, setToken] = useState(initialToken || '');
   const [mode, setMode] = useState('client');
