@@ -14,7 +14,13 @@ import {
   YAxis,
 } from 'recharts';
 
-import { assessments as assessmentsApi, analytics as analyticsApi, roles as rolesApi, tasks as tasksApi } from '../../shared/api';
+import {
+  agent as agentApi,
+  assessments as assessmentsApi,
+  analytics as analyticsApi,
+  roles as rolesApi,
+  tasks as tasksApi,
+} from '../../shared/api';
 import { getCategoryScoresFromAssessment } from '../../lib/comparisonCategories';
 import { dimensionOrder, getDimensionById } from '../../scoring/scoringDimensions';
 import { PageHero } from '../../shared/layout/PageHero';
@@ -76,6 +82,15 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
     score_buckets: [],
     dimension_averages: {},
   });
+  // Agent decisions feed for the canvas-spec "Decisions feed" panel
+  // (HANDOFF v2 §6 / canvas reporting-v2). Pulls every consequential
+  // action — advance / reject / flag / pause / invite — sorted newest
+  // first. Also drives the Auto-advanced and Auto-rejected KPI tiles.
+  const [agentDecisions, setAgentDecisions] = useState([]);
+  // Live org spend rollup for the canvas-spec "Org spend" KPI tile.
+  // Fans out across active roles (capped at 20) using the same
+  // /roles/{id}/agent/status endpoint AgentBar consumes.
+  const [orgSpend, setOrgSpend] = useState({ spent_cents: 0, budget_cents: 0 });
 
   useEffect(() => {
     let cancelled = false;
@@ -88,6 +103,61 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
         setTasks(Array.isArray(tasksRes.value?.data) ? tasksRes.value.data : []);
       }
     });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Agent decisions feed — canvas reporting-v2 spec.
+  useEffect(() => {
+    let cancelled = false;
+    agentApi.listDecisions({ limit: 30 })
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res?.data) ? res.data : [];
+        setAgentDecisions(list);
+      })
+      .catch(() => {
+        if (!cancelled) setAgentDecisions([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [roleFilter]);
+
+  // Org spend rollup — sum monthly_spent_cents + monthly_budget_cents
+  // across agent-enabled roles (capped at 20). Mirrors the AgentBar
+  // fan-out so the Org spend KPI shows the same number recruiters see
+  // in the global header.
+  useEffect(() => {
+    let cancelled = false;
+    rolesApi.list()
+      .then(async (rolesRes) => {
+        const allRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
+        const targets = allRoles
+          .filter((role) => role?.agentic_mode_enabled)
+          .slice(0, 20);
+        if (targets.length === 0) {
+          if (!cancelled) setOrgSpend({ spent_cents: 0, budget_cents: 0 });
+          return;
+        }
+        const settled = await Promise.allSettled(
+          targets.map((role) => agentApi.status(role.id)),
+        );
+        if (cancelled) return;
+        let spent = 0;
+        let budget = 0;
+        settled.forEach((entry) => {
+          if (entry.status !== 'fulfilled') return;
+          const d = entry.value?.data || {};
+          spent += Number(d.monthly_spent_cents || 0);
+          budget += Number(d.monthly_budget_cents || 0);
+        });
+        setOrgSpend({ spent_cents: spent, budget_cents: budget });
+      })
+      .catch(() => {
+        if (!cancelled) setOrgSpend({ spent_cents: 0, budget_cents: 0 });
+      });
     return () => {
       cancelled = true;
     };
@@ -351,51 +421,155 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
               <p>{narrative}</p>
             </section>
 
-            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-              <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Decisions made</div>
-                <div className="text-2xl font-bold text-[var(--taali-text)]">{data.total_assessments}</div>
-              </Panel>
-              <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Completed</div>
-                <div className="text-2xl font-bold text-[var(--taali-purple)]">{data.completed_count}</div>
-              </Panel>
-              <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Avg score</div>
-                <div className="text-2xl font-bold text-[var(--taali-text)]">
-                  {data.avg_score != null
-                    ? <>{Math.round(Number(data.avg_score) * 10)} <span className="text-base font-normal text-[var(--taali-muted)]">/ 100</span></>
-                    : '—'}
+            {/* HANDOFF v2 / canvas reporting-v2 — KPI row matches the
+                canvas: Decisions made / Auto-advanced / Auto-rejected /
+                Org spend. Auto-advanced + Auto-rejected pull from the
+                agent decisions feed; Org spend pulls from the rolled-up
+                agent/status fan-out. */}
+            {(() => {
+              const autoAdvanced = agentDecisions.filter((d) => {
+                const t = String(d?.decision_type || '').toLowerCase();
+                return (t === 'advance' || t === 'auto_advance') && String(d?.status || '').toLowerCase() !== 'pending';
+              }).length;
+              const autoRejected = agentDecisions.filter((d) => {
+                const t = String(d?.decision_type || '').toLowerCase();
+                return (t === 'reject' || t === 'auto_reject') && String(d?.status || '').toLowerCase() !== 'pending';
+              }).length;
+              const flaggedBorderlines = agentDecisions.filter((d) => {
+                const t = String(d?.decision_type || '').toLowerCase();
+                return t === 'flag' || t === 'borderline';
+              }).length;
+              const dollars = (cents) => {
+                const n = Number(cents || 0) / 100;
+                return n >= 100 ? `$${Math.round(n)}` : `$${n.toFixed(0)}`;
+              };
+              const overBudget = orgSpend.budget_cents > 0 && orgSpend.spent_cents > orgSpend.budget_cents;
+              const overPct = orgSpend.budget_cents > 0
+                ? Math.round(((orgSpend.spent_cents - orgSpend.budget_cents) / orgSpend.budget_cents) * 100)
+                : 0;
+              return (
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+                  <Panel className="p-4">
+                    <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Decisions made</div>
+                    <div className="text-2xl font-bold text-[var(--taali-text)]">{data.total_assessments + agentDecisions.length}</div>
+                    <div className="mt-1 text-[12px] text-[var(--taali-muted)]">
+                      Across CV scoring + agent actions
+                    </div>
+                  </Panel>
+                  <Panel className="p-4">
+                    <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Auto-advanced</div>
+                    <div className="text-2xl font-bold text-[var(--taali-purple)]">
+                      <em style={{ fontStyle: 'normal' }}>{autoAdvanced}</em>
+                    </div>
+                    <div className="mt-1 text-[12px] text-[var(--taali-muted)]">
+                      {flaggedBorderlines > 0 ? `+${flaggedBorderlines} borderline${flaggedBorderlines === 1 ? '' : 's'} flagged` : 'No borderlines flagged'}
+                    </div>
+                  </Panel>
+                  <Panel className="p-4">
+                    <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Auto-rejected</div>
+                    <div className="text-2xl font-bold text-[var(--taali-text)]">{autoRejected}</div>
+                    <div className="mt-1 text-[12px] text-[var(--taali-muted)]">All below role threshold</div>
+                  </Panel>
+                  <Panel className="p-4">
+                    <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">
+                      Org spend{orgSpend.budget_cents > 0 ? ` (vs ${dollars(orgSpend.budget_cents)} cap)` : ''}
+                    </div>
+                    <div className="text-2xl font-bold text-[var(--taali-text)]">
+                      {dollars(orgSpend.spent_cents)}
+                      {orgSpend.budget_cents > 0 ? (
+                        <span className="text-base font-normal text-[var(--taali-muted)]"> / {dollars(orgSpend.budget_cents)}</span>
+                      ) : null}
+                    </div>
+                    <div
+                      className="mt-1 text-[12px]"
+                      style={{ color: overBudget ? 'var(--amber)' : 'var(--taali-muted)' }}
+                    >
+                      {orgSpend.budget_cents === 0
+                        ? 'No agent-enabled roles yet'
+                        : overBudget
+                          ? `${overPct}% over · review per-role caps`
+                          : 'Within budget'}
+                    </div>
+                  </Panel>
                 </div>
-              </Panel>
-              <Panel className="p-4">
-                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Completion rate</div>
-                <div className="text-2xl font-bold text-[var(--taali-text)]">{safeNumber(data.completion_rate).toFixed(1)}%</div>
-              </Panel>
-            </div>
+              );
+            })()}
 
             <div className="grid gap-5 lg:grid-cols-[1.3fr_1fr]">
+              {/* HANDOFF v2 / canvas reporting-v2 — left column is a
+                  reverse-chrono "Decisions feed" of every consequential
+                  action the agent took. Replaces the legacy weekly-rate
+                  bar chart, which was deferred to a separate analytics
+                  drill-in per the canvas. */}
               <Panel className="p-4">
-                <h2 className="mb-1 font-bold text-base">Completion rate trend</h2>
-                <p className="mb-3 text-[12.5px] text-[var(--mute)]">Weekly close rate across the selected range.</p>
-                <div className="h-[260px]">
-                  <ResponsiveContainer>
-                    <BarChart data={weekly}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="var(--taali-border-muted)" />
-                      <XAxis dataKey="week" tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
-                      <YAxis domain={[0, 100]} tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
-                      <Tooltip
-                        contentStyle={{
-                          background: 'var(--taali-surface-elevated)',
-                          border: '1px solid var(--taali-border-soft)',
-                          borderRadius: '16px',
-                          color: 'var(--taali-text)',
-                        }}
-                      />
-                      <Bar dataKey="rate" fill="var(--taali-purple)" />
-                    </BarChart>
-                  </ResponsiveContainer>
-                </div>
+                <h2 className="mb-1 font-bold text-base">Decisions feed</h2>
+                <p className="mb-3 text-[12.5px] text-[var(--mute)]">
+                  A reverse-chronological log of every consequential action.
+                </p>
+                {agentDecisions.length === 0 ? (
+                  <div className="mc-decisions-empty" style={{ padding: '24px 4px', textAlign: 'left', color: 'var(--mute)', fontSize: 13 }}>
+                    No agent decisions in this window yet. Once the agent advances, rejects, or
+                    flags a candidate, every action lands here with the reasoning attached.
+                  </div>
+                ) : (
+                  <div className="mc-decisions-feed">
+                    {agentDecisions.slice(0, 8).map((decision) => {
+                      const type = String(decision?.decision_type || '').toLowerCase();
+                      const kind = type.includes('advance') ? 'advance'
+                        : type.includes('reject') ? 'reject'
+                        : type.includes('flag') ? 'flag'
+                        : type.includes('pause') ? 'pause'
+                        : type.includes('invite') ? 'invite'
+                        : 'action';
+                      const tone = kind === 'advance' ? 'var(--taali-success)'
+                        : kind === 'reject' ? 'var(--red, #dc2626)'
+                        : kind === 'flag' ? 'var(--amber, #f59e0b)'
+                        : kind === 'pause' ? 'var(--mute)'
+                        : 'var(--purple)';
+                      const verb = decision?.recommendation
+                        || (kind === 'advance' ? 'Advanced candidate'
+                          : kind === 'reject' ? 'Rejected candidate'
+                          : kind === 'flag' ? 'Flagged candidate'
+                          : kind === 'pause' ? 'Paused agent'
+                          : kind === 'invite' ? 'Sent invitation'
+                          : 'Recorded action');
+                      const candName = decision?.candidate_name || 'Candidate';
+                      const created = decision?.created_at;
+                      const ago = (() => {
+                        if (!created) return '';
+                        const diffMs = Date.now() - new Date(created).getTime();
+                        if (Number.isNaN(diffMs)) return '';
+                        const m = Math.round(diffMs / 60000);
+                        if (m < 1) return 'just now';
+                        if (m < 60) return `${m}m ago`;
+                        const h = Math.round(m / 60);
+                        if (h < 24) return `${h}h ago`;
+                        return `${Math.round(h / 24)}d ago`;
+                      })();
+                      return (
+                        <div
+                          key={decision.id || `${decision.created_at}-${decision.application_id}`}
+                          className="mc-decisions-row"
+                        >
+                          <span className="mc-decisions-row-time">{ago}</span>
+                          <span
+                            className="mc-decisions-row-dot"
+                            style={{ background: `color-mix(in oklab, ${tone} 22%, transparent)`, color: tone }}
+                            aria-hidden="true"
+                          />
+                          <div>
+                            <div className="mc-decisions-row-title">
+                              {kind === 'advance' || kind === 'reject' ? `${verb}${candName !== 'Candidate' ? ` · ${candName}` : ''}` : verb}
+                            </div>
+                            <div className="mc-decisions-row-body">
+                              {decision?.reasoning || '—'}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
               </Panel>
 
               <div className="flex flex-col gap-4">
