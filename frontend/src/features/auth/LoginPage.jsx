@@ -142,7 +142,7 @@ export const LoginPage = ({ onNavigate }) => {
           New here?{' '}
           <button
             type="button"
-            onClick={() => onNavigate('demo')}
+            onClick={() => onNavigate('demo-lead')}
             style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
           >
             Book a demo

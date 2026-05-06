@@ -73,7 +73,7 @@ export const VerifyEmailPage = ({ onNavigate, token }) => {
             <button type="button" className="mc-auth-cta mc-auth-cta-outline" onClick={() => onNavigate('settings-workable')}>
               Connect Workable →
             </button>
-            <button type="button" className="mc-auth-cta mc-auth-cta-outline" onClick={() => onNavigate('demo')}>
+            <button type="button" className="mc-auth-cta mc-auth-cta-outline" onClick={() => onNavigate('showcase')}>
               Take the 2-min tour →
             </button>
           </div>
