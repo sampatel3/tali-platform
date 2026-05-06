@@ -86,8 +86,9 @@ describe('assessmentViewModels', () => {
       completedAssessment: null,
     });
 
-    expect(model.summaryText).toBe('Composite fit 74.2 from skills 78.8.');
-    expect(model.rationaleBullets).toContain('Composite fit 74.2 from skills 78.8, experience 71.5, recruiter requirements 69.0.');
+    // HANDOFF v2 §6 — scores normalised to integer "nn / 100".
+    expect(model.summaryText).toBe('Composite fit 74 / 100 from skills 79 / 100.');
+    expect(model.rationaleBullets).toContain('Composite fit 74 / 100 from skills 79 / 100, experience 72 / 100, recruiter requirements 69 / 100.');
     expect(model.rationaleBullets).toContain('Prompt rubric stayed at 8.0/10 for communication quality.');
   });
 

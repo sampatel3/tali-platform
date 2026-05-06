@@ -7,7 +7,8 @@ import { toCvScore100 } from './candidatesUiUtils';
 const formatInnerValue = (value) => {
   const numeric = Number(value);
   if (!Number.isFinite(numeric)) return '—';
-  return numeric.toFixed(1);
+  // HANDOFF v2 §6 — integer 0–100, no decimals.
+  return String(Math.round(numeric));
 };
 
 export function CandidateScoreRing({

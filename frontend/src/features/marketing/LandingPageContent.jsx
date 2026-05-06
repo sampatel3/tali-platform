@@ -356,8 +356,8 @@ export const LandingPage = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* WE MEASURE HOW CANDIDATES USE AI — the differentiator (white bg) */}
-      <section id="platform" className="border-t border-[var(--line)] bg-[var(--bg)]">
+      {/* WE MEASURE HOW CANDIDATES USE AI — the differentiator (white bg per HANDOFF v2 §1) */}
+      <section id="platform" className="border-t border-[var(--line)] bg-white">
         <div className={`${containerClass} py-20`}>
           <div className="grid gap-16 lg:grid-cols-[1fr_1.1fr] lg:items-center">
             <div>

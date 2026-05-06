@@ -696,7 +696,8 @@ describe('CandidateDetailPage', () => {
     await waitFor(() => {
       expect(screen.getAllByText('Summary').length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText('Why this score').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText(/Composite fit 74\.2/).length).toBeGreaterThanOrEqual(1);
+      // HANDOFF v2 §6 — scores rendered as integer "nn / 100".
+      expect(screen.getAllByText(/Composite fit 74 \/ 100/).length).toBeGreaterThanOrEqual(1);
       expect(screen.getAllByText(/Recruiter requirements coverage: 2\/3 met/).length).toBeGreaterThanOrEqual(1);
     });
   });
