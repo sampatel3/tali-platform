@@ -9293,3 +9293,71 @@ button.eng-badge-button:focus-visible {
   margin-top: 5px;
 }
 
+/* ================== CANDIDATE REPORT SNAPSHOT — Phase 6.3 ================== */
+
+.mc-report-snapshot {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 28px 32px;
+  margin-bottom: 18px;
+  align-items: center;
+}
+
+@media (min-width: 880px) {
+  .mc-report-snapshot { grid-template-columns: auto 1fr; }
+}
+
+.mc-report-snapshot-score {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+}
+
+.mc-report-snapshot-score-empty {
+  width: 140px;
+  height: 140px;
+  border-radius: 50%;
+  border: 2px dashed var(--line);
+  display: grid;
+  place-items: center;
+  font-size: 12px;
+  color: var(--mute);
+  text-align: center;
+  padding: 8px;
+}
+
+.mc-report-snapshot-score-meta { display: flex; flex-direction: column; gap: 4px; }
+
+.mc-report-snapshot-score-label {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+
+.mc-report-snapshot-radar {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.mc-report-snapshot-radar-empty {
+  max-width: 420px;
+  font-size: 13px;
+  color: var(--mute);
+  line-height: 1.55;
+  text-align: center;
+  padding: 16px;
+  border: 1px dashed var(--line);
+  border-radius: 14px;
+}
+
+.mc-report-snapshot-radar-empty p { margin: 0 0 6px; }
+.mc-report-snapshot-radar-empty p:last-child { margin: 0; }
+.mc-report-snapshot-radar-empty b { color: var(--ink); }
+

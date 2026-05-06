@@ -16,6 +16,9 @@ import {
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import { ShareModal } from './ShareModal';
 import { buildClientReportFilenameStem } from './clientReportUtils';
+import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
+import { RadarChart } from '../../shared/ui/RadarChart';
+import { ScoreRing } from '../../shared/ui/ScoreRing';
 import { buildStandingCandidateReportModel, COMPLETED_ASSESSMENT_STATUSES } from './assessmentViewModels';
 import {
   getErrorMessage,
@@ -1474,6 +1477,46 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         </div>
 
         <div className={`pane ${activeTab === 'overview' ? 'active' : ''}`} data-p="overview">
+        {(() => {
+          const fluencyAxes = computeFluencyAxes(completedAssessment);
+          const compositeScore = (() => {
+            if (Number.isFinite(Number(completedAssessment?.score))) {
+              const s = Number(completedAssessment.score);
+              return s <= 10 ? s * 10 : s;
+            }
+            if (Number.isFinite(Number(application?.cv_match_score))) return Number(application.cv_match_score);
+            return null;
+          })();
+          if (compositeScore == null && !fluencyAxes) return null;
+          return (
+            <div className="mc-report-snapshot">
+              <div className="mc-report-snapshot-score">
+                {compositeScore != null ? (
+                  <ScoreRing score={Math.round(compositeScore)} size={140} />
+                ) : (
+                  <div className="mc-report-snapshot-score-empty">Score pending</div>
+                )}
+                <div className="mc-report-snapshot-score-meta">
+                  <div className="mc-kicker">COMPOSITE · 0–100</div>
+                  <div className="mc-report-snapshot-score-label">
+                    {reportModel?.recommendation?.label || 'Standing report'}
+                  </div>
+                </div>
+              </div>
+              <div className="mc-report-snapshot-radar">
+                <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>AI FLUENCY · 6 DIMENSIONS</div>
+                {fluencyAxes ? (
+                  <RadarChart values={fluencyAxes} max={10} size={260} />
+                ) : (
+                  <div className="mc-report-snapshot-radar-empty">
+                    <p><b>Scoring pending.</b></p>
+                    <p>The fluency radar fills in once the candidate finishes the assessment runtime — we roll up prompt quality, error recovery, context utilization, independence, design thinking, and written communication into the six canvas axes.</p>
+                  </div>
+                )}
+              </div>
+            </div>
+          );
+        })()}
         <div className="report-body">
           <div>
             <div className="report-card">
