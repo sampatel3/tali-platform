@@ -3,7 +3,7 @@ import { AlertTriangle, CheckCircle, Mail } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { auth } from '../../shared/api';
-import { FlowLayout, AuthCard } from './AuthLayout';
+import { AuthShell, AuthField } from './AuthShell';
 
 export const RegisterPage = ({ onNavigate }) => {
   const { register } = useAuth();
@@ -79,99 +79,149 @@ export const RegisterPage = ({ onNavigate }) => {
     }
   };
 
-  return (
-    <FlowLayout onNavigate={onNavigate} activePane="register">
-      {success ? (
-        <AuthCard
-          kicker="VERIFY EMAIL"
-          title={<>Check your inbox<em>.</em></>}
-          subtitle="We sent a verification link to your work email."
-          widthClassName="max-w-[560px]"
-        >
-          <div className="mb-6 flex items-start gap-4 rounded-[14px] border border-[color-mix(in_oklab,var(--green)_30%,var(--line))] bg-[color-mix(in_oklab,var(--green)_10%,var(--bg-2))] p-5">
-            <div className="grid h-9 w-9 place-items-center rounded-[10px] bg-[var(--green)] text-[var(--taali-inverse-text)]">
-              <Mail size={18} />
-            </div>
-            <div>
-              <p className="text-[15px] font-semibold text-[var(--ink)]">{form.email}</p>
-              <p className="mt-1 text-[13px] leading-6 text-[var(--ink-2)]">Click the link in the email to activate your account. The link expires in 24 hours.</p>
-            </div>
+  if (success) {
+    return (
+      <AuthShell
+        kicker="VERIFY EMAIL"
+        title="Check your inbox"
+        sub="We sent a verification link to your work email."
+      >
+        <div className="mc-auth-success-card" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: 16 }}>
+          <div
+            style={{
+              width: 36,
+              height: 36,
+              borderRadius: 10,
+              background: 'var(--green)',
+              color: '#fff',
+              display: 'grid',
+              placeItems: 'center',
+              flexShrink: 0,
+            }}
+          >
+            <Mail size={16} strokeWidth={1.8} />
           </div>
-          <div className="flex flex-col gap-3">
-            <button type="button" className="btn btn-purple btn-lg w-full justify-center" onClick={() => onNavigate('login')}>
-              Go to sign in <span className="arrow">→</span>
-            </button>
-            <button type="button" className="btn btn-outline btn-lg w-full justify-center" onClick={handleResend} disabled={resending}>
-              {resending ? 'Sending...' : resent ? <><CheckCircle size={16} /> Sent</> : 'Resend verification email'}
-            </button>
+          <div>
+            <p style={{ margin: 0, fontSize: 15, fontWeight: 600, color: 'var(--ink)' }}>{form.email}</p>
+            <p style={{ margin: '4px 0 0', fontSize: 13, lineHeight: 1.5, color: 'var(--ink-2)' }}>
+              Click the link in the email to activate your account. The link expires in 24 hours.
+            </p>
           </div>
-        </AuthCard>
-      ) : (
-        <AuthCard
-          kicker="CREATE ACCOUNT"
-          title={<>Start hiring with <em>evidence</em>.</>}
-          subtitle="90 seconds to set up. No credit card. $1.50 of free credits — try the full platform."
-          widthClassName="max-w-[560px]"
-        >
-          {error ? (
-            <div className="mb-5 flex items-center gap-2 rounded-[14px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-4">
-              <AlertTriangle size={18} className="shrink-0 text-[var(--taali-danger)]" />
-              <span className="text-sm text-[var(--ink)]">{error}</span>
-            </div>
-          ) : null}
-
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="field md:col-span-2">
-              <span className="k">Work email</span>
-              <input type="email" placeholder="you@company.com" value={form.email} onChange={updateField('email')} />
-              <span className="mt-1 block text-[11.5px] text-[var(--mute)]">We&apos;ll use your domain to find teammates to invite.</span>
-            </label>
-            <label className="field">
-              <span className="k">Full name</span>
-              <input type="text" placeholder="Sam Patel" value={form.full_name} onChange={updateField('full_name')} />
-            </label>
-            <label className="field">
-              <span className="k">Company</span>
-              <input type="text" placeholder="Deeplight AI" value={form.organization_name} onChange={updateField('organization_name')} />
-            </label>
-            <label className="field md:col-span-2">
-              <span className="k">Password</span>
-              <input
-                type="password"
-                placeholder="••••••••"
-                value={form.password}
-                onChange={updateField('password')}
-                onKeyDown={(e) => e.key === 'Enter' && handleRegister()}
-              />
-              <div className="mt-2 flex gap-1">
-                {[1, 2, 3, 4, 5].map((step) => (
-                  <i
-                    key={step}
-                    className="block h-1 flex-1 rounded-[2px]"
-                    style={{ background: step <= Math.min(4, Math.floor(form.password.length / 3)) ? 'var(--purple)' : 'var(--line)' }}
-                  />
-                ))}
-              </div>
-              <span className="mt-1 block text-[11.5px] text-[var(--mute)]">Strong · 12+ chars, 1 number</span>
-            </label>
-          </div>
-
-          <button type="button" className="btn btn-purple btn-lg mt-5 w-full justify-center" onClick={handleRegister} disabled={loading}>
-            {loading ? 'Creating account...' : <>Create account <span className="arrow">→</span></>}
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 18 }}>
+          <button type="button" className="mc-auth-cta" onClick={() => onNavigate('login')}>
+            Go to sign in →
           </button>
+          <button
+            type="button"
+            className="mc-auth-cta mc-auth-cta-outline"
+            onClick={handleResend}
+            disabled={resending}
+          >
+            {resending ? 'Sending...' : resent ? (
+              <>
+                <CheckCircle size={14} /> Sent
+              </>
+            ) : 'Resend verification email'}
+          </button>
+        </div>
+      </AuthShell>
+    );
+  }
 
-          <p className="mt-4 text-[12.5px] leading-6 text-[var(--mute)]">
-            By creating an account you agree to our Terms and Privacy. We never train models on your candidate data.
-          </p>
-
-          <div className="mt-5 text-center text-[13.5px] text-[var(--mute)]">
-            Already have an account?{' '}
-            <button type="button" className="font-medium text-[var(--purple)] hover:underline" onClick={() => onNavigate('login')}>
-              Sign in
-            </button>
-          </div>
-        </AuthCard>
+  return (
+    <AuthShell
+      kicker="START FREE"
+      title="Create your team"
+      sub="14-day trial. No card. Bring your roles in or start with one of ours."
+      topRight={(
+        <span>
+          Already with us?{' '}
+          <button
+            type="button"
+            onClick={() => onNavigate('login')}
+            style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
+          >
+            Sign in
+          </button>
+        </span>
       )}
-    </FlowLayout>
+    >
+      {error ? (
+        <div className="mc-auth-error-card" role="alert">
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <AlertTriangle size={16} strokeWidth={1.8} style={{ color: 'var(--red)', flexShrink: 0 }} />
+            <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>{error}</span>
+          </div>
+        </div>
+      ) : null}
+
+      <AuthField
+        label="Work email"
+        name="email"
+        type="email"
+        autoComplete="email"
+        placeholder="you@company.com"
+        value={form.email}
+        onChange={updateField('email')}
+        helper="We'll use your domain to find teammates to invite."
+      />
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10 }}>
+        <AuthField
+          label="Full name"
+          name="full_name"
+          autoComplete="name"
+          placeholder="Sam Patel"
+          value={form.full_name}
+          onChange={updateField('full_name')}
+        />
+        <AuthField
+          label="Company"
+          name="organization_name"
+          autoComplete="organization"
+          placeholder="Deeplight AI"
+          value={form.organization_name}
+          onChange={updateField('organization_name')}
+        />
+      </div>
+      <AuthField
+        label="Password"
+        name="password"
+        type="password"
+        autoComplete="new-password"
+        placeholder="••••••••"
+        value={form.password}
+        onChange={updateField('password')}
+        helper="Strong · 12+ chars, 1 number"
+      />
+
+      <div style={{ display: 'flex', gap: 4, margin: '-8px 0 14px' }}>
+        {[1, 2, 3, 4, 5].map((step) => (
+          <span
+            key={step}
+            style={{
+              flex: 1,
+              height: 3,
+              borderRadius: 2,
+              background: step <= Math.min(4, Math.floor(form.password.length / 3)) ? 'var(--purple)' : 'var(--line)',
+            }}
+          />
+        ))}
+      </div>
+
+      <button
+        type="button"
+        className="mc-auth-cta"
+        onClick={handleRegister}
+        disabled={loading}
+        onKeyDown={(e) => e.key === 'Enter' && handleRegister()}
+      >
+        {loading ? 'Creating account...' : 'Create account →'}
+      </button>
+
+      <p style={{ marginTop: 16, fontSize: 12, lineHeight: 1.5, color: 'var(--mute)' }}>
+        By creating an account you agree to our Terms and Privacy. We never train models on your candidate data.
+      </p>
+    </AuthShell>
   );
 };

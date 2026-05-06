@@ -1,4 +1,4 @@
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 
 // Mock the API module
@@ -541,9 +541,14 @@ describe('AssessmentsPage', () => {
     });
   });
 
-  it('shows signed-in user and organization in the top-right nav', async () => {
+  it('shows signed-in user and organization in the avatar menu', async () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
     renderAppAt('/assessments');
+
+    const avatarBtn = await screen.findByRole('button', { name: /account menu/i }, { timeout: 5000 });
+    await act(async () => {
+      fireEvent.click(avatarBtn);
+    });
 
     await waitFor(() => {
       expect(screen.getByText('Admin User')).toBeInTheDocument();
@@ -551,7 +556,7 @@ describe('AssessmentsPage', () => {
     }, { timeout: 5000 });
   });
 
-  it('refreshes stale top-right organization names from the organization endpoint', async () => {
+  it('refreshes stale organization names in the avatar menu from the organization endpoint', async () => {
     const staleUser = {
       ...mockUser,
       full_name: 'Sam Patel',
@@ -563,6 +568,11 @@ describe('AssessmentsPage', () => {
     assessmentsApi.list.mockResolvedValue({ data: { items: mockAssessments, total: 3 } });
 
     renderAppAt('/assessments');
+
+    const avatarBtn = await screen.findByRole('button', { name: /account menu/i }, { timeout: 5000 });
+    await act(async () => {
+      fireEvent.click(avatarBtn);
+    });
 
     await waitFor(() => {
       expect(screen.getByText('Sam Patel')).toBeInTheDocument();
@@ -713,7 +723,7 @@ describe('AssessmentsPage', () => {
     await waitFor(() => {
       expect(window.location.pathname).toBe('/reporting');
       expect(analyticsApi.get).toHaveBeenCalled();
-      expect(screen.getByRole('heading', { name: 'Reporting' })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Your agent in narrative/i })).toBeInTheDocument();
     });
   });
 

@@ -28,6 +28,8 @@ export const pathForPage = (page, options = {}) => {
       return '/assessments';
     case 'demo':
       return '/demo';
+    case 'demo-lead':
+      return '/demo-lead';
     case 'candidates':
       return '/candidates';
     case 'candidate-report': {

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
+import { PageHero } from '../../shared/layout/PageHero';
 import { RoleSheet } from '../candidates/RoleSheet';
 import { trimOrUndefined } from '../candidates/candidatesUiUtils';
 import {
@@ -417,24 +418,21 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
-      <div className="page">
-        <div className="page-head">
-          <div className="tally-bg" />
-          <div>
-            <div className="kicker">01 · RECRUITER WORKSPACE</div>
-            <h1>Jobs<em>.</em></h1>
-            <p className="sub">
-              Manage the recruiter workflow from role-level pipeline views. Every candidate, scored and sorted.
-            </p>
-          </div>
-          <button
-            type="button"
-            className="btn btn-outline"
-            onClick={() => onNavigate('candidates')}
-          >
-            Open candidates
-          </button>
-        </div>
+      <div className="mc-page">
+        <PageHero
+          kicker="01 · ROLE PIPELINE"
+          title="Jobs"
+          subtitle="Manage the recruiter workflow from role-level pipeline views. Every candidate, scored and sorted."
+          actions={(
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => onNavigate('candidates')}
+            >
+              Open candidates
+            </button>
+          )}
+        />
 
         <div className="jobs-search">
           <div className="relative grow">

@@ -34,7 +34,7 @@ import {
   ResetPasswordPage,
   VerifyEmailPage,
 } from './features/auth';
-import { DashboardNav } from './features/dashboard/DashboardNav';
+import { Shell as DashboardNav } from './shared/layout/Shell';
 import { ReportingPage } from './features/analytics/AnalyticsPage';
 import { CandidateWelcomePage } from './features/assessment_runtime/CandidateWelcomePage';
 import {
@@ -49,6 +49,9 @@ const CandidateFeedbackPage = lazy(() =>
 );
 const DemoExperiencePage = lazy(() =>
   import('./features/demo/DemoExperiencePage').then((m) => ({ default: m.DemoExperiencePage }))
+);
+const DemoLeadPage = lazy(() =>
+  import('./features/marketing/DemoLeadPage').then((m) => ({ default: m.DemoLeadPage }))
 );
 const LazyAssessmentResultsPage = lazy(() =>
   import('./features/assessments/AssessmentResultsPage').then((m) => ({ default: m.AssessmentResultsPage }))
@@ -340,14 +343,14 @@ function AppContent() {
   if (authLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center">
-        <Loader2 size={32} className="animate-spin" style={{ color: '#9D00FF' }} />
+        <Loader2 size={32} className="animate-spin" style={{ color: 'var(--purple)' }} />
       </div>
     );
   }
 
   const lazyFallback = (
     <div className="min-h-screen flex items-center justify-center">
-      <Loader2 size={28} className="animate-spin" style={{ color: '#9D00FF' }} />
+      <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
     </div>
   );
   // workflowModeLoading removed — there is no per-org workflow probe anymore.
@@ -425,6 +428,14 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <DemoExperiencePage onNavigate={navigateToPage} />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/demo-lead"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <DemoLeadPage onNavigate={navigateToPage} />
           </Suspense>
         )}
       />
@@ -559,7 +570,7 @@ function AppContent() {
         element={
           loadingCandidateDetail ? (
             <div className="min-h-screen flex items-center justify-center">
-              <Loader2 size={28} className="animate-spin" style={{ color: '#9D00FF' }} />
+              <Loader2 size={28} className="animate-spin" style={{ color: 'var(--purple)' }} />
             </div>
           ) : (
             <Suspense fallback={lazyFallback}>

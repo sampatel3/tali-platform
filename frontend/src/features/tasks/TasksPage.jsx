@@ -4,6 +4,7 @@ import { useParams } from 'react-router-dom';
 
 import { useToast } from '../../context/ToastContext';
 import { tasks as tasksApi } from '../../shared/api';
+import { PageHero } from '../../shared/layout/PageHero';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const AssessmentPage = lazy(() => import('../assessment_runtime/AssessmentPage'));
@@ -158,24 +159,22 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="tasks" onNavigate={onNavigate} /> : null}
-      <div className="page">
-        <div className="tasks-hero">
-          <div>
-            <div className="kicker">TASK LIBRARY · ENGINEERING BUILT</div>
-            <h1>
-              Tasks the engineering team built for <em>you</em>.
-            </h1>
-            <p>Browse read-only assessment tasks, preview the candidate workspace, and use them when assigning candidates from jobs.</p>
-          </div>
-          <button
-            type="button"
-            className="eng-badge eng-badge-button"
-            onClick={() => onNavigate?.('tasks-bespoke')}
-          >
-            <span className="ico"><Lock size={14} /></span>
-            <span className="t"><b>Read-only catalog</b><br /><span>Contact Taali to build a bespoke task for candidate assessment</span></span>
-          </button>
-        </div>
+      <div className="mc-page">
+        <PageHero
+          kicker="03 · TASKS"
+          title={<>Tasks the engineering team built for <em>you</em></>}
+          subtitle="Browse read-only assessment tasks, preview the candidate workspace, and use them when assigning candidates from jobs."
+          actions={(
+            <button
+              type="button"
+              className="eng-badge eng-badge-button"
+              onClick={() => onNavigate?.('tasks-bespoke')}
+            >
+              <span className="ico"><Lock size={14} /></span>
+              <span className="t"><b>Read-only catalog</b><br /><span>Contact Taali to build a bespoke task for candidate assessment</span></span>
+            </button>
+          )}
+        />
 
         <div className="tasks-toolbar">
           <div className="seg">

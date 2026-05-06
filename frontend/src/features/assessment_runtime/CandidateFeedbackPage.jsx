@@ -3,7 +3,6 @@ import { Loader2 } from 'lucide-react';
 
 import { assessments as assessmentsApi } from '../../shared/api';
 import { Logo } from '../../shared/ui/Branding';
-import { Panel } from '../../shared/ui/TaaliPrimitives';
 import { CandidateFeedbackReportView } from './CandidateFeedbackReportView';
 
 const DEFAULT_SHARE_TEXT = 'I completed a TAALI AI collaboration assessment.';
@@ -80,18 +79,18 @@ export const CandidateFeedbackPage = ({ token }) => {
 
   if (error) {
     return (
-      <div className="min-h-screen bg-[var(--taali-bg)]">
-        <div className="border-b-2 border-[var(--taali-border)] bg-[var(--taali-surface-elevated)]">
+      <div className="min-h-screen bg-[var(--bg)]">
+        <div className="border-b border-[var(--line)] bg-[var(--bg-2)]">
           <div className="mx-auto flex max-w-5xl items-center gap-3 px-4 py-4">
             <Logo onClick={() => {}} />
-            <span className="font-mono text-xs text-[var(--taali-muted)]">Candidate feedback</span>
+            <span className="font-mono text-xs uppercase tracking-[0.12em] text-[var(--mute)]">CANDIDATE · FEEDBACK</span>
           </div>
         </div>
         <div className="mx-auto max-w-3xl px-4 py-14">
-          <Panel className="border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-6">
-            <h1 className="text-xl font-bold text-[var(--taali-danger)] mb-2">Feedback not ready</h1>
-            <p className="text-sm text-[var(--taali-danger)]">{error}</p>
-          </Panel>
+          <div className="mc-auth-error-card" role="alert">
+            <div className="title">Feedback not ready</div>
+            <div className="body">{error}</div>
+          </div>
         </div>
       </div>
     );

@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { AlertTriangle, CheckCircle } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 
 import { auth } from '../../shared/api';
-import { FlowLayout, AuthCard } from './AuthLayout';
+import { AuthShell, AuthField } from './AuthShell';
 
 export const ResetPasswordPage = ({ onNavigate, token }) => {
   const [password, setPassword] = useState('');
@@ -39,57 +39,74 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
 
   if (!token) {
     return (
-      <FlowLayout onNavigate={onNavigate} activePane="reset">
-        <AuthCard kicker="RESET PASSWORD" title={<>Invalid <em>link</em>.</>} subtitle="This reset link is missing or invalid. Request a new one from the login page." widthClassName="max-w-[560px]">
-          <button type="button" className="btn btn-purple btn-lg w-full justify-center" onClick={() => onNavigate('forgot-password')}>
-            Request new link <span className="arrow">→</span>
-          </button>
-        </AuthCard>
-      </FlowLayout>
+      <AuthShell kicker="SET A NEW PASSWORD" title="Invalid link" sub="This reset link is missing or invalid. Request a new one from the login page.">
+        <button type="button" className="mc-auth-cta" onClick={() => onNavigate('forgot-password')}>
+          Request new link →
+        </button>
+      </AuthShell>
     );
   }
 
   if (success) {
     return (
-      <FlowLayout onNavigate={onNavigate} activePane="reset">
-        <AuthCard kicker="RESET PASSWORD" title={<>Password <em>updated</em>.</>} subtitle="You can now sign in with your new password." widthClassName="max-w-[560px]">
-          <button type="button" className="btn btn-purple btn-lg w-full justify-center" onClick={() => onNavigate('login')}>
-            Sign in <span className="arrow">→</span>
-          </button>
-        </AuthCard>
-      </FlowLayout>
+      <AuthShell kicker="SET A NEW PASSWORD" title="Password updated" sub="You can now sign in with your new password.">
+        <button type="button" className="mc-auth-cta" onClick={() => onNavigate('login')}>
+          Sign in →
+        </button>
+      </AuthShell>
     );
   }
 
   return (
-    <FlowLayout onNavigate={onNavigate} activePane="reset">
-      <AuthCard kicker="RESET PASSWORD" title={<>Set a <em>new</em> password.</>} subtitle="Use a strong password you haven’t used before." widthClassName="max-w-[560px]">
-        {error ? (
-          <div className="mb-4 flex items-center gap-2 rounded-[14px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-3">
-            <AlertTriangle size={18} className="shrink-0 text-[var(--taali-danger)]" />
-            <span className="text-sm text-[var(--ink)]">{error}</span>
-          </div>
-        ) : null}
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <label className="field">
-            <span className="k">New password</span>
-            <input type="password" placeholder="••••••••" value={password} onChange={(e) => setPassword(e.target.value)} />
-          </label>
-          <label className="field">
-            <span className="k">Confirm new password</span>
-            <input type="password" placeholder="••••••••" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
-          </label>
-          <button type="submit" className="btn btn-purple btn-lg w-full justify-center" disabled={loading}>
-            {loading ? 'Updating password...' : <>Update password <span className="arrow">→</span></>}
-          </button>
-        </form>
-        <div className="mt-5 text-center text-[13.5px] text-[var(--mute)]">
+    <AuthShell
+      kicker="SET A NEW PASSWORD"
+      title="Choose something memorable"
+      sub="Use a passphrase, not a word. Mix at least 12 characters; we won't make you add a symbol."
+      topRight={(
+        <span>
           Back to{' '}
-          <button type="button" className="font-medium text-[var(--purple)] hover:underline" onClick={() => onNavigate('login')}>
+          <button
+            type="button"
+            onClick={() => onNavigate('login')}
+            style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
+          >
             sign in
           </button>
+        </span>
+      )}
+    >
+      {error ? (
+        <div className="mc-auth-error-card" role="alert">
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <AlertTriangle size={16} strokeWidth={1.8} style={{ color: 'var(--red)', flexShrink: 0 }} />
+            <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>{error}</span>
+          </div>
         </div>
-      </AuthCard>
-    </FlowLayout>
+      ) : null}
+      <form onSubmit={handleSubmit}>
+        <AuthField
+          label="New password"
+          name="password"
+          type="password"
+          autoComplete="new-password"
+          placeholder="••••••••"
+          value={password}
+          onChange={(e) => setPassword(e.target.value)}
+          helper="12+ characters. Strong: a string of words you'll remember."
+        />
+        <AuthField
+          label="Confirm new password"
+          name="confirm"
+          type="password"
+          autoComplete="new-password"
+          placeholder="••••••••"
+          value={confirm}
+          onChange={(e) => setConfirm(e.target.value)}
+        />
+        <button type="submit" className="mc-auth-cta" disabled={loading}>
+          {loading ? 'Updating password...' : 'Update password →'}
+        </button>
+      </form>
+    </AuthShell>
   );
 };

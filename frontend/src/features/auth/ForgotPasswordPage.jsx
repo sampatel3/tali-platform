@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { AlertTriangle, CheckCircle } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 
 import { auth } from '../../shared/api';
-import { FlowLayout, AuthCard } from './AuthLayout';
+import { AuthShell, AuthField } from './AuthShell';
 
 export const ForgotPasswordPage = ({ onNavigate }) => {
   const [email, setEmail] = useState('');
@@ -28,46 +28,60 @@ export const ForgotPasswordPage = ({ onNavigate }) => {
     }
   };
 
-  return (
-    <FlowLayout onNavigate={onNavigate} activePane="forgot">
-      <AuthCard
-        kicker="FORGOT PASSWORD"
-        title={sent ? <>Check your <em>email</em>.</> : <>Forgot your <em>password</em>?</>}
-        subtitle={sent
-          ? 'If an account exists for that email, we sent a link to reset your password.'
-          : 'Enter your email and we’ll send a reset link. Links expire in 30 minutes.'}
-        widthClassName="max-w-[560px]"
+  if (sent) {
+    return (
+      <AuthShell
+        kicker="ACCOUNT RECOVERY"
+        title="Check your email"
+        sub="If an account exists for that email, we sent a link to reset your password."
       >
-        {sent ? (
-          <button type="button" className="btn btn-purple btn-lg w-full justify-center" onClick={() => onNavigate('login')}>
-            Back to sign in <span className="arrow">→</span>
+        <button type="button" className="mc-auth-cta" onClick={() => onNavigate('login')}>
+          Back to sign in →
+        </button>
+      </AuthShell>
+    );
+  }
+
+  return (
+    <AuthShell
+      kicker="ACCOUNT RECOVERY"
+      title="Forgot your password?"
+      sub="Enter your work email and we'll send a single-use link. The link expires in 30 minutes."
+      topRight={(
+        <span>
+          Remembered?{' '}
+          <button
+            type="button"
+            onClick={() => onNavigate('login')}
+            style={{ background: 'none', border: 0, color: 'var(--purple)', fontWeight: 500, cursor: 'pointer', padding: 0, font: 'inherit' }}
+          >
+            Back to sign in
           </button>
-        ) : (
-          <>
-            {error ? (
-              <div className="mb-4 flex items-center gap-2 rounded-[14px] border border-[var(--taali-danger-border)] bg-[var(--taali-danger-soft)] p-3">
-                <AlertTriangle size={18} className="shrink-0 text-[var(--taali-danger)]" />
-                <span className="text-sm text-[var(--ink)]">{error}</span>
-              </div>
-            ) : null}
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <label className="field">
-                <span className="k">Email</span>
-                <input type="email" placeholder="you@company.com" value={email} onChange={(e) => setEmail(e.target.value)} />
-              </label>
-              <button type="submit" className="btn btn-purple btn-lg w-full justify-center" disabled={loading}>
-                {loading ? 'Sending...' : <>Send reset link <span className="arrow">→</span></>}
-              </button>
-            </form>
-            <div className="mt-5 text-center text-[13.5px] text-[var(--mute)]">
-              Remembered it?{' '}
-              <button type="button" className="font-medium text-[var(--purple)] hover:underline" onClick={() => onNavigate('login')}>
-                Back to sign in
-              </button>
-            </div>
-          </>
-        )}
-      </AuthCard>
-    </FlowLayout>
+        </span>
+      )}
+    >
+      {error ? (
+        <div className="mc-auth-error-card" role="alert">
+          <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+            <AlertTriangle size={16} strokeWidth={1.8} style={{ color: 'var(--red)', flexShrink: 0 }} />
+            <span style={{ fontSize: 13, color: 'var(--ink-2)' }}>{error}</span>
+          </div>
+        </div>
+      ) : null}
+      <form onSubmit={handleSubmit}>
+        <AuthField
+          label="Work email"
+          name="email"
+          type="email"
+          autoComplete="email"
+          placeholder="you@company.com"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+        />
+        <button type="submit" className="mc-auth-cta" disabled={loading}>
+          {loading ? 'Sending...' : 'Send reset link →'}
+        </button>
+      </form>
+    </AuthShell>
   );
 };

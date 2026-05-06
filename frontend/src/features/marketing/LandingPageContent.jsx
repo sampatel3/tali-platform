@@ -203,20 +203,45 @@ export const LandingPage = ({ onNavigate }) => {
         />
         <div className={`${containerClass} grid gap-12 lg:grid-cols-[1.05fr_.95fr] lg:items-center`}>
           <div>
-            <span className="eyebrow">
-              <span className="eyebrow-tag">NEW</span>
-              Six-axis AI-collaboration scoring — now live
-              <span className="text-[var(--mute-2)]">→</span>
-            </span>
-            <h1 className="h-display mt-6 text-[clamp(56px,7.3vw,108px)] leading-[0.94]">
-              Hire engineers who can <em>ship</em> with AI<span className="text-[var(--purple)]">.</span>
+            <div className="mc-kicker" style={{ display: 'inline-flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+              <span
+                aria-hidden="true"
+                style={{
+                  display: 'inline-flex',
+                  width: 6,
+                  height: 6,
+                  borderRadius: '50%',
+                  background: 'var(--purple)',
+                  boxShadow: '0 0 0 4px var(--purple-soft)',
+                }}
+              />
+              AGENTIC-FIRST · AI-NATIVE HIRING
+            </div>
+            <h1 className="h-display mt-2 text-[clamp(56px,7.3vw,108px)] leading-[0.96]">
+              The recruiter's <em>agent.</em><br />Built to hire engineers<br />who ship with AI<span className="text-[var(--purple)]">.</span>
             </h1>
-            <p className="mt-5 max-w-[560px] text-[19px] leading-[1.55] text-[var(--mute)]">
-              Your candidates will pair with AI tools on day one. Taali is the only assessment platform that scores <em>how they actually use them</em> — six dimensions, evidence-linked, calibrated to your team&apos;s bar.
+            <p className="mt-5 max-w-[640px] text-[18px] leading-[1.55] text-[var(--ink-2)]">
+              Taali is the first agentic hiring platform — and the only one that measures how candidates actually <em className="text-[var(--ink)] font-medium">use AI</em> on the job. The agent triages your pipeline, runs hands-on assessments in a real IDE, and surfaces calibrated evidence. You stay in charge of every consequential decision.
             </p>
-            <div className="mt-9 flex flex-wrap gap-3">
+            <div className="mt-7 flex flex-wrap gap-3 text-[13px] text-[var(--ink-2)]">
+              {[
+                { k: 'AGENTIC', v: 'Runs your pipeline 24/7 — pauses for your judgment' },
+                { k: 'AI-NATIVE', v: 'The only platform that scores AI fluency in hands-on tasks' },
+              ].map((badge) => (
+                <div
+                  key={badge.k}
+                  className="inline-flex items-center gap-2.5 rounded-full border border-[var(--line)] bg-[var(--bg-2)] px-3.5 py-2"
+                >
+                  <span className="font-[var(--font-mono)] text-[10.5px] font-semibold tracking-[0.08em] text-[var(--purple)]">
+                    {badge.k}
+                  </span>
+                  <span>{badge.v}</span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-7 flex flex-wrap gap-3">
               <button type="button" className="btn btn-primary btn-lg" onClick={() => onNavigate('demo')}>
-                Try the walkthrough <span className="arrow">→</span>
+                Book a demo
               </button>
               <button
                 type="button"
@@ -225,7 +250,7 @@ export const LandingPage = ({ onNavigate }) => {
                   window.location.href = '/c/demo?view=client&k=demo-token&showcase=1';
                 }}
               >
-                See a sample report
+                Try the live walkthrough <span className="arrow">→</span>
               </button>
             </div>
             <div className="mt-14 flex max-w-[520px] items-start gap-3 rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] px-4 py-4 text-[13.5px] leading-[1.55] text-[var(--mute)] shadow-[var(--shadow-sm)]">
