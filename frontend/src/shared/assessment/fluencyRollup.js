@@ -9,10 +9,13 @@
 // when product needs a workspace-configurable weighting, promote this
 // formula to backend and store on the workspace.
 
+// Labels stay short so they fit a six-axis radar without overflowing the
+// viewBox. Long-form names ("Reasoning under pressure", "AI collaboration")
+// surface in the per-axis card / tooltip when needed.
 const FLUENCY_AXES = [
   {
     key: 'sysdesign',
-    label: 'Systems design',
+    label: 'Systems',
     sources: ['design_thinking_score', 'requirement_comprehension_score'],
   },
   {
@@ -22,22 +25,22 @@ const FLUENCY_AXES = [
   },
   {
     key: 'reasoning',
-    label: 'Reasoning under pressure',
+    label: 'Reasoning',
     sources: ['debugging_strategy_score', 'error_recovery_score', 'learning_velocity_score'],
   },
   {
     key: 'aicollab',
-    label: 'AI collaboration',
+    label: 'AI collab',
     sources: ['prompt_quality_score', 'prompt_efficiency_score', 'context_utilization_score', 'independence_score'],
   },
   {
     key: 'release',
-    label: 'Release safety',
+    label: 'Release',
     sources: ['error_recovery_score', 'time_efficiency_score'],
   },
   {
     key: 'communication',
-    label: 'Communication',
+    label: 'Comms',
     sources: ['written_communication_score'],
   },
 ];

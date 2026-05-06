@@ -1364,17 +1364,17 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             </div>
             <div className="c hi">
               <div className="k">Role fit</div>
-              <div className="v">{reportModel?.summaryModel?.roleFitScore != null ? `${Math.round(reportModel.summaryModel.roleFitScore)}%` : '—'}</div>
+              <div className="v">{reportModel?.summaryModel?.roleFitScore != null ? `${Math.round(reportModel.summaryModel.roleFitScore)} / 100` : '—'}</div>
               <div className="d">{application?.role_name || application?.candidate_position || 'Role evidence'}</div>
             </div>
             <div className="c">
               <div className="k">Assessment</div>
-              <div className="v">{reportModel?.summaryModel?.assessmentScore != null ? `${Math.round(reportModel.summaryModel.assessmentScore)}` : '—'}</div>
+              <div className="v">{reportModel?.summaryModel?.assessmentScore != null ? `${Math.round(reportModel.summaryModel.assessmentScore)} / 100` : '—'}</div>
               <div className="d">{completedAssessment ? 'Completed signal present' : 'Pending completion'}</div>
             </div>
             <div className="c">
               <div className="k">Workable raw</div>
-              <div className="v">{application?.workable_score_raw != null ? `${Math.round(application.workable_score_raw)}` : '—'}</div>
+              <div className="v">{application?.workable_score_raw != null ? `${Math.round(application.workable_score_raw)} / 100` : '—'}</div>
               <div className="d">{workableSource ? 'Synced candidate context' : 'Manual application'}</div>
             </div>
           </div>
