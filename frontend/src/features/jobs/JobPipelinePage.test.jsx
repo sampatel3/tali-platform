@@ -110,34 +110,32 @@ describe('JobPipelinePage', () => {
     apiClient.tasks.list.mockResolvedValue({ data: [] });
   });
 
-  // The scoring panel collapses by default (showing only the summary row);
-  // recruiters expand it via an "Edit" toggle to see the full criteria +
-  // threshold editor. Tests that assert on those internals expand it first.
-  const expandScoringPanel = async () => {
-    const editToggle = await screen.findByRole('button', { name: /^Edit$/, expanded: false });
-    fireEvent.click(editToggle);
-  };
-
   // Default view is the candidates table; pipeline kanban is opt-in. Tests
   // that assert on kanban cards switch to the Pipeline tab first.
   const switchToPipelineView = async () => {
     fireEvent.click(await screen.findByRole('button', { name: /^Pipeline$/i }));
   };
 
-  it('does not treat an unset reject threshold as 0 percent', async () => {
+  // Per HANDOFF v2 §4.3 / canvas jobs-detail-settings — CV scoring criteria
+  // and Reject threshold live on the Agent settings tab now (the legacy
+  // above-tabs score-panel was retired). Tests that assert on those
+  // controls open the tab first.
+  const openAgentSettingsTab = async () => {
+    fireEvent.click(await screen.findByRole('button', { name: /^Agent settings$/i }));
+  };
+
+  it('renders the reject-threshold slider on the Agent settings tab without a spinbutton', async () => {
     renderPipeline();
-    await expandScoringPanel();
+    await openAgentSettingsTab();
 
-    await screen.findByRole('heading', { name: /Reject threshold/i, level: 3 });
+    await screen.findByRole('heading', { name: /Reject threshold/i, level: 2 });
 
-    expect(screen.getByText(/the saved threshold/i)).toBeInTheDocument();
-    expect(screen.queryByText(/below 0%/i)).not.toBeInTheDocument();
-    expect(screen.getByRole('slider', { name: /Reject threshold/i })).toBeInTheDocument();
-    // The threshold renders as a slider only — no spinbutton inside the
-    // scoring panel. The agent bar's budget input is its own spinbutton
-    // outside this scope and isn't what we're guarding against.
-    const scorePanel = document.getElementById('role-scoring-panel');
-    expect(within(scorePanel).queryByRole('spinbutton')).not.toBeInTheDocument();
+    expect(screen.getByRole('slider', { name: /Reject threshold percent/i })).toBeInTheDocument();
+    // The threshold is a slider only — no spinbutton anywhere on the tab.
+    // (The agent bar's budget input is its own spinbutton, outside scope.)
+    const settingsRegion = document.querySelector('.mc-agent-settings');
+    expect(settingsRegion).toBeInTheDocument();
+    expect(within(settingsRegion).queryByRole('spinbutton')).not.toBeInTheDocument();
   });
 
   it('shows stage-aware card signals instead of pre-screen scores in early stages', async () => {
@@ -255,19 +253,21 @@ Banking transformation experience
     expect(querySectionTitle('What we offer')).not.toBeInTheDocument();
   });
 
-  it('saves recruiter criteria from the explicit edit flow', async () => {
+  it('saves recruiter criteria from the Agent settings tab', async () => {
     apiClient.roles.update.mockResolvedValue({ data: { ...baseRole, additional_requirements: 'Payments experience' } });
 
     renderPipeline();
-    await expandScoringPanel();
+    await openAgentSettingsTab();
 
-    await screen.findByRole('heading', { name: /Scoring criteria/i, level: 3 });
-    fireEvent.click(screen.getByRole('button', { name: /Edit criteria/i }));
+    // CV scoring criteria editor lives on the Agent settings tab — its
+    // textarea is always editable, and Save role settings persists.
+    await screen.findByRole('heading', { name: /CV scoring/i, level: 2 });
 
-    fireEvent.change(screen.getByPlaceholderText(/One requirement per line/i), {
+    const textarea = screen.getByPlaceholderText(/Must have:/i);
+    fireEvent.change(textarea, {
       target: { value: 'Payments experience\nStakeholder governance' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Save criteria/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Save role settings/i }));
 
     await waitFor(() => {
       expect(apiClient.roles.update).toHaveBeenCalledWith(101, expect.objectContaining({
