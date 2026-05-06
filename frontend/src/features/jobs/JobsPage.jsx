@@ -510,6 +510,34 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           </div>
         ) : null}
 
+        <div className="mc-jobs-kpis">
+          {(() => {
+            const activeRoles = roles.length;
+            const starredCount = roles.filter((r) => r.starred_for_auto_sync).length;
+            const pipelineCount = roles.reduce(
+              (acc, r) => acc + Number(r.active_candidates_count || r.applications_count || 0),
+              0,
+            );
+            const reviewCount = roles.reduce(
+              (acc, r) => acc + Number(r?.stage_counts?.review || 0),
+              0,
+            );
+            const tiles = [
+              { k: 'ACTIVE ROLES', v: activeRoles, d: starredCount > 0 ? `${starredCount} starred` : 'None starred' },
+              { k: 'CANDIDATES IN PIPELINE', v: pipelineCount, d: 'Across active roles' },
+              { k: 'YOUR REVIEW QUEUE', v: reviewCount, d: reviewCount === 0 ? 'All clear' : `Across ${roles.filter((r) => Number(r?.stage_counts?.review || 0) > 0).length} role${roles.filter((r) => Number(r?.stage_counts?.review || 0) > 0).length === 1 ? '' : 's'}` },
+              { k: 'AGENT BUDGET', v: '—', d: 'Cap set per role' },
+            ];
+            return tiles.map((tile) => (
+              <div key={tile.k} className="mc-jobs-kpi">
+                <div className="k">{tile.k}</div>
+                <div className="v">{tile.v}</div>
+                <div className="d">{tile.d}</div>
+              </div>
+            ));
+          })()}
+        </div>
+
         <div className="filter-row" id="jobs-source-filters">
           {SOURCE_FILTERS.map((filter) => (
             <button
