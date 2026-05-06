@@ -4,7 +4,6 @@ import {
   ArrowRight,
   Filter,
   RefreshCw,
-  Search,
   Star,
 } from 'lucide-react';
 
@@ -148,7 +147,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   // at AGENT_SPEND_FANOUT_LIMIT to keep the request count bounded; orgs with
   // more agentic roles fall back to the cap-only display.
   const [agentSpendByRole, setAgentSpendByRole] = useState({});
-  const [query, setQuery] = useState('');
   const [sourceFilter, setSourceFilter] = useState('all');
   const [roleSheetOpen, setRoleSheetOpen] = useState(false);
   const [savingRole, setSavingRole] = useState(false);
@@ -383,23 +381,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     return new Date(parsed.getTime() + (intervalMinutes * 60000));
   }, [orgData?.workable_config?.sync_interval_minutes, orgData?.workable_last_sync_at]);
 
-  const filtered = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return roles
-      .filter((role) => filterRoleBySource(role, sourceFilter))
-      .filter((role) => {
-        if (!needle) return true;
-        return [
-          role?.name,
-          role?.description,
-          role?.job_spec_filename,
-        ]
-          .filter(Boolean)
-          .join(' ')
-          .toLowerCase()
-          .includes(needle);
-      });
-  }, [query, roles, sourceFilter]);
+  const filtered = useMemo(() => (
+    roles.filter((role) => filterRoleBySource(role, sourceFilter))
+  ), [roles, sourceFilter]);
 
   const handleToggleStar = useCallback(async (role) => {
     if (!role || isShowcase) return;
@@ -506,21 +490,9 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           )}
         />
 
-        {/* Quick search input is kept as an enhancement on top of the
-            canvas spec — the canvas relies on the global ⌘K palette in
-            Shell, but we surface a tighter search-by-name input here too. */}
-        <div className="jobs-search">
-          <div className="relative grow">
-            <Search size={15} className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[var(--mute)]" />
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search jobs by name…"
-              aria-label="Search jobs"
-              className="pl-11"
-            />
-          </div>
-        </div>
+        {/* HANDOFF v2 §4 / canvas jobs-list — search lives in the global
+            ⌘K palette in Shell. The local "Search jobs by name" input was
+            redundant chrome and is gone per the canvas spec. */}
 
         {orgData?.workable_connected ? (
           <div className="wk-strip">

@@ -4,25 +4,17 @@ import {
   ArrowLeft,
   ArrowUpDown,
   BriefcaseBusiness,
-  Check,
   ChevronDown,
-  Edit3,
-  Loader2,
-  MapPin,
   Settings2,
   Share2,
   Sparkles,
-  X,
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { prefetchDocumentBlob } from '../../shared/api/documentCache';
 import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
-import {
-  Spinner,
-  Textarea,
-} from '../../shared/ui/TaaliPrimitives';
+import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import { AgentBar, useAgentStatus } from '../../shared/layout/AgentBar';
@@ -89,38 +81,6 @@ const resolveOptionalPercent = (value) => {
   return Math.max(0, Math.min(100, Math.round(numeric)));
 };
 
-const resolvePipelineReviewScore = (application) => {
-  const score = Number(
-    application?.taali_score
-    ?? application?.score_summary?.taali_score
-    ?? application?.score_summary?.assessment_score
-    ?? application?.pre_screen_score
-  );
-  return Number.isFinite(score) ? score : null;
-};
-
-const resolvePipelineCardSignal = (application) => {
-  const stage = String(application?.pipeline_stage || '').toLowerCase();
-  if (stage === 'review') {
-    const reviewScore = resolvePipelineReviewScore(application);
-    return {
-      label: reviewScore != null ? formatScore(reviewScore) : '—',
-      toneClass: reviewScore != null && reviewScore >= 80 ? 'hi' : '',
-    };
-  }
-  if (stage === 'in_assessment') {
-    const normalizedStatus = String(application?.status || '').toLowerCase();
-    return {
-      label: normalizedStatus.includes('pause') ? 'Paused' : 'Live',
-      toneClass: '',
-    };
-  }
-  return {
-    label: '—',
-    toneClass: '',
-  };
-};
-
 const resolvePipelineCardFooterStatus = (application) => {
   const stage = String(application?.pipeline_stage || '').toLowerCase();
   if (stage === 'applied') return 'Not invited';
@@ -128,12 +88,6 @@ const resolvePipelineCardFooterStatus = (application) => {
   if (stage === 'in_assessment') return 'Assessment live';
   if (stage === 'review') return 'Decision';
   return resolveAssessmentId(application) ? 'Assessment linked' : 'No task yet';
-};
-
-const formatScore = (value) => {
-  const numeric = Number(value);
-  if (!Number.isFinite(numeric)) return '—';
-  return `${Math.round(numeric)}`;
 };
 
 const splitCriteriaDraft = (criteriaDraft = '') => String(criteriaDraft || '')
@@ -1005,7 +959,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [loading, setLoading] = useState(true);
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
   const [criteriaDraft, setCriteriaDraft] = useState('');
-  const [criteriaEditing, setCriteriaEditing] = useState(false);
   const [thresholdDraft, setThresholdDraft] = useState('');
   const [refreshTick, setRefreshTick] = useState(0);
   const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
@@ -1017,7 +970,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // `stageFilters` re-seeds from the new initial value.
   const [tableStageFilter, setTableStageFilter] = useState('all');
   const [tableSortBy, setTableSortBy] = useState('composite');
-  const [scoringExpanded, setScoringExpanded] = useState(false);
   const [roleSheetOpen, setRoleSheetOpen] = useState(false);
   const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
   const [roleSheetError, setRoleSheetError] = useState('');
@@ -1043,7 +995,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       const nextRole = roleRes?.data || null;
       setRole(nextRole);
       setCriteriaDraft(nextRole?.additional_requirements || '');
-      setCriteriaEditing(false);
       setThresholdDraft(nextRole?.auto_reject_threshold_100 != null ? String(nextRole.auto_reject_threshold_100) : '');
       setRoleTasks(Array.isArray(tasksRes?.data) ? tasksRes.data : []);
       setRoleApplications(Array.isArray(applicationsRes?.data) ? applicationsRes.data : []);
@@ -1169,11 +1120,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     () => resolveOptionalPercent(role?.auto_reject_threshold_100),
     [role?.auto_reject_threshold_100]
   );
-  const currentThresholdValue = useMemo(
-    () => (thresholdDraft !== '' ? resolveOptionalPercent(thresholdDraft) : thresholdValue),
-    [thresholdDraft, thresholdValue]
-  );
-  const sliderThresholdValue = currentThresholdValue ?? 60;
   const belowThresholdCount = useMemo(() => {
     if (thresholdValue == null) return 0;
     return activeApplications.filter((application) => {
@@ -1181,16 +1127,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       return Number.isFinite(score) && score < thresholdValue;
     }).length;
   }, [activeApplications, thresholdValue]);
-
-  const lastScoredAt = useMemo(() => {
-    const scoredDates = activeApplications
-      .map((application) => application?.cv_match_scored_at)
-      .filter(Boolean)
-      .map((value) => new Date(value))
-      .filter((value) => !Number.isNaN(value.getTime()))
-      .sort((a, b) => b.getTime() - a.getTime());
-    return scoredDates[0] || null;
-  }, [activeApplications]);
 
   // HANDOFF v2 §4 — Candidates tab KPI row matches canvas exactly:
   // In pipeline · New CVs · Below threshold · Agent spend (with bar).
@@ -1278,25 +1214,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     return items.slice(0, 4);
   }, [recruiterCriteria.length, role?.interview_focus?.manual_screening_triggers, role?.interview_focus?.questions, role?.workable_job_id]);
 
-  const thresholdHandleStyle = useMemo(() => ({
-    left: `${Math.max(0, Math.min(100, Number(sliderThresholdValue || 0)))}%`,
-    opacity: currentThresholdValue == null ? 0.72 : 1,
-  }), [currentThresholdValue, sliderThresholdValue]);
-
   const roleFactValues = useMemo(() => ({
     location: role?.location || role?.candidate_location || parsedJobSpec.meta.location || 'Location not captured',
     department: role?.department || parsedJobSpec.meta.department || role?.organization_name || 'Hiring team',
     employment: role?.employment_type || parsedJobSpec.meta.employmentType || 'Full-time',
   }), [parsedJobSpec.meta.department, parsedJobSpec.meta.employmentType, parsedJobSpec.meta.location, role?.candidate_location, role?.department, role?.employment_type, role?.location, role?.organization_name]);
-
-  const belowThresholdDots = useMemo(() => {
-    if (!activeApplications.length) return [];
-    return activeApplications.map((application) => {
-      const score = Number(application?.pre_screen_score);
-      const belowThreshold = thresholdValue != null && Number.isFinite(score) && score < thresholdValue;
-      return belowThreshold ? 'below' : 'above';
-    });
-  }, [activeApplications, thresholdValue]);
 
   // ---------------------------------------------------------------------------
   // Confirmation flow for batch actions
@@ -1470,7 +1392,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       });
       await loadRoleWorkspace();
       setRefreshTick((value) => value + 1);
-      setCriteriaEditing(false);
       showToast('Role scoring guidance updated.', 'success');
     } catch (error) {
       showToast(getErrorMessage(error, 'Failed to save role scoring guidance.'), 'error');
@@ -1752,234 +1673,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           </div>
         </div>
 
-        <div className={`score-panel ${scoringExpanded ? 'is-expanded' : 'is-collapsed'}`} id="role-scoring-panel">
-          <div className="score-action">
-            <div className="sa-icon">
-              <Sparkles size={20} />
-            </div>
-            <div className="sa-summary">
-              <div className="sa-label">CV scoring</div>
-              <div className="sa-headline">Score {activeApplications.length} CVs against this role&apos;s criteria</div>
-              <div className="sa-meta">
-                <span><b>Reject &lt; {currentThresholdValue != null ? `${currentThresholdValue}%` : '—'}</b></span>
-                <span aria-hidden>·</span>
-                <span><b>{recruiterCriteria.length || 'Job spec'}</b> {recruiterCriteria.length ? 'criteria' : 'only'}</span>
-                <span aria-hidden>·</span>
-                <span><b>{unscoredApplications.length}</b> unscreened</span>
-                <span aria-hidden>·</span>
-                <span>Last run {lastScoredAt ? lastScoredAt.toLocaleDateString() : 'never'}</span>
-              </div>
-            </div>
-            <div className="sa-actions action-toolbar">
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm"
-                onClick={() => setScoringExpanded((v) => !v)}
-                aria-expanded={scoringExpanded}
-                aria-controls="score-grid-region"
-              >
-                <Edit3 size={13} />
-                {scoringExpanded ? 'Hide' : 'Edit'}
-                <ChevronDown
-                  size={13}
-                  style={{
-                    marginLeft: 2,
-                    transition: 'transform 180ms ease',
-                    transform: scoringExpanded ? 'rotate(180deg)' : 'rotate(0deg)',
-                  }}
-                />
-              </button>
-              <button
-                type="button"
-                className="btn btn-purple btn-sm"
-                onClick={() => setProcessDialogOpen(true)}
-                disabled={String(processJobs?.[numericRoleId]?.status || '').toLowerCase() === 'running'}
-              >
-                {(() => {
-                  const pj = processJobs?.[numericRoleId];
-                  const status = String(pj?.status || '').toLowerCase();
-                  if (status === 'running') {
-                    const step = pj?.current_step;
-                    const label = step === 'fetch' ? 'Fetching CVs'
-                      : step === 'pre_screen' ? 'Pre-screening'
-                      : step === 'score' ? 'Scoring'
-                      : 'Processing';
-                    return (
-                      <>
-                        <Loader2 size={13} className="animate-spin" />
-                        {label}…
-                      </>
-                    );
-                  }
-                  return <>Score {activeApplications.length} candidates</>;
-                })()}
-              </button>
-            </div>
-          </div>
-
-          <div className="score-grid" id="score-grid-region" hidden={!scoringExpanded}>
-            <div className="sp-col">
-              <div className="criteria-head">
-                <div>
-                  <h3>Scoring <em>criteria</em></h3>
-                  <p className="sp-sub">Every CV on this role is scored against the job spec plus the recruiter guidance saved here.</p>
-                </div>
-                <div className="criteria-actions">
-                  {criteriaEditing ? (
-                    <>
-                      <button
-                        type="button"
-                        className="btn btn-outline btn-sm"
-                        onClick={() => {
-                          setCriteriaDraft(role?.additional_requirements || '');
-                          setCriteriaEditing(false);
-                        }}
-                      >
-                        <X size={13} />
-                        Cancel
-                      </button>
-                      <button
-                        type="button"
-                        className="btn btn-purple btn-sm"
-                        onClick={handleSaveRoleConfig}
-                        disabled={savingRoleConfig}
-                      >
-                        <Check size={13} />
-                        {savingRoleConfig ? 'Saving…' : 'Save criteria'}
-                      </button>
-                    </>
-                  ) : (
-                    <button type="button" className="btn btn-outline btn-sm" onClick={() => setCriteriaEditing(true)}>
-                      <Edit3 size={13} />
-                      Edit criteria
-                    </button>
-                  )}
-                </div>
-              </div>
-              <div className="req-list">
-                {recruiterCriteria.length ? recruiterCriteria.map((criterion, index) => (
-                  <div key={`${criterion}-${index}`} className="req-item source-rec">
-                    <span className="num">{String(index + 1).padStart(2, '0')}</span>
-                    <div>{criterion}</div>
-                    <span className="tag-src">Recruiter</span>
-                  </div>
-                )) : (
-                  <div className="req-item source-jd">
-                    <span className="num">01</span>
-                    <div>Use the job spec and linked task as the default scoring source until recruiter criteria are added.</div>
-                    <span className="tag-src">Job spec</span>
-                  </div>
-                )}
-              </div>
-              <div className={`criteria-input ${criteriaEditing ? 'editing' : ''}`}>
-                <div className="criteria-input-label">
-                  Recruiter scoring requirements
-                  <span>{criteriaEditing ? 'Editable' : 'Saved guidance'}</span>
-                </div>
-                <Textarea
-                  value={criteriaDraft}
-                  onChange={(event) => setCriteriaDraft(event.target.value)}
-                  readOnly={!criteriaEditing}
-                  className="criteria-textarea min-h-[180px]"
-                  placeholder={`One requirement per line. Prefix with the priority so the AI weighs it correctly.
-
-Examples:
-Must have: 5+ years building data pipelines on AWS
-Preferred: Banking or fintech background
-Nice to have: AWS Solutions Architect certification
-Constraint: Based in UAE (no remote)
-Disqualifying: No experience with regulated financial data`}
-                />
-                <div className="criteria-input-foot">
-                  {criteriaEditing
-                    ? 'Saved criteria are sent to the next CV scoring or re-score run.'
-                    : 'Use Edit criteria to add role-specific requirements before scoring CVs.'}
-                </div>
-              </div>
-            </div>
-
-            <div className="sp-col">
-              <h3>Reject <em>threshold</em></h3>
-              <p className="sp-sub">Below-threshold candidates are flagged for faster review and bulk rejection. Nothing is auto-rejected.</p>
-              <div className={`thr-wrap ${currentThresholdValue == null ? 'unset' : ''}`}>
-                <div className="thr-label">Below this → flag for rejection</div>
-                <div className="thr-big">
-                  <span>{currentThresholdValue != null ? currentThresholdValue : '—'}</span>
-                  <span className="sign">%</span>
-                </div>
-                <div className="thr-slider">
-                  <div className="thr-track" aria-hidden="true">
-                    <div className="track" />
-                    <div className="handle" style={thresholdHandleStyle} />
-                  </div>
-                  <input
-                    type="range"
-                    min={0}
-                    max={100}
-                    value={sliderThresholdValue}
-                    onChange={(event) => setThresholdDraft(normalizeThreshold(event.target.value))}
-                    className="thr-range"
-                    aria-label="Reject threshold"
-                  />
-                </div>
-                <div className="thr-ticks">
-                  <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
-                </div>
-                <div style={{ marginTop: '18px' }}>
-                  <div className="thr-label">Pipeline distribution</div>
-                  <div className="thr-dots">
-                    {belowThresholdDots.map((dot, index) => (
-                      <div key={`${dot}-${index}`} className={`d ${dot}`} />
-                    ))}
-                  </div>
-                </div>
-                <p className="thr-caption">
-                  <b>{belowThresholdCount} of {activeApplications.length} candidates</b> in the pipeline currently score below
-                  {' '}
-                  {thresholdValue != null ? `${thresholdValue}%` : 'the saved threshold'}.
-                </p>
-                <div className="row" style={{ marginTop: '12px', justifyContent: 'space-between' }}>
-                  <button type="button" className="btn btn-ghost btn-sm" onClick={() => setActiveView('table')}>
-                    View below-threshold candidates →
-                  </button>
-                  <button
-                    type="button"
-                    className="btn btn-outline btn-sm"
-                    onClick={handleSaveRoleConfig}
-                    disabled={savingRoleConfig}
-                  >
-                    {savingRoleConfig ? 'Saving…' : 'Save threshold'}
-                  </button>
-                </div>
-                {/* Fetch CVs button moved up next to the Re-score buttons. */}
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <div className="stat-row">
-          {pipelineStats.map((item) => (
-            <div
-              key={item.key}
-              className={`stat ${item.highlight ? 'hi' : ''} ${item.budgetPct != null ? 'has-bar' : ''}`.trim()}
-            >
-              <div className="k">{item.label}</div>
-              <div className="v">
-                {item.value}
-                {item.valueSuffix ? (
-                  <span style={{ color: 'var(--mute)', fontSize: 14, marginLeft: 4 }}>{item.valueSuffix}</span>
-                ) : null}
-              </div>
-              {item.budgetPct != null ? (
-                <div className="stat-bar" aria-hidden="true">
-                  <i style={{ width: `${item.budgetPct}%` }} />
-                </div>
-              ) : null}
-              <div className="d">{item.description}</div>
-            </div>
-          ))}
-        </div>
-
         {activeView === 'pipeline' ? (
           <div className="pipeline-layout">
             <div className="kanban">
@@ -2002,7 +1695,6 @@ Disqualifying: No experience with regulated financial data`}
                         PendingAgentDecisionsPanel above the table for now;
                         the in-card buttons are deep-link entry points. */}
                     {visibleItems.map((application) => {
-                      const cardSignal = resolvePipelineCardSignal(application);
                       const cvPct = Number.isFinite(Number(application?.cv_match_score))
                         ? Math.round(Number(application.cv_match_score))
                         : null;
@@ -2208,6 +1900,34 @@ Disqualifying: No experience with regulated financial data`}
           </div>
         ) : (
           <>
+            {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — KPI row
+                (In pipeline · New CVs · Below threshold · Agent spend) is
+                the first thing inside the Candidates tab, mirroring the
+                CandidatesTab artboard in tali-pages.jsx. Other tabs do not
+                show these KPIs. */}
+            <div className="stat-row">
+              {pipelineStats.map((item) => (
+                <div
+                  key={item.key}
+                  className={`stat ${item.highlight ? 'hi' : ''} ${item.budgetPct != null ? 'has-bar' : ''}`.trim()}
+                >
+                  <div className="k">{item.label}</div>
+                  <div className="v">
+                    {item.value}
+                    {item.valueSuffix ? (
+                      <span style={{ color: 'var(--mute)', fontSize: 14, marginLeft: 4 }}>{item.valueSuffix}</span>
+                    ) : null}
+                  </div>
+                  {item.budgetPct != null ? (
+                    <div className="stat-bar" aria-hidden="true">
+                      <i style={{ width: `${item.budgetPct}%` }} />
+                    </div>
+                  ) : null}
+                  <div className="d">{item.description}</div>
+                </div>
+              ))}
+            </div>
+
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — segmented
                 stage filter + Sort + Score new toolbar above the table.
                 Stage counts read off groupedApplications (already memoized).

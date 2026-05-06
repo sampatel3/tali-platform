@@ -308,39 +308,6 @@ const uniqueStringValues = (values) => {
   return ordered;
 };
 
-const getCvMatchTone = (score, thresholdValue) => {
-  const numeric = Number(score);
-  if (!Number.isFinite(numeric)) return 'un';
-  const threshold = Number(thresholdValue);
-  // When the recruiter has set a per-role threshold, that's the source
-  // of truth: below = red, comfortably above = green, just above =
-  // amber. The hardcoded 60/80 cutoffs only kick in when no threshold
-  // is configured, so a 50% candidate on a role with a 40% threshold
-  // renders amber (above bar) instead of red.
-  if (Number.isFinite(threshold) && threshold > 0) {
-    if (numeric < threshold) return 'lo';
-    if (numeric >= threshold + 20) return 'hi';
-    return 'md';
-  }
-  if (numeric >= 80) return 'hi';
-  if (numeric >= 60) return 'md';
-  return 'lo';
-};
-
-const getHireSignal = (application, thresholdValue) => {
-  const score = Number(resolveUnifiedScore(application).value);
-  if (!Number.isFinite(score)) return { label: 'Pending', tone: '' };
-  const threshold = Number(thresholdValue);
-  if (Number.isFinite(threshold) && threshold > 0) {
-    if (score < threshold) return { label: 'Below threshold', tone: 'red' };
-    if (score >= threshold + 20) return { label: 'Strong hire', tone: 'green' };
-    return { label: 'Above threshold', tone: 'amber' };
-  }
-  if (score >= 80) return { label: 'Strong hire', tone: 'green' };
-  if (score >= 65) return { label: 'Maybe', tone: 'amber' };
-  return { label: 'No hire', tone: 'red' };
-};
-
 const getStatusChip = (application) => {
   const stage = String(application?.pipeline_stage || '').toLowerCase();
   if (stage === 'in_assessment') return { label: 'live', tone: 'live' };
@@ -2323,10 +2290,10 @@ export const CandidatesDirectoryPage = ({
                   </div>
                   <div>Candidate</div>
                   <div>Role</div>
-                  <div title="CV match before assessment, blended composite after">Taali AI Score</div>
-                  <div>Hire signal</div>
+                  <div>Stage</div>
+                  <div>CV match</div>
+                  <div title="Composite score after assessment; CV match until then">Score</div>
                   <div>Status</div>
-                  <div>Submitted</div>
                 </div>
 
                 {applications.map((application) => {
@@ -2335,9 +2302,17 @@ export const CandidatesDirectoryPage = ({
                   const roleApplicationCount = Number(roleApplicationsByCandidateKey[candidateApplicationKey(application)] || 1);
                   const preScreenScore = resolvePreScreenScore(application);
                   const unifiedScore = resolveUnifiedScore(application);
-                  const updatedAt = application.pipeline_stage_updated_at || application.updated_at || application.created_at;
-                  const scoreTone = getCvMatchTone(unifiedScore.value, thresholdRoleValue);
-                  const hireSignal = getHireSignal(application, thresholdRoleValue);
+                  const cvMatchValue = Number.isFinite(Number(preScreenScore)) ? Math.round(Number(preScreenScore)) : null;
+                  const taaliScoreValue = Number.isFinite(Number(resolveTaaliScore(application)))
+                    ? Math.round(Number(resolveTaaliScore(application)))
+                    : null;
+                  const compositeMode = Boolean(application?.score_mode || application?.score_summary?.score_mode)
+                    && (application?.score_mode || application?.score_summary?.score_mode) !== 'role_fit_only';
+                  const compositeScoreValue = compositeMode && taaliScoreValue != null
+                    ? taaliScoreValue
+                    : (cvMatchValue ?? null);
+                  const stageRaw = String(application?.pipeline_stage || '').toLowerCase();
+                  const stageLabel = formatTitleCase(stageRaw) || '—';
                   const statusChip = getStatusChip(application);
                   const belowThreshold = Number.isFinite(thresholdRoleValue) && Number.isFinite(Number(preScreenScore)) && Number(preScreenScore) < thresholdRoleValue;
                   return (
@@ -2398,88 +2373,48 @@ export const CandidatesDirectoryPage = ({
 
                         <div className="c-role">
                           {application.role_name || application.candidate_position || 'Role'}
-                          <div className="r-meta">
-                            {application.candidate_location || 'Location not captured'}
-                            {roleApplicationCount > 1 ? ` · ${roleApplicationCount} applications` : ''}
-                          </div>
+                          {roleApplicationCount > 1 ? (
+                            <div className="r-meta">{roleApplicationCount} applications</div>
+                          ) : null}
                         </div>
 
-                        <div className="c-score-unified" title={unifiedScore.value == null ? 'Not scored yet' : `${Math.round(Number(unifiedScore.value))} / 100`}>
-                          <span className={`pct ${scoreTone}`}>
-                            {(() => {
-                              const status = application?.score_status;
-                              if (status === 'pending' || status === 'running') return 'Scoring…';
-                              if (unifiedScore.value == null) {
-                                if (status === 'error') return 'Error';
-                                if (status === 'stale') return 'Stale';
-                                return '—';
-                              }
-                              const rounded = Math.round(Number(unifiedScore.value));
-                              const formatted = (
-                                <>
-                                  {rounded}
-                                  <span style={{ color: 'var(--mute)', fontWeight: 400 }}> / 100</span>
-                                </>
-                              );
-                              return status === 'stale' ? <>{formatted} · stale</> : formatted;
-                            })()}
-                            {application.workable_score_raw != null && unifiedScore.value != null ? (
-                              <span className="wk-pip">WK <b>{Math.round(Number(application.workable_score_raw))}</b></span>
-                            ) : null}
-                          </span>
-                          <div className="meter">
-                            <i className={scoreTone} style={{ width: `${Math.max(0, Math.min(100, Number(unifiedScore.value || 0)))}%` }} />
-                            {hasThresholdRoleValue ? (
-                              <span className="thr" style={{ left: `${Math.max(0, Math.min(100, thresholdRoleValue))}%` }} />
-                            ) : null}
-                          </div>
-                          <div className="score-meta">
-                            {unifiedScore.kind ? (
-                              <span className={`score-kind-pill ${unifiedScore.kind}`}>
-                                {unifiedScore.kind === 'composite' ? 'Composite' : 'CV'}
-                              </span>
-                            ) : null}
-                            {rolesApi?.generateTaaliCvAi && application.cv_filename ? (() => {
-                              const status = application?.score_status;
-                              const inFlight =
-                                Number(generatingTaaliId) === Number(application.id)
-                                || status === 'pending'
-                                || status === 'running';
-                              const label = inFlight
-                                ? 'Scoring…'
-                                : status === 'error'
-                                  ? 'Retry'
-                                  : (status === 'stale' || preScreenScore != null)
-                                    ? 'Rescore'
-                                    : 'Score';
-                              return (
-                                <button
-                                  type="button"
-                                  className="cv-rescore-link"
-                                  disabled={inFlight}
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    handleGenerateTaaliCvAi(application);
-                                  }}
-                                  title="Score this candidate's CV match"
-                                >
-                                  {label}
-                                </button>
-                              );
-                            })() : null}
-                          </div>
-                        </div>
-
+                        {/* HANDOFF v2 / canvas CandidatesDirectoryPage —
+                            Stage is its own column with a pill chip. */}
                         <div>
-                          <span className={`chip ${hireSignal.tone}`}>{hireSignal.label}</span>
+                          <span className="stage-pill">{stageLabel}</span>
+                        </div>
+
+                        {/* CV match — mono percentage. */}
+                        <div className="c-cvmatch" title={cvMatchValue == null ? 'CV not scored' : `${cvMatchValue}% CV match`}>
+                          {cvMatchValue != null ? `${cvMatchValue}%` : (
+                            rolesApi?.generateTaaliCvAi && application.cv_filename ? (
+                              <button
+                                type="button"
+                                className="cv-rescore-link"
+                                disabled={Number(generatingTaaliId) === Number(application.id)
+                                  || application?.score_status === 'pending'
+                                  || application?.score_status === 'running'}
+                                onClick={(event) => {
+                                  event.stopPropagation();
+                                  handleGenerateTaaliCvAi(application);
+                                }}
+                                title="Score this candidate's CV match"
+                              >
+                                {Number(generatingTaaliId) === Number(application.id) ? 'Scoring…' : 'Score'}
+                              </button>
+                            ) : '—'
+                          )}
+                        </div>
+
+                        {/* Score — composite when available, else dash. */}
+                        <div className={`c-score ${compositeScoreValue != null && compositeScoreValue >= 80 ? 'hi' : ''}`}>
+                          {compositeScoreValue != null
+                            ? <>{compositeScoreValue}<span className="suffix"> / 100</span></>
+                            : '—'}
                         </div>
 
                         <div className={`candidate-status-chip ${statusChip.tone}`}>
                           <span className="dot" />{statusChip.label}
-                        </div>
-
-                        <div className="candidate-submitted-cell">
-                          <span className="c-time">{formatRelativeDateTime(updatedAt)}</span>
                         </div>
                       </div>
                       {selected ? (
