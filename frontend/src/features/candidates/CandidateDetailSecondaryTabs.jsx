@@ -61,7 +61,7 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
       <div className="grid grid-cols-2 gap-3 md:grid-cols-5">
         <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Avg Prompt clarity</div>
-          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.prompt_quality_score?.toFixed(1) || '--'}<span className="text-xs text-[var(--taali-muted)]">/10</span></div>
+          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.prompt_quality_score != null ? Math.round(assessment.prompt_quality_score * 10) : '--'}<span className="text-xs text-[var(--taali-muted)]"> / 100</span></div>
         </Card>
         <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Time to First Prompt</div>
@@ -81,8 +81,8 @@ export const CandidateAiUsageTab = ({ candidate, avgCalibrationScore }) => {
         </Card>
         <Card className="p-3.5">
           <div className="font-mono text-xs text-[var(--taali-muted)]">Calibration</div>
-          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.calibration_score != null ? `${assessment.calibration_score.toFixed(1)}/10` : '--'}</div>
-          <div className="mt-1 font-mono text-xs text-[var(--taali-muted)]">vs avg {avgCalibrationScore != null ? `${avgCalibrationScore.toFixed(1)}/10` : '--'}</div>
+          <div className="text-xl font-bold text-[var(--taali-text)]">{assessment.calibration_score != null ? `${Math.round(assessment.calibration_score * 10)} / 100` : '--'}</div>
+          <div className="mt-1 font-mono text-xs text-[var(--taali-muted)]">vs avg {avgCalibrationScore != null ? `${Math.round(avgCalibrationScore * 10)} / 100` : '--'}</div>
         </Card>
       </div>
 

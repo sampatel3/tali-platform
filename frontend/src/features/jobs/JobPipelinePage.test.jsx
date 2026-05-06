@@ -265,16 +265,16 @@ Banking transformation experience
     });
   });
 
-  it('opens role fit and activity as real candidate subviews', async () => {
+  it('opens Agent settings and Job spec tabs (renamed from role fit / activity per HANDOFF v2 §4.1)', async () => {
     renderPipeline();
 
     await screen.findByRole('heading', { name: /AI Native Engineer/i });
 
-    fireEvent.click(screen.getByRole('button', { name: /^Role fit$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Agent settings$/i }));
     expect(await screen.findByRole('heading', { name: /Role fit/i })).toBeInTheDocument();
     expect(screen.getByText(/CV match sorted against this role/i)).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole('button', { name: /^Activity$/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Job spec$/i }));
     expect(await screen.findByRole('heading', { name: /Pipeline activity/i })).toBeInTheDocument();
     expect(screen.getByText(/Recent candidate movement/i)).toBeInTheDocument();
   });

@@ -41,9 +41,12 @@ const resolveAssessmentStatus = (application) => (
   String(application?.score_summary?.assessment_status || application?.valid_assessment_status || '').toLowerCase()
 );
 
+// HANDOFF v2 §5.1: candidate file is exactly 4 tabs.
+// Overview · CV & match · Interview prep · Notes & timeline
+// (the standalone "Assessment" tab was dropped — its content surfaces on
+// Overview now.)
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'assessment', label: 'Assessment', recruiterPrep: true },
   { id: 'cv', label: 'CV & match' },
   { id: 'prep', label: 'Interview prep', recruiterPrep: true },
   { id: 'notes', label: 'Notes & timeline', internalOnly: true },
@@ -1148,34 +1151,8 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     void loadShareLink().catch(() => {});
   }, [application?.id, isInterviewView, loadShareLink, routeApplicationKey, sharedRouteToken]);
 
-  const handleDownloadReport = async () => {
-    if (!application) return;
-    setBusyAction('report');
-    try {
-      const res = completedAssessment?.id
-        ? await assessmentsApi?.downloadReport?.(completedAssessment.id)
-        : await rolesApi?.downloadApplicationReport?.(application.id);
-      if (!res) throw new Error('Report download is unavailable.');
-      const blob = new Blob([res.data], {
-        type: res?.headers?.['content-type'] || 'application/pdf',
-      });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = `${buildClientReportFilenameStem(
-        application?.role_name,
-        application?.candidate_name || application?.candidate_email
-      )}.pdf`;
-      document.body.appendChild(anchor);
-      anchor.click();
-      anchor.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      showToast(getErrorMessage(err, 'Failed to download report.'), 'error');
-    } finally {
-      setBusyAction('');
-    }
-  };
+  // Report PDF export removed per HANDOFF v2 §3 — share links replace PDFs
+  // entirely; do not reintroduce a download path.
 
   const handleCopyLink = async () => {
     try {
@@ -1432,7 +1409,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               <Mail size={14} />
               Email to panel
             </button>
-            {/* Download PDF removed — the shareable web link above is the canonical report. */}
+            {/* No PDF surface anywhere on the candidate file per HANDOFF v2 §3. */}
           </div>
         </div>
         {shareState.error ? <p className="mt-3 text-xs text-[var(--taali-danger)]">{shareState.error}</p> : null}
@@ -1506,7 +1483,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               <div className="mc-report-snapshot-radar">
                 <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>AI FLUENCY · 6 DIMENSIONS</div>
                 {fluencyAxes ? (
-                  <RadarChart values={fluencyAxes} max={10} size={260} />
+                  <RadarChart values={fluencyAxes} max={100} size={260} />
                 ) : (
                   <div className="mc-report-snapshot-radar-empty">
                     <p><b>Scoring pending.</b></p>
@@ -1558,7 +1535,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                       ) : null}
                     </div>
                     <div className="pct">
-                      {isCvHighlight ? <span className="chip purple">CV match</span> : (numericValue != null ? `${Math.round(numericValue)} / 10` : '—')}
+                      {isCvHighlight ? <span className="chip purple">CV match</span> : (numericValue != null ? `${Math.round(numericValue * 10)} / 100` : '—')}
                     </div>
                   </div>
                 );
@@ -1598,7 +1575,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 <div key={item.key} className="dimension-row">
                   <div className="dimension-row-head">
                     <span className="dimension-name">{item.label}</span>
-                    <span className="dimension-score">{Math.round(Number(item.value || 0))} / 10</span>
+                    <span className="dimension-score">{Math.round(Number(item.value || 0) * 10)} / 100</span>
                   </div>
                   <div className="bar">
                     <i style={{ width: `${Math.max(0, Math.min(100, Number(item.value || 0) * 10))}%` }} />
@@ -1673,7 +1650,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
                 <div key={item.key} className="dim">
                   <div className="dim-row">
                     <span className="dim-name">{item.label}</span>
-                    <span className="dim-score">{Math.round(Number(item.value || 0))} / 10</span>
+                    <span className="dim-score">{Math.round(Number(item.value || 0) * 10)} / 100</span>
                   </div>
                   <div className="bar">
                     <i style={{ width: `${Math.max(0, Math.min(100, Number(item.value || 0) * 10))}%` }} />

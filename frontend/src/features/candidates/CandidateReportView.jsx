@@ -203,12 +203,12 @@ export function CandidateReportView({
                           <div
                             className="h-full rounded-full"
                             style={{
-                              width: `${(item.value / 10) * 100}%`,
+                              width: `${Math.min(100, Math.max(0, item.value * 10))}%`,
                               backgroundColor: scoreBarColor(item.value),
                             }}
                           />
                         </div>
-                        <span className="w-10 text-right text-[var(--taali-text)]">{item.value.toFixed(1)}</span>
+                        <span className="w-10 text-right text-[var(--taali-text)]">{Math.round(item.value * 10)}</span>
                       </div>
                     ))}
                   </div>

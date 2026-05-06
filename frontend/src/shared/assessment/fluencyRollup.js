@@ -45,6 +45,9 @@ const FLUENCY_AXES = [
 const num = (value) => (Number.isFinite(Number(value)) ? Number(value) : null);
 
 // Returns the 6-axis fluency rollup, or null if nothing is scorable.
+// Atomic axes are stored 0–10 in the backend; we multiply ×10 here so every
+// downstream display (radar, score pills, dimension bars) uses the unified
+// 0–100 scale per HANDOFF v2 §6.
 export const computeFluencyAxes = (assessment) => {
   if (!assessment) return null;
   let any = false;
@@ -52,8 +55,8 @@ export const computeFluencyAxes = (assessment) => {
     const values = sources.map((field) => num(assessment[field])).filter((v) => v != null);
     if (values.length === 0) return { k: key, label, v: 0, hasSignal: false };
     any = true;
-    const v = values.reduce((acc, x) => acc + x, 0) / values.length;
-    return { k: key, label, v, hasSignal: true };
+    const meanOnTen = values.reduce((acc, x) => acc + x, 0) / values.length;
+    return { k: key, label, v: meanOnTen * 10, hasSignal: true };
   });
   return any ? axes : null;
 };
