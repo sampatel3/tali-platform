@@ -53,6 +53,9 @@ const DemoExperiencePage = lazy(() =>
 const DemoLeadPage = lazy(() =>
   import('./features/marketing/DemoLeadPage').then((m) => ({ default: m.DemoLeadPage }))
 );
+const DemoShowcasePage = lazy(() =>
+  import('./features/marketing/DemoShowcasePage').then((m) => ({ default: m.DemoShowcasePage }))
+);
 const LazyAssessmentResultsPage = lazy(() =>
   import('./features/assessments/AssessmentResultsPage').then((m) => ({ default: m.AssessmentResultsPage }))
 );
@@ -436,6 +439,14 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <DemoLeadPage onNavigate={navigateToPage} />
+          </Suspense>
+        )}
+      />
+      <Route
+        path="/showcase"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <DemoShowcasePage onNavigate={navigateToPage} />
           </Suspense>
         )}
       />

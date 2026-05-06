@@ -44,11 +44,11 @@ export const DemoLeadPage = ({ onNavigate }) => {
           aria-label="Back to landing"
         >
           <TaaliTile
-            className="h-[26px] w-[26px] rounded-[5px]"
+            className="h-7 w-7 rounded-[7px]"
             fillClassName="text-[var(--purple)]"
             lineClassName="text-white"
             strokeWidth={2.4}
-            cornerRadius={5}
+            cornerRadius={6.5}
           />
           <span>taali<em>.</em></span>
         </button>

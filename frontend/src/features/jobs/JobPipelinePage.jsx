@@ -612,6 +612,292 @@ const FormattedJobSpecSection = ({ section, marker }) => {
   );
 };
 
+// RoleAgentSettingsTab — merged Agent settings panel per HANDOFF v2 §4.3.
+// Hero banner with ON/OFF + CV scoring criteria editor + reject threshold +
+// pipeline-distribution dot grid + autonomy toggles, with a sticky sidebar
+// for budget / must-haves / pause threshold / audit footer.
+const RoleAgentSettingsTab = ({
+  role,
+  agentEnabled,
+  criteriaDraft,
+  setCriteriaDraft,
+  thresholdDraft,
+  setThresholdDraft,
+  thresholdValue,
+  recruiterCriteria,
+  unscoredApplicationsCount,
+  activeApplications,
+  belowThresholdCount,
+  savingRoleConfig,
+  onSave,
+  onScore,
+  onScrollToReview,
+}) => {
+  const total = activeApplications.length;
+  const above = Math.max(0, total - belowThresholdCount);
+  const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
+  const thresholdDisplay = Math.max(0, Math.min(100, sliderValue));
+  const mustHaves = Array.isArray(role?.must_haves) ? role.must_haves : [];
+  const monthlyBudgetCents = Number(role?.agent_monthly_budget_cents ?? 5000);
+  const monthlySpentCents = Number(role?.agent_monthly_spent_cents ?? 0);
+  const budgetPct = monthlyBudgetCents > 0
+    ? Math.min(100, Math.round((monthlySpentCents / monthlyBudgetCents) * 100))
+    : 0;
+  const fmtUsd = (cents) => `$${Math.round((Number(cents) || 0) / 100)}`;
+  const dayOfMonth = new Date().getDate();
+  const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
+  const projectedCents = dayOfMonth ? Math.round((monthlySpentCents * daysInMonth) / dayOfMonth) : monthlySpentCents;
+  const [autonomy, setAutonomy] = React.useState({
+    auto_invite_above: true,
+    auto_reject_below: true,
+    auto_advance_high_score: false,
+    passive_outbound: false,
+  });
+  const setAutonomyField = (key, on) => setAutonomy((prev) => ({ ...prev, [key]: on }));
+
+  return (
+    <div className="mc-agent-settings">
+      <div className="mc-agent-settings-main">
+        {/* Hero banner */}
+        <section className="mc-agent-settings-hero">
+          <div className="mc-agent-settings-hero-glyph">
+            <Settings2 size={20} strokeWidth={2} />
+          </div>
+          <div className="mc-agent-settings-hero-body">
+            <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
+            <div className="mc-agent-settings-hero-title">
+              Agentic mode is{' '}
+              <span style={{ color: 'var(--purple)' }}>{agentEnabled ? 'ON' : 'OFF'}</span>
+            </div>
+            <p className="mc-agent-settings-hero-help">
+              Overrides your <a href="#org-defaults" style={{ color: 'var(--purple)' }}>org defaults</a> for this role only. Toggle off to disable autonomous actions — the agent will still surface ranked candidates for review.
+            </p>
+          </div>
+          <div className="mc-agent-settings-hero-aside">
+            <span className={`mc-switch ${agentEnabled ? 'on' : ''}`} aria-label="Agent enabled" />
+            <span className="mc-agent-settings-since">
+              {agentEnabled ? 'ON · since this role was created' : 'OFF'}
+            </span>
+          </div>
+        </section>
+
+        {/* CV scoring criteria */}
+        <section className="mc-agent-settings-card">
+          <div className="mc-agent-settings-card-head">
+            <div>
+              <h2 className="mc-agent-settings-card-title">
+                CV scoring <em>criteria</em>
+              </h2>
+              <p className="mc-agent-settings-card-help">Job spec is the default. Add recruiter guidance below to refine.</p>
+            </div>
+            <button
+              type="button"
+              className="btn btn-purple btn-sm"
+              onClick={onScore}
+              disabled={savingRoleConfig || unscoredApplicationsCount === 0}
+            >
+              {unscoredApplicationsCount > 0
+                ? `Score ${unscoredApplicationsCount} candidate${unscoredApplicationsCount === 1 ? '' : 's'}`
+                : 'No new candidates'}
+            </button>
+          </div>
+          <div className="mc-agent-settings-callout">
+            <span className="mc-agent-settings-callout-num">01</span>
+            <span>Default: scores against the job spec + linked task. Add recruiter requirements below to weigh additional signals.</span>
+            <span className="mc-agent-settings-callout-tag">JOB SPEC</span>
+          </div>
+          <div className="mc-agent-settings-textwrap">
+            <div className="mc-agent-settings-texthead">
+              <span>RECRUITER SCORING REQUIREMENTS</span>
+              <span style={{ color: 'var(--purple)' }}>
+                {recruiterCriteria.length
+                  ? `${recruiterCriteria.length} line${recruiterCriteria.length === 1 ? '' : 's'}`
+                  : 'No lines yet'}
+              </span>
+            </div>
+            <textarea
+              rows={6}
+              className="mc-agent-settings-textarea"
+              value={criteriaDraft}
+              onChange={(event) => setCriteriaDraft(event.target.value)}
+              placeholder={'Must have: 4+ yrs production Python or Go\nMust have: Postgres internals, query planning experience\nPreferred: On-call rotation at >100k req/min scale\nNice to have: Open-source or technical writing'}
+            />
+          </div>
+        </section>
+
+        {/* Reject threshold */}
+        <section className="mc-agent-settings-card">
+          <div className="mc-agent-settings-card-head">
+            <div>
+              <h2 className="mc-agent-settings-card-title">
+                Reject <em>threshold</em>
+              </h2>
+              <p className="mc-agent-settings-card-help">
+                Below this CV score, candidates are flagged for bulk reject. Nothing auto-rejects without your approval unless autonomy is enabled below.
+              </p>
+            </div>
+            <div className="mc-agent-settings-threshold-display">
+              {thresholdDisplay}<span className="mc-agent-settings-threshold-pct">%</span>
+            </div>
+          </div>
+          <div className="mc-agent-settings-slider">
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={thresholdDisplay}
+              onChange={(event) => setThresholdDraft(event.target.value)}
+              aria-label="Reject threshold percent"
+              className="mc-agent-settings-slider-input"
+            />
+            <div className="mc-agent-settings-slider-track">
+              <div className="mc-agent-settings-slider-thumb" style={{ left: `${thresholdDisplay}%` }} />
+            </div>
+            <div className="mc-agent-settings-slider-scale">
+              <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+            </div>
+          </div>
+          {total > 0 ? (
+            <>
+              <div className="mc-kicker is-mute" style={{ marginTop: 18, marginBottom: 12 }}>
+                PIPELINE DISTRIBUTION · {total} SCORED
+              </div>
+              <div className="mc-agent-settings-dotgrid">
+                {Array.from({ length: total }).map((_, i) => (
+                  <span
+                    key={i}
+                    className={`mc-agent-settings-dot ${i < belowThresholdCount ? 'is-below' : 'is-above'}`}
+                    aria-hidden="true"
+                  />
+                ))}
+              </div>
+              <div className="mc-agent-settings-distribution-summary">
+                <span>
+                  <b style={{ color: '#dc2626' }}>{belowThresholdCount}</b> below threshold ·{' '}
+                  <b style={{ color: '#16a34a' }}>{above}</b> above
+                </span>
+                {belowThresholdCount > 0 ? (
+                  <button type="button" className="btn btn-ghost btn-sm" onClick={onScrollToReview}>
+                    Review the {belowThresholdCount} →
+                  </button>
+                ) : null}
+              </div>
+            </>
+          ) : (
+            <p className="mc-agent-settings-card-help" style={{ marginTop: 18 }}>
+              Pipeline distribution will populate once candidates are scored.
+            </p>
+          )}
+        </section>
+
+        {/* Autonomy rules */}
+        <section className="mc-agent-settings-card">
+          <h2 className="mc-agent-settings-card-title">
+            Autonomy <em>rules</em>
+          </h2>
+          <p className="mc-agent-settings-card-help" style={{ marginBottom: 14 }}>
+            What the agent can do on this role without asking.
+          </p>
+          {[
+            {
+              key: 'auto_invite_above',
+              title: 'Auto-invite candidates scoring ≥ 75%',
+              sub: 'Sends the assessment invite within hourly limits.',
+            },
+            {
+              key: 'auto_reject_below',
+              title: `Auto-reject candidates scoring < ${thresholdDisplay}%`,
+              sub: 'Sends the role-specific reject template, logs to audit.',
+            },
+            {
+              key: 'auto_advance_high_score',
+              title: 'Auto-advance assessments scoring ≥ 85%',
+              sub: 'Moves to Final Review without recruiter approval.',
+            },
+            {
+              key: 'passive_outbound',
+              title: 'Outbound to passive candidates',
+              sub: 'Drafts and sends initial outreach for matched profiles.',
+            },
+          ].map((rule, idx) => (
+            <label key={rule.key} className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}>
+              <button
+                type="button"
+                className={`mc-switch ${autonomy[rule.key] ? 'on' : ''}`}
+                onClick={() => setAutonomyField(rule.key, !autonomy[rule.key])}
+                aria-pressed={Boolean(autonomy[rule.key])}
+                aria-label={rule.title}
+              />
+              <div>
+                <div className="mc-agent-settings-rule-title">{rule.title}</div>
+                <div className="mc-agent-settings-rule-sub">{rule.sub}</div>
+              </div>
+            </label>
+          ))}
+        </section>
+
+        {/* Save bar */}
+        <div className="mc-agent-settings-savebar">
+          <span>
+            Changes apply to this role only. Org defaults stay intact —{' '}
+            <a href="#org-defaults" style={{ color: 'var(--purple)' }}>edit org defaults →</a>
+          </span>
+          <button type="button" className="btn btn-purple btn-sm" onClick={onSave} disabled={savingRoleConfig}>
+            {savingRoleConfig ? 'Saving…' : 'Save role settings'}
+          </button>
+        </div>
+      </div>
+
+      {/* Sidebar */}
+      <aside className="mc-agent-settings-side">
+        <div className="mc-agent-settings-side-card">
+          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>AGENT BUDGET · THIS ROLE</div>
+          <div className="mc-agent-settings-budget-amount">
+            <span className="big">{fmtUsd(monthlySpentCents)}</span>
+            <span className="of">of {fmtUsd(monthlyBudgetCents)}</span>
+          </div>
+          <div className="mc-agent-settings-budget-bar">
+            <i style={{ width: `${budgetPct}%` }} />
+          </div>
+          <div className="mc-agent-settings-budget-foot">
+            EOM PROJECTION ≈ {fmtUsd(projectedCents)} ·{' '}
+            {projectedCents > monthlyBudgetCents ? 'over budget' : 'paced under budget'}
+          </div>
+        </div>
+
+        <div className="mc-agent-settings-side-card">
+          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>MUST-HAVE REQUIREMENTS</div>
+          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>The agent rejects below these — no exceptions.</p>
+          {mustHaves.length ? (
+            <ul className="mc-agent-settings-mustlist">
+              {mustHaves.map((item, idx) => (
+                <li key={`${item}-${idx}`}>· {item}</li>
+              ))}
+            </ul>
+          ) : (
+            <div className="mc-agent-settings-card-help">No must-haves set yet.</div>
+          )}
+        </div>
+
+        <div className="mc-agent-settings-side-card">
+          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>PAUSE THRESHOLD</div>
+          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>Agent pauses itself when budget reaches this %.</p>
+          <select className="mc-agent-settings-select" defaultValue={80}>
+            <option value={70}>70%</option>
+            <option value={80}>80%</option>
+            <option value={90}>90%</option>
+          </select>
+        </div>
+
+        <div className="mc-agent-settings-audit-callout">
+          Inherits from <a href="#org-defaults" style={{ color: 'var(--purple)' }}>org defaults</a>. Changes here apply to this role only.
+        </div>
+      </aside>
+    </div>
+  );
+};
+
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
   const { roleId } = useParams();
   const rolesApi = apiClient.roles;
@@ -1689,62 +1975,23 @@ Disqualifying: No experience with regulated financial data`}
                 surfaced in the candidate score sheet (kit + screening pack). */}
           </div>
         ) : activeView === 'role-fit' ? (
-          <div className="role-fit-view">
-            <div className="role-fit-list">
-              <div className="role-fit-head">
-                <div>
-                  <h3>Role <em>fit</em></h3>
-                  <p>CV match sorted against this role&apos;s job spec and saved recruiter criteria.</p>
-                </div>
-                <button type="button" className="btn btn-outline btn-sm" onClick={() => handleBatchScore({ includeScored: true })}>
-                  Re-score role fit
-                </button>
-              </div>
-              {roleFitApplications.slice(0, 12).map((application) => {
-                const score = Number(application?.pre_screen_score);
-                const scoreLabel = Number.isFinite(score) ? Math.round(score) : null;
-                const belowThreshold = thresholdValue != null && scoreLabel != null && scoreLabel < thresholdValue;
-                return (
-                  <button
-                    key={application.id}
-                    type="button"
-                    className="role-fit-row"
-                    onClick={() => onNavigate('candidate-report', {
-                      candidateApplicationId: application.id,
-                      ...(Number.isFinite(numericRoleId) ? { fromRoleId: numericRoleId } : {}),
-                    })}
-                    onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
-                  >
-                    <div className="av">{buildApplicationTitle(application).slice(0, 2).toUpperCase()}</div>
-                    <div className="rf-main">
-                      <div className="n">{buildApplicationTitle(application)}</div>
-                      <div className="e">{application?.candidate_email || application?.candidate_position || 'No email captured'}</div>
-                    </div>
-                    <div className="rf-score">
-                      <span>{scoreLabel != null ? `${scoreLabel}%` : '—'}</span>
-                      <div className="mini-bar"><i style={{ width: `${scoreLabel != null ? Math.max(3, Math.min(100, scoreLabel)) : 0}%` }} /></div>
-                    </div>
-                    <div className={`rf-status ${belowThreshold ? 'warn' : 'ok'}`}>
-                      {belowThreshold ? 'Below threshold' : 'In range'}
-                    </div>
-                  </button>
-                );
-              })}
-            </div>
-            <div className="role-fit-side">
-              <h4>Scoring source</h4>
-              <p>The role fit score uses the ingested job spec plus the recruiter-specific requirements saved above.</p>
-              <div className="req-list">
-                {(recruiterCriteria.length ? recruiterCriteria : ['No recruiter-specific requirements saved yet.']).slice(0, 4).map((criterion, index) => (
-                  <div key={`${criterion}-${index}`} className={`req-item ${recruiterCriteria.length ? 'source-rec' : 'source-jd'}`}>
-                    <span className="num">{String(index + 1).padStart(2, '0')}</span>
-                    <div>{criterion}</div>
-                    <span className="tag-src">{recruiterCriteria.length ? 'Recruiter' : 'Job spec'}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          </div>
+          <RoleAgentSettingsTab
+            role={role}
+            agentEnabled={role?.agentic_mode_enabled !== false}
+            criteriaDraft={criteriaDraft}
+            setCriteriaDraft={setCriteriaDraft}
+            thresholdDraft={thresholdDraft}
+            setThresholdDraft={setThresholdDraft}
+            thresholdValue={thresholdValue}
+            recruiterCriteria={recruiterCriteria}
+            unscoredApplicationsCount={unscoredApplications.length}
+            activeApplications={activeApplications}
+            belowThresholdCount={belowThresholdCount}
+            savingRoleConfig={savingRoleConfig}
+            onSave={handleSaveRoleConfig}
+            onScore={() => handleBatchScore({ includeScored: false })}
+            onScrollToReview={() => document.getElementById('pipeline-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+          />
         ) : activeView === 'activity' ? (
           <div className="activity-view">
             <div className="activity-head">

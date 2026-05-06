@@ -19,11 +19,11 @@ export const AuthShell = ({
       <div className="mc-auth-editorial-bg" aria-hidden="true" />
       <div className="mc-auth-editorial-logo">
         <TaaliTile
-          className="h-[26px] w-[26px] rounded-[5px]"
+          className="h-7 w-7 rounded-[7px]"
           fillClassName="text-white"
           lineClassName="text-[var(--purple)]"
           strokeWidth={2.4}
-          cornerRadius={5}
+          cornerRadius={6.5}
         />
         <span>taali<span style={{ opacity: 0.7 }}>.</span></span>
       </div>

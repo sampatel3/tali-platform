@@ -30,6 +30,8 @@ export const pathForPage = (page, options = {}) => {
       return '/demo';
     case 'demo-lead':
       return '/demo-lead';
+    case 'showcase':
+      return '/showcase';
     case 'candidates':
       return '/candidates';
     case 'candidate-report': {
