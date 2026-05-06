@@ -9075,6 +9075,409 @@ button.eng-badge-button:focus-visible {
   border-radius: 10px;
 }
 
+/* ================== ROLE AGENT SETTINGS TAB — v2 §4.3 ================== */
+
+.mc-agent-settings {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 24px;
+  align-items: flex-start;
+}
+
+@media (min-width: 1100px) {
+  .mc-agent-settings { grid-template-columns: 1fr 320px; }
+}
+
+.mc-agent-settings-main {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-width: 0;
+}
+
+.mc-agent-settings-hero {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 18px;
+  padding: 24px 28px;
+  background: linear-gradient(180deg, var(--purple-soft) 0%, var(--bg-2) 100%);
+  border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line));
+  border-radius: 18px;
+}
+
+.mc-agent-settings-hero-glyph {
+  width: 48px;
+  height: 48px;
+  border-radius: 12px;
+  background: var(--purple);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.mc-agent-settings-hero-body {
+  min-width: 0;
+}
+
+.mc-agent-settings-hero-title {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin: 4px 0 6px;
+}
+
+.mc-agent-settings-hero-help {
+  font-size: 13.5px;
+  color: var(--ink-2);
+  line-height: 1.55;
+  max-width: 640px;
+  margin: 0;
+}
+
+.mc-agent-settings-hero-aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.mc-agent-settings-since {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--purple);
+}
+
+.mc-agent-settings-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  padding: 24px 28px;
+}
+
+.mc-agent-settings-card-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+}
+
+.mc-agent-settings-card-title {
+  margin: 0 0 4px;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.mc-agent-settings-card-title em {
+  font-style: normal;
+  color: var(--purple);
+}
+
+.mc-agent-settings-card-help {
+  margin: 0;
+  color: var(--mute);
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: 560px;
+}
+
+.mc-agent-settings-callout {
+  display: flex;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 12px 14px;
+  background: var(--purple-soft);
+  border-radius: 10px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.5;
+  margin-bottom: 14px;
+}
+
+.mc-agent-settings-callout-num {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--purple);
+  font-weight: 600;
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.mc-agent-settings-callout-tag {
+  padding: 2px 8px;
+  border-radius: 6px;
+  background: var(--bg-2);
+  color: var(--purple);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  align-self: flex-start;
+  flex-shrink: 0;
+}
+
+.mc-agent-settings-textwrap {
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.mc-agent-settings-texthead {
+  display: flex;
+  justify-content: space-between;
+  padding: 10px 14px;
+  border-bottom: 1px dashed var(--line);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.mc-agent-settings-textarea {
+  width: 100%;
+  border: 0;
+  padding: 14px 16px;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  line-height: 1.6;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--ink-2);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.mc-agent-settings-textarea:focus {
+  background: var(--bg-2);
+}
+
+.mc-agent-settings-threshold-display {
+  font-family: var(--font-display);
+  font-size: 60px;
+  font-weight: 600;
+  letter-spacing: -0.04em;
+  line-height: 1;
+  color: var(--purple);
+  text-align: right;
+}
+
+.mc-agent-settings-threshold-pct {
+  color: var(--mute);
+  font-size: 32px;
+}
+
+.mc-agent-settings-slider {
+  position: relative;
+  margin-top: 8px;
+}
+
+.mc-agent-settings-slider-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 24px;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 2;
+}
+
+.mc-agent-settings-slider-track {
+  position: relative;
+  height: 8px;
+  border-radius: 4px;
+  background: linear-gradient(90deg, #fecaca 0%, #fde68a 50%, #bbf7d0 100%);
+}
+
+.mc-agent-settings-slider-thumb {
+  position: absolute;
+  top: -6px;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  border: 2px solid var(--purple);
+  background: var(--bg-2);
+  box-shadow: var(--shadow-sm);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.mc-agent-settings-slider-scale {
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--mute);
+  margin-top: 14px;
+}
+
+.mc-agent-settings-dotgrid {
+  display: grid;
+  grid-template-columns: repeat(40, 1fr);
+  gap: 3px;
+  margin-bottom: 14px;
+}
+
+@media (max-width: 720px) {
+  .mc-agent-settings-dotgrid { grid-template-columns: repeat(28, 1fr); }
+}
+
+.mc-agent-settings-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 3.5px;
+  display: inline-block;
+}
+
+.mc-agent-settings-dot.is-below { background: #dc2626; opacity: 0.85; }
+.mc-agent-settings-dot.is-above { background: #16a34a; opacity: 0.7; }
+
+.mc-agent-settings-distribution-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.mc-agent-settings-rule {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 14px;
+  align-items: flex-start;
+  padding: 14px 0;
+  cursor: pointer;
+}
+
+.mc-agent-settings-rule.is-divided { border-top: 1px solid var(--line-2); }
+
+.mc-agent-settings-rule-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.mc-agent-settings-rule-sub {
+  font-size: 12.5px;
+  color: var(--mute);
+  margin-top: 2px;
+  line-height: 1.5;
+}
+
+.mc-agent-settings-savebar {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 14px 18px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  font-size: 12.5px;
+  color: var(--mute);
+  flex-wrap: wrap;
+}
+
+.mc-agent-settings-side {
+  position: sticky;
+  top: 88px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-self: flex-start;
+}
+
+.mc-agent-settings-side-card {
+  padding: 18px 20px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+.mc-agent-settings-budget-amount {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.mc-agent-settings-budget-amount .big {
+  font-family: var(--font-display);
+  font-size: 30px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+
+.mc-agent-settings-budget-amount .of {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  color: var(--mute);
+}
+
+.mc-agent-settings-budget-bar {
+  height: 6px;
+  background: var(--bg-3);
+  border-radius: 999px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.mc-agent-settings-budget-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--purple);
+}
+
+.mc-agent-settings-budget-foot {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--mute);
+}
+
+.mc-agent-settings-mustlist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.mc-agent-settings-select {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: inherit;
+  font-size: 13.5px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.mc-agent-settings-audit-callout {
+  padding: 14px 16px;
+  background: var(--purple-soft);
+  border: 1px solid color-mix(in oklab, var(--purple) 25%, transparent);
+  border-radius: 12px;
+  font-size: 12px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
 /* ================== DEMO LEAD PAGE — Phase 9 ================== */
 
 .mc-demo-lead {

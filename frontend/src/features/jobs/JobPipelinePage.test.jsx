@@ -271,8 +271,10 @@ Banking transformation experience
     await screen.findByRole('heading', { name: /AI Native Engineer/i });
 
     fireEvent.click(screen.getByRole('button', { name: /^Agent settings$/i }));
-    expect(await screen.findByRole('heading', { name: /Role fit/i })).toBeInTheDocument();
-    expect(screen.getByText(/CV match sorted against this role/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /CV scoring/i })).toBeInTheDocument();
+    expect(screen.getByText(/HOW THE AGENT RUNS THIS ROLE/i)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Reject threshold/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /Autonomy rules/i })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Job spec$/i }));
     expect(await screen.findByRole('heading', { name: /Pipeline activity/i })).toBeInTheDocument();
