@@ -74,7 +74,7 @@ const stitchToolResults = (rows) => {
     .map(({ _isToolResultEcho, _toolResults, ...rest }) => rest);
 };
 
-const ChatPage = () => {
+const ChatPage = ({ onNavigate = null, NavComponent = null } = {}) => {
   const navigate = useNavigate();
   const { conversationId: routeId } = useParams();
   const conversationId = routeId ? Number(routeId) : null;
@@ -206,7 +206,9 @@ const ChatPage = () => {
   }, [conversationId, conversations]);
 
   return (
-    <div className="cp-root">
+    <>
+      {NavComponent ? <NavComponent currentPage="chat" onNavigate={onNavigate} /> : null}
+      <div className="cp-root">
       <Sidebar
         conversations={conversations}
         activeId={conversationId}
@@ -261,6 +263,7 @@ const ChatPage = () => {
         onCancel={cancelDelete}
       />
     </div>
+    </>
   );
 };
 

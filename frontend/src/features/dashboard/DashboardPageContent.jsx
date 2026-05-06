@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { CheckCircle, ClipboardList, Eye, Link2, Timer, TriangleAlert } from 'lucide-react';
+import { Check, CheckCircle, Circle, ClipboardList, Eye, Link2, Timer, TriangleAlert } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
@@ -271,10 +271,28 @@ export const DashboardPage = ({
               <Button variant="ghost" size="sm" onClick={dismissOnboarding}>Dismiss</Button>
             </div>
             <ol className="space-y-2 text-sm text-[var(--taali-text)]">
-              <li>{hasRoles ? '✓' : '○'} Create a role</li>
-              <li>{hasCandidates ? '✓' : '○'} Add a candidate with their CV</li>
-              <li>{hasSentAssessment ? '✓' : '○'} Send them an assessment link</li>
-              <li>○ Manage setup in Candidates, then review completed attempts here.</li>
+              <li className="flex items-center gap-2">
+                {hasRoles
+                  ? <Check size={14} className="text-[var(--taali-success)]" aria-label="Done" />
+                  : <Circle size={14} className="text-[var(--taali-muted)]" aria-label="Not started" />}
+                <span>Create a role</span>
+              </li>
+              <li className="flex items-center gap-2">
+                {hasCandidates
+                  ? <Check size={14} className="text-[var(--taali-success)]" aria-label="Done" />
+                  : <Circle size={14} className="text-[var(--taali-muted)]" aria-label="Not started" />}
+                <span>Add a candidate with their CV</span>
+              </li>
+              <li className="flex items-center gap-2">
+                {hasSentAssessment
+                  ? <Check size={14} className="text-[var(--taali-success)]" aria-label="Done" />
+                  : <Circle size={14} className="text-[var(--taali-muted)]" aria-label="Not started" />}
+                <span>Send them an assessment link</span>
+              </li>
+              <li className="flex items-center gap-2">
+                <Circle size={14} className="text-[var(--taali-muted)]" aria-label="Not started" />
+                <span>Manage setup in Candidates, then review completed attempts here.</span>
+              </li>
             </ol>
             <div className="mt-3">
               <Button variant="secondary" size="sm" onClick={() => onNavigate('candidates')}>Go to Candidates</Button>
