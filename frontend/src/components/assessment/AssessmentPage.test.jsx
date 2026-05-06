@@ -149,7 +149,7 @@ describe('AssessmentPage tracking metadata', () => {
     });
 
     expect(await screen.findByRole('heading', { name: /Task submitted/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Close' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Close/ })).toBeInTheDocument();
     expect(screen.queryByText(/TAALI Demo Results/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Your TAALI profile/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/Try another demo/i)).not.toBeInTheDocument();

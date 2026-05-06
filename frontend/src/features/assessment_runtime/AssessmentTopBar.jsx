@@ -61,13 +61,13 @@ export const AssessmentTopBar = ({
 
         {claudeBudget?.enabled ? (
           <div
-            className="hidden items-center gap-2 rounded-full px-3.5 py-2 font-mono text-[12px] text-[color-mix(in_oklab,var(--amber)_60%,var(--ink))] md:inline-flex"
+            className="hidden items-center gap-2 rounded-full px-3.5 py-2 font-mono text-[12px] text-[var(--purple)] md:inline-flex"
             style={{
-              border: '1px solid color-mix(in oklab, var(--peach) 80%, var(--line))',
-              background: 'color-mix(in oklab, var(--peach) 55%, transparent)',
+              border: '1px solid color-mix(in oklab, var(--purple) 22%, var(--line))',
+              background: 'var(--purple-soft)',
             }}
           >
-            <span>Claude</span>
+            <span style={{ letterSpacing: '0.08em', textTransform: 'uppercase', fontSize: 10 }}>Claude</span>
             <span>{formatBudgetUsd(claudeBudget.remaining_usd)} of {formatUsd(claudeBudget.limit_usd)}</span>
           </div>
         ) : null}
