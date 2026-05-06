@@ -277,6 +277,10 @@ from .api.v1.users import router as users_router
 from .api.v1.workable import router as workable_router
 from .api.v1.auth import router as auth_router
 from .api.v1.background_jobs import router as background_jobs_router
+from .api.v1.share_links import (
+    public_router as share_links_public_router,
+    router as share_links_router,
+)
 
 # FastAPI-Users auth routers
 app.include_router(
@@ -318,6 +322,11 @@ app.include_router(roles_router, prefix="/api/v1")
 app.include_router(scoring_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
+app.include_router(share_links_router, prefix="/api/v1")
+# HANDOFF v2 §3 — public share viewer is mounted at /share/:token
+# (no /api/v1 prefix) so the URL the recruiter copy-pastes works in
+# any browser without auth and without exposing the API surface.
+app.include_router(share_links_public_router)
 
 # cv_match_v3.0 admin + override surface (gated server-side; flag controls runner)
 from .cv_matching.routes import (
