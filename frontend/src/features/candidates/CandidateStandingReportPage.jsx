@@ -41,9 +41,12 @@ const resolveAssessmentStatus = (application) => (
   String(application?.score_summary?.assessment_status || application?.valid_assessment_status || '').toLowerCase()
 );
 
+// HANDOFF v2 §5.1: candidate file is exactly 4 tabs.
+// Overview · CV & match · Interview prep · Notes & timeline
+// (the standalone "Assessment" tab was dropped — its content surfaces on
+// Overview now.)
 const REPORT_TABS = [
   { id: 'overview', label: 'Overview' },
-  { id: 'assessment', label: 'Assessment', recruiterPrep: true },
   { id: 'cv', label: 'CV & match' },
   { id: 'prep', label: 'Interview prep', recruiterPrep: true },
   { id: 'notes', label: 'Notes & timeline', internalOnly: true },
