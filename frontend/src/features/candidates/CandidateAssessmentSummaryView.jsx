@@ -83,7 +83,7 @@ const RoleFitSummaryPanel = ({ reportModel }) => {
         </div>
         {reportModel?.summaryModel?.roleFitScore != null ? (
           <Badge variant="purple" className="font-mono text-[11px]">
-            Role fit {reportModel.summaryModel.roleFitScore.toFixed(1)}
+            Role fit {Math.round(reportModel.summaryModel.roleFitScore)} / 100
           </Badge>
         ) : null}
       </div>

@@ -10,10 +10,14 @@ const toFiniteNumber = (value) => {
   return Number.isFinite(numeric) ? numeric : null;
 };
 
+// HANDOFF v2 §6 — scores render as integer "nn / 100" everywhere. The
+// previous version stripped "/ 100" and rewrote scores to a single-decimal
+// display; that contradicted the unified scale. This now normalises any
+// stray "92/100" / "92 / 100" / "92.5/100" to the canonical "92 / 100" form.
 const sanitizeScoreText = (value) => String(value || '').replace(/(\d+(?:\.\d+)?)\s*\/\s*100\b/g, (_, score) => {
   const numeric = Number(score);
-  if (!Number.isFinite(numeric)) return score;
-  return numeric.toFixed(1);
+  if (!Number.isFinite(numeric)) return `${score} / 100`;
+  return `${Math.round(numeric)} / 100`;
 });
 
 const uniqueTrimmed = (items, maxItems = Infinity) => {
@@ -475,10 +479,10 @@ const buildEvidenceSections = ({ application, completedAssessment, roleFitModel,
   const jobSpecFilename = assessment?.candidate_job_spec_filename || application?.role_job_spec_filename || null;
   const aiUsageItems = assessment ? [
     assessment.total_prompts != null ? `${assessment.total_prompts} prompts captured` : null,
-    assessment.prompt_quality_score != null ? `Prompt clarity ${assessment.prompt_quality_score.toFixed(1)}/10` : null,
+    assessment.prompt_quality_score != null ? `Prompt clarity ${Math.round(assessment.prompt_quality_score * 10)} / 100` : null,
     assessment.browser_focus_ratio != null ? `Browser focus ${Math.round(assessment.browser_focus_ratio * 100)}%` : null,
     assessment.tab_switch_count != null ? `${assessment.tab_switch_count} tab switches recorded` : null,
-    assessment.calibration_score != null ? `Calibration ${assessment.calibration_score.toFixed(1)}/10` : null,
+    assessment.calibration_score != null ? `Calibration ${Math.round(assessment.calibration_score * 10)} / 100` : null,
     Array.isArray(assessment.prompt_fraud_flags) && assessment.prompt_fraud_flags.length
       ? `${assessment.prompt_fraud_flags.length} integrity flags need review`
       : null,

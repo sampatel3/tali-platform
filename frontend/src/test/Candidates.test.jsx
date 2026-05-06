@@ -156,7 +156,7 @@ const renderAppOnCandidatesPage = async () => {
   // with a strict string fails. findByRole('heading', name: /Candidates/) is
   // the supported way to express "the page-level Candidates heading".
   await waitFor(() => {
-    expect(screen.getByRole('heading', { level: 1, name: /Candidates/ })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: /Search every candidate/i })).toBeInTheDocument();
   }, { timeout: 5000 });
 
   return result;

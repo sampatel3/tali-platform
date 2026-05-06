@@ -584,8 +584,8 @@ export const CandidatesDirectoryPage = ({
   lockRoleId = null,
   useRolePipelineEndpoint = false,
   navCurrentPage = 'candidates',
-  title = 'Candidates',
-  subtitle = 'Every person across every role, scored and filterable. Click a row to triage; Cmd/Ctrl-click opens the full report.',
+  title = 'Search every candidate',
+  subtitle = 'Plain-language across CVs, assessment evidence, and your notes.',
   prelude = null,
   externalRefreshKey = 0,
   embedded = false,
@@ -1861,10 +1861,10 @@ export const CandidatesDirectoryPage = ({
                 {rolePipelineMode ? 'ROLE PIPELINE' : 'CANDIDATES · ALL ROLES'}
               </div>
               <h1 className="mc-h-display">
-                {headerTitle || (
-                  <>
-                    Search every <em>candidate</em>
-                  </>
+                {rolePipelineMode ? (
+                  <>{headerTitle || 'Pipeline'}</>
+                ) : (
+                  <>Search every <em>candidate</em></>
                 )}
                 <span className="mc-period">.</span>
               </h1>
@@ -2373,7 +2373,7 @@ export const CandidatesDirectoryPage = ({
                           </div>
                         </div>
 
-                        <div className="c-score-unified" title={unifiedScore.value == null ? 'Not scored yet' : `${Math.round(Number(unifiedScore.value))}%`}>
+                        <div className="c-score-unified" title={unifiedScore.value == null ? 'Not scored yet' : `${Math.round(Number(unifiedScore.value))} / 100`}>
                           <span className={`pct ${scoreTone}`}>
                             {(() => {
                               const status = application?.score_status;
@@ -2383,8 +2383,14 @@ export const CandidatesDirectoryPage = ({
                                 if (status === 'stale') return 'Stale';
                                 return '—';
                               }
-                              const formatted = `${Math.round(Number(unifiedScore.value))}%`;
-                              return status === 'stale' ? `${formatted} · stale` : formatted;
+                              const rounded = Math.round(Number(unifiedScore.value));
+                              const formatted = (
+                                <>
+                                  {rounded}
+                                  <span style={{ color: 'var(--mute)', fontWeight: 400 }}> / 100</span>
+                                </>
+                              );
+                              return status === 'stale' ? <>{formatted} · stale</> : formatted;
                             })()}
                             {application.workable_score_raw != null && unifiedScore.value != null ? (
                               <span className="wk-pip">WK <b>{Math.round(Number(application.workable_score_raw))}</b></span>
