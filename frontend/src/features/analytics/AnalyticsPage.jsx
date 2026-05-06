@@ -51,7 +51,8 @@ const buildNarrative = (data, rangeLabel) => {
   if (total === 0) {
     return `No assessments closed in the ${rangeLabel.toLowerCase()}. Once candidates start completing tasks, the agent will narrate what it advanced, rejected, and flagged.`;
   }
-  const avgPart = avg != null ? ` Average composite score sat at ${Number(avg).toFixed(1)}/10.` : '';
+  // HANDOFF v2 §6 — recruiter-facing scores rendered as integer nn / 100.
+  const avgPart = avg != null ? ` Average composite score sat at ${Math.round(Number(avg) * 10)} / 100.` : '';
   const completionRate = safeNumber(data.completion_rate);
   return `Across the ${rangeLabel.toLowerCase()}, ${completed} of ${total} assessments closed (${completionRate.toFixed(0)}% completion).${avgPart} Use the panels below to see what shifted, where confidence dropped, and how the funnel held up.`;
 };
@@ -362,7 +363,9 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
               <Panel className="p-4">
                 <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Avg score</div>
                 <div className="text-2xl font-bold text-[var(--taali-text)]">
-                  {data.avg_score != null ? `${Number(data.avg_score).toFixed(1)}/10` : '—'}
+                  {data.avg_score != null
+                    ? <>{Math.round(Number(data.avg_score) * 10)} <span className="text-base font-normal text-[var(--taali-muted)]">/ 100</span></>
+                    : '—'}
                 </div>
               </Panel>
               <Panel className="p-4">
@@ -412,7 +415,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                         <AnomalyRow
                           tone="amber"
                           title="Average score below mid-band"
-                          body={`Mean composite is ${Number(data.avg_score).toFixed(1)}/10. Either the bar is set high or the candidate pool needs sharpening.`}
+                          body={`Mean composite is ${Math.round(Number(data.avg_score) * 10)} / 100. Either the bar is set high or the candidate pool needs sharpening.`}
                         />
                       ) : null}
                       {data.completion_rate >= 50 && (data.avg_score == null || data.avg_score >= 5) ? (

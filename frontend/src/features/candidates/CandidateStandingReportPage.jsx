@@ -12,6 +12,7 @@ import {
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import {
+  CandidateAvatar,
   WorkableComparisonCard,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import { ShareModal } from './ShareModal';
@@ -372,32 +373,37 @@ const toBulletList = (value) => {
   return text ? [text] : [];
 };
 
+// PrepQuestionCard — canvas cand-prep card layout:
+//   QUESTION NN · {source}    (mono purple kicker)
+//   {question}                 (display, weight 500)
+//   LISTEN FOR (green mono)    |  CONCERNING IF (red mono)
+//   {listenFor bullets}        |  {concern bullets}
 const PrepQuestionCard = ({ item, number, listenLabel, concernLabel, fallbackConcern }) => {
   const listenItems = toBulletList(item?.listenFor);
   const concernItems = toBulletList(item?.redFlags || item?.followUp);
   const evidenceText = asCleanText(item?.evidence);
   const contextText = asCleanText(item?.context);
   return (
-    <div className="q-card">
-      <div className="q-num">QUESTION {String(number).padStart(2, '0')} · {item?.source || 'Standing report'}</div>
-      <div className="q-text">{item?.question}</div>
+    <div className="mc-prep-card">
+      <div className="mc-prep-card-kicker">
+        QUESTION {String(number).padStart(2, '0')} · {item?.source || 'Standing report'}
+      </div>
+      <div className="mc-prep-card-question">{item?.question}</div>
       {contextText ? (
-        <div className="q-context" style={{ marginTop: '6px', fontSize: '13.5px', lineHeight: 1.55, color: 'var(--mute)' }}>
-          {contextText}
-        </div>
+        <div className="mc-prep-card-context">{contextText}</div>
       ) : null}
-      <div className="q-meta">
+      <div className="mc-prep-card-grid">
         <div>
-          <div className="label">{listenLabel}</div>
-          <ul className="listen">
+          <div className="mc-prep-card-label is-listen">{listenLabel}</div>
+          <ul className="mc-prep-card-list">
             {(listenItems.length ? listenItems : ['Specific examples tied to the candidate evidence.']).map((line, idx) => (
               <li key={`listen-${idx}`}>{line}</li>
             ))}
           </ul>
         </div>
         <div>
-          <div className="label">{concernLabel}</div>
-          <ul className="concerning">
+          <div className="mc-prep-card-label is-concern">{concernLabel}</div>
+          <ul className="mc-prep-card-list">
             {(concernItems.length ? concernItems : [fallbackConcern]).map((line, idx) => (
               <li key={`concern-${idx}`}>{line}</li>
             ))}
@@ -405,11 +411,9 @@ const PrepQuestionCard = ({ item, number, listenLabel, concernLabel, fallbackCon
         </div>
       </div>
       {evidenceText ? (
-        <div className="q-evidence" style={{ marginTop: '12px', padding: '10px 12px', borderRadius: '10px', background: 'var(--taali-surface-subtle, rgba(124, 58, 237, 0.06))', fontSize: '13px', lineHeight: 1.55, color: 'var(--ink-2)' }}>
-          <div className="label" style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--mute)', marginBottom: '4px' }}>
-            Anchor in
-          </div>
-          {evidenceText}
+        <div className="mc-prep-card-evidence">
+          <div className="mc-prep-card-evidence-label">ANCHOR IN</div>
+          <div>{evidenceText}</div>
         </div>
       ) : null}
     </div>
@@ -794,6 +798,11 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [busyAction, setBusyAction] = useState('');
   const [shareModalOpen, setShareModalOpen] = useState(false);
   const [applicationEvents, setApplicationEvents] = useState([]);
+  // Notes & timeline tab — local note draft + a tick that lets us refetch
+  // the events feed after a successful save without a full page reload.
+  const [noteDraft, setNoteDraft] = useState('');
+  const [savingNote, setSavingNote] = useState(false);
+  const [eventsRefetchTick, setEventsRefetchTick] = useState(0);
   const [shareState, setShareState] = useState({
     url: '',
     token: '',
@@ -911,7 +920,9 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
 
   useEffect(() => {
     void loadStandingReport();
-  }, [loadStandingReport]);
+    // `eventsRefetchTick` is bumped after a recruiter saves a note so the
+    // standing report reloads with the new event in the timeline.
+  }, [loadStandingReport, eventsRefetchTick]);
 
   useEffect(() => {
     if (!sharedRouteToken) return;
@@ -1216,6 +1227,30 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     }
   };
 
+  // Save a recruiter note. We persist via assessmentsApi.addNote when an
+  // assessment is linked (it writes a `recruiter_note` event to the
+  // application timeline); we degrade to a toast otherwise. After save
+  // we bump eventsRefetchTick so the timeline picks up the new event.
+  const handleSaveNote = useCallback(async () => {
+    const note = noteDraft.trim();
+    if (!note) return;
+    if (!assessmentId || !assessmentsApi?.addNote) {
+      showToast('Notes are saved against the linked assessment — none is linked yet.', 'info');
+      return;
+    }
+    setSavingNote(true);
+    try {
+      await assessmentsApi.addNote(assessmentId, note);
+      setNoteDraft('');
+      setEventsRefetchTick((prev) => prev + 1);
+      showToast('Note added to the timeline.', 'success');
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to add note.'), 'error');
+    } finally {
+      setSavingNote(false);
+    }
+  }, [assessmentId, assessmentsApi, noteDraft, showToast]);
+
   const handlePostToWorkable = useCallback(async () => {
     if (!assessmentId || !assessmentsApi?.postToWorkable) {
       showToast('Workable posting is unavailable for this report.', 'error');
@@ -1306,79 +1341,102 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
             </button>
           );
         })()}
-        <div className="kicker" style={{ marginBottom: '10px' }}>Candidate standing report</div>
-
-        <div className="report-hero">
-          <div className="meta">
-            <span className="kicker">STANDING REPORT · APPLICATION #{application?.id || '—'}</span>
-            <span className={`chip ${reportModel?.recommendation?.variant === 'success' ? 'green' : reportModel?.recommendation?.variant === 'warning' ? 'amber' : 'purple'}`}>
-              {reportModel?.recommendation?.label || 'Pending review'}
-            </span>
-            {isPreScreenedOut ? (
-              <span className="chip" style={{ background: 'var(--taali-surface-subtle, rgba(100,116,139,0.15))', color: 'var(--ink-2)' }}>
-                Pre-screened out
-              </span>
-            ) : null}
-          </div>
-          {isPreScreenedOut ? (
-            <div
-              data-internal-only
-              style={{
-                marginTop: '14px',
-                padding: '12px 14px',
-                borderRadius: '12px',
-                background: 'var(--taali-surface-subtle, rgba(100,116,139,0.08))',
-                border: '1px solid var(--taali-border, rgba(100,116,139,0.2))',
-                display: 'flex',
-                gap: '12px',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                flexWrap: 'wrap',
-              }}
+        {/* HANDOFF v2 §5.1 / canvas cand-overview header — light page header
+            with avatar + name + meta line + 3 actions. The 4-tile dark
+            score band that used to live here is redundant now: the new
+            Overview pane (cand-overview hero band) renders ScoreRing +
+            RECOMMENDATION + SIGNAL list on every tab. */}
+        <div className="mc-kicker" style={{ marginBottom: 8 }}>Candidate standing report</div>
+        {isPreScreenedOut ? (
+          <div
+            data-internal-only
+            style={{
+              marginTop: '4px',
+              marginBottom: '14px',
+              padding: '12px 14px',
+              borderRadius: '12px',
+              background: 'var(--taali-surface-subtle, rgba(100,116,139,0.08))',
+              border: '1px solid var(--taali-border, rgba(100,116,139,0.2))',
+              display: 'flex',
+              gap: '12px',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div style={{ fontSize: '13.5px', color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 600 }}>
+              <strong>Filtered out by pre-screen.</strong>{' '}
+              {preScreenReason || 'A cheap pre-screen decided this CV did not plausibly meet the role must-haves.'}
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleRunFullEvaluation}
+              disabled={busyAction === 'rescore'}
             >
-              <div style={{ fontSize: '13.5px', color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 600 }}>
-                <strong>Filtered out by pre-screen.</strong>{' '}
-                {preScreenReason || 'A cheap pre-screen decided this CV did not plausibly meet the role must-haves.'}
-              </div>
+              {busyAction === 'rescore' ? 'Queuing…' : 'Run full evaluation'}
+            </button>
+          </div>
+        ) : null}
+        <header className="mc-cand-header">
+          <CandidateAvatar
+            name={application?.candidate_name || application?.candidate_email || 'Candidate'}
+            size={72}
+            className="mc-cand-header-avatar"
+          />
+          <div className="mc-cand-header-id">
+            <div className="mc-kicker">CANDIDATE</div>
+            <h1 className="mc-cand-header-name">
+              {application?.candidate_name || application?.candidate_email || 'Candidate'}
+            </h1>
+            <div className="mc-cand-header-meta">
+              {[
+                application?.candidate_email,
+                application?.candidate_location,
+                application?.role_name,
+                application?.pipeline_stage
+                  ? `Application: ${String(application.pipeline_stage).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())}`
+                  : null,
+              ].filter(Boolean).map((part, idx, arr) => (
+                <React.Fragment key={`${part}-${idx}`}>
+                  <span>{part}</span>
+                  {idx < arr.length - 1 ? <span className="mc-cand-header-sep">·</span> : null}
+                </React.Fragment>
+              ))}
+            </div>
+          </div>
+          {!isClientView ? (
+            <div className="mc-cand-header-actions">
+              {application?.workable_profile_url ? (
+                <button
+                  type="button"
+                  className="btn btn-outline btn-sm"
+                  onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
+                >
+                  <ExternalLink size={13} />
+                  Open in Workable
+                </button>
+              ) : null}
               <button
                 type="button"
-                className="btn btn-primary btn-sm"
-                onClick={handleRunFullEvaluation}
-                disabled={busyAction === 'rescore'}
+                className="btn btn-outline btn-sm"
+                onClick={() => setShareModalOpen(true)}
+                disabled={!application?.id}
               >
-                {busyAction === 'rescore' ? 'Queuing…' : 'Run full evaluation'}
+                <Copy size={13} />
+                Manage links
+              </button>
+              <button
+                type="button"
+                className="btn btn-purple btn-sm"
+                onClick={() => setShareModalOpen(true)}
+                disabled={!application?.id}
+              >
+                Share with client
               </button>
             </div>
           ) : null}
-          <h1>
-            {application?.candidate_name || application?.candidate_email || 'Candidate'}
-            {application?.role_name ? (
-              <> · <span style={{ color: 'var(--mute)' }}>{application.role_name}</span></>
-            ) : null}
-          </h1>
-          <div className="report-hero-grid">
-            <div className="c hi">
-              <div className="k">TAALI score</div>
-              <div className="v">{reportModel?.summaryModel?.taaliScore != null ? `${Math.round(reportModel.summaryModel.taaliScore)} / 100` : '—'}</div>
-              <div className="d">{completedAssessment ? 'CV + assessment' : 'Pre-assessment'}</div>
-            </div>
-            <div className="c hi">
-              <div className="k">Role fit</div>
-              <div className="v">{reportModel?.summaryModel?.roleFitScore != null ? `${Math.round(reportModel.summaryModel.roleFitScore)} / 100` : '—'}</div>
-              <div className="d">{application?.role_name || application?.candidate_position || 'Role evidence'}</div>
-            </div>
-            <div className="c">
-              <div className="k">Assessment</div>
-              <div className="v">{reportModel?.summaryModel?.assessmentScore != null ? `${Math.round(reportModel.summaryModel.assessmentScore)} / 100` : '—'}</div>
-              <div className="d">{completedAssessment ? 'Completed signal present' : 'Pending completion'}</div>
-            </div>
-            <div className="c">
-              <div className="k">Workable raw</div>
-              <div className="v">{application?.workable_score_raw != null ? `${Math.round(application.workable_score_raw)} / 100` : '—'}</div>
-              <div className="d">{workableSource ? 'Synced candidate context' : 'Manual application'}</div>
-            </div>
-          </div>
-        </div>
+        </header>
 
         <div className="share-bar" data-internal-only>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
@@ -1459,191 +1517,234 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         </div>
 
         <div className={`pane ${activeTab === 'overview' ? 'active' : ''}`} data-p="overview">
+        {/* HANDOFF v2 §5.1 / canvas cand-overview — Overview tab is:
+            (1) hero band: ScoreRing | RECOMMENDATION + body | SIGNAL list,
+            (2) two-up: STRONGEST SIGNAL · WORTH PROBING,
+            (3) DIMENSION SCORES — six rolled-up bars (0–100),
+            (4) four evidence cards: AI USAGE · CODE & GIT · TIMELINE · DOCUMENTS.
+            All scores render as integer "nn / 100" per HANDOFF v2 §6. */}
         {(() => {
           const fluencyAxes = computeFluencyAxes(completedAssessment);
+          const taaliScore = reportModel?.summaryModel?.taaliScore;
+          const roleFitScoreVal = reportModel?.summaryModel?.roleFitScore;
+          const assessmentScore = reportModel?.summaryModel?.assessmentScore;
+          // Composite score for the ScoreRing in the hero band — prefer
+          // completed-assessment composite, then taali summary, then
+          // application CV match. The ring is the page's loudest signal,
+          // so falling back through these keeps it from going empty when
+          // an assessment isn't linked yet.
           const compositeScore = (() => {
             if (Number.isFinite(Number(completedAssessment?.score))) {
               const s = Number(completedAssessment.score);
               return s <= 10 ? s * 10 : s;
             }
+            if (Number.isFinite(Number(taaliScore))) return Number(taaliScore);
             if (Number.isFinite(Number(application?.cv_match_score))) return Number(application.cv_match_score);
             return null;
           })();
-          if (compositeScore == null && !fluencyAxes) return null;
+          const recommendationLabel = reportModel?.recommendation?.label || 'Continue review';
+          const fmtScore = (v) => (Number.isFinite(Number(v)) ? Math.round(Number(v)) : null);
+
+          // 6-dimension labels (long form, matches canvas DIMENSION SCORES)
+          const DIM_LONG_LABELS = {
+            sysdesign: 'Systems design',
+            codecraft: 'Code craft',
+            reasoning: 'Reasoning under pressure',
+            aicollab: 'AI collaboration',
+            release: 'Release safety',
+            communication: 'Communication',
+          };
+          const dimensions = fluencyAxes
+            ? fluencyAxes.map((axis) => ({
+                key: axis.k,
+                label: DIM_LONG_LABELS[axis.k] || axis.label,
+                value: Math.round(Number(axis.v || 0)),
+                hasSignal: axis.hasSignal,
+              }))
+            : [];
+
+          const topRisk = riskItems[0] || null;
+          const topStrength = strengthItems[0] || null;
+          const strongestTitle = reportModel?.strongestSignalTitle && reportModel.strongestSignalTitle !== '—'
+            ? reportModel.strongestSignalTitle
+            : (topStrength?.label || 'Signal building');
+          const strongestDesc = reportModel?.strongestSignalDescription
+            || 'Strongest evidence will appear once the candidate has been scored against this role.';
+
           return (
-            <div className="mc-report-snapshot">
-              <div className="mc-report-snapshot-score">
-                {compositeScore != null ? (
-                  <ScoreRing score={Math.round(compositeScore)} size={140} />
-                ) : (
-                  <div className="mc-report-snapshot-score-empty">Score pending</div>
-                )}
-                <div className="mc-report-snapshot-score-meta">
-                  <div className="mc-kicker">COMPOSITE · 0–100</div>
-                  <div className="mc-report-snapshot-score-label">
-                    {reportModel?.recommendation?.label || 'Standing report'}
+            <>
+              {/* (1) Hero band */}
+              <div className="mc-overview-hero">
+                <div className="mc-overview-hero-score">
+                  {compositeScore != null ? (
+                    <ScoreRing score={Math.round(compositeScore)} size={140} />
+                  ) : (
+                    <div className="mc-report-snapshot-score-empty" style={{ width: 140, height: 140 }}>
+                      Score pending
+                    </div>
+                  )}
+                </div>
+                <div className="mc-overview-hero-body">
+                  <div className="mc-kicker">RECOMMENDATION</div>
+                  <div className="mc-overview-hero-recommendation">{recommendationLabel}</div>
+                  <p className="mc-overview-hero-summary">
+                    {reportModel?.recruiterSummaryText
+                      || 'Recommendation copy will populate once role-fit and assessment evidence are scored.'}
+                  </p>
+                </div>
+                <div className="mc-overview-hero-signal">
+                  <div className="mc-kicker">SIGNAL</div>
+                  <div className="mc-overview-signal-row">
+                    <span>TAALI</span>
+                    <span className="mc-overview-signal-val">
+                      {fmtScore(taaliScore) ?? '—'}
+                      <span className="mc-overview-signal-suffix">/ 100</span>
+                    </span>
+                  </div>
+                  <div className="mc-overview-signal-row">
+                    <span>Role fit</span>
+                    <span className="mc-overview-signal-val">
+                      {fmtScore(roleFitScoreVal) ?? '—'}
+                      <span className="mc-overview-signal-suffix">/ 100</span>
+                    </span>
+                  </div>
+                  <div className="mc-overview-signal-row">
+                    <span>Assessment</span>
+                    <span className="mc-overview-signal-val">
+                      {fmtScore(assessmentScore) ?? '—'}
+                      <span className="mc-overview-signal-suffix">/ 100</span>
+                    </span>
                   </div>
                 </div>
               </div>
-              <div className="mc-report-snapshot-radar">
-                <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>AI FLUENCY · 6 DIMENSIONS</div>
-                {fluencyAxes ? (
-                  <RadarChart values={fluencyAxes} max={100} size={260} />
-                ) : (
-                  <div className="mc-report-snapshot-radar-empty">
-                    <p><b>Scoring pending.</b></p>
-                    <p>The fluency radar fills in once the candidate finishes the assessment runtime — we roll up prompt quality, error recovery, context utilization, independence, design thinking, and written communication into the six canvas axes.</p>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })()}
-        <div className="report-body">
-          <div>
-            <div className="report-card">
-              <div className="kicker">Verdict</div>
-              <h2 style={{ fontSize: '28px', margin: '10px 0 12px' }}>
-                {reportModel?.recommendation?.label || 'Continue review'}. <em>With context.</em>
-              </h2>
-              <p style={{ fontSize: '15.5px', lineHeight: 1.6, color: 'var(--ink-2)', margin: '0 0 14px' }}>
-                {reportModel?.recruiterSummaryText}
-              </p>
-              <p style={{ fontSize: '14.5px', lineHeight: 1.6, color: 'var(--mute)', margin: 0 }}>
-                <b style={{ color: 'var(--ink-2)' }}>Watch-out.</b> {reportModel?.integritySummaryText}
-              </p>
-            </div>
 
-            <div className="report-card">
-              <h2>Top <em>strengths</em></h2>
-              <p className="sub">Ranked by the strongest dimensions currently visible in this standing report.</p>
-              {strengthItems.length ? strengthItems.map((item, index) => {
-                const isCvHighlight = item.source === 'cv_match';
-                const numericValue = Number.isFinite(Number(item?.value)) ? Number(item.value) : null;
-                return (
-                  <div key={item.key} className="rank-row">
-                    <div className="rk">{String(index + 1).padStart(2, '0')}</div>
-                    <div>
-                      <div className="t">{item.label}</div>
-                      <div className="s">
-                        {isCvHighlight
-                          ? 'Highlight extracted from the candidate CV during scoring. Probe for ownership and outcomes during interviews.'
-                          : index === 0
-                            ? reportModel?.strongestSignalDescription
-                            : `Score signal remains strong in ${String(item.label || '').toLowerCase()} across the current evidence set.`}
-                      </div>
-                      {index === 0 && !isCvHighlight ? (
-                        <div className="evidence-block">
-                          <div className="turn">Evidence</div>
-                          {reportModel?.evidenceSections?.roleFit?.description || reportModel?.evidenceSections?.assessment?.description || 'Standing report evidence is attached directly to the linked recruiter and assessment records.'}
+              {/* (2) Strongest signal + Worth probing */}
+              <div className="mc-overview-signals">
+                <div className="mc-overview-signal-card">
+                  <div className="mc-kicker">STRONGEST SIGNAL</div>
+                  <div className="mc-overview-signal-card-title">{strongestTitle}</div>
+                  <p className="mc-overview-signal-card-body">{strongestDesc}</p>
+                </div>
+                <div className="mc-overview-signal-card">
+                  <div className="mc-kicker">WORTH PROBING</div>
+                  <div className="mc-overview-signal-card-title">
+                    {topRisk?.title || 'No probes flagged'}
+                  </div>
+                  <p className="mc-overview-signal-card-body">
+                    {topRisk?.description
+                      || 'No high-priority gaps surfaced. Run the panel against the strongest evidence to validate the recommendation.'}
+                  </p>
+                </div>
+              </div>
+
+              {/* (3) Dimension scores — six bars */}
+              {dimensions.length ? (
+                <div className="mc-overview-dimensions">
+                  <div className="mc-kicker">DIMENSION SCORES</div>
+                  <div className="mc-overview-dimensions-grid">
+                    {dimensions.map((dim) => (
+                      <div key={dim.key} className="mc-overview-dim-row">
+                        <span className="mc-overview-dim-label">{dim.label}</span>
+                        <div className="mc-overview-dim-bar" aria-hidden="true">
+                          <i style={{ width: `${Math.max(0, Math.min(100, dim.value))}%` }} />
                         </div>
-                      ) : null}
-                    </div>
-                    <div className="pct">
-                      {isCvHighlight ? <span className="chip purple">CV match</span> : (numericValue != null ? `${Math.round(numericValue * 10)} / 100` : '—')}
-                    </div>
+                        <span className="mc-overview-dim-score">
+                          {dim.hasSignal ? dim.value : '—'}
+                          {dim.hasSignal ? <span className="mc-overview-dim-suffix">/100</span> : null}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                );
-              }) : (
-                <div className="rank-row">
-                  <div className="rk">01</div>
-                  <div>
-                    <div className="t">{reportModel?.strongestSignalTitle || 'Signal building'}</div>
-                    <div className="s">{reportModel?.strongestSignalDescription}</div>
-                  </div>
-                  <div className="pct">—</div>
+                </div>
+              ) : (
+                <div className="mc-overview-dimensions mc-overview-dimensions-empty">
+                  <div className="mc-kicker">DIMENSION SCORES</div>
+                  <p className="mc-overview-dim-empty">
+                    Six-dimension breakdown (Systems design, Code craft, Reasoning under pressure, AI
+                    collaboration, Release safety, Communication) appears once the candidate completes
+                    the assessment.
+                  </p>
                 </div>
               )}
-            </div>
 
-            <div className="report-card">
-              <h2>Risks to <em>probe</em></h2>
-              <p className="sub">Use these in the panel loop so the decision stays evidence-based.</p>
-              {riskItems.map((item, index) => (
-                <div key={`${item.title}-${index}`} className="rank-row">
-                  <div className="rk" style={{ color: 'var(--amber)' }}>{String(index + 1).padStart(2, '0')}</div>
-                  <div>
-                    <div className="t">{item.title}</div>
-                    <div className="s">{item.description}</div>
+              {/* (4) Evidence row — four cards */}
+              <div className="mc-overview-evidence">
+                {[
+                  { kicker: 'AI USAGE', section: reportModel?.evidenceSections?.aiUsage },
+                  { kicker: 'CODE & GIT', section: reportModel?.evidenceSections?.codeAndGit },
+                  { kicker: 'TIMELINE', section: reportModel?.evidenceSections?.timeline },
+                  { kicker: 'DOCUMENTS', section: reportModel?.evidenceSections?.documents },
+                ].map(({ kicker, section }) => {
+                  const headline = section?.items?.[0]
+                    || section?.title
+                    || 'Evidence pending';
+                  const description = section?.description
+                    || 'Evidence appears here once the candidate is scored.';
+                  return (
+                    <div key={kicker} className="mc-overview-evidence-card">
+                      <div className="mc-kicker">{kicker}</div>
+                      <div className="mc-overview-evidence-headline">{headline}</div>
+                      <p className="mc-overview-evidence-body">{description}</p>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Internal-only footer: Workable comparison + quick links + status.
+                  Hidden on isClient external shared views. */}
+              {!isClientView ? (
+                <div className="mc-overview-footer" data-internal-only>
+                  {workableConnected && workableSource ? (
+                    <WorkableComparisonCard
+                      workableRawScore={application?.workable_score_raw}
+                      taaliScore={reportModel?.summaryModel?.taaliScore}
+                      posted={Boolean(completedAssessment?.posted_to_workable)}
+                      postedAt={completedAssessment?.posted_to_workable_at || null}
+                      workableProfileUrl={application?.workable_profile_url || ''}
+                      scorePrecedence={orgData?.workable_config?.score_precedence || 'workable_first'}
+                      onPost={assessmentId && !completedAssessment?.posted_to_workable ? handlePostToWorkable : null}
+                      posting={busyAction === 'workable'}
+                    />
+                  ) : null}
+                  <div className="mc-overview-footer-row">
+                    <div className="mc-overview-footer-status">
+                      <div className="mc-kicker is-mute">STANDING REPORT STATUS</div>
+                      <p>
+                        {completedAssessment
+                          ? 'Assessment completed. This report combines role-fit evidence with final assessment signal.'
+                          : 'Assessment not completed yet. This report stays anchored to CV, role-fit, and recruiter-facing evidence already on file.'}
+                      </p>
+                    </div>
+                    <div className="mc-overview-footer-links">
+                      {canOpenAssessmentDetail ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => onNavigate('candidate-detail', { candidateDetailAssessmentId: assessmentId })}
+                        >
+                          Open assessment detail
+                          <ExternalLink size={13} />
+                        </Button>
+                      ) : null}
+                      {application?.workable_profile_url ? (
+                        <Button
+                          type="button"
+                          variant="secondary"
+                          size="sm"
+                          onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
+                        >
+                          View on Workable
+                          <ExternalLink size={13} />
+                        </Button>
+                      ) : null}
+                    </div>
                   </div>
-                  <div className="pct amber">Probe</div>
                 </div>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <div className="report-card">
-              <h2>Signal <em>breakdown</em></h2>
-              <p className="sub">Dimension-level scoring behind the standing recommendation.</p>
-              {(reportModel?.dimensionEntries || []).map((item) => (
-                <div key={item.key} className="dimension-row">
-                  <div className="dimension-row-head">
-                    <span className="dimension-name">{item.label}</span>
-                    <span className="dimension-score">{Math.round(Number(item.value || 0) * 10)} / 100</span>
-                  </div>
-                  <div className="bar">
-                    <i style={{ width: `${Math.max(0, Math.min(100, Number(item.value || 0) * 10))}%` }} />
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            <div className="report-card" data-internal-only>
-              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Quick links</div>
-              <div className="mt-3 space-y-2">
-                {canOpenAssessmentDetail ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    className="w-full justify-between"
-                    onClick={() => onNavigate('candidate-detail', { candidateDetailAssessmentId: assessmentId })}
-                  >
-                    Open assessment detail
-                    <ExternalLink size={14} />
-                  </Button>
-                ) : null}
-                {application?.workable_profile_url ? (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="sm"
-                    className="w-full justify-between"
-                    onClick={() => window.open(application.workable_profile_url, '_blank', 'noopener,noreferrer')}
-                  >
-                    View on Workable
-                    <ExternalLink size={14} />
-                  </Button>
-                ) : null}
-              </div>
-            </div>
-
-            {workableConnected && workableSource ? (
-              <div data-internal-only>
-                <WorkableComparisonCard
-                  workableRawScore={application?.workable_score_raw}
-                  taaliScore={reportModel?.summaryModel?.taaliScore}
-                  posted={Boolean(completedAssessment?.posted_to_workable)}
-                  postedAt={completedAssessment?.posted_to_workable_at || null}
-                  workableProfileUrl={application?.workable_profile_url || ''}
-                  scorePrecedence={orgData?.workable_config?.score_precedence || 'workable_first'}
-                  onPost={assessmentId && !completedAssessment?.posted_to_workable ? handlePostToWorkable : null}
-                  posting={busyAction === 'workable'}
-                />
-              </div>
-            ) : null}
-
-            <div className="report-card">
-              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Standing report status</div>
-              <div className="mt-2 text-sm text-[var(--taali-text)]">
-                {completedAssessment
-                  ? 'Assessment completed. This report now combines role-fit evidence with final assessment signal.'
-                  : 'Assessment not completed yet. This report stays anchored to CV, role-fit, and recruiter-facing evidence already on file.'}
-              </div>
-            </div>
-          </div>
-        </div>
+              ) : null}
+            </>
+          );
+        })()}
         </div>
 
         <div className={`pane ${activeTab === 'assessment' ? 'active' : ''}`} data-p="assessment">
@@ -1751,73 +1852,231 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         </div>
 
         <div className={`pane ${activeTab === 'prep' ? 'active' : ''}`} data-p="prep">
-          <div className="prep-stack">
-            <div className="panel prep-panel">
-              <h2>Stage 1 <em>recruiter screen</em></h2>
-              <p className="sub">Use these to validate claims quickly before the deeper panel loop.</p>
-              <div className="qgroup">
-                {interviewQuestions.stageOne.map((item, index) => (
-                  <PrepQuestionCard
-                    key={`${item.question}-${index}`}
-                    item={item}
-                    number={index + 1}
-                    listenLabel="Listen for"
-                    concernLabel="Follow-up"
-                    fallbackConcern="Ask for one concrete example, artifact, or tradeoff."
-                  />
-                ))}
+          {/* HANDOFF v2 §5.1 / canvas cand-prep — Interview prep is:
+              (1) purple-soft hero banner: READY FOR YOUR PANEL · {N} questions,
+                  anchored in {candidate}'s actual evidence
+              (2) STAGE 1 · RECRUITER SCREEN kicker + question cards
+              (3) STAGE 2 · HIRING PANEL kicker + question cards
+              Each card: mono kicker "QUESTION NN · {source}" + question +
+              two-column LISTEN FOR (green) / CONCERNING IF (red). */}
+          {(() => {
+            const totalQs = (interviewQuestions.stageOne?.length || 0) + (interviewQuestions.stageTwo?.length || 0);
+            const candidateFirstName = String(application?.candidate_name || '').trim().split(/\s+/)[0] || 'this candidate';
+            return (
+              <div className="mc-prep-hero">
+                <div className="mc-kicker">READY FOR YOUR PANEL</div>
+                <div className="mc-prep-hero-title">
+                  {totalQs > 0
+                    ? <>{totalQs} questions, anchored in {candidateFirstName}'s actual <em>evidence</em>.</>
+                    : <>Interview prep <em>builds</em> after the candidate is scored.</>}
+                </div>
+                <p className="mc-prep-hero-body">
+                  {totalQs > 0
+                    ? 'Each question cites the moment in the assessment it came from. Listen-for and concerning-if are calibrated to your role rubric.'
+                    : 'Once the assessment is scored, this tab populates with stage-1 screen and stage-2 panel questions tied to evidence.'}
+                </p>
               </div>
+            );
+          })()}
+
+          <div className="mc-prep-stage">
+            <div className="mc-kicker">STAGE 1 · RECRUITER SCREEN</div>
+            <div className="mc-prep-stage-grid">
+              {interviewQuestions.stageOne.map((item, index) => (
+                <PrepQuestionCard
+                  key={`${item.question}-${index}`}
+                  item={item}
+                  number={index + 1}
+                  listenLabel="LISTEN FOR"
+                  concernLabel="CONCERNING IF"
+                  fallbackConcern="Ask for one concrete example, artifact, or tradeoff."
+                />
+              ))}
             </div>
-            <div className="panel prep-panel">
-              <h2>Stage 2 <em>technical panel</em></h2>
-              <p className="sub">Designed for the hiring panel: probe how the candidate thinks with AI in the actual work.</p>
-              <div className="qgroup">
-                {interviewQuestions.stageTwo.map((item, index) => (
-                  <PrepQuestionCard
-                    key={`${item.question}-${index}`}
-                    item={item}
-                    number={index + 1}
-                    listenLabel="Strong signal"
-                    concernLabel="Concern"
-                    fallbackConcern="Vague answers without links to code, prompts, or decisions."
-                  />
-                ))}
-              </div>
+          </div>
+
+          <div className="mc-prep-stage">
+            <div className="mc-kicker">STAGE 2 · HIRING PANEL</div>
+            <div className="mc-prep-stage-grid">
+              {interviewQuestions.stageTwo.map((item, index) => (
+                <PrepQuestionCard
+                  key={`${item.question}-${index}`}
+                  item={item}
+                  number={index + 1}
+                  listenLabel="LISTEN FOR"
+                  concernLabel="CONCERNING IF"
+                  fallbackConcern="Vague answers without links to code, prompts, or decisions."
+                />
+              ))}
             </div>
           </div>
         </div>
 
         <div className={`pane ${activeTab === 'notes' ? 'active' : ''}`} data-p="notes" data-internal-only>
-          <div className="two-col">
-            <div className="panel">
-              <h2>Team <em>notes</em></h2>
-              <p className="sub">Internal recruiter and hiring-team context stays out of interviewer share mode.</p>
-              <div className="note">
-                <div className="who">Taali <span className="when">system note</span></div>
-                <p>{reportModel?.recruiterSummaryText || 'Add recruiter notes after the panel review.'}</p>
-              </div>
-              <div className="note-input">
-                <textarea placeholder="Add a private team note" disabled />
-                <button type="button" className="btn btn-outline btn-sm" disabled>Save</button>
-              </div>
-            </div>
-            <div className="panel">
-              <h2>Activity <em>timeline</em></h2>
-              <p className="sub">Application events from the role pipeline and assessment lifecycle.</p>
-              <div className="act">
-                {timelineItems.map((item, index) => (
-                  <div key={`${item.title}-${index}`} className="row">
-                    <div className="dot">{index + 1}</div>
-                    <div>
-                      <div className="t">{item.title}</div>
-                      <div className="s">{item.detail}</div>
+          {/* HANDOFF v2 §5.1 / canvas cand-notes — Notes & timeline is:
+              (1) HIRING TEAM NOTES column — note cards (who · role · time + body)
+                  with a dashed-border textarea + "Add note" CTA at the bottom
+              (2) AUDIT TIMELINE column — vertical line + colored dots,
+                  each event has TIME · title · description.
+              We synthesize "hiring team notes" from `recruiter_note` events
+              on the application timeline; saving a new note pushes a
+              recruiter_note event via assessmentsApi.addNote and bumps
+              eventsRefetchTick so the timeline reloads. */}
+          {(() => {
+            // Recruiter notes are persisted by POST /assessments/{id}/notes,
+            // which appends `{event_type: "note", text, author, timestamp}`
+            // to `assessment.timeline` (a JSON column). They are NOT
+            // emitted to the application_events table. So we read both
+            // sources: assessment.timeline first (real persisted notes)
+            // and applicationEvents as a fallback for any future
+            // recruiter_note event-type emissions.
+            const timelineNotes = (() => {
+              const entries = Array.isArray(completedAssessment?.timeline)
+                ? completedAssessment.timeline
+                : [];
+              return entries
+                .filter((entry) => {
+                  const type = String(entry?.event_type || entry?.type || '').toLowerCase();
+                  if (type !== 'note' && type !== 'recruiter_note') return false;
+                  return Boolean((entry?.text || entry?.prompt || '').trim());
+                })
+                .map((entry, idx) => ({
+                  key: `tl-note-${entry.timestamp || entry.time || idx}`,
+                  who: entry?.author || 'Recruiter',
+                  role: 'Hiring team',
+                  time: entry?.timestamp || entry?.time,
+                  body: entry?.text || entry?.prompt || '',
+                }))
+                .filter((note) => note.body && note.body.trim());
+            })();
+            const eventNotes = applicationEvents
+              .filter((event) => {
+                const type = String(event?.event_type || '').toLowerCase();
+                return type === 'recruiter_note'
+                  || type === 'note_added'
+                  || (event?.metadata && typeof event.metadata.note === 'string' && event.metadata.note.trim());
+              })
+              .map((event) => ({
+                key: `evt-note-${event.id || event.created_at}`,
+                who: event?.actor_name || event?.metadata?.actor_name || 'Recruiter',
+                role: event?.actor_role || event?.metadata?.actor_role || 'Hiring team',
+                time: event?.created_at,
+                body: event?.metadata?.note || event?.reason || event?.description || '',
+              }))
+              .filter((note) => note.body && note.body.trim());
+            // Newest first across both sources.
+            const recruiterNotes = [...timelineNotes, ...eventNotes].sort((a, b) => {
+              const ta = a.time ? new Date(a.time).getTime() : 0;
+              const tb = b.time ? new Date(b.time).getTime() : 0;
+              return tb - ta;
+            });
+
+            const fmtRelative = (ts) => {
+              if (!ts) return '';
+              const diffMs = Date.now() - new Date(ts).getTime();
+              if (Number.isNaN(diffMs)) return '';
+              const diffMin = Math.round(diffMs / 60000);
+              if (diffMin < 1) return 'just now';
+              if (diffMin < 60) return `${diffMin}m ago`;
+              const diffHr = Math.round(diffMin / 60);
+              if (diffHr < 24) return `${diffHr}h ago`;
+              const diffDay = Math.round(diffHr / 24);
+              if (diffDay < 14) return `${diffDay}d ago`;
+              return new Date(ts).toLocaleDateString();
+            };
+
+            const eventDotColor = (event) => {
+              const type = String(event?.event_type || '').toLowerCase();
+              if (type.includes('reject')) return 'var(--red, #dc2626)';
+              if (type.includes('advance') || type.includes('approved')) return 'var(--green, #16a34a)';
+              if (type.includes('assess')) return '#2563eb';
+              if (type.includes('cv_scored') || type.includes('invite')) return 'var(--purple)';
+              return 'var(--mute)';
+            };
+
+            return (
+              <div className="mc-notes-grid">
+                <div className="mc-notes-col">
+                  <div className="mc-kicker">HIRING TEAM NOTES</div>
+                  {recruiterNotes.length === 0 ? (
+                    <div className="mc-notes-empty">
+                      No hiring team notes yet. Drop a private note to the team below — it'll land in the audit timeline on the right.
                     </div>
-                    <div className="when">{item.when ? new Date(item.when).toLocaleDateString() : '—'}</div>
+                  ) : (
+                    recruiterNotes.map((note) => (
+                      <div key={note.key} className="mc-notes-card">
+                        <div className="mc-notes-card-head">
+                          <span className="mc-notes-card-who">
+                            {note.who}
+                            <span className="mc-notes-card-role"> · {note.role}</span>
+                          </span>
+                          <span className="mc-notes-card-time">{fmtRelative(note.time)}</span>
+                        </div>
+                        <div className="mc-notes-card-body">{note.body}</div>
+                      </div>
+                    ))
+                  )}
+                  <div className="mc-notes-input">
+                    <textarea
+                      value={noteDraft}
+                      onChange={(event) => setNoteDraft(event.target.value)}
+                      placeholder={assessmentId
+                        ? 'Add a note for the hiring team…'
+                        : 'Notes are saved against the linked assessment — link one to enable.'}
+                      disabled={!assessmentId || savingNote}
+                      rows={3}
+                    />
+                    <div className="mc-notes-input-actions">
+                      <button
+                        type="button"
+                        className="btn btn-purple btn-sm"
+                        onClick={handleSaveNote}
+                        disabled={!assessmentId || savingNote || !noteDraft.trim()}
+                      >
+                        {savingNote ? 'Adding…' : 'Add note'}
+                      </button>
+                    </div>
                   </div>
-                ))}
+                </div>
+
+                <div className="mc-notes-col">
+                  <div className="mc-kicker">AUDIT TIMELINE</div>
+                  {applicationEvents.length === 0 ? (
+                    <div className="mc-notes-empty">
+                      Audit events will appear here as the candidate moves through the pipeline.
+                    </div>
+                  ) : (
+                    <div className="mc-audit-timeline">
+                      {applicationEvents.slice(0, 12).map((event, idx) => {
+                        const type = String(event?.event_type || 'activity').replace(/_/g, ' ');
+                        const meta = event?.metadata || {};
+                        let title = type.charAt(0).toUpperCase() + type.slice(1);
+                        if (String(event?.event_type || '').toLowerCase() === 'cv_scored') {
+                          const score = Number(meta.role_fit_score);
+                          if (Number.isFinite(score)) title = `CV scored — ${Math.round(score)} / 100`;
+                        }
+                        const detail = event?.reason || event?.description || meta.note || '';
+                        return (
+                          <div key={event.id || `${event.event_type}-${idx}`} className="mc-audit-row">
+                            <span
+                              className="mc-audit-dot"
+                              aria-hidden="true"
+                              style={{ background: eventDotColor(event) }}
+                            />
+                            <div>
+                              <div className="mc-audit-time">{fmtRelative(event?.created_at).toUpperCase()}</div>
+                              <div className="mc-audit-title">{title}</div>
+                              {detail ? <div className="mc-audit-detail">{detail}</div> : null}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
-            </div>
-          </div>
+            );
+          })()}
         </div>
       </div>
       <ShareModal

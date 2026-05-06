@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useState } from 'react';
-import { ArrowLeft, Download, Mail } from 'lucide-react';
+import { ArrowLeft, Mail } from 'lucide-react';
 import * as apiClient from '../../shared/api';
 import { useToast } from '../../context/ToastContext';
 import { getMetricMeta, buildGlossaryFromMetadata } from '../../lib/scoringGlossary';
@@ -16,7 +16,6 @@ import {
 import { buildStandingCandidateReportModel } from './assessmentViewModels';
 import { CandidateAssessmentSummaryView } from './CandidateAssessmentSummaryView';
 import { CandidateEvaluateTab } from './CandidateEvaluateTab';
-import { buildClientReportFilenameStem } from './clientReportUtils';
 import {
   CandidateAiUsageTab,
   CandidateCodeGitTab,
@@ -171,84 +170,6 @@ const CandidateInterviewGuidanceTab = ({
         </div>
       </Panel>
     ) : null}
-  </div>
-);
-
-const CandidateClientReportTab = ({
-  busyAction,
-  handleDownloadReport,
-  handlePostToWorkable,
-  handleResendInvite,
-  handleRequestCvUpload,
-  handleDeleteAssessment,
-  canResendInvite,
-  canRequestCvUpload,
-  workableStatus,
-  canPostToWorkable = true,
-  canDeleteAssessment = true,
-}) => (
-  <div className="space-y-4">
-    <Panel className="p-4">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Report</div>
-          <div className="mt-2 text-xl font-semibold text-[var(--taali-text)]">Download the employer-facing assessment brief.</div>
-          <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-            Export the TAALI client report PDF for employer or client review.
-          </p>
-        </div>
-        <Button type="button" size="sm" variant="secondary" onClick={handleDownloadReport} disabled={busyAction !== ''}>
-          {busyAction === 'report' ? 'Downloading...' : 'Download client report'}
-        </Button>
-      </div>
-    </Panel>
-
-    <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
-      {canPostToWorkable || canResendInvite || canRequestCvUpload || canDeleteAssessment ? (
-        <Panel className="p-4">
-          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Recruiter actions</div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            {canPostToWorkable ? (
-              <Button type="button" size="sm" variant="secondary" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
-                {busyAction === 'workable' ? 'Posting...' : 'Post to Workable'}
-              </Button>
-            ) : null}
-            {canResendInvite ? (
-              <Button type="button" size="sm" variant="secondary" onClick={handleResendInvite} disabled={busyAction !== ''}>
-                {busyAction === 'resend' ? 'Resending...' : 'Resend invite'}
-              </Button>
-            ) : null}
-            {canRequestCvUpload ? (
-              <Button type="button" size="sm" variant="secondary" onClick={handleRequestCvUpload} disabled={busyAction !== ''}>
-                {busyAction === 'request-cv' ? 'Sending CV request...' : 'Request CV upload'}
-              </Button>
-            ) : null}
-            {canDeleteAssessment ? (
-              <Button type="button" size="sm" variant="danger" onClick={handleDeleteAssessment} disabled={busyAction !== ''}>
-                {busyAction === 'delete' ? 'Deleting...' : 'Delete assessment'}
-              </Button>
-            ) : null}
-          </div>
-        </Panel>
-      ) : (
-        <Panel className="p-4">
-          <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Report scope</div>
-          <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
-            This export is available before an assessment is completed, using CV and role-fit evidence already on file.
-          </p>
-        </Panel>
-      )}
-
-      <Panel className="p-4">
-        <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Workable status</div>
-        <div className="mt-3 text-sm text-[var(--taali-text)]">
-          <span className={workableStatus.posted ? 'font-semibold text-[var(--taali-success)]' : 'font-semibold text-[var(--taali-text)]'}>
-            {workableStatus.posted ? 'Posted' : 'Not posted'}
-          </span>
-          {workableStatus.postedAt ? ` on ${new Date(workableStatus.postedAt).toLocaleString()}` : ''}
-        </div>
-      </Panel>
-    </div>
   </div>
 );
 
@@ -479,7 +400,6 @@ export const AssessmentResultsPage = ({
   const canGenerateInterviewGuide = hasCompletedAssessment
     ? Boolean(completedAssessment) && (normalizedStatus === 'completed' || normalizedStatus === 'completed_due_to_timeout')
     : Boolean(applicationId);
-  const canDownloadClientReport = Boolean(hasCompletedAssessment ? assessmentId : applicationId);
   const pendingAssessmentResults = buildAssessmentPendingMessage({
     application: applicationRecord,
     reportModel,
@@ -706,37 +626,6 @@ export const AssessmentResultsPage = ({
       </div>
     );
   }
-
-  const handleDownloadReport = async () => {
-    if (!canDownloadClientReport) return;
-    setBusyAction('report');
-    try {
-      const res = hasCompletedAssessment
-        ? await assessmentsApi.downloadReport(assessmentId)
-        : await rolesApi?.downloadApplicationReport?.(applicationId);
-      if (!res) {
-        throw new Error('Client report endpoint is unavailable.');
-      }
-      const blob = new Blob([res.data], {
-        type: res?.headers?.['content-type'] || 'application/pdf',
-      });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${buildClientReportFilenameStem(
-        roleName,
-        candidate?.name || applicationRecord?.candidate_name || applicationRecord?.candidate_email
-      )}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      showToast(err?.response?.data?.detail || 'Failed to download report', 'error');
-    } finally {
-      setBusyAction('');
-    }
-  };
 
   const handlePostToWorkable = async () => {
     if (!assessmentId) return;
@@ -1167,11 +1056,6 @@ export const AssessmentResultsPage = ({
       <div className="rounded-[var(--taali-radius-card)] border border-[var(--taali-border)] bg-[var(--taali-surface)] p-4">
         <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-muted)]">Recruiter actions</div>
         <div className="mt-3 flex flex-wrap gap-2">
-          {canDownloadClientReport ? (
-            <Button type="button" size="sm" variant="secondary" onClick={handleDownloadReport} disabled={busyAction !== ''}>
-              {busyAction === 'report' ? 'Downloading...' : 'Download report'}
-            </Button>
-          ) : null}
           {Boolean(hasCompletedAssessment && assessmentId && workableConnected && !workableStatus.posted) ? (
             <Button type="button" size="sm" variant="secondary" onClick={handlePostToWorkable} disabled={busyAction !== ''}>
               {busyAction === 'workable' ? 'Posting...' : 'Post to Workable'}
@@ -1255,11 +1139,6 @@ export const AssessmentResultsPage = ({
               <a className="icon-btn" href={`mailto:${candidate.email}`} title="Email candidate">
                 <Mail size={15} />
               </a>
-            ) : null}
-            {canDownloadClientReport ? (
-              <button type="button" className="icon-btn" title="Download report" onClick={handleDownloadReport} disabled={busyAction !== ''}>
-                <Download size={15} />
-              </button>
             ) : null}
             {applicationId ? (
               <button

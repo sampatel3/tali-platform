@@ -150,8 +150,12 @@ describe('JobPipelinePage', () => {
     expect(appliedCard).toBeTruthy();
     expect(reviewCard).toBeTruthy();
 
+    // Per HANDOFF v2 §4 / canvas jobs-detail-pipeline — early-stage cards
+    // (applied / invited / in_assessment) hide the composite score
+    // entirely until a review-stage signal exists. Review-stage cards
+    // surface the composite score in the agent recommendation block.
     expect(within(appliedCard).queryByText('91')).not.toBeInTheDocument();
-    expect(within(appliedCard).getByText('—')).toBeInTheDocument();
+    expect(within(appliedCard).queryByText('64')).not.toBeInTheDocument();
 
     await waitFor(() => {
       expect(within(reviewCard).getByText('64')).toBeInTheDocument();

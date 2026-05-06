@@ -57,6 +57,7 @@ import {
   Sheet,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
+import { PageHero } from '../../shared/layout/PageHero';
 import { getErrorMessage } from './candidatesUiUtils';
 import { CandidateSheet } from './CandidateSheet';
 import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
@@ -589,6 +590,15 @@ export const CandidatesDirectoryPage = ({
   prelude = null,
   externalRefreshKey = 0,
   embedded = false,
+  // Single-stage filter passed in by a parent (e.g. JobPipelinePage's
+  // segmented "All / Review / In assessment / Invited / Applied" toolbar
+  // per HANDOFF v2 §4 / canvas jobs-detail-candidates). When this prop
+  // changes, the parent should bump `externalRefreshKey` (or remount via
+  // key) to re-seed the internal `stageFilters` state.
+  initialStageFilter = null,
+  // Initial sort option (one of SORT_OPTIONS values). Same remount
+  // contract as initialStageFilter.
+  initialSortOption = null,
 }) => {
   const rolesApi = apiClient.roles;
   const { showToast } = useToast();
@@ -607,9 +617,16 @@ export const CandidatesDirectoryPage = ({
   const [roleFilters, setRoleFilters] = useState(() => (
     defaultRoleFilter === 'all' ? [] : [String(defaultRoleFilter)]
   ));
-  const [stageFilters, setStageFilters] = useState([]);
+  const [stageFilters, setStageFilters] = useState(() => (
+    initialStageFilter && initialStageFilter !== 'all' ? [String(initialStageFilter)] : []
+  ));
   const [outcomeFilters, setOutcomeFilters] = useState(['open']);
-  const [sortOption, setSortOption] = useState(SORT_OPTIONS[0].value);
+  const [sortOption, setSortOption] = useState(() => {
+    if (initialSortOption && SORT_OPTIONS.some((opt) => opt.value === initialSortOption)) {
+      return initialSortOption;
+    }
+    return SORT_OPTIONS[0].value;
+  });
   const [minPreScreenScore, setMinPreScreenScore] = useState('');
   const [search, setSearch] = useState('');
   const [workableOnly, setWorkableOnly] = useState(false);
@@ -1855,37 +1872,30 @@ export const CandidatesDirectoryPage = ({
       {NavComponent ? <NavComponent currentPage={navCurrentPage} onNavigate={onNavigate} /> : null}
       <div className={embedded ? '' : 'mc-page mc-page-narrow'}>
         {showPageHead ? (
-          <header className="mc-page-head">
-            <div>
-              <div className="mc-kicker">
-                {rolePipelineMode ? 'ROLE PIPELINE' : 'CANDIDATES · ALL ROLES'}
-              </div>
-              <h1 className="mc-h-display">
-                {rolePipelineMode ? (
-                  <>{headerTitle || 'Pipeline'}</>
-                ) : (
-                  <>Search every <em>candidate</em></>
-                )}
-                <span className="mc-period">.</span>
-              </h1>
-              <p className="mc-subtitle">{headerSubtitle || 'Plain-language across CVs, assessment evidence, and your notes.'}</p>
-            </div>
-            <div className="mc-page-head-actions">
-              {!rolePipelineMode ? (
-                <button type="button" className="btn btn-outline btn-sm" onClick={handleExportCsv}>
-                  Export CSV
+          <PageHero
+            kicker={rolePipelineMode ? 'ROLE PIPELINE' : 'CANDIDATES · ALL ROLES'}
+            title={rolePipelineMode
+              ? <>{headerTitle || 'Pipeline'}</>
+              : <>Search every <em>candidate</em></>}
+            subtitle={headerSubtitle || 'Plain-language across CVs, assessment evidence, and your notes.'}
+            actions={(
+              <>
+                {!rolePipelineMode ? (
+                  <button type="button" className="btn btn-outline btn-sm" onClick={handleExportCsv}>
+                    Export CSV
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  className="btn btn-purple btn-sm"
+                  onClick={handleOpenInviteCandidate}
+                  disabled={loadingRoles || roles.length === 0}
+                >
+                  + Invite candidate
                 </button>
-              ) : null}
-              <button
-                type="button"
-                className="btn btn-purple btn-sm"
-                onClick={handleOpenInviteCandidate}
-                disabled={loadingRoles || roles.length === 0}
-              >
-                + Invite candidate
-              </button>
-            </div>
-          </header>
+              </>
+            )}
+          />
         ) : null}
 
         {prelude ? <div className="mb-4 space-y-4">{prelude}</div> : null}

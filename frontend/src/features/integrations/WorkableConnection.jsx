@@ -111,7 +111,7 @@ export const WorkableCallbackPage = ({
       <div className="border-2 border-black p-8 max-w-md text-center">
         {status === 'connecting' && (
           <>
-            <Loader2 size={32} className="animate-spin mx-auto mb-4" style={{ color: '#9D00FF' }} />
+            <Loader2 size={32} className="animate-spin mx-auto mb-4 text-[var(--taali-purple)]" />
             <p className="font-mono text-sm">Connecting Workable…</p>
           </>
         )}

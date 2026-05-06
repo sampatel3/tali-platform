@@ -1764,11 +1764,26 @@ html[data-theme="dark"] {
   background: var(--bg-2);
   border: 1px solid var(--line);
   border-radius: var(--radius-lg);
-  padding: 22px;
+  padding: 18px 20px;
   box-shadow: var(--shadow-sm);
   display: flex;
   flex-direction: column;
   gap: 14px;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease, transform 0.12s ease;
+}
+
+.job-card:hover {
+  border-color: color-mix(in oklab, var(--purple) 25%, var(--line));
+  box-shadow: var(--shadow-md);
+  transform: translateY(-1px);
+}
+
+.job-card .role-name {
+  font-family: var(--font-display);
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
 }
 
 .job-card.from-wk {
@@ -1797,31 +1812,32 @@ html[data-theme="dark"] {
 
 .job-stats {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+  padding-top: 10px;
+  border-top: 1px solid var(--line-2);
 }
 
 .js-cell {
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 10px 12px;
+  padding: 4px 4px 0;
+  text-align: center;
 }
 
 .js-cell .k {
   font-family: var(--font-mono);
-  font-size: 10.5px;
+  font-size: 10px;
   color: var(--mute);
-  letter-spacing: 0.08em;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .js-cell .v {
   font-family: var(--font-display);
-  font-size: 24px;
+  font-size: 22px;
   line-height: 1.1;
   margin-top: 2px;
   letter-spacing: -0.02em;
+  color: var(--ink);
 }
 
 .job-foot {
@@ -2643,9 +2659,25 @@ html[data-theme="dark"] {
 
 .stat-row {
   display: grid;
-  grid-template-columns: repeat(5, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 12px;
   margin-bottom: 20px;
+}
+
+.stat.has-bar .stat-bar {
+  display: block;
+  height: 6px;
+  background: var(--bg-3);
+  border-radius: 999px;
+  overflow: hidden;
+  margin: 4px 0 6px;
+}
+
+.stat.has-bar .stat-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--purple);
+  border-radius: 999px;
 }
 
 .stat {
@@ -2797,19 +2829,18 @@ html[data-theme="dark"] {
 
 .kanban-card {
   display: block;
-  padding: 14px;
-  border-radius: 14px;
+  padding: 10px;
+  border-radius: 10px;
   border: 1px solid var(--line);
   background: var(--bg);
-  box-shadow: var(--shadow-sm);
   color: inherit;
   cursor: pointer;
   text-decoration: none;
 }
 
 .kanban-card:hover {
-  border-color: color-mix(in oklab, var(--purple) 40%, var(--line));
-  background: color-mix(in oklab, var(--purple) 5%, var(--bg));
+  border-color: color-mix(in oklab, var(--purple) 25%, var(--line));
+  background: color-mix(in oklab, var(--purple) 4%, var(--bg));
 }
 
 .kanban-card:focus-visible {
@@ -2817,68 +2848,127 @@ html[data-theme="dark"] {
   outline-offset: 2px;
 }
 
+.kanban-card.is-review {
+  border-color: color-mix(in oklab, var(--purple) 25%, var(--line));
+}
+
 .kanban-card .cc-top {
-  display: grid;
-  grid-template-columns: 32px 1fr auto;
-  gap: 10px;
+  display: flex;
   align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.kanban-card .cc-id {
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .kanban-card .av {
-  width: 32px;
-  height: 32px;
-  border-radius: 50%;
+  width: 24px;
+  height: 24px;
+  border-radius: 6px;
   display: grid;
   place-items: center;
-  background: var(--purple-soft);
-  color: var(--purple);
-  font-size: 11px;
+  background: var(--ink-soft);
+  color: #fff;
+  font-size: 10px;
   font-weight: 600;
+  flex-shrink: 0;
 }
 
 .kanban-card .n {
-  font-size: 13.5px;
-  font-weight: 600;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.kanban-card .e {
-  font-family: var(--font-mono);
+.kanban-card .pos {
   font-size: 10.5px;
   color: var(--mute);
-  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
-.kanban-card .sc {
+/* Compact meta line: CV n% · score · ago [· LIVE] */
+.kanban-card .cc-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 10px;
+  color: var(--mute);
+}
+
+.kanban-card .cc-line .dot-sep {
+  color: var(--mute);
+  opacity: 0.5;
+}
+
+.kanban-card .cc-line .score-pip {
+  color: var(--ink);
   font-weight: 600;
+}
+
+.kanban-card .cc-line .live-pip {
+  color: var(--purple);
+  font-weight: 600;
+}
+
+.kanban-card .cc-line-grow {
+  flex: 1 1 auto;
+}
+
+.kanban-card .cc-agent {
+  margin-top: 6px;
+  padding: 7px 8px;
+  border-radius: 8px;
+  background: var(--purple-soft);
+  display: flex;
+  gap: 6px;
+  align-items: flex-start;
+}
+
+.kanban-card .cc-agent-glyph {
+  color: var(--purple);
+  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.kanban-card .cc-agent-body {
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink-2);
+  min-width: 0;
+}
+
+.kanban-card .cc-agent-action {
+  font-weight: 500;
   color: var(--purple);
 }
 
-.kanban-card .cc-meta,
-.kanban-card .cc-foot {
+.kanban-card .cc-agent-why {
+  color: var(--mute);
+  font-size: 10.5px;
+}
+
+.kanban-card .cc-agent-actions {
   display: flex;
   gap: 6px;
-  flex-wrap: wrap;
-  margin-top: 10px;
+  margin-top: 5px;
 }
 
-.kanban-card .cc-foot {
-  justify-content: space-between;
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  color: var(--mute);
-}
-
-.kanban-card .tag {
+.kanban-card .cc-agent-actions .btn-xs {
+  height: 24px;
+  padding: 0 9px;
+  font-size: 11px;
   display: inline-flex;
   align-items: center;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: var(--bg-3);
-  color: var(--ink-2);
-  font-family: var(--font-mono);
-  font-size: 10px;
+  border-radius: 6px;
+  cursor: pointer;
 }
 
 .kanban-card .tag.g {
@@ -7687,6 +7777,13 @@ button.eng-badge-button:focus-visible {
 
 /* ================== AGENT BAR (purple aurora) ================== */
 
+/* Wrapper rendered globally inside Shell so the agent bar sits between
+   the top nav and the page content with the same horizontal padding the
+   rest of the recruiter UI uses. */
+.mc-agent-bar-wrap {
+  padding: 12px var(--pad-x) 0;
+}
+
 .mc-agent-bar {
   position: relative;
   border-radius: 14px;
@@ -10230,4 +10327,693 @@ button.eng-badge-button:focus-visible {
 .mc-report-snapshot-radar-empty p { margin: 0 0 6px; }
 .mc-report-snapshot-radar-empty p:last-child { margin: 0; }
 .mc-report-snapshot-radar-empty b { color: var(--ink); }
+
+/* ===========================================================================
+   Candidate file page header — HANDOFF v2 §5.1 / canvas cand-overview
+   Light header above the tab strip: avatar 72 + CANDIDATE kicker + name +
+   meta line + 3 actions (Open in Workable / Manage links / Share with
+   client). Replaces the legacy dark "STANDING REPORT" hero.
+   =========================================================================== */
+
+.mc-cand-header {
+  display: flex;
+  align-items: flex-end;
+  gap: 24px;
+  margin-bottom: 18px;
+  padding: 4px 0 0;
+}
+
+.mc-cand-header-avatar {
+  border-radius: 14px !important;
+  width: 72px !important;
+  height: 72px !important;
+  font-size: 24px !important;
+  font-family: var(--font-display);
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.mc-cand-header-id {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.mc-cand-header-id .mc-kicker {
+  margin: 0;
+}
+
+.mc-cand-header-name {
+  font-family: var(--font-display);
+  font-size: 42px;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  margin: 4px 0 6px;
+  color: var(--ink);
+  line-height: 1.05;
+}
+
+.mc-cand-header-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--mute);
+}
+
+.mc-cand-header-meta b {
+  color: var(--ink-2);
+}
+
+.mc-cand-header-sep {
+  opacity: 0.6;
+}
+
+.mc-cand-header-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  flex-shrink: 0;
+}
+
+@media (max-width: 880px) {
+  .mc-cand-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 14px;
+  }
+  .mc-cand-header-actions {
+    align-self: stretch;
+  }
+}
+
+/* ===========================================================================
+   Candidate Interview prep tab — HANDOFF v2 §5.1 / canvas cand-prep
+   Hero banner + STAGE 1 / STAGE 2 kickered groups + question cards
+   with LISTEN FOR (green) / CONCERNING IF (red) two-column layout.
+   =========================================================================== */
+
+.mc-prep-hero {
+  padding: 18px 22px;
+  border-radius: 14px;
+  background: var(--purple-soft);
+  border: 1px solid color-mix(in oklab, var(--purple) 35%, var(--line));
+  margin-bottom: 18px;
+}
+
+.mc-prep-hero .mc-kicker {
+  margin: 0 0 4px;
+  color: var(--purple);
+}
+
+.mc-prep-hero-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 0 0 6px;
+  color: var(--ink);
+}
+
+.mc-prep-hero-body {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+.mc-prep-stage {
+  margin-bottom: 18px;
+}
+
+.mc-prep-stage .mc-kicker {
+  margin: 0 0 10px;
+}
+
+.mc-prep-stage-grid {
+  display: grid;
+  gap: 10px;
+}
+
+.mc-prep-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 22px;
+}
+
+.mc-prep-card-kicker {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  color: var(--purple);
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.mc-prep-card-question {
+  font-family: var(--font-display);
+  font-size: 18px;
+  letter-spacing: -0.015em;
+  font-weight: 500;
+  color: var(--ink);
+  margin: 0 0 14px;
+}
+
+.mc-prep-card-context {
+  margin: -8px 0 14px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--mute);
+}
+
+.mc-prep-card-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 18px;
+}
+@media (max-width: 720px) {
+  .mc-prep-card-grid { grid-template-columns: 1fr; }
+}
+
+.mc-prep-card-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  margin-bottom: 4px;
+}
+
+.mc-prep-card-label.is-listen {
+  color: #16a34a;
+}
+
+.mc-prep-card-label.is-concern {
+  color: #dc2626;
+}
+
+.mc-prep-card-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.mc-prep-card-list li {
+  position: relative;
+  padding-left: 12px;
+  margin-bottom: 4px;
+}
+
+.mc-prep-card-list li::before {
+  content: '·';
+  position: absolute;
+  left: 0;
+  top: -1px;
+  color: var(--mute);
+  font-weight: 700;
+}
+
+.mc-prep-card-evidence {
+  margin-top: 14px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  background: var(--purple-soft);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink-2);
+}
+
+.mc-prep-card-evidence-label {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--mute);
+  margin-bottom: 4px;
+}
+
+/* ===========================================================================
+   Candidate Notes & timeline tab — HANDOFF v2 §5.1 / canvas cand-notes
+   Two-col grid: HIRING TEAM NOTES (1.4fr) + AUDIT TIMELINE (1fr) with
+   colored dots on a left vertical line.
+   =========================================================================== */
+
+.mc-notes-grid {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 18px;
+}
+@media (max-width: 880px) {
+  .mc-notes-grid { grid-template-columns: 1fr; }
+}
+
+.mc-notes-col .mc-kicker {
+  margin-bottom: 10px;
+}
+
+.mc-notes-empty {
+  padding: 14px 16px;
+  border-radius: 12px;
+  background: var(--bg-2);
+  border: 1px dashed var(--line);
+  font-size: 13px;
+  color: var(--mute);
+  line-height: 1.55;
+  margin-bottom: 8px;
+}
+
+.mc-notes-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 8px;
+}
+
+.mc-notes-card-head {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.mc-notes-card-who {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--ink);
+}
+
+.mc-notes-card-role {
+  color: var(--mute);
+  font-weight: 400;
+}
+
+.mc-notes-card-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--mute);
+}
+
+.mc-notes-card-body {
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+.mc-notes-input {
+  padding: 14px;
+  border-radius: 12px;
+  background: var(--bg-2);
+  border: 1px dashed var(--line);
+  margin-top: 6px;
+}
+
+.mc-notes-input textarea {
+  width: 100%;
+  min-height: 60px;
+  border: 0;
+  background: transparent;
+  outline: none;
+  font: inherit;
+  font-size: 13px;
+  resize: vertical;
+  color: var(--ink);
+}
+
+.mc-notes-input textarea:disabled {
+  cursor: not-allowed;
+  color: var(--mute);
+}
+
+.mc-notes-input-actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 6px;
+}
+
+.mc-audit-timeline {
+  position: relative;
+  padding-left: 18px;
+  border-left: 2px solid var(--line);
+}
+
+.mc-audit-row {
+  position: relative;
+  margin-bottom: 14px;
+}
+
+.mc-audit-dot {
+  position: absolute;
+  left: -25px;
+  top: 6px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 2px solid var(--bg);
+}
+
+.mc-audit-time {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  color: var(--mute);
+  margin-bottom: 2px;
+}
+
+.mc-audit-title {
+  font-size: 13.5px;
+  font-weight: 500;
+  margin-bottom: 2px;
+  color: var(--ink);
+}
+
+.mc-audit-detail {
+  font-size: 12.5px;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+/* ===========================================================================
+   Role detail Candidates tab toolbar — HANDOFF v2 §4 / canvas
+   jobs-detail-candidates. Segmented stage filter + Sort + Score new
+   above the embedded candidates table.
+   =========================================================================== */
+
+.ctable-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px 12px 0 0;
+  background: var(--bg-2);
+  margin-bottom: -1px; /* sit flush against the table card below it */
+  flex-wrap: wrap;
+}
+
+.ctable-toolbar-grow {
+  flex: 1 1 auto;
+}
+
+.ctable-toolbar .seg {
+  display: inline-flex;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px;
+  gap: 2px;
+}
+
+.ctable-toolbar .seg button {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 5px 12px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  color: var(--mute);
+  border-radius: 999px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  transition: color 0.12s ease, background 0.12s ease;
+}
+
+.ctable-toolbar .seg button:hover {
+  color: var(--ink-2);
+}
+
+.ctable-toolbar .seg button.on {
+  background: var(--ink);
+  color: #fff;
+}
+
+.ctable-toolbar .seg button .ct {
+  font-size: 10.5px;
+  opacity: 0.8;
+}
+
+/* ===========================================================================
+   Candidate Overview tab — HANDOFF v2 §5.1 / canvas cand-overview
+   Hero band + signal cards + 6-dim bar grid + 4-card evidence row.
+   =========================================================================== */
+
+.mc-overview-hero {
+  display: grid;
+  grid-template-columns: auto 1fr 280px;
+  gap: 24px;
+  align-items: center;
+  padding: 24px;
+  border-radius: 16px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  margin-bottom: 18px;
+}
+@media (max-width: 960px) {
+  .mc-overview-hero {
+    grid-template-columns: auto 1fr;
+  }
+  .mc-overview-hero-signal {
+    grid-column: 1 / -1;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+    padding-top: 14px;
+    padding-left: 0;
+  }
+}
+
+.mc-overview-hero-score {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.mc-overview-hero-body {
+  min-width: 0;
+}
+
+.mc-overview-hero-recommendation {
+  font-family: var(--font-display);
+  font-size: 26px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--purple);
+  margin: 6px 0;
+}
+
+.mc-overview-hero-summary {
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink-2);
+  max-width: 540px;
+}
+
+.mc-overview-hero-signal {
+  border-left: 1px solid var(--line);
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.mc-overview-hero-signal .mc-kicker {
+  margin-bottom: 8px;
+}
+
+.mc-overview-signal-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 13px;
+  padding: 4px 0;
+  color: var(--mute);
+}
+
+.mc-overview-signal-val {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.mc-overview-signal-suffix {
+  color: var(--mute);
+  font-weight: 400;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  margin-left: 4px;
+}
+
+.mc-overview-signals {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+@media (max-width: 720px) {
+  .mc-overview-signals { grid-template-columns: 1fr; }
+}
+
+.mc-overview-signal-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+}
+
+.mc-overview-signal-card-title {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 8px 0;
+  color: var(--ink);
+}
+
+.mc-overview-signal-card-body {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.mc-overview-dimensions {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 18px 20px;
+  margin-bottom: 14px;
+}
+
+.mc-overview-dimensions .mc-kicker {
+  margin: 0 0 14px;
+}
+
+.mc-overview-dimensions-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px 28px;
+}
+@media (max-width: 720px) {
+  .mc-overview-dimensions-grid { grid-template-columns: 1fr; }
+}
+
+.mc-overview-dim-row {
+  display: grid;
+  grid-template-columns: 1.6fr 1fr 64px;
+  align-items: center;
+  gap: 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 4px 0;
+}
+
+.mc-overview-dim-label {
+  color: var(--mute);
+}
+
+.mc-overview-dim-bar {
+  height: 6px;
+  background: var(--bg-3);
+  border-radius: 999px;
+  overflow: hidden;
+}
+
+.mc-overview-dim-bar > i {
+  display: block;
+  height: 100%;
+  background: var(--purple);
+  border-radius: 999px;
+}
+
+.mc-overview-dim-score {
+  text-align: right;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.mc-overview-dim-suffix {
+  color: var(--mute);
+  font-weight: 400;
+  margin-left: 2px;
+}
+
+.mc-overview-dim-empty {
+  margin: 8px 0 0;
+  font-size: 13px;
+  color: var(--mute);
+  line-height: 1.55;
+}
+
+.mc-overview-evidence {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+@media (max-width: 1100px) {
+  .mc-overview-evidence { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 600px) {
+  .mc-overview-evidence { grid-template-columns: 1fr; }
+}
+
+.mc-overview-evidence-card {
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+
+.mc-overview-evidence-headline {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin: 6px 0;
+  color: var(--ink);
+}
+
+.mc-overview-evidence-body {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+.mc-overview-footer {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 4px;
+}
+
+.mc-overview-footer-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 18px;
+  align-items: center;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 16px 18px;
+}
+@media (max-width: 720px) {
+  .mc-overview-footer-row { grid-template-columns: 1fr; }
+}
+
+.mc-overview-footer-status p {
+  margin: 4px 0 0;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.55;
+}
+
+.mc-overview-footer-links {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 

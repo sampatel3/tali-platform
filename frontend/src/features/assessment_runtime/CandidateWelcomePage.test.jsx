@@ -18,6 +18,9 @@ vi.mock('../../shared/api', () => ({
 vi.mock('../../shared/ui/Branding', () => ({
   Logo: () => <div>TAALI</div>,
   BrandLabel: ({ children }) => <div>{children}</div>,
+  TaaliTile: () => <span aria-hidden="true" />,
+  TaaliLines: () => <span aria-hidden="true" />,
+  TaaliRoundel: () => <span aria-hidden="true" />,
 }));
 
 describe('CandidateWelcomePage', () => {

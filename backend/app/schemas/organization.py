@@ -84,12 +84,34 @@ class ScoringPolicyUpdate(BaseModel):
     time_to_first_signal: Optional[bool] = None
 
 
+class AgentDefaultsAutonomy(BaseModel):
+    """Org-default autonomy toggles. Per-role overrides win on the role
+    detail Agent settings tab. New roles inherit these defaults."""
+
+    auto_invite_above: bool = True
+    auto_reject_below: bool = True
+    auto_advance_high_score: bool = False
+    passive_outbound: bool = False
+
+
+class AgentDefaults(BaseModel):
+    """Org-default agent settings surfaced via the Settings → AI tooling
+    drawer (HANDOFF Phase 5). Per-role overrides on the role-detail
+    Agent settings tab take precedence over these."""
+
+    enabled: bool = True
+    budget_cents: int = Field(default=5000, ge=0)
+    pause_threshold_pct: int = Field(default=80, ge=0, le=100)
+    autonomy: AgentDefaultsAutonomy = Field(default_factory=AgentDefaultsAutonomy)
+
+
 class AiToolingConfig(BaseModel):
     claude_enabled: bool = True
     cursor_inline_enabled: bool = False
     no_ai_baseline_enabled: bool = True
     claude_credit_per_candidate_usd: float = Field(default=12.0, ge=0, le=1000)
     session_timeout_minutes: int = Field(default=60, ge=15, le=240)
+    agent_defaults: Optional[AgentDefaults] = None
 
 
 class AiToolingConfigUpdate(BaseModel):
@@ -98,6 +120,7 @@ class AiToolingConfigUpdate(BaseModel):
     no_ai_baseline_enabled: Optional[bool] = None
     claude_credit_per_candidate_usd: Optional[float] = Field(default=None, ge=0, le=1000)
     session_timeout_minutes: Optional[int] = Field(default=None, ge=15, le=240)
+    agent_defaults: Optional[AgentDefaults] = None
 
 
 class NotificationPreferences(BaseModel):

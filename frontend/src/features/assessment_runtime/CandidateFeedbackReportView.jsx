@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { Download, ExternalLink } from 'lucide-react';
+import { ExternalLink } from 'lucide-react';
 
 import { BrandLabel, Logo } from '../../shared/ui/Branding';
 import { Badge, Button, Panel, cx } from '../../shared/ui/TaaliPrimitives';
@@ -14,8 +14,6 @@ const clampPercent = (value) => {
 export const CandidateFeedbackReportView = ({
   payload,
   onLinkedInShare = null,
-  onDownloadPdf = null,
-  downloadingPdf = false,
   embedded = false,
 }) => {
   const feedback = payload?.feedback || {};
@@ -40,9 +38,6 @@ export const CandidateFeedbackReportView = ({
   const benchmarkLabel = feedback?.overall_percentile_label
     || (benchmark?.available ? null : 'Benchmark coming soon');
   const handleLinkedInShare = onLinkedInShare || (() => {});
-  const handleDownloadPdf = onDownloadPdf || (() => {});
-
-  const isDownloadDisabled = Boolean(onDownloadPdf) && downloadingPdf;
 
   return (
     <div className={cx(embedded ? 'bg-[var(--taali-bg)]' : 'min-h-screen bg-[var(--taali-bg)]')}>
@@ -74,19 +69,19 @@ export const CandidateFeedbackReportView = ({
                 <ExternalLink size={14} />
                 Share on LinkedIn
               </Button>
-              <Button type="button" variant="secondary" size="sm" onClick={handleDownloadPdf} disabled={isDownloadDisabled}>
-                <Download size={14} />
-                {downloadingPdf ? 'Preparing PDF...' : 'Download PDF'}
-              </Button>
             </div>
           </div>
 
+          {/* HANDOFF v2 §6 — render every score as integer "nn / 100".
+              The scoring engine emits 0-10 atomic scores; we present them
+              on the unified 0-100 scale so candidate-facing and
+              recruiter-facing surfaces read the same. */}
           <div className="mt-5 grid gap-4 md:grid-cols-[180px_minmax(0,1fr)]">
             <div className="border border-[var(--taali-border)] bg-[var(--taali-purple-soft)] p-4">
               <div className="mb-1 text-xs font-mono text-[var(--taali-muted)]">Overall score</div>
               <div className="text-4xl font-bold text-[var(--taali-purple)]">
-                {feedback?.overall_score ?? 0}
-                <span className="text-base text-[var(--taali-muted)]">/10</span>
+                {Math.round(Number(feedback?.overall_score ?? 0) * 10)}
+                <span className="text-base text-[var(--taali-muted)]"> / 100</span>
               </div>
               {benchmarkLabel ? (
                 <div className="mt-2 text-xs font-mono text-[var(--taali-muted)]">{benchmarkLabel}</div>
@@ -104,7 +99,7 @@ export const CandidateFeedbackReportView = ({
                     />
                   </div>
                   <div className="text-right font-mono text-xs text-[var(--taali-muted)]">
-                    {item.score}/10{item.percentile_label ? ` · ${item.percentile_label}` : ''}
+                    {Math.round(Number(item.score || 0) * 10)} / 100{item.percentile_label ? ` · ${item.percentile_label}` : ''}
                   </div>
                 </div>
               ))}
@@ -135,7 +130,7 @@ export const CandidateFeedbackReportView = ({
                 {improvements.slice(0, 3).map((item) => (
                   <div key={item.dimension_id} className="border border-[var(--taali-border)] p-3">
                     <div className="text-sm font-medium text-[var(--taali-text)]">
-                      {item.dimension} ({item.score}/10)
+                      {item.dimension} ({Math.round(Number(item.score || 0) * 10)} / 100)
                     </div>
                     {item.evidence ? <div className="mt-1 text-xs text-[var(--taali-muted)]">{item.evidence}</div> : null}
                     <div className="mt-2 text-sm text-[var(--taali-text)]">{item.practice_advice}</div>
@@ -161,7 +156,7 @@ export const CandidateFeedbackReportView = ({
               <ul className="space-y-1 text-sm text-[var(--taali-text)]">
                 {strengths.slice(0, 3).map((item) => (
                   <li key={item.dimension_id}>
-                    • {item.dimension} ({item.score}/10)
+                    • {item.dimension} ({Math.round(Number(item.score || 0) * 10)} / 100)
                   </li>
                 ))}
               </ul>

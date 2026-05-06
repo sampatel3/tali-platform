@@ -9,6 +9,7 @@ import {
   subscribeThemePreference,
 } from '../../lib/themePreference';
 import { navigateToMarketingSection } from '../../lib/marketingScroll';
+import { TaaliTile } from '../ui/Branding';
 import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 
 const APP_TABS = [
@@ -51,21 +52,21 @@ const resolveOrgName = (user) => String(
   || ''
 ).trim();
 
-const Mark = () => (
-  <span className="logo-mark" aria-hidden="true">
-    <svg viewBox="0 0 24 24" fill="none" stroke="white" strokeWidth="2" strokeLinecap="round">
-      <line x1="6" y1="4.5" x2="6" y2="19.5" />
-      <line x1="10" y1="4.5" x2="10" y2="19.5" />
-      <line x1="14" y1="4.5" x2="14" y2="19.5" />
-      <line x1="18" y1="4.5" x2="18" y2="19.5" />
-      <line x1="4" y1="18.5" x2="20" y2="5.5" />
-    </svg>
-  </span>
-);
-
+// Use the canonical brand glyph (`TaaliTile`) so every header logo across
+// marketing, auth, runtime, and the recruiter app renders from the same
+// SVG path. The legacy `Mark` component used inline lines with hard-coded
+// `stroke="white"` — kept here historically so existing `.logo-mark` CSS
+// could supply the purple backdrop. Now we let `TaaliTile` render the
+// backdrop too so there's exactly one source of truth.
 export const TaaliLogo = ({ onClick, wordmarkClassName = '' }) => (
   <button type="button" className="logo" onClick={onClick} aria-label="Taali home">
-    <Mark />
+    <TaaliTile
+      className="h-7 w-7 rounded-[7px]"
+      fillClassName="text-[var(--purple)]"
+      lineClassName="text-white"
+      strokeWidth={2.4}
+      cornerRadius={5.4}
+    />
     <span className={`logo-word ${wordmarkClassName}`.trim()}>
       taali<em>.</em>
     </span>

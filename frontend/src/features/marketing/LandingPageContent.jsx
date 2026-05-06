@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { Check } from 'lucide-react';
 
 import { AssessmentRuntimePreviewView } from '../assessment_runtime/AssessmentRuntimePreviewView';
 import { PRODUCT_WALKTHROUGH, PRODUCT_WALKTHROUGH_TASK } from '../demo/productWalkthroughModels';
@@ -379,8 +380,8 @@ export const LandingPage = ({ onNavigate }) => {
                   { t: 'Autopilot detection', d: 'We flag candidates who pasted without reading. Calibrated, not punitive.' },
                 ].map((bullet) => (
                   <li key={bullet.t} className="flex items-start gap-3">
-                    <span className="mt-0.5 inline-flex h-[22px] w-[22px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--purple)] text-[12px] font-semibold text-white">
-                      ✓
+                    <span className="mt-0.5 inline-flex h-[22px] w-[22px] flex-shrink-0 items-center justify-center rounded-full bg-[var(--purple)] text-white">
+                      <Check size={13} strokeWidth={2.6} aria-hidden="true" />
                     </span>
                     <div>
                       <div className="text-[14.5px] font-medium text-[var(--ink)]">{bullet.t}</div>

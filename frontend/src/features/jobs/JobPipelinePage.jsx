@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams } from 'react-router-dom';
 import {
   ArrowLeft,
+  ArrowUpDown,
   BriefcaseBusiness,
   Check,
   ChevronDown,
@@ -25,6 +26,7 @@ import {
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import { AgentSettingsPanel } from '../../shared/layout/AgentSettingsPanel';
+import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { CommandBar } from '../../shared/ui/CommandBar';
 import { AgentRail } from './AgentRail';
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
@@ -105,7 +107,7 @@ const resolvePipelineCardSignal = (application) => {
   if (stage === 'in_assessment') {
     const normalizedStatus = String(application?.status || '').toLowerCase();
     return {
-      label: normalizedStatus.includes('pause') ? '⏸' : '🟢',
+      label: normalizedStatus.includes('pause') ? 'Paused' : 'Live',
       toneClass: '',
     };
   }
@@ -619,6 +621,7 @@ const FormattedJobSpecSection = ({ section, marker }) => {
 const RoleAgentSettingsTab = ({
   role,
   agentEnabled,
+  agentStatus = null,
   criteriaDraft,
   setCriteriaDraft,
   thresholdDraft,
@@ -638,8 +641,15 @@ const RoleAgentSettingsTab = ({
   const sliderValue = thresholdDraft !== '' ? Number(thresholdDraft) : (thresholdValue ?? 55);
   const thresholdDisplay = Math.max(0, Math.min(100, sliderValue));
   const mustHaves = Array.isArray(role?.must_haves) ? role.must_haves : [];
-  const monthlyBudgetCents = Number(role?.agent_monthly_budget_cents ?? 5000);
-  const monthlySpentCents = Number(role?.agent_monthly_spent_cents ?? 0);
+  // Budget cap is the role.monthly_usd_budget_cents column on the role
+  // record; live spend comes from /roles/{id}/agent/status. Default cap
+  // ($50) only applies when the role hasn't set one yet.
+  const monthlyBudgetCents = Number(
+    agentStatus?.monthly_budget_cents
+    ?? role?.monthly_usd_budget_cents
+    ?? 5000
+  );
+  const monthlySpentCents = Number(agentStatus?.monthly_spent_cents ?? 0);
   const budgetPct = monthlyBudgetCents > 0
     ? Math.min(100, Math.round((monthlySpentCents / monthlyBudgetCents) * 100))
     : 0;
@@ -916,6 +926,70 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const numericRoleId = Number(roleId);
   // Batch progress is owned by the global JobStatusContext — single source of truth.
   const batchScoreProgress = jobs?.[numericRoleId] ?? EMPTY_PROGRESS;
+  // Live agent status for THIS role — backend serves /roles/{id}/agent/status
+  // with monthly_spent_cents + monthly_budget_cents + pending_decisions +
+  // last_activity. Polled every 30s, paused when the tab is hidden.
+  const { status: agentStatus } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
+  // Pending agent decisions for this role, keyed by application_id so the
+  // Pipeline-tab kanban cards can render the real Approve/Override flow
+  // inline (HANDOFF v2 §4 / canvas jobs-detail-pipeline). Polls every 30s.
+  const [pendingAgentDecisions, setPendingAgentDecisions] = useState({});
+  const [resolvingDecisionId, setResolvingDecisionId] = useState(null);
+  const fetchPendingDecisions = useCallback(async () => {
+    if (!Number.isFinite(numericRoleId)) return;
+    try {
+      const res = await apiClient.agent.listDecisions({
+        role_id: numericRoleId,
+        status: 'pending',
+        limit: 50,
+      });
+      const list = Array.isArray(res?.data) ? res.data : [];
+      setPendingAgentDecisions(
+        list.reduce((acc, decision) => {
+          const appId = Number(decision?.application_id);
+          if (Number.isFinite(appId)) acc[appId] = decision;
+          return acc;
+        }, {}),
+      );
+    } catch {
+      // Quiet failure — the kanban cards just fall back to the
+      // score-based decision verb until next poll succeeds.
+    }
+  }, [numericRoleId]);
+  useEffect(() => {
+    void fetchPendingDecisions();
+    const handle = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.hidden) return;
+      void fetchPendingDecisions();
+    }, 30_000);
+    return () => window.clearInterval(handle);
+  }, [fetchPendingDecisions]);
+  const handleApproveDecision = useCallback(async (decisionId) => {
+    if (!decisionId) return;
+    setResolvingDecisionId(decisionId);
+    try {
+      await apiClient.agent.approveDecision(decisionId);
+      showToast(`Approved agent recommendation #${decisionId}`, 'success');
+      await fetchPendingDecisions();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to approve recommendation.'), 'error');
+    } finally {
+      setResolvingDecisionId(null);
+    }
+  }, [fetchPendingDecisions, showToast]);
+  const handleOverrideDecision = useCallback(async (decisionId) => {
+    if (!decisionId) return;
+    setResolvingDecisionId(decisionId);
+    try {
+      await apiClient.agent.overrideDecision(decisionId, { override_action: 'manual_review' });
+      showToast(`Overrode agent recommendation #${decisionId}`, 'info');
+      await fetchPendingDecisions();
+    } catch (err) {
+      showToast(getErrorMessage(err, 'Failed to override recommendation.'), 'error');
+    } finally {
+      setResolvingDecisionId(null);
+    }
+  }, [fetchPendingDecisions, showToast]);
   const [role, setRole] = useState(null);
   const [roleTasks, setRoleTasks] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
@@ -933,6 +1007,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
   const [activeView, setActiveView] = useState('table');
+  // HANDOFF v2 §4 / canvas jobs-detail-candidates — primary stage filter
+  // for the Candidates tab. The segmented row above the table toggles
+  // this; the embedded directory re-mounts via key so its internal
+  // `stageFilters` re-seeds from the new initial value.
+  const [tableStageFilter, setTableStageFilter] = useState('all');
+  const [tableSortBy, setTableSortBy] = useState('composite');
   const [scoringExpanded, setScoringExpanded] = useState(false);
   const [roleSheetOpen, setRoleSheetOpen] = useState(false);
   const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
@@ -1107,33 +1187,61 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     return scoredDates[0] || null;
   }, [activeApplications]);
 
-  const pipelineStats = useMemo(() => ([
-    {
-      key: 'active',
-      label: 'In pipeline',
-      value: String(role?.active_candidates_count || activeApplications.length || 0),
-      description: `${role?.stage_counts?.review || 0} in review`,
-      highlight: true,
-    },
-    {
-      key: 'unscored',
-      label: 'New CVs',
-      value: String(unscoredApplications.length),
-      description: unscoredApplications.length > 0 ? 'Ready for score-new-only' : 'All visible CVs scored',
-    },
-    {
-      key: 'below-threshold',
-      label: 'Below threshold',
-      value: String(belowThresholdCount),
-      description: thresholdValue != null ? `Threshold ${thresholdValue}/100` : 'Set a reject threshold',
-    },
-    {
-      key: 'tasks',
-      label: 'Assessment tasks',
-      value: String(roleTasks.length),
-      description: roleTasks.length ? `${roleTasks[0]?.name || 'Task'} linked` : 'Link a task before inviting',
-    },
-  ]), [activeApplications.length, belowThresholdCount, role, roleTasks.length, thresholdValue, unscoredApplications.length]);
+  // HANDOFF v2 §4 — Candidates tab KPI row matches canvas exactly:
+  // In pipeline · New CVs · Below threshold · Agent spend (with bar).
+  // The legacy "Assessment tasks" + "Interview focus" tiles are gone —
+  // task linkage shows in the role hero, interview focus is per-candidate.
+  // Spend pulls from /roles/{id}/agent/status (live), budget cap is the
+  // role.monthly_usd_budget_cents column.
+  const pipelineStats = useMemo(() => {
+    const monthlySpentCents = Number(agentStatus?.monthly_spent_cents || 0);
+    const monthlyBudgetCents = Number(
+      agentStatus?.monthly_budget_cents
+      ?? role?.monthly_usd_budget_cents
+      ?? 0
+    );
+    const spentDollars = Math.round(monthlySpentCents / 100);
+    const budgetDollars = Math.round(monthlyBudgetCents / 100);
+    const spendPct = monthlyBudgetCents > 0
+      ? Math.min(100, Math.round((monthlySpentCents / monthlyBudgetCents) * 100))
+      : null;
+    const eomProjection = spendPct != null && spendPct > 0
+      ? Math.round((spentDollars * 30) / Math.max(1, new Date().getDate()))
+      : null;
+    return [
+      {
+        key: 'active',
+        label: 'In pipeline',
+        value: String(role?.active_candidates_count || activeApplications.length || 0),
+        description: `${role?.stage_counts?.review || 0} in review`,
+        highlight: true,
+      },
+      {
+        key: 'unscored',
+        label: 'New CVs',
+        value: String(unscoredApplications.length),
+        description: unscoredApplications.length > 0 ? 'Ready to score' : 'All visible CVs scored',
+      },
+      {
+        key: 'below-threshold',
+        label: 'Below threshold',
+        value: String(belowThresholdCount),
+        description: thresholdValue != null ? `Auto-flagged at <${thresholdValue}` : 'Set a reject threshold',
+      },
+      {
+        key: 'spend',
+        label: 'Agent spend',
+        // value rendered specially below — we still emit a string fallback
+        // so the .v cell isn't empty when budget is 0.
+        value: budgetDollars > 0 ? `$${spentDollars}` : '—',
+        valueSuffix: budgetDollars > 0 ? `/ $${budgetDollars}` : null,
+        budgetPct: spendPct,
+        description: spendPct != null
+          ? `${spendPct}%${eomProjection != null && budgetDollars > 0 ? ` · projected $${eomProjection} EOM` : ''}`
+          : 'Cap not set',
+      },
+    ];
+  }, [activeApplications.length, agentStatus, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
 
   const groupedApplications = useMemo(() => PIPELINE_STAGE_ORDER.map((stage) => ({
     ...stage,
@@ -1692,10 +1800,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             <button type="button" className={activeView === 'activity' ? 'active' : ''} onClick={() => setActiveView('activity')}>Job spec</button>
             <button type="button" className={activeView === 'role-fit' ? 'active' : ''} onClick={() => setActiveView('role-fit')}>Agent settings</button>
           </div>
-          <div className="row">
-            <div className="filter-chip"><span className="mono">Filter</span> · All stages</div>
-            <div className="filter-chip"><span className="mono">Sort</span> · Composite</div>
-          </div>
         </div>
 
         <div className={`score-panel ${scoringExpanded ? 'is-expanded' : 'is-collapsed'}`} id="role-scoring-panel">
@@ -1905,17 +2009,25 @@ Disqualifying: No experience with regulated financial data`}
 
         <div className="stat-row">
           {pipelineStats.map((item) => (
-            <div key={item.key} className={`stat ${item.highlight ? 'hi' : ''}`}>
+            <div
+              key={item.key}
+              className={`stat ${item.highlight ? 'hi' : ''} ${item.budgetPct != null ? 'has-bar' : ''}`.trim()}
+            >
               <div className="k">{item.label}</div>
-              <div className="v">{item.value}</div>
+              <div className="v">
+                {item.value}
+                {item.valueSuffix ? (
+                  <span style={{ color: 'var(--mute)', fontSize: 14, marginLeft: 4 }}>{item.valueSuffix}</span>
+                ) : null}
+              </div>
+              {item.budgetPct != null ? (
+                <div className="stat-bar" aria-hidden="true">
+                  <i style={{ width: `${item.budgetPct}%` }} />
+                </div>
+              ) : null}
               <div className="d">{item.description}</div>
             </div>
           ))}
-          <div className="stat">
-            <div className="k">Interview focus</div>
-            <div className="v">{Array.isArray(role?.interview_focus?.questions) ? role.interview_focus.questions.length : 0}</div>
-            <div className="d">Generated prompts</div>
-          </div>
         </div>
 
         {activeView === 'pipeline' ? (
@@ -1930,34 +2042,115 @@ Disqualifying: No experience with regulated financial data`}
                       <div className="title"><span className="dot" />{stage.label}</div>
                       <div className="count">{stage.items.length} · {stage.countLabel}</div>
                     </div>
+                    {/* HANDOFF v2 §4 / canvas jobs-detail-pipeline — kanban
+                        card per v3:
+                          avatar · name + position
+                          CV n% · score · ago [· LIVE]
+                          (review stage only) agent recommendation block:
+                            Advance / Reject + reasoning + Approve · Override
+                        Approve/Override are surfaced in the
+                        PendingAgentDecisionsPanel above the table for now;
+                        the in-card buttons are deep-link entry points. */}
                     {visibleItems.map((application) => {
                       const cardSignal = resolvePipelineCardSignal(application);
+                      const cvPct = Number.isFinite(Number(application?.cv_match_score))
+                        ? Math.round(Number(application.cv_match_score))
+                        : null;
+                      const compositeRaw = application?.score_summary?.taali_score
+                        ?? application?.taali_score
+                        ?? application?.assessment_score
+                        ?? null;
+                      const compositeScore = Number.isFinite(Number(compositeRaw))
+                        ? Math.round(Number(compositeRaw))
+                        : null;
+                      const isLive = String(application?.pipeline_stage || '').toLowerCase() === 'in_assessment';
+                      const isReview = stage.key === 'review';
+                      // Real pending agent decision (if any) for this candidate.
+                      // When present, the agent block surfaces the actual
+                      // recommendation verb + reasoning + wires Approve /
+                      // Override to apiClient.agent.{approve,override}Decision.
+                      const pendingDecision = pendingAgentDecisions[application?.id] || null;
+                      const decisionResolving = pendingDecision?.id != null
+                        && resolvingDecisionId === pendingDecision.id;
+                      const decisionVerb = pendingDecision?.recommendation
+                        || (compositeScore != null && compositeScore >= 75
+                          ? 'Advance to interview'
+                          : compositeScore != null && compositeScore < 50
+                            ? 'Reject'
+                            : 'Awaiting decision');
                       return (
                         <a
                           key={application.id}
-                          className="kanban-card text-left"
+                          className={`kanban-card text-left ${isReview ? 'is-review' : ''}`}
                           href={candidateReportHref(application, numericRoleId)}
                           onClick={(event) => handlePipelineReportClick(event, application)}
                           onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
                         >
                           <div className="cc-top">
                             <div className="av">{buildApplicationTitle(application).slice(0, 2).toUpperCase()}</div>
-                            <div>
+                            <div className="cc-id">
                               <div className="n">{buildApplicationTitle(application)}</div>
-                              <div className="e">{application?.candidate_email || 'No email captured'}</div>
+                              <div className="pos">
+                                {application?.candidate_position
+                                  || application?.candidate_email
+                                  || 'No position captured'}
+                              </div>
                             </div>
-                            <div className={`sc ${cardSignal.toneClass}`}>{cardSignal.label}</div>
                           </div>
-                          <div className="cc-meta">
-                            <span className={`tag ${application?.workable_sourced ? 'a' : ''}`}>{application?.workable_sourced ? 'Workable' : 'Taali'}</span>
-                            {application?.candidate_location ? (
-                              <span className="tag"><MapPin size={10} />{application.candidate_location}</span>
-                            ) : null}
+                          <div className="cc-line">
+                            {cvPct != null ? <span>CV {cvPct}%</span> : <span className="mute">No CV score</span>}
+                            {compositeScore != null ? <>
+                              <span className="dot-sep">·</span>
+                              <span className="score-pip">{compositeScore}</span>
+                            </> : null}
+                            <span className="cc-line-grow" />
+                            <span>
+                              {formatRelativeShort(application?.updated_at || application?.created_at)}
+                              {isLive ? <span className="live-pip"> · LIVE</span> : null}
+                            </span>
                           </div>
-                          <div className="cc-foot">
-                            <span>{formatRelativeShort(application?.created_at || application?.updated_at)}</span>
-                            <span>{resolvePipelineCardFooterStatus(application)}</span>
-                          </div>
+                          {isReview ? (
+                            <div className="cc-agent">
+                              <div className="cc-agent-glyph" aria-hidden="true">
+                                <Sparkles size={11} strokeWidth={2} />
+                              </div>
+                              <div className="cc-agent-body">
+                                <div className="cc-agent-action">{decisionVerb}</div>
+                                <div className="cc-agent-why">
+                                  {pendingDecision?.reasoning
+                                    || resolvePipelineCardFooterStatus(application)}
+                                </div>
+                                {pendingDecision ? (
+                                  <div className="cc-agent-actions">
+                                    <button
+                                      type="button"
+                                      className="btn btn-purple btn-xs"
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        void handleApproveDecision(pendingDecision.id);
+                                      }}
+                                      disabled={decisionResolving}
+                                    >
+                                      {decisionResolving ? '…' : 'Approve'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      className="btn btn-outline btn-xs"
+                                      onClick={(event) => {
+                                        event.preventDefault();
+                                        event.stopPropagation();
+                                        void handleOverrideDecision(pendingDecision.id);
+                                      }}
+                                      disabled={decisionResolving}
+                                    >
+                                      Override
+                                    </button>
+                                  </div>
+                                ) : null}
+                              </div>
+                            </div>
+                          ) : null}
                         </a>
                       );
                     })}
@@ -1978,6 +2171,7 @@ Disqualifying: No experience with regulated financial data`}
           <RoleAgentSettingsTab
             role={role}
             agentEnabled={role?.agentic_mode_enabled !== false}
+            agentStatus={agentStatus}
             criteriaDraft={criteriaDraft}
             setCriteriaDraft={setCriteriaDraft}
             thresholdDraft={thresholdDraft}
@@ -2034,7 +2228,66 @@ Disqualifying: No experience with regulated financial data`}
           </div>
         ) : (
           <>
+            {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — segmented
+                stage filter + Sort + Score new toolbar above the table.
+                Stage counts read off groupedApplications (already memoized).
+                Sort is currently a label-only display until the directory
+                exposes a controlled sort-by; "Score new" is wired to the
+                same handler the score panel uses. */}
+            <div className="ctable-toolbar">
+              <div className="seg" role="tablist" aria-label="Filter candidates by stage">
+                {[
+                  { key: 'all', label: 'All', count: activeApplications.length },
+                  ...PIPELINE_STAGE_ORDER.map((stage) => {
+                    const items = (groupedApplications.find((g) => g.key === stage.key)?.items) || [];
+                    return { key: stage.key, label: stage.label, count: items.length };
+                  }),
+                ].map((seg) => (
+                  <button
+                    key={seg.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={tableStageFilter === seg.key}
+                    className={tableStageFilter === seg.key ? 'on' : ''}
+                    onClick={() => setTableStageFilter(seg.key)}
+                  >
+                    {seg.label}
+                    {seg.count > 0 ? <span className="ct"> ({seg.count})</span> : null}
+                  </button>
+                ))}
+              </div>
+              <div className="ctable-toolbar-grow" />
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => {
+                  // Toggle between composite (Taali score desc) and CV-match
+                  // recency. `tableSortBy` is the directory's sort key —
+                  // changing it bumps the table key so the embedded
+                  // CandidatesDirectoryPage remounts with the new
+                  // initialSortOption and re-fetches.
+                  setTableSortBy((prev) => (prev === 'composite' ? 'cv' : 'composite'));
+                }}
+                aria-label="Sort table"
+                title="Sort"
+              >
+                <ArrowUpDown size={12} />
+                Sort: {tableSortBy === 'composite' ? 'Taali score' : 'CV match'}
+              </button>
+              {unscoredApplications.length > 0 ? (
+                <button
+                  type="button"
+                  className="btn btn-purple btn-sm"
+                  onClick={() => handleBatchScore({ includeScored: false })}
+                  disabled={savingRoleConfig}
+                >
+                  <Sparkles size={12} />
+                  Score new ({unscoredApplications.length})
+                </button>
+              ) : null}
+            </div>
             <CandidatesDirectoryPage
+              key={`role-pipeline-${roleId}-${tableStageFilter}-${tableSortBy}`}
               onNavigate={onNavigate}
               NavComponent={null}
               lockRoleId={roleId || null}
@@ -2044,6 +2297,8 @@ Disqualifying: No experience with regulated financial data`}
               subtitle=""
               externalRefreshKey={refreshTick}
               embedded
+              initialStageFilter={tableStageFilter === 'all' ? null : tableStageFilter}
+              initialSortOption={tableSortBy === 'cv' ? 'cv_match_scored_at:desc' : 'taali_score:desc'}
             />
           </>
         )}

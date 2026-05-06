@@ -1,5 +1,15 @@
 import React from 'react';
-import { CheckCircle } from 'lucide-react';
+import {
+  Brain,
+  CheckCircle,
+  CheckSquare,
+  FileText,
+  Paperclip,
+  PenTool,
+  Target,
+  Wrench,
+  Zap,
+} from 'lucide-react';
 import {
   PolarAngleAxis,
   PolarGrid,
@@ -21,14 +31,14 @@ import { ScoringCardGrid } from '../../shared/ui/ScoringCardGrid';
 import { ScoringGlossaryPanel, SCORING_GLOSSARY_METRIC_COUNT } from '../../shared/ui/ScoringGlossaryPanel';
 
 const DIMENSION_VISUAL_CONFIG = {
-  task_completion: { icon: '✅', weight: '20%' },
-  prompt_clarity: { icon: '🎯', weight: '15%' },
-  context_provision: { icon: '📎', weight: '15%' },
-  independence_efficiency: { icon: '🧠', weight: '20%' },
-  response_utilization: { icon: '⚡', weight: '10%' },
-  debugging_design: { icon: '🔧', weight: '5%' },
-  written_communication: { icon: '✍️', weight: '10%' },
-  role_fit: { icon: '📄', weight: '5%' },
+  task_completion: { Icon: CheckSquare, weight: '20%' },
+  prompt_clarity: { Icon: Target, weight: '15%' },
+  context_provision: { Icon: Paperclip, weight: '15%' },
+  independence_efficiency: { Icon: Brain, weight: '20%' },
+  response_utilization: { Icon: Zap, weight: '10%' },
+  debugging_design: { Icon: Wrench, weight: '5%' },
+  written_communication: { Icon: PenTool, weight: '10%' },
+  role_fit: { Icon: FileText, weight: '5%' },
 };
 
 const FRAUD_FLAG_EXPLANATIONS = {
@@ -131,7 +141,7 @@ export const CandidateResultsTab = ({
   );
   const CATEGORY_CONFIG = dimensionOrder.map((id) => ({
     key: id,
-    icon: DIMENSION_VISUAL_CONFIG[id]?.icon || '•',
+    Icon: DIMENSION_VISUAL_CONFIG[id]?.Icon || null,
     weight: DIMENSION_VISUAL_CONFIG[id]?.weight || '—',
     label: getDimensionById(id).label,
     description: getDimensionById(id).longDescription,
@@ -320,7 +330,7 @@ export const CandidateResultsTab = ({
                 onClick={() => setExpandedCategory(isExpanded ? null : cat.key)}
               >
                 <div className="flex min-w-0 items-center gap-3">
-                  <span>{cat.icon}</span>
+                  {cat.Icon ? <cat.Icon size={15} strokeWidth={1.8} className="text-[var(--taali-purple)]" aria-hidden="true" /> : null}
                   <span className="min-w-0 font-bold leading-snug text-[var(--taali-text)]" title={cat.description}>{cat.label}</span>
                   <Badge variant="muted" className="font-mono text-[11px]">Weight: {cat.weight}</Badge>
                   {benchmarkBadge ? (

@@ -11,7 +11,6 @@ export const CandidateFeedbackPage = ({ token }) => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [payload, setPayload] = useState(null);
-  const [downloadingPdf, setDownloadingPdf] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -43,27 +42,6 @@ export const CandidateFeedbackPage = ({ token }) => {
     const url = typeof window !== 'undefined' ? window.location.href : '';
     const shareUrl = `https://www.linkedin.com/sharing/share-offsite/?url=${encodeURIComponent(url)}&summary=${encodeURIComponent(DEFAULT_SHARE_TEXT)}`;
     window.open(shareUrl, '_blank', 'noopener,noreferrer');
-  };
-
-  const handleDownloadPdf = async () => {
-    if (!token) return;
-    setDownloadingPdf(true);
-    try {
-      const res = await assessmentsApi.downloadCandidateFeedbackPdf(token);
-      const blob = new Blob([res.data], { type: 'application/pdf' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `candidate-feedback-${payload?.assessment_id || 'report'}.pdf`;
-      document.body.appendChild(a);
-      a.click();
-      a.remove();
-      URL.revokeObjectURL(url);
-    } catch (err) {
-      setError(err?.response?.data?.detail || 'Failed to download PDF.');
-    } finally {
-      setDownloadingPdf(false);
-    }
   };
 
   if (loading) {
@@ -100,8 +78,6 @@ export const CandidateFeedbackPage = ({ token }) => {
     <CandidateFeedbackReportView
       payload={payload}
       onLinkedInShare={handleLinkedInShare}
-      onDownloadPdf={handleDownloadPdf}
-      downloadingPdf={downloadingPdf}
     />
   );
 };

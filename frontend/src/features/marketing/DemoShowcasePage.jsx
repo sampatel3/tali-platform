@@ -36,7 +36,7 @@ const JOBS_MOCK = [
 const CHAT_MOCK = [
   { kind: 'user', text: 'Find me three candidates for the Senior Backend role who already worked through retry semantics in production.' },
   { kind: 'tool', text: 'graph_search_candidates · scope=role:1442 · 47 → 3 matches' },
-  { kind: 'assistant', text: 'Three strong fits: Maya Chen (92, ex-Stripe, idempotency-keys talk), Jordan Patel (88, Linear), Priya Raman (84, applied retries to ML pipelines).' },
+  { kind: 'assistant', text: 'Three strong fits: Maya Chen (92, ex-Helix Pay, idempotency-keys talk), Jordan Patel (88, ex-Wander), Priya Raman (84, applied retries to ML pipelines).' },
 ];
 
 const WORKSPACE_MOCK = [

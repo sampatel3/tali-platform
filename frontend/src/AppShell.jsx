@@ -530,8 +530,7 @@ function AppContent() {
         path="/chat"
         element={(
           <Suspense fallback={lazyFallback}>
-            <DashboardNavWithMode currentPage="chat" onNavigate={navigateToPage} />
-            <ChatPage />
+            <ChatPage onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />
           </Suspense>
         )}
       />
@@ -539,8 +538,7 @@ function AppContent() {
         path="/chat/:conversationId"
         element={(
           <Suspense fallback={lazyFallback}>
-            <DashboardNavWithMode currentPage="chat" onNavigate={navigateToPage} />
-            <ChatPage />
+            <ChatPage onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />
           </Suspense>
         )}
       />
@@ -630,6 +628,10 @@ function AppContent() {
         )}
       />
 
+      {/* Recruiter task preview renders the candidate-facing AssessmentPage
+          in demo mode (full-screen IDE + chat + terminal). Intentionally
+          chrome-less to match the runtime — the recruiter sees exactly what
+          the candidate sees. Use the browser back button to return. */}
       <Route
         path="/tasks/:taskId/preview"
         element={(
