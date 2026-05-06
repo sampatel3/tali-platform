@@ -1401,10 +1401,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
 
         <div className="sub-tabs sub-tabs-sticky">
           <div className="seg">
-            <button type="button" className={activeView === 'table' ? 'active' : ''} onClick={() => setActiveView('table')}>Candidates table</button>
+            <button type="button" className={activeView === 'table' ? 'active' : ''} onClick={() => setActiveView('table')}>Candidates</button>
             <button type="button" className={activeView === 'pipeline' ? 'active' : ''} onClick={() => setActiveView('pipeline')}>Pipeline</button>
-            <button type="button" className={activeView === 'role-fit' ? 'active' : ''} onClick={() => setActiveView('role-fit')}>Role fit</button>
-            <button type="button" className={activeView === 'activity' ? 'active' : ''} onClick={() => setActiveView('activity')}>Activity</button>
+            <button type="button" className={activeView === 'activity' ? 'active' : ''} onClick={() => setActiveView('activity')}>Job spec</button>
+            <button type="button" className={activeView === 'role-fit' ? 'active' : ''} onClick={() => setActiveView('role-fit')}>Agent settings</button>
           </div>
           <div className="row">
             <div className="filter-chip"><span className="mono">Filter</span> · All stages</div>
