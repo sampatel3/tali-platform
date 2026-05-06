@@ -109,29 +109,29 @@ const footerColumns = [
   {
     title: 'Product',
     items: [
-      { label: 'Book a demo', page: 'demo' },
+      { label: 'Book a demo', page: 'demo-lead' },
       { label: 'AI collab score', section: 'platform' },
       { label: 'Question bank', section: 'platform' },
       { label: 'Integrations', section: 'platform' },
-      { label: 'Product walkthrough', page: 'demo' },
+      { label: 'Product walkthrough', page: 'showcase' },
     ],
   },
   {
     title: 'Company',
     items: [
       { label: 'Manifesto', section: 'problem' },
-      { label: 'Careers', page: 'demo' },
-      { label: 'Blog', page: 'demo' },
+      { label: 'Careers', page: 'demo-lead' },
+      { label: 'Blog', page: 'demo-lead' },
       { label: 'Contact', href: 'mailto:hello@taali.ai' },
     ],
   },
   {
     title: 'Resources',
     items: [
-      { label: 'Sample walkthrough', page: 'demo' },
+      { label: 'Sample walkthrough', page: 'showcase' },
       { label: 'Rubric library', section: 'platform' },
-      { label: 'Docs', page: 'demo' },
-      { label: 'Security', page: 'demo' },
+      { label: 'Docs', page: 'demo-lead' },
+      { label: 'Security', page: 'demo-lead' },
     ],
   },
 ];
@@ -425,22 +425,6 @@ export const LandingPage = ({ onNavigate }) => {
       </section>
 
       {/* Trust strip removed — early product, no public customer logos. */}
-
-      {/* RUNTIME (kept short — anchors the nav 'Runtime' link) */}
-      <section id="runtime" className="border-t border-[var(--line)] bg-[var(--bg)]">
-        <div className={`${containerClass} py-20`}>
-          <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.14em] text-[var(--purple)]">
-            INSIDE THE RUNTIME
-          </div>
-          <h2 className="mt-3 max-w-[760px] font-[var(--font-display)] text-[clamp(30px,3.6vw,38px)] font-semibold leading-[1.1] tracking-[-0.02em] text-[var(--ink)]">
-            What your candidate <em className="not-italic text-[var(--purple)]">actually sees.</em>
-          </h2>
-          <p className="mt-4 max-w-[680px] text-[15.5px] leading-[1.6] text-[var(--ink-2)]">
-            A browser-based IDE with the same repo, runtime, and AI tooling your hiring team uses to evaluate.
-            No proctoring overlay. No screen capture. The transcript is the record.
-          </p>
-        </div>
-      </section>
 
       {/* WALKTHROUGH TEASER — v4 (HANDOFF chat.md §1) */}
       <section
