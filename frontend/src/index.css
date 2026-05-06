@@ -7487,20 +7487,6 @@ button.eng-badge-button:focus-visible {
   font-style: normal;
 }
 
-.mc-nav-logo .mc-mark {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
-  background: var(--ink);
-  color: var(--bg);
-  display: grid;
-  place-items: center;
-  font-family: var(--font-mono);
-  font-size: 14px;
-  font-weight: 600;
-  letter-spacing: -0.04em;
-}
-
 .mc-nav-logo em {
   color: var(--purple);
   font-style: normal;
@@ -8128,20 +8114,6 @@ button.eng-badge-button:focus-visible {
   font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.02em;
-}
-
-.mc-auth-editorial-mark {
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: #fff;
-  color: var(--purple);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 700;
 }
 
 .mc-auth-quote {
@@ -9142,20 +9114,6 @@ button.eng-badge-button:focus-visible {
 }
 
 .mc-demo-lead-logo em { color: var(--purple); font-style: normal; font-weight: inherit; }
-
-.mc-demo-lead-mark {
-  width: 26px;
-  height: 26px;
-  border-radius: 7px;
-  background: var(--purple);
-  color: #fff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-family: var(--font-mono);
-  font-size: 12px;
-  font-weight: 700;
-}
 
 .mc-demo-lead-title {
   font-family: var(--font-display);

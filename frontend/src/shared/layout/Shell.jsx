@@ -20,6 +20,7 @@ import {
   setDarkModePreference,
   subscribeThemePreference,
 } from '../../lib/themePreference';
+import { TaaliTile } from '../ui/Branding';
 import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 
 const NAV_TABS = [
@@ -149,7 +150,13 @@ export const Shell = ({ currentPage, onNavigate }) => {
         onClick={() => handleNav('jobs')}
         aria-label="Taali home"
       >
-        <span className="mc-mark">T</span>
+        <TaaliTile
+          className="h-7 w-7 rounded-[6px]"
+          fillClassName="text-[var(--purple)]"
+          lineClassName="text-white"
+          strokeWidth={2.4}
+          cornerRadius={5.4}
+        />
         <span>taali<em>.</em></span>
       </button>
       <nav className="mc-nav-tabs" aria-label="Primary">

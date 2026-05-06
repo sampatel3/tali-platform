@@ -1,5 +1,7 @@
 import React from 'react';
 
+import { TaaliTile } from '../../shared/ui/Branding';
+
 // AuthShell — two-pane layout used by login / register / forgot / reset /
 // verify-email per HANDOFF §4.3. Editorial pane (deep purple gradient with
 // a customer testimonial + compliance row) on the left, form pane on the
@@ -16,7 +18,13 @@ export const AuthShell = ({
     <aside className="mc-auth-editorial">
       <div className="mc-auth-editorial-bg" aria-hidden="true" />
       <div className="mc-auth-editorial-logo">
-        <span className="mc-auth-editorial-mark">T</span>
+        <TaaliTile
+          className="h-[26px] w-[26px] rounded-[5px]"
+          fillClassName="text-white"
+          lineClassName="text-[var(--purple)]"
+          strokeWidth={2.4}
+          cornerRadius={5}
+        />
         <span>taali<span style={{ opacity: 0.7 }}>.</span></span>
       </div>
       <blockquote className="mc-auth-quote">
