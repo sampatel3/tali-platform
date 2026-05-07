@@ -175,7 +175,7 @@ function WorkableCounters({ data }) {
 }
 
 function JobRow({
-  status, scope, counters, startedAt, finishedAt,
+  type, status, scope, counters, startedAt, finishedAt,
   onCancel, onDismiss, isLive,
 }) {
   const s = String(status ?? '').toLowerCase();
@@ -184,6 +184,9 @@ function JobRow({
   return (
     <div className="bg-jobs-panel-row">
       <div className="bg-jobs-panel-cell"><StatusDot status={status} /></div>
+      <div className="bg-jobs-panel-cell">
+        <span className="bg-jobs-panel-type">{type}</span>
+      </div>
       <div className="bg-jobs-panel-cell">{scope}</div>
       <div className="bg-jobs-panel-cell">{counters}</div>
       <div className="bg-jobs-panel-cell"><Timestamp value={startedAt} /></div>
@@ -211,23 +214,12 @@ function JobRow({
   );
 }
 
-function SubTable({ title, headers, rows, emptyText }) {
-  return (
-    <div className="bg-jobs-panel-subtable">
-      <h3 className="bg-jobs-panel-subtitle">{title}</h3>
-      <div className="bg-jobs-panel-table">
-        <div className="bg-jobs-panel-row bg-jobs-panel-head">
-          {headers.map((h) => (
-            <div key={h} className="bg-jobs-panel-cell bg-jobs-panel-head-cell">{h}</div>
-          ))}
-        </div>
-        {rows.length === 0 ? (
-          <div className="bg-jobs-panel-empty">{emptyText}</div>
-        ) : rows}
-      </div>
-    </div>
-  );
-}
+const tsValue = (value) => {
+  if (!value) return 0;
+  if (typeof value === 'number') return value;
+  if (typeof value === 'string') return Date.parse(value) || 0;
+  return value?.getTime?.() ?? 0;
+};
 
 export default function BackgroundJobsPanel() {
   const ctx = useJobStatus();
@@ -279,181 +271,232 @@ export default function BackgroundJobsPanel() {
     Object.keys(liveFetch).map((k) => Number(k)),
   ), [liveFetch]);
 
-  const processRows = useMemo(() => {
-    const out = [];
+  // Each "row" is { key, type, status, sortAt, render }. We collect from
+  // every job source then sort newest-first so the panel shows one flat
+  // chronological list — no per-source grouping. The `type` column tells
+  // the recruiter what kind of job each row is.
+  const allRows = useMemo(() => {
+    const rows = [];
+
     for (const [roleIdRaw, data] of Object.entries(liveProcess)) {
       const roleId = Number(roleIdRaw);
       if (!isVisible(data?.status)) continue;
       const scope = data?.role_name ? `Role: ${data.role_name}` : `Role #${roleId}`;
-      out.push(
-        <JobRow
-          key={`process-live-${roleId}`}
-          status={data.status}
-          scope={scope}
-          counters={<ProcessCounters data={data} />}
-          startedAt={data?.started_at}
-          finishedAt={data?.finished_at}
-          onCancel={() => ctx?.cancelProcessJob?.(roleId)}
-          onDismiss={() => ctx?.dismissProcessJob?.(roleId)}
-          isLive
-        />
-      );
+      rows.push({
+        key: `process-live-${roleId}`,
+        type: 'Process candidates',
+        status: data.status,
+        sortAt: tsValue(data?.started_at),
+        node: (
+          <JobRow
+            key={`process-live-${roleId}`}
+            type="Process candidates"
+            status={data.status}
+            scope={scope}
+            counters={<ProcessCounters data={data} />}
+            startedAt={data?.started_at}
+            finishedAt={data?.finished_at}
+            onCancel={() => ctx?.cancelProcessJob?.(roleId)}
+            onDismiss={() => ctx?.dismissProcessJob?.(roleId)}
+            isLive
+          />
+        ),
+      });
     }
-    return out;
-  }, [liveProcess, ctx]);
 
-  const scoreRows = useMemo(() => {
-    // Render live rows first (active + terminal-but-still-tracked), then
-    // historic rows from the listing endpoint that we don't already have live.
-    const out = [];
     for (const [roleIdRaw, data] of Object.entries(liveJobs)) {
       const roleId = Number(roleIdRaw);
       if (!isVisible(data?.status)) continue;
-      const scope = data?.role_name
-        ? `Role: ${data.role_name}`
-        : `Role #${roleId}`;
-      out.push(
-        <JobRow
-          key={`score-live-${roleId}`}
-          status={data.status}
-          scope={scope}
-          counters={<ScoreCounters data={data} />}
-          startedAt={data?.started_at}
-          finishedAt={data?.finished_at}
-          onCancel={() => ctx?.cancelBatch?.(roleId)}
-          onDismiss={() => ctx?.dismissJob?.(roleId)}
-          isLive
-        />
-      );
+      const scope = data?.role_name ? `Role: ${data.role_name}` : `Role #${roleId}`;
+      rows.push({
+        key: `score-live-${roleId}`,
+        type: 'Scoring batch',
+        status: data.status,
+        sortAt: tsValue(data?.started_at),
+        node: (
+          <JobRow
+            key={`score-live-${roleId}`}
+            type="Scoring batch"
+            status={data.status}
+            scope={scope}
+            counters={<ScoreCounters data={data} />}
+            startedAt={data?.started_at}
+            finishedAt={data?.finished_at}
+            onCancel={() => ctx?.cancelBatch?.(roleId)}
+            onDismiss={() => ctx?.dismissJob?.(roleId)}
+            isLive
+          />
+        ),
+      });
     }
     for (const r of history) {
       if (r.kind !== 'scoring_batch') continue;
       if (liveScoreRoleIds.has(Number(r.scope_id))) continue;
       if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
       const scope = r.role_name ? `Role: ${r.role_name}` : `Role #${r.scope_id}`;
-      out.push(
-        <JobRow
-          key={`score-hist-${r.id}`}
-          status={r.status}
-          scope={scope}
-          counters={<ScoreCounters data={{ ...r.counters }} />}
-          startedAt={r.started_at}
-          finishedAt={r.finished_at}
-        />
-      );
+      rows.push({
+        key: `score-hist-${r.id}`,
+        type: 'Scoring batch',
+        status: r.status,
+        sortAt: tsValue(r.started_at),
+        node: (
+          <JobRow
+            key={`score-hist-${r.id}`}
+            type="Scoring batch"
+            status={r.status}
+            scope={scope}
+            counters={<ScoreCounters data={{ ...r.counters }} />}
+            startedAt={r.started_at}
+            finishedAt={r.finished_at}
+          />
+        ),
+      });
     }
-    return out;
-  }, [liveJobs, history, liveScoreRoleIds, showAllHistory, ctx, tick]);
 
-  const fetchRows = useMemo(() => {
-    const out = [];
     for (const [roleIdRaw, data] of Object.entries(liveFetch)) {
       const roleId = Number(roleIdRaw);
       if (!isVisible(data?.status)) continue;
-      const scope = `Role #${roleId}`;
-      out.push(
-        <JobRow
-          key={`fetch-live-${roleId}`}
-          status={data.status}
-          scope={scope}
-          counters={<FetchCounters data={data} />}
-          startedAt={data?.started_at}
-          finishedAt={data?.finished_at}
-          onCancel={() => ctx?.cancelFetchCvs?.(roleId)}
-          onDismiss={() => ctx?.dismissFetchJob?.(roleId)}
-          isLive
-        />
-      );
+      rows.push({
+        key: `fetch-live-${roleId}`,
+        type: 'CV fetch',
+        status: data.status,
+        sortAt: tsValue(data?.started_at),
+        node: (
+          <JobRow
+            key={`fetch-live-${roleId}`}
+            type="CV fetch"
+            status={data.status}
+            scope={`Role #${roleId}`}
+            counters={<FetchCounters data={data} />}
+            startedAt={data?.started_at}
+            finishedAt={data?.finished_at}
+            onCancel={() => ctx?.cancelFetchCvs?.(roleId)}
+            onDismiss={() => ctx?.dismissFetchJob?.(roleId)}
+            isLive
+          />
+        ),
+      });
     }
     for (const r of history) {
       if (r.kind !== 'cv_fetch') continue;
       if (liveFetchRoleIds.has(Number(r.scope_id))) continue;
       if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
       const scope = r.role_name ? `Role: ${r.role_name}` : `Role #${r.scope_id}`;
-      out.push(
-        <JobRow
-          key={`fetch-hist-${r.id}`}
-          status={r.status}
-          scope={scope}
-          counters={<FetchCounters data={{ ...r.counters }} />}
-          startedAt={r.started_at}
-          finishedAt={r.finished_at}
-        />
-      );
+      rows.push({
+        key: `fetch-hist-${r.id}`,
+        type: 'CV fetch',
+        status: r.status,
+        sortAt: tsValue(r.started_at),
+        node: (
+          <JobRow
+            key={`fetch-hist-${r.id}`}
+            type="CV fetch"
+            status={r.status}
+            scope={scope}
+            counters={<FetchCounters data={{ ...r.counters }} />}
+            startedAt={r.started_at}
+            finishedAt={r.finished_at}
+          />
+        ),
+      });
     }
-    return out;
-  }, [liveFetch, history, liveFetchRoleIds, showAllHistory, ctx, tick]);
 
-  const graphRows = useMemo(() => {
-    const out = [];
+    if (workableSync && (workableSync.sync_in_progress || workableSync.status === 'running')) {
+      rows.push({
+        key: 'workable-live',
+        type: 'Workable sync',
+        status: workableSync.status || 'running',
+        sortAt: tsValue(workableSync.started_at),
+        node: (
+          <JobRow
+            key="workable-live"
+            type="Workable sync"
+            status={workableSync.status || 'running'}
+            scope={`Org-wide · mode: ${workableSync.mode || 'metadata'}`}
+            counters={<WorkableCounters data={workableSync} />}
+            startedAt={workableSync.started_at}
+            finishedAt={workableSync.finished_at}
+            onCancel={() => ctx?.cancelWorkableSync?.(workableSync.run_id ?? null)}
+            onDismiss={() => ctx?.dismissWorkableSyncJob?.()}
+            isLive
+          />
+        ),
+      });
+    }
+    for (const r of workableHistory) {
+      if (workableSync?.run_id && r.id === workableSync.run_id && (workableSync.sync_in_progress || workableSync.status === 'running')) continue;
+      if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
+      rows.push({
+        key: `workable-hist-${r.id}`,
+        type: 'Workable sync',
+        status: r.status,
+        sortAt: tsValue(r.started_at),
+        node: (
+          <JobRow
+            key={`workable-hist-${r.id}`}
+            type="Workable sync"
+            status={r.status}
+            scope={`Org-wide · mode: ${r.mode || 'metadata'}`}
+            counters={<WorkableCounters data={r} />}
+            startedAt={r.started_at}
+            finishedAt={r.finished_at}
+          />
+        ),
+      });
+    }
+
     if (graphSync && isVisible(graphSync.status)) {
-      out.push(
-        <JobRow
-          key="graph-live"
-          status={graphSync.status}
-          scope="Org-wide"
-          counters={<GraphCounters data={graphSync} />}
-          startedAt={graphSync?.started_at}
-          finishedAt={graphSync?.finished_at}
-          onCancel={() => ctx?.cancelGraphSync?.()}
-          onDismiss={() => ctx?.dismissGraphSyncJob?.()}
-          isLive
-        />
-      );
+      rows.push({
+        key: 'graph-live',
+        type: 'Graph sync',
+        status: graphSync.status,
+        sortAt: tsValue(graphSync?.started_at),
+        node: (
+          <JobRow
+            key="graph-live"
+            type="Graph sync"
+            status={graphSync.status}
+            scope="Org-wide"
+            counters={<GraphCounters data={graphSync} />}
+            startedAt={graphSync?.started_at}
+            finishedAt={graphSync?.finished_at}
+            onCancel={() => ctx?.cancelGraphSync?.()}
+            onDismiss={() => ctx?.dismissGraphSyncJob?.()}
+            isLive
+          />
+        ),
+      });
     }
     for (const r of history) {
       if (r.kind !== 'graph_sync') continue;
-      // Don't double-render the row that's the same as the live graphSync.
       if (graphSync && isVisible(graphSync.status) && r.finished_at == null) continue;
       if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
-      out.push(
-        <JobRow
-          key={`graph-hist-${r.id}`}
-          status={r.status}
-          scope="Org-wide"
-          counters={<GraphCounters data={{ ...r.counters }} />}
-          startedAt={r.started_at}
-          finishedAt={r.finished_at}
-        />
-      );
+      rows.push({
+        key: `graph-hist-${r.id}`,
+        type: 'Graph sync',
+        status: r.status,
+        sortAt: tsValue(r.started_at),
+        node: (
+          <JobRow
+            key={`graph-hist-${r.id}`}
+            type="Graph sync"
+            status={r.status}
+            scope="Org-wide"
+            counters={<GraphCounters data={{ ...r.counters }} />}
+            startedAt={r.started_at}
+            finishedAt={r.finished_at}
+          />
+        ),
+      });
     }
-    return out;
-  }, [graphSync, history, showAllHistory, ctx, tick]);
 
-  const workableRows = useMemo(() => {
-    const out = [];
-    if (workableSync && (workableSync.sync_in_progress || workableSync.status === 'running')) {
-      out.push(
-        <JobRow
-          key="workable-live"
-          status={workableSync.status || 'running'}
-          scope={`Org-wide · mode: ${workableSync.mode || 'metadata'}`}
-          counters={<WorkableCounters data={workableSync} />}
-          startedAt={workableSync.started_at}
-          finishedAt={workableSync.finished_at}
-          onCancel={() => ctx?.cancelWorkableSync?.(workableSync.run_id ?? null)}
-          onDismiss={() => ctx?.dismissWorkableSyncJob?.()}
-          isLive
-        />
-      );
-    }
-    for (const r of workableHistory) {
-      // Skip the live row to avoid double-render.
-      if (workableSync?.run_id && r.id === workableSync.run_id && (workableSync.sync_in_progress || workableSync.status === 'running')) continue;
-      if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
-      out.push(
-        <JobRow
-          key={`workable-hist-${r.id}`}
-          status={r.status}
-          scope={`Org-wide · mode: ${r.mode || 'metadata'}`}
-          counters={<WorkableCounters data={r} />}
-          startedAt={r.started_at}
-          finishedAt={r.finished_at}
-        />
-      );
-    }
-    return out;
-  }, [workableSync, workableHistory, showAllHistory, ctx, tick]);
+    rows.sort((a, b) => b.sortAt - a.sortAt);
+    return rows;
+  }, [
+    liveProcess, liveJobs, liveFetch, graphSync, workableSync,
+    history, workableHistory, liveScoreRoleIds, liveFetchRoleIds,
+    showAllHistory, ctx, tick,
+  ]);
 
   const hasActive = useMemo(() => {
     const liveActive = (m) => Object.values(m).some((d) => ACTIVE_STATUSES.has(String(d?.status ?? '').toLowerCase()));
@@ -471,7 +514,10 @@ export default function BackgroundJobsPanel() {
     ? `Last updated ${formatRelativeDateTime(lastUpdatedAt.toISOString())}`
     : 'Awaiting first refresh…';
 
-  const headers = ['Status', 'Scope', 'Counters', 'Started', 'Finished', 'Actions'];
+  // HANDOFF settings.md follow-up — one flat list, not five sub-tables.
+  // Each row carries its own "Type" column so the recruiter can still
+  // tell scoring from sync at a glance, sorted newest-first by start time.
+  const headers = ['Status', 'Type', 'Scope', 'Counters', 'Started', 'Finished', 'Actions'];
 
   return (
     <div className="bg-jobs-panel">
@@ -494,36 +540,16 @@ export default function BackgroundJobsPanel() {
         </button>
       </div>
 
-      <SubTable
-        title="Process candidates"
-        headers={headers}
-        rows={processRows}
-        emptyText="No active runs."
-      />
-      <SubTable
-        title="Scoring batch"
-        headers={headers}
-        rows={scoreRows}
-        emptyText="No recent runs."
-      />
-      <SubTable
-        title="CV fetch"
-        headers={headers}
-        rows={fetchRows}
-        emptyText="No recent runs."
-      />
-      <SubTable
-        title="Workable sync"
-        headers={headers}
-        rows={workableRows}
-        emptyText="No recent runs."
-      />
-      <SubTable
-        title="Graph sync"
-        headers={headers}
-        rows={graphRows}
-        emptyText="No recent runs."
-      />
+      <div className="bg-jobs-panel-table">
+        <div className="bg-jobs-panel-row bg-jobs-panel-head">
+          {headers.map((h) => (
+            <div key={h} className="bg-jobs-panel-cell bg-jobs-panel-head-cell">{h}</div>
+          ))}
+        </div>
+        {allRows.length === 0 ? (
+          <div className="bg-jobs-panel-empty">No background jobs running.</div>
+        ) : allRows.map((row) => row.node)}
+      </div>
     </div>
   );
 }

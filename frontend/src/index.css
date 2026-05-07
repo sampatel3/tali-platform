@@ -7389,12 +7389,24 @@ button.eng-badge-button:focus-visible {
 }
 .bg-jobs-panel-row {
   display: grid;
-  grid-template-columns: 160px 1.1fr 1.4fr 0.8fr 0.8fr 0.7fr;
+  /* status · type · scope · counters · started · finished · actions */
+  grid-template-columns: 130px 130px 1fr 1.3fr 0.8fr 0.8fr 0.7fr;
   gap: 10px;
   padding: 10px 12px;
   border-bottom: 1px solid var(--taali-border);
   font-size: 12px;
   align-items: center;
+}
+.bg-jobs-panel-type {
+  font-family: var(--taali-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--taali-muted);
+  padding: 2px 8px;
+  border-radius: 4px;
+  background: var(--taali-bg-soft, #f3f4f6);
+  white-space: nowrap;
 }
 .bg-jobs-panel-row:last-child { border-bottom: none; }
 .bg-jobs-panel-head {
