@@ -85,7 +85,10 @@ describe('Demo flow redesign', () => {
     expect(screen.getByText(/AGENTIC-FIRST/i)).toBeInTheDocument();
     expect(screen.getAllByRole('button', { name: /^Book a demo$/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: /Try the live walkthrough/i }).length).toBeGreaterThan(0);
-    expect(screen.getByText(/Agentic mode is ON/i)).toBeInTheDocument();
+    // Hero composition shows the unified AgentHeader's right-side panel
+    // ("Agent mode" label + state pill "ON"), per HANDOFF unified-headers.md §2.
+    expect(screen.getByText(/^Agent mode$/i)).toBeInTheDocument();
+    expect(screen.getByText(/3 awaiting your review/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Maya Chen/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/CANDIDATES PROCESSED/i)).toBeInTheDocument();
     // "What your candidate actually sees" section was removed in v4 (HANDOFF chat.md)

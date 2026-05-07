@@ -1,7 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams } from 'react-router-dom';
 import {
-  ArrowLeft,
   ArrowUpDown,
   BriefcaseBusiness,
   Check,
@@ -21,7 +20,8 @@ import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
-import { AgentBar, useAgentStatus } from '../../shared/layout/AgentBar';
+import { useAgentStatus } from '../../shared/layout/AgentBar';
+import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 // AgentRail (the legacy left "cockpit rail") was retired with the v3
 // role detail layout — top AgentBar replaces it. Component file stays
 // in the tree until any other surface that may import it is also
@@ -669,7 +669,7 @@ const RoleAgentSettingsTab = ({
           <div className="mc-agent-settings-hero-body">
             <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
             <div className="mc-agent-settings-hero-title">
-              Agentic mode is{' '}
+              Agent mode is{' '}
               <span style={{ color: 'var(--purple)' }}>{agentEnabled ? 'ON' : 'OFF'}</span>
             </div>
             <p className="mc-agent-settings-hero-help">
@@ -1631,6 +1631,27 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   };
 
+  // HANDOFF unified-headers.md §2-§4 — Role detail uses the single
+  // AgentHeader with a role-scoped agent panel on the right. Builds the
+  // panel agent prop from the polled /agent/status payload, with the
+  // role's own `agentic_mode_enabled` flag deciding whether it's ON or
+  // OFF. The previous role-hero + AgentBar duo collapses into this hero.
+  const roleAgent = useMemo(() => {
+    const enabled = Boolean(role?.agentic_mode_enabled);
+    if (!agentStatus) {
+      return {
+        on: enabled,
+        paused: false,
+        pending: 0,
+        spentCents: 0,
+        budgetCents: Number(role?.monthly_usd_budget_cents || 0) || 5000,
+        tick: enabled ? 'Loading agent status…' : null,
+        inFlight: false,
+      };
+    }
+    return buildAgentPropFromStatus(agentStatus, { isEnabled: enabled });
+  }, [agentStatus, role]);
+
   if (loading && !role) {
     return (
       <div>
@@ -1644,106 +1665,65 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     );
   }
 
+  const goToAgentSettings = () => {
+    setActiveView('role-fit');
+    const tabsEl = document.querySelector('.sub-tabs-sticky');
+    if (tabsEl && typeof tabsEl.scrollIntoView === 'function') {
+      tabsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
+  };
+
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
-      <div className="page">
-        <button type="button" className="pipeline-back" onClick={() => onNavigate('jobs')}>
-          <ArrowLeft size={10} />
-          All roles
-        </button>
-
-        {/* HANDOFF v2 §4.2 / canvas jobs-detail-* — role detail is a
-            single-column page with the role-scoped AgentBar at the top
-            (replacing the legacy left "Agent rail" cockpit layout).
-            Shell already hides its global org-scoped AgentBar on this
-            route so we don't double-stack. */}
-        {/* AgentBar Run now / Pause:
-            - Run now triggers `agent.runNow(roleId)` and surfaces a toast.
-            - Pause routes the user to the Agent settings tab on this page,
-              where the canvas-spec hero banner ON/OFF toggle owns the
-              actual pause state. We deliberately do NOT open a separate
-              <AgentSettingsPanel> drawer — having both an inline tab AND
-              a slide-out drawer for the same controls was the duplicate
-              chrome the user flagged. */}
-        <AgentBar
-          roleId={Number.isFinite(numericRoleId) ? numericRoleId : null}
-          onRunNow={async () => {
-            if (!Number.isFinite(numericRoleId)) return;
-            try {
-              await apiClient.agent.runNow(numericRoleId);
-              showToast('Agent run queued for this role.', 'success');
-            } catch (error) {
-              showToast(getErrorMessage(error, 'Failed to start agent run.'), 'error');
-            }
-          }}
-          onPause={() => {
-            setActiveView('role-fit');
-            const tabsEl = document.querySelector('.sub-tabs-sticky');
-            if (tabsEl && typeof tabsEl.scrollIntoView === 'function') {
-              tabsEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
-            }
-          }}
-        />
-
-        <div className="mc-cockpit-main">
-        <div className="role-hero">
-          <div className="watermark">{String(role?.name || 'ROLE').replace(/[^A-Z0-9]/gi, '').slice(0, 3).toUpperCase() || 'ROL'}</div>
-          <div className="role-hero-top">
-            <div>
-              <div className="role-meta-line">
-                <span className="kicker">ROLE · #{role?.id || '—'}</span>
-                <span className="chip green">Active · hiring</span>
-                <span className="chip">{role?.source === 'workable' ? 'Synced from Workable' : 'Created in Taali'}</span>
-              </div>
-              <h1>{role?.name}<em>.</em></h1>
-              {/* HANDOFF v2 §4 / canvas jobs-detail-* — 4 facts in a row:
-                  Location / Department / Employment / Linked task (purple).
-                  Updated timestamp moves into the meta-line above so the
-                  facts row stays canvas-aligned. */}
-              <div className="role-facts">
-                <div className="f"><span className="k">Location</span><span className="v">{roleFactValues.location}</span></div>
-                <div className="f"><span className="k">Department</span><span className="v">{roleFactValues.department}</span></div>
-                <div className="f"><span className="k">Employment</span><span className="v">{roleFactValues.employment}</span></div>
-                <div className="f"><span className="k">Linked task</span><span className="v purple">{roleTasks[0]?.name || 'Task not linked'}</span></div>
-              </div>
-            </div>
-
-            <div className="role-actions">
-              <div className="row">
-                <button type="button" className="icon-btn" title="Share role" onClick={handleShareRole}>
-                  <Share2 size={15} />
-                </button>
-                <button type="button" className="icon-btn" title="Role settings" onClick={handleOpenRoleSettings}>
-                  <Settings2 size={15} />
-                </button>
-              </div>
-              <div className="row">
-                <button
-                  type="button"
-                  className="btn btn-outline btn-sm"
-                  onClick={() => {
-                    setRoleSheetError('');
-                    setRoleSheetOpen(true);
-                  }}
-                >
-                  Edit role
-                </button>
-                <button
-                  type="button"
-                  className="btn btn-purple btn-sm"
-                  onClick={() => {
-                    setCandidateSheetError('');
-                    setCandidateSheetOpen(true);
-                  }}
-                >
-                  Invite candidate <span className="arrow">→</span>
-                </button>
-              </div>
-            </div>
+      <AgentHeader
+        kicker={`ROLE · #${role?.id || '—'}`}
+        title={role?.name || 'Role'}
+        backLink={{ label: 'All roles', onClick: () => onNavigate('jobs') }}
+        actions={(
+          <>
+            <button type="button" className="btn btn-outline btn-sm" title="Share role" onClick={handleShareRole}>
+              <Share2 size={13} />
+              Share
+            </button>
+            <button
+              type="button"
+              className="btn btn-outline btn-sm"
+              onClick={() => {
+                setRoleSheetError('');
+                setRoleSheetOpen(true);
+              }}
+            >
+              Edit role
+            </button>
+            <button
+              type="button"
+              className="btn btn-purple btn-sm"
+              onClick={() => {
+                setCandidateSheetError('');
+                setCandidateSheetOpen(true);
+              }}
+            >
+              Invite candidate <span className="arrow">→</span>
+            </button>
+          </>
+        )}
+        postTitle={(
+          <div className="ah-facts">
+            <div className="f"><span className="k">Location</span><span className="v">{roleFactValues.location}</span></div>
+            <div className="f"><span className="k">Department</span><span className="v">{roleFactValues.department}</span></div>
+            <div className="f"><span className="k">Employment</span><span className="v">{roleFactValues.employment}</span></div>
+            <div className="f"><span className="k">Linked task</span><span className="v purple">{roleTasks[0]?.name || 'Task not linked'}</span></div>
           </div>
-        </div>
-
+        )}
+        agent={roleAgent}
+        onTurnOnAgent={goToAgentSettings}
+        onPauseAgent={goToAgentSettings}
+        onResumeAgent={goToAgentSettings}
+        onAgentSettings={handleOpenRoleSettings}
+      />
+      <div className="page">
+        <div className="mc-cockpit-main">
         <div className="sub-tabs sub-tabs-sticky">
           <div className="seg">
             <button type="button" className={activeView === 'table' ? 'active' : ''} onClick={() => setActiveView('table')}>Candidates</button>

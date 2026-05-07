@@ -8,7 +8,8 @@ import {
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
-import { PageHero } from '../../shared/layout/PageHero';
+import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
+import { useAgentStatusOrg } from '../../shared/layout/AgentBar';
 import { RoleSheet } from '../candidates/RoleSheet';
 import { trimOrUndefined } from '../candidates/candidatesUiUtils';
 import {
@@ -125,6 +126,34 @@ const getRoleBadgeLabel = (role) => {
   if (String(role?.source || '').toLowerCase() === 'workable') return null;
   if (isRoleDraft(role)) return 'Draft';
   return 'Role';
+};
+
+// Maps the org-aggregate /agent/status payload (or the showcase fixture) into
+// the shape AgentHeader's right-side panel expects. Returns null when there's
+// no real status yet *and* the org has no agentic roles — the panel itself
+// renders an OFF state when the prop is non-null but on=false.
+const useJobsHeaderAgent = (roles, isShowcase) => {
+  const { status } = useAgentStatusOrg();
+  return useMemo(() => {
+    if (isShowcase) {
+      return {
+        on: true,
+        paused: false,
+        pending: 2,
+        spentCents: 1820,
+        budgetCents: 5000,
+        tick: 'Scoring 14 new candidates · just now',
+        inFlight: true,
+      };
+    }
+    const anyEnabled = roles.some((role) => role?.agentic_mode_enabled);
+    if (!status) {
+      return anyEnabled
+        ? { on: false, paused: false, pending: 0, spentCents: 0, budgetCents: 5000, tick: null, inFlight: false }
+        : { on: false, paused: false, pending: 0, spentCents: 0, budgetCents: 0, tick: null, inFlight: false };
+    }
+    return buildAgentPropFromStatus(status, { isEnabled: status.active_role_count > 0 });
+  }, [status, roles, isShowcase]);
 };
 
 export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => {
@@ -451,45 +480,49 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
     }
   };
 
+  const headerAgent = useJobsHeaderAgent(roles, isShowcase);
+
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
+      {/* HANDOFF unified-headers.md §2-§4 — single AgentHeader at the top of
+          the page. Right-side panel reflects the org-aggregate agent state
+          when at least one role has the agent enabled; otherwise the OFF
+          panel reserves the same vertical space so the hero stays 280px
+          tall. */}
+      <AgentHeader
+        kicker={`JOBS · ${roles.length} ACTIVE ROLE${roles.length === 1 ? '' : 'S'}`}
+        title={<>{roles.length} active <em>roles</em></>}
+        period={false}
+        subtitle="You're hiring. Star a role to keep its candidates flowing in automatically."
+        actions={(
+          <>
+            <button
+              type="button"
+              className="btn btn-outline"
+              onClick={() => document.getElementById('jobs-source-filters')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
+            >
+              <Filter size={13} />
+              Filter
+            </button>
+            <button
+              type="button"
+              className="btn btn-purple"
+              onClick={() => {
+                if (isShowcase) return;
+                setRoleSheetError('');
+                setRoleSheetOpen(true);
+              }}
+              disabled={isShowcase}
+              aria-disabled={isShowcase || undefined}
+            >
+              + New role
+            </button>
+          </>
+        )}
+        agent={headerAgent}
+      />
       <div className="mc-page">
-        {/* HANDOFF v2 §4 — Jobs list hero matches canvas (jobs-list artboard):
-            kicker "JOBS", dynamic "{N} active <em>roles</em>" headline,
-            "you're hiring" subtitle, Filter + + New role actions. */}
-        <PageHero
-          kicker="JOBS"
-          title={<>{roles.length} active <em>roles</em></>}
-          period={false}
-          subtitle="You're hiring. Star a role to keep its candidates flowing in automatically."
-          actions={(
-            <>
-              <button
-                type="button"
-                className="btn btn-outline"
-                onClick={() => document.getElementById('jobs-source-filters')?.scrollIntoView({ behavior: 'smooth', block: 'center' })}
-              >
-                <Filter size={13} />
-                Filter
-              </button>
-              <button
-                type="button"
-                className="btn btn-purple"
-                onClick={() => {
-                  if (isShowcase) return;
-                  setRoleSheetError('');
-                  setRoleSheetOpen(true);
-                }}
-                disabled={isShowcase}
-                aria-disabled={isShowcase || undefined}
-              >
-                + New role
-              </button>
-            </>
-          )}
-        />
-
         {/* HANDOFF v2 §4 / canvas jobs-list — search lives in the global
             ⌘K palette in Shell. The local "Search jobs by name" input was
             redundant chrome and is gone per the canvas spec. */}

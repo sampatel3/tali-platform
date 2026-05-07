@@ -91,7 +91,7 @@ export const useAgentStatus = (roleId) => {
 // not enabled on) so the aggregate stays bounded for huge orgs. If/when the
 // backend ships an org-aggregate endpoint, the bar can switch to that without
 // changing its render shape.
-const useAgentStatusOrg = () => {
+export const useAgentStatusOrg = () => {
   const [status, setStatus] = useState(null);
   const [error, setError] = useState(null);
   const cancelledRef = useRef(false);
@@ -144,7 +144,12 @@ const useAgentStatusOrg = () => {
 
         const tsOf = (activity) => {
           if (!activity || typeof activity !== 'object') return -Infinity;
-          const raw = activity.at || activity.timestamp || activity.occurred_at;
+          // Real backend uses `created_at`; legacy fixtures use `at` /
+          // `timestamp` / `occurred_at`. Try each in turn.
+          const raw = activity.created_at
+            || activity.at
+            || activity.timestamp
+            || activity.occurred_at;
           if (!raw) return -Infinity;
           const parsed = Date.parse(String(raw));
           return Number.isNaN(parsed) ? -Infinity : parsed;
@@ -157,7 +162,10 @@ const useAgentStatusOrg = () => {
           monthlySpent += Number(data.monthly_spent_cents || 0);
           monthlyBudget += Number(data.monthly_budget_cents || 0);
           pending += Number(data.pending_decisions || 0);
-          if (data.paused) anyPaused = true;
+          // Backend returns `paused_at: datetime|null`; tests/legacy callers
+          // may set `paused: bool`. Accept either.
+          const isPaused = data.paused != null ? Boolean(data.paused) : Boolean(data.paused_at);
+          if (isPaused) anyPaused = true;
           else allPaused = false;
           if (!currentRun && data.current_run) currentRun = data.current_run;
           const ts = tsOf(data.last_activity);
@@ -169,13 +177,28 @@ const useAgentStatusOrg = () => {
         });
 
         // Annotate the aggregated tick so it reads "<event> · <role> · <ago>"
-        // instead of the per-role bar's "<event> · <ago>".
+        // instead of the per-role bar's "<event> · <ago>". When the upstream
+        // (real backend) payload doesn't have a pre-computed `summary`,
+        // derive one from `event_type` + `candidate_name` so the aggregate
+        // tick still reads as a sentence and not just the role name.
         let annotatedActivity = latestActivity;
         if (latestActivity && latestActivityRole) {
+          let baseSummary = latestActivity.summary;
+          if (!baseSummary) {
+            const subject = latestActivity.candidate_name
+              || (latestActivity.application_id ? `application #${latestActivity.application_id}` : 'candidate');
+            switch (latestActivity.event_type) {
+              case 'pipeline_stage_changed': baseSummary = `Advanced ${subject}`; break;
+              case 'application_outcome_changed': baseSummary = `Updated outcome on ${subject}`; break;
+              case 'agent_paused': baseSummary = `Paused — ${latestActivity.reason || 'budget reached'}`; break;
+              default: baseSummary = latestActivity.reason
+                || (latestActivity.event_type ? String(latestActivity.event_type).replace(/_/g, ' ') : null);
+            }
+          }
           annotatedActivity = {
             ...latestActivity,
-            summary: latestActivity.summary
-              ? `${latestActivity.summary} · ${latestActivityRole}`
+            summary: baseSummary
+              ? `${baseSummary} · ${latestActivityRole}`
               : latestActivityRole,
           };
         }
@@ -292,7 +315,7 @@ export const AgentBar = ({
           </div>
           <div style={{ minWidth: 0 }}>
             <div className="mc-agent-title">
-              <span>{paused ? 'Agentic mode paused' : 'Agentic mode is ON'}</span>
+              <span>{paused ? 'Agent mode paused' : 'Agent mode is ON'}</span>
               {pending > 0 ? (
                 <span className="mc-agent-pending">{pending} awaiting your review</span>
               ) : null}

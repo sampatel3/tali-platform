@@ -11,7 +11,7 @@ import { useToast } from '../../context/ToastContext';
 import { aedToUsd, formatAed } from '../../lib/currency';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
 import { AgentSettingsPanel } from '../../shared/layout/AgentSettingsPanel';
-import { PageHero } from '../../shared/layout/PageHero';
+import { AgentHeader } from '../../shared/layout/AgentHeader';
 import {
   Button,
   Panel,
@@ -1143,12 +1143,20 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="settings" onNavigate={onNavigate} /> : null}
+      <AgentHeader
+        kicker="SETTINGS · WORKSPACE"
+        title="Settings"
+        subtitle="Workspace, scoring policy, integrations, and access. Changes apply to new recruiter-facing surfaces immediately."
+        actions={(
+          <>
+            <span style={{ fontFamily: 'var(--font-mono)', fontSize: 10.5, color: 'rgba(255,255,255,0.55)', letterSpacing: '.06em', textTransform: 'uppercase' }}>Workspace</span>
+            <span style={{ fontSize: 13, fontWeight: 500, color: '#fff', padding: '5px 10px', background: 'rgba(255,255,255,0.10)', border: '1px solid rgba(255,255,255,0.18)', borderRadius: 8 }}>
+              {orgData?.name || user?.organization?.name || 'Workspace'}
+            </span>
+          </>
+        )}
+      />
       <div className="mc-page">
-        <PageHero
-          kicker="04 · RECRUITER WORKSPACE"
-          title="Settings"
-          subtitle="Workspace, scoring policy, integrations, and access."
-        />
 
         {orgLoading ? renderLoadingState : (
           <div className="mc-settings">

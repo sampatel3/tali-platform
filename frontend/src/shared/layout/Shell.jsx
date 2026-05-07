@@ -21,7 +21,7 @@ import {
   subscribeThemePreference,
 } from '../../lib/themePreference';
 import { TaaliTile } from '../ui/Branding';
-import { AgentBar } from './AgentBar';
+import { useAgentStatusOrg } from './AgentBar';
 import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 
 // Nav: "Search" replaces the v3 "Chat" label — same NL-over-everything
@@ -146,10 +146,18 @@ export const Shell = ({ currentPage, onNavigate }) => {
     onNavigate?.('landing');
   };
 
-  // Hide the global AgentBar on the role detail page — that page renders
-  // its own role-scoped AgentBar / cockpit rail and an extra org bar would
-  // double-stack. Same logic for the role pipeline at /jobs/:roleId.
-  const hideGlobalAgentBar = resolvedPage === 'role-detail' || resolvedPage === 'role-pipeline';
+  // HANDOFF unified-headers.md §6 — the global org-scoped AgentBar is gone.
+  // Agent state now lives inside the per-page AgentHeader's right-side panel
+  // (Jobs / Role detail). The lightweight "Agent running" chip in the nav is
+  // also scoped to those two surfaces — anywhere else, the chip is hidden so
+  // the nav doesn't double-signal what the page hero already shows.
+  const showAgentChip = resolvedPage === 'jobs' || resolvedPage === 'role-pipeline' || resolvedPage === 'role-detail';
+  const { status: orgAgentStatus } = useAgentStatusOrg();
+  const agentChipOn = Boolean(
+    orgAgentStatus
+      && orgAgentStatus.active_role_count > 0
+      && !orgAgentStatus.paused,
+  );
 
   return (
     <>
@@ -186,6 +194,18 @@ export const Shell = ({ currentPage, onNavigate }) => {
       </nav>
       <div className="mc-nav-grow" />
       <div className="mc-nav-right">
+        {showAgentChip && agentChipOn ? (
+          <button
+            type="button"
+            className="mc-nav-agent-chip"
+            onClick={() => handleNav('jobs')}
+            title="Agent mode is ON · click to manage on Jobs"
+            aria-label="Agent mode is on"
+          >
+            <span className="dot" aria-hidden="true" />
+            Agent running
+          </button>
+        ) : null}
         <button type="button" className="mc-nav-search" aria-label="Open command palette">
           <Search size={13} strokeWidth={2} />
           <span>Search candidates, roles, tasks…</span>
@@ -218,11 +238,6 @@ export const Shell = ({ currentPage, onNavigate }) => {
         </div>
       </div>
     </header>
-    {hideGlobalAgentBar ? null : (
-      <div className="mc-agent-bar-wrap">
-        <AgentBar />
-      </div>
-    )}
     </>
   );
 };

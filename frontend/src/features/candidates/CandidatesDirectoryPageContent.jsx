@@ -57,7 +57,7 @@ import {
   Sheet,
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
-import { PageHero } from '../../shared/layout/PageHero';
+import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { getErrorMessage } from './candidatesUiUtils';
 import { CandidateSheet } from './CandidateSheet';
 import { RetakeAssessmentDialog } from './RetakeAssessmentDialog';
@@ -1847,33 +1847,33 @@ export const CandidatesDirectoryPage = ({
   return (
     <div>
       {NavComponent ? <NavComponent currentPage={navCurrentPage} onNavigate={onNavigate} /> : null}
-      <div className={embedded ? '' : 'mc-page mc-page-narrow'}>
-        {showPageHead ? (
-          <PageHero
-            kicker={rolePipelineMode ? 'ROLE PIPELINE' : 'CANDIDATES · ALL ROLES'}
-            title={rolePipelineMode
-              ? <>{headerTitle || 'Pipeline'}</>
-              : <>Search every <em>candidate</em></>}
-            subtitle={headerSubtitle || 'Plain-language across CVs, assessment evidence, and your notes.'}
-            actions={(
-              <>
-                {!rolePipelineMode ? (
-                  <button type="button" className="btn btn-outline btn-sm" onClick={handleExportCsv}>
-                    Export CSV
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  className="btn btn-purple btn-sm"
-                  onClick={handleOpenInviteCandidate}
-                  disabled={loadingRoles || roles.length === 0}
-                >
-                  + Invite candidate
+      {showPageHead && !embedded ? (
+        <AgentHeader
+          kicker={rolePipelineMode ? 'ROLE PIPELINE' : 'CANDIDATES · ALL ROLES'}
+          title={rolePipelineMode
+            ? <>{headerTitle || 'Pipeline'}</>
+            : <>Search every <em>candidate</em></>}
+          subtitle={headerSubtitle || 'Plain-language across CVs, assessment evidence, and your notes.'}
+          actions={(
+            <>
+              {!rolePipelineMode ? (
+                <button type="button" className="btn btn-outline btn-sm" onClick={handleExportCsv}>
+                  Export CSV
                 </button>
-              </>
-            )}
-          />
-        ) : null}
+              ) : null}
+              <button
+                type="button"
+                className="btn btn-purple btn-sm"
+                onClick={handleOpenInviteCandidate}
+                disabled={loadingRoles || roles.length === 0}
+              >
+                + Invite candidate
+              </button>
+            </>
+          )}
+        />
+      ) : null}
+      <div className={embedded ? '' : 'mc-page mc-page-narrow'}>
 
         {prelude ? <div className="mb-4 space-y-4">{prelude}</div> : null}
 

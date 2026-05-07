@@ -17,19 +17,21 @@
   --purple-2: #6b21e8;
   --purple-soft: #f0e7fb;
 
-  /* v4 — deep-purple dark surfaces (HANDOFF chat.md §2). Used by the
-     demo lead editorial pane, demo showcase hero + walkthrough panels,
-     auth editorial pane, reporting narrator, and any future
-     deep-purple/black surface. */
-  --ink-deep: #100a18;       /* deepest panel bg, IDE chrome */
-  --ink-deep-2: #0d0719;     /* card surface / gradient end */
-  --ink-deep-3: #1a0f2e;     /* mid panel / gradient start */
-  --line-dark: #2a1f3d;      /* border on dark panels */
+  /* v5 — deep-purple dark surfaces (HANDOFF unified-headers.md §1).
+     Bumped up from v4 (#100a18 / #0d0719 / #1a0f2e / #2a1f3d) so the
+     purple actually reads as purple, not black. Applies to the auth
+     editorial pane, demo dark panels, IDE chrome, reporting narrator,
+     and every platform AgentHeader. */
+  --ink-deep: #1a1228;       /* deepest panel bg, IDE chrome */
+  --ink-deep-2: #1d1130;     /* card surface / gradient end */
+  --ink-deep-3: #2a1854;     /* mid panel / gradient start */
+  --line-dark: #3a2a55;      /* border on dark panels */
   --purple-glow: rgba(167, 139, 250, 0.45); /* atmospheric blob */
   --purple-lav: #a78bfa;     /* lavender accent text on dark */
-  --grad-dark-vert: linear-gradient(180deg, #1a0f2e 0%, #0d0719 100%);
-  --grad-dark-diag: linear-gradient(135deg, #1a0f2e 0%, #0d0719 100%);
-  --grad-dark-card: linear-gradient(160deg, #1a0f2e 0%, #2a1f3d 100%);
+  /* Signature dark gradients — same tokens, retuned to the new base */
+  --grad-dark-vert: linear-gradient(180deg, #2a1854 0%, #1d1130 100%);
+  --grad-dark-diag: linear-gradient(135deg, #2a1854 0%, #1d1130 100%);
+  --grad-dark-card: linear-gradient(160deg, #2a1854 0%, #3a2a55 100%);
 
   --lime: #c8f169;
   --peach: #ffd1b8;
@@ -8216,6 +8218,504 @@ button.eng-badge-button:focus-visible {
   color: var(--mute);
   max-width: 720px;
   margin: 0;
+}
+
+/* ================================================================
+   AGENT HEADER — unified V2 hero (HANDOFF unified-headers.md §2-§5)
+   The single dark-purple slab at the top of every recruiter page.
+   Fixed 280px tall so every header lines up perfectly across the
+   platform. The right-side agent panel (Jobs / Role detail) reserves
+   208px so OFF and ON states have the same vertical footprint.
+   ================================================================ */
+
+.agent-header {
+  color: #fff;
+  border-bottom: 1px solid var(--line-dark);
+  position: relative;
+  overflow: hidden;
+  padding: 32px 32px 36px;
+  /* Fixed minimum — absorbs Role-detail facts grid + 4-row agent panel */
+  min-height: 280px;
+  display: flex;
+  align-items: center;
+}
+
+.agent-header-inner {
+  position: relative;
+  z-index: 1;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 32px;
+  align-items: flex-start;
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+/* Compact variant deprecated — normalized to default height. */
+.agent-header.compact { padding: 32px 32px 36px; }
+
+/* === ON: vivid, saturated purple wash. Active worker, live brand colour. === */
+.agent-header.agent-running {
+  background:
+    radial-gradient(ellipse 80% 60% at 75% 0%,  rgba(196,165,253,0.70) 0%, transparent 60%),
+    radial-gradient(ellipse 70% 80% at 10% 100%, rgba(180,80,255,0.55) 0%, transparent 65%),
+    linear-gradient(180deg, #3a1d6e 0%, #251248 100%);
+  animation: agentHeaderPulse 6s ease-in-out infinite;
+}
+
+@keyframes agentHeaderPulse {
+  0%, 100% { filter: saturate(1)    brightness(1);    }
+  50%      { filter: saturate(1.15) brightness(1.08); }
+}
+
+.agent-header.agent-running::before {
+  content: "";
+  position: absolute;
+  top: -20%;
+  right: 18%;
+  width: 560px;
+  height: 560px;
+  background: radial-gradient(circle, rgba(220,200,255,0.42), transparent 60%);
+  filter: blur(20px);
+  pointer-events: none;
+  animation: agentGlowDrift1 9s ease-in-out infinite;
+}
+
+.agent-header.agent-running::after {
+  content: "";
+  position: absolute;
+  bottom: -40%;
+  left: -5%;
+  width: 540px;
+  height: 540px;
+  background: radial-gradient(circle, rgba(180,80,255,0.45), transparent 65%);
+  pointer-events: none;
+  animation: agentGlowDrift2 11s ease-in-out infinite;
+}
+
+@keyframes agentGlowDrift1 {
+  0%, 100% { transform: translate(0, 0)        scale(1);    opacity: .85; }
+  50%      { transform: translate(-30px, 18px) scale(1.08); opacity: 1;   }
+}
+
+@keyframes agentGlowDrift2 {
+  0%, 100% { transform: translate(0, 0)         scale(1);    opacity: .8;  }
+  50%      { transform: translate(28px, -22px)  scale(1.10); opacity: 1;   }
+}
+
+/* === OFF / no-agent: same purple base, glows muted, no animation. === */
+.agent-header.agent-quiet {
+  background: var(--grad-dark-vert);
+  border-bottom-color: rgba(255, 255, 255, 0.06);
+}
+
+.agent-header.agent-quiet::before {
+  content: "";
+  position: absolute;
+  top: -30%;
+  right: 25%;
+  width: 420px;
+  height: 420px;
+  background: radial-gradient(circle, rgba(167,139,250,0.05), transparent 65%);
+  pointer-events: none;
+}
+
+.agent-header.agent-quiet::after {
+  content: "";
+  position: absolute;
+  bottom: -50%;
+  left: -2%;
+  width: 420px;
+  height: 420px;
+  background: radial-gradient(circle, rgba(157,0,255,0.04), transparent 70%);
+  pointer-events: none;
+}
+
+.agent-header.agent-quiet::before,
+.agent-header.agent-quiet::after {
+  opacity: 0.18 !important;
+  filter: blur(40px) !important;
+}
+
+/* Dial back the lavender accent on quiet mode so the trailing "." reads quiet, not branded. */
+.agent-header.agent-quiet .agent-header-left h1 em,
+.agent-header.agent-quiet .agent-header-left h1 .ah-period {
+  color: rgba(196, 165, 253, .55);
+}
+
+.agent-header-left { min-width: 0; }
+
+.agent-header-left .back-link {
+  color: rgba(255, 255, 255, 0.65);
+  display: inline-block;
+  margin-bottom: 14px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  text-decoration: none;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+}
+
+.agent-header-left .back-link:hover { color: #fff; }
+
+.agent-header-left .ah-kicker {
+  display: inline-block;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.65);
+  margin: 0 0 10px;
+}
+
+.agent-header-left .ah-title-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 18px;
+  flex-wrap: wrap;
+}
+
+.agent-header-left h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 48px;
+  letter-spacing: -.03em;
+  font-weight: 600;
+  line-height: 1.02;
+  color: #fff;
+}
+
+.agent-header.compact .agent-header-left h1 { font-size: 48px; }
+
+.agent-header-left h1 em,
+.agent-header-left h1 .ah-period {
+  font-style: normal;
+  color: var(--purple-lav);
+}
+
+.agent-header-left .ah-title-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.agent-header-left .ah-title-actions .btn,
+.agent-header-left .ah-title-actions button.btn-outline,
+.agent-header-left .ah-title-actions .btn-outline {
+  background: rgba(255, 255, 255, 0.10);
+  border-color: rgba(255, 255, 255, 0.20);
+  color: #fff;
+}
+
+.agent-header-left .ah-title-actions .btn-outline:hover { background: rgba(255, 255, 255, 0.16); }
+
+.agent-header-left .ah-title-actions .btn-purple,
+.agent-header-left .ah-title-actions .btn.btn-purple {
+  background: var(--purple);
+  color: #fff;
+  border-color: transparent;
+}
+
+.agent-header-left p.ah-subtitle {
+  margin: 10px 0 0;
+  color: rgba(255, 255, 255, 0.78);
+  font-size: 14px;
+  line-height: 1.55;
+  max-width: 640px;
+}
+
+/* ============== Right-side agent panel (Jobs / Role detail) ============== */
+.agent-panel {
+  width: 300px;
+  flex-shrink: 0;
+  /* Reserves vertical space so OFF state doesn't collapse the hero */
+  min-height: 208px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(167, 139, 250, 0.32);
+  border-radius: 14px;
+  padding: 14px 14px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  backdrop-filter: blur(8px);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+
+/* OFF panel: pin Turn-on button to bottom so it doesn't float mid-card. */
+.agent-panel.agent-off .agent-actions { margin-top: auto; }
+.agent-panel.agent-off {
+  border-color: rgba(255, 255, 255, 0.14);
+  background: rgba(255, 255, 255, 0.04);
+}
+.agent-panel.agent-paused { border-color: rgba(251, 191, 36, 0.32); }
+
+/* Subtle breathing border on the live panel — signals live activity. */
+.agent-header.agent-running .agent-panel:not(.agent-off):not(.agent-paused) {
+  animation: agentPanelBreathe 3s ease-in-out infinite;
+}
+
+@keyframes agentPanelBreathe {
+  0%, 100% {
+    border-color: rgba(196, 165, 253, 0.42);
+    box-shadow: 0 0 0 0 rgba(196, 165, 253, 0), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  }
+  50% {
+    border-color: rgba(220, 200, 255, 0.72);
+    box-shadow: 0 0 0 4px rgba(196, 165, 253, 0.12), 0 1px 0 rgba(255, 255, 255, 0.10) inset;
+  }
+}
+
+.agent-panel-head { display: flex; align-items: center; gap: 11px; }
+
+.agent-pulse-wrap {
+  width: 36px;
+  height: 36px;
+  flex-shrink: 0;
+  border-radius: 10px;
+  background: rgba(167, 139, 250, 0.22);
+  border: 1px solid rgba(167, 139, 250, 0.40);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+}
+
+.agent-panel.agent-off .agent-pulse-wrap {
+  background: rgba(255, 255, 255, 0.06);
+  border-color: rgba(255, 255, 255, 0.16);
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.agent-panel.agent-paused .agent-pulse-wrap {
+  background: rgba(251, 191, 36, 0.18);
+  border-color: rgba(251, 191, 36, 0.40);
+}
+
+.agent-pulse {
+  position: absolute;
+  inset: -3px;
+  border-radius: 13px;
+  border: 2px solid rgba(196, 165, 253, 0.65);
+  animation: agentPulse 1.6s ease-out infinite;
+  pointer-events: none;
+}
+
+@keyframes agentPulse {
+  0%   { transform: scale(1);    opacity: .85; }
+  100% { transform: scale(1.32); opacity: 0;   }
+}
+
+.agent-status { flex: 1; min-width: 0; }
+.agent-status-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.agent-mode {
+  font-size: 12.5px;
+  color: rgba(255, 255, 255, 0.78);
+  font-weight: 500;
+}
+
+.agent-state-pill {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: .08em;
+  padding: 2px 8px;
+  border-radius: 999px;
+  text-transform: uppercase;
+}
+
+.agent-state-pill.state-on     { background: #c4a5fd; color: #1a0f2e; }
+.agent-state-pill.state-off    { background: rgba(255, 255, 255, 0.14); color: rgba(255, 255, 255, 0.78); border: 1px solid rgba(255, 255, 255, 0.18); }
+.agent-state-pill.state-paused { background: rgba(251, 191, 36, 0.85); color: #3b2200; }
+
+.agent-pending {
+  margin-top: 4px;
+  font-size: 11.5px;
+  color: #fff;
+  font-weight: 600;
+  background: rgba(196, 165, 253, 0.22);
+  border: 1px solid rgba(196, 165, 253, 0.40);
+  border-radius: 6px;
+  padding: 3px 8px;
+  display: inline-block;
+}
+
+.agent-tick {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.78);
+  line-height: 1.45;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.20);
+  border-left: 2px solid var(--purple-lav);
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.agent-budget { display: flex; flex-direction: column; gap: 5px; }
+.agent-budget-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.agent-budget-row .amt {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: #fff;
+  font-weight: 600;
+}
+.agent-budget-row .amt .of {
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 400;
+}
+
+.agent-budget-bar {
+  height: 5px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.14);
+  overflow: hidden;
+}
+
+.agent-budget-bar .fill {
+  height: 100%;
+  background: var(--purple-lav);
+  border-radius: 3px;
+}
+
+.agent-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.agent-btn {
+  flex: 1;
+  height: 30px;
+  background: rgba(255, 255, 255, 0.10);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.20);
+  border-radius: 7px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.agent-btn:hover { background: rgba(255, 255, 255, 0.16); }
+.agent-btn:disabled { opacity: 0.55; cursor: default; }
+.agent-btn.icon { flex: 0 0 30px; padding: 0; color: rgba(255, 255, 255, 0.78); }
+.agent-btn.primary { background: var(--purple); border-color: transparent; }
+.agent-btn.primary:hover { background: color-mix(in oklab, var(--purple) 90%, white); }
+
+/* ============== Pre/Post-title slots ============== */
+.agent-header-left .ah-pre { margin-bottom: 14px; }
+.agent-header-left .ah-post { margin-top: 14px; }
+
+/* Candidate detail avatar block lives in the preTitle slot. */
+.ah-cand-pre {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+.ah-cand-pre .ah-cand-avatar {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.10);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Role detail facts grid lives in the postTitle slot. */
+.ah-facts {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 18px;
+  max-width: 720px;
+  margin-top: 14px;
+}
+.ah-facts .f { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
+.ah-facts .f .k {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.55);
+}
+.ah-facts .f .v {
+  font-size: 13px;
+  color: #fff;
+  font-weight: 500;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ah-facts .f .v.purple { color: var(--purple-lav); }
+
+@media (max-width: 880px) {
+  .agent-header-inner { grid-template-columns: 1fr; }
+  .agent-panel { width: 100%; }
+  .ah-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+
+/* ============== Nav agent-running chip (Jobs / Role detail only) ============== */
+.mc-nav-agent-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(167, 139, 250, 0.14);
+  border: 1px solid rgba(167, 139, 250, 0.36);
+  color: var(--purple);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.mc-nav-agent-chip:hover { background: rgba(167, 139, 250, 0.22); }
+.mc-nav-agent-chip .dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--purple);
+  box-shadow: 0 0 0 4px rgba(127, 57, 251, 0.18);
+  animation: agentChipPulse 1.6s ease-in-out infinite;
+}
+@keyframes agentChipPulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(127, 57, 251, 0.30); opacity: 1; }
+  50%      { box-shadow: 0 0 0 6px rgba(127, 57, 251, 0);    opacity: .85; }
 }
 
 /* ================== AUTH SHELL (Phase 3) ================== */
