@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useParams, useSearchParams } from 'react-router-dom';
-import { AlertCircle, Check, Copy, Download, Mail, ExternalLink, Eye, X } from 'lucide-react';
+import { AlertCircle, Check, Copy, Download, ExternalLink, Eye, X } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
 import { getCachedDocumentBlob } from '../../shared/api/documentCache';
@@ -797,6 +797,10 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
   const [error, setError] = useState('');
   const [busyAction, setBusyAction] = useState('');
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  // 'interview' = internal panel link · 'client' = external client link.
+  // Pre-set when the candidate header opens the modal so the right tab
+  // is active (HANDOFF v2 §3).
+  const [shareInitialMode, setShareInitialMode] = useState('client');
   const [applicationEvents, setApplicationEvents] = useState([]);
   // Notes & timeline tab — local note draft + a tick that lets us refetch
   // the events feed after a successful save without a full page reload.
@@ -1407,6 +1411,13 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           </div>
           {!isClientView ? (
             <div className="mc-cand-header-actions">
+              {/* User feedback: tidy the share UI down to one button per
+                  audience and surface the Workable link at the top
+                  (was buried in a second share-bar below). The legacy
+                  "Manage links" / "Share report" / "Copy interview
+                  link" / "Email to panel" stack is gone — both share
+                  buttons open the same ShareModal pre-set to the right
+                  mode (interview = panel, client = external). */}
               {application?.workable_profile_url ? (
                 <button
                   type="button"
@@ -1420,16 +1431,22 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               <button
                 type="button"
                 className="btn btn-outline btn-sm"
-                onClick={() => setShareModalOpen(true)}
+                onClick={() => {
+                  setShareInitialMode('interview');
+                  setShareModalOpen(true);
+                }}
                 disabled={!application?.id}
               >
                 <Copy size={13} />
-                Manage links
+                Share internally
               </button>
               <button
                 type="button"
                 className="btn btn-purple btn-sm"
-                onClick={() => setShareModalOpen(true)}
+                onClick={() => {
+                  setShareInitialMode('client');
+                  setShareModalOpen(true);
+                }}
                 disabled={!application?.id}
               >
                 Share with client
@@ -1438,43 +1455,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
           ) : null}
         </header>
 
-        <div className="share-bar" data-internal-only>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
-            <div style={{ width: 32, height: 32, borderRadius: 10, background: 'var(--purple-soft)', color: 'var(--purple)', display: 'grid', placeItems: 'center' }}>
-              <Copy size={15} />
-            </div>
-            <div>
-              <div style={{ fontWeight: 600, fontSize: '13.5px' }}>Shareable link</div>
-              <div style={{ fontSize: 12, color: 'var(--mute)' }}>Read-only interview link · panel-safe tabs only</div>
-            </div>
-          </div>
-          <Input
-            readOnly
-            aria-label="Shareable report link"
-            value={shareUrl || (shareState.loading ? 'Generating secure link…' : 'Secure link unavailable')}
-            className="link"
-          />
-          <div className="row">
-            <button
-              type="button"
-              className="btn btn-purple btn-sm"
-              onClick={() => setShareModalOpen(true)}
-              disabled={shareState.loading || !application?.id}
-            >
-              <ExternalLink size={14} />
-              Share report
-            </button>
-            <button type="button" className="btn btn-outline btn-sm" onClick={handleCopyLink} disabled={shareState.loading || !application?.id}>
-              <Copy size={14} />
-              Copy interview link
-            </button>
-            <button type="button" className="btn btn-outline btn-sm" onClick={handleEmailShare} disabled={shareState.loading || !application?.id}>
-              <Mail size={14} />
-              Email to panel
-            </button>
-            {/* No PDF surface anywhere on the candidate file per HANDOFF v2 §3. */}
-          </div>
-        </div>
         {shareState.error ? <p className="mt-3 text-xs text-[var(--taali-danger)]">{shareState.error}</p> : null}
 
         {isClientView && application?.client_share_summary ? (
@@ -2083,6 +2063,7 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         open={shareModalOpen}
         onClose={() => setShareModalOpen(false)}
         applicationId={application?.id}
+        initialMode={shareInitialMode}
       />
     </div>
   );

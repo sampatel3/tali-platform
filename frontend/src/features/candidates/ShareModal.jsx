@@ -51,9 +51,20 @@ const formatExpiryLabel = (link) => {
 // Mints a new share link per recruiter click, lists all existing links
 // (active + revoked + expired) with revoke + copy controls. Single-
 // view mode invalidates after the first GET against /share/:token.
-export const ShareModal = ({ open, onClose, applicationId }) => {
-  const [mode, setMode] = useState('client');
+//
+// `initialMode` lets the caller pre-select 'interview' (internal panel)
+// or 'client' (external) when the modal opens — e.g. the candidate
+// header has separate "Share internally" + "Share with client" buttons
+// that open the same modal but on the right tab.
+export const ShareModal = ({ open, onClose, applicationId, initialMode = 'client' }) => {
+  const [mode, setMode] = useState(initialMode);
   const [expiry, setExpiry] = useState('7d');
+
+  // Re-sync mode when the modal opens with a different initial mode
+  // (e.g. user closes the client tab, then clicks "Share internally").
+  useEffect(() => {
+    if (open) setMode(initialMode);
+  }, [open, initialMode]);
   const [links, setLinks] = useState([]);
   const [loading, setLoading] = useState(false);
   const [creating, setCreating] = useState(false);
