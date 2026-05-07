@@ -15,6 +15,8 @@ def send_assessment_invite_sync(
     assessment_id: int,
     org_name: str,
     position: str,
+    candidate_facing_brand: str | None = None,
+    reply_to: str | None = None,
 ) -> None:
     """Send assessment invite email synchronously (MVP mode, no Celery)."""
     if not (settings.RESEND_API_KEY or "").strip():
@@ -28,6 +30,8 @@ def send_assessment_invite_sync(
         org_name=org_name,
         position=position,
         frontend_url=settings.FRONTEND_URL,
+        candidate_facing_brand=candidate_facing_brand,
+        reply_to=reply_to,
     )
 
 
@@ -47,6 +51,29 @@ def send_results_notification_sync(
         score=score,
         assessment_id=assessment_id,
         frontend_url=settings.FRONTEND_URL,
+    )
+
+
+def send_application_rejected_sync(
+    candidate_email: str,
+    candidate_name: str,
+    org_name: str,
+    position: str,
+) -> dict:
+    """Send candidate-facing rejection email synchronously.
+
+    Returns the EmailService result dict. Callers should treat failures
+    as non-fatal — the rejection itself is already persisted; the email
+    is best-effort.
+    """
+    if not (settings.RESEND_API_KEY or "").strip():
+        return {"success": False, "email_id": "", "skipped": True}
+    email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
+    return email_svc.send_application_rejected(
+        candidate_email=candidate_email,
+        candidate_name=candidate_name,
+        org_name=org_name,
+        position=position,
     )
 
 

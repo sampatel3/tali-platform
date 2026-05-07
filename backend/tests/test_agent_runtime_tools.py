@@ -1,0 +1,514 @@
+"""Direct unit tests for the agent runtime's tool registry + reject flow.
+
+These bypass the Anthropic loop and call ``tool_registry.dispatch``
+directly with a synthetic AgentRun. They cover:
+- the new read tools (search_applications, compare_applications,
+  nl_search_candidates, get_candidate)
+- the new queue tools (queue_reject_decision,
+  queue_skip_assessment_reject_decision)
+- the reject side-effect wired into approve_decision
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+from unittest.mock import patch
+
+import pytest
+from sqlalchemy import event
+
+from app.actions import approve_decision, queue_decision
+from app.actions.types import Actor
+from app.agent_runtime import tool_registry
+from app.candidate_search.schemas import ParsedFilter, SearchOutput
+from app.models.agent_decision import AgentDecision
+from app.models.agent_run import AgentRun
+from app.models.candidate import Candidate
+from app.models.candidate_application import CandidateApplication
+from app.models.organization import Organization
+from app.models.role import Role
+from app.models.user import User
+
+
+# SQLite doesn't autoincrement BigInteger PKs (only INTEGER PKs are special-cased).
+# AgentRun and AgentDecision use BigInteger to match prod's Postgres sequences,
+# so we hand-roll an in-memory counter for the test session.
+_BIG_PK_COUNTERS: dict[str, int] = {"agent_runs": 0, "agent_decisions": 0}
+
+
+def _assign_big_pk(mapper, connection, target):  # pragma: no cover — fired by SQLA
+    table = target.__table__.name
+    if target.id is None and table in _BIG_PK_COUNTERS:
+        _BIG_PK_COUNTERS[table] += 1
+        target.id = _BIG_PK_COUNTERS[table]
+
+
+event.listen(AgentRun, "before_insert", _assign_big_pk)
+event.listen(AgentDecision, "before_insert", _assign_big_pk)
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+def _make_org(db) -> Organization:
+    org = Organization(name="Agent Test Org", slug=f"agent-org-{id(db)}")
+    db.add(org)
+    db.flush()
+    return org
+
+
+def _make_role(db, org: Organization) -> Role:
+    role = Role(
+        organization_id=org.id,
+        name="Senior Backend Engineer",
+        source="manual",
+        job_spec_text="Build distributed systems.",
+        agentic_mode_enabled=True,
+        monthly_usd_budget_cents=5000,
+    )
+    db.add(role)
+    db.flush()
+    return role
+
+
+def _make_application(
+    db,
+    *,
+    org: Organization,
+    role: Role,
+    name: str,
+    email: str,
+    taali: float | None = None,
+    pipeline_stage: str = "review",
+) -> CandidateApplication:
+    candidate = Candidate(
+        organization_id=org.id, email=email, full_name=name, position="Engineer"
+    )
+    db.add(candidate)
+    db.flush()
+    app = CandidateApplication(
+        organization_id=org.id,
+        candidate_id=candidate.id,
+        role_id=role.id,
+        status="applied",
+        pipeline_stage=pipeline_stage,
+        pipeline_stage_source="recruiter",
+        application_outcome="open",
+        source="manual",
+        taali_score_cache_100=taali,
+    )
+    db.add(app)
+    db.flush()
+    return app
+
+
+def _make_agent_run(db, role: Role) -> AgentRun:
+    run = AgentRun(
+        organization_id=role.organization_id,
+        role_id=role.id,
+        trigger="manual",
+        status="running",
+        model_version="claude-3-5-haiku-latest",
+        prompt_version="agent.v2.test",
+    )
+    db.add(run)
+    db.flush()
+    return run
+
+
+def _make_recruiter(db, org: Organization) -> User:
+    user = User(
+        email=f"recruiter-{id(db)}@example.com",
+        hashed_password="x",
+        full_name="Recruiter",
+        organization_id=org.id,
+        is_active=True,
+        is_verified=True,
+        is_superuser=False,
+    )
+    db.add(user)
+    db.flush()
+    return user
+
+
+# ---------------------------------------------------------------------------
+# Tool catalogue / schema sanity
+# ---------------------------------------------------------------------------
+
+
+def test_agent_tools_catalogue_contains_expected_names():
+    names = {t["name"] for t in tool_registry.AGENT_TOOLS}
+    assert {
+        # reads
+        "get_application",
+        "get_candidate",
+        "get_candidate_cv",
+        "search_applications",
+        "compare_applications",
+        "nl_search_candidates",
+        "graph_search_candidates",
+        "get_cohort_signals",
+        # execute
+        "score_cv",
+        "send_assessment",
+        # queue
+        "queue_advance_decision",
+        "queue_reject_decision",
+        "queue_skip_assessment_reject_decision",
+        # terminal
+        "agent_run_complete",
+    }.issubset(names)
+
+
+def test_send_assessment_dispatch_invokes_action(db):
+    """Agent tool wires through to the action and returns the action's payload shape."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test", taali=80.0)
+    run = _make_agent_run(db, role)
+
+    fake_result = type(
+        "_R", (), {"as_dict": lambda self: {"assessment_id": 99, "status": "sent", "detail": None}}
+    )()
+    with patch(
+        "app.actions.send_assessment.run", return_value=fake_result
+    ) as mock_run:
+        result = tool_registry.dispatch(
+            "send_assessment",
+            {"application_id": app.id, "duration_minutes": 60},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert mock_run.called
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["organization_id"] == org.id
+    assert kwargs["application_id"] == app.id
+    assert kwargs["duration_minutes"] == 60
+    # Actor passed positionally (second arg).
+    actor = mock_run.call_args.args[1]
+    assert actor.type == "agent"
+    assert actor.agent_run_id == run.id
+
+    assert result == {"assessment_id": 99, "status": "sent", "detail": None}
+
+
+def test_queue_decision_tool_names_covers_all_queue_tools():
+    """Decision-budget gating covers every queue tool, not just advance."""
+    assert "queue_advance_decision" in tool_registry.QUEUE_DECISION_TOOL_NAMES
+    assert "queue_reject_decision" in tool_registry.QUEUE_DECISION_TOOL_NAMES
+    assert "queue_skip_assessment_reject_decision" in tool_registry.QUEUE_DECISION_TOOL_NAMES
+
+
+def test_dispatch_unknown_tool_raises():
+    with pytest.raises(KeyError):
+        tool_registry.dispatch("bogus_tool", {}, db=None, agent_run=None, role=None)
+
+
+# ---------------------------------------------------------------------------
+# Read tools
+# ---------------------------------------------------------------------------
+
+
+def test_search_applications_dispatch_returns_role_scoped_results(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    other_role = Role(organization_id=org.id, name="Other", source="manual")
+    db.add(other_role)
+    db.flush()
+    a1 = _make_application(db, org=org, role=role, name="High", email="h@x.test", taali=85.0)
+    a2 = _make_application(db, org=org, role=role, name="Mid", email="m@x.test", taali=60.0)
+    _make_application(db, org=org, role=other_role, name="Other Role", email="o@x.test", taali=99.0)
+    run = _make_agent_run(db, role)
+
+    result = tool_registry.dispatch(
+        "search_applications",
+        {"min_score": 70.0, "limit": 10},
+        db=db,
+        agent_run=run,
+        role=role,
+    )
+
+    ids = [r["application_id"] for r in result]
+    assert a1.id in ids
+    assert a2.id not in ids  # below threshold
+
+
+def test_search_applications_defaults_to_agents_role(db):
+    """Caller doesn't have to pass role_id — the agent uses its own role."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    a1 = _make_application(db, org=org, role=role, name="A", email="a@x.test", taali=80.0)
+    run = _make_agent_run(db, role)
+
+    result = tool_registry.dispatch(
+        "search_applications", {}, db=db, agent_run=run, role=role
+    )
+    ids = [r["application_id"] for r in result]
+    assert a1.id in ids
+
+
+def test_compare_applications_dispatch(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    a1 = _make_application(db, org=org, role=role, name="A", email="a@x.test", taali=80.0)
+    a2 = _make_application(db, org=org, role=role, name="B", email="b@x.test", taali=70.0)
+    run = _make_agent_run(db, role)
+
+    result = tool_registry.dispatch(
+        "compare_applications",
+        {"application_ids": [a1.id, a2.id]},
+        db=db,
+        agent_run=run,
+        role=role,
+    )
+
+    assert "applications" in result
+    assert [r["application_id"] for r in result["applications"]] == [a1.id, a2.id]
+
+
+def test_nl_search_candidates_dispatch_passes_role_id(db):
+    """Agent's nl_search wrapper should default role_id to the agent's role."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    a1 = _make_application(db, org=org, role=role, name="A", email="a@x.test", taali=80.0)
+    run = _make_agent_run(db, role)
+
+    fake = SearchOutput(
+        application_ids=[a1.id],
+        parsed_filter=ParsedFilter(skills_all=["python"], free_text="python engineer"),
+        warnings=[],
+        rerank_applied=False,
+        subgraph=None,
+    )
+    with patch(
+        "app.candidate_search.runner.run_search", return_value=fake
+    ) as mock_runner:
+        result = tool_registry.dispatch(
+            "nl_search_candidates",
+            {"query": "python engineer"},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert mock_runner.called
+    assert result["total_matched"] == 1
+    assert result["applications"][0]["application_id"] == a1.id
+
+
+def test_get_candidate_dispatch(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    a = _make_application(db, org=org, role=role, name="Cand", email="c@x.test", taali=80.0)
+    run = _make_agent_run(db, role)
+
+    result = tool_registry.dispatch(
+        "get_candidate",
+        {"candidate_id": a.candidate_id},
+        db=db,
+        agent_run=run,
+        role=role,
+    )
+    assert result["candidate_id"] == a.candidate_id
+    assert result["full_name"] == "Cand"
+
+
+def test_graph_search_candidates_returns_warning_when_unconfigured(db):
+    """Without NEO4J creds the tool should degrade gracefully, not crash."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    run = _make_agent_run(db, role)
+
+    with patch(
+        "app.candidate_graph.client.is_configured", return_value=False
+    ):
+        result = tool_registry.dispatch(
+            "graph_search_candidates",
+            {"query": "stripe"},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert result["applications"] == []
+    assert any(w["code"] == "neo4j_unavailable" for w in result["warnings"])
+
+
+# ---------------------------------------------------------------------------
+# Queue tools
+# ---------------------------------------------------------------------------
+
+
+def test_queue_reject_decision_creates_pending_row(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, name="Low", email="l@x.test", taali=40.0)
+    run = _make_agent_run(db, role)
+
+    result = tool_registry.dispatch(
+        "queue_reject_decision",
+        {
+            "application_id": app.id,
+            "reasoning": "TAALI 40 < threshold; missing required Kubernetes experience.",
+            "evidence": {"taali_score": 40, "criteria_misses": ["kubernetes"]},
+            "confidence": 0.85,
+        },
+        db=db,
+        agent_run=run,
+        role=role,
+    )
+
+    assert result["status"] == "pending"
+    assert result["decision_type"] == "reject"
+
+    decision = db.query(AgentDecision).filter(AgentDecision.id == result["decision_id"]).one()
+    assert decision.decision_type == "reject"
+    assert decision.application_id == app.id
+    assert decision.idempotency_key == f"{run.id}:{app.id}:reject"
+
+
+def test_queue_skip_assessment_reject_decision_creates_pending_row(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="VeryLow", email="vl@x.test", taali=20.0,
+        pipeline_stage="applied",
+    )
+    run = _make_agent_run(db, role)
+
+    result = tool_registry.dispatch(
+        "queue_skip_assessment_reject_decision",
+        {
+            "application_id": app.id,
+            "reasoning": "CV-match 20, no relevant experience; not worth the assessment cost.",
+            "evidence": {"cv_match_score": 20},
+            "confidence": 0.9,
+        },
+        db=db,
+        agent_run=run,
+        role=role,
+    )
+
+    assert result["decision_type"] == "skip_assessment_reject"
+    decision = db.query(AgentDecision).filter(AgentDecision.id == result["decision_id"]).one()
+    assert decision.decision_type == "skip_assessment_reject"
+
+
+def test_queue_reject_idempotent_within_run(db):
+    """Double-call from same run on same app+type should reuse the existing decision."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, name="X", email="x@x.test", taali=40.0)
+    run = _make_agent_run(db, role)
+
+    args = {
+        "application_id": app.id,
+        "reasoning": "Below threshold.",
+        "evidence": {"taali_score": 40},
+        "confidence": 0.7,
+    }
+    first = tool_registry.dispatch(
+        "queue_reject_decision", args, db=db, agent_run=run, role=role
+    )
+    # Commit the first insert so the second call's IntegrityError-driven
+    # rollback (in queue_decision.run) doesn't unwind our setup rows. In
+    # prod the first call lands in its own transaction.
+    db.commit()
+    second = tool_registry.dispatch(
+        "queue_reject_decision", args, db=db, agent_run=run, role=role
+    )
+    assert first["decision_id"] == second["decision_id"]
+
+
+# ---------------------------------------------------------------------------
+# Reject approval — the previously-501 path is now wired
+# ---------------------------------------------------------------------------
+
+
+def test_approve_reject_decision_sets_outcome_rejected(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, name="X", email="x@x.test", taali=40.0)
+    run = _make_agent_run(db, role)
+    recruiter = _make_recruiter(db, org)
+
+    # Agent queues
+    queued = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="reject",
+        reasoning="Below threshold.",
+        confidence=0.7,
+        model_version="m",
+        prompt_version="p",
+    )
+    db.flush()
+
+    # Recruiter approves — should now succeed (previously raised 501).
+    # Patch the email dispatch so the test stays hermetic.
+    with patch(
+        "app.actions.reject_application._dispatch_rejection_email"
+    ) as mock_email:
+        approve_decision.run(
+            db,
+            Actor.recruiter(recruiter),
+            organization_id=int(org.id),
+            decision_id=int(queued.id),
+        )
+        db.flush()
+
+    db.refresh(app)
+    assert app.application_outcome == "rejected"
+
+    db.refresh(queued)
+    assert queued.status == "approved"
+    assert queued.resolved_by_user_id == recruiter.id
+
+    # Email dispatch happened with the candidate's address.
+    assert mock_email.called
+    kwargs = mock_email.call_args.kwargs
+    assert kwargs["candidate_email"] == "x@x.test"
+
+
+def test_approve_skip_assessment_reject_sets_outcome_rejected(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(
+        db, org=org, role=role, name="Y", email="y@x.test", taali=20.0,
+        pipeline_stage="applied",
+    )
+    run = _make_agent_run(db, role)
+    recruiter = _make_recruiter(db, org)
+
+    queued = queue_decision.run(
+        db,
+        Actor.agent(int(run.id)),
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        application_id=int(app.id),
+        decision_type="skip_assessment_reject",
+        reasoning="Pre-screen well below cutoff.",
+        confidence=0.85,
+        model_version="m",
+        prompt_version="p",
+    )
+    db.flush()
+
+    with patch("app.actions.reject_application._dispatch_rejection_email"):
+        approve_decision.run(
+            db,
+            Actor.recruiter(recruiter),
+            organization_id=int(org.id),
+            decision_id=int(queued.id),
+        )
+        db.flush()
+
+    db.refresh(app)
+    assert app.application_outcome == "rejected"

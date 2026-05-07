@@ -6,18 +6,54 @@ hiring-manager result notifications via the Resend API.
 """
 
 import logging
+import re
 
 import resend
 
 from ...platform.brand import BRAND_NAME, brand_email_from
 from .templates import (
+    application_rejected_html,
     assessment_expiry_reminder_html,
     assessment_invite_html,
+    assessment_invite_text,
     candidate_feedback_ready_html,
     email_verification_html,
     password_reset_html,
     results_notification_html,
 )
+
+
+_ANGLE_ADDR_RE = re.compile(r"<([^>]+)>")
+
+
+def _extract_address(value: str) -> str:
+    """Pull just the email address out of a ``Display Name <addr@x.com>`` string."""
+    if not value:
+        return ""
+    match = _ANGLE_ADDR_RE.search(value)
+    if match:
+        return match.group(1).strip()
+    return value.strip()
+
+
+def _compose_from(*, base: str, display_name: str | None) -> str:
+    """Build a Resend-compatible ``"Name <addr@x.com>"`` from-line.
+
+    When ``display_name`` is set, the inbox shows that name (e.g. the
+    org's candidate-facing brand) even though the underlying domain is
+    Taali's. Falls back to ``base`` unchanged when no name is provided
+    OR when ``base`` doesn't contain a recognizable email address.
+    """
+    name = (display_name or "").strip()
+    if not name:
+        return base
+    address = _extract_address(base)
+    if not address or "@" not in address:
+        return base
+    # Quote display name only if it contains characters that require it.
+    # Keep it simple — most org names are safe.
+    safe_name = name.replace('"', "")
+    return f'"{safe_name}" <{address}>'
 
 logger = logging.getLogger(__name__)
 
@@ -39,30 +75,57 @@ class EmailService:
         org_name: str,
         position: str,
         frontend_url: str,
+        candidate_facing_brand: str | None = None,
+        reply_to: str | None = None,
     ) -> dict:
+        """Send the assessment invite email, co-branded with the org.
+
+        ``candidate_facing_brand``: the name candidates know the org by
+        (e.g. "Acme Hiring"). When set, becomes the inbox display name on
+        the from-line so the email looks like a continuation of the
+        recruiter's prior comms (Workable application receipt, etc.).
+        Falls back to ``org_name`` when not set, and the platform brand
+        when neither is.
+
+        ``reply_to``: optional; usually the recruiter's email so candidate
+        replies route to a real person rather than the no-reply address.
+        """
         try:
             if assessment_id is not None:
                 assessment_link = f"{frontend_url}/assessment/{assessment_id}?token={token}"
             else:
                 assessment_link = f"{frontend_url}/assess/{token}"
+            display_brand = (candidate_facing_brand or org_name or "").strip() or BRAND_NAME
             logger.info(
-                "Sending assessment invite to %s for position '%s' at %s",
-                candidate_email, position, org_name,
+                "Sending assessment invite to %s for position '%s' at %s (brand=%s)",
+                candidate_email, position, org_name, display_brand,
             )
 
             html_body = assessment_invite_html(
                 candidate_name=candidate_name,
-                org_name=org_name,
+                org_name=display_brand,
+                position=position,
+                assessment_link=assessment_link,
+            )
+            text_body = assessment_invite_text(
+                candidate_name=candidate_name,
+                org_name=display_brand,
                 position=position,
                 assessment_link=assessment_link,
             )
 
-            email = resend.Emails.send({
-                "from": self.from_email,
+            payload: dict = {
+                "from": _compose_from(base=self.from_email, display_name=display_brand),
                 "to": [candidate_email],
-                "subject": f"Technical Assessment Invitation — {position} at {org_name}",
+                "subject": f"Your {position} assessment at {display_brand}",
                 "html": html_body,
-            })
+                "text": text_body,
+            }
+            reply_to_clean = (reply_to or "").strip()
+            if reply_to_clean:
+                payload["reply_to"] = reply_to_clean
+
+            email = resend.Emails.send(payload)
 
             email_id = email.get("id", "") if isinstance(email, dict) else str(email)
             logger.info("Assessment invite sent successfully (email_id=%s, to=%s)", email_id, candidate_email)
@@ -139,6 +202,37 @@ class EmailService:
             return {"success": True, "email_id": email_id}
         except Exception as e:
             logger.error("Failed to send password reset to %s: %s", to_email, str(e))
+            return {"success": False, "email_id": ""}
+
+    def send_application_rejected(
+        self,
+        candidate_email: str,
+        candidate_name: str,
+        org_name: str,
+        position: str,
+    ) -> dict:
+        try:
+            logger.info(
+                "Sending application-rejected email to %s for position '%s' at %s",
+                candidate_email, position, org_name,
+            )
+            html_body = application_rejected_html(
+                candidate_name=candidate_name,
+                org_name=org_name,
+                position=position,
+            )
+            email = resend.Emails.send({
+                "from": self.from_email,
+                "to": [candidate_email],
+                "subject": f"Update on your application at {org_name}",
+                "html": html_body,
+            })
+            email_id = email.get("id", "") if isinstance(email, dict) else str(email)
+            return {"success": True, "email_id": email_id}
+        except Exception as exc:
+            logger.error(
+                "Failed to send rejection email to %s: %s", candidate_email, str(exc)
+            )
             return {"success": False, "email_id": ""}
 
     def send_assessment_expiry_reminder(

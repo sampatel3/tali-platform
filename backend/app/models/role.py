@@ -65,6 +65,23 @@ class Role(Base):
     agent_paused_reason = Column(Text, nullable=True)
     agent_last_run_at = Column(DateTime(timezone=True), nullable=True)
     agent_calibration = Column(JSON, nullable=True)
+    # Per-role Anthropic model override. Null = use settings.resolved_claude_model
+    # (Haiku by default). Set to e.g. ``claude-sonnet-4-5`` for roles where
+    # borderline-judgment cycles are worth Sonnet's cost — recruiter-tunable
+    # cost/quality knob without touching env vars.
+    agent_model = Column(String, nullable=True)
+    # Event-debounce window. When set and in the future, an event-triggered
+    # agent cycle is already scheduled for this role and additional events
+    # within the window must NOT enqueue another. The agent task clears it
+    # on entry so events arriving during the cycle start a new window.
+    # See app/agent_runtime/event_debounce.py.
+    agent_next_run_at = Column(DateTime(timezone=True), nullable=True)
+    # Cached "do high scorers cluster" signals (skills/companies/titles/schools
+    # over-represented in the top decile vs the full applicant pool). Computed
+    # lazily by ``cohort_signals_service.compute_cohort_signals`` and refreshed
+    # when stale (>1 hour). See the agent's get_cohort_signals tool.
+    agent_cohort_signals = Column(JSON, nullable=True)
+    agent_cohort_signals_at = Column(DateTime(timezone=True), nullable=True)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

@@ -263,6 +263,9 @@ def create_assessment(
             candidate_email=candidate_email,
             candidate_name=candidate_name,
             position=task.name or "Technical assessment",
+            # Route candidate replies to the recruiter who triggered the
+            # send rather than the platform's no-reply address.
+            reply_to=current_user.email,
         )
         try:
             db.commit()

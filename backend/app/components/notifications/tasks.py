@@ -8,7 +8,17 @@ logger = logging.getLogger(__name__)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def send_assessment_email(self, candidate_email: str, candidate_name: str, token: str, org_name: str, position: str, assessment_id: int | None = None):
+def send_assessment_email(
+    self,
+    candidate_email: str,
+    candidate_name: str,
+    token: str,
+    org_name: str,
+    position: str,
+    assessment_id: int | None = None,
+    candidate_facing_brand: str | None = None,
+    reply_to: str | None = None,
+):
     """Send assessment invitation email to candidate."""
     from .email_client import EmailService
 
@@ -22,6 +32,8 @@ def send_assessment_email(self, candidate_email: str, candidate_name: str, token
             org_name=org_name,
             position=position,
             frontend_url=settings.FRONTEND_URL,
+            candidate_facing_brand=candidate_facing_brand,
+            reply_to=reply_to,
         )
         if not result["success"]:
             raise Exception(result.get("error", "Email send failed"))
@@ -29,6 +41,34 @@ def send_assessment_email(self, candidate_email: str, candidate_name: str, token
         return result
     except Exception as exc:
         logger.error(f"Failed to send assessment email to {candidate_email}: {exc}")
+        raise self.retry(exc=exc)
+
+
+@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
+def send_application_rejected_email(
+    self,
+    candidate_email: str,
+    candidate_name: str,
+    org_name: str,
+    position: str,
+):
+    """Send candidate-facing rejection email (best-effort, retries on transient failure)."""
+    from .email_client import EmailService
+
+    try:
+        email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
+        result = email_svc.send_application_rejected(
+            candidate_email=candidate_email,
+            candidate_name=candidate_name,
+            org_name=org_name,
+            position=position,
+        )
+        if not result["success"]:
+            raise Exception(result.get("error", "Email send failed"))
+        logger.info("Rejection email sent to %s for position '%s'", candidate_email, position)
+        return result
+    except Exception as exc:
+        logger.error("Failed to send rejection email to %s: %s", candidate_email, exc)
         raise self.retry(exc=exc)
 
 

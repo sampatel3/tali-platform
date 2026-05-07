@@ -15,8 +15,11 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
-from . import advance_stage
+from . import advance_stage, reject_application
 from .types import ACTOR_RECRUITER, Actor
+
+
+_REJECT_DECISION_TYPES = ("reject", "skip_assessment_reject")
 
 
 def run(
@@ -66,12 +69,15 @@ def run(
             idempotency_key=f"approve_decision:{decision.id}",
             metadata=metadata,
         )
-    elif decision.decision_type in ("reject", "skip_assessment_reject"):
-        # Reject path lands in Phase 2 — this gate keeps the API surface
-        # complete without silently no-op'ing on Phase 1.
-        raise HTTPException(
-            status_code=501,
-            detail=f"approve for decision_type={decision.decision_type} not yet implemented (Phase 2)",
+    elif decision.decision_type in _REJECT_DECISION_TYPES:
+        reject_application.run(
+            db,
+            actor,
+            organization_id=organization_id,
+            application_id=int(decision.application_id),
+            reason=reason,
+            idempotency_key=f"approve_decision:{decision.id}",
+            metadata={**metadata, "decision_type": decision.decision_type},
         )
     else:
         raise HTTPException(
