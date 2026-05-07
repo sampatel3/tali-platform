@@ -25,7 +25,11 @@ vi.mock('../shared/api', () => ({
   },
   billing: { usage: vi.fn(), costs: vi.fn(), credits: vi.fn(), createCheckoutSession: vi.fn() },
   organizations: { get: vi.fn(), update: vi.fn() },
-  analytics: { get: vi.fn().mockResolvedValue({ data: {} }) },
+  analytics: {
+    get: vi.fn().mockResolvedValue({ data: {} }),
+    reportingSummary: vi.fn().mockResolvedValue({ data: {} }),
+    benchmarks: vi.fn().mockResolvedValue({ data: {} }),
+  },
   tasks: {
     list: vi.fn(),
     get: vi.fn(),
@@ -731,7 +735,9 @@ describe('AssessmentsPage', () => {
 
     await waitFor(() => {
       expect(window.location.pathname).toBe('/reporting');
-      expect(analyticsApi.get).toHaveBeenCalled();
+      // Reporting now hydrates from /analytics/reporting-summary (HANDOFF
+      // chat.md design refresh) instead of the legacy /analytics/ endpoint.
+      expect(analyticsApi.reportingSummary).toHaveBeenCalled();
       expect(screen.getByRole('heading', { name: /Your agent in narrative/i })).toBeInTheDocument();
     });
   });

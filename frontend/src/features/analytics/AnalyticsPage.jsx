@@ -3,11 +3,6 @@ import {
   Bar,
   BarChart,
   CartesianGrid,
-  PolarAngleAxis,
-  PolarGrid,
-  PolarRadiusAxis,
-  Radar,
-  RadarChart,
   ResponsiveContainer,
   Tooltip,
   XAxis,
@@ -15,14 +10,12 @@ import {
 } from 'recharts';
 
 import {
-  agent as agentApi,
   assessments as assessmentsApi,
   analytics as analyticsApi,
   roles as rolesApi,
   tasks as tasksApi,
 } from '../../shared/api';
 import { getCategoryScoresFromAssessment } from '../../lib/comparisonCategories';
-import { dimensionOrder, getDimensionById } from '../../scoring/scoringDimensions';
 import { PageHero } from '../../shared/layout/PageHero';
 import { Button, Panel, Select, Spinner } from '../../shared/ui/TaaliPrimitives';
 
@@ -50,17 +43,36 @@ const getDateRangeParams = (range) => {
 
 const safeNumber = (value, fallback = 0) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
 
-const buildNarrative = (data, rangeLabel) => {
-  const total = safeNumber(data.total_assessments);
-  const completed = safeNumber(data.completed_count);
-  const avg = safeNumber(data.avg_score, null);
-  if (total === 0) {
-    return `No assessments closed in the ${rangeLabel.toLowerCase()}. Once candidates start completing tasks, the agent will narrate what it advanced, rejected, and flagged.`;
-  }
-  // HANDOFF v2 §6 — recruiter-facing scores rendered as integer nn / 100.
-  const avgPart = avg != null ? ` Average composite score sat at ${Math.round(Number(avg) * 10)} / 100.` : '';
-  const completionRate = safeNumber(data.completion_rate);
-  return `Across the ${rangeLabel.toLowerCase()}, ${completed} of ${total} assessments closed (${completionRate.toFixed(0)}% completion).${avgPart} Use the panels below to see what shifted, where confidence dropped, and how the funnel held up.`;
+const formatDollars = (cents) => {
+  const n = Number(cents || 0) / 100;
+  return n >= 100 ? `$${Math.round(n)}` : `$${n.toFixed(0)}`;
+};
+
+const formatRelative = (iso) => {
+  if (!iso) return '';
+  const diff = Date.now() - new Date(iso).getTime();
+  if (Number.isNaN(diff)) return '';
+  const m = Math.round(diff / 60000);
+  if (m < 1) return 'just now';
+  if (m < 60) return `${m}m ago`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `${h}h ago`;
+  return `${Math.round(h / 24)}d ago`;
+};
+
+const EMPTY_SUMMARY = {
+  window: { from: null, to: null, label: 'Last 30 days' },
+  kpis: {
+    decisions_made: { current: 0, prior: 0, delta_pct: null },
+    auto_advanced: { current: 0, borderlines_flagged: 0 },
+    auto_rejected: { current: 0, below_threshold: 0 },
+    org_spend: { spent_cents: 0, budget_cents: 0, over_pct: null, top_role: null, active_role_count: 0 },
+  },
+  narrator: { paragraph: '', chips: [] },
+  decisions_feed: [],
+  anomalies: [],
+  funnel: [],
+  score_buckets: [],
 };
 
 export const ReportingPage = ({ onNavigate, NavComponent }) => {
@@ -71,26 +83,8 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
   const [dateRange, setDateRange] = useState('30d');
   const [loading, setLoading] = useState(true);
   const [exporting, setExporting] = useState(false);
-  const [data, setData] = useState({
-    weekly_completion: [],
-    total_assessments: 0,
-    completed_count: 0,
-    completion_rate: 0,
-    top_score: null,
-    avg_score: null,
-    avg_time_minutes: null,
-    score_buckets: [],
-    dimension_averages: {},
-  });
-  // Agent decisions feed for the canvas-spec "Decisions feed" panel
-  // (HANDOFF v2 §6 / canvas reporting-v2). Pulls every consequential
-  // action — advance / reject / flag / pause / invite — sorted newest
-  // first. Also drives the Auto-advanced and Auto-rejected KPI tiles.
-  const [agentDecisions, setAgentDecisions] = useState([]);
-  // Live org spend rollup for the canvas-spec "Org spend" KPI tile.
-  // Fans out across active roles (capped at 20) using the same
-  // /roles/{id}/agent/status endpoint AgentBar consumes.
-  const [orgSpend, setOrgSpend] = useState({ spent_cents: 0, budget_cents: 0 });
+  const [summary, setSummary] = useState(EMPTY_SUMMARY);
+  const [activeChip, setActiveChip] = useState(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -108,65 +102,8 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
     };
   }, []);
 
-  // Agent decisions feed — canvas reporting-v2 spec.
-  useEffect(() => {
-    let cancelled = false;
-    agentApi.listDecisions({ limit: 30 })
-      .then((res) => {
-        if (cancelled) return;
-        const list = Array.isArray(res?.data) ? res.data : [];
-        setAgentDecisions(list);
-      })
-      .catch(() => {
-        if (!cancelled) setAgentDecisions([]);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [roleFilter]);
-
-  // Org spend rollup — sum monthly_spent_cents + monthly_budget_cents
-  // across agent-enabled roles (capped at 20). Mirrors the AgentBar
-  // fan-out so the Org spend KPI shows the same number recruiters see
-  // in the global header.
-  useEffect(() => {
-    let cancelled = false;
-    rolesApi.list()
-      .then(async (rolesRes) => {
-        const allRoles = Array.isArray(rolesRes?.data) ? rolesRes.data : [];
-        const targets = allRoles
-          .filter((role) => role?.agentic_mode_enabled)
-          .slice(0, 20);
-        if (targets.length === 0) {
-          if (!cancelled) setOrgSpend({ spent_cents: 0, budget_cents: 0 });
-          return;
-        }
-        const settled = await Promise.allSettled(
-          targets.map((role) => agentApi.status(role.id)),
-        );
-        if (cancelled) return;
-        let spent = 0;
-        let budget = 0;
-        settled.forEach((entry) => {
-          if (entry.status !== 'fulfilled') return;
-          const d = entry.value?.data || {};
-          spent += Number(d.monthly_spent_cents || 0);
-          budget += Number(d.monthly_budget_cents || 0);
-        });
-        setOrgSpend({ spent_cents: spent, budget_cents: budget });
-      })
-      .catch(() => {
-        if (!cancelled) setOrgSpend({ spent_cents: 0, budget_cents: 0 });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const queryParams = useMemo(() => {
-    const params = {
-      ...getDateRangeParams(dateRange),
-    };
+    const params = { ...getDateRangeParams(dateRange) };
     if (roleFilter) params.role_id = roleFilter;
     if (taskFilter) params.task_id = taskFilter;
     return params;
@@ -175,36 +112,23 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    analyticsApi.get(queryParams)
+    analyticsApi.reportingSummary(queryParams)
       .then((res) => {
-        if (!cancelled) {
-          setData({
-            weekly_completion: res?.data?.weekly_completion || [],
-            total_assessments: safeNumber(res?.data?.total_assessments),
-            completed_count: safeNumber(res?.data?.completed_count),
-            completion_rate: safeNumber(res?.data?.completion_rate),
-            top_score: res?.data?.top_score,
-            avg_score: res?.data?.avg_score,
-            avg_time_minutes: res?.data?.avg_time_minutes,
-            score_buckets: Array.isArray(res?.data?.score_buckets) ? res.data.score_buckets : [],
-            dimension_averages: res?.data?.dimension_averages || {},
-          });
-        }
+        if (cancelled) return;
+        const data = res?.data || EMPTY_SUMMARY;
+        setSummary({
+          window: data.window || EMPTY_SUMMARY.window,
+          kpis: data.kpis || EMPTY_SUMMARY.kpis,
+          narrator: data.narrator || EMPTY_SUMMARY.narrator,
+          decisions_feed: Array.isArray(data.decisions_feed) ? data.decisions_feed : [],
+          anomalies: Array.isArray(data.anomalies) ? data.anomalies : [],
+          funnel: Array.isArray(data.funnel) ? data.funnel : [],
+          score_buckets: Array.isArray(data.score_buckets) ? data.score_buckets : [],
+        });
+        setActiveChip(null);
       })
       .catch(() => {
-        if (!cancelled) {
-          setData({
-            weekly_completion: [],
-            total_assessments: 0,
-            completed_count: 0,
-            completion_rate: 0,
-            top_score: null,
-            avg_score: null,
-            avg_time_minutes: null,
-            score_buckets: [],
-            dimension_averages: {},
-          });
-        }
+        if (!cancelled) setSummary(EMPTY_SUMMARY);
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -214,46 +138,23 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
     };
   }, [queryParams]);
 
-  const weekly = data.weekly_completion?.length ? data.weekly_completion : [
-    { week: 'Week 1', rate: 0, count: 0 },
-    { week: 'Week 2', rate: 0, count: 0 },
-    { week: 'Week 3', rate: 0, count: 0 },
-    { week: 'Week 4', rate: 0, count: 0 },
-    { week: 'Week 5', rate: 0, count: 0 },
-  ];
+  const rangeLabel = summary.window?.label
+    || DATE_RANGE_OPTIONS.find((opt) => opt.value === dateRange)?.label
+    || 'Last 30 days';
 
-  const histogramData = data.score_buckets?.length ? data.score_buckets : [
+  const decisionsKpi = summary.kpis.decisions_made;
+  const advancedKpi = summary.kpis.auto_advanced;
+  const rejectedKpi = summary.kpis.auto_rejected;
+  const spendKpi = summary.kpis.org_spend;
+  const overBudget = (spendKpi.over_pct || 0) > 0;
+
+  const histogramData = summary.score_buckets?.length ? summary.score_buckets : [
     { range: '0-20', count: 0, percentage: 0 },
     { range: '20-40', count: 0, percentage: 0 },
     { range: '40-60', count: 0, percentage: 0 },
     { range: '60-80', count: 0, percentage: 0 },
     { range: '80-100', count: 0, percentage: 0 },
   ];
-
-  const radarData = dimensionOrder.map((key) => ({
-    dimension: getDimensionById(key).label,
-    score: safeNumber(data.dimension_averages?.[key], 0),
-    fullMark: 10,
-  }));
-
-  const rangeLabel = DATE_RANGE_OPTIONS.find((opt) => opt.value === dateRange)?.label || 'Last 30 days';
-  const narrative = buildNarrative(data, rangeLabel);
-
-  const funnelStages = useMemo(() => {
-    const total = Math.max(safeNumber(data.total_assessments), 0);
-    const completed = Math.max(safeNumber(data.completed_count), 0);
-    const inFlight = Math.max(total - completed, 0);
-    const highScore = histogramData
-      .filter((b) => /80|60-80|80-100/.test(String(b.range)))
-      .reduce((acc, b) => acc + safeNumber(b.count), 0);
-    const stages = [
-      { label: 'Invited', n: total, p: 100 },
-      { label: 'In assessment', n: inFlight, p: total ? (inFlight / total) * 100 : 0 },
-      { label: 'Completed', n: completed, p: total ? (completed / total) * 100 : 0 },
-      { label: 'Score ≥ 60', n: highScore, p: total ? (highScore / total) * 100 : 0 },
-    ];
-    return stages;
-  }, [data.total_assessments, data.completed_count, histogramData]);
 
   const handleExportCsv = async () => {
     setExporting(true);
@@ -313,22 +214,11 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
       });
 
       const columns = [
-        'candidate_name',
-        'candidate_email',
-        'task',
-        'role',
-        'status',
-        'score_10',
-        'score_100',
-        'completed_at',
-        'task_completion',
-        'prompt_clarity',
-        'context_provision',
-        'independence_efficiency',
-        'response_utilization',
-        'debugging_design',
-        'written_communication',
-        'role_fit',
+        'candidate_name', 'candidate_email', 'task', 'role', 'status',
+        'score_10', 'score_100', 'completed_at',
+        'task_completion', 'prompt_clarity', 'context_provision',
+        'independence_efficiency', 'response_utilization',
+        'debugging_design', 'written_communication', 'role_fit',
       ];
       const csv = [
         columns.join(','),
@@ -346,12 +236,21 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
     }
   };
 
+  const activeChipBody = activeChip
+    ? (summary.narrator.chips || []).find((c) => c.key === activeChip)?.body
+    : null;
+
+  const decisionsDelta = decisionsKpi.delta_pct;
+  const decisionsDeltaLabel = decisionsDelta == null
+    ? `${decisionsKpi.current === 0 ? 'No prior data' : 'No change vs prior period'}`
+    : `${decisionsDelta > 0 ? '+' : ''}${decisionsDelta.toFixed(0)}% vs prior ${rangeLabel.toLowerCase()}`;
+
   return (
     <div>
       <NavComponent currentPage="reporting" onNavigate={onNavigate} />
       <div className="mc-page mc-page-narrow">
         <PageHero
-          kicker={`MISSION CONTROL · ${rangeLabel.toUpperCase()}`}
+          kicker={`MISSION CONTROL · ${rangeLabel.toUpperCase()}${roleFilter ? '' : ' · ALL ROLES'}`}
           title={<>Your agent in <em>narrative</em></>}
           subtitle="What Taali did, what it skipped, and where it was unsure. Not a dashboard — a daily standup in retrospect."
           actions={(
@@ -364,7 +263,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
         <Panel className="mb-5 p-4">
           <div className="grid gap-3 md:grid-cols-4">
             <label className="block">
-              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Role</span>
+              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Role</span>
               <Select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
                 <option value="">All roles</option>
                 {roles.map((role) => (
@@ -373,7 +272,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
               </Select>
             </label>
             <label className="block">
-              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Task</span>
+              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Task</span>
               <Select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>
                 <option value="">All tasks</option>
                 {tasks.map((task) => (
@@ -382,7 +281,7 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
               </Select>
             </label>
             <label className="block">
-              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Date range</span>
+              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Date range</span>
               <Select value={dateRange} onChange={(event) => setDateRange(event.target.value)}>
                 {DATE_RANGE_OPTIONS.map((option) => (
                   <option key={option.value} value={option.value}>{option.label}</option>
@@ -413,145 +312,111 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
           </div>
         ) : (
           <div className="space-y-5">
+            {/* Narrator — concrete numbers + clickable chip drill-ins. */}
             <section className="mc-narrator">
               <div className="mc-narrator-bg" aria-hidden="true" />
               <div className="mc-kicker" style={{ color: 'rgba(255,255,255,0.7)', marginBottom: 6 }}>
                 NARRATOR · WHAT THE AGENT DID
               </div>
-              <p>{narrative}</p>
+              <p>{summary.narrator.paragraph}</p>
+              {summary.narrator.chips?.length ? (
+                <div className="mc-narrator-chips">
+                  {summary.narrator.chips.map((chip) => (
+                    <button
+                      key={chip.key}
+                      type="button"
+                      className={`mc-narrator-chip ${activeChip === chip.key ? 'on' : ''}`.trim()}
+                      onClick={() => setActiveChip((prev) => (prev === chip.key ? null : chip.key))}
+                    >
+                      {chip.label}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+              {activeChipBody ? (
+                <div className="mc-narrator-chip-body">{activeChipBody}</div>
+              ) : null}
             </section>
 
-            {/* HANDOFF v2 / canvas reporting-v2 — KPI row matches the
-                canvas: Decisions made / Auto-advanced / Auto-rejected /
-                Org spend. Auto-advanced + Auto-rejected pull from the
-                agent decisions feed; Org spend pulls from the rolled-up
-                agent/status fan-out. */}
-            {(() => {
-              const autoAdvanced = agentDecisions.filter((d) => {
-                const t = String(d?.decision_type || '').toLowerCase();
-                return (t === 'advance' || t === 'auto_advance') && String(d?.status || '').toLowerCase() !== 'pending';
-              }).length;
-              const autoRejected = agentDecisions.filter((d) => {
-                const t = String(d?.decision_type || '').toLowerCase();
-                return (t === 'reject' || t === 'auto_reject') && String(d?.status || '').toLowerCase() !== 'pending';
-              }).length;
-              const flaggedBorderlines = agentDecisions.filter((d) => {
-                const t = String(d?.decision_type || '').toLowerCase();
-                return t === 'flag' || t === 'borderline';
-              }).length;
-              const dollars = (cents) => {
-                const n = Number(cents || 0) / 100;
-                return n >= 100 ? `$${Math.round(n)}` : `$${n.toFixed(0)}`;
-              };
-              const overBudget = orgSpend.budget_cents > 0 && orgSpend.spent_cents > orgSpend.budget_cents;
-              const overPct = orgSpend.budget_cents > 0
-                ? Math.round(((orgSpend.spent_cents - orgSpend.budget_cents) / orgSpend.budget_cents) * 100)
-                : 0;
-              return (
-                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-                  <Panel className="p-4">
-                    <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Decisions made</div>
-                    <div className="text-2xl font-bold text-[var(--taali-text)]">{data.total_assessments + agentDecisions.length}</div>
-                    <div className="mt-1 text-[12px] text-[var(--taali-muted)]">
-                      Across CV scoring + agent actions
-                    </div>
-                  </Panel>
-                  <Panel className="p-4">
-                    <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Auto-advanced</div>
-                    <div className="text-2xl font-bold text-[var(--taali-purple)]">
-                      <em style={{ fontStyle: 'normal' }}>{autoAdvanced}</em>
-                    </div>
-                    <div className="mt-1 text-[12px] text-[var(--taali-muted)]">
-                      {flaggedBorderlines > 0 ? `+${flaggedBorderlines} borderline${flaggedBorderlines === 1 ? '' : 's'} flagged` : 'No borderlines flagged'}
-                    </div>
-                  </Panel>
-                  <Panel className="p-4">
-                    <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">Auto-rejected</div>
-                    <div className="text-2xl font-bold text-[var(--taali-text)]">{autoRejected}</div>
-                    <div className="mt-1 text-[12px] text-[var(--taali-muted)]">All below role threshold</div>
-                  </Panel>
-                  <Panel className="p-4">
-                    <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--taali-muted)]">
-                      Org spend{orgSpend.budget_cents > 0 ? ` (vs ${dollars(orgSpend.budget_cents)} cap)` : ''}
-                    </div>
-                    <div className="text-2xl font-bold text-[var(--taali-text)]">
-                      {dollars(orgSpend.spent_cents)}
-                      {orgSpend.budget_cents > 0 ? (
-                        <span className="text-base font-normal text-[var(--taali-muted)]"> / {dollars(orgSpend.budget_cents)}</span>
-                      ) : null}
-                    </div>
-                    <div
-                      className="mt-1 text-[12px]"
-                      style={{ color: overBudget ? 'var(--amber)' : 'var(--taali-muted)' }}
-                    >
-                      {orgSpend.budget_cents === 0
-                        ? 'No agent-enabled roles yet'
-                        : overBudget
-                          ? `${overPct}% over · review per-role caps`
-                          : 'Within budget'}
-                    </div>
-                  </Panel>
+            {/* KPI row matching the canvas: Decisions / Auto-advanced /
+                Auto-rejected / Org spend with deltas + drivers. */}
+            <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+              <Panel className="p-4">
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Decisions made</div>
+                <div className="text-2xl font-bold text-[var(--ink)]">
+                  {decisionsKpi.current.toLocaleString()}
                 </div>
-              );
-            })()}
+                <div className="mt-1 text-[12px] text-[var(--mute)]" style={{ color: decisionsDelta != null && decisionsDelta > 0 ? 'var(--purple)' : 'var(--mute)' }}>
+                  {decisionsDeltaLabel}
+                </div>
+              </Panel>
+              <Panel className="p-4">
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Auto-advanced</div>
+                <div className="text-2xl font-bold text-[var(--purple)]">
+                  {advancedKpi.current}
+                </div>
+                <div className="mt-1 text-[12px] text-[var(--mute)]">
+                  {advancedKpi.borderlines_flagged > 0
+                    ? `+${advancedKpi.borderlines_flagged} borderline${advancedKpi.borderlines_flagged === 1 ? '' : 's'} flagged`
+                    : 'No borderlines flagged'}
+                </div>
+              </Panel>
+              <Panel className="p-4">
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Auto-rejected</div>
+                <div className="text-2xl font-bold text-[var(--ink)]">{rejectedKpi.current}</div>
+                <div className="mt-1 text-[12px] text-[var(--mute)]">All below role threshold</div>
+              </Panel>
+              <Panel className="p-4">
+                <div className="mb-1 font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">
+                  Org spend{spendKpi.budget_cents > 0 ? ` (vs ${formatDollars(spendKpi.budget_cents)} cap)` : ''}
+                </div>
+                <div className="text-2xl font-bold text-[var(--ink)]">
+                  {formatDollars(spendKpi.spent_cents)}
+                  {spendKpi.budget_cents > 0 ? (
+                    <span className="text-base font-normal text-[var(--mute)]"> / {formatDollars(spendKpi.budget_cents)}</span>
+                  ) : null}
+                </div>
+                <div className="mt-1 text-[12px]" style={{ color: overBudget ? 'var(--amber)' : 'var(--mute)' }}>
+                  {spendKpi.active_role_count === 0
+                    ? 'No agent-enabled roles yet'
+                    : overBudget
+                      ? `${spendKpi.over_pct?.toFixed(0)}% over${spendKpi.top_role ? ` · driven by ${spendKpi.top_role}` : ''}`
+                      : 'Within budget'}
+                </div>
+              </Panel>
+            </div>
 
             <div className="grid gap-5 lg:grid-cols-[1.3fr_1fr]">
-              {/* HANDOFF v2 / canvas reporting-v2 — left column is a
-                  reverse-chrono "Decisions feed" of every consequential
-                  action the agent took. Replaces the legacy weekly-rate
-                  bar chart, which was deferred to a separate analytics
-                  drill-in per the canvas. */}
+              {/* Decisions feed (left, larger). */}
               <Panel className="p-4">
                 <h2 className="mb-1 font-bold text-base">Decisions feed</h2>
                 <p className="mb-3 text-[12.5px] text-[var(--mute)]">
                   A reverse-chronological log of every consequential action.
                 </p>
-                {agentDecisions.length === 0 ? (
+                {summary.decisions_feed.length === 0 ? (
                   <div className="mc-decisions-empty" style={{ padding: '24px 4px', textAlign: 'left', color: 'var(--mute)', fontSize: 13 }}>
                     No agent decisions in this window yet. Once the agent advances, rejects, or
                     flags a candidate, every action lands here with the reasoning attached.
                   </div>
                 ) : (
                   <div className="mc-decisions-feed">
-                    {agentDecisions.slice(0, 8).map((decision) => {
-                      const type = String(decision?.decision_type || '').toLowerCase();
-                      const kind = type.includes('advance') ? 'advance'
-                        : type.includes('reject') ? 'reject'
-                        : type.includes('flag') ? 'flag'
-                        : type.includes('pause') ? 'pause'
-                        : type.includes('invite') ? 'invite'
-                        : 'action';
-                      const tone = kind === 'advance' ? 'var(--taali-success)'
-                        : kind === 'reject' ? 'var(--red, #dc2626)'
-                        : kind === 'flag' ? 'var(--amber, #f59e0b)'
-                        : kind === 'pause' ? 'var(--mute)'
+                    {summary.decisions_feed.slice(0, 8).map((decision) => {
+                      const tone = decision.kind === 'advance' ? 'var(--green, #16a34a)'
+                        : decision.kind === 'reject' ? 'var(--red, #dc2626)'
+                        : decision.kind === 'flag' ? 'var(--amber, #f59e0b)'
+                        : decision.kind === 'pause' ? 'var(--mute)'
                         : 'var(--purple)';
-                      const verb = decision?.recommendation
-                        || (kind === 'advance' ? 'Advanced candidate'
-                          : kind === 'reject' ? 'Rejected candidate'
-                          : kind === 'flag' ? 'Flagged candidate'
-                          : kind === 'pause' ? 'Paused agent'
-                          : kind === 'invite' ? 'Sent invitation'
+                      const verb = decision.recommendation
+                        || (decision.kind === 'advance' ? 'Advanced candidate'
+                          : decision.kind === 'reject' ? 'Rejected candidate'
+                          : decision.kind === 'flag' ? 'Flagged candidate'
+                          : decision.kind === 'pause' ? 'Paused agent'
+                          : decision.kind === 'invite' ? 'Sent invitation'
                           : 'Recorded action');
-                      const candName = decision?.candidate_name || 'Candidate';
-                      const created = decision?.created_at;
-                      const ago = (() => {
-                        if (!created) return '';
-                        const diffMs = Date.now() - new Date(created).getTime();
-                        if (Number.isNaN(diffMs)) return '';
-                        const m = Math.round(diffMs / 60000);
-                        if (m < 1) return 'just now';
-                        if (m < 60) return `${m}m ago`;
-                        const h = Math.round(m / 60);
-                        if (h < 24) return `${h}h ago`;
-                        return `${Math.round(h / 24)}d ago`;
-                      })();
+                      const candName = decision.candidate_name || 'Candidate';
                       return (
-                        <div
-                          key={decision.id || `${decision.created_at}-${decision.application_id}`}
-                          className="mc-decisions-row"
-                        >
-                          <span className="mc-decisions-row-time">{ago}</span>
+                        <div key={decision.id} className="mc-decisions-row">
+                          <span className="mc-decisions-row-time">{formatRelative(decision.created_at)}</span>
                           <span
                             className="mc-decisions-row-dot"
                             style={{ background: `color-mix(in oklab, ${tone} 22%, transparent)`, color: tone }}
@@ -559,11 +424,11 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                           />
                           <div>
                             <div className="mc-decisions-row-title">
-                              {kind === 'advance' || kind === 'reject' ? `${verb}${candName !== 'Candidate' ? ` · ${candName}` : ''}` : verb}
+                              {decision.kind === 'advance' || decision.kind === 'reject'
+                                ? `${verb}${candName !== 'Candidate' ? ` · ${candName}` : ''}`
+                                : verb}
                             </div>
-                            <div className="mc-decisions-row-body">
-                              {decision?.reasoning || '—'}
-                            </div>
+                            <div className="mc-decisions-row-body">{decision.reasoning || '—'}</div>
                           </div>
                         </div>
                       );
@@ -576,48 +441,42 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
                 <Panel className="p-4">
                   <h2 className="mb-1 font-bold text-base">Anomalies</h2>
                   <p className="mb-3 text-[12.5px] text-[var(--mute)]">Things worth your attention.</p>
-                  {data.total_assessments > 0 ? (
-                    <div className="flex flex-col gap-2">
-                      {data.completion_rate < 50 ? (
-                        <AnomalyRow
-                          tone="amber"
-                          title="Low completion rate"
-                          body={`Only ${safeNumber(data.completion_rate).toFixed(0)}% of invited candidates completed the assessment. Consider revisiting invite copy or task length.`}
-                        />
-                      ) : null}
-                      {data.avg_score != null && data.avg_score < 5 ? (
-                        <AnomalyRow
-                          tone="amber"
-                          title="Average score below mid-band"
-                          body={`Mean composite is ${Math.round(Number(data.avg_score) * 10)} / 100. Either the bar is set high or the candidate pool needs sharpening.`}
-                        />
-                      ) : null}
-                      {data.completion_rate >= 50 && (data.avg_score == null || data.avg_score >= 5) ? (
-                        <p className="text-[12.5px] text-[var(--mute)]">Nothing flagged in the current window.</p>
-                      ) : null}
-                    </div>
+                  {summary.anomalies.length === 0 ? (
+                    <p className="text-[12.5px] text-[var(--mute)]">
+                      Anomalies appear once the agent has graded enough assessments to spot drift.
+                    </p>
                   ) : (
-                    <p className="text-[12.5px] text-[var(--mute)]">Anomalies appear once the agent has graded enough assessments to spot drift.</p>
+                    <div className="flex flex-col gap-2">
+                      {summary.anomalies.map((anomaly, i) => (
+                        <AnomalyRow key={`${anomaly.title}-${i}`} {...anomaly} />
+                      ))}
+                    </div>
                   )}
                 </Panel>
 
                 <Panel className="p-4">
                   <h2 className="mb-1 font-bold text-base">Funnel · org-wide</h2>
-                  <p className="mb-3 text-[12.5px] text-[var(--mute)]">From invitation through completion to score ≥ 60.</p>
+                  <p className="mb-3 text-[12.5px] text-[var(--mute)]">From application through review to hire.</p>
                   <div className="flex flex-col gap-2">
-                    {funnelStages.map((stage) => (
-                      <div key={stage.label} className="grid grid-cols-[120px_1fr_auto] items-center gap-3">
-                        <span className="text-[13px] text-[var(--ink-2)]">{stage.label}</span>
-                        <div className="relative h-2.5 rounded-full bg-[var(--bg-3)] overflow-hidden">
+                    {(summary.funnel.length ? summary.funnel : [
+                      { label: 'APPLIED', count: 0, percentage: 0 },
+                      { label: 'INVITED', count: 0, percentage: 0 },
+                      { label: 'DONE', count: 0, percentage: 0 },
+                      { label: 'REVIEW', count: 0, percentage: 0 },
+                      { label: 'HIRED', count: 0, percentage: 0 },
+                    ]).map((stage) => (
+                      <div key={stage.label} className="grid grid-cols-[110px_1fr_auto] items-center gap-3">
+                        <span className="font-mono text-[10.5px] uppercase tracking-[0.08em] text-[var(--mute)]">{stage.label}</span>
+                        <div className="relative h-2.5 overflow-hidden rounded-full bg-[var(--bg-3)]">
                           <div
                             className="absolute inset-y-0 left-0 rounded-full"
                             style={{
-                              width: `${Math.max(0, Math.min(100, stage.p))}%`,
+                              width: `${Math.max(0, Math.min(100, safeNumber(stage.percentage)))}%`,
                               background: 'linear-gradient(90deg, var(--purple), color-mix(in srgb, var(--purple) 60%, var(--lime)))',
                             }}
                           />
                         </div>
-                        <span className="font-[var(--font-mono)] text-[11.5px] text-[var(--ink-2)]">{stage.n}</span>
+                        <span className="font-mono text-[11.5px] text-[var(--ink-2)]">{safeNumber(stage.count).toLocaleString()}</span>
                       </div>
                     ))}
                   </div>
@@ -631,34 +490,19 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
               <div className="h-[260px]">
                 <ResponsiveContainer>
                   <BarChart data={histogramData}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="var(--taali-border-muted)" />
-                    <XAxis dataKey="range" tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
-                    <YAxis tick={{ fill: 'var(--taali-muted)', fontSize: 12 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} tickLine={{ stroke: 'var(--taali-border-soft)' }} />
+                    <CartesianGrid strokeDasharray="3 3" stroke="var(--line)" />
+                    <XAxis dataKey="range" tick={{ fill: 'var(--mute)', fontSize: 12 }} axisLine={{ stroke: 'var(--line)' }} tickLine={{ stroke: 'var(--line)' }} />
+                    <YAxis tick={{ fill: 'var(--mute)', fontSize: 12 }} axisLine={{ stroke: 'var(--line)' }} tickLine={{ stroke: 'var(--line)' }} />
                     <Tooltip
                       contentStyle={{
-                        background: 'var(--taali-surface-elevated)',
-                        border: '1px solid var(--taali-border-soft)',
-                        borderRadius: '16px',
-                        color: 'var(--taali-text)',
+                        background: 'var(--bg-2)',
+                        border: '1px solid var(--line)',
+                        borderRadius: '12px',
+                        color: 'var(--ink)',
                       }}
                     />
-                    <Bar dataKey="count" fill="var(--taali-info)" />
+                    <Bar dataKey="count" fill="var(--purple)" />
                   </BarChart>
-                </ResponsiveContainer>
-              </div>
-            </Panel>
-
-            <Panel className="p-4">
-              <h2 className="mb-1 font-bold text-base">Per-dimension averages</h2>
-              <p className="mb-3 text-[12.5px] text-[var(--mute)]">How candidates score across the eleven scoring axes.</p>
-              <div className="h-[320px]">
-                <ResponsiveContainer>
-                  <RadarChart data={radarData}>
-                    <PolarGrid stroke="var(--taali-border-muted)" />
-                    <PolarAngleAxis dataKey="dimension" tick={{ fill: 'var(--taali-muted)', fontSize: 11 }} />
-                    <PolarRadiusAxis domain={[0, 10]} tick={{ fill: 'var(--taali-muted)', fontSize: 11 }} axisLine={{ stroke: 'var(--taali-border-soft)' }} />
-                    <Radar dataKey="score" stroke="var(--taali-purple)" fill="var(--taali-purple)" fillOpacity={0.2} />
-                  </RadarChart>
                 </ResponsiveContainer>
               </div>
             </Panel>
@@ -669,18 +513,25 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
   );
 };
 
-const AnomalyRow = ({ tone, title, body }) => (
-  <div className="flex items-start gap-3 rounded-[10px] border border-[var(--line)] bg-[var(--bg)] px-3 py-3">
-    <span
-      className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
-      style={{ background: tone === 'red' ? 'var(--red)' : 'var(--amber)' }}
-      aria-hidden="true"
-    />
-    <div>
-      <div className="text-[13px] font-medium text-[var(--ink)]">{title}</div>
-      <div className="mt-0.5 text-[12px] leading-[1.45] text-[var(--mute)]">{body}</div>
+const AnomalyRow = ({ tone, title, body }) => {
+  const dotColor = tone === 'red'
+    ? 'var(--red)'
+    : tone === 'amber'
+      ? 'var(--amber)'
+      : 'var(--purple)';
+  return (
+    <div className="flex items-start gap-3 rounded-[10px] border border-[var(--line)] bg-[var(--bg)] px-3 py-3">
+      <span
+        className="mt-1.5 h-1.5 w-1.5 flex-shrink-0 rounded-full"
+        style={{ background: dotColor }}
+        aria-hidden="true"
+      />
+      <div>
+        <div className="text-[13px] font-medium text-[var(--ink)]">{title}</div>
+        <div className="mt-0.5 text-[12px] leading-[1.45] text-[var(--mute)]">{body}</div>
+      </div>
     </div>
-  </div>
-);
+  );
+};
 
 export const AnalyticsPage = ReportingPage;
