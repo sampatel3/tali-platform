@@ -1169,17 +1169,37 @@ class WorkableSyncService:
             )
         created = False
         if not role:
-            # Seed additional_requirements from the org-wide default. Workable
-            # itself doesn't supply scoring criteria, so on import every
-            # newly-created role inherits the recruiter's default. Existing
-            # roles (re-sync) keep whatever they already have.
-            org_default = (getattr(org, "default_additional_requirements", None) or "").strip() or None
+            # Seed defaults from the workspace settings. Workable itself
+            # doesn't supply scoring criteria, budget, or thresholds, so
+            # newly-created roles inherit them at import time. Existing roles
+            # (re-sync) keep whatever they already have.
+            list_default = getattr(org, "default_role_requirements", None)
+            if isinstance(list_default, list):
+                joined = "\n".join(
+                    str(item).strip() for item in list_default if str(item).strip()
+                )
+                org_default = joined or None
+            else:
+                org_default = (
+                    (getattr(org, "default_additional_requirements", None) or "").strip()
+                    or None
+                )
+            org_budget = getattr(org, "default_role_budget_cents", None)
+            org_threshold = getattr(org, "default_score_threshold", None)
             role = Role(
                 organization_id=org.id,
                 source="workable",
                 workable_job_id=job_id or None,
                 name=title,
                 additional_requirements=org_default,
+                monthly_usd_budget_cents=(
+                    int(org_budget) if org_budget is not None else None
+                ),
+                score_threshold=(
+                    max(0, min(100, int(org_threshold)))
+                    if org_threshold is not None
+                    else None
+                ),
             )
             db.add(role)
             created = True

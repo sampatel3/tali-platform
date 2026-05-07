@@ -37,31 +37,48 @@ def create_role(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    # Fall back to the org-wide default scoring criteria when the create
-    # request doesn't supply its own. Recruiters can edit the role's
-    # additional_requirements afterwards; the default is a starting point,
-    # not a binding link.
+    # Fall back to the org-wide defaults set on the Settings → AI agent tab
+    # when the create request doesn't supply its own values. Recruiters can
+    # edit any of these afterwards from the role page; the defaults are a
+    # starting point, not a binding link, and existing roles are not
+    # rewritten when the workspace defaults change.
+    org = (
+        db.query(Organization)
+        .filter(Organization.id == current_user.organization_id)
+        .first()
+    )
+
     requested_reqs = (data.additional_requirements or "").strip() or None
-    if requested_reqs is None:
-        org = (
-            db.query(Organization)
-            .filter(Organization.id == current_user.organization_id)
-            .first()
-        )
-        org_default = (
-            (getattr(org, "default_additional_requirements", None) or "").strip()
-            if org is not None
-            else ""
-        )
-        effective_reqs = org_default or None
-    else:
-        effective_reqs = requested_reqs
+    if requested_reqs is None and org is not None:
+        list_default = getattr(org, "default_role_requirements", None)
+        if isinstance(list_default, list):
+            joined = "\n".join(
+                str(item).strip() for item in list_default if str(item).strip()
+            )
+            requested_reqs = joined or None
+        if requested_reqs is None:
+            blob_default = (
+                getattr(org, "default_additional_requirements", None) or ""
+            ).strip()
+            requested_reqs = blob_default or None
+
+    monthly_budget_cents = data.monthly_usd_budget_cents
+    if monthly_budget_cents is None and org is not None:
+        org_budget = getattr(org, "default_role_budget_cents", None)
+        if org_budget is not None:
+            monthly_budget_cents = max(0, int(org_budget))
+
+    score_threshold = data.score_threshold
+    if score_threshold is None and org is not None:
+        org_threshold = getattr(org, "default_score_threshold", None)
+        if org_threshold is not None:
+            score_threshold = max(0, min(100, int(org_threshold)))
 
     role = Role(
         organization_id=current_user.organization_id,
         name=data.name.strip(),
         description=(data.description or None),
-        additional_requirements=effective_reqs,
+        additional_requirements=requested_reqs,
         screening_pack_template=(data.screening_pack_template.model_dump() if data.screening_pack_template else None),
         tech_interview_pack_template=(data.tech_interview_pack_template.model_dump() if data.tech_interview_pack_template else None),
         auto_reject_enabled=data.auto_reject_enabled,
@@ -69,6 +86,8 @@ def create_role(
         workable_actor_member_id=(data.workable_actor_member_id or None),
         workable_disqualify_reason_id=(data.workable_disqualify_reason_id or None),
         auto_reject_note_template=(data.auto_reject_note_template or None),
+        monthly_usd_budget_cents=monthly_budget_cents,
+        score_threshold=score_threshold,
     )
     db.add(role)
     try:
