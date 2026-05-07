@@ -376,11 +376,17 @@ def health_check():
     except Exception:
         redis_ok = False
 
+    # Resend powers verification, password-reset, and team-invite emails.
+    # When the key is missing or set to "skip", on_after_register silently
+    # logs and returns — the user gets no email. Surface here so /health
+    # is the one place to confirm transactional email is wired.
+    resend_key = (settings.RESEND_API_KEY or "").strip().lower()
     integrations = {
         "e2b_configured": _is_configured_secret(settings.E2B_API_KEY),
         "claude_configured": _is_configured_secret(settings.ANTHROPIC_API_KEY),
         "workable_configured": _is_configured_secret(settings.WORKABLE_CLIENT_ID) and _is_configured_secret(settings.WORKABLE_CLIENT_SECRET),
         "stripe_configured": _is_configured_secret(settings.STRIPE_API_KEY),
+        "resend_configured": _is_configured_secret(settings.RESEND_API_KEY) and resend_key != "skip",
     }
 
     try:
