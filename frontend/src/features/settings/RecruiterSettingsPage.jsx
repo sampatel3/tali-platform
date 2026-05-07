@@ -461,25 +461,36 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setWorkableMembersLoading(true);
     setWorkableReasonsLoading(true);
     setWorkableStagesLoading(true);
-    try {
-      const [membersRes, reasonsRes, stagesRes] = await Promise.all([
-        orgsApi.getWorkableMembers(),
-        orgsApi.getWorkableDisqualificationReasons(),
-        orgsApi.getWorkableStages(),
-      ]);
-      setWorkableMembers(Array.isArray(membersRes?.data?.members) ? membersRes.data.members : []);
-      setWorkableReasons(Array.isArray(reasonsRes?.data?.disqualification_reasons) ? reasonsRes.data.disqualification_reasons : []);
-      setWorkableStages(Array.isArray(stagesRes?.data?.stages) ? stagesRes.data.stages : []);
-    } catch {
+    // Fetch each lookup independently so one failure doesn't blank out the
+    // others. Surface the failure as a toast so the recruiter can tell the
+    // difference between "Workable returned zero" and "the call errored."
+    const [membersRes, reasonsRes, stagesRes] = await Promise.allSettled([
+      orgsApi.getWorkableMembers(),
+      orgsApi.getWorkableDisqualificationReasons(),
+      orgsApi.getWorkableStages(),
+    ]);
+    if (membersRes.status === 'fulfilled') {
+      setWorkableMembers(Array.isArray(membersRes.value?.data?.members) ? membersRes.value.data.members : []);
+    } else {
       setWorkableMembers([]);
-      setWorkableReasons([]);
-      setWorkableStages([]);
-    } finally {
-      setWorkableMembersLoading(false);
-      setWorkableReasonsLoading(false);
-      setWorkableStagesLoading(false);
+      showToast(getErrorMessage(membersRes.reason, 'Failed to load Workable members.'), 'error');
     }
-  }, [orgData?.workable_connected]);
+    if (reasonsRes.status === 'fulfilled') {
+      setWorkableReasons(Array.isArray(reasonsRes.value?.data?.disqualification_reasons) ? reasonsRes.value.data.disqualification_reasons : []);
+    } else {
+      setWorkableReasons([]);
+      showToast(getErrorMessage(reasonsRes.reason, 'Failed to load Workable disqualification reasons.'), 'error');
+    }
+    if (stagesRes.status === 'fulfilled') {
+      setWorkableStages(Array.isArray(stagesRes.value?.data?.stages) ? stagesRes.value.data.stages : []);
+    } else {
+      setWorkableStages([]);
+      showToast(getErrorMessage(stagesRes.reason, 'Failed to load Workable stages.'), 'error');
+    }
+    setWorkableMembersLoading(false);
+    setWorkableReasonsLoading(false);
+    setWorkableStagesLoading(false);
+  }, [orgData?.workable_connected, showToast]);
 
   useEffect(() => {
     void loadOrg();
@@ -1698,6 +1709,11 @@ Disqualifying: No experience with regulated financial data`}
                           return <option key={reasonId} value={reasonId}>{workableReasonLabel(reason)}</option>;
                         })}
                       </select>
+                      {!workableReasonsLoading && workableReasons.length === 0 && (
+                        <span className="settings-inline-note">
+                          No disqualification reasons found in Workable. Add one in Workable&nbsp;Settings &rarr; Recruiting &rarr; Disqualification reasons (and attach a &ldquo;Disqualification message&rdquo; automated action), then refresh this page.
+                        </span>
+                      )}
                     </label>
                     <label className="field">
                       <span className="k">Auto-reject threshold (0-100)</span>
