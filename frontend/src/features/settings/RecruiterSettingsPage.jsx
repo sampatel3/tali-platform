@@ -227,6 +227,10 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const navigate = useNavigate();
   const sectionRefs = useRef({});
   const workableSyncPollRef = useRef(null);
+  // One-shot guard: auto-default the disqualification reason at most once
+  // per page load. Without this the effect would refire on every reasons
+  // refresh and re-write the same value.
+  const workableReasonAutoDefaultedRef = useRef(false);
 
   // HANDOFF v2 §11 — Settings is one page with internal anchor scroll.
   // We still derive the initial section from the URL path so legacy
@@ -491,6 +495,57 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setWorkableReasonsLoading(false);
     setWorkableStagesLoading(false);
   }, [orgData?.workable_connected, showToast]);
+
+  // Auto-default the Workable disqualification reason. Every Workable
+  // workspace ships with at least one default reason ("Position filled",
+  // "Not qualified", etc.), so making the recruiter pick one before the
+  // reject path can fire emails is unnecessary friction. When reasons
+  // load and the org has no reason configured, pick the first one and
+  // persist immediately so the integration "just works" — recruiter can
+  // change the choice in settings later. Critically, the *email-firing*
+  // automated action in Workable still has to be attached to whichever
+  // reason ends up selected, so we surface a toast that nudges them to
+  // verify.
+  useEffect(() => {
+    if (workableReasonAutoDefaultedRef.current) return;
+    if (workableReasonsLoading) return;
+    if (workableReasons.length === 0) return;
+    if (!orgData?.workable_connected) return;
+    const currentValue = String(workableForm.workableDisqualifyReasonId || '').trim();
+    const persistedValue = String(orgData?.workable_config?.workable_disqualify_reason_id || '').trim();
+    if (currentValue || persistedValue) return;
+    const firstReason = workableReasons[0] || {};
+    const firstReasonId = String(firstReason?.id || firstReason?.reason_id || '').trim();
+    if (!firstReasonId) return;
+    workableReasonAutoDefaultedRef.current = true;
+    setWorkableForm((prev) => ({ ...prev, workableDisqualifyReasonId: firstReasonId }));
+    // Persist quietly. We send only this single field — the org PATCH
+    // merges into existing workable_config so other fields are unaffected.
+    const reasonLabel = workableReasonLabel(firstReason);
+    (async () => {
+      try {
+        await orgsApi.update({
+          workable_config: { workable_disqualify_reason_id: firstReasonId },
+        });
+        showToast(
+          `Defaulted disqualification reason to "${reasonLabel}". Verify it has a "Disqualification message" automated action in Workable, or change the reason here.`,
+          'success',
+        );
+      } catch (error) {
+        showToast(
+          getErrorMessage(error, 'Failed to auto-default the disqualification reason. Pick one and save manually.'),
+          'error',
+        );
+      }
+    })();
+  }, [
+    workableReasons,
+    workableReasonsLoading,
+    orgData?.workable_connected,
+    orgData?.workable_config?.workable_disqualify_reason_id,
+    workableForm.workableDisqualifyReasonId,
+    showToast,
+  ]);
 
   useEffect(() => {
     void loadOrg();
