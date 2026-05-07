@@ -46,6 +46,16 @@ class Organization(Base):
     # CV scoring. Auto-copied into role.additional_requirements on role
     # create (manual + Workable import) when the role's own value is empty.
     default_additional_requirements = Column(Text, nullable=True)
+    # Settings → AI agent defaults (HANDOFF settings.md). Each is read once at
+    # role-create time; per-role overrides win and existing roles are never
+    # rewritten when these change.
+    default_role_requirements = Column(JSON, nullable=True)
+    default_role_budget_cents = Column(Integer, nullable=True)
+    default_score_threshold = Column(Integer, nullable=True)
+    # Workspace-wide spend cap (cents). When projected month-end > cap, the
+    # agent pauses new invites — surfaced via the "Spend over budget"
+    # notification. NULL means no cap configured.
+    monthly_spend_cap_cents = Column(Integer, nullable=True)
     workspace_settings = Column(JSON, nullable=True)
     scoring_policy = Column(JSON, nullable=True)
     ai_tooling_config = Column(JSON, nullable=True)

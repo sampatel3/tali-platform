@@ -154,6 +154,24 @@ def _merge_notification_preferences(org: Organization, incoming: OrgUpdate) -> d
     return NotificationPreferences(**{**base, **updates}).model_dump()
 
 
+def _resolved_workable_mode(org: Organization) -> str:
+    """Map the underlying email_mode + granted_scopes onto the UI-facing
+    two-way / read-only label introduced in the settings redesign."""
+    config = _resolved_workable_config(org)
+    granted = config.get("granted_scopes") or []
+    email_mode = str(config.get("email_mode") or "manual_taali")
+    if email_mode == "workable_preferred_fallback_manual" and "w_candidates" in granted:
+        return "two_way"
+    return "read_only"
+
+
+def _resolved_role_requirements(org: Organization) -> list[str]:
+    raw = getattr(org, "default_role_requirements", None)
+    if isinstance(raw, list):
+        return [str(item).strip() for item in raw if str(item).strip()]
+    return []
+
+
 def _org_response_payload(org: Organization) -> OrgResponse:
     response = OrgResponse.model_validate(org)
     response.workable_config = WorkableConfigBase(**_resolved_workable_config(org))
@@ -162,6 +180,8 @@ def _org_response_payload(org: Organization) -> OrgResponse:
     response.scoring_policy = ScoringPolicy(**_resolved_scoring_policy(org))
     response.ai_tooling_config = AiToolingConfig(**_resolved_ai_tooling_config(org))
     response.notification_preferences = NotificationPreferences(**_resolved_notification_preferences(org))
+    response.default_role_requirements = _resolved_role_requirements(org)
+    response.workable_mode = _resolved_workable_mode(org)
     return response
 
 
@@ -294,6 +314,23 @@ def update_my_org(
     if data.default_additional_requirements is not None:
         default_reqs = (data.default_additional_requirements or "").strip()
         org.default_additional_requirements = default_reqs or None
+    if data.default_role_requirements is not None:
+        cleaned = [
+            str(item).strip()
+            for item in data.default_role_requirements
+            if str(item).strip()
+        ]
+        # Mirror the cleaned list into the legacy free-text column so the CV
+        # scorer (which still reads default_additional_requirements) sees the
+        # same content. The new field is the source of truth for the UI.
+        org.default_role_requirements = cleaned
+        org.default_additional_requirements = "\n".join(cleaned) or None
+    if data.default_role_budget_cents is not None:
+        org.default_role_budget_cents = max(0, int(data.default_role_budget_cents))
+    if data.default_score_threshold is not None:
+        org.default_score_threshold = max(0, min(100, int(data.default_score_threshold)))
+    if data.monthly_spend_cap_cents is not None:
+        org.monthly_spend_cap_cents = max(0, int(data.monthly_spend_cap_cents))
     if org.saml_enabled and not org.saml_metadata_url:
         raise HTTPException(status_code=400, detail="saml_metadata_url is required when saml_enabled is true")
     try:

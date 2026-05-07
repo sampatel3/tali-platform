@@ -1,7 +1,7 @@
 from datetime import datetime
-from typing import List, Literal, Optional
+from typing import Any, List, Literal, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class WorkableConfigBase(BaseModel):
@@ -128,6 +128,10 @@ class NotificationPreferences(BaseModel):
     daily_digest: bool = True
     panel_reminders: bool = True
     sync_failures: bool = True
+    # HANDOFF settings.md — six toggles. The two new ones are workspace-
+    # wide alerts that fire from the agent loop, not the recruiter UI.
+    spend_over_budget: bool = True
+    agent_paused: bool = True
 
 
 class NotificationPreferencesUpdate(BaseModel):
@@ -135,6 +139,8 @@ class NotificationPreferencesUpdate(BaseModel):
     daily_digest: Optional[bool] = None
     panel_reminders: Optional[bool] = None
     sync_failures: Optional[bool] = None
+    spend_over_budget: Optional[bool] = None
+    agent_paused: Optional[bool] = None
 
 
 class OrgResponse(BaseModel):
@@ -156,6 +162,17 @@ class OrgResponse(BaseModel):
     default_assessment_duration_minutes: int = 30
     invite_email_template: Optional[str] = None
     default_additional_requirements: Optional[str] = None
+    # Settings → AI agent defaults (HANDOFF settings.md). New roles inherit
+    # these; existing roles aren't rewritten when defaults change.
+    default_role_requirements: List[str] = Field(default_factory=list)
+    default_role_budget_cents: Optional[int] = None
+    default_score_threshold: Optional[int] = None
+    # Workspace-wide spend cap (cents). NULL = no cap.
+    monthly_spend_cap_cents: Optional[int] = None
+    # Convenience alias surfaced to the UI: ``two_way`` when granted_scopes
+    # includes ``w_candidates``, otherwise ``read_only``. Renamed from the
+    # legacy ``hybrid | manual`` for clarity in copy.
+    workable_mode: Literal["two_way", "read_only"] = "read_only"
     workspace_settings: WorkspaceSettings = Field(default_factory=WorkspaceSettings)
     scoring_policy: ScoringPolicy = Field(default_factory=ScoringPolicy)
     ai_tooling_config: AiToolingConfig = Field(default_factory=AiToolingConfig)
@@ -166,6 +183,18 @@ class OrgResponse(BaseModel):
     saml_metadata_url: Optional[str] = None
     candidate_feedback_enabled: bool = True
     created_at: datetime
+
+    @field_validator("default_role_requirements", mode="before")
+    @classmethod
+    def _coerce_requirements(cls, value: Any) -> list[str]:
+        # The DB column is nullable JSON; orgs that predate the settings
+        # redesign return None here. Coerce to an empty list so the typed
+        # response stays valid.
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return []
 
     model_config = {"from_attributes": True}
 
@@ -186,6 +215,14 @@ class OrgUpdate(BaseModel):
     default_assessment_duration_minutes: Optional[int] = Field(default=None, ge=15, le=180)
     invite_email_template: Optional[str] = Field(default=None, max_length=10000)
     default_additional_requirements: Optional[str] = Field(default=None, max_length=12000)
+    # Settings → AI agent defaults. ``default_role_requirements`` is a list
+    # of short human-readable strings (one per requirement) that pre-fill the
+    # must-haves on every new role. The list is bounded so a stray paste
+    # can't blow up the JSON column.
+    default_role_requirements: Optional[List[str]] = Field(default=None, max_length=200)
+    default_role_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    default_score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
+    monthly_spend_cap_cents: Optional[int] = Field(default=None, ge=0, le=100_000_000)
 
 
 class WorkableConnect(BaseModel):

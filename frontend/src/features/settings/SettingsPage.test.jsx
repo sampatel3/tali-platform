@@ -22,6 +22,8 @@ vi.mock('../../shared/api', () => ({
     usage: vi.fn(),
     costs: vi.fn(),
     credits: vi.fn(),
+    usageBreakdown: vi.fn(),
+    usageEvents: vi.fn(),
     createCheckoutSession: vi.fn(),
   },
   team: {
@@ -47,7 +49,7 @@ vi.mock('../../context/ToastContext', () => ({
   useToast: () => ({ showToast }),
 }));
 
-import { organizations as orgsApi, team as teamApi } from '../../shared/api';
+import { billing as billingApi, organizations as orgsApi, team as teamApi } from '../../shared/api';
 import { SettingsPage } from './SettingsPage';
 
 const baseOrgData = {
@@ -62,31 +64,26 @@ const baseOrgData = {
   saml_enabled: false,
   saml_metadata_url: '',
   workable_connected: false,
+  workable_mode: 'read_only',
   workspace_settings: {
     candidate_facing_brand: 'DeepLight · Engineering',
     primary_domain: 'deeplight.ai',
     locale: 'English (US)',
   },
-  scoring_policy: {
-    prompt_quality: true,
-    error_recovery: true,
-    independence: true,
-    context_utilization: true,
-    design_thinking: true,
-    time_to_first_signal: false,
-  },
-  ai_tooling_config: {
-    claude_enabled: true,
-    cursor_inline_enabled: false,
-    no_ai_baseline_enabled: true,
-    claude_credit_per_candidate_usd: 12,
-    session_timeout_minutes: 60,
-  },
+  // Settings redesign — replaces the old scoring/ai-tooling configuration
+  // surface. Tests below assert this is the only place in the UI where
+  // these three workspace defaults can be set.
+  default_role_requirements: ['5+ years backend', 'Strong SQL'],
+  default_role_budget_cents: 20000,
+  default_score_threshold: 70,
+  monthly_spend_cap_cents: null,
   notification_preferences: {
     candidate_updates: true,
     daily_digest: true,
     panel_reminders: true,
     sync_failures: true,
+    spend_over_budget: true,
+    agent_paused: true,
   },
   fireflies_config: {
     connected: false,
@@ -116,6 +113,11 @@ describe('SettingsPage recruiter surface', () => {
     orgsApi.getWorkableMembers.mockResolvedValue({ data: { members: [] } });
     orgsApi.getWorkableDisqualificationReasons.mockResolvedValue({ data: { disqualification_reasons: [] } });
     orgsApi.getWorkableStages.mockResolvedValue({ data: { stages: [] } });
+    billingApi.usage.mockResolvedValue({ data: { usage: [], total_cost: 0 } });
+    billingApi.costs.mockResolvedValue({ data: { total_cost_usd: 0 } });
+    billingApi.credits.mockResolvedValue({ data: { credits_balance: 0, packs: [] } });
+    billingApi.usageBreakdown.mockResolvedValue({ data: { by_feature: [] } });
+    billingApi.usageEvents.mockResolvedValue({ data: { events: [] } });
     teamApi.list.mockResolvedValue({ data: [] });
     teamApi.invite.mockResolvedValue({ data: { id: 22, email: 'new@deeplight.ai', full_name: 'New Recruiter' } });
   });
@@ -132,57 +134,53 @@ describe('SettingsPage recruiter surface', () => {
     expect(screen.getByRole('button', { name: 'Save invite template' })).toBeInTheDocument();
   });
 
-  it('saves AI tooling settings from the Agent & AI tooling section', async () => {
+  it('saves the three workspace defaults from the AI agent tab', async () => {
+    renderSettingsRoute('/settings/agent');
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /AI agent/i })).toBeInTheDocument();
+    });
+    // Wait for the seeded list to land in the form so the save click sees
+    // the same values as the user.
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('5+ years backend')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Save agent defaults' }));
+
+    await waitFor(() => {
+      expect(orgsApi.update).toHaveBeenCalledWith({
+        default_role_requirements: ['5+ years backend', 'Strong SQL'],
+        default_role_budget_cents: 20000,
+        default_score_threshold: 70,
+      });
+    });
+    expect(showToast).toHaveBeenCalledWith('Agent defaults saved.', 'success');
+  });
+
+  it('legacy /settings/ai and /settings/scoring deep links land on the agent tab', async () => {
     renderSettingsRoute('/settings/ai');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /Agent & AI tooling/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /AI agent/i })).toBeInTheDocument();
     });
-
-    const durationInput = screen.getByLabelText(/Default assessment duration/i);
-    fireEvent.change(durationInput, {
-      target: { value: '45' },
-    });
-    await waitFor(() => {
-      expect(durationInput).toHaveValue(45);
-    });
-    fireEvent.click(screen.getByRole('button', { name: 'Save AI tooling' }));
-
-    await waitFor(() => {
-      expect(orgsApi.update).toHaveBeenCalledWith({
-        ai_tooling_config: {
-          claude_enabled: true,
-          cursor_inline_enabled: false,
-          no_ai_baseline_enabled: true,
-          claude_credit_per_candidate_usd: 12,
-          session_timeout_minutes: 60,
-          // Settings → AI tooling now also persists the org-default agent
-          // panel state (HANDOFF Phase 5). Null when no defaults staged.
-          agent_defaults: null,
-        },
-        default_assessment_duration_minutes: 45,
-      });
-    });
-    expect(showToast).toHaveBeenCalledWith('AI tooling settings saved.', 'success');
   });
 
-  it('saves scoring policy toggles', async () => {
-    renderSettingsRoute('/settings/scoring');
+  it('renders the new Members tab heading and role chips', async () => {
+    teamApi.list.mockResolvedValue({
+      data: [
+        { id: 7, email: 'iris@deeplight.ai', full_name: 'Iris Park', is_email_verified: true, role: 'Recruiter' },
+      ],
+    });
+    renderSettingsRoute('/settings/members');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /Scoring policy/i })).toBeInTheDocument();
+      expect(screen.getAllByRole('heading', { name: /Members/i }).length).toBeGreaterThan(0);
     });
-
-    fireEvent.click(screen.getAllByRole('button', { pressed: true })[0]);
-    fireEvent.click(screen.getByRole('button', { name: 'Save scoring policy' }));
-
     await waitFor(() => {
-      expect(orgsApi.update).toHaveBeenCalledWith({
-        scoring_policy: expect.objectContaining({
-          prompt_quality: false,
-        }),
-      });
+      expect(screen.getByText('Iris Park')).toBeInTheDocument();
     });
+    expect(screen.getByText('Recruiter')).toBeInTheDocument();
   });
 
   it('shows write-back settings from granted scopes and requires an actor member before saving', async () => {
@@ -228,7 +226,7 @@ describe('SettingsPage recruiter surface', () => {
     expect(orgsApi.update).not.toHaveBeenCalled();
   });
 
-  it('blocks automated write-back settings when w_candidates scope is not granted', async () => {
+  it('blocks two-way Workable mode when w_candidates scope is not granted', async () => {
     orgsApi.get.mockResolvedValueOnce({
       data: {
         ...baseOrgData,
@@ -252,7 +250,8 @@ describe('SettingsPage recruiter surface', () => {
       expect(screen.getByRole('heading', { name: /Workable integration/i })).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByRole('button', { name: /Workable hybrid/i }));
+    // The mode card was renamed hybrid|manual → two_way|read_only.
+    fireEvent.click(screen.getByRole('button', { name: /Two-way/i }));
     fireEvent.click(screen.getByRole('button', { name: 'Save Workable Settings' }));
 
     await waitFor(() => {
@@ -343,5 +342,16 @@ describe('SettingsPage recruiter surface', () => {
         },
       });
     });
+  });
+
+  it('renders the Security tab with SAML, 2FA and audit log entry', async () => {
+    renderSettingsRoute('/settings/security');
+
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: /Security/i })).toBeInTheDocument();
+    });
+    expect(screen.getAllByText(/Two-factor authentication/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole('link', { name: /Open audit log/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/SAML SSO/i).length).toBeGreaterThan(0);
   });
 });

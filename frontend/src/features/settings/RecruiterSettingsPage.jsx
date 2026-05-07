@@ -10,7 +10,6 @@ import { useAuth } from '../../context/AuthContext';
 import { useToast } from '../../context/ToastContext';
 import { aedToUsd, formatAed } from '../../lib/currency';
 import { organizations as orgsApi, billing as billingApi, team as teamApi } from '../../shared/api';
-import { AgentSettingsPanel } from '../../shared/layout/AgentSettingsPanel';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
 import {
   Button,
@@ -39,26 +38,16 @@ const DEFAULT_WORKSPACE_SETTINGS = {
   primary_domain: '',
   locale: 'English (US)',
 };
-const DEFAULT_SCORING_POLICY = {
-  prompt_quality: true,
-  error_recovery: true,
-  independence: true,
-  context_utilization: true,
-  design_thinking: true,
-  time_to_first_signal: false,
-};
-const DEFAULT_AI_TOOLING_CONFIG = {
-  claude_enabled: true,
-  cursor_inline_enabled: false,
-  no_ai_baseline_enabled: true,
-  claude_credit_per_candidate_usd: 12,
-  session_timeout_minutes: 60,
-};
+// HANDOFF settings.md — Notifications tab covers 6 toggles. The two
+// new keys (spend_over_budget, agent_paused) are persisted in the same
+// notification_preferences JSON column the backend already accepts.
 const DEFAULT_NOTIFICATION_PREFERENCES = {
   candidate_updates: true,
   daily_digest: true,
   panel_reminders: true,
   sync_failures: true,
+  spend_over_budget: true,
+  agent_paused: true,
 };
 const DEFAULT_FIRELIES_FORM = {
   apiKey: '',
@@ -67,9 +56,10 @@ const DEFAULT_FIRELIES_FORM = {
   inviteEmail: '',
   singleAccountMode: true,
 };
-// `team` collapses the old `members` + `roles` tabs into a single
-// section. Legacy URLs (/settings/members, /settings/roles) still
-// resolve here so any bookmarked link keeps working.
+// HANDOFF settings.md — final 10-tab layout. Aliases map every legacy URL
+// (the v3 `team` / `scoring` / `ai` / `sso` paths, plus a few even older
+// names) onto the new canonical tab keys so bookmarked deep-links keep
+// working.
 const SECTION_ALIASES = {
   '': 'org',
   org: 'org',
@@ -77,15 +67,17 @@ const SECTION_ALIASES = {
   workable: 'workable',
   billing: 'billing',
   usage: 'usage',
-  team: 'team',
-  members: 'team',
-  roles: 'team',
-  access: 'team',
-  enterprise: 'sso',
-  sso: 'sso',
-  scoring: 'scoring',
-  ai: 'ai',
-  agent: 'ai',
+  team: 'members',
+  members: 'members',
+  roles: 'members',
+  access: 'members',
+  enterprise: 'security',
+  sso: 'security',
+  saml: 'security',
+  security: 'security',
+  scoring: 'agent',
+  ai: 'agent',
+  agent: 'agent',
   preferences: 'email',
   api: 'email',
   email: 'email',
@@ -196,6 +188,108 @@ const ToggleCard = ({ title, description, checked, onChange, badge = null }) => 
   </div>
 );
 
+// HANDOFF settings.md — AI agent tab. The whole tab is exactly three
+// fields: a repeating list of must-have strings, a single dollar budget
+// every new role inherits, and a 0..100 score threshold below which
+// candidates land in recruiter review. No rubric editor, no model
+// picker, no token cap UI — those are product decisions, not customer
+// configuration.
+const AgentDefaultsForm = ({ requirements, budgetUsd, threshold, onChange }) => {
+  const items = Array.isArray(requirements) ? requirements : [];
+  const updateAt = (index, value) => {
+    const next = items.slice();
+    next[index] = value;
+    onChange({ requirements: next });
+  };
+  const removeAt = (index) => {
+    const next = items.slice();
+    next.splice(index, 1);
+    onChange({ requirements: next });
+  };
+  const addItem = () => {
+    onChange({ requirements: [...items, ''] });
+  };
+  return (
+    <div className="settings-subgrid">
+      <div className="settings-subcard">
+        <div className="settings-subcard-head">
+          <div>
+            <h3>Default role requirements</h3>
+            <p>Pre-fills the must-haves on every new role. Recruiters edit per role from the role page.</p>
+          </div>
+        </div>
+        <div className="agent-defaults-list">
+          {items.length === 0 ? (
+            <div className="settings-empty-state">No defaults yet — add a few must-haves new roles should inherit.</div>
+          ) : null}
+          {items.map((value, index) => (
+            <div key={index} className="agent-defaults-row">
+              <input
+                aria-label={`Default requirement ${index + 1}`}
+                value={value}
+                onChange={(event) => updateAt(index, event.target.value)}
+                placeholder="e.g. 5+ years building data pipelines on AWS"
+                maxLength={400}
+              />
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                onClick={() => removeAt(index)}
+                aria-label={`Remove default requirement ${index + 1}`}
+              >
+                Remove
+              </button>
+            </div>
+          ))}
+        </div>
+        <button type="button" className="btn btn-outline btn-sm" onClick={addItem}>
+          + Add requirement
+        </button>
+      </div>
+
+      <div className="settings-subcard">
+        <div className="settings-subcard-head">
+          <div>
+            <h3>Default budget per role</h3>
+            <p>Cap the agent will respect on each new role until a recruiter changes it. Resets monthly.</p>
+          </div>
+        </div>
+        <label className="field">
+          <span className="k">Default budget (USD/month)</span>
+          <input
+            type="number"
+            min={0}
+            step="1"
+            value={budgetUsd}
+            onChange={(event) => onChange({ budgetUsd: event.target.value })}
+            placeholder="200"
+          />
+        </label>
+      </div>
+
+      <div className="settings-subcard">
+        <div className="settings-subcard-head">
+          <div>
+            <h3>Default score threshold</h3>
+            <p>Minimum total score on a new role's auto-shortlist. Below = flagged for recruiter review.</p>
+          </div>
+        </div>
+        <label className="field">
+          <span className="k">Threshold ({Math.max(0, Math.min(100, Number(threshold) || 0))}/100)</span>
+          <input
+            type="range"
+            min={0}
+            max={100}
+            value={Math.max(0, Math.min(100, Number(threshold) || 0))}
+            onChange={(event) => onChange({ threshold: Number(event.target.value) })}
+            aria-label="Default score threshold"
+          />
+        </label>
+      </div>
+    </div>
+  );
+};
+
 const SettingsNavLink = ({ active, label, onClick }) => (
   <button
     type="button"
@@ -244,32 +338,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [orgLoading, setOrgLoading] = useState(true);
   const [workspaceForm, setWorkspaceForm] = useState(DEFAULT_WORKSPACE_SETTINGS);
   const [workspaceSaving, setWorkspaceSaving] = useState(false);
-  const [scoringPolicyForm, setScoringPolicyForm] = useState(DEFAULT_SCORING_POLICY);
-  const [scoringSaving, setScoringSaving] = useState(false);
-  const [aiToolingForm, setAiToolingForm] = useState({
-    ...DEFAULT_AI_TOOLING_CONFIG,
-    defaultAssessmentMinutes: 30,
-  });
-  const [aiSaving, setAiSaving] = useState(false);
-  // Org-default agent settings drawer (HANDOFF Phase 5 — Settings → AI tooling
-  // embeds the same panel used on the role detail "Agent settings" tab, but
-  // scoped to org defaults). State lives here so the form's onChange persists
-  // to the same orgData.ai_tooling_config blob that handleSaveAiTooling writes.
-  const [agentDefaultsOpen, setAgentDefaultsOpen] = useState(false);
-  const agentDefaultsValue = useMemo(() => {
-    const cfg = orgData?.ai_tooling_config?.agent_defaults || {};
-    return {
-      enabled: cfg.enabled !== false,
-      budget_cents: Number.isFinite(cfg.budget_cents) ? cfg.budget_cents : 5000,
-      pause_threshold_pct: Number.isFinite(cfg.pause_threshold_pct) ? cfg.pause_threshold_pct : 80,
-      autonomy: {
-        auto_invite_above: cfg.autonomy?.auto_invite_above !== false,
-        auto_reject_below: cfg.autonomy?.auto_reject_below !== false,
-        auto_advance_high_score: Boolean(cfg.autonomy?.auto_advance_high_score),
-        passive_outbound: Boolean(cfg.autonomy?.passive_outbound),
-      },
-    };
-  }, [orgData?.ai_tooling_config?.agent_defaults]);
   const [notificationPreferencesForm, setNotificationPreferencesForm] = useState(DEFAULT_NOTIFICATION_PREFERENCES);
   const [notificationsSaving, setNotificationsSaving] = useState(false);
   const [accessForm, setAccessForm] = useState({
@@ -296,8 +364,20 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [emailTemplatePreview, setEmailTemplatePreview] = useState(DEFAULT_INVITE_TEMPLATE);
   const [apiSaving, setApiSaving] = useState(false);
-  const [defaultAdditionalRequirements, setDefaultAdditionalRequirements] = useState('');
-  const [defaultRequirementsSaving, setDefaultRequirementsSaving] = useState(false);
+  // HANDOFF settings.md — AI agent tab. Three workspace-wide defaults
+  // every new role inherits. The textarea is one requirement per line.
+  const [agentDefaultsForm, setAgentDefaultsForm] = useState({
+    requirements: [],
+    budgetUsd: '',
+    threshold: 70,
+  });
+  const [agentDefaultsSaving, setAgentDefaultsSaving] = useState(false);
+  // Workspace spend cap (cents). Lives on the Billing tab and is enforced
+  // by the agent before it sends new invites.
+  const [spendCapForm, setSpendCapForm] = useState({ usd: '' });
+  const [spendCapSaving, setSpendCapSaving] = useState(false);
+  // 2FA + audit toggle on the Security tab. Persisted alongside SSO.
+  const [twoFactorRequired, setTwoFactorRequired] = useState(false);
   const [firefliesForm, setFirefliesForm] = useState(DEFAULT_FIRELIES_FORM);
   const [firefliesSaving, setFirefliesSaving] = useState(false);
   const [firefliesHasApiKey, setFirefliesHasApiKey] = useState(false);
@@ -489,7 +569,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     if (activeSection === 'billing') {
       void loadBilling();
     }
-    if (activeSection === 'team') {
+    if (activeSection === 'members') {
       void loadTeam();
     }
     if (activeSection === 'workable') {
@@ -514,16 +594,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       primary_domain: inferredPrimaryDomain,
       locale: workspaceSettings.locale || DEFAULT_WORKSPACE_SETTINGS.locale,
     });
-    setScoringPolicyForm({
-      ...DEFAULT_SCORING_POLICY,
-      ...(orgData.scoring_policy || {}),
-    });
-    const nextAiTooling = {
-      ...DEFAULT_AI_TOOLING_CONFIG,
-      ...(orgData.ai_tooling_config || {}),
-      defaultAssessmentMinutes: Number(orgData.default_assessment_duration_minutes || 30),
-    };
-    setAiToolingForm(nextAiTooling);
     setNotificationPreferencesForm({
       ...DEFAULT_NOTIFICATION_PREFERENCES,
       ...(orgData.notification_preferences || {}),
@@ -540,7 +610,33 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setEmailTemplatePreview(
       String(orgData.invite_email_template || '').trim() || DEFAULT_INVITE_TEMPLATE
     );
-    setDefaultAdditionalRequirements(String(orgData.default_additional_requirements || ''));
+    // Agent defaults — backend may send the new typed list; fall back to
+    // splitting the legacy text blob so workspaces predating the redesign
+    // still see their requirements.
+    const seedList = Array.isArray(orgData.default_role_requirements)
+      ? orgData.default_role_requirements.map((item) => String(item || '').trim()).filter(Boolean)
+      : String(orgData.default_additional_requirements || '')
+        .split('\n')
+        .map((line) => line.trim())
+        .filter(Boolean);
+    const seedBudgetCents = Number.isFinite(Number(orgData.default_role_budget_cents))
+      ? Number(orgData.default_role_budget_cents)
+      : null;
+    const seedThreshold = Number.isFinite(Number(orgData.default_score_threshold))
+      ? Number(orgData.default_score_threshold)
+      : 70;
+    setAgentDefaultsForm({
+      requirements: seedList,
+      budgetUsd: seedBudgetCents != null ? String((seedBudgetCents / 100).toFixed(2)) : '',
+      threshold: Math.max(0, Math.min(100, seedThreshold)),
+    });
+    const seedCapCents = Number.isFinite(Number(orgData.monthly_spend_cap_cents))
+      ? Number(orgData.monthly_spend_cap_cents)
+      : null;
+    setSpendCapForm({
+      usd: seedCapCents != null ? String((seedCapCents / 100).toFixed(2)) : '',
+    });
+    setTwoFactorRequired(Boolean(orgData.two_factor_required));
     const firefliesConfig = orgData.fireflies_config || {};
     setFirefliesForm({
       apiKey: '',
@@ -645,66 +741,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
-  const handleSaveScoringPolicy = async () => {
-    setScoringSaving(true);
-    try {
-      const res = await orgsApi.update({ scoring_policy: scoringPolicyForm });
-      setOrgData(res?.data || null);
-      showToast('Scoring policy saved.', 'success');
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to save scoring policy.'), 'error');
-    } finally {
-      setScoringSaving(false);
-    }
-  };
-
-  const handleSaveAiTooling = async () => {
-    setAiSaving(true);
-    try {
-      const res = await orgsApi.update({
-        ai_tooling_config: {
-          claude_enabled: Boolean(aiToolingForm.claude_enabled),
-          cursor_inline_enabled: Boolean(aiToolingForm.cursor_inline_enabled),
-          no_ai_baseline_enabled: Boolean(aiToolingForm.no_ai_baseline_enabled),
-          claude_credit_per_candidate_usd: Number(aiToolingForm.claude_credit_per_candidate_usd || 0),
-          session_timeout_minutes: Number(aiToolingForm.session_timeout_minutes || 60),
-          // Preserve any agent_defaults the panel has staged on this org so a
-          // form-save doesn't clobber drawer-saved values, and vice versa.
-          agent_defaults: orgData?.ai_tooling_config?.agent_defaults || null,
-        },
-        default_assessment_duration_minutes: Math.max(15, Math.min(180, Number(aiToolingForm.defaultAssessmentMinutes || 30))),
-      });
-      setOrgData(res?.data || null);
-      showToast('AI tooling settings saved.', 'success');
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to save AI tooling settings.'), 'error');
-    } finally {
-      setAiSaving(false);
-    }
-  };
-
-  const handleAgentDefaultsChange = async (next) => {
-    // Persist immediately on every drawer change so the panel feels live —
-    // the panel is built around optimistic UI elsewhere too.
-    setOrgData((prev) => {
-      const cfg = prev?.ai_tooling_config || {};
-      return {
-        ...(prev || {}),
-        ai_tooling_config: { ...cfg, agent_defaults: next },
-      };
-    });
-    try {
-      await orgsApi.update({
-        ai_tooling_config: {
-          ...(orgData?.ai_tooling_config || {}),
-          agent_defaults: next,
-        },
-      });
-    } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to save agent defaults.'), 'error');
-    }
-  };
-
   const handleSaveAccess = async () => {
     setAccessSaving(true);
     const domains = String(accessForm.allowedEmailDomains || '')
@@ -728,15 +764,19 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const handleSaveSso = async () => {
     setSsoSaving(true);
     try {
+      // The backend silently ignores keys it doesn't recognise (Pydantic
+      // strict-mode is off on OrgUpdate), so sending two_factor_required
+      // is safe even on workspaces that haven't shipped the column yet.
       const res = await orgsApi.update({
         sso_enforced: Boolean(ssoForm.ssoEnforced),
         saml_enabled: Boolean(ssoForm.samlEnabled),
         saml_metadata_url: String(ssoForm.samlMetadataUrl || '').trim() || null,
+        two_factor_required: Boolean(twoFactorRequired),
       });
       setOrgData(res?.data || null);
-      showToast('SSO / SAML settings saved.', 'success');
+      showToast('Security settings saved.', 'success');
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to save SSO / SAML settings.'), 'error');
+      showToast(getErrorMessage(error, 'Failed to save security settings.'), 'error');
     } finally {
       setSsoSaving(false);
     }
@@ -773,20 +813,43 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
   };
 
-  const handleSaveDefaultRequirements = async () => {
-    setDefaultRequirementsSaving(true);
-    const payload = {
-      default_additional_requirements:
-        String(defaultAdditionalRequirements || '').trim() || null,
-    };
+  const handleSaveAgentDefaults = async () => {
+    setAgentDefaultsSaving(true);
+    const cleanedRequirements = (agentDefaultsForm.requirements || [])
+      .map((item) => String(item || '').trim())
+      .filter(Boolean);
+    const budgetUsd = Number(agentDefaultsForm.budgetUsd);
+    const budgetCents = Number.isFinite(budgetUsd) && budgetUsd > 0
+      ? Math.round(budgetUsd * 100)
+      : null;
+    const threshold = Math.max(0, Math.min(100, Number(agentDefaultsForm.threshold) || 0));
     try {
-      const res = await orgsApi.update(payload);
-      setOrgData((prev) => ({ ...(prev || {}), ...(res?.data || {}) }));
-      showToast('Default scoring criteria saved.', 'success');
+      const res = await orgsApi.update({
+        default_role_requirements: cleanedRequirements,
+        default_role_budget_cents: budgetCents == null ? 0 : budgetCents,
+        default_score_threshold: threshold,
+      });
+      setOrgData(res?.data || null);
+      showToast('Agent defaults saved.', 'success');
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to save default scoring criteria.'), 'error');
+      showToast(getErrorMessage(error, 'Failed to save agent defaults.'), 'error');
     } finally {
-      setDefaultRequirementsSaving(false);
+      setAgentDefaultsSaving(false);
+    }
+  };
+
+  const handleSaveSpendCap = async () => {
+    setSpendCapSaving(true);
+    const usd = Number(spendCapForm.usd);
+    const cents = Number.isFinite(usd) && usd >= 0 ? Math.round(usd * 100) : 0;
+    try {
+      const res = await orgsApi.update({ monthly_spend_cap_cents: cents });
+      setOrgData(res?.data || null);
+      showToast('Spend cap saved.', 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to save spend cap.'), 'error');
+    } finally {
+      setSpendCapSaving(false);
     }
   };
 
@@ -1167,23 +1230,23 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
         {orgLoading ? renderLoadingState : (
           <div className="mc-settings">
-            {/* HANDOFF chat.md §1 — v4 switched Settings from a sticky
-                left rail to a horizontal pill-tab strip matching the
-                Jobs / Chat / Tasks tab vocabulary. Each tab is its own
-                focused page; only the active section renders below. */}
+            {/* HANDOFF settings.md — final 10-tab layout. Removed:
+                scoring (rubric is product IP), ai tooling (Claude is the
+                only LLM), api keys (no public API in v1). The agent tab
+                replaces the old scoring + assessment defaults with three
+                workspace-wide defaults inherited at role creation. */}
             <div className="mc-settings-tabs" role="tablist" aria-label="Settings sections">
               {[
                 { k: 'org', l: 'Organization' },
-                { k: 'team', l: 'Team & access' },
-                { k: 'scoring', l: 'Scoring' },
-                { k: 'ai', l: 'Agent & AI tooling' },
+                { k: 'members', l: 'Members' },
+                { k: 'agent', l: 'AI agent' },
                 { k: 'workable', l: 'Workable' },
                 { k: 'email', l: 'Email & transcripts' },
+                { k: 'notifications', l: 'Notifications' },
                 { k: 'billing', l: 'Billing' },
                 { k: 'usage', l: 'Usage' },
-                { k: 'notifications', l: 'Notifications' },
+                { k: 'security', l: 'Security' },
                 { k: 'jobs', l: 'Background jobs' },
-                { k: 'sso', l: 'SSO / SAML' },
               ].map((tab) => (
                 <button
                   key={tab.k}
@@ -1244,196 +1307,38 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.scoring = node; }} hidden={activeSection !== "scoring"}>
+              <div ref={(node) => { sectionRefs.current.agent = node; }} hidden={activeSection !== "agent"}>
                 <SectionPanel
-                  id="scoring"
-                  title="Scoring policy"
-                  subtitle="Default CV scoring criteria and assessment scoring dimensions."
+                  id="agent"
+                  title="AI agent"
+                  subtitle="Workspace-wide defaults inherited by every new role. Per-role overrides on the role page win — existing roles are not retroactively updated when these change."
                 >
-                  <div className="settings-subgrid">
-                    <div className="settings-subcard">
-                      <div className="settings-subcard-head">
-                        <div>
-                          <h3>Default scoring criteria</h3>
-                          <p>
-                            Auto-applied to every newly imported or created role. Recruiters can override per role from the role pipeline page.
-                          </p>
-                        </div>
-                      </div>
-                      <label className="field">
-                        <span className="k">Criteria (used by AI when scoring CVs)</span>
-                        <textarea
-                          rows={8}
-                          value={defaultAdditionalRequirements}
-                          onChange={(event) => setDefaultAdditionalRequirements(event.target.value)}
-                          placeholder={`One requirement per line. Prefix with the priority so the AI weighs it correctly.
-
-Examples:
-Must have: 5+ years building data pipelines on AWS
-Preferred: Banking or fintech background
-Nice to have: AWS Solutions Architect certification
-Constraint: Based in UAE (no remote)
-Disqualifying: No experience with regulated financial data`}
-                          maxLength={12000}
-                        />
-                      </label>
-                      <div className="settings-save-row">
-                        <div className="settings-inline-note">
-                          Existing roles keep their current criteria. New roles inherit this list when imported from Workable or created manually.
-                        </div>
-                        <button
-                          type="button"
-                          className="btn btn-purple btn-sm"
-                          onClick={handleSaveDefaultRequirements}
-                          disabled={defaultRequirementsSaving}
-                        >
-                          {defaultRequirementsSaving ? 'Saving...' : 'Save default criteria'}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="settings-toggle-list settings-top-gap">
-                    <ToggleCard
-                      title="Prompt quality"
-                      description="Reward scoped, single-decision prompts. Penalize vague requests."
-                      checked={scoringPolicyForm.prompt_quality}
-                      onChange={(value) => setScoringPolicyForm((prev) => ({ ...prev, prompt_quality: value }))}
-                    />
-                    <ToggleCard
-                      title="Error recovery"
-                      description="Credit candidates who flag or reject incorrect AI output."
-                      checked={scoringPolicyForm.error_recovery}
-                      onChange={(value) => setScoringPolicyForm((prev) => ({ ...prev, error_recovery: value }))}
-                    />
-                    <ToggleCard
-                      title="Independence"
-                      description="Measure which parts of the final code were written by the human vs. the model."
-                      checked={scoringPolicyForm.independence}
-                      onChange={(value) => setScoringPolicyForm((prev) => ({ ...prev, independence: value }))}
-                    />
-                    <ToggleCard
-                      title="Context utilization"
-                      description="Track how AI suggestions are reviewed before being accepted."
-                      checked={scoringPolicyForm.context_utilization}
-                      onChange={(value) => setScoringPolicyForm((prev) => ({ ...prev, context_utilization: value }))}
-                    />
-                    <ToggleCard
-                      title="Design thinking"
-                      description="Credit decisions that connect the fix to its blast radius across the system."
-                      checked={scoringPolicyForm.design_thinking}
-                      onChange={(value) => setScoringPolicyForm((prev) => ({ ...prev, design_thinking: value }))}
-                    />
-                    <ToggleCard
-                      title="Time-to-first-signal"
-                      description="Include this in the composite score when you want stronger leveling signal."
-                      checked={scoringPolicyForm.time_to_first_signal}
-                      onChange={(value) => setScoringPolicyForm((prev) => ({ ...prev, time_to_first_signal: value }))}
-                    />
-                  </div>
+                  <AgentDefaultsForm
+                    requirements={agentDefaultsForm.requirements}
+                    budgetUsd={agentDefaultsForm.budgetUsd}
+                    threshold={agentDefaultsForm.threshold}
+                    onChange={(next) => setAgentDefaultsForm((prev) => ({ ...prev, ...next }))}
+                  />
                   <div className="settings-save-row">
-                    <div className="settings-inline-note">Changes apply to new assessments after today.</div>
-                    <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveScoringPolicy} disabled={scoringSaving}>
-                      {scoringSaving ? 'Saving...' : 'Save scoring policy'}
+                    <div className="settings-inline-note">
+                      Saved values seed the role page on every newly imported or created role.
+                    </div>
+                    <button
+                      type="button"
+                      className="btn btn-purple btn-sm"
+                      onClick={handleSaveAgentDefaults}
+                      disabled={agentDefaultsSaving}
+                    >
+                      {agentDefaultsSaving ? 'Saving...' : 'Save agent defaults'}
                     </button>
                   </div>
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.ai = node; }} hidden={activeSection !== "ai"}>
+              <div ref={(node) => { sectionRefs.current.members = node; }} hidden={activeSection !== "members"}>
                 <SectionPanel
-                  id="ai"
-                  title="Agent & AI tooling"
-                  subtitle="What candidates get during an assessment, plus the autonomous agent's defaults for new roles."
-                >
-                  <div className="settings-toggle-list">
-                    <ToggleCard
-                      title="AI coding assistant"
-                      description="Full IDE plus terminal access with an AI pair-programmer. Default for all assessments."
-                      checked={aiToolingForm.claude_enabled}
-                      onChange={(value) => setAiToolingForm((prev) => ({ ...prev, claude_enabled: value }))}
-                      badge={<span className="chip purple">ENABLED</span>}
-                    />
-                    <ToggleCard
-                      title="Inline autocomplete"
-                      description="Autocomplete only, without a chat pane. Useful for pure-craft roles."
-                      checked={aiToolingForm.cursor_inline_enabled}
-                      onChange={(value) => setAiToolingForm((prev) => ({ ...prev, cursor_inline_enabled: value }))}
-                    />
-                    <ToggleCard
-                      title="No-AI baseline"
-                      description="Run the same task without AI to calibrate collaboration lift per role."
-                      checked={aiToolingForm.no_ai_baseline_enabled}
-                      onChange={(value) => setAiToolingForm((prev) => ({ ...prev, no_ai_baseline_enabled: value }))}
-                    />
-                  </div>
-                  <div className="row-form settings-top-gap">
-                    <label className="field">
-                      <span className="k">AI credit per candidate (USD)</span>
-                      <input
-                        type="number"
-                        min={0}
-                        step="0.5"
-                        value={aiToolingForm.claude_credit_per_candidate_usd}
-                        onChange={(event) => setAiToolingForm((prev) => ({ ...prev, claude_credit_per_candidate_usd: event.target.value }))}
-                      />
-                    </label>
-                    <label className="field">
-                      <span className="k">Hard session timeout (minutes)</span>
-                      <input
-                        type="number"
-                        min={15}
-                        max={240}
-                        value={aiToolingForm.session_timeout_minutes}
-                        onChange={(event) => setAiToolingForm((prev) => ({ ...prev, session_timeout_minutes: event.target.value }))}
-                      />
-                    </label>
-                    <label className="field">
-                      <span className="k">Default assessment duration (minutes)</span>
-                      <input
-                        type="number"
-                        min={15}
-                        max={180}
-                        value={aiToolingForm.defaultAssessmentMinutes}
-                        onChange={(event) => setAiToolingForm((prev) => ({ ...prev, defaultAssessmentMinutes: event.target.value }))}
-                      />
-                    </label>
-                  </div>
-                  <div className="settings-save-row">
-                    <div className="settings-inline-note">Credit caps are per candidate, per assessment.</div>
-                    <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveAiTooling} disabled={aiSaving}>
-                      {aiSaving ? 'Saving...' : 'Save AI tooling'}
-                    </button>
-                  </div>
-
-                  {/* HANDOFF Phase 5 — embed the same agent panel used on
-                      role detail, scoped to org-wide defaults. Per-role
-                      overrides win over these defaults. */}
-                  <div className="settings-top-gap" style={{ borderTop: '1px solid var(--line)', paddingTop: 16 }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between', gap: 16 }}>
-                      <div>
-                        <div style={{ fontSize: 14, fontWeight: 600, color: 'var(--ink)' }}>Agent defaults</div>
-                        <div className="settings-inline-note" style={{ marginTop: 4 }}>
-                          Budget, autonomy, and pause threshold every new role inherits. Per-role
-                          overrides on the role detail's Agent settings tab win.
-                        </div>
-                      </div>
-                      <button
-                        type="button"
-                        className="btn btn-outline btn-sm"
-                        onClick={() => setAgentDefaultsOpen(true)}
-                      >
-                        Open agent defaults
-                      </button>
-                    </div>
-                  </div>
-                </SectionPanel>
-              </div>
-
-              <div ref={(node) => { sectionRefs.current.team = node; }} hidden={activeSection !== "team"}>
-                <SectionPanel
-                  id="team"
-                  title="Team & access"
+                  id="members"
+                  title="Members"
                   subtitle={`${teamMembers.length} ${teamMembers.length === 1 ? 'person' : 'people'} in this workspace.`}
                 >
                   <form className="settings-invite-form" onSubmit={handleInvite}>
@@ -1451,17 +1356,25 @@ Disqualifying: No experience with regulated financial data`}
                       </button>
                     </div>
                   </form>
+                  {/* HANDOFF settings.md — role assignment moved off the
+                      removed "Roles & access" tab onto a column on this
+                      table. We default to Owner / Admin / Recruiter /
+                      Hiring manager, with Owner/Admin able to manage
+                      others. */}
                   <div className="members">
                     {teamMembers.map((member) => {
                       const isSelf = member?.email === user?.email;
+                      const role = isSelf
+                        ? 'Owner'
+                        : (String(member?.role || '').trim() || (member?.is_email_verified ? 'Recruiter' : 'Invited'));
                       return (
                         <div key={member.id} className="mb">
                           <div className="av">{initialsFor(member.full_name || member.email)}</div>
                           <div className="who">
                             <b>{member.full_name || member.email}</b>
-                            <div>{isSelf ? 'owner · you' : (member.is_email_verified ? 'member' : 'invited')}</div>
+                            <div>{isSelf ? 'you' : (member?.email || '—')}</div>
                           </div>
-                          <span className="chip">{isSelf ? 'admin' : 'member'}</span>
+                          <span className="chip">{role}</span>
                           <button type="button" className="btn btn-outline btn-sm" disabled>
                             Manage
                           </button>
@@ -1614,28 +1527,32 @@ Disqualifying: No experience with regulated financial data`}
                     </div>
                   ) : null}
 
+                  {/* HANDOFF settings.md — sync mode renamed
+                      hybrid|manual → two_way|read_only for clarity in
+                      copy. The underlying email_mode + granted_scopes
+                      stay the same so existing roles keep working. */}
                   <div className="wk-grid settings-top-gap">
                     <div className={`wk-mode-card ${workableForm.emailMode === 'workable_preferred_fallback_manual' ? 'selected' : ''}`}>
                       <div>
-                        <h5>Workable hybrid</h5>
-                        <p>Taali invites, scores, and writes candidate activity back as private notes or stage actions.</p>
+                        <h5>Two-way</h5>
+                        <p>Taali invites, scores, and writes candidate activity back as private notes or stage actions. Requires the <code>w_candidates</code> scope.</p>
                       </div>
                       <button
                         type="button"
                         className={`sw ${workableForm.emailMode === 'workable_preferred_fallback_manual' ? 'on' : ''}`}
-                        aria-label="Workable hybrid"
+                        aria-label="Two-way"
                         onClick={() => setWorkableForm((prev) => ({ ...prev, emailMode: 'workable_preferred_fallback_manual' }))}
                       />
                     </div>
                     <div className={`wk-mode-card ${workableForm.emailMode === 'manual_taali' ? 'selected' : ''}`}>
                       <div>
-                        <h5>Manual</h5>
-                        <p>Workable stays read-only while Taali manages invites and review locally.</p>
+                        <h5>Read-only</h5>
+                        <p>Workable stays read-only while Taali manages invites and review locally. No write-backs.</p>
                       </div>
                       <button
                         type="button"
                         className={`sw ${workableForm.emailMode === 'manual_taali' ? 'on' : ''}`}
-                        aria-label="Manual"
+                        aria-label="Read-only"
                         onClick={() => setWorkableForm((prev) => ({ ...prev, emailMode: 'manual_taali', inviteStageName: '' }))}
                       />
                     </div>
@@ -1837,41 +1754,100 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.sso = node; }} hidden={activeSection !== "sso"}>
+              <div ref={(node) => { sectionRefs.current.security = node; }} hidden={activeSection !== "security"}>
                 <SectionPanel
-                  id="sso"
-                  title="SSO / SAML"
-                  subtitle="Identity provider enforcement and metadata configuration."
+                  id="security"
+                  title="Security"
+                  subtitle="SAML SSO, two-factor authentication, and the audit log entry point."
                 >
-                  <div className="settings-toggle-list">
-                    <ToggleCard
-                      title="Enforce SSO"
-                      description="Block password login and team invites. Provision access through your identity provider."
-                      checked={ssoForm.ssoEnforced}
-                      onChange={(value) => setSsoForm((prev) => ({ ...prev, ssoEnforced: value }))}
-                    />
-                    <ToggleCard
-                      title="Enable SAML metadata"
-                      description="Store SAML metadata so this workspace can be connected to an IdP."
-                      checked={ssoForm.samlEnabled}
-                      onChange={(value) => setSsoForm((prev) => ({ ...prev, samlEnabled: value }))}
-                    />
-                  </div>
-                  <div className="row-form settings-top-gap">
-                    <label className="field">
-                      <span className="k">SAML metadata URL</span>
-                      <input
-                        type="url"
-                        placeholder="https://idp.example.com/metadata.xml"
-                        value={ssoForm.samlMetadataUrl}
-                        onChange={(event) => setSsoForm((prev) => ({ ...prev, samlMetadataUrl: event.target.value }))}
+                  {/* HANDOFF settings.md — Security tab combines the
+                      legacy SSO / SAML page with a 2FA toggle and a link
+                      to the audit log. */}
+                  <div className="settings-subcard">
+                    <div className="settings-subcard-head">
+                      <div>
+                        <h3>SAML SSO</h3>
+                        <p>Pick a preset, paste your metadata URL, and toggle enforcement once verified.</p>
+                      </div>
+                    </div>
+                    <div className="row-form">
+                      <label className="field">
+                        <span className="k">Identity provider</span>
+                        <select
+                          defaultValue={String(orgData?.saml_provider || '').trim() || 'okta'}
+                          onChange={() => { /* preset is informational; metadata URL is the source of truth */ }}
+                        >
+                          <option value="okta">Okta</option>
+                          <option value="azure_ad">Azure AD</option>
+                          <option value="google">Google Workspace</option>
+                          <option value="onelogin">OneLogin</option>
+                          <option value="custom">Custom (any SAML 2.0 IdP)</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span className="k">SAML metadata URL</span>
+                        <input
+                          type="url"
+                          placeholder="https://idp.example.com/metadata.xml"
+                          value={ssoForm.samlMetadataUrl}
+                          onChange={(event) => setSsoForm((prev) => ({ ...prev, samlMetadataUrl: event.target.value }))}
+                        />
+                      </label>
+                    </div>
+                    <div className="settings-toggle-list settings-top-gap">
+                      <ToggleCard
+                        title="Enable SAML metadata"
+                        description="Store SAML metadata so this workspace can be connected to an IdP."
+                        checked={ssoForm.samlEnabled}
+                        onChange={(value) => setSsoForm((prev) => ({ ...prev, samlEnabled: value }))}
                       />
-                    </label>
+                      <ToggleCard
+                        title="Enforce SSO"
+                        description="Block password login and team invites. Provision access through your identity provider."
+                        checked={ssoForm.ssoEnforced}
+                        onChange={(value) => setSsoForm((prev) => ({ ...prev, ssoEnforced: value }))}
+                      />
+                    </div>
                   </div>
+
+                  <div className="settings-subcard settings-top-gap">
+                    <div className="settings-subcard-head">
+                      <div>
+                        <h3>Two-factor authentication</h3>
+                        <p>Require recruiters to confirm a second factor on every sign-in. Bypassed for SSO logins.</p>
+                      </div>
+                    </div>
+                    <div className="settings-toggle-list">
+                      <ToggleCard
+                        title="Require 2FA for password login"
+                        description="Time-based codes via authenticator app. Backup codes available from each member's profile."
+                        checked={twoFactorRequired}
+                        onChange={(value) => setTwoFactorRequired(value)}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="settings-subcard settings-top-gap">
+                    <div className="settings-subcard-head">
+                      <div>
+                        <h3>Audit log</h3>
+                        <p>Every recruiter action and every consequential agent decision is recorded.</p>
+                      </div>
+                    </div>
+                    <div className="settings-inline-actions">
+                      <a
+                        className="btn btn-outline btn-sm"
+                        href="/reporting?view=audit"
+                      >
+                        Open audit log →
+                      </a>
+                    </div>
+                  </div>
+
                   <div className="settings-save-row">
-                    <div className="settings-inline-note">SAML metadata is required when SAML is enabled.</div>
+                    <div className="settings-inline-note">SAML metadata is required when SAML is enabled. 2FA is workspace-wide.</div>
                     <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveSso} disabled={ssoSaving}>
-                      {ssoSaving ? 'Saving...' : 'Save SSO settings'}
+                      {ssoSaving ? 'Saving...' : 'Save security settings'}
                     </button>
                   </div>
                 </SectionPanel>
@@ -2022,7 +1998,7 @@ Disqualifying: No experience with regulated financial data`}
                 <SectionPanel
                   id="billing"
                   title="Billing"
-                  subtitle="Usage, credits, and spend thresholds for this workspace."
+                  subtitle="Pay-as-you-go via Stripe. Card on file, monthly cap, and recent invoices."
                 >
                   {billingLoading ? (
                     <div className="settings-loading-inline">
@@ -2031,7 +2007,17 @@ Disqualifying: No experience with regulated financial data`}
                     </div>
                   ) : (
                     <>
+                      {/* HANDOFF settings.md — Plan is hardcoded
+                          "Pay-as-you-go" — no plan picker. Card +
+                          spend cap + invoices are the three surfaces. */}
                       <div className="settings-billing-summary">
+                        <div className="settings-billing-card">
+                          <div className="settings-summary-label">Plan</div>
+                          <div className="settings-summary-value">Pay-as-you-go</div>
+                          <div className="settings-summary-note">
+                            Pre-screen at cost · Scoring &amp; assessments at usage-based pricing
+                          </div>
+                        </div>
                         <div className="settings-billing-card">
                           <div className="settings-summary-label">Current balance</div>
                           <div
@@ -2043,25 +2029,61 @@ Disqualifying: No experience with regulated financial data`}
                           <div className="settings-summary-note">
                             {balanceLow
                               ? 'Balance is running low — top up to keep scoring & assessments running.'
-                              : 'Pay-as-you-go usage pricing · USD'}
+                              : `${breakdownTotalEvents} billable AI ${breakdownTotalEvents === 1 ? 'request' : 'requests'} in the last 30 days.`}
                           </div>
                         </div>
                         <div className="settings-billing-card">
-                          <div className="settings-summary-label">Last 30 days</div>
-                          <div className="settings-summary-value">{formatUsd(breakdownTotalUsd)}</div>
-                          <div className="settings-summary-note">
-                            {breakdownTotalEvents} billable AI {breakdownTotalEvents === 1 ? 'request' : 'requests'} · see Usage for the per-product breakdown
+                          <div className="settings-summary-label">Card on file</div>
+                          <div className="settings-summary-value">
+                            {orgData?.stripe_customer_id ? 'Stripe customer' : 'No card yet'}
                           </div>
-                        </div>
-                        <div className="settings-billing-card">
-                          <div className="settings-summary-label">Plan</div>
-                          <div className="settings-summary-value">Pay-as-you-go</div>
                           <div className="settings-summary-note">
-                            Pre-screen at cost · Scoring &amp; assessments at usage-based pricing
+                            <a
+                              href="https://billing.stripe.com/p/login"
+                              target="_blank"
+                              rel="noreferrer noopener"
+                              style={{ color: 'var(--purple)' }}
+                            >
+                              Manage in Stripe →
+                            </a>
                           </div>
                         </div>
                       </div>
-                      <div className="settings-credit-packs">
+
+                      <div className="settings-subcard settings-top-gap">
+                        <div className="settings-subcard-head">
+                          <div>
+                            <h3>Monthly spend cap</h3>
+                            <p>Hard cap on workspace spend. When the projected month-end total exceeds this number, the agent pauses new invites and a "Spend over budget" notification fires.</p>
+                          </div>
+                        </div>
+                        <div className="row-form">
+                          <label className="field">
+                            <span className="k">Cap (USD/month)</span>
+                            <input
+                              type="number"
+                              min={0}
+                              step="10"
+                              value={spendCapForm.usd}
+                              onChange={(event) => setSpendCapForm({ usd: event.target.value })}
+                              placeholder="500"
+                            />
+                          </label>
+                        </div>
+                        <div className="settings-save-row">
+                          <div className="settings-inline-note">Leave blank to disable the cap.</div>
+                          <button
+                            type="button"
+                            className="btn btn-purple btn-sm"
+                            onClick={handleSaveSpendCap}
+                            disabled={spendCapSaving}
+                          >
+                            {spendCapSaving ? 'Saving...' : 'Save spend cap'}
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="settings-credit-packs settings-top-gap">
                         {creditPacks.length === 0 ? (
                           <div className="settings-summary-note" style={{ padding: '8px 0' }}>
                             No top-up packs available — contact support.
@@ -2088,7 +2110,7 @@ Disqualifying: No experience with regulated financial data`}
 
                       <div className="settings-usage-table">
                         <div className="settings-usage-head">
-                          <h3>Recent activity</h3>
+                          <h3>Recent invoices</h3>
                         </div>
                         <table>
                           <thead>
@@ -2163,6 +2185,18 @@ Disqualifying: No experience with regulated financial data`}
                       description="Alert the workspace if Workable or transcript syncs need attention."
                       checked={notificationPreferencesForm.sync_failures}
                       onChange={(value) => setNotificationPreferencesForm((prev) => ({ ...prev, sync_failures: value }))}
+                    />
+                    <ToggleCard
+                      title="Spend over budget"
+                      description="Fires when projected month-end spend exceeds the workspace cap. Pauses new agent invites until cleared."
+                      checked={notificationPreferencesForm.spend_over_budget}
+                      onChange={(value) => setNotificationPreferencesForm((prev) => ({ ...prev, spend_over_budget: value }))}
+                    />
+                    <ToggleCard
+                      title="Agent paused"
+                      description="Fires when the autonomous agent stops on its own — bad sample, recruiter intervention, or ratelimit."
+                      checked={notificationPreferencesForm.agent_paused}
+                      onChange={(value) => setNotificationPreferencesForm((prev) => ({ ...prev, agent_paused: value }))}
                     />
                   </div>
                   <div className="settings-save-row">
@@ -2289,13 +2323,6 @@ Disqualifying: No experience with regulated financial data`}
         </div>
       ) : null}
 
-      <AgentSettingsPanel
-        open={agentDefaultsOpen}
-        onClose={() => setAgentDefaultsOpen(false)}
-        scope="org"
-        value={agentDefaultsValue}
-        onChange={handleAgentDefaultsChange}
-      />
     </div>
   );
 };

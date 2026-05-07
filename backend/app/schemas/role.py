@@ -69,6 +69,8 @@ class RoleCreate(BaseModel):
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
     workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
     auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
+    monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
 
 
 class RoleUpdate(BaseModel):
@@ -89,6 +91,7 @@ class RoleUpdate(BaseModel):
     agent_decision_budget_per_cycle: Optional[int] = Field(default=None, ge=1, le=200)
     # Universal monthly USD cap (cents) for ALL Anthropic spend on the role.
     monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
+    score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
 
 
 class RoleCriterionResponse(BaseModel):
@@ -130,6 +133,7 @@ class RoleResponse(BaseModel):
     agent_token_budget_per_cycle: Optional[int] = None
     agent_decision_budget_per_cycle: Optional[int] = None
     monthly_usd_budget_cents: Optional[int] = None
+    score_threshold: Optional[int] = None
     agent_paused_at: Optional[datetime] = None
     agent_paused_reason: Optional[str] = None
     agent_last_run_at: Optional[datetime] = None

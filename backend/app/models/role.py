@@ -61,6 +61,11 @@ class Role(Base):
     # (scoring, pre-screen, assessment, agent). Required when activating
     # agentic mode; optional otherwise. Stored as cents.
     monthly_usd_budget_cents = Column(Integer, nullable=True)
+    # 0..100 minimum total score for the role's auto-shortlist. Below this
+    # threshold the candidate is flagged for recruiter review. Seeded from
+    # ``organization.default_score_threshold`` at role-create time; recruiter
+    # overrides on the role page win.
+    score_threshold = Column(Integer, nullable=True)
     agent_paused_at = Column(DateTime(timezone=True), nullable=True)
     agent_paused_reason = Column(Text, nullable=True)
     agent_last_run_at = Column(DateTime(timezone=True), nullable=True)
