@@ -133,9 +133,17 @@ def test_canonical_task_catalog_dir_points_to_backend_tasks():
     assert canonical_task_catalog_dir().as_posix().endswith("/backend/tasks")
 
 
-def test_canonical_task_catalog_contains_two_specs():
+def test_canonical_task_catalog_loads_all_shipped_specs():
     specs = load_task_specs(canonical_task_catalog_dir())
-    assert len(specs) == 2
+    expected_keys = {
+        "ai_eng_genai_production_readiness",
+        "data_eng_aws_glue_pipeline_recovery",
+        "platform_eng_aws_eks_misconfig_triage",
+        "platform_eng_azure_aks_misconfig_triage",
+        "scrum_master_sprint_recovery_scenario",
+    }
+    actual_keys = {spec["task_id"] for spec in specs}
+    assert actual_keys == expected_keys
 
 
 def test_candidate_rubric_view_excludes_criteria():

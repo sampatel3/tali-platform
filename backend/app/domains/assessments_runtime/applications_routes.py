@@ -902,6 +902,13 @@ def _upsert_application_interview(
             provider_meeting_id=provider_meeting_id,
         )
         db.add(interview)
+        # Append to the eagerly-loaded interviews collection so callers
+        # that iterate ``app.interviews`` (e.g. refresh_application_
+        # interview_support) see the new row before commit. Without this,
+        # the post-link cache would miss the just-created interview and
+        # report fireflies status="not_expected" until the next reload.
+        if interview not in (app.interviews or []):
+            app.interviews.append(interview)
         db.flush()
     interview.stage = stage
     interview.source = source

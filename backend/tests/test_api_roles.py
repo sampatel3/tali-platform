@@ -401,6 +401,11 @@ def test_role_application_summary_uses_role_fit_before_completion_and_hierarchic
         "score_scale": "0-100",
         "requirements_match_score_100": 74.0,
     }
+    # The list endpoint reads from cached score columns (set by the
+    # scoring pipeline). Refresh them here since this test bypasses the
+    # scoring pipeline and manipulates the row directly.
+    from app.domains.assessments_runtime.role_support import refresh_application_score_cache
+    refresh_application_score_cache(app_row, db=db)
     db.commit()
 
     pre = client.get(f"/api/v1/roles/{role['id']}/applications?sort_by=taali_score", headers=headers)
@@ -433,6 +438,8 @@ def test_role_application_summary_uses_role_fit_before_completion_and_hierarchic
         "score_scale": "0-100",
         "requirements_match_score_100": 74.0,
     }
+    # Cache is read by the listing endpoint; refresh after manual mutation.
+    refresh_application_score_cache(app_row, db=db)
     db.commit()
 
     post = client.get(f"/api/v1/roles/{role['id']}/applications?sort_by=taali_score", headers=headers)
@@ -440,8 +447,9 @@ def test_role_application_summary_uses_role_fit_before_completion_and_hierarchic
     post_item = post.json()[0]
     assert post_item["taali_score"] == 74.0
     assert post_item["score_mode"] == "assessment_plus_role_fit"
-    assert post_item["valid_assessment_id"] == assessment_id
-    assert post_item["valid_assessment_status"] == AssessmentStatus.COMPLETED.value
+    # valid_assessment_id/status are surfaced on the detail endpoint,
+    # not the listing (the listing reads cached score columns for
+    # performance and doesn't include per-assessment metadata).
     assert post_item["score_summary"]["assessment_score"] == 70.0
     assert post_item["score_summary"]["cv_fit_score"] == 82.0
     assert post_item["score_summary"]["role_fit_score"] == 78.0
@@ -644,6 +652,7 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
     ).json()
 
     monkeypatch.setattr(applications_routes.settings, "ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setattr(applications_routes.settings, "ENABLE_PRE_SCREEN_GATE", False)
     monkeypatch.setattr(
         applications_routes,
         "process_document_upload",
@@ -654,25 +663,29 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
             "text_preview": "Python SQL backend API",
         },
     )
-    # Scoring now runs through cv_score_orchestrator (Celery-disabled in tests
-    # makes it execute inline). Patch the orchestrator's reference so both v3
-    # and v4 paths return the stub.
-    from app.services import cv_score_orchestrator
-    stub_result = {
-        "cv_job_match_score": 84,
-        "skills_match": 80,
-        "experience_relevance": 88,
-        "match_details": {
-            "summary": "Strong API and SQL alignment.",
-            "score_scale": "0-100",
-            "score_rationale_bullets": [
-                "Composite fit 84/100 from strong API skills and relevant backend delivery.",
-                "Recruiter requirements coverage: 2/3 met, 1 partial, 0 missing.",
-            ],
-        },
-    }
-    monkeypatch.setattr(cv_score_orchestrator, "calculate_cv_job_match_sync", lambda **_: stub_result)
-    monkeypatch.setattr(cv_score_orchestrator, "calculate_cv_job_match_v4_sync", lambda **_: stub_result)
+    # Scoring now runs through app.cv_matching.runner.run_cv_match (the
+    # orchestrator imports it locally). Stub the module attribute so both
+    # the orchestrator's call and any direct caller see the same return.
+    from app.cv_matching import runner as cv_match_runner
+    from app.cv_matching.schemas import CVMatchOutput, ScoringStatus
+
+    def _stub_run(*args, **kwargs):
+        return CVMatchOutput(
+            prompt_version=cv_match_runner.PROMPT_VERSION,
+            skills_match_score=80.0,
+            experience_relevance_score=88.0,
+            matching_skills=["Python", "SQL"],
+            experience_highlights=["Strong API and SQL alignment."],
+            summary="Strong API and SQL alignment.",
+            requirements_match_score=84.0,
+            cv_fit_score=84.0,
+            role_fit_score=84.0,
+            scoring_status=ScoringStatus.OK,
+            model_version=cv_match_runner.MODEL_VERSION,
+            trace_id="test-trace",
+        )
+
+    monkeypatch.setattr(cv_match_runner, "run_cv_match", _stub_run)
 
     cv_file = {"file": ("resume.pdf", io.BytesIO(b"%PDF-1.4 python sql backend api"), "application/pdf")}
     upload_resp = client.post(f"/api/v1/applications/{app['id']}/upload-cv", files=cv_file, headers=headers)
@@ -684,7 +697,7 @@ def test_application_cv_match_score_is_returned(client, monkeypatch):
     assert len(apps) == 1
     assert apps[0]["cv_match_score"] == 84.0
     assert apps[0]["cv_match_details"]["summary"] == "Strong API and SQL alignment."
-    assert len(apps[0]["cv_match_details"]["score_rationale_bullets"]) == 2
+    assert apps[0]["cv_match_details"]["role_fit_score"] == 84.0
     assert apps[0]["cv_match_scored_at"] is not None
 
 
@@ -749,11 +762,10 @@ def test_application_detail_exposes_cv_sections_and_document_file(client, db, tm
     assert download_resp.headers["content-disposition"].startswith("attachment;")
 
 
-def test_job_spec_upload_generates_interview_focus(client, monkeypatch):
+def test_job_spec_upload_generates_interview_focus(client, db, monkeypatch):
     headers, _ = auth_headers(client)
     role = client.post("/api/v1/roles", json={"name": "Interview focus role"}, headers=headers).json()
 
-    monkeypatch.setattr(roles_management_routes.settings, "ANTHROPIC_API_KEY", "test-key")
     monkeypatch.setattr(
         roles_management_routes,
         "process_document_upload",
@@ -764,54 +776,71 @@ def test_job_spec_upload_generates_interview_focus(client, monkeypatch):
             "text_preview": "Senior backend role requiring APIs, SQL, and incident ownership.",
         },
     )
-    monkeypatch.setattr(
-        roles_management_routes,
-        "generate_interview_focus_sync",
-        lambda **_: {
-            "role_summary": "Role needs strong API design, data modeling, and production ownership.",
-            "manual_screening_triggers": ["Hands-on API ownership", "Database depth"],
-            "questions": [
-                {
-                    "question": "Describe an API you designed end-to-end.",
-                    "what_to_listen_for": ["Tradeoffs, scale, reliability"],
-                    "concerning_signals": ["Vague ownership"],
-                },
-                {
-                    "question": "How did you optimize a slow SQL workload?",
-                    "what_to_listen_for": ["Profiling approach", "Index strategy"],
-                    "concerning_signals": ["No concrete example"],
-                },
-                {
-                    "question": "Walk through an incident you led in production.",
-                    "what_to_listen_for": ["Root cause, mitigation, prevention"],
-                    "concerning_signals": ["No post-incident learning"],
-                },
-            ],
-        },
-    )
+
+    # Interview-focus generation now runs as a Celery task. In tests
+    # Celery isn't configured for eager mode, so stub the role-jd-attached
+    # event handler to write the focus blob synchronously, the way the
+    # worker would. Asserts what the recruiter sees on the next page load.
+    fake_focus = {
+        "role_summary": "Role needs strong API design, data modeling, and production ownership.",
+        "manual_screening_triggers": ["Hands-on API ownership", "Database depth"],
+        "questions": [
+            {
+                "question": "Describe an API you designed end-to-end.",
+                "what_to_listen_for": ["Tradeoffs, scale, reliability"],
+                "concerning_signals": ["Vague ownership"],
+            },
+            {
+                "question": "How did you optimize a slow SQL workload?",
+                "what_to_listen_for": ["Profiling approach", "Index strategy"],
+                "concerning_signals": ["No concrete example"],
+            },
+            {
+                "question": "Walk through an incident you led in production.",
+                "what_to_listen_for": ["Root cause, mitigation, prevention"],
+                "concerning_signals": ["No post-incident learning"],
+            },
+        ],
+    }
+
+    def _fake_on_role_jd_attached(role_arg):
+        from datetime import datetime, timezone
+        from app.platform.database import SessionLocal
+        with SessionLocal() as fresh:
+            row = fresh.query(Role).filter(Role.id == role_arg.id).first()
+            if row is not None:
+                row.interview_focus = fake_focus
+                row.interview_focus_generated_at = datetime.now(timezone.utc)
+                fresh.commit()
+
+    monkeypatch.setattr(roles_management_routes, "on_role_jd_attached", _fake_on_role_jd_attached)
 
     job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"role requirements"), "text/plain")}
     upload_resp = client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers)
     assert upload_resp.status_code == 200, upload_resp.text
     payload = upload_resp.json()
-    assert payload["interview_focus_generated"] is True
-    assert payload["interview_focus_error"] is None
-    assert len(payload["interview_focus"]["questions"]) == 3
-    assert payload["interview_focus_generated_at"] is not None
+    # Upload returns immediately; interview_focus_pending signals async work.
+    assert payload["interview_focus_pending"] is True
 
+    # The stubbed handler ran inline before the response, so the next
+    # listing call should already see the populated focus.
     list_resp = client.get("/api/v1/roles", headers=headers)
     assert list_resp.status_code == 200, list_resp.text
     roles = list_resp.json()
     assert len(roles) >= 1
-    assert roles[0]["interview_focus"]["questions"][0]["question"] == "Describe an API you designed end-to-end."
-    assert roles[0]["interview_focus_generated_at"] is not None
+    role_payload = next(r for r in roles if r["id"] == role["id"])
+    assert role_payload["interview_focus"]["questions"][0]["question"] == "Describe an API you designed end-to-end."
+    assert role_payload["interview_focus_generated_at"] is not None
 
 
-def test_job_spec_upload_returns_interview_focus_error_when_api_key_missing(client, monkeypatch):
+def test_job_spec_upload_succeeds_when_interview_focus_cannot_run(client, monkeypatch):
+    """Upload returns immediately even when downstream interview-focus
+    generation can't run (no API key, worker offline, etc.). The recruiter
+    isn't blocked; the worker logs the skip and the page reload reflects
+    interview_focus=None."""
     headers, _ = auth_headers(client)
     role = client.post("/api/v1/roles", json={"name": "No key role"}, headers=headers).json()
 
-    monkeypatch.setattr(roles_management_routes.settings, "ANTHROPIC_API_KEY", "")
     monkeypatch.setattr(
         roles_management_routes,
         "process_document_upload",
@@ -822,14 +851,16 @@ def test_job_spec_upload_returns_interview_focus_error_when_api_key_missing(clie
             "text_preview": "Role requirements for production backend engineer.",
         },
     )
+    # Stub the event handler to a no-op (mirroring the worker's behaviour
+    # when ANTHROPIC_API_KEY is unset — it skips generation).
+    monkeypatch.setattr(roles_management_routes, "on_role_jd_attached", lambda role_arg: None)
 
     job_spec_file = {"file": ("job-spec.txt", io.BytesIO(b"role requirements"), "text/plain")}
     upload_resp = client.post(f"/api/v1/roles/{role['id']}/upload-job-spec", files=job_spec_file, headers=headers)
     assert upload_resp.status_code == 200, upload_resp.text
     payload = upload_resp.json()
-    assert payload["interview_focus_generated"] is False
+    assert payload["interview_focus_pending"] is True
     assert payload["interview_focus"] is None
-    assert "not configured" in (payload["interview_focus_error"] or "").lower()
 
 
 def test_list_role_applications_supports_score_sort_and_source_filter(client, db):

@@ -277,7 +277,7 @@ from .api.v1.users import router as users_router
 from .api.v1.workable import router as workable_router
 from .api.v1.auth import router as auth_router
 from .api.v1.background_jobs import router as background_jobs_router
-from .api.v1.share_links import (
+from .domains.share_links import (
     public_router as share_links_public_router,
     router as share_links_router,
 )
