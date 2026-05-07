@@ -2083,7 +2083,6 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
         open={shareModalOpen}
         onClose={() => setShareModalOpen(false)}
         applicationId={application?.id}
-        initialToken={shareState?.token || ''}
       />
     </div>
   );

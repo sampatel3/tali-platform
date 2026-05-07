@@ -9228,7 +9228,12 @@ button.eng-badge-button:focus-visible {
   background: transparent;
 }
 
-.mc-share-expiry { display: flex; flex-direction: column; gap: 6px; }
+.mc-share-expiry {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 
 .mc-share-label {
   display: inline-flex;
@@ -9271,6 +9276,153 @@ button.eng-badge-button:focus-visible {
   font-size: 12.5px;
   padding: 10px 12px;
   border-radius: 10px;
+}
+
+/* HANDOFF v2 §3 — active-links list inside the share modal + report
+   footer. Each row shows mode + expiry + view count + Copy / Revoke. */
+.mc-share-links {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mc-share-links.is-history { opacity: 0.78; }
+
+.mc-share-links-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.mc-share-links-count {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--mute);
+}
+
+.mc-share-empty {
+  font-size: 12px;
+  color: var(--mute);
+  margin: 0;
+}
+
+.mc-share-link-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  list-style: none;
+  padding: 0;
+  margin: 0;
+}
+
+.mc-share-link-row {
+  display: grid;
+  grid-template-columns: minmax(160px, 200px) 1fr auto auto;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  font-size: 12.5px;
+}
+
+.mc-share-link-row.is-inactive {
+  grid-template-columns: 1fr;
+  background: var(--bg);
+}
+
+.mc-share-link-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.mc-share-link-mode {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  padding: 2px 7px;
+  border-radius: 4px;
+  background: var(--purple-soft);
+  color: var(--purple);
+  white-space: nowrap;
+}
+
+.mc-share-link-mode.recruiter {
+  background: color-mix(in oklab, var(--purple) 14%, var(--bg-3));
+  color: var(--ink-2);
+}
+
+.mc-share-link-mode.client {
+  background: var(--purple-soft);
+  color: var(--purple);
+}
+
+.mc-share-link-mode.single-view {
+  background: color-mix(in oklab, var(--purple) 8%, var(--bg-3));
+  color: var(--ink-2);
+}
+
+.mc-share-link-expiry {
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.mc-share-link-views {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--mute);
+}
+
+.mc-share-link-row .mc-share-link-input {
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  color: var(--ink-2);
+  min-width: 0;
+}
+
+.mc-share-link-row .mc-share-link-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-radius: 7px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 11.5px;
+  color: var(--ink);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.mc-share-link-row .mc-share-link-btn:hover {
+  border-color: var(--purple);
+  color: var(--purple);
+}
+
+.mc-share-link-row .mc-share-link-btn.is-ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--mute);
+}
+
+.mc-share-link-row .mc-share-link-btn.is-ghost:hover {
+  color: var(--red);
+}
+
+.mc-share-link-row .mc-share-link-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 /* ================== ROLE AGENT SETTINGS TAB — v2 §4.3 ================== */

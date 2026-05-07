@@ -1,92 +1,141 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Copy, Link2, RefreshCw, X } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { Copy, Link2, RefreshCw, Trash2, X } from 'lucide-react';
 
 import { roles as rolesApi } from '../../shared/api';
 
 const buildShareUrl = (mode, token) => {
   if (!token) return '';
   if (typeof window === 'undefined') return '';
-  if (mode === 'client') {
-    return `${window.location.origin}/c/${token}?view=client&showcase=1`;
-  }
-  return `${window.location.origin}/candidates/${token}?view=interview&k=${token}`;
+  // HANDOFF v2 §3 — recipients land on /share/:token, the public
+  // route on the backend that gates by expiry / view-count and tells
+  // the frontend which mode to render in.
+  return `${window.location.origin}/share/${token}`;
 };
 
 const EXPIRY_OPTIONS = [
   { value: '7d', label: 'In 7 days' },
   { value: '24h', label: 'In 24 hours' },
   { value: '30d', label: 'In 30 days' },
-  { value: 'single', label: 'Single view, then expires' },
+  { value: 'single-view', label: 'Single view, then expires' },
 ];
 
-// ShareModal — single-link MVP backed by
-// CandidateApplication.report_share_token. Surfaces the canvas-spec
-// 4-option expiry picker (7d / 24h / 30d / single-view) + 2-mode toggle
-// (client / recruiter), and a Rotate control that revokes the
-// previous link in place. The full multi-link contract from HANDOFF v2
-// §3 (share_links table + per-link revoke + active-link list in the
-// report footer) is the next iteration; the picker UI is already
-// canvas-aligned so swapping the backend is purely additive.
-export const ShareModal = ({ open, onClose, applicationId, initialToken }) => {
-  const [token, setToken] = useState(initialToken || '');
+const MODE_OPTIONS = [
+  {
+    value: 'client',
+    label: 'Client view',
+    sub: 'Score, recommendation, and evidence — no prompts.',
+  },
+  {
+    value: 'recruiter',
+    label: 'Recruiter view',
+    sub: 'Full report with timeline, prompts, and AI usage.',
+  },
+];
+
+const formatExpiryLabel = (link) => {
+  if (link?.revoked) return 'Revoked';
+  if (link?.expired) return 'Expired';
+  if (link?.single_view_consumed) return 'Used';
+  if (link?.expiry_preset) {
+    const match = EXPIRY_OPTIONS.find((opt) => opt.value === link.expiry_preset);
+    if (match) return match.label;
+  }
+  if (link?.expires_at) {
+    const date = new Date(link.expires_at);
+    if (!Number.isNaN(date.getTime())) return `Until ${date.toLocaleString()}`;
+  }
+  return '—';
+};
+
+// ShareModal — HANDOFF v2 §3 multi-link contract.
+// Mints a new share link per recruiter click, lists all existing links
+// (active + revoked + expired) with revoke + copy controls. Single-
+// view mode invalidates after the first GET against /share/:token.
+export const ShareModal = ({ open, onClose, applicationId }) => {
   const [mode, setMode] = useState('client');
-  const [expiry, setExpiry] = useState('30d');
-  const [busy, setBusy] = useState(false);
+  const [expiry, setExpiry] = useState('7d');
+  const [links, setLinks] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [creating, setCreating] = useState(false);
   const [error, setError] = useState('');
   const [copiedKey, setCopiedKey] = useState(null);
+  const [busyLinkId, setBusyLinkId] = useState(null);
+
+  const refreshLinks = useCallback(async () => {
+    if (!applicationId) return;
+    setError('');
+    setLoading(true);
+    try {
+      const res = await rolesApi.listApplicationShareLinks(applicationId);
+      const next = Array.isArray(res?.data?.links) ? res.data.links : [];
+      setLinks(next);
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Could not load share links.');
+    } finally {
+      setLoading(false);
+    }
+  }, [applicationId]);
 
   useEffect(() => {
     if (!open) return undefined;
     setError('');
-    setToken(initialToken || '');
+    setCopiedKey(null);
+    void refreshLinks();
     const onKey = (e) => {
       if (e.key === 'Escape') onClose?.();
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [open, initialToken, onClose]);
+  }, [open, refreshLinks, onClose]);
 
-  useEffect(() => {
-    if (!open || token || !applicationId) return;
-    let cancelled = false;
-    setBusy(true);
+  const handleCreate = useCallback(async () => {
+    if (!applicationId || creating) return;
     setError('');
-    rolesApi
-      .getApplicationShareLink(applicationId)
-      .then((res) => {
-        if (cancelled) return;
-        const next = res?.data?.token || res?.data?.share_token || '';
-        if (next) setToken(next);
-      })
-      .catch((err) => {
-        if (!cancelled) setError(err?.response?.data?.detail || 'Could not generate a share link.');
-      })
-      .finally(() => {
-        if (!cancelled) setBusy(false);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [open, applicationId, token]);
-
-  const handleRotate = async () => {
-    if (!applicationId) return;
-    setBusy(true);
-    setError('');
+    setCreating(true);
     try {
-      const res = await rolesApi.getApplicationShareLink(applicationId);
-      const next = res?.data?.token || res?.data?.share_token || '';
-      setToken(next);
+      const res = await rolesApi.createApplicationShareLink(applicationId, { mode, expiry });
+      const link = res?.data;
+      if (link?.id) {
+        setLinks((prev) => [link, ...prev.filter((row) => row.id !== link.id)]);
+        const url = buildShareUrl(link.mode, link.token);
+        if (url) {
+          try {
+            await navigator.clipboard.writeText(url);
+            setCopiedKey(`row-${link.id}`);
+            setTimeout(() => setCopiedKey((curr) => (curr === `row-${link.id}` ? null : curr)), 2000);
+          } catch {
+            // Copy failure is non-fatal — recipient can copy from the row.
+          }
+        }
+      } else {
+        await refreshLinks();
+      }
     } catch (err) {
-      setError(err?.response?.data?.detail || 'Could not rotate the share link.');
+      setError(err?.response?.data?.detail || 'Could not create share link.');
     } finally {
-      setBusy(false);
+      setCreating(false);
     }
-  };
+  }, [applicationId, mode, expiry, creating, refreshLinks]);
 
-  const url = useMemo(() => buildShareUrl(mode, token), [mode, token]);
+  const handleRevoke = useCallback(async (linkId) => {
+    setError('');
+    setBusyLinkId(linkId);
+    try {
+      const res = await rolesApi.revokeShareLink(linkId);
+      const updated = res?.data;
+      if (updated?.id) {
+        setLinks((prev) => prev.map((row) => (row.id === updated.id ? updated : row)));
+      } else {
+        await refreshLinks();
+      }
+    } catch (err) {
+      setError(err?.response?.data?.detail || 'Could not revoke share link.');
+    } finally {
+      setBusyLinkId(null);
+    }
+  }, [refreshLinks]);
 
-  const handleCopy = async (key, text) => {
+  const handleCopy = useCallback(async (key, text) => {
     if (!text) return;
     try {
       await navigator.clipboard.writeText(text);
@@ -95,7 +144,10 @@ export const ShareModal = ({ open, onClose, applicationId, initialToken }) => {
     } catch {
       setError('Copy failed. Select the link and copy manually.');
     }
-  };
+  }, []);
+
+  const activeLinks = useMemo(() => links.filter((row) => row?.active), [links]);
+  const inactiveLinks = useMemo(() => links.filter((row) => !row?.active), [links]);
 
   if (!open) return null;
 
@@ -104,7 +156,7 @@ export const ShareModal = ({ open, onClose, applicationId, initialToken }) => {
       <div className="mc-share-card">
         <header className="mc-share-head">
           <div>
-            <div className="mc-kicker">CLIENT-SHAREABLE LINK</div>
+            <div className="mc-kicker">CANDIDATE REPORT · SHARE LINKS</div>
             <h2 className="mc-share-title">Share this candidate report</h2>
           </div>
           <button type="button" className="mc-icon-btn" onClick={onClose} aria-label="Close share modal">
@@ -113,34 +165,19 @@ export const ShareModal = ({ open, onClose, applicationId, initialToken }) => {
         </header>
 
         <div className="mc-share-body">
+          {/* Create-link panel */}
           <fieldset className="mc-share-modes" aria-label="View mode">
-            <ModeToggle mode={mode} setMode={setMode} value="client" label="Client view" sub="Score, recommendation, and evidence — no prompts." />
-            <ModeToggle mode={mode} setMode={setMode} value="recruiter" label="Recruiter view" sub="Full report with timeline, prompts, and AI usage." />
+            {MODE_OPTIONS.map((opt) => (
+              <ModeToggle
+                key={opt.value}
+                mode={mode}
+                setMode={setMode}
+                value={opt.value}
+                label={opt.label}
+                sub={opt.sub}
+              />
+            ))}
           </fieldset>
-
-          <div className="mc-share-link">
-            <Link2 size={14} strokeWidth={1.8} />
-            <input className="mc-share-link-input" readOnly value={url} aria-label="Share link" />
-            <button
-              type="button"
-              className="mc-share-link-btn"
-              onClick={() => handleCopy('main', url)}
-              disabled={!url || busy}
-            >
-              <Copy size={13} strokeWidth={1.8} />
-              {copiedKey === 'main' ? 'Copied' : 'Copy'}
-            </button>
-            <button
-              type="button"
-              className="mc-share-link-btn is-ghost"
-              onClick={handleRotate}
-              disabled={busy || !applicationId}
-              title="Rotate the link — the previous link stops working immediately"
-            >
-              <RefreshCw size={13} strokeWidth={1.8} />
-              Rotate
-            </button>
-          </div>
 
           <div className="mc-share-expiry">
             <label className="mc-share-label">
@@ -155,16 +192,111 @@ export const ShareModal = ({ open, onClose, applicationId, initialToken }) => {
                 ))}
               </select>
             </label>
-            <p className="mc-share-help">
-              The link auto-expires when this window closes. Choose <em style={{ fontStyle: 'normal', color: 'var(--ink-2)' }}>Single view</em> for one-shot sharing.
-            </p>
+            <button
+              type="button"
+              className="btn btn-purple btn-sm"
+              onClick={handleCreate}
+              disabled={creating || !applicationId}
+            >
+              <Link2 size={13} strokeWidth={1.8} />
+              {creating ? 'Creating…' : 'Create link'}
+            </button>
           </div>
 
           {error ? <div className="mc-share-error">{error}</div> : null}
 
+          {/* Active links — HANDOFF v2 §3: visible in the report footer
+              with revoke + new-link controls. */}
+          <div className="mc-share-links">
+            <div className="mc-share-links-head">
+              <span className="mc-kicker is-mute">ACTIVE LINKS</span>
+              <span className="mc-share-links-count">
+                {loading ? 'Loading…' : `${activeLinks.length} active`}
+              </span>
+            </div>
+            {activeLinks.length === 0 && !loading ? (
+              <p className="mc-share-empty">No active links yet. Create one above.</p>
+            ) : (
+              <ul className="mc-share-link-list">
+                {activeLinks.map((link) => {
+                  const url = buildShareUrl(link.mode, link.token);
+                  const copyKey = `row-${link.id}`;
+                  return (
+                    <li key={link.id} className="mc-share-link-row">
+                      <div className="mc-share-link-meta">
+                        <span className={`mc-share-link-mode ${link.mode}`}>{link.mode}</span>
+                        <span className="mc-share-link-expiry">{formatExpiryLabel(link)}</span>
+                        {link.view_count > 0 ? (
+                          <span className="mc-share-link-views">{link.view_count} view{link.view_count === 1 ? '' : 's'}</span>
+                        ) : null}
+                      </div>
+                      <input
+                        readOnly
+                        value={url}
+                        className="mc-share-link-input"
+                        aria-label={`${link.mode} share link`}
+                      />
+                      <button
+                        type="button"
+                        className="mc-share-link-btn"
+                        onClick={() => handleCopy(copyKey, url)}
+                        disabled={!url}
+                      >
+                        <Copy size={13} strokeWidth={1.8} />
+                        {copiedKey === copyKey ? 'Copied' : 'Copy'}
+                      </button>
+                      <button
+                        type="button"
+                        className="mc-share-link-btn is-ghost"
+                        onClick={() => handleRevoke(link.id)}
+                        disabled={busyLinkId === link.id}
+                        title="Revoke this link — it stops working immediately"
+                      >
+                        <Trash2 size={13} strokeWidth={1.8} />
+                        {busyLinkId === link.id ? 'Revoking…' : 'Revoke'}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
+          {/* Audit history — revoked / expired / single-view-consumed.
+              Surfaced so recruiters can see who shared what and when. */}
+          {inactiveLinks.length > 0 ? (
+            <div className="mc-share-links is-history">
+              <div className="mc-share-links-head">
+                <span className="mc-kicker is-mute">HISTORY</span>
+                <button
+                  type="button"
+                  className="mc-share-link-btn is-ghost"
+                  onClick={() => void refreshLinks()}
+                  disabled={loading}
+                >
+                  <RefreshCw size={13} strokeWidth={1.8} className={loading ? 'animate-spin' : ''} />
+                  Refresh
+                </button>
+              </div>
+              <ul className="mc-share-link-list">
+                {inactiveLinks.map((link) => (
+                  <li key={link.id} className="mc-share-link-row is-inactive">
+                    <div className="mc-share-link-meta">
+                      <span className={`mc-share-link-mode ${link.mode}`}>{link.mode}</span>
+                      <span className="mc-share-link-expiry">{formatExpiryLabel(link)}</span>
+                      {link.view_count > 0 ? (
+                        <span className="mc-share-link-views">{link.view_count} view{link.view_count === 1 ? '' : 's'}</span>
+                      ) : null}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <p className="mc-share-foot">
-            Recipients see only what the selected mode allows. Rotating the link revokes the previous one
-            and invalidates anyone holding it.
+            Recipients see only what the selected mode allows. Revoking a link invalidates anyone
+            holding it; single-view links auto-revoke after the first open.
           </p>
         </div>
       </div>
