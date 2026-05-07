@@ -82,6 +82,13 @@ describe('AssessmentPage tracking metadata', () => {
     mockSubmit.mockResolvedValue({ data: { success: true } });
     mockClaude.mockResolvedValue({ data: { success: true, content: 'ok' } });
     vi.spyOn(window, 'confirm').mockReturnValue(true);
+    // Default benign WebSocket mock for every test. Without this, AssessmentPage
+    // calls `new WebSocket('ws://localhost/...')` against Node 20's undici, which
+    // doesn't accept the property-based `onerror` API and emits
+    // `InvalidArgumentError: invalid onError method` after the test tears down,
+    // turning CI red even though all assertions pass. Tests that need to
+    // capture sent messages override this with createMockWebSocketClass().
+    global.WebSocket = createMockWebSocketClass();
   });
 
   afterEach(() => {
