@@ -7361,7 +7361,7 @@ button.eng-badge-button:focus-visible {
   gap: 18px;
 }
 .bg-jobs-panel-header {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 8px;
   font-size: 11px;
@@ -7369,7 +7369,7 @@ button.eng-badge-button:focus-visible {
   letter-spacing: 0.04em;
   text-transform: uppercase;
 }
-.bg-jobs-panel-header-text { white-space: nowrap; }
+.bg-jobs-panel-header-text { flex: 1; min-width: 0; }
 .bg-jobs-panel-subtable {
   display: flex;
   flex-direction: column;

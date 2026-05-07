@@ -98,7 +98,7 @@ const baseOrgData = {
   },
 };
 
-const renderSettingsRoute = (initialPath = '/settings/api') => render(
+const renderSettingsRoute = (initialPath = '/settings/email') => render(
   <MemoryRouter initialEntries={[initialPath]}>
     <Routes>
       <Route path="/settings/*" element={<SettingsPage onNavigate={vi.fn()} />} />
@@ -120,23 +120,23 @@ describe('SettingsPage recruiter surface', () => {
     teamApi.invite.mockResolvedValue({ data: { id: 22, email: 'new@deeplight.ai', full_name: 'New Recruiter' } });
   });
 
-  it('renders the API keys section without crashing', async () => {
-    renderSettingsRoute('/settings/api');
+  it('renders the Email & transcripts section without crashing', async () => {
+    renderSettingsRoute('/settings/email');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /API keys/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Email & transcripts/i })).toBeInTheDocument();
     });
 
     expect(screen.getByText('Invite template')).toBeInTheDocument();
     expect(screen.getByText('Fireflies transcript ingestion')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Save API key settings' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Save invite template' })).toBeInTheDocument();
   });
 
-  it('saves AI tooling settings from the AI section', async () => {
+  it('saves AI tooling settings from the Agent & AI tooling section', async () => {
     renderSettingsRoute('/settings/ai');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /AI tooling/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Agent & AI tooling/i })).toBeInTheDocument();
     });
 
     const durationInput = screen.getByLabelText(/Default assessment duration/i);
@@ -279,7 +279,7 @@ describe('SettingsPage recruiter surface', () => {
       },
     });
 
-    renderSettingsRoute('/settings/api');
+    renderSettingsRoute('/settings/email');
 
     await waitFor(() => {
       expect(screen.getByText('Fireflies transcript ingestion')).toBeInTheDocument();
@@ -321,7 +321,7 @@ describe('SettingsPage recruiter surface', () => {
       },
     });
 
-    renderSettingsRoute('/settings/api');
+    renderSettingsRoute('/settings/email');
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: 'Clear stored API key' })).toBeInTheDocument();
