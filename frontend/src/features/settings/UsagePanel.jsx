@@ -3,101 +3,84 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { billing as billingApi } from '../../shared/api';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
-const PERIOD_OPTIONS = [
-  { value: 7, label: '7 days' },
-  { value: 14, label: '14 days' },
-  { value: 30, label: '30 days' },
-  { value: 60, label: '60 days' },
-  { value: 90, label: '90 days' },
+// HANDOFF settings.md — Usage tab spec:
+// "Stacked daily bar chart is purely client-side from the
+//  /billing/usage-timeseries?period_days=30 payload. Three buckets, in
+//  stacking order from bottom: In-IDE assistance (purple), Scoring
+//  (lavender), Pre-screen summaries (sand)."
+const SURFACES = [
+  { id: 'in_ide', label: 'In-IDE assistance', color: '#7e6dff' },
+  { id: 'scoring', label: 'Scoring', color: '#bcb1f0' },
+  { id: 'prescreen', label: 'Pre-screen summaries', color: '#d8c8b0' },
 ];
 
-const GROUP_BY_OPTIONS = [
-  { value: 'feature', label: 'Product' },
-  { value: 'user', label: 'Person' },
-];
+// Backend feature codes → one of the three customer-facing surfaces. Codes
+// not listed roll into "In-IDE assistance" (the broadest catch-all per the
+// design — it covers both the candidate IDE and the recruiter-side agent).
+const FEATURE_TO_SURFACE = {
+  prescreen: 'prescreen',
 
-// Customer-facing labels for the internal feature codes the backend records
-// against each usage event. Anything missing falls through to a humanised
-// version of the raw key so we never leak `agent_autonomous` style strings.
-const FEATURE_LABELS = {
-  prescreen: 'Pre-screening',
-  score: 'CV scoring',
-  assessment: 'Assessment workspace',
-  taali_chat: 'Taali Chat',
-  agent_autonomous: 'Autonomous agent',
-  cv_parse: 'CV parsing',
-  cv_rerank: 'Search rerank',
-  search_parse: 'Search query parsing',
-  archetype_synthesis: 'Archetype synthesis',
-  pairwise_judge: 'Pairwise calibration',
-  interview_focus: 'Interview focus',
-  interview_tech: 'Tech interview prompts',
-  fit_matching: 'Fit matching',
-  other: 'Other',
+  score: 'scoring',
+  cv_parse: 'scoring',
+  cv_rerank: 'scoring',
+  search_parse: 'scoring',
+  archetype_synthesis: 'scoring',
+  pairwise_judge: 'scoring',
+  fit_matching: 'scoring',
+
+  assessment: 'in_ide',
+  taali_chat: 'in_ide',
+  agent_autonomous: 'in_ide',
+  interview_focus: 'in_ide',
+  interview_tech: 'in_ide',
+  other: 'in_ide',
 };
+
+const surfaceFor = (featureKey) =>
+  FEATURE_TO_SURFACE[String(featureKey || '').toLowerCase()] || 'in_ide';
 
 const formatUsd = (n) => `$${Number(n || 0).toFixed(2)}`;
 const formatUsd4 = (n) => `$${Number(n || 0).toFixed(4)}`;
 const formatNumber = (n) => Number(n || 0).toLocaleString();
 
-const sortKeyAsc = (a, b) => (a > b ? 1 : a < b ? -1 : 0);
+const surfaceById = (id) => SURFACES.find((s) => s.id === id);
 
-const PALETTE = [
-  '#7e6dff', '#a4b4a8', '#bfa890', '#7e8e98', '#c79b76',
-  '#8b9aa3', '#b08e72', '#9aa5a0', '#cdb696', '#7d6e5b',
-];
+const PERIOD_DAYS = 30;
 
-const colorFor = (_key, index) => PALETTE[index % PALETTE.length];
-
-const humaniseKey = (key) => String(key || '')
-  .replace(/[_-]+/g, ' ')
-  .replace(/\b\w/g, (c) => c.toUpperCase());
-
-const labelForGroup = (groupBy, key) => {
-  if (groupBy === 'feature') return FEATURE_LABELS[key] || humaniseKey(key);
-  if (groupBy === 'user') return key === 'unattributed' ? 'Unattributed' : `Member #${key}`;
-  return humaniseKey(key);
-};
-
-// Pivot the timeseries (one row per day per group) into a per-day shape so
-// the bar chart can stack segments. Days without spend are dropped because
-// we render the whole window from the chart's leftmost day to its rightmost.
+// Pivot the per-feature timeseries into per-day, three-surface buckets
+// matching the SURFACES order so the stacked bar chart renders bottom-up
+// in the order the handoff specifies.
 const pivotByDay = (buckets) => {
   const byDay = new Map();
-  const groupKeys = new Set();
   for (const b of buckets) {
     const day = b.day || 'unknown';
     if (!byDay.has(day)) {
-      byDay.set(day, { day, total: 0, groups: {}, calls: 0 });
+      byDay.set(day, { day, total: 0, calls: 0, surfaces: { in_ide: 0, scoring: 0, prescreen: 0 } });
     }
     const cell = byDay.get(day);
+    const surface = surfaceFor(b.group_key);
     const dollars = Number(b.cost_usd || 0);
-    cell.groups[b.group_key] = (cell.groups[b.group_key] || 0) + dollars;
+    cell.surfaces[surface] += dollars;
     cell.total += dollars;
     cell.calls += Number(b.event_count || 0);
-    groupKeys.add(b.group_key);
   }
-  const days = [...byDay.values()].sort((a, b) => sortKeyAsc(a.day, b.day));
-  const orderedGroups = [...groupKeys].sort(sortKeyAsc);
-  return { days, groupKeys: orderedGroups };
+  return [...byDay.values()].sort((a, b) => (a.day > b.day ? 1 : a.day < b.day ? -1 : 0));
 };
 
-const sumByGroup = (buckets) => {
-  const map = new Map();
+const sumBySurface = (buckets) => {
+  const totals = { in_ide: { cost_usd: 0, event_count: 0 }, scoring: { cost_usd: 0, event_count: 0 }, prescreen: { cost_usd: 0, event_count: 0 } };
   for (const b of buckets) {
-    const key = b.group_key;
-    const prev = map.get(key) || { cost_usd: 0, event_count: 0 };
-    prev.cost_usd += Number(b.cost_usd || 0);
-    prev.event_count += Number(b.event_count || 0);
-    map.set(key, prev);
+    const surface = surfaceFor(b.group_key);
+    totals[surface].cost_usd += Number(b.cost_usd || 0);
+    totals[surface].event_count += Number(b.event_count || 0);
   }
-  return [...map.entries()]
-    .map(([key, value]) => ({ key, ...value }))
-    .sort((a, b) => b.cost_usd - a.cost_usd);
+  return SURFACES.map((s) => ({ id: s.id, label: s.label, color: s.color, ...totals[s.id] }));
 };
 
-const StackedBarChart = ({ buckets, groupBy }) => {
-  const { days, groupKeys } = useMemo(() => pivotByDay(buckets), [buckets]);
+// Tiny SVG stacked bar chart — no external deps. Each bar = one day,
+// segments stacked from bottom in the SURFACES order so In-IDE sits
+// at the base, Scoring above it, Pre-screen on top (per handoff).
+const StackedBarChart = ({ days }) => {
   if (days.length === 0) {
     return (
       <div className="settings-billing-card" style={{ padding: 24, textAlign: 'center' }}>
@@ -116,38 +99,30 @@ const StackedBarChart = ({ buckets, groupBy }) => {
   const BAR_WIDTH = Math.max(8, Math.floor(640 / days.length) - BAR_GAP);
   const WIDTH = days.length * (BAR_WIDTH + BAR_GAP);
 
-  const colorByGroup = new Map();
-  groupKeys.forEach((g, i) => colorByGroup.set(g, colorFor(g, i)));
-
   return (
     <div style={{ overflowX: 'auto' }}>
-      <svg
-        width={WIDTH}
-        height={HEIGHT}
-        role="img"
-        aria-label={`Daily spend stacked by ${groupBy}`}
-      >
+      <svg width={WIDTH} height={HEIGHT} role="img" aria-label="Daily spend stacked by surface">
         {days.map((day, idx) => {
           const x = idx * (BAR_WIDTH + BAR_GAP);
           let yCursor = HEIGHT - PAD_Y;
-          const segments = groupKeys
-            .map((g) => ({ group: g, value: day.groups[g] || 0 }))
-            .filter((s) => s.value > 0);
+          // Stacking order: In-IDE (bottom), Scoring (middle), Pre-screen (top)
           return (
             <g key={day.day}>
-              {segments.map((seg) => {
-                const segH = (seg.value / maxTotal) * (HEIGHT - PAD_Y * 2);
+              {SURFACES.map((surface) => {
+                const value = day.surfaces[surface.id] || 0;
+                if (value <= 0) return null;
+                const segH = (value / maxTotal) * (HEIGHT - PAD_Y * 2);
                 yCursor -= segH;
                 return (
                   <rect
-                    key={`${day.day}:${seg.group}`}
+                    key={`${day.day}:${surface.id}`}
                     x={x}
                     y={yCursor}
                     width={BAR_WIDTH}
                     height={Math.max(1, segH)}
-                    fill={colorByGroup.get(seg.group)}
+                    fill={surface.color}
                   >
-                    <title>{`${day.day} · ${labelForGroup(groupBy, seg.group)}: ${formatUsd4(seg.value)}`}</title>
+                    <title>{`${day.day} · ${surface.label}: ${formatUsd4(value)}`}</title>
                   </rect>
                 );
               })}
@@ -157,18 +132,18 @@ const StackedBarChart = ({ buckets, groupBy }) => {
         })}
       </svg>
       <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginTop: 8 }}>
-        {groupKeys.map((g, i) => (
-          <div key={g} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
+        {SURFACES.map((surface) => (
+          <div key={surface.id} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 12 }}>
             <span
               style={{
                 width: 10,
                 height: 10,
-                background: colorFor(g, i),
+                background: surface.color,
                 borderRadius: 2,
                 display: 'inline-block',
               }}
             />
-            <span>{labelForGroup(groupBy, g)}</span>
+            <span>{surface.label}</span>
           </div>
         ))}
       </div>
@@ -181,15 +156,15 @@ const StackedBarChart = ({ buckets, groupBy }) => {
 };
 
 export default function UsagePanel() {
-  const [periodDays, setPeriodDays] = useState(30);
-  const [groupBy, setGroupBy] = useState('feature');
   const [timeseries, setTimeseries] = useState(null);
   const [loadingSeries, setLoadingSeries] = useState(false);
 
-  const loadTimeseries = useCallback(async (days, gb) => {
+  const loadTimeseries = useCallback(async () => {
     setLoadingSeries(true);
     try {
-      const res = await billingApi.usageTimeseries(days, gb);
+      // Always feature-grouped — we collapse the per-feature buckets into
+      // the three customer-facing surfaces below.
+      const res = await billingApi.usageTimeseries(PERIOD_DAYS, 'feature');
       setTimeseries(res?.data || null);
     } catch {
       setTimeseries(null);
@@ -199,43 +174,31 @@ export default function UsagePanel() {
   }, []);
 
   useEffect(() => {
-    void loadTimeseries(periodDays, groupBy);
-  }, [periodDays, groupBy, loadTimeseries]);
+    void loadTimeseries();
+  }, [loadTimeseries]);
 
   const buckets = timeseries?.buckets || [];
+  const days = useMemo(() => pivotByDay(buckets), [buckets]);
+  const surfaceSummary = useMemo(() => sumBySurface(buckets), [buckets]);
   const totalUsd = useMemo(
-    () => buckets.reduce((sum, b) => sum + Number(b.cost_usd || 0), 0),
-    [buckets],
+    () => surfaceSummary.reduce((sum, s) => sum + s.cost_usd, 0),
+    [surfaceSummary],
   );
   const totalCalls = useMemo(
-    () => buckets.reduce((sum, b) => sum + Number(b.event_count || 0), 0),
-    [buckets],
+    () => surfaceSummary.reduce((sum, s) => sum + s.event_count, 0),
+    [surfaceSummary],
   );
-  const groupSummary = useMemo(() => sumByGroup(buckets), [buckets]);
-  const breakdownLabel = groupBy === 'feature' ? 'Product' : 'Person';
+  const topDriver = useMemo(
+    () => [...surfaceSummary].sort((a, b) => b.cost_usd - a.cost_usd)[0] || null,
+    [surfaceSummary],
+  );
 
   return (
     <div>
-      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center', marginBottom: 16 }}>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-          <span>Period</span>
-          <select
-            value={periodDays}
-            onChange={(e) => setPeriodDays(Number(e.target.value))}
-          >
-            {PERIOD_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </label>
-        <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13 }}>
-          <span>Group by</span>
-          <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)}>
-            {GROUP_BY_OPTIONS.map((opt) => (
-              <option key={opt.value} value={opt.value}>{opt.label}</option>
-            ))}
-          </select>
-        </label>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+        <span style={{ fontSize: 12, color: 'var(--taali-muted)' }}>
+          Trailing {PERIOD_DAYS} days · grouped by surface
+        </span>
         {loadingSeries ? <Spinner size={14} /> : null}
       </div>
 
@@ -243,25 +206,21 @@ export default function UsagePanel() {
         <div className="settings-billing-card">
           <div className="settings-summary-label">Total spend</div>
           <div className="settings-summary-value">{formatUsd(totalUsd)}</div>
-          <div className="settings-summary-note">
-            {periodDays}-day window
-          </div>
+          <div className="settings-summary-note">{PERIOD_DAYS}-day window</div>
         </div>
         <div className="settings-billing-card">
           <div className="settings-summary-label">Billable AI requests</div>
           <div className="settings-summary-value">{formatNumber(totalCalls)}</div>
-          <div className="settings-summary-note">
-            Across all Taali products
-          </div>
+          <div className="settings-summary-note">Across all Taali surfaces</div>
         </div>
         <div className="settings-billing-card">
           <div className="settings-summary-label">Top driver</div>
           <div className="settings-summary-value">
-            {groupSummary[0] ? labelForGroup(groupBy, groupSummary[0].key) : '—'}
+            {topDriver ? topDriver.label : '—'}
           </div>
           <div className="settings-summary-note">
-            {groupSummary[0]
-              ? `${formatUsd(groupSummary[0].cost_usd)} · ${formatNumber(groupSummary[0].event_count)} requests`
+            {topDriver
+              ? `${formatUsd(topDriver.cost_usd)} · ${formatNumber(topDriver.event_count)} requests`
               : 'No spend yet'}
           </div>
         </div>
@@ -269,34 +228,51 @@ export default function UsagePanel() {
 
       <div style={{ marginTop: 24 }}>
         <h3 style={{ fontSize: 14, marginBottom: 8 }}>Daily spend</h3>
-        <StackedBarChart buckets={buckets} groupBy={groupBy} />
+        <StackedBarChart days={days} />
       </div>
 
-      {groupSummary.length > 0 ? (
-        <div className="settings-usage-table" style={{ marginTop: 24 }}>
-          <div className="settings-usage-head">
-            <h3>Breakdown by {breakdownLabel.toLowerCase()}</h3>
-          </div>
-          <table>
-            <thead>
-              <tr>
-                <th>{breakdownLabel}</th>
-                <th>Requests</th>
-                <th>Spend</th>
-              </tr>
-            </thead>
-            <tbody>
-              {groupSummary.map((row) => (
-                <tr key={row.key}>
-                  <td>{labelForGroup(groupBy, row.key)}</td>
+      <div className="settings-usage-table" style={{ marginTop: 24 }}>
+        <div className="settings-usage-head">
+          <h3>Breakdown by surface</h3>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th>Surface</th>
+              <th>Requests</th>
+              <th>Spend</th>
+            </tr>
+          </thead>
+          <tbody>
+            {SURFACES.map((surface) => {
+              const row = surfaceSummary.find((s) => s.id === surface.id) || { cost_usd: 0, event_count: 0 };
+              return (
+                <tr key={surface.id}>
+                  <td>
+                    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 8 }}>
+                      <span
+                        aria-hidden="true"
+                        style={{
+                          width: 10,
+                          height: 10,
+                          background: surface.color,
+                          borderRadius: 2,
+                          display: 'inline-block',
+                        }}
+                      />
+                      {surface.label}
+                    </span>
+                  </td>
                   <td>{formatNumber(row.event_count)}</td>
                   <td>{formatUsd4(row.cost_usd)}</td>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : null}
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }
+
+export { SURFACES, surfaceById };
