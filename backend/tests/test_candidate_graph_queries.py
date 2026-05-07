@@ -126,26 +126,34 @@ def test_extract_taali_ids_from_attributes_and_text():
 
 
 def test_subgraph_assembles_with_person_id_format():
-    facts = [
-        _fact(
-            source_uuid="p-uuid-aaa",
-            target_uuid="c-uuid-acme",
-            edge_label="WORKED_AT",
-            source_name="Alice",
-            target_name="Acme Corp",
-            source_attrs={"taali_id": 42, "headline": "Senior Engineer"},
-            target_attrs={"kind": "Company"},
-        ),
-    ]
-
-    captured = []
+    # subgraph_for_candidates now drops to a direct Cypher query against
+    # graphiti.driver, returning a Neo4j EagerResult-shaped object with
+    # .records (each record is dict-like). Match that shape so the
+    # _merge_neo4j_records helper can build GraphNode/GraphEdge objects.
+    record = {
+        "s_uuid": "p-uuid-aaa",
+        "s_name": "Alice",
+        "s_props": {"taali_id": 42, "headline": "Senior Engineer"},
+        "t_uuid": "c-uuid-acme",
+        "t_name": "Acme Corp",
+        "t_props": {"kind": "Company"},
+        "e_name": None,
+        "e_fact": "Alice worked at Acme Corp",
+        "e_valid_at": None,
+        "e_invalid_at": None,
+    }
+    fake_result = SimpleNamespace(records=[record])
 
     def fake_run_async(coro, **kwargs):
-        return facts
+        return fake_result
 
+    fake_graphiti = SimpleNamespace(
+        search=lambda **kw: None,
+        driver=SimpleNamespace(execute_query=lambda *a, **kw: None),
+    )
     with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
          patch.object(graph_search.graph_client, "run_async", side_effect=fake_run_async), \
-         patch.object(graph_search.graph_client, "get_graphiti", return_value=SimpleNamespace(search=lambda **kw: None)):
+         patch.object(graph_search.graph_client, "get_graphiti", return_value=fake_graphiti):
         payload = graph_search.subgraph_for_candidates(
             organization_id=1, candidate_ids=[42]
         )

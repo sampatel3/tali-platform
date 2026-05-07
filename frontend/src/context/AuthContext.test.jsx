@@ -1,4 +1,20 @@
 import { render, screen, fireEvent } from '@testing-library/react';
+import { vi } from 'vitest';
+
+// AuthProvider's mount effect calls authApi.me() to validate the cached
+// token. In jsdom that fires a real HTTP request via undici and the
+// resolution races test teardown, surfacing as an "invalid onError
+// method" unhandled rejection that fails CI even though every test
+// passed. Mock the module so the call is a no-op.
+vi.mock('../shared/api', () => ({
+  auth: {
+    me: vi.fn().mockResolvedValue({ data: { id: 1, email: 'user@example.com' } }),
+    login: vi.fn(),
+    register: vi.fn(),
+    logout: vi.fn(),
+  },
+}));
+
 import { AuthProvider, useAuth } from './AuthContext';
 
 function TestConsumer() {
