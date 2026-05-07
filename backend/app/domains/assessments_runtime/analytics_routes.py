@@ -2,16 +2,21 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy import and_, or_
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, desc, or_
+from sqlalchemy.orm import Session, joinedload
 
+from ...agent_runtime import budget_guard
 from ...platform.database import get_db
 from ...deps import get_current_user
-from ...models.user import User
+from ...models.agent_decision import AgentDecision
 from ...models.assessment import Assessment, AssessmentStatus
+from ...models.candidate import Candidate
+from ...models.candidate_application import CandidateApplication
+from ...models.role import Role
+from ...models.user import User
 
 router = APIRouter(prefix="/analytics", tags=["Analytics"])
 
@@ -420,3 +425,417 @@ def get_task_benchmarks(
             }
 
     return result
+
+
+# ----------------------------------------------------------------------------
+# Reporting summary endpoint — backs the Mission Control "Your agent in
+# narrative" page (HANDOFF chat.md / Tali Redesign canvas reporting tile).
+# Returns everything the page renders in one round trip:
+# - KPIs with deltas vs the prior equivalent window
+# - Narrator paragraph with concrete numbers + clickable chip explanations
+# - Decisions feed (most recent agent decisions in window)
+# - Anomalies (paused agents, budget overruns, low confidence, score drift)
+# - Funnel counts by pipeline stage (APPLIED → INVITED → DONE → REVIEW → HIRED)
+# - Score distribution buckets (re-uses the existing decile binning)
+# ----------------------------------------------------------------------------
+
+# Pipeline stages map to the canvas's funnel rows. We display "DONE" as the
+# label for `in_assessment` since the funnel narrates *what was scored*, not
+# *what is in flight*; and "HIRED" as the terminal step from
+# application_outcome rather than pipeline_stage. APPLIED + INVITED + DONE
+# map directly from pipeline_stage; REVIEW maps to pipeline_stage="review".
+_FUNNEL_STAGES = (
+    ("APPLIED", "applied"),
+    ("INVITED", "invited"),
+    ("DONE", "in_assessment"),
+    ("REVIEW", "review"),
+    ("HIRED", "_hired"),
+)
+
+
+def _ms_format_dollars(cents: int | None) -> str:
+    n = (cents or 0) / 100.0
+    if n >= 100:
+        return f"${int(round(n))}"
+    return f"${n:.0f}"
+
+
+def _decisions_in_window(
+    db: Session,
+    org_id: int,
+    *,
+    role_id: Optional[int],
+    parsed_from: Optional[datetime],
+    parsed_to: Optional[datetime],
+) -> List[AgentDecision]:
+    q = (
+        db.query(AgentDecision)
+        .filter(AgentDecision.organization_id == org_id)
+    )
+    if role_id is not None:
+        q = q.filter(AgentDecision.role_id == role_id)
+    if parsed_from is not None:
+        q = q.filter(AgentDecision.created_at >= parsed_from)
+    if parsed_to is not None:
+        q = q.filter(AgentDecision.created_at <= parsed_to)
+    return q.order_by(desc(AgentDecision.created_at)).all()
+
+
+def _decision_kind(decision: AgentDecision) -> str:
+    t = str(decision.decision_type or "").lower()
+    if "advance" in t:
+        return "advance"
+    if "reject" in t:
+        return "reject"
+    if "flag" in t or "borderline" in t:
+        return "flag"
+    if "pause" in t:
+        return "pause"
+    if "invite" in t:
+        return "invite"
+    return "action"
+
+
+def _delta_pct(current: float, prior: float) -> Optional[float]:
+    if prior <= 0:
+        return None
+    return round(((current - prior) / prior) * 100.0, 1)
+
+
+@router.get("/reporting-summary")
+def get_reporting_summary(
+    role_id: Optional[int] = Query(default=None),
+    task_id: Optional[int] = Query(default=None),
+    date_from: Optional[str] = Query(default=None, description="ISO date/time (inclusive)"),
+    date_to: Optional[str] = Query(default=None, description="ISO date/time (inclusive)"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Aggregate everything the Reporting page renders into a single payload.
+
+    The Mission Control reporting tile expects KPIs with prior-period
+    deltas, an in-narrative paragraph with chip-button drill-ins, the
+    decisions feed, anomalies, the funnel, and the score histogram —
+    all calibrated to the active filter window. Composing this on the
+    server keeps the page render to one fetch and avoids fan-out
+    requests for the org-spend rollup.
+    """
+    org_id = current_user.organization_id
+    if not org_id:
+        return {
+            "window": {"from": None, "to": None, "label": "Last 30 days"},
+            "kpis": {
+                "decisions_made": {"current": 0, "prior": 0, "delta_pct": None},
+                "auto_advanced": {"current": 0, "borderlines_flagged": 0},
+                "auto_rejected": {"current": 0, "below_threshold": 0},
+                "org_spend": {
+                    "spent_cents": 0, "budget_cents": 0,
+                    "over_pct": None, "top_role": None,
+                    "active_role_count": 0,
+                },
+            },
+            "narrator": {"paragraph": "Your agent has not seen any candidates yet.", "chips": []},
+            "decisions_feed": [],
+            "anomalies": [],
+            "funnel": [],
+            "score_buckets": _build_score_buckets([]),
+        }
+
+    parsed_from = _parse_filter_datetime(date_from, end_of_day=False)
+    parsed_to = _parse_filter_datetime(date_to, end_of_day=True)
+    if parsed_from and parsed_to and parsed_from > parsed_to:
+        raise HTTPException(status_code=400, detail="date_from must be before date_to")
+
+    # Default window: last 30 days, ending now.
+    now = datetime.now(timezone.utc)
+    if parsed_to is None:
+        parsed_to = now
+    if parsed_from is None:
+        parsed_from = parsed_to - timedelta(days=30)
+    window_days = max(1, int((parsed_to - parsed_from).total_seconds() / 86400))
+    window_label = (
+        "Last 7 days" if window_days <= 7
+        else "Last 30 days" if window_days <= 31
+        else "Last 90 days" if window_days <= 92
+        else f"Last {window_days} days"
+    )
+    prior_to = parsed_from
+    prior_from = parsed_from - timedelta(days=window_days)
+
+    # ── Agent decisions in window (current + prior for delta) ──────────
+    decisions = _decisions_in_window(
+        db, org_id, role_id=role_id, parsed_from=parsed_from, parsed_to=parsed_to,
+    )
+    prior_decisions = _decisions_in_window(
+        db, org_id, role_id=role_id, parsed_from=prior_from, parsed_to=prior_to,
+    )
+
+    auto_advanced_count = sum(1 for d in decisions if _decision_kind(d) == "advance")
+    auto_rejected_count = sum(1 for d in decisions if _decision_kind(d) == "reject")
+    flagged_count = sum(1 for d in decisions if _decision_kind(d) == "flag")
+    paused_count = sum(1 for d in decisions if _decision_kind(d) == "pause")
+
+    # Assessments closed in the window — counted alongside agent decisions
+    # for the "Decisions made" KPI, which represents *every* consequential
+    # action the agent took (CV scoring + advance/reject/flag/etc.).
+    asmnt_q = (
+        db.query(Assessment)
+        .filter(
+            Assessment.organization_id == org_id,
+            Assessment.is_voided.is_(False),
+            Assessment.created_at >= parsed_from,
+            Assessment.created_at <= parsed_to,
+        )
+    )
+    if role_id is not None:
+        asmnt_q = asmnt_q.filter(Assessment.role_id == role_id)
+    if task_id is not None:
+        asmnt_q = asmnt_q.filter(Assessment.task_id == task_id)
+    assessments = asmnt_q.all()
+    completed = [a for a in assessments if _is_completed(a) and a.completed_at]
+    decisions_made = len(decisions) + len(assessments)
+    prior_assessments = (
+        db.query(Assessment)
+        .filter(
+            Assessment.organization_id == org_id,
+            Assessment.is_voided.is_(False),
+            Assessment.created_at >= prior_from,
+            Assessment.created_at <= prior_to,
+        )
+        .count()
+    )
+    prior_decisions_made = len(prior_decisions) + prior_assessments
+
+    # ── Org spend rollup across agent-enabled roles ────────────────────
+    agent_roles = (
+        db.query(Role)
+        .filter(
+            Role.organization_id == org_id,
+            Role.deleted_at.is_(None),
+            Role.agentic_mode_enabled.is_(True),
+        )
+        .all()
+    )
+    spent_total = 0
+    budget_total = 0
+    role_spend: List[Tuple[Role, int]] = []
+    for role in agent_roles:
+        try:
+            spent = budget_guard.month_to_date_spend_cents(db, role=role)
+        except Exception:
+            spent = 0
+        spent_total += int(spent or 0)
+        budget_total += int(role.monthly_usd_budget_cents or 0)
+        role_spend.append((role, int(spent or 0)))
+
+    over_pct: Optional[float] = None
+    top_role_name: Optional[str] = None
+    if budget_total > 0:
+        over_pct = round(((spent_total - budget_total) / budget_total) * 100.0, 1)
+    if role_spend:
+        role_spend.sort(key=lambda r: r[1], reverse=True)
+        top = role_spend[0]
+        if top[1] > 0:
+            top_role_name = top[0].name
+
+    # ── Funnel counts (org-wide or role-scoped) ────────────────────────
+    app_q = db.query(CandidateApplication).filter(
+        CandidateApplication.organization_id == org_id,
+    )
+    if role_id is not None:
+        app_q = app_q.filter(CandidateApplication.role_id == role_id)
+    applications = app_q.all()
+    funnel: List[Dict[str, Any]] = []
+    total_applied = len(applications)
+    for label, key in _FUNNEL_STAGES:
+        if key == "_hired":
+            count = sum(
+                1 for a in applications
+                if str(a.application_outcome or "").lower() == "hired"
+            )
+        else:
+            count = sum(
+                1 for a in applications
+                if str(a.pipeline_stage or "").lower() == key
+            )
+        pct = round((count / total_applied) * 100.0, 1) if total_applied else 0.0
+        funnel.append({"label": label, "key": key, "count": count, "percentage": pct})
+
+    # ── Decisions feed (recent N with candidate names) ─────────────────
+    feed_rows = (
+        db.query(AgentDecision, CandidateApplication, Candidate)
+        .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
+        .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
+        .filter(AgentDecision.organization_id == org_id)
+    )
+    if role_id is not None:
+        feed_rows = feed_rows.filter(AgentDecision.role_id == role_id)
+    if parsed_from is not None:
+        feed_rows = feed_rows.filter(AgentDecision.created_at >= parsed_from)
+    if parsed_to is not None:
+        feed_rows = feed_rows.filter(AgentDecision.created_at <= parsed_to)
+    feed_rows = feed_rows.order_by(desc(AgentDecision.created_at)).limit(30).all()
+
+    decisions_feed: List[Dict[str, Any]] = []
+    for decision, application, candidate in feed_rows:
+        kind = _decision_kind(decision)
+        candidate_name = (
+            (getattr(candidate, "full_name", None) if candidate else None)
+            or (getattr(candidate, "email", None) if candidate else None)
+            or "Candidate"
+        )
+        decisions_feed.append({
+            "id": int(decision.id),
+            "kind": kind,
+            "decision_type": decision.decision_type,
+            "recommendation": decision.recommendation,
+            "reasoning": decision.reasoning,
+            "confidence": float(decision.confidence) if decision.confidence is not None else None,
+            "status": decision.status,
+            "candidate_name": candidate_name,
+            "application_id": int(decision.application_id),
+            "role_id": int(decision.role_id),
+            "created_at": decision.created_at,
+        })
+
+    # ── Anomalies ──────────────────────────────────────────────────────
+    anomalies: List[Dict[str, Any]] = []
+    paused_roles = [
+        r for r in agent_roles
+        if getattr(r, "agent_paused_at", None) is not None
+    ]
+    for role in paused_roles[:3]:
+        anomalies.append({
+            "tone": "amber",
+            "title": f"Paused agent on {role.name}",
+            "body": (role.agent_paused_reason
+                     or "Agent is paused on this role. Resume from the role pipeline page."),
+        })
+    if budget_total > 0 and spent_total > budget_total:
+        spent_label = _ms_format_dollars(spent_total)
+        budget_label = _ms_format_dollars(budget_total)
+        driver = f"driven by {top_role_name}" if top_role_name else ""
+        anomalies.append({
+            "tone": "red",
+            "title": "Spend over cap (org-wide)",
+            "body": f"{spent_label} of {budget_label}. " + (f"Staff ML drove most of it ({driver}). " if driver else "")
+                    + "Review per-role caps in Settings → AI tooling.",
+        })
+    low_conf = [
+        d for d in decisions
+        if d.confidence is not None and float(d.confidence) < 0.55
+    ]
+    if len(low_conf) >= 3:
+        anomalies.append({
+            "tone": "amber",
+            "title": f"Confidence low on {len(low_conf)} decisions",
+            "body": "Coverage below 55%. Recommend uploading 3+ exemplar reviews so the agent can calibrate.",
+        })
+    if not anomalies and total_applied > 0:
+        anomalies.append({
+            "tone": "neutral",
+            "title": "Nothing flagged",
+            "body": "No paused agents, no budget overruns, confidence holding steady. Your agent is having a quiet day.",
+        })
+
+    # ── Score buckets (existing helper) ────────────────────────────────
+    scores_100 = [s for s in (_score_100(a) for a in completed) if s is not None]
+    score_buckets = _build_score_buckets(scores_100)
+
+    # ── Narrator paragraph + drill-in chips ────────────────────────────
+    if decisions_made == 0 and not decisions_feed:
+        narrator_paragraph = (
+            f"No assessments closed in the {window_label.lower()}. "
+            "Once candidates start completing tasks, the agent will narrate "
+            "what it advanced, rejected, and flagged."
+        )
+        chips: List[Dict[str, str]] = []
+    else:
+        bits = []
+        bits.append(
+            f"In the {window_label.lower()}, your agent acted "
+            f"{decisions_made} time{'s' if decisions_made != 1 else ''}."
+        )
+        if auto_advanced_count or auto_rejected_count:
+            bits.append(
+                f"It auto-advanced {auto_advanced_count} candidate"
+                f"{'s' if auto_advanced_count != 1 else ''} "
+                f"and auto-rejected {auto_rejected_count} below threshold."
+            )
+        if flagged_count:
+            bits.append(
+                f"It flagged {flagged_count} borderline candidate"
+                f"{'s' if flagged_count != 1 else ''} for your judgment."
+            )
+        if budget_total > 0:
+            bits.append(
+                f"Spend sat at {_ms_format_dollars(spent_total)} of "
+                f"{_ms_format_dollars(budget_total)} cap"
+                + (f" — {over_pct:.0f}% over." if over_pct and over_pct > 0 else ".")
+            )
+        if paused_count:
+            bits.append(f"It paused itself {paused_count} time{'s' if paused_count != 1 else ''} when signal got thin.")
+        narrator_paragraph = " ".join(bits)
+
+        chips = []
+        if budget_total > 0 and spent_total > budget_total:
+            chips.append({
+                "key": "over_budget",
+                "label": "Why over budget?",
+                "body": (
+                    f"Org spend is {_ms_format_dollars(spent_total)} against a "
+                    f"{_ms_format_dollars(budget_total)} cap"
+                    + (f" — {top_role_name} drove most of it." if top_role_name else ".")
+                ),
+            })
+        if flagged_count:
+            chips.append({
+                "key": "borderlines",
+                "label": f"Show the {flagged_count} borderline{'s' if flagged_count != 1 else ''}",
+                "body": "Borderline candidates are listed in the decisions feed below — filter on `flag` to jump straight to them.",
+            })
+        if paused_roles:
+            first = paused_roles[0]
+            chips.append({
+                "key": "paused",
+                "label": f"Why was {first.name} paused?",
+                "body": (
+                    first.agent_paused_reason
+                    or "The agent paused itself when confidence dropped below threshold. Resume from the role pipeline page."
+                ),
+            })
+
+    return {
+        "window": {
+            "from": parsed_from.isoformat() if parsed_from else None,
+            "to": parsed_to.isoformat() if parsed_to else None,
+            "label": window_label,
+        },
+        "kpis": {
+            "decisions_made": {
+                "current": decisions_made,
+                "prior": prior_decisions_made,
+                "delta_pct": _delta_pct(decisions_made, prior_decisions_made),
+            },
+            "auto_advanced": {
+                "current": auto_advanced_count,
+                "borderlines_flagged": flagged_count,
+            },
+            "auto_rejected": {
+                "current": auto_rejected_count,
+                "below_threshold": auto_rejected_count,
+            },
+            "org_spend": {
+                "spent_cents": spent_total,
+                "budget_cents": budget_total,
+                "over_pct": over_pct,
+                "top_role": top_role_name,
+                "active_role_count": len(agent_roles),
+            },
+        },
+        "narrator": {"paragraph": narrator_paragraph, "chips": chips},
+        "decisions_feed": decisions_feed,
+        "anomalies": anomalies,
+        "funnel": funnel,
+        "score_buckets": score_buckets,
+    }

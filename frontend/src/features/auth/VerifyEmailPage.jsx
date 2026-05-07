@@ -41,7 +41,7 @@ export const VerifyEmailPage = ({ onNavigate, token }) => {
       : { kicker: 'VERIFY EMAIL', title: 'Verifying your email', sub: 'Please wait a moment.' };
 
   return (
-    <AuthShell {...heroProps}>
+    <AuthShell {...heroProps} onNavigate={onNavigate}>
       {status === 'success' ? (
         <>
           <div className="mc-auth-success-card" style={{ display: 'flex', alignItems: 'flex-start', gap: 12, padding: 16 }}>

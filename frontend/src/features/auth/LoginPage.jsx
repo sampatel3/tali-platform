@@ -134,6 +134,7 @@ export const LoginPage = ({ onNavigate }) => {
 
   return (
     <AuthShell
+      onNavigate={onNavigate}
       kicker="WELCOME BACK"
       title="Sign in to Taali"
       sub="Pick up where you left off. Your agent is waiting."

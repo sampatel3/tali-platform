@@ -69,6 +69,7 @@ def test_file_size_guard_for_api_and_service_paths() -> None:
         "app/components/assessments/service.py": "assessment orchestration",
         "app/components/integrations/workable/sync_service.py": "Workable sync flow",
         "app/components/integrations/workable/service.py": "legacy Workable integration service",
+        "app/domains/assessments_runtime/analytics_routes.py": "Mission Control reporting summary aggregator",
         "app/domains/assessments_runtime/applications_routes.py": "applications API",
         "app/domains/assessments_runtime/candidate_runtime_routes.py": "candidate runtime API",
         "app/domains/assessments_runtime/candidate_terminal_routes.py": "candidate terminal API",

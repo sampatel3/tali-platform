@@ -31,6 +31,7 @@ export const ForgotPasswordPage = ({ onNavigate }) => {
   if (sent) {
     return (
       <AuthShell
+        onNavigate={onNavigate}
         kicker="ACCOUNT RECOVERY"
         title="Check your email"
         sub="If an account exists for that email, we sent a link to reset your password."
@@ -44,6 +45,7 @@ export const ForgotPasswordPage = ({ onNavigate }) => {
 
   return (
     <AuthShell
+      onNavigate={onNavigate}
       kicker="ACCOUNT RECOVERY"
       title="Forgot your password?"
       sub="Enter your work email and we'll send a single-use link. The link expires in 30 minutes."

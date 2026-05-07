@@ -588,17 +588,14 @@ describe('CandidatesPage', () => {
     expect(await screen.findByRole('button', { name: /Back to candidates/i }, { timeout: 5000 })).toBeInTheDocument();
     expect(await screen.findByText('Candidate standing report', {}, { timeout: 5000 })).toBeInTheDocument();
     expect(screen.getAllByText(/Standing Candidate/i).length).toBeGreaterThan(0);
-    expect(screen.getByText('Shareable link')).toBeInTheDocument();
-    expect(screen.getByLabelText('Shareable report link')).toHaveValue('https://www.taali.ai/c/12?view=interview&k=shr_candidate_report_12');
+    // Header now exposes one Share-internally + one Share-with-client
+    // button instead of the legacy "Shareable link" panel + 4-button row.
+    // Both buttons open the same ShareModal pre-set to the right tab.
+    expect(screen.getByRole('button', { name: /Share with client/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Share internally/i })).toBeInTheDocument();
   });
 
-  it('loads a standing report from a shared token route and copies the secure link', async () => {
-    const clipboardWriteText = vi.fn().mockResolvedValue(undefined);
-    Object.defineProperty(window.navigator, 'clipboard', {
-      configurable: true,
-      value: { writeText: clipboardWriteText },
-    });
-
+  it('loads a standing report from a shared token route and exposes share buttons', async () => {
     rolesApi.getApplicationByShareToken.mockResolvedValue({
       data: {
         id: 12,
@@ -633,19 +630,16 @@ describe('CandidatesPage', () => {
     });
 
     await renderAppAt('/candidates/shr_candidate_report_12');
-    const expectedVisibleShareUrl = `${window.location.origin}/c/12?view=interview&k=shr_candidate_report_12`;
-    const expectedCopiedShareUrl = 'https://www.taali.ai/c/12?view=interview&k=shr_candidate_report_12';
 
     await waitFor(() => {
       expect(rolesApi.getApplicationByShareToken).toHaveBeenCalledWith('shr_candidate_report_12');
       expect(screen.getByText('Candidate standing report')).toBeInTheDocument();
-      expect(screen.getByLabelText('Shareable report link')).toHaveValue(expectedVisibleShareUrl);
-    });
-
-    fireEvent.click(screen.getByRole('button', { name: /Copy interview link/i }));
-
-    await waitFor(() => {
-      expect(clipboardWriteText).toHaveBeenCalledWith(expectedCopiedShareUrl);
+      // The new header exposes two share buttons that open the modal —
+      // the inline Input/Copy/Email row was removed per user feedback
+      // ("tidy all the shareable links — way too many"). Modal-internal
+      // copy + revoke flows are covered in ShareModal's own tests.
+      expect(screen.getByRole('button', { name: /Share internally/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Share with client/i })).toBeInTheDocument();
     });
   });
 
