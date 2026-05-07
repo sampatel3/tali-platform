@@ -6,6 +6,9 @@ import { TaaliTile } from '../../shared/ui/Branding';
 // verify-email per HANDOFF §4.3. Editorial pane (deep purple gradient with
 // a customer testimonial + compliance row) on the left, form pane on the
 // right with kicker → title → subtitle → form children → footer.
+//
+// `onNavigate` is forwarded by every auth page so the editorial logo
+// behaves like the marketing nav logo: click it to return to /.
 export const AuthShell = ({
   kicker,
   title,
@@ -13,11 +16,17 @@ export const AuthShell = ({
   children,
   footer,
   topRight = null,
+  onNavigate,
 }) => (
   <div className="mc-auth">
     <aside className="mc-auth-editorial">
       <div className="mc-auth-editorial-bg" aria-hidden="true" />
-      <div className="mc-auth-editorial-logo">
+      <button
+        type="button"
+        className="mc-auth-editorial-logo"
+        onClick={() => onNavigate?.('landing')}
+        aria-label="Taali home"
+      >
         <TaaliTile
           className="h-7 w-7 rounded-[7px]"
           fillClassName="text-white"
@@ -26,7 +35,7 @@ export const AuthShell = ({
           cornerRadius={6.5}
         />
         <span>taali<span style={{ opacity: 0.7 }}>.</span></span>
-      </div>
+      </button>
       <div className="mc-auth-quote">
         <div className="mc-auth-quote-kicker">WHY TAALI</div>
         <p>

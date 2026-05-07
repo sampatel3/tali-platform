@@ -39,7 +39,7 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
 
   if (!token) {
     return (
-      <AuthShell kicker="SET A NEW PASSWORD" title="Invalid link" sub="This reset link is missing or invalid. Request a new one from the login page.">
+      <AuthShell onNavigate={onNavigate} kicker="SET A NEW PASSWORD" title="Invalid link" sub="This reset link is missing or invalid. Request a new one from the login page.">
         <button type="button" className="mc-auth-cta" onClick={() => onNavigate('forgot-password')}>
           Request new link →
         </button>
@@ -49,7 +49,7 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
 
   if (success) {
     return (
-      <AuthShell kicker="SET A NEW PASSWORD" title="Password updated" sub="You can now sign in with your new password.">
+      <AuthShell onNavigate={onNavigate} kicker="SET A NEW PASSWORD" title="Password updated" sub="You can now sign in with your new password.">
         <button type="button" className="mc-auth-cta" onClick={() => onNavigate('login')}>
           Sign in →
         </button>
@@ -59,6 +59,7 @@ export const ResetPasswordPage = ({ onNavigate, token }) => {
 
   return (
     <AuthShell
+      onNavigate={onNavigate}
       kicker="SET A NEW PASSWORD"
       title="Choose something memorable"
       sub="Use a passphrase, not a word. Mix at least 12 characters; we won't make you add a symbol."

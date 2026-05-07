@@ -8271,6 +8271,24 @@ button.eng-badge-button:focus-visible {
   font-size: 18px;
   font-weight: 600;
   letter-spacing: -0.02em;
+  /* Render as a button — clears default UA chrome so the logo keeps
+     the same look as the prior <div> while staying clickable. */
+  background: transparent;
+  border: 0;
+  padding: 0;
+  color: inherit;
+  cursor: pointer;
+  width: fit-content;
+}
+
+.mc-auth-editorial-logo:hover {
+  opacity: 0.85;
+}
+
+.mc-auth-editorial-logo:focus-visible {
+  outline: 2px solid var(--purple-lav);
+  outline-offset: 4px;
+  border-radius: 4px;
 }
 
 .mc-auth-quote {

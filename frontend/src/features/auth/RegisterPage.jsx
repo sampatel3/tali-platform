@@ -82,6 +82,7 @@ export const RegisterPage = ({ onNavigate }) => {
   if (success) {
     return (
       <AuthShell
+        onNavigate={onNavigate}
         kicker="VERIFY EMAIL"
         title="Check your inbox"
         sub="We sent a verification link to your work email."
@@ -131,6 +132,7 @@ export const RegisterPage = ({ onNavigate }) => {
 
   return (
     <AuthShell
+      onNavigate={onNavigate}
       kicker="START FREE"
       title="Create your team"
       sub="14-day trial. No card. Bring your roles in or start with one of ours."
