@@ -138,12 +138,12 @@ describe('SettingsPage recruiter surface', () => {
     renderSettingsRoute('/settings/agent');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /AI agent/i })).toBeInTheDocument();
+      expect(screen.getByText(/Every new role inherits/i)).toBeInTheDocument();
     });
-    // Wait for the seeded list to land in the form so the save click sees
-    // the same values as the user.
+    // Wait for the seeded textarea content to land in the form. The
+    // textarea joins the list with newlines.
     await waitFor(() => {
-      expect(screen.getByDisplayValue('5+ years backend')).toBeInTheDocument();
+      expect(screen.getByDisplayValue(/5\+ years backend/)).toBeInTheDocument();
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Save agent defaults' }));

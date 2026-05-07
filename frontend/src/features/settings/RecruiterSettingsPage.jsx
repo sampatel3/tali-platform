@@ -1,8 +1,12 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   CreditCard,
+  Edit3,
   KeyRound,
   Mail,
+  Settings2,
+  X,
+  Check,
 } from 'lucide-react';
 import { useLocation, useNavigate } from 'react-router-dom';
 
@@ -188,104 +192,237 @@ const ToggleCard = ({ title, description, checked, onChange, badge = null }) => 
   </div>
 );
 
-// HANDOFF settings.md — AI agent tab. The whole tab is exactly three
-// fields: a repeating list of must-have strings, a single dollar budget
-// every new role inherits, and a 0..100 score threshold below which
-// candidates land in recruiter review. No rubric editor, no model
-// picker, no token cap UI — those are product decisions, not customer
-// configuration.
-const AgentDefaultsForm = ({ requirements, budgetUsd, threshold, onChange }) => {
+// HANDOFF settings.md — AI agent tab. Three workspace defaults inherited
+// at role-create time: a repeating list of must-have strings, a single
+// dollar budget cap, and a 0..100 score threshold. Visually mirrors the
+// role page Agent settings tab (RoleAgentSettingsTab in JobPipelinePage)
+// so recruiters get the same mental model when they jump between
+// workspace defaults and per-role overrides.
+const AgentDefaultsForm = ({
+  requirements,
+  budgetUsd,
+  threshold,
+  onChange,
+  onSaveBudget,
+}) => {
   const items = Array.isArray(requirements) ? requirements : [];
-  const updateAt = (index, value) => {
-    const next = items.slice();
-    next[index] = value;
-    onChange({ requirements: next });
+  const requirementsText = items.join('\n');
+  const handleTextareaChange = (event) => {
+    const lines = String(event.target.value || '').split('\n');
+    onChange({ requirements: lines });
   };
-  const removeAt = (index) => {
-    const next = items.slice();
-    next.splice(index, 1);
-    onChange({ requirements: next });
+  const cleanedItems = items.map((item) => String(item || '').trim()).filter(Boolean);
+  const thresholdDisplay = Math.max(0, Math.min(100, Number(threshold) || 0));
+  const budgetDollars = Number(budgetUsd);
+  const fmtUsd = (n) => `$${Math.round(Number(n) || 0)}`;
+
+  const [budgetEditing, setBudgetEditing] = React.useState(false);
+  const [budgetDraft, setBudgetDraft] = React.useState('');
+  const [budgetSaving, setBudgetSaving] = React.useState(false);
+  const startBudgetEdit = () => {
+    setBudgetDraft(Number.isFinite(budgetDollars) ? String(budgetDollars) : '');
+    setBudgetEditing(true);
   };
-  const addItem = () => {
-    onChange({ requirements: [...items, ''] });
+  const cancelBudgetEdit = () => {
+    setBudgetEditing(false);
+    setBudgetDraft('');
   };
+  const submitBudgetEdit = async () => {
+    const parsed = Number(budgetDraft);
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+    onChange({ budgetUsd: String(parsed) });
+    if (onSaveBudget) {
+      setBudgetSaving(true);
+      try {
+        await onSaveBudget(parsed);
+      } finally {
+        setBudgetSaving(false);
+      }
+    }
+    setBudgetEditing(false);
+  };
+
   return (
-    <div className="settings-subgrid">
-      <div className="settings-subcard">
-        <div className="settings-subcard-head">
-          <div>
-            <h3>Default role requirements</h3>
-            <p>Pre-fills the must-haves on every new role. Recruiters edit per role from the role page.</p>
+    <div className="mc-agent-settings">
+      <div className="mc-agent-settings-main">
+        {/* Hero banner */}
+        <section className="mc-agent-settings-hero">
+          <div className="mc-agent-settings-hero-glyph">
+            <Settings2 size={20} strokeWidth={2} />
           </div>
-        </div>
-        <div className="agent-defaults-list">
-          {items.length === 0 ? (
-            <div className="settings-empty-state">No defaults yet — add a few must-haves new roles should inherit.</div>
-          ) : null}
-          {items.map((value, index) => (
-            <div key={index} className="agent-defaults-row">
-              <input
-                aria-label={`Default requirement ${index + 1}`}
-                value={value}
-                onChange={(event) => updateAt(index, event.target.value)}
-                placeholder="e.g. 5+ years building data pipelines on AWS"
-                maxLength={400}
-              />
+          <div className="mc-agent-settings-hero-body">
+            <div className="mc-kicker">WORKSPACE DEFAULTS</div>
+            <div className="mc-agent-settings-hero-title">
+              Every new role inherits{' '}
+              <span style={{ color: 'var(--purple)' }}>these defaults</span>
+            </div>
+            <p className="mc-agent-settings-hero-help">
+              Per-role overrides on the role page win — existing roles are not retroactively updated when these change.
+            </p>
+          </div>
+          <div className="mc-agent-settings-hero-aside">
+            <span className="mc-agent-settings-since">
+              Saved values seed the role page on every newly imported or created role.
+            </span>
+          </div>
+        </section>
+
+        {/* Default role requirements */}
+        <section className="mc-agent-settings-card">
+          <div className="mc-agent-settings-card-head">
+            <div>
+              <h2 className="mc-agent-settings-card-title">
+                Default role <em>requirements</em>
+              </h2>
+              <p className="mc-agent-settings-card-help">
+                Pre-fills the must-haves on every new role. Recruiters edit per role from the role page.
+              </p>
+            </div>
+          </div>
+          <div className="mc-agent-settings-callout">
+            <span className="mc-agent-settings-callout-num">01</span>
+            <span>One requirement per line. Prefix with the priority so the agent weighs it correctly (Must have / Preferred / Nice to have).</span>
+            <span className="mc-agent-settings-callout-tag">DEFAULTS</span>
+          </div>
+          <div className="mc-agent-settings-textwrap">
+            <div className="mc-agent-settings-texthead">
+              <span>RECRUITER SCORING REQUIREMENTS</span>
+              <span style={{ color: 'var(--purple)' }}>
+                {cleanedItems.length
+                  ? `${cleanedItems.length} line${cleanedItems.length === 1 ? '' : 's'}`
+                  : 'No lines yet'}
+              </span>
+            </div>
+            <textarea
+              rows={6}
+              className="mc-agent-settings-textarea"
+              value={requirementsText}
+              onChange={handleTextareaChange}
+              placeholder={'Must have: 4+ yrs production Python or Go\nMust have: Postgres internals, query planning experience\nPreferred: On-call rotation at >100k req/min scale\nNice to have: Open-source or technical writing'}
+            />
+          </div>
+        </section>
+
+        {/* Default score threshold */}
+        <section className="mc-agent-settings-card">
+          <div className="mc-agent-settings-card-head">
+            <div>
+              <h2 className="mc-agent-settings-card-title">
+                Default score <em>threshold</em>
+              </h2>
+              <p className="mc-agent-settings-card-help">
+                Minimum total score on a new role's auto-shortlist. Candidates below this are flagged for recruiter review.
+              </p>
+            </div>
+            <div className="mc-agent-settings-threshold-display">
+              {thresholdDisplay}<span className="mc-agent-settings-threshold-pct">%</span>
+            </div>
+          </div>
+          <div className="mc-agent-settings-slider">
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={thresholdDisplay}
+              onChange={(event) => onChange({ threshold: Number(event.target.value) })}
+              aria-label="Default score threshold"
+              className="mc-agent-settings-slider-input"
+            />
+            <div className="mc-agent-settings-slider-track">
+              <div className="mc-agent-settings-slider-thumb" style={{ left: `${thresholdDisplay}%` }} />
+            </div>
+            <div className="mc-agent-settings-slider-scale">
+              <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
+            </div>
+          </div>
+        </section>
+      </div>
+
+      {/* Sidebar */}
+      <aside className="mc-agent-settings-side">
+        <div className="mc-agent-settings-side-card">
+          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>DEFAULT ROLE BUDGET</div>
+          <p className="mc-agent-settings-card-help" style={{ marginTop: 0, marginBottom: 10 }}>
+            Cap the agent will respect on each new role until a recruiter changes it. Resets monthly.
+          </p>
+          <div className="mc-agent-settings-budget-amount">
+            <span className="big">{fmtUsd(budgetDollars || 0)}</span>
+            <span className="of">/ month</span>
+          </div>
+          {budgetEditing ? (
+            <div className="mc-agent-settings-budget-edit">
+              <label className="mc-agent-settings-budget-edit-label">
+                Default cap (USD)
+                <div className="mc-agent-settings-budget-edit-input">
+                  <span className="prefix">$</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={5}
+                    value={budgetDraft}
+                    onChange={(event) => setBudgetDraft(event.target.value)}
+                    aria-label="Default monthly budget in dollars"
+                    autoFocus
+                  />
+                </div>
+              </label>
+              <div className="mc-agent-settings-budget-edit-actions">
+                <button
+                  type="button"
+                  className="btn btn-outline btn-xs"
+                  onClick={cancelBudgetEdit}
+                  disabled={budgetSaving}
+                >
+                  <X size={11} />
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-purple btn-xs"
+                  onClick={submitBudgetEdit}
+                  disabled={budgetSaving || budgetDraft === ''}
+                >
+                  <Check size={11} />
+                  {budgetSaving ? 'Saving…' : 'Save cap'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mc-agent-settings-budget-cap-row">
+              <span>Applies to new roles only</span>
               <button
                 type="button"
-                className="btn btn-outline btn-sm"
-                onClick={() => removeAt(index)}
-                aria-label={`Remove default requirement ${index + 1}`}
+                className="mc-agent-settings-budget-edit-link"
+                onClick={startBudgetEdit}
               >
-                Remove
+                <Edit3 size={11} />
+                Edit
               </button>
             </div>
-          ))}
+          )}
         </div>
-        <button type="button" className="btn btn-outline btn-sm" onClick={addItem}>
-          + Add requirement
-        </button>
-      </div>
 
-      <div className="settings-subcard">
-        <div className="settings-subcard-head">
-          <div>
-            <h3>Default budget per role</h3>
-            <p>Cap the agent will respect on each new role until a recruiter changes it. Resets monthly.</p>
-          </div>
+        <div className="mc-agent-settings-side-card">
+          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>DEFAULT MUST-HAVES</div>
+          <p className="mc-agent-settings-card-help" style={{ marginBottom: 10 }}>
+            Copied verbatim into every new role. The agent rejects below these unless the recruiter overrides on the role page.
+          </p>
+          {cleanedItems.length ? (
+            <ul className="mc-agent-settings-mustlist">
+              {cleanedItems.map((item, idx) => (
+                <li key={`${item}-${idx}`}>· {item}</li>
+              ))}
+            </ul>
+          ) : (
+            <div className="mc-agent-settings-card-help">No defaults yet — add a few in the editor.</div>
+          )}
         </div>
-        <label className="field">
-          <span className="k">Default budget (USD/month)</span>
-          <input
-            type="number"
-            min={0}
-            step="1"
-            value={budgetUsd}
-            onChange={(event) => onChange({ budgetUsd: event.target.value })}
-            placeholder="200"
-          />
-        </label>
-      </div>
 
-      <div className="settings-subcard">
-        <div className="settings-subcard-head">
-          <div>
-            <h3>Default score threshold</h3>
-            <p>Minimum total score on a new role's auto-shortlist. Below = flagged for recruiter review.</p>
-          </div>
+        <div className="mc-agent-settings-audit-callout">
+          Workspace defaults applied at role-create time. Per-role overrides on the role page win.
         </div>
-        <label className="field">
-          <span className="k">Threshold ({Math.max(0, Math.min(100, Number(threshold) || 0))}/100)</span>
-          <input
-            type="range"
-            min={0}
-            max={100}
-            value={Math.max(0, Math.min(100, Number(threshold) || 0))}
-            onChange={(event) => onChange({ threshold: Number(event.target.value) })}
-            aria-label="Default score threshold"
-          />
-        </label>
-      </div>
+      </aside>
     </div>
   );
 };
