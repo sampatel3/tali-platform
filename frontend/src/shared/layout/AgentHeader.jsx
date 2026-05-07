@@ -76,7 +76,7 @@ const AgentOffActivator = ({ onActivate, disabledReason }) => {
   return (
     <>
       <div className="agent-off-copy">
-        {disabledReason || 'Set a monthly cap and turn on the agent.'}
+        {disabledReason || 'Set the monthly cap for this role — covers pre-screen, scoring, semantic search, assessments, and the agent — then turn on the agent.'}
       </div>
       <div className="agent-off-budget">
         <span className="agent-off-budget-prefix">$</span>
@@ -86,7 +86,7 @@ const AgentOffActivator = ({ onActivate, disabledReason }) => {
           step={5}
           value={budget}
           onChange={(event) => setBudget(event.target.value)}
-          aria-label="Monthly budget in USD"
+          aria-label="Role monthly budget in USD"
           disabled={activating}
           inputMode="numeric"
         />
@@ -173,7 +173,7 @@ const AgentPanel = ({
       {on || paused ? (
         <div className="agent-budget">
           <div className="agent-budget-row">
-            <span>This month</span>
+            <span title="Covers pre-screen, scoring, semantic search, assessments, and the agent on this role.">Role budget · this month</span>
             <span className="amt">{spentLabel} <span className="of">/ {budgetLabel}</span></span>
           </div>
           <div className="agent-budget-bar">

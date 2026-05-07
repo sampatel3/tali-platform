@@ -26,6 +26,15 @@ vi.mock('../../shared/api', () => ({
   tasks: {
     list: vi.fn(),
   },
+  agent: {
+    status: vi.fn().mockResolvedValue({ data: null }),
+    usageBreakdown: vi.fn().mockResolvedValue({ data: null }),
+    listDecisions: vi.fn().mockResolvedValue({ data: [] }),
+    approveDecision: vi.fn().mockResolvedValue({ data: null }),
+    overrideDecision: vi.fn().mockResolvedValue({ data: null }),
+    discardPending: vi.fn().mockResolvedValue({ data: null }),
+    runNow: vi.fn().mockResolvedValue({ data: null }),
+  },
 }));
 
 vi.mock('../candidates/CandidateSheet', () => ({
