@@ -33,12 +33,19 @@ def sync_candidate(
     *,
     db: Session | None = None,
     include_cv_text: bool = True,
+    bill_organization_id: int | None = None,
+    bill_role_id: int | None = None,
+    bill_user_id: int | None = None,
 ) -> int:
     """Ingest one candidate's profile (+ optional raw CV text) into Graphiti.
 
     Returns the number of episodes successfully sent. Returns 0 (no error)
     when Graphiti is not configured or the candidate is missing
     organization_id.
+
+    When ``bill_organization_id`` is set (typically by the per-role Process
+    cascade), each successful episode is also recorded as a graph_sync
+    UsageEvent against the org/role so the cost flows into the role budget.
     """
     if not graph_client.is_configured():
         return 0
@@ -53,7 +60,14 @@ def sync_candidate(
     )
     cv_ep = episode_module.build_cv_text_episode(candidate) if include_cv_text else None
     episodes = profile_eps + ([cv_ep] if cv_ep else [])
-    sent = episode_module.dispatch(episodes)
+    sent = episode_module.dispatch(
+        episodes,
+        db=db,
+        bill_organization_id=bill_organization_id,
+        bill_role_id=bill_role_id,
+        bill_user_id=bill_user_id,
+        bill_candidate_id=int(candidate.id),
+    )
 
     if db is not None and sent > 0:
         _record_sync_state(db, int(candidate.id))

@@ -15,4 +15,8 @@ export const agent = {
 
   // Consolidated bar payload (poll target)
   status: (roleId) => api.get(`/roles/${roleId}/agent/status`),
+
+  // Per-feature spend breakdown for the role this calendar month — backs
+  // the Role budget panel so recruiters see where their cap is going.
+  usageBreakdown: (roleId) => api.get(`/roles/${roleId}/usage/breakdown`),
 };

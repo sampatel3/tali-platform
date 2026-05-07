@@ -589,12 +589,11 @@ const RoleAgentSettingsTab = ({
   setThresholdDraft,
   thresholdValue,
   recruiterCriteria,
-  unscoredApplicationsCount,
   activeApplications,
   belowThresholdCount,
   savingRoleConfig,
+  usageBreakdown,
   onSave,
-  onScore,
   onScrollToReview,
   onSaveBudget,
 }) => {
@@ -691,18 +690,10 @@ const RoleAgentSettingsTab = ({
               <h2 className="mc-agent-settings-card-title">
                 CV scoring <em>criteria</em>
               </h2>
-              <p className="mc-agent-settings-card-help">Job spec is the default. Add recruiter guidance below to refine.</p>
+              <p className="mc-agent-settings-card-help">
+                Job spec is the default. Add recruiter guidance below to refine. The agent applies this automatically as new candidates arrive.
+              </p>
             </div>
-            <button
-              type="button"
-              className="btn btn-purple btn-sm"
-              onClick={onScore}
-              disabled={savingRoleConfig || unscoredApplicationsCount === 0}
-            >
-              {unscoredApplicationsCount > 0
-                ? `Score ${unscoredApplicationsCount} candidate${unscoredApplicationsCount === 1 ? '' : 's'}`
-                : 'No new candidates'}
-            </button>
           </div>
           <div className="mc-agent-settings-callout">
             <span className="mc-agent-settings-callout-num">01</span>
@@ -855,7 +846,10 @@ const RoleAgentSettingsTab = ({
       {/* Sidebar */}
       <aside className="mc-agent-settings-side">
         <div className="mc-agent-settings-side-card">
-          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>AGENT BUDGET · THIS ROLE</div>
+          <div className="mc-kicker is-mute" style={{ marginBottom: 8 }}>ROLE BUDGET · THIS MONTH</div>
+          <p className="mc-agent-settings-card-help" style={{ marginTop: 0, marginBottom: 10 }}>
+            One pot for everything we do on this role: pre-screen, scoring, semantic search, assessments, and the agent.
+          </p>
           <div className="mc-agent-settings-budget-amount">
             <span className="big">{fmtUsd(monthlySpentCents)}</span>
             <span className="of">of {fmtUsd(monthlyBudgetCents)}</span>
@@ -867,6 +861,35 @@ const RoleAgentSettingsTab = ({
             EOM PROJECTION ≈ {fmtUsd(projectedCents)} ·{' '}
             {projectedCents > monthlyBudgetCents ? 'over budget' : 'paced under budget'}
           </div>
+          {Array.isArray(usageBreakdown?.by_feature) && usageBreakdown.by_feature.length > 0 ? (
+            <ul className="mc-agent-settings-budget-breakdown">
+              {(() => {
+                // Roll up the per-feature lines into the recruiter-facing
+                // labels (Scoring, Pre-screen, Semantic search, etc.) the
+                // backend already grouped by, then render one row each.
+                const grouped = new Map();
+                for (const line of usageBreakdown.by_feature) {
+                  const key = line.label || line.feature;
+                  const prev = grouped.get(key) || { label: key, cost_cents: 0, event_count: 0 };
+                  prev.cost_cents += Number(line.cost_cents || 0);
+                  prev.event_count += Number(line.event_count || 0);
+                  grouped.set(key, prev);
+                }
+                return [...grouped.values()]
+                  .sort((a, b) => b.cost_cents - a.cost_cents)
+                  .map((row) => (
+                    <li key={row.label}>
+                      <span className="mc-agent-settings-budget-breakdown-label">{row.label}</span>
+                      <span className="mc-agent-settings-budget-breakdown-amt">{fmtUsd(row.cost_cents)}</span>
+                    </li>
+                  ));
+              })()}
+            </ul>
+          ) : monthlySpentCents > 0 ? null : (
+            <div className="mc-agent-settings-card-help" style={{ marginTop: 12 }}>
+              No spend yet this month.
+            </div>
+          )}
           {/* HANDOFF v2 §4.3 — Monthly cap $X · Edit. Recruiters can
               raise / lower the per-role cap inline; saved value is
               persisted on the role record (monthly_usd_budget_cents),
@@ -978,6 +1001,19 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // with monthly_spent_cents + monthly_budget_cents + pending_decisions +
   // last_activity. Polled every 30s, paused when the tab is hidden.
   const { status: agentStatus } = useAgentStatus(Number.isFinite(numericRoleId) ? numericRoleId : null);
+  // Per-feature spend breakdown for the role budget panel. Refetched
+  // whenever the role's monthly spend ticks (a coarse proxy for "new
+  // usage events landed"); cheap enough to call inline.
+  const [usageBreakdown, setUsageBreakdown] = useState(null);
+  useEffect(() => {
+    if (!Number.isFinite(numericRoleId)) return undefined;
+    if (!apiClient?.agent?.usageBreakdown) return undefined;
+    let cancelled = false;
+    apiClient.agent.usageBreakdown(numericRoleId)
+      .then((res) => { if (!cancelled) setUsageBreakdown(res?.data || null); })
+      .catch(() => { if (!cancelled) setUsageBreakdown(null); });
+    return () => { cancelled = true; };
+  }, [numericRoleId, agentStatus?.monthly_spent_cents]);
   // Pending agent decisions for this role, keyed by application_id so the
   // Pipeline-tab kanban cards can render the real Approve/Override flow
   // inline (HANDOFF v2 §4 / canvas jobs-detail-pipeline). Polls every 30s.
@@ -1465,13 +1501,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   };
 
-  // Backwards-compatible wrappers used by existing buttons elsewhere on the
-  // page. New buttons should go through openConfirm() directly.
-  const handleBatchScore = ({ includeScored = false } = {}) =>
-    openConfirm(includeScored ? 'score_rescore' : 'score_new');
-
-  const handleFetchCvs = () => openConfirm('fetch_cvs');
-
   const handleSaveRoleConfig = async () => {
     if (!Number.isFinite(numericRoleId)) return;
     setSavingRoleConfig(true);
@@ -1931,12 +1960,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             setThresholdDraft={setThresholdDraft}
             thresholdValue={thresholdValue}
             recruiterCriteria={recruiterCriteria}
-            unscoredApplicationsCount={unscoredApplications.length}
             activeApplications={activeApplications}
             belowThresholdCount={belowThresholdCount}
             savingRoleConfig={savingRoleConfig}
+            usageBreakdown={usageBreakdown}
             onSave={handleSaveRoleConfig}
-            onScore={() => handleBatchScore({ includeScored: false })}
             onScrollToReview={() => document.getElementById('pipeline-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
             onSaveBudget={async (dollars) => {
               if (!Number.isFinite(numericRoleId)) return;

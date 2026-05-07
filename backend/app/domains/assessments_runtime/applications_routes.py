@@ -4463,6 +4463,10 @@ def _process_dry_run(
         "graph_sync": {
             "will_run": int(will_graph_sync),
             "refresh": bool(refresh_graph),
+            # Rough estimate: ~5 episodes/candidate × ~$0.005 each on Haiku.
+            # Surfaced in the preview so recruiters see the indexing spend
+            # before it lands in their role budget.
+            "estimated_cost_cents": int(round(will_graph_sync * 2.0)),
         },
         "total_candidates": len(apps),
     }
@@ -4479,6 +4483,7 @@ def _run_process(
     score_mode: str,
     sync_graph: bool = False,
     refresh_graph: bool = False,
+    user_id: int | None = None,
 ) -> None:
     """Background worker: cascade fetch → pre-screen → score → graph sync.
 
@@ -4745,7 +4750,12 @@ def _run_process(
                             progress["graph_sync"]["errors"] += 1
                         else:
                             sent = graph_sync_module.sync_candidate(
-                                cand, db=db, include_cv_text=True
+                                cand,
+                                db=db,
+                                include_cv_text=True,
+                                bill_organization_id=org_id,
+                                bill_role_id=role_id,
+                                bill_user_id=user_id,
                             )
                             if sent == 0:
                                 # Graphiti returned no episodes — likely an
@@ -4867,6 +4877,7 @@ def process_role(
             "score_mode": score_mode,
             "sync_graph": sync_graph,
             "refresh_graph": refresh_graph,
+            "user_id": current_user.id,
         },
         daemon=True,
     )

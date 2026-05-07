@@ -22,7 +22,7 @@ class UsageEvent(Base):
     organization_id = Column(Integer, ForeignKey("organizations.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     role_id = Column(Integer, ForeignKey("roles.id"), nullable=True)
-    feature = Column(String, nullable=False)  # prescreen | score | assessment | other
+    feature = Column(String, nullable=False)  # see Feature enum in pricing_service (prescreen | score | assessment | graph_sync | agent_autonomous | …)
     entity_id = Column(String, nullable=True)  # application_id / assessment_id
     model = Column(String, nullable=False)
     input_tokens = Column(Integer, default=0, nullable=False)

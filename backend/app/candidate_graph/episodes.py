@@ -300,12 +300,25 @@ def build_event_episode(event: CandidateApplicationEvent) -> Episode | None:
 # ---------------------------------------------------------------------------
 
 
-def dispatch(episodes: Iterable[Episode]) -> int:
+def dispatch(
+    episodes: Iterable[Episode],
+    *,
+    db: "Session | None" = None,  # type: ignore[name-defined]
+    bill_organization_id: int | None = None,
+    bill_role_id: int | None = None,
+    bill_user_id: int | None = None,
+    bill_candidate_id: int | None = None,
+) -> int:
     """Send episodes to Graphiti. Returns the number successfully sent.
 
     Graphiti's ``add_episode`` is async; we dispatch via the shared loop.
     Errors on individual episodes are logged but don't abort the batch —
     a partial graph is better than nothing.
+
+    When ``db`` and ``bill_organization_id`` are supplied, each successful
+    episode also writes a ``UsageEvent`` (feature=graph_sync) so the
+    indexing cost flows into the role's monthly budget. The caller owns
+    the commit; this function only adds rows.
     """
     sent = 0
     if not graph_client.is_configured():
@@ -331,6 +344,17 @@ def dispatch(episodes: Iterable[Episode]) -> int:
                 timeout=120.0,
             )
             sent += 1
+            if db is not None and bill_organization_id is not None:
+                from . import billing
+                billing.record_episode_cost(
+                    db,
+                    organization_id=bill_organization_id,
+                    role_id=bill_role_id,
+                    user_id=bill_user_id,
+                    candidate_id=bill_candidate_id,
+                    episode_name=episode.name,
+                    episode_body=episode.body,
+                )
         except Exception as exc:
             logger.warning(
                 "Graphiti add_episode failed name=%s reason=%s", episode.name, exc

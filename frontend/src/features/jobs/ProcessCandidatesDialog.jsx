@@ -6,10 +6,10 @@ import { Button, Dialog } from '../../shared/ui/TaaliPrimitives';
 /**
  * ProcessCandidatesDialog
  *
- * One dialog to drive the cascade: fetch CVs → pre-screen → score.
- * Each step has a checkbox. Score has a 3-way radio (none / new / all).
- * "Refresh pre-screen" lives under an Advanced disclosure since it's
- * destructive (overrides existing pre-screen results).
+ * One dialog to drive the cascade: fetch CVs → pre-screen → score → add to
+ * semantic search. Each step has a checkbox. Score has a 3-way radio
+ * (none / new / all). Destructive refreshes (re-fetch CVs, refresh
+ * pre-screen, re-index every candidate) live under an Advanced disclosure.
  *
  * Counts come from the backend's dry_run preview, recomputed every time
  * the user toggles a step so the numbers reflect the actual cascade.
@@ -19,7 +19,8 @@ import { Button, Dialog } from '../../shared/ui/TaaliPrimitives';
  *   roleId     — number
  *   onClose    — () => void
  *   onConfirm  — async (body) => void.  body shape:
- *                  { fetch_cvs, pre_screen, refresh_pre_screen, score }
+ *                  { fetch_cvs, refresh_cvs, pre_screen, refresh_pre_screen,
+ *                    score, sync_graph, refresh_graph }
  */
 export function ProcessCandidatesDialog({
   open,
@@ -36,7 +37,7 @@ export function ProcessCandidatesDialog({
     pre_screen: true,
     refresh_pre_screen: false,
     score: 'new',
-    sync_graph: false,
+    sync_graph: true,
     refresh_graph: false,
     ...(defaults || {}),
   }));
@@ -55,7 +56,7 @@ export function ProcessCandidatesDialog({
       pre_screen: true,
       refresh_pre_screen: false,
       score: 'new',
-      sync_graph: false,
+      sync_graph: true,
       refresh_graph: false,
       ...(defaults || {}),
     });
@@ -107,6 +108,7 @@ export function ProcessCandidatesDialog({
   const preScreenCount = Number(counts?.pre_screen?.will_run ?? 0);
   const scoreCount = Number(counts?.score?.will_run ?? 0);
   const graphSyncCount = Number(counts?.graph_sync?.will_run ?? 0);
+  const graphSyncEstCents = Number(counts?.graph_sync?.estimated_cost_cents ?? 0);
 
   const willDoSomething = (
     (opts.fetch_cvs && fetchCount > 0)
@@ -158,7 +160,7 @@ export function ProcessCandidatesDialog({
       open={open}
       onClose={submitting ? undefined : onClose}
       title="Process candidates"
-      description="Pick which steps to run. They execute in order: fetch CVs → pre-screen → score."
+      description="Pick which steps to run. They execute in order: fetch CVs → pre-screen → score → add to semantic search. All steps draw from this role's monthly budget."
       footer={(
         <div className="flex flex-wrap items-center justify-end gap-2">
           <Button type="button" variant="ghost" onClick={onClose} disabled={submitting}>
@@ -264,6 +266,31 @@ export function ProcessCandidatesDialog({
           </div>
         </fieldset>
 
+        {/* ── Add to semantic search ─────────────────────────────────── */}
+        <label className="process-row">
+          <input
+            type="checkbox"
+            checked={!!opts.sync_graph}
+            onChange={(e) => setOpts((s) => ({ ...s, sync_graph: e.target.checked }))}
+          />
+          <div className="process-row__body">
+            <div className="process-row__title">Add candidates to semantic search</div>
+            <div className="process-row__sub">
+              {opts.sync_graph && graphSyncCount === 0
+                ? 'All candidates with a CV are already in semantic search and up to date.'
+                : 'Indexes candidates so you can search across the database in natural language. Skips ones already indexed.'}
+              {opts.sync_graph && graphSyncCount > 0 && graphSyncEstCents > 0 ? (
+                <span className="process-row__cost">
+                  {' '}~${(graphSyncEstCents / 100).toFixed(2)} from this role's budget.
+                </span>
+              ) : null}
+            </div>
+          </div>
+          <div className="process-row__count">
+            {opts.sync_graph ? graphSyncCount : ''}
+          </div>
+        </label>
+
         {/* ── Advanced ───────────────────────────────────────────────── */}
         <button
           type="button"
@@ -313,39 +340,18 @@ export function ProcessCandidatesDialog({
                 </div>
               </div>
             </label>
-            {/* Graph sync — per-role: projects this job's candidates with a
-                CV into the Graphiti / Neo4j knowledge graph. Skips candidates
-                already synced (same CV) so it's safe to leave on. */}
-            <label className="process-row">
-              <input
-                type="checkbox"
-                checked={!!opts.sync_graph}
-                onChange={(e) => setOpts((s) => ({ ...s, sync_graph: e.target.checked }))}
-              />
-              <div className="process-row__body">
-                <div className="process-row__title">Sync candidates to knowledge graph</div>
-                <div className="process-row__sub">
-                  {opts.sync_graph && graphSyncCount === 0
-                    ? 'All candidates with a CV on this role are already in the graph and up to date.'
-                    : `Project this job's candidates with a CV into Neo4j via Graphiti. Skips candidates already synced (same CV).`}
-                </div>
-              </div>
-              <div className="process-row__count">
-                {opts.sync_graph ? graphSyncCount : ''}
-              </div>
-            </label>
             {opts.sync_graph ? (
-              <label className="process-row" style={{ marginLeft: 24 }}>
+              <label className="process-row">
                 <input
                   type="checkbox"
                   checked={!!opts.refresh_graph}
                   onChange={(e) => setOpts((s) => ({ ...s, refresh_graph: e.target.checked }))}
                 />
                 <div className="process-row__body">
-                  <div className="process-row__title">Force re-sync (ignore last_synced_at)</div>
+                  <div className="process-row__title">Re-index every candidate</div>
                   <div className="process-row__sub">
-                    Re-projects every candidate even if their CV hasn't changed since the last sync.
-                    Use only when you suspect drift.
+                    Re-adds every candidate to semantic search even if their CV hasn't changed.
+                    Use only when you suspect the index has drifted.
                   </div>
                 </div>
               </label>

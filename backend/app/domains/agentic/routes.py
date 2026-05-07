@@ -129,6 +129,22 @@ class AgentStatusPayload(BaseModel):
     last_activity: Optional[AgentStatusActivity] = None
 
 
+class RoleUsageBreakdownLine(BaseModel):
+    feature: str
+    label: str
+    cost_cents: int
+    event_count: int
+
+
+class RoleUsageBreakdown(BaseModel):
+    role_id: int
+    role_name: str
+    monthly_budget_cents: int
+    monthly_spent_cents: int
+    month_start: datetime
+    by_feature: list[RoleUsageBreakdownLine]
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -473,6 +489,100 @@ def agent_status(
         monthly_spent_cents=monthly_spent,
         current_run=current_run,
         last_activity=last_activity,
+    )
+
+
+@router.get("/roles/{role_id}/usage/breakdown", response_model=RoleUsageBreakdown)
+def role_usage_breakdown(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Per-feature spend rollup for the role this calendar month.
+
+    Backs the role's "Budget" panel — same monthly window the budget
+    guard uses, broken down by what the spend went to (scoring,
+    pre-screen, semantic search, agent, etc.) so recruiters can see
+    where their cap is going.
+    """
+    from sqlalchemy import func
+
+    from ...models.usage_event import UsageEvent
+
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == current_user.organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if role is None:
+        raise HTTPException(status_code=404, detail=f"role {role_id} not found")
+
+    now = datetime.now().astimezone()
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+    # Pre-screen and CV parsing share a recruiter mental model ("the
+    # platform looked at the CV"); scoring rolls in the related
+    # pairwise/archetype/rerank passes that produce the Taali score.
+    # Semantic search is the new graph_sync bucket. Assessments include
+    # interview prep + analysis. Anything else falls under "Other".
+    LABELS = {
+        "prescreen":           "Pre-screen",
+        "cv_parse":            "Pre-screen",
+        "score":               "Scoring",
+        "cv_rerank":           "Scoring",
+        "archetype_synthesis": "Scoring",
+        "pairwise_judge":      "Scoring",
+        "fit_matching":        "Scoring",
+        "graph_sync":          "Semantic search",
+        "assessment":          "Assessments",
+        "interview_focus":     "Assessments",
+        "interview_tech":      "Assessments",
+        "agent_autonomous":    "Agent",
+        "taali_chat":          "Chat",
+        "search_parse":        "Chat",
+        "other":               "Other",
+    }
+
+    rows = (
+        db.query(
+            UsageEvent.feature,
+            func.coalesce(func.sum(UsageEvent.cost_usd_micro), 0).label("cost_micro"),
+            func.count(UsageEvent.id).label("event_count"),
+        )
+        .filter(
+            UsageEvent.organization_id == current_user.organization_id,
+            UsageEvent.role_id == role_id,
+            UsageEvent.created_at >= month_start,
+        )
+        .group_by(UsageEvent.feature)
+        .all()
+    )
+
+    lines = [
+        RoleUsageBreakdownLine(
+            feature=str(r.feature),
+            label=LABELS.get(str(r.feature), str(r.feature).replace("_", " ").title()),
+            cost_cents=int(int(r.cost_micro or 0) / 10_000),
+            event_count=int(r.event_count or 0),
+        )
+        for r in rows
+    ]
+    lines.sort(key=lambda l: l.cost_cents, reverse=True)
+
+    monthly_spent = budget_guard.month_to_date_spend_cents(db, role=role)
+    monthly_budget = budget_guard.role_monthly_usd_cents(role)
+
+    return RoleUsageBreakdown(
+        role_id=role_id,
+        role_name=str(role.name or ""),
+        monthly_budget_cents=monthly_budget,
+        monthly_spent_cents=monthly_spent,
+        month_start=month_start,
+        by_feature=lines,
     )
 
 

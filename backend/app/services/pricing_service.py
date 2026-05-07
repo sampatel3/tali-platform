@@ -38,6 +38,7 @@ class Feature(str, Enum):
     INTERVIEW_FOCUS = "interview_focus"    # services/interview_focus_service
     INTERVIEW_TECH = "interview_tech"      # services/interview_tech_prompt
     FIT_MATCHING = "fit_matching"          # services/fit_matching_service
+    GRAPH_SYNC = "graph_sync"              # candidate_graph (semantic search indexing)
     OTHER = "other"
 
 
@@ -147,6 +148,15 @@ _FEATURE_PRICING: dict[Feature, FeaturePricing] = {
     Feature.FIT_MATCHING: FeaturePricing(
         feature=Feature.FIT_MATCHING,
         markup_multiplier=Decimal("3.0"),
+        cache_hit_multiplier=Decimal("0.10"),
+    ),
+    Feature.GRAPH_SYNC: FeaturePricing(
+        # Semantic-search indexing (Graphiti). Internal infrastructure work,
+        # not a recruiter-facing artefact, so 1× at cost. Recorded against
+        # the role's monthly budget so indexing spend is visible alongside
+        # scoring/pre-screen.
+        feature=Feature.GRAPH_SYNC,
+        markup_multiplier=Decimal("1.0"),
         cache_hit_multiplier=Decimal("0.10"),
     ),
     Feature.OTHER: FeaturePricing(
@@ -279,6 +289,7 @@ def estimate_reservation(feature: Feature | str) -> int:
         Feature.INTERVIEW_FOCUS: 6_000,
         Feature.INTERVIEW_TECH: 4_000,
         Feature.FIT_MATCHING: 30_000,
+        Feature.GRAPH_SYNC: 10_000,
         Feature.OTHER: 5_000,
     }
     if isinstance(feature, str):
