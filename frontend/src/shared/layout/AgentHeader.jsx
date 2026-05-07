@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Pause, Play, Settings as SettingsIcon, Sparkles } from 'lucide-react';
 
 import { useAgentStatus } from './AgentBar';
@@ -34,7 +34,88 @@ const formatUsd = (cents) => {
   return dollars >= 100 ? `$${Math.round(dollars)}` : `$${dollars.toFixed(2)}`;
 };
 
-const AgentPanel = ({ agent, onTurnOn, onPause, onResume, onSettings }) => {
+const DEFAULT_BUDGET_USD = 50;
+
+// Inline activator shown inside the OFF-state panel: budget input + Activate
+// button. On Activate we call `onActivate(monthlyBudgetCents)` — the parent
+// page is responsible for hitting the backend and surfacing toast feedback.
+//
+// When no `onActivate` is wired (e.g. Jobs list panel where activation is
+// per-role, not org-wide), we render only the guidance copy so the panel
+// reads as informational, not an unusable input.
+const AgentOffActivator = ({ onActivate, disabledReason }) => {
+  const [budget, setBudget] = useState(String(DEFAULT_BUDGET_USD));
+  const [activating, setActivating] = useState(false);
+  const [errorMsg, setErrorMsg] = useState(null);
+
+  if (!onActivate) {
+    return (
+      <div className="agent-off-copy" style={{ marginTop: 'auto' }}>
+        {disabledReason || 'Open a role to turn on agent mode there.'}
+      </div>
+    );
+  }
+
+  const submit = async () => {
+    const dollars = Number(budget);
+    if (!Number.isFinite(dollars) || dollars <= 0) {
+      setErrorMsg('Enter a monthly cap greater than $0.');
+      return;
+    }
+    setErrorMsg(null);
+    setActivating(true);
+    try {
+      await onActivate(Math.round(dollars * 100));
+    } catch (err) {
+      setErrorMsg(err?.message || 'Failed to turn on agent mode.');
+    } finally {
+      setActivating(false);
+    }
+  };
+
+  return (
+    <>
+      <div className="agent-off-copy">
+        {disabledReason || 'Set a monthly cap and turn on the agent.'}
+      </div>
+      <div className="agent-off-budget">
+        <span className="agent-off-budget-prefix">$</span>
+        <input
+          type="number"
+          min={1}
+          step={5}
+          value={budget}
+          onChange={(event) => setBudget(event.target.value)}
+          aria-label="Monthly budget in USD"
+          disabled={activating}
+          inputMode="numeric"
+        />
+        <span className="agent-off-budget-suffix">/ month</span>
+      </div>
+      {errorMsg ? <div className="agent-off-error">{errorMsg}</div> : null}
+      <div className="agent-actions">
+        <button
+          type="button"
+          className="agent-btn primary"
+          onClick={submit}
+          disabled={activating}
+        >
+          <Play size={11} strokeWidth={2} fill="currentColor" />
+          {activating ? 'Activating…' : 'Turn on agent'}
+        </button>
+      </div>
+    </>
+  );
+};
+
+const AgentPanel = ({
+  agent,
+  onActivate,
+  onPause,
+  onResume,
+  onSettings,
+  offStateMessage,
+}) => {
   const {
     on = true,
     paused = false,
@@ -44,12 +125,23 @@ const AgentPanel = ({ agent, onTurnOn, onPause, onResume, onSettings }) => {
     tick = null,
     inFlight = false,
   } = agent || {};
-  const status = !on ? 'off' : (paused ? 'paused' : 'on');
+  const status = !on ? (paused ? 'paused' : 'off') : 'on';
   const pct = budgetCents > 0
     ? Math.min(100, Math.round((Number(spentCents) / Number(budgetCents)) * 100))
     : 0;
   const spentLabel = formatUsd(spentCents);
   const budgetLabel = formatUsd(budgetCents);
+  const [busy, setBusy] = useState(null); // 'pause' | 'resume' | null
+
+  const runWith = async (key, handler) => {
+    if (!handler) return;
+    setBusy(key);
+    try {
+      await handler();
+    } finally {
+      setBusy(null);
+    }
+  };
 
   return (
     <aside className={`agent-panel agent-${status}`}>
@@ -61,7 +153,9 @@ const AgentPanel = ({ agent, onTurnOn, onPause, onResume, onSettings }) => {
         <div className="agent-status">
           <div className="agent-status-line">
             <span className="agent-mode">Agent mode</span>
-            <span className={`agent-state-pill state-${status}`}>{status.toUpperCase()}</span>
+            <span className={`agent-state-pill state-${status}`}>
+              {status === 'paused' ? 'AUTO-PAUSED' : status.toUpperCase()}
+            </span>
           </div>
           {pending > 0 ? (
             <div className="agent-pending">{pending} awaiting your review</div>
@@ -70,8 +164,13 @@ const AgentPanel = ({ agent, onTurnOn, onPause, onResume, onSettings }) => {
       </div>
 
       {on && tick ? <div className="agent-tick">{tick}</div> : null}
+      {paused ? (
+        <div className="agent-tick">
+          Auto-paused — monthly cap reached. Raise the cap or resume to continue.
+        </div>
+      ) : null}
 
-      {on ? (
+      {on || paused ? (
         <div className="agent-budget">
           <div className="agent-budget-row">
             <span>This month</span>
@@ -83,34 +182,46 @@ const AgentPanel = ({ agent, onTurnOn, onPause, onResume, onSettings }) => {
         </div>
       ) : null}
 
-      <div className="agent-actions">
-        {on && !paused ? (
-          <button type="button" className="agent-btn" onClick={onPause} disabled={!onPause}>
-            <Pause size={11} strokeWidth={2} />
-            Pause
+      {!on && !paused ? (
+        <AgentOffActivator
+          onActivate={onActivate}
+          disabledReason={offStateMessage}
+        />
+      ) : (
+        <div className="agent-actions">
+          {on && !paused ? (
+            <button
+              type="button"
+              className="agent-btn"
+              onClick={() => runWith('pause', onPause)}
+              disabled={!onPause || busy === 'pause'}
+            >
+              <Pause size={11} strokeWidth={2} />
+              {busy === 'pause' ? 'Pausing…' : 'Pause'}
+            </button>
+          ) : paused ? (
+            <button
+              type="button"
+              className="agent-btn primary"
+              onClick={() => runWith('resume', onResume)}
+              disabled={!onResume || busy === 'resume'}
+            >
+              <Play size={11} strokeWidth={2} fill="currentColor" />
+              {busy === 'resume' ? 'Resuming…' : 'Resume'}
+            </button>
+          ) : null}
+          <button
+            type="button"
+            className="agent-btn icon"
+            title="Configure agent"
+            aria-label="Configure agent"
+            onClick={onSettings}
+            disabled={!onSettings}
+          >
+            <SettingsIcon size={13} strokeWidth={1.7} />
           </button>
-        ) : on && paused ? (
-          <button type="button" className="agent-btn" onClick={onResume} disabled={!onResume}>
-            <Play size={11} strokeWidth={2} fill="currentColor" />
-            Resume
-          </button>
-        ) : (
-          <button type="button" className="agent-btn primary" onClick={onTurnOn} disabled={!onTurnOn}>
-            <Play size={11} strokeWidth={2} fill="currentColor" />
-            Turn on
-          </button>
-        )}
-        <button
-          type="button"
-          className="agent-btn icon"
-          title="Configure agent"
-          aria-label="Configure agent"
-          onClick={onSettings}
-          disabled={!onSettings}
-        >
-          <SettingsIcon size={13} strokeWidth={1.7} />
-        </button>
-      </div>
+        </div>
+      )}
     </aside>
   );
 };
@@ -125,10 +236,20 @@ export const AgentHeader = ({
   postTitle = null,
   period = true,
   agent = null,
-  onTurnOnAgent,
+  // OFF state: called with monthly cap in cents. Page must hit
+  // PATCH /roles/{id} with { agentic_mode_enabled: true, monthly_usd_budget_cents }.
+  onActivateAgent,
+  // ON state: called when user clicks Pause. Page hits PATCH /roles/{id}
+  // with { agentic_mode_enabled: false }.
   onPauseAgent,
+  // PAUSED state: called when user clicks Resume. Page hits PATCH /roles/{id}
+  // with { agentic_mode_enabled: true } (also clears paused_at server-side).
   onResumeAgent,
+  // Settings cog — opens the per-role agent settings drawer / tab.
   onAgentSettings,
+  // Optional copy shown in the OFF panel when activation isn't available
+  // (e.g. Jobs list, where activation is per-role).
+  offStateMessage,
   className = '',
   variant = 'hero',
 }) => {
@@ -164,10 +285,11 @@ export const AgentHeader = ({
         {showAgent ? (
           <AgentPanel
             agent={agent}
-            onTurnOn={onTurnOnAgent}
+            onActivate={onActivateAgent}
             onPause={onPauseAgent}
             onResume={onResumeAgent}
             onSettings={onAgentSettings}
+            offStateMessage={offStateMessage}
           />
         ) : null}
       </div>
@@ -196,8 +318,11 @@ export const buildAgentPropFromStatus = (status, options = {}) => {
     ? Boolean(isEnabled)
     : Boolean(status.enabled);
   return {
+    // ON visual only when agentic_mode_enabled AND not auto-paused.
     on: enabled && !isPaused,
-    paused: isPaused,
+    // 'paused' here means *auto-paused* (paused_at set) while still enabled.
+    // A manual pause flips agentic_mode_enabled=false → on=false, paused=false.
+    paused: enabled && isPaused,
     pending: Number(status.pending_decisions || 0),
     spentCents: Number(status.monthly_spent_cents || 0),
     budgetCents: Number(status.monthly_budget_cents || 0) || 5000,

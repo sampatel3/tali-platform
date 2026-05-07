@@ -129,9 +129,10 @@ const getRoleBadgeLabel = (role) => {
 };
 
 // Maps the org-aggregate /agent/status payload (or the showcase fixture) into
-// the shape AgentHeader's right-side panel expects. Returns null when there's
-// no real status yet *and* the org has no agentic roles — the panel itself
-// renders an OFF state when the prop is non-null but on=false.
+// the shape AgentHeader's right-side panel expects. Activation on the Jobs
+// list is intentionally per-role (each role has its own budget cap), so the
+// OFF state on this page guides the user to open a role rather than firing
+// a single org-wide activate.
 const useJobsHeaderAgent = (roles, isShowcase) => {
   const { status } = useAgentStatusOrg();
   return useMemo(() => {
@@ -148,9 +149,16 @@ const useJobsHeaderAgent = (roles, isShowcase) => {
     }
     const anyEnabled = roles.some((role) => role?.agentic_mode_enabled);
     if (!status) {
-      return anyEnabled
-        ? { on: false, paused: false, pending: 0, spentCents: 0, budgetCents: 5000, tick: null, inFlight: false }
-        : { on: false, paused: false, pending: 0, spentCents: 0, budgetCents: 0, tick: null, inFlight: false };
+      // Pre-fetch placeholder. Show OFF until the org-aggregate payload lands.
+      return {
+        on: false,
+        paused: false,
+        pending: 0,
+        spentCents: 0,
+        budgetCents: anyEnabled ? 5000 : 0,
+        tick: null,
+        inFlight: false,
+      };
     }
     return buildAgentPropFromStatus(status, { isEnabled: status.active_role_count > 0 });
   }, [status, roles, isShowcase]);
@@ -521,6 +529,7 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
           </>
         )}
         agent={headerAgent}
+        offStateMessage="Open a role and turn on agent mode there — each role has its own monthly cap."
       />
       <div className="mc-page">
         {/* HANDOFF v2 §4 / canvas jobs-list — search lives in the global

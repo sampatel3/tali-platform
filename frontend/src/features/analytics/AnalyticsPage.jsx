@@ -9,15 +9,9 @@ import {
   YAxis,
 } from 'recharts';
 
-import {
-  assessments as assessmentsApi,
-  analytics as analyticsApi,
-  roles as rolesApi,
-  tasks as tasksApi,
-} from '../../shared/api';
-import { getCategoryScoresFromAssessment } from '../../lib/comparisonCategories';
+import { analytics as analyticsApi } from '../../shared/api';
 import { AgentHeader } from '../../shared/layout/AgentHeader';
-import { Button, Panel, Select, Spinner } from '../../shared/ui/TaaliPrimitives';
+import { Panel, Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const DATE_RANGE_OPTIONS = [
   { value: '7d', label: 'Last 7 days' },
@@ -76,38 +70,17 @@ const EMPTY_SUMMARY = {
 };
 
 export const ReportingPage = ({ onNavigate, NavComponent }) => {
-  const [roles, setRoles] = useState([]);
-  const [tasks, setTasks] = useState([]);
-  const [roleFilter, setRoleFilter] = useState('');
-  const [taskFilter, setTaskFilter] = useState('');
-  const [dateRange, setDateRange] = useState('30d');
   const [loading, setLoading] = useState(true);
-  const [exporting, setExporting] = useState(false);
   const [summary, setSummary] = useState(EMPTY_SUMMARY);
   const [activeChip, setActiveChip] = useState(null);
 
-  useEffect(() => {
-    let cancelled = false;
-    Promise.allSettled([rolesApi.list(), tasksApi.list()]).then(([rolesRes, tasksRes]) => {
-      if (cancelled) return;
-      if (rolesRes.status === 'fulfilled') {
-        setRoles(Array.isArray(rolesRes.value?.data) ? rolesRes.value.data : []);
-      }
-      if (tasksRes.status === 'fulfilled') {
-        setTasks(Array.isArray(tasksRes.value?.data) ? tasksRes.value.data : []);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  // Reporting is org-wide and locked to a fixed 30-day window per the
+  // narrative-first canvas: "a daily standup in retrospect". Drill-downs
+  // happen by clicking narrator chips, not by filtering the page.
+  const dateRange = '30d';
+  const roleFilter = '';
 
-  const queryParams = useMemo(() => {
-    const params = { ...getDateRangeParams(dateRange) };
-    if (roleFilter) params.role_id = roleFilter;
-    if (taskFilter) params.task_id = taskFilter;
-    return params;
-  }, [dateRange, roleFilter, taskFilter]);
+  const queryParams = useMemo(() => ({ ...getDateRangeParams(dateRange) }), [dateRange]);
 
   useEffect(() => {
     let cancelled = false;
@@ -156,86 +129,6 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
     { range: '80-100', count: 0, percentage: 0 },
   ];
 
-  const handleExportCsv = async () => {
-    setExporting(true);
-    try {
-      const allItems = [];
-      let offset = 0;
-      const limit = 100;
-      let total = 0;
-      do {
-        const res = await assessmentsApi.list({
-          limit,
-          offset,
-          ...(roleFilter ? { role_id: roleFilter } : {}),
-          ...(taskFilter ? { task_id: taskFilter } : {}),
-        });
-        const payload = res?.data || {};
-        const items = Array.isArray(payload) ? payload : (payload.items || []);
-        total = typeof payload.total === 'number' ? payload.total : items.length;
-        allItems.push(...items);
-        offset += limit;
-      } while (offset < total);
-
-      const { date_from: dateFromRaw, date_to: dateToRaw } = getDateRangeParams(dateRange);
-      const dateFrom = dateFromRaw ? new Date(dateFromRaw) : null;
-      const dateTo = dateToRaw ? new Date(dateToRaw) : null;
-      const filtered = allItems.filter((item) => {
-        if (!dateFrom && !dateTo) return true;
-        const ts = item?.completed_at || item?.created_at;
-        if (!ts) return false;
-        const dt = new Date(ts);
-        if (Number.isNaN(dt.getTime())) return false;
-        if (dateFrom && dt < dateFrom) return false;
-        if (dateTo && dt > dateTo) return false;
-        return true;
-      });
-
-      const rows = filtered.map((item) => {
-        const categories = getCategoryScoresFromAssessment(item);
-        return {
-          candidate_name: item.candidate_name || item.candidate?.full_name || '',
-          candidate_email: item.candidate_email || item.candidate?.email || '',
-          task: item.task_name || item.task?.name || '',
-          role: item.role_name || item.task?.role || '',
-          status: item.status || '',
-          score_10: item.score ?? '',
-          score_100: item.final_score ?? (item.score != null ? Number(item.score) * 10 : ''),
-          completed_at: item.completed_at || '',
-          task_completion: categories.task_completion ?? '',
-          prompt_clarity: categories.prompt_clarity ?? '',
-          context_provision: categories.context_provision ?? '',
-          independence_efficiency: categories.independence_efficiency ?? '',
-          response_utilization: categories.response_utilization ?? '',
-          debugging_design: categories.debugging_design ?? '',
-          written_communication: categories.written_communication ?? '',
-          role_fit: categories.role_fit ?? '',
-        };
-      });
-
-      const columns = [
-        'candidate_name', 'candidate_email', 'task', 'role', 'status',
-        'score_10', 'score_100', 'completed_at',
-        'task_completion', 'prompt_clarity', 'context_provision',
-        'independence_efficiency', 'response_utilization',
-        'debugging_design', 'written_communication', 'role_fit',
-      ];
-      const csv = [
-        columns.join(','),
-        ...rows.map((row) => columns.map((col) => `"${String(row[col] ?? '').replace(/"/g, '""')}"`).join(',')),
-      ].join('\n');
-      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const anchor = document.createElement('a');
-      anchor.href = url;
-      anchor.download = 'analytics-assessments.csv';
-      anchor.click();
-      URL.revokeObjectURL(url);
-    } finally {
-      setExporting(false);
-    }
-  };
-
   const activeChipBody = activeChip
     ? (summary.narrator.chips || []).find((c) => c.key === activeChip)?.body
     : null;
@@ -252,60 +145,8 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
         kicker={`MISSION CONTROL · ${rangeLabel.toUpperCase()}${roleFilter ? '' : ' · ALL ROLES'}`}
         title={<>Your agent in <em>narrative</em></>}
         subtitle="What Taali did, what it skipped, and where it was unsure. Not a dashboard — a daily standup in retrospect."
-        actions={(
-          <Button type="button" variant="secondary" size="sm" onClick={handleExportCsv} disabled={loading || exporting}>
-            {exporting ? 'Exporting...' : 'Export CSV'}
-          </Button>
-        )}
       />
       <div className="mc-page mc-page-narrow">
-
-        <Panel className="mb-5 p-4">
-          <div className="grid gap-3 md:grid-cols-4">
-            <label className="block">
-              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Role</span>
-              <Select value={roleFilter} onChange={(event) => setRoleFilter(event.target.value)}>
-                <option value="">All roles</option>
-                {roles.map((role) => (
-                  <option key={role.id} value={role.id}>{role.name}</option>
-                ))}
-              </Select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Task</span>
-              <Select value={taskFilter} onChange={(event) => setTaskFilter(event.target.value)}>
-                <option value="">All tasks</option>
-                {tasks.map((task) => (
-                  <option key={task.id} value={task.id}>{task.name}</option>
-                ))}
-              </Select>
-            </label>
-            <label className="block">
-              <span className="mb-1 block font-mono text-xs uppercase tracking-[0.08em] text-[var(--mute)]">Date range</span>
-              <Select value={dateRange} onChange={(event) => setDateRange(event.target.value)}>
-                {DATE_RANGE_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>{option.label}</option>
-                ))}
-              </Select>
-            </label>
-            <div className="flex items-end">
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => {
-                  setRoleFilter('');
-                  setTaskFilter('');
-                  setDateRange('30d');
-                }}
-                disabled={!roleFilter && !taskFilter && dateRange === '30d'}
-              >
-                Reset filters
-              </Button>
-            </div>
-          </div>
-        </Panel>
-
         {loading ? (
           <div className="flex min-h-[260px] items-center justify-center">
             <Spinner size={32} />
