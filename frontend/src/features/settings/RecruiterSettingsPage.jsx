@@ -67,6 +67,9 @@ const DEFAULT_FIRELIES_FORM = {
   inviteEmail: '',
   singleAccountMode: true,
 };
+// `team` collapses the old `members` + `roles` tabs into a single
+// section. Legacy URLs (/settings/members, /settings/roles) still
+// resolve here so any bookmarked link keeps working.
 const SECTION_ALIASES = {
   '': 'org',
   org: 'org',
@@ -74,15 +77,19 @@ const SECTION_ALIASES = {
   workable: 'workable',
   billing: 'billing',
   usage: 'usage',
-  team: 'members',
-  members: 'members',
-  roles: 'roles',
+  team: 'team',
+  members: 'team',
+  roles: 'team',
+  access: 'team',
   enterprise: 'sso',
   sso: 'sso',
   scoring: 'scoring',
   ai: 'ai',
-  preferences: 'api',
-  api: 'api',
+  agent: 'ai',
+  preferences: 'email',
+  api: 'email',
+  email: 'email',
+  fireflies: 'email',
   notifications: 'notifications',
   jobs: 'jobs',
   'background-jobs': 'jobs',
@@ -482,7 +489,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     if (activeSection === 'billing') {
       void loadBilling();
     }
-    if (activeSection === 'members' || activeSection === 'roles') {
+    if (activeSection === 'team') {
       void loadTeam();
     }
     if (activeSection === 'workable') {
@@ -758,9 +765,9 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     try {
       const res = await orgsApi.update(payload);
       setOrgData((prev) => ({ ...(prev || {}), ...(res?.data || {}) }));
-      showToast('API key settings saved.', 'success');
+      showToast('Invite template saved.', 'success');
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to save API key settings.'), 'error');
+      showToast(getErrorMessage(error, 'Failed to save invite template.'), 'error');
     } finally {
       setApiSaving(false);
     }
@@ -1167,17 +1174,16 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
             <div className="mc-settings-tabs" role="tablist" aria-label="Settings sections">
               {[
                 { k: 'org', l: 'Organization' },
-                { k: 'scoring', l: 'Scoring policy' },
-                { k: 'ai', l: 'AI tooling' },
-                { k: 'members', l: 'Members' },
-                { k: 'roles', l: 'Roles & access' },
-                { k: 'jobs', l: 'Background jobs' },
+                { k: 'team', l: 'Team & access' },
+                { k: 'scoring', l: 'Scoring' },
+                { k: 'ai', l: 'Agent & AI tooling' },
                 { k: 'workable', l: 'Workable' },
-                { k: 'sso', l: 'SSO / SAML' },
-                { k: 'api', l: 'API keys' },
+                { k: 'email', l: 'Email & transcripts' },
                 { k: 'billing', l: 'Billing' },
                 { k: 'usage', l: 'Usage' },
                 { k: 'notifications', l: 'Notifications' },
+                { k: 'jobs', l: 'Background jobs' },
+                { k: 'sso', l: 'SSO / SAML' },
               ].map((tab) => (
                 <button
                   key={tab.k}
@@ -1337,19 +1343,19 @@ Disqualifying: No experience with regulated financial data`}
               <div ref={(node) => { sectionRefs.current.ai = node; }} hidden={activeSection !== "ai"}>
                 <SectionPanel
                   id="ai"
-                  title="AI tooling"
-                  subtitle="What the candidate runtime provides during an assessment."
+                  title="Agent & AI tooling"
+                  subtitle="What candidates get during an assessment, plus the autonomous agent's defaults for new roles."
                 >
                   <div className="settings-toggle-list">
                     <ToggleCard
-                      title="Claude CLI + Chat"
-                      description="Full IDE plus terminal access. Default for all assessments."
+                      title="AI coding assistant"
+                      description="Full IDE plus terminal access with an AI pair-programmer. Default for all assessments."
                       checked={aiToolingForm.claude_enabled}
                       onChange={(value) => setAiToolingForm((prev) => ({ ...prev, claude_enabled: value }))}
                       badge={<span className="chip purple">ENABLED</span>}
                     />
                     <ToggleCard
-                      title="Cursor / Copilot inline"
+                      title="Inline autocomplete"
                       description="Autocomplete only, without a chat pane. Useful for pure-craft roles."
                       checked={aiToolingForm.cursor_inline_enabled}
                       onChange={(value) => setAiToolingForm((prev) => ({ ...prev, cursor_inline_enabled: value }))}
@@ -1363,7 +1369,7 @@ Disqualifying: No experience with regulated financial data`}
                   </div>
                   <div className="row-form settings-top-gap">
                     <label className="field">
-                      <span className="k">Claude credit per candidate</span>
+                      <span className="k">AI credit per candidate (USD)</span>
                       <input
                         type="number"
                         min={0}
@@ -1424,11 +1430,11 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.members = node; }} hidden={activeSection !== "members"}>
+              <div ref={(node) => { sectionRefs.current.team = node; }} hidden={activeSection !== "team"}>
                 <SectionPanel
-                  id="members"
-                  title="Members"
-                  subtitle={`${teamMembers.length} people in this workspace.`}
+                  id="team"
+                  title="Team & access"
+                  subtitle={`${teamMembers.length} ${teamMembers.length === 1 ? 'person' : 'people'} in this workspace.`}
                 >
                   <form className="settings-invite-form" onSubmit={handleInvite}>
                     <label className="field">
@@ -1468,47 +1474,41 @@ Disqualifying: No experience with regulated financial data`}
                       </div>
                     ) : null}
                   </div>
-                </SectionPanel>
-              </div>
 
-              <div ref={(node) => { sectionRefs.current.roles = node; }} hidden={activeSection !== "roles"}>
-                <SectionPanel
-                  id="roles"
-                  title="Roles & access"
-                  subtitle="Control who can join this workspace and which recruiter surfaces are enabled."
-                >
-                  <div className="settings-toggle-list">
-                    <ToggleCard
-                      title="Candidate feedback reports"
-                      description="Allow candidate-facing post-assessment feedback reports."
-                      checked={accessForm.candidateFeedbackEnabled}
-                      onChange={(value) => setAccessForm((prev) => ({ ...prev, candidateFeedbackEnabled: value }))}
-                    />
-                  </div>
-                  <div className="row-form settings-top-gap">
-                    <label className="field">
-                      <span className="k">Allowed email domains (comma separated)</span>
-                      <input
-                        value={accessForm.allowedEmailDomains}
-                        onChange={(event) => setAccessForm((prev) => ({ ...prev, allowedEmailDomains: event.target.value }))}
-                        placeholder="company.com, subsidiary.org"
+                  <div className="settings-top-gap" style={{ borderTop: '1px solid var(--line)', paddingTop: 18 }}>
+                    <div className="settings-toggle-list">
+                      <ToggleCard
+                        title="Candidate feedback reports"
+                        description="Allow candidate-facing post-assessment feedback reports."
+                        checked={accessForm.candidateFeedbackEnabled}
+                        onChange={(value) => setAccessForm((prev) => ({ ...prev, candidateFeedbackEnabled: value }))}
                       />
-                    </label>
-                    <div className="settings-summary-card">
-                      <div className="settings-summary-label">Current access model</div>
-                      <div className="settings-summary-value">{teamMembers.length || 0} members</div>
-                      <div className="settings-summary-note">
-                        {accessForm.allowedEmailDomains.trim()
-                          ? `Invites limited to ${accessForm.allowedEmailDomains}.`
-                          : 'Invites are currently open to any verified domain.'}
+                    </div>
+                    <div className="row-form settings-top-gap">
+                      <label className="field">
+                        <span className="k">Allowed email domains (comma separated)</span>
+                        <input
+                          value={accessForm.allowedEmailDomains}
+                          onChange={(event) => setAccessForm((prev) => ({ ...prev, allowedEmailDomains: event.target.value }))}
+                          placeholder="company.com, subsidiary.org"
+                        />
+                      </label>
+                      <div className="settings-summary-card">
+                        <div className="settings-summary-label">Current access model</div>
+                        <div className="settings-summary-value">{teamMembers.length || 0} members</div>
+                        <div className="settings-summary-note">
+                          {accessForm.allowedEmailDomains.trim()
+                            ? `Invites limited to ${accessForm.allowedEmailDomains}.`
+                            : 'Invites are currently open to any verified domain.'}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  <div className="settings-save-row">
-                    <div className="settings-inline-note">Team invites respect the allowed domain list immediately.</div>
-                    <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveAccess} disabled={accessSaving}>
-                      {accessSaving ? 'Saving...' : 'Save access settings'}
-                    </button>
+                    <div className="settings-save-row">
+                      <div className="settings-inline-note">Team invites respect the allowed domain list immediately.</div>
+                      <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveAccess} disabled={accessSaving}>
+                        {accessSaving ? 'Saving...' : 'Save access settings'}
+                      </button>
+                    </div>
                   </div>
                 </SectionPanel>
               </div>
@@ -1877,11 +1877,11 @@ Disqualifying: No experience with regulated financial data`}
                 </SectionPanel>
               </div>
 
-              <div ref={(node) => { sectionRefs.current.api = node; }} hidden={activeSection !== "api"}>
+              <div ref={(node) => { sectionRefs.current.email = node; }} hidden={activeSection !== "email"}>
                 <SectionPanel
-                  id="api"
-                  title="API keys"
-                  subtitle="Workspace-wide API credentials and recruiter email defaults."
+                  id="email"
+                  title="Email & transcripts"
+                  subtitle="Default candidate invite copy and Fireflies transcript ingestion."
                 >
                   <div className="settings-subgrid">
                     <div className="settings-subcard">
@@ -1908,7 +1908,7 @@ Disqualifying: No experience with regulated financial data`}
                       Supports placeholders like {'{{candidate_name}}'} and {'{{assessment_link}}'}.
                     </div>
                     <button type="button" className="btn btn-purple btn-sm" onClick={handleSaveApiKeys} disabled={apiSaving}>
-                      {apiSaving ? 'Saving...' : 'Save API key settings'}
+                      {apiSaving ? 'Saving...' : 'Save invite template'}
                     </button>
                   </div>
 
@@ -2050,14 +2050,14 @@ Disqualifying: No experience with regulated financial data`}
                           <div className="settings-summary-label">Last 30 days</div>
                           <div className="settings-summary-value">{formatUsd(breakdownTotalUsd)}</div>
                           <div className="settings-summary-note">
-                            {breakdownTotalEvents} billable Claude {breakdownTotalEvents === 1 ? 'call' : 'calls'}
+                            {breakdownTotalEvents} billable AI {breakdownTotalEvents === 1 ? 'request' : 'requests'} · see Usage for the per-product breakdown
                           </div>
                         </div>
                         <div className="settings-billing-card">
                           <div className="settings-summary-label">Plan</div>
                           <div className="settings-summary-value">Pay-as-you-go</div>
                           <div className="settings-summary-note">
-                            Pre-screen at cost · Scoring &amp; assessments at 3× Claude tokens
+                            Pre-screen at cost · Scoring &amp; assessments at usage-based pricing
                           </div>
                         </div>
                       </div>
@@ -2086,27 +2086,6 @@ Disqualifying: No experience with regulated financial data`}
                         ))}
                       </div>
 
-                      {featureBreakdown.length > 0 ? (
-                        <div className="settings-billing-summary" style={{ marginTop: 16 }}>
-                          {featureBreakdown.map((row) => {
-                            const usd = Number(row.credits_charged || 0) / 1_000_000;
-                            const tokens =
-                              Number(row.input_tokens || 0) + Number(row.output_tokens || 0);
-                            return (
-                              <div key={row.feature} className="settings-billing-card">
-                                <div className="settings-summary-label">
-                                  {FEATURE_LABELS[row.feature] || row.feature}
-                                </div>
-                                <div className="settings-summary-value">{formatUsd(usd)}</div>
-                                <div className="settings-summary-note">
-                                  {row.event_count} calls · {tokens.toLocaleString()} tokens
-                                </div>
-                              </div>
-                            );
-                          })}
-                        </div>
-                      ) : null}
-
                       <div className="settings-usage-table">
                         <div className="settings-usage-head">
                           <h3>Recent activity</h3>
@@ -2115,29 +2094,23 @@ Disqualifying: No experience with regulated financial data`}
                           <thead>
                             <tr>
                               <th>Date</th>
-                              <th>Feature</th>
-                              <th>Tokens</th>
+                              <th>Product</th>
                               <th>Cost</th>
                             </tr>
                           </thead>
                           <tbody>
                             {billingEvents.length === 0 ? (
                               <tr>
-                                <td colSpan={4} className="empty">
-                                  No usage yet. Activity from prescreening, scoring, and assessments will appear here.
+                                <td colSpan={3} className="empty">
+                                  No usage yet. Activity from pre-screening, scoring, and assessments will appear here.
                                 </td>
                               </tr>
                             ) : billingEvents.map((row) => {
                               const date = row.created_at ? new Date(row.created_at).toLocaleString() : '—';
-                              const totalTokens = Number(row.input_tokens || 0) + Number(row.output_tokens || 0);
                               return (
                                 <tr key={row.id}>
                                   <td>{date}</td>
-                                  <td>
-                                    {FEATURE_LABELS[row.feature] || row.feature}
-                                    {row.cache_hit ? <span style={{ marginLeft: 6, color: 'var(--taali-muted)', fontSize: '0.75rem' }}>(cache)</span> : null}
-                                  </td>
-                                  <td>{totalTokens.toLocaleString()}</td>
+                                  <td>{FEATURE_LABELS[row.feature] || row.feature}</td>
                                   <td>{formatUsd6(row.credits_charged_usd)}</td>
                                 </tr>
                               );

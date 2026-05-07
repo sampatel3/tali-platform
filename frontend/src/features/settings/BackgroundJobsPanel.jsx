@@ -6,6 +6,9 @@ import { roles as rolesApi } from '../../shared/api';
 import { formatRelativeDateTime } from '../../shared/ui/RecruiterDesignPrimitives';
 
 const HISTORY_POLL_MS = 5000;
+// Hide terminal-state history rows older than this so the panel stays focused
+// on what actually needs attention. Toggle "Show all history" to override.
+const HISTORY_RECENT_WINDOW_MS = 30 * 60 * 1000;
 
 // Color tokens, keyed by the verbatim backend status string. Anything not
 // listed falls through to the neutral grey dot (treated as terminal/unknown).
@@ -29,6 +32,18 @@ const TERMINAL_STATUSES = new Set([
 ]);
 
 const ACTIVE_STATUSES = new Set(['running', 'started', 'queued', 'cancelling']);
+
+const isRecentTerminal = (status, finishedAt, showAll) => {
+  if (showAll) return true;
+  const s = String(status ?? '').toLowerCase();
+  if (!TERMINAL_STATUSES.has(s)) return true;
+  if (!finishedAt) return false;
+  const ts = typeof finishedAt === 'string'
+    ? Date.parse(finishedAt)
+    : Number(finishedAt?.getTime?.() ?? finishedAt);
+  if (!Number.isFinite(ts)) return false;
+  return Date.now() - ts <= HISTORY_RECENT_WINDOW_MS;
+};
 
 const isVisible = (status) => {
   const s = String(status ?? '').toLowerCase();
@@ -220,6 +235,7 @@ export default function BackgroundJobsPanel() {
   const [workableHistory, setWorkableHistory] = useState([]);
   const [lastUpdatedAt, setLastUpdatedAt] = useState(null);
   const [tick, setTick] = useState(0);
+  const [showAllHistory, setShowAllHistory] = useState(false);
 
   const liveJobs = ctx?.jobs ?? {};
   const liveFetch = ctx?.fetchJobs ?? {};
@@ -313,6 +329,7 @@ export default function BackgroundJobsPanel() {
     for (const r of history) {
       if (r.kind !== 'scoring_batch') continue;
       if (liveScoreRoleIds.has(Number(r.scope_id))) continue;
+      if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
       const scope = r.role_name ? `Role: ${r.role_name}` : `Role #${r.scope_id}`;
       out.push(
         <JobRow
@@ -326,7 +343,7 @@ export default function BackgroundJobsPanel() {
       );
     }
     return out;
-  }, [liveJobs, history, liveScoreRoleIds, ctx]);
+  }, [liveJobs, history, liveScoreRoleIds, showAllHistory, ctx, tick]);
 
   const fetchRows = useMemo(() => {
     const out = [];
@@ -351,6 +368,7 @@ export default function BackgroundJobsPanel() {
     for (const r of history) {
       if (r.kind !== 'cv_fetch') continue;
       if (liveFetchRoleIds.has(Number(r.scope_id))) continue;
+      if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
       const scope = r.role_name ? `Role: ${r.role_name}` : `Role #${r.scope_id}`;
       out.push(
         <JobRow
@@ -364,7 +382,7 @@ export default function BackgroundJobsPanel() {
       );
     }
     return out;
-  }, [liveFetch, history, liveFetchRoleIds, ctx]);
+  }, [liveFetch, history, liveFetchRoleIds, showAllHistory, ctx, tick]);
 
   const graphRows = useMemo(() => {
     const out = [];
@@ -387,6 +405,7 @@ export default function BackgroundJobsPanel() {
       if (r.kind !== 'graph_sync') continue;
       // Don't double-render the row that's the same as the live graphSync.
       if (graphSync && isVisible(graphSync.status) && r.finished_at == null) continue;
+      if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
       out.push(
         <JobRow
           key={`graph-hist-${r.id}`}
@@ -399,7 +418,7 @@ export default function BackgroundJobsPanel() {
       );
     }
     return out;
-  }, [graphSync, history, ctx]);
+  }, [graphSync, history, showAllHistory, ctx, tick]);
 
   const workableRows = useMemo(() => {
     const out = [];
@@ -421,6 +440,7 @@ export default function BackgroundJobsPanel() {
     for (const r of workableHistory) {
       // Skip the live row to avoid double-render.
       if (workableSync?.run_id && r.id === workableSync.run_id && (workableSync.sync_in_progress || workableSync.status === 'running')) continue;
+      if (!isRecentTerminal(r.status, r.finished_at, showAllHistory)) continue;
       out.push(
         <JobRow
           key={`workable-hist-${r.id}`}
@@ -433,7 +453,7 @@ export default function BackgroundJobsPanel() {
       );
     }
     return out;
-  }, [workableSync, workableHistory, ctx]);
+  }, [workableSync, workableHistory, showAllHistory, ctx, tick]);
 
   const hasActive = useMemo(() => {
     const liveActive = (m) => Object.values(m).some((d) => ACTIVE_STATUSES.has(String(d?.status ?? '').toLowerCase()));
@@ -461,7 +481,17 @@ export default function BackgroundJobsPanel() {
           className={hasActive ? 'animate-spin' : ''}
           style={{ opacity: hasActive ? 1 : 0.45 }}
         />
-        <span className="bg-jobs-panel-header-text">Auto-refreshing every 5s</span>
+        <span className="bg-jobs-panel-header-text">
+          Auto-refreshing every 5s · finished runs auto-clear after 30 min
+        </span>
+        <button
+          type="button"
+          className="bg-jobs-panel-btn"
+          onClick={() => setShowAllHistory((v) => !v)}
+          style={{ marginLeft: 'auto' }}
+        >
+          {showAllHistory ? 'Hide older runs' : 'Show all history'}
+        </button>
       </div>
 
       <SubTable
