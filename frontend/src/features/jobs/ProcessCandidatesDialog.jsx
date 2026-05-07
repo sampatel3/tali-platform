@@ -32,6 +32,7 @@ export function ProcessCandidatesDialog({
 
   const [opts, setOpts] = useState(() => ({
     fetch_cvs: true,
+    refresh_cvs: false,
     pre_screen: true,
     refresh_pre_screen: false,
     score: 'new',
@@ -50,6 +51,7 @@ export function ProcessCandidatesDialog({
     if (!open) return;
     setOpts({
       fetch_cvs: true,
+      refresh_cvs: false,
       pre_screen: true,
       refresh_pre_screen: false,
       score: 'new',
@@ -72,6 +74,7 @@ export function ProcessCandidatesDialog({
       try {
         const body = {
           fetch_cvs: !!opts.fetch_cvs,
+          refresh_cvs: !!opts.refresh_cvs,
           pre_screen: !!opts.pre_screen,
           refresh_pre_screen: !!opts.refresh_pre_screen,
           score: opts.score || 'none',
@@ -130,11 +133,20 @@ export function ProcessCandidatesDialog({
     if (!willDoSomething) return;
     setSubmitting(true);
     try {
+      // The dialog exposes the full cascade — fetch + refetch + pre-
+      // screen + refresh + score + graph sync + refresh graph — so the
+      // confirm payload has to forward every option the backend
+      // supports. The earlier shape dropped sync_graph / refresh_graph
+      // / refresh_cvs, which silently turned off the advanced toggles
+      // the recruiter clicked.
       await onConfirm?.({
         fetch_cvs: !!opts.fetch_cvs,
+        refresh_cvs: !!opts.refresh_cvs,
         pre_screen: !!opts.pre_screen,
         refresh_pre_screen: !!opts.refresh_pre_screen,
         score: opts.score || 'none',
+        sync_graph: !!opts.sync_graph,
+        refresh_graph: !!opts.refresh_graph,
       });
     } finally {
       setSubmitting(false);
@@ -262,6 +274,31 @@ export function ProcessCandidatesDialog({
         </button>
         {advancedOpen ? (
           <div className="process-dialog__advanced">
+            {/* Force re-fetch every CV from Workable, including ones
+                already cached. Use after a Workable change that the
+                normal "fetch missing only" wouldn't pick up. */}
+            <label className="process-row">
+              <input
+                type="checkbox"
+                checked={!!opts.refresh_cvs}
+                onChange={(e) => setOpts((s) => ({
+                  ...s,
+                  refresh_cvs: e.target.checked,
+                  // Implies fetch_cvs — recruiters expect the toggle
+                  // to "do the fetch" without also having to leave
+                  // the basic Fetch box ticked.
+                  fetch_cvs: e.target.checked ? true : s.fetch_cvs,
+                }))}
+              />
+              <div className="process-row__body">
+                <div className="process-row__title">Re-fetch every CV from Workable</div>
+                <div className="process-row__sub">
+                  Re-pulls the CV from Workable for every candidate with a Workable record,
+                  even ones already cached. Use when the candidate updated their CV in Workable
+                  after we last synced.
+                </div>
+              </div>
+            </label>
             <label className="process-row">
               <input
                 type="checkbox"

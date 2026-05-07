@@ -4328,6 +4328,7 @@ def _process_dry_run(
     role_id: int,
     organization_id: int,
     fetch_cvs: bool,
+    refresh_cvs: bool,
     pre_screen: bool,
     refresh_pre_screen: bool,
     score_mode: str,
@@ -4338,6 +4339,8 @@ def _process_dry_run(
 
     Cascade-aware: when ``fetch_cvs`` is on, the pre-screen and score counts
     include candidates that will end up with a CV after the fetch step.
+    ``refresh_cvs`` extends the fetch step to every Workable-sourced
+    candidate, even ones already cached.
     """
     from ...services.pre_screening_service import application_needs_pre_screen
 
@@ -4363,11 +4366,15 @@ def _process_dry_run(
         # Will be fetched only if source=workable.
         return (a.source or "") == "workable"
 
-    # Fetch step
-    will_fetch = (
-        sum(1 for a in apps if not has_cv(a) and (a.source or "") == "workable")
-        if fetch_cvs else 0
-    )
+    # Fetch step — refresh_cvs forces every Workable-sourced application
+    # back into the fetch list regardless of whether a CV is already
+    # cached on the application or its parent candidate.
+    if fetch_cvs and refresh_cvs:
+        will_fetch = sum(1 for a in apps if (a.source or "") == "workable")
+    elif fetch_cvs:
+        will_fetch = sum(1 for a in apps if not has_cv(a) and (a.source or "") == "workable")
+    else:
+        will_fetch = 0
     no_cv_no_workable = sum(
         1 for a in apps if not has_cv(a) and (a.source or "") != "workable"
     )
@@ -4466,6 +4473,7 @@ def _run_process(
     org_id: int,
     *,
     fetch_cvs: bool,
+    refresh_cvs: bool,
     pre_screen: bool,
     refresh_pre_screen: bool,
     score_mode: str,
@@ -4515,7 +4523,12 @@ def _run_process(
                 )
                 .all()
             )
-            apps_to_fetch = [a for a in apps_to_fetch if not (a.cv_text or "").strip()]
+            # In refresh mode every Workable-sourced application gets re-
+            # fetched regardless of whether a CV is already cached. The
+            # default still skips cached CVs to keep the common-case run
+            # cheap.
+            if not refresh_cvs:
+                apps_to_fetch = [a for a in apps_to_fetch if not (a.cv_text or "").strip()]
             progress["fetch"]["total"] = len(apps_to_fetch)
             _set_process_progress(role_id, progress)
 
@@ -4531,7 +4544,15 @@ def _run_process(
                     return
                 try:
                     success = False
-                    if app.candidate and (app.candidate.cv_text or "").strip():
+                    # Refresh mode bypasses the candidate-row short-circuit
+                    # and goes back to Workable for the freshest CV. The
+                    # cached candidate row is still updated as a side
+                    # effect of the Workable fetch.
+                    if (
+                        not refresh_cvs
+                        and app.candidate
+                        and (app.candidate.cv_text or "").strip()
+                    ):
                         # CV already on the candidate row — copy it onto the app.
                         app.cv_file_url = app.candidate.cv_file_url
                         app.cv_filename = app.candidate.cv_filename
@@ -4769,6 +4790,9 @@ def process_role(
 
     Body:
       - ``fetch_cvs`` (bool, default false)
+      - ``refresh_cvs`` (bool, default false) — extends the fetch step
+        to every Workable-sourced candidate, even ones already cached.
+        Implies ``fetch_cvs``.
       - ``pre_screen`` (bool, default false)
       - ``refresh_pre_screen`` (bool, default false) — overrides pre_screen,
         forces re-run for every candidate with a CV
@@ -4784,6 +4808,9 @@ def process_role(
     """
     role = get_role(role_id, current_user.organization_id, db)
     fetch_cvs = bool(payload.get("fetch_cvs"))
+    refresh_cvs = bool(payload.get("refresh_cvs"))
+    if refresh_cvs:
+        fetch_cvs = True
     pre_screen = bool(payload.get("pre_screen"))
     refresh_pre_screen = bool(payload.get("refresh_pre_screen"))
     score_mode = str(payload.get("score") or "none").lower()
@@ -4803,6 +4830,7 @@ def process_role(
             role_id=role_id,
             organization_id=current_user.organization_id,
             fetch_cvs=fetch_cvs,
+            refresh_cvs=refresh_cvs,
             pre_screen=pre_screen,
             refresh_pre_screen=refresh_pre_screen,
             score_mode=score_mode,
@@ -4833,6 +4861,7 @@ def process_role(
         args=(role_id, current_user.organization_id),
         kwargs={
             "fetch_cvs": fetch_cvs,
+            "refresh_cvs": refresh_cvs,
             "pre_screen": pre_screen,
             "refresh_pre_screen": refresh_pre_screen,
             "score_mode": score_mode,
