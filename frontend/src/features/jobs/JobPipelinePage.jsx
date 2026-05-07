@@ -1673,6 +1673,57 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   };
 
+  // OFF → ON. Activate agent mode for THIS role with the budget the
+  // recruiter set in the panel. Backend requires monthly_usd_budget_cents
+  // to be set when flipping agentic_mode_enabled to true.
+  const handleActivateAgent = async (monthlyBudgetCents) => {
+    if (!Number.isFinite(numericRoleId)) return;
+    if (!Number.isFinite(monthlyBudgetCents) || monthlyBudgetCents <= 0) {
+      showToast('Set a monthly cap greater than $0 before activating.', 'error');
+      throw new Error('Invalid budget');
+    }
+    try {
+      await rolesApi.update(numericRoleId, {
+        agentic_mode_enabled: true,
+        monthly_usd_budget_cents: monthlyBudgetCents,
+      });
+      await loadRoleWorkspace();
+      const usd = (monthlyBudgetCents / 100).toFixed(monthlyBudgetCents % 100 === 0 ? 0 : 2);
+      showToast(`Agent mode is on — Taali will work this role with a $${usd}/month cap.`, 'success');
+    } catch (error) {
+      const message = getErrorMessage(error, 'Failed to turn on agent mode.');
+      showToast(message, 'error');
+      throw new Error(message);
+    }
+  };
+
+  // ON → OFF. Manual pause flips agentic_mode_enabled to false. The user
+  // can re-enable from the same panel later.
+  const handlePauseAgent = async () => {
+    if (!Number.isFinite(numericRoleId)) return;
+    try {
+      await rolesApi.update(numericRoleId, { agentic_mode_enabled: false });
+      await loadRoleWorkspace();
+      showToast('Agent mode paused for this role.', 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to pause agent mode.'), 'error');
+    }
+  };
+
+  // AUTO-PAUSED → ON. The role is still agentic_mode_enabled=true but
+  // paused_at was set when the budget cap was reached. Re-PATCHing
+  // agentic_mode_enabled=true clears paused_at server-side.
+  const handleResumeAgent = async () => {
+    if (!Number.isFinite(numericRoleId)) return;
+    try {
+      await rolesApi.update(numericRoleId, { agentic_mode_enabled: true });
+      await loadRoleWorkspace();
+      showToast('Agent mode resumed. Raise the monthly cap if you want it to keep going.', 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to resume agent mode.'), 'error');
+    }
+  };
+
   return (
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
@@ -1717,10 +1768,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           </div>
         )}
         agent={roleAgent}
-        onTurnOnAgent={goToAgentSettings}
-        onPauseAgent={goToAgentSettings}
-        onResumeAgent={goToAgentSettings}
-        onAgentSettings={handleOpenRoleSettings}
+        onActivateAgent={handleActivateAgent}
+        onPauseAgent={handlePauseAgent}
+        onResumeAgent={handleResumeAgent}
+        onAgentSettings={goToAgentSettings}
       />
       <div className="page">
         <div className="mc-cockpit-main">

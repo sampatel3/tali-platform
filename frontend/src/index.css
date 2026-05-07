@@ -8604,6 +8604,56 @@ button.eng-badge-button:focus-visible {
   margin-top: 2px;
 }
 
+/* OFF-state activator (HANDOFF unified-headers.md §4):
+   inline budget input + Activate button living inside the agent panel
+   when the role has agent mode disabled. One click + one number → live. */
+.agent-off-copy {
+  font-size: 12px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.75);
+}
+
+.agent-off-budget {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.20);
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 8px;
+  padding: 6px 10px;
+}
+
+.agent-off-budget-prefix,
+.agent-off-budget-suffix {
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+.agent-off-budget input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: 0;
+  color: #fff;
+  font-size: 14px;
+  font-weight: 600;
+  font-family: var(--font-mono);
+  padding: 0;
+}
+
+.agent-off-budget input:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.agent-off-error {
+  font-size: 11.5px;
+  color: rgba(251, 191, 36, 0.95);
+  line-height: 1.35;
+}
+
 .agent-btn {
   flex: 1;
   height: 30px;
