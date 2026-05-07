@@ -4,10 +4,14 @@ import {
   ArrowLeft,
   ArrowUpDown,
   BriefcaseBusiness,
+  Check,
   ChevronDown,
+  Edit3,
+  Loader2,
   Settings2,
   Share2,
   Sparkles,
+  X,
 } from 'lucide-react';
 
 import * as apiClient from '../../shared/api';
@@ -18,7 +22,6 @@ import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import { AgentBar, useAgentStatus } from '../../shared/layout/AgentBar';
-import { CommandBar } from '../../shared/ui/CommandBar';
 // AgentRail (the legacy left "cockpit rail") was retired with the v3
 // role detail layout — top AgentBar replaces it. Component file stays
 // in the tree until any other surface that may import it is also
@@ -593,6 +596,7 @@ const RoleAgentSettingsTab = ({
   onSave,
   onScore,
   onScrollToReview,
+  onSaveBudget,
 }) => {
   const total = activeApplications.length;
   const above = Math.max(0, total - belowThresholdCount);
@@ -622,6 +626,37 @@ const RoleAgentSettingsTab = ({
     passive_outbound: false,
   });
   const setAutonomyField = (key, on) => setAutonomy((prev) => ({ ...prev, [key]: on }));
+
+  // Per-role monthly budget editor — HANDOFF v2 §4.3 wants
+  // "Monthly cap $50 · Edit" in the budget sidebar. Falls back to
+  // the org default of $50 when the role hasn't set one.
+  const [budgetEditing, setBudgetEditing] = React.useState(false);
+  const [budgetDraftDollars, setBudgetDraftDollars] = React.useState('');
+  const [budgetSaving, setBudgetSaving] = React.useState(false);
+  const monthlyBudgetDollars = Math.round(monthlyBudgetCents / 100);
+  const startBudgetEdit = () => {
+    setBudgetDraftDollars(String(monthlyBudgetDollars));
+    setBudgetEditing(true);
+  };
+  const cancelBudgetEdit = () => {
+    setBudgetEditing(false);
+    setBudgetDraftDollars('');
+  };
+  const submitBudgetEdit = async () => {
+    if (!onSaveBudget) {
+      setBudgetEditing(false);
+      return;
+    }
+    const parsed = Number(budgetDraftDollars);
+    if (!Number.isFinite(parsed) || parsed < 0) return;
+    setBudgetSaving(true);
+    try {
+      await onSaveBudget(parsed);
+      setBudgetEditing(false);
+    } finally {
+      setBudgetSaving(false);
+    }
+  };
 
   return (
     <div className="mc-agent-settings">
@@ -832,6 +867,61 @@ const RoleAgentSettingsTab = ({
             EOM PROJECTION ≈ {fmtUsd(projectedCents)} ·{' '}
             {projectedCents > monthlyBudgetCents ? 'over budget' : 'paced under budget'}
           </div>
+          {/* HANDOFF v2 §4.3 — Monthly cap $X · Edit. Recruiters can
+              raise / lower the per-role cap inline; saved value is
+              persisted on the role record (monthly_usd_budget_cents),
+              not a session-only override. */}
+          {budgetEditing ? (
+            <div className="mc-agent-settings-budget-edit">
+              <label className="mc-agent-settings-budget-edit-label">
+                Monthly cap (USD)
+                <div className="mc-agent-settings-budget-edit-input">
+                  <span className="prefix">$</span>
+                  <input
+                    type="number"
+                    min={0}
+                    step={5}
+                    value={budgetDraftDollars}
+                    onChange={(event) => setBudgetDraftDollars(event.target.value)}
+                    aria-label="Monthly budget in dollars"
+                    autoFocus
+                  />
+                </div>
+              </label>
+              <div className="mc-agent-settings-budget-edit-actions">
+                <button
+                  type="button"
+                  className="btn btn-outline btn-xs"
+                  onClick={cancelBudgetEdit}
+                  disabled={budgetSaving}
+                >
+                  <X size={11} />
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-purple btn-xs"
+                  onClick={submitBudgetEdit}
+                  disabled={budgetSaving || budgetDraftDollars === ''}
+                >
+                  <Check size={11} />
+                  {budgetSaving ? 'Saving…' : 'Save cap'}
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mc-agent-settings-budget-cap-row">
+              <span>Monthly cap {fmtUsd(monthlyBudgetCents)}</span>
+              <button
+                type="button"
+                className="mc-agent-settings-budget-edit-link"
+                onClick={startBudgetEdit}
+              >
+                <Edit3 size={11} />
+                Edit
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="mc-agent-settings-side-card">
@@ -1563,16 +1653,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           All roles
         </button>
 
-        <CommandBar
-          initialScope="Candidates"
-          onSubmit={({ scope, query }) => {
-            if (scope === 'Roles') return onNavigate('jobs');
-            if (scope === 'Tasks') return onNavigate('tasks');
-            if (scope === 'Reports') return onNavigate('reporting');
-            onNavigate('chat', { searchQuery: query });
-          }}
-        />
-
         {/* HANDOFF v2 §4.2 / canvas jobs-detail-* — role detail is a
             single-column page with the role-scoped AgentBar at the top
             (replacing the legacy left "Agent rail" cockpit layout).
@@ -1827,6 +1907,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             onSave={handleSaveRoleConfig}
             onScore={() => handleBatchScore({ includeScored: false })}
             onScrollToReview={() => document.getElementById('pipeline-table')?.scrollIntoView({ behavior: 'smooth', block: 'start' })}
+            onSaveBudget={async (dollars) => {
+              if (!Number.isFinite(numericRoleId)) return;
+              const cents = Math.max(0, Math.round(Number(dollars) * 100));
+              try {
+                await rolesApi.update(numericRoleId, { monthly_usd_budget_cents: cents });
+                showToast('Monthly budget updated.', 'success');
+                await loadRoleWorkspace();
+              } catch (error) {
+                showToast(getErrorMessage(error, 'Failed to update budget.'), 'error');
+              }
+            }}
           />
         ) : activeView === 'activity' ? (
           // HANDOFF v2 §4.4 / canvas jobs-detail-spec — Job spec tab is the
@@ -1974,17 +2065,42 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 <ArrowUpDown size={12} />
                 Sort: {tableSortBy === 'composite' ? 'Taali score' : 'CV match'}
               </button>
-              {unscoredApplications.length > 0 ? (
-                <button
-                  type="button"
-                  className="btn btn-purple btn-sm"
-                  onClick={() => handleBatchScore({ includeScored: false })}
-                  disabled={savingRoleConfig}
-                >
-                  <Sparkles size={12} />
-                  Score new ({unscoredApplications.length})
-                </button>
-              ) : null}
+              {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — primary
+                  recruiter action is the cascade Process flow (Fetch CVs
+                  → Pre-screen → Score → score), opened via
+                  ProcessCandidatesDialog. The label flips to a live
+                  status while the cascade is in flight, mirroring the
+                  BackgroundJobsToaster state. */}
+              <button
+                type="button"
+                className="btn btn-purple btn-sm"
+                onClick={() => setProcessDialogOpen(true)}
+                disabled={String(processJobs?.[numericRoleId]?.status || '').toLowerCase() === 'running'}
+              >
+                {(() => {
+                  const pj = processJobs?.[numericRoleId];
+                  const status = String(pj?.status || '').toLowerCase();
+                  if (status === 'running') {
+                    const step = pj?.current_step;
+                    const label = step === 'fetch' ? 'Fetching CVs'
+                      : step === 'pre_screen' ? 'Pre-screening'
+                      : step === 'score' ? 'Scoring'
+                      : 'Processing';
+                    return (
+                      <>
+                        <Loader2 size={12} className="animate-spin" />
+                        {label}…
+                      </>
+                    );
+                  }
+                  return (
+                    <>
+                      <Sparkles size={12} />
+                      Process {activeApplications.length} candidate{activeApplications.length === 1 ? '' : 's'}
+                    </>
+                  );
+                })()}
+              </button>
             </div>
             {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — clean
                 ctable with Candidate / Score / Stage / Status / Agent /
