@@ -12,9 +12,9 @@ import {
   Spinner,
 } from '../../shared/ui/TaaliPrimitives';
 import {
-  CandidateAvatar,
   WorkableComparisonCard,
 } from '../../shared/ui/RecruiterDesignPrimitives';
+import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { ShareModal } from './ShareModal';
 import { buildClientReportFilenameStem } from './clientReportUtils';
 import { computeFluencyAxes } from '../../shared/assessment/fluencyRollup';
@@ -1303,121 +1303,50 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
     );
   }
 
+  const targetRoleId = application?.role_id ?? backFromRoleId ?? null;
+  const targetRoleName = application?.role_name || 'job';
+  const candidateLabel = application?.candidate_name || application?.candidate_email || 'Candidate';
+  const candidateInitials = (() => {
+    const seed = String(candidateLabel).trim();
+    if (!seed) return 'C';
+    const letters = seed.split(/\s+/).filter(Boolean).map((w) => w[0]).join('');
+    return letters.slice(0, 2).toUpperCase() || 'C';
+  })();
+  const metaParts = [
+    application?.candidate_email,
+    application?.candidate_location,
+    application?.role_name,
+    application?.pipeline_stage
+      ? `Application: ${String(application.pipeline_stage).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())}`
+      : null,
+  ].filter(Boolean);
+
   return (
     <div>
       {NavComponent && !isInterviewView ? <NavComponent currentPage="candidates" onNavigate={onNavigate} /> : null}
-      <div className="page">
-        {isInterviewView ? (
-          <div className="iv-banner">
-            <Eye size={16} />
-            {isClientView ? (
-              <span><b>Client view.</b> External, client-safe summary — recruiter notes, scoring breakdown, and interview prep are hidden.</span>
-            ) : (
-              <span><b>Interview view.</b> You are seeing the panel-safe version of this Taali report.</span>
-            )}
-          </div>
-        ) : null}
-        {(() => {
-          // Prefer the role on the application itself — it's always
-          // populated when the candidate is attached to a role, so the
-          // back link works even when the user reloads /candidates/N
-          // and loses the ?from=jobs/X query param. Fall back to the
-          // ?from param (kept for legacy deep-links that pass it
-          // explicitly), and finally to the all-candidates list.
-          const targetRoleId = application?.role_id ?? backFromRoleId ?? null;
-          const targetRoleName = application?.role_name || 'job';
-          return (
-            <button
-              type="button"
-              className="standing-back back"
-              data-internal-only
-              onClick={() => {
-                if (targetRoleId != null) {
-                  onNavigate('job-pipeline', { roleId: targetRoleId });
-                  return;
-                }
-                onNavigate('candidates');
-              }}
-            >
-              {targetRoleId != null
-                ? `← Back to job: ${targetRoleName}`
-                : '← Back to candidates'}
-            </button>
-          );
-        })()}
-        {/* HANDOFF v2 §5.1 / canvas cand-overview header — light page header
-            with avatar + name + meta line + 3 actions. The 4-tile dark
-            score band that used to live here is redundant now: the new
-            Overview pane (cand-overview hero band) renders ScoreRing +
-            RECOMMENDATION + SIGNAL list on every tab. */}
-        <div className="mc-kicker" style={{ marginBottom: 8 }}>Candidate standing report</div>
-        {isPreScreenedOut ? (
-          <div
-            data-internal-only
-            style={{
-              marginTop: '4px',
-              marginBottom: '14px',
-              padding: '12px 14px',
-              borderRadius: '12px',
-              background: 'var(--taali-surface-subtle, rgba(100,116,139,0.08))',
-              border: '1px solid var(--taali-border, rgba(100,116,139,0.2))',
-              display: 'flex',
-              gap: '12px',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              flexWrap: 'wrap',
-            }}
-          >
-            <div style={{ fontSize: '13.5px', color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 600 }}>
-              <strong>Filtered out by pre-screen.</strong>{' '}
-              {preScreenReason || 'A cheap pre-screen decided this CV did not plausibly meet the role must-haves.'}
+      {!isInterviewView ? (
+        <AgentHeader
+          kicker="Candidate standing report"
+          title={candidateLabel}
+          period={false}
+          subtitle={metaParts.length ? metaParts.join(' · ') : 'Candidate standing report'}
+          backLink={{
+            label: targetRoleId != null ? `Back to job: ${targetRoleName}` : 'Back to candidates',
+            onClick: () => {
+              if (targetRoleId != null) {
+                onNavigate('job-pipeline', { roleId: targetRoleId });
+                return;
+              }
+              onNavigate('candidates');
+            },
+          }}
+          preTitle={(
+            <div className="ah-cand-pre">
+              <div className="ah-cand-avatar" aria-hidden="true">{candidateInitials}</div>
             </div>
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={handleRunFullEvaluation}
-              disabled={busyAction === 'rescore'}
-            >
-              {busyAction === 'rescore' ? 'Queuing…' : 'Run full evaluation'}
-            </button>
-          </div>
-        ) : null}
-        <header className="mc-cand-header">
-          <CandidateAvatar
-            name={application?.candidate_name || application?.candidate_email || 'Candidate'}
-            size={72}
-            className="mc-cand-header-avatar"
-          />
-          <div className="mc-cand-header-id">
-            <div className="mc-kicker">CANDIDATE</div>
-            <h1 className="mc-cand-header-name">
-              {application?.candidate_name || application?.candidate_email || 'Candidate'}
-            </h1>
-            <div className="mc-cand-header-meta">
-              {[
-                application?.candidate_email,
-                application?.candidate_location,
-                application?.role_name,
-                application?.pipeline_stage
-                  ? `Application: ${String(application.pipeline_stage).replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())}`
-                  : null,
-              ].filter(Boolean).map((part, idx, arr) => (
-                <React.Fragment key={`${part}-${idx}`}>
-                  <span>{part}</span>
-                  {idx < arr.length - 1 ? <span className="mc-cand-header-sep">·</span> : null}
-                </React.Fragment>
-              ))}
-            </div>
-          </div>
-          {!isClientView ? (
-            <div className="mc-cand-header-actions">
-              {/* User feedback: tidy the share UI down to one button per
-                  audience and surface the Workable link at the top
-                  (was buried in a second share-bar below). The legacy
-                  "Manage links" / "Share report" / "Copy interview
-                  link" / "Email to panel" stack is gone — both share
-                  buttons open the same ShareModal pre-set to the right
-                  mode (interview = panel, client = external). */}
+          )}
+          actions={!isClientView ? (
+            <>
               {application?.workable_profile_url ? (
                 <button
                   type="button"
@@ -1451,9 +1380,52 @@ export const CandidateStandingReportPage = ({ onNavigate, NavComponent = null })
               >
                 Share with client
               </button>
-            </div>
+            </>
           ) : null}
-        </header>
+        />
+      ) : null}
+      <div className="page">
+        {isInterviewView ? (
+          <div className="iv-banner">
+            <Eye size={16} />
+            {isClientView ? (
+              <span><b>Client view.</b> External, client-safe summary — recruiter notes, scoring breakdown, and interview prep are hidden.</span>
+            ) : (
+              <span><b>Interview view.</b> You are seeing the panel-safe version of this Taali report.</span>
+            )}
+          </div>
+        ) : null}
+        {isPreScreenedOut ? (
+          <div
+            data-internal-only
+            style={{
+              marginTop: '4px',
+              marginBottom: '14px',
+              padding: '12px 14px',
+              borderRadius: '12px',
+              background: 'var(--taali-surface-subtle, rgba(100,116,139,0.08))',
+              border: '1px solid var(--taali-border, rgba(100,116,139,0.2))',
+              display: 'flex',
+              gap: '12px',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+            }}
+          >
+            <div style={{ fontSize: '13.5px', color: 'var(--ink-2)', lineHeight: 1.5, maxWidth: 600 }}>
+              <strong>Filtered out by pre-screen.</strong>{' '}
+              {preScreenReason || 'A cheap pre-screen decided this CV did not plausibly meet the role must-haves.'}
+            </div>
+            <button
+              type="button"
+              className="btn btn-primary btn-sm"
+              onClick={handleRunFullEvaluation}
+              disabled={busyAction === 'rescore'}
+            >
+              {busyAction === 'rescore' ? 'Queuing…' : 'Run full evaluation'}
+            </button>
+          </div>
+        ) : null}
 
         {shareState.error ? <p className="mt-3 text-xs text-[var(--taali-danger)]">{shareState.error}</p> : null}
 

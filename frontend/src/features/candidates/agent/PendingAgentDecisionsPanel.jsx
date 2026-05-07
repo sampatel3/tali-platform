@@ -84,7 +84,7 @@ export const PendingAgentDecisionsPanel = ({ role, onAfterAction }) => {
         <div>
           <div className="font-medium">Agent paused</div>
           <div className="text-taali-fg-muted">
-            {role.agent_paused_reason || 'No new agent decisions will be queued until you re-enable agentic mode.'}
+            {role.agent_paused_reason || 'No new agent decisions will be queued until you re-enable agent mode.'}
           </div>
         </div>
       </div>

@@ -16,7 +16,7 @@ import {
   tasks as tasksApi,
 } from '../../shared/api';
 import { getCategoryScoresFromAssessment } from '../../lib/comparisonCategories';
-import { PageHero } from '../../shared/layout/PageHero';
+import { AgentHeader } from '../../shared/layout/AgentHeader';
 import { Button, Panel, Select, Spinner } from '../../shared/ui/TaaliPrimitives';
 
 const DATE_RANGE_OPTIONS = [
@@ -248,17 +248,17 @@ export const ReportingPage = ({ onNavigate, NavComponent }) => {
   return (
     <div>
       <NavComponent currentPage="reporting" onNavigate={onNavigate} />
+      <AgentHeader
+        kicker={`MISSION CONTROL · ${rangeLabel.toUpperCase()}${roleFilter ? '' : ' · ALL ROLES'}`}
+        title={<>Your agent in <em>narrative</em></>}
+        subtitle="What Taali did, what it skipped, and where it was unsure. Not a dashboard — a daily standup in retrospect."
+        actions={(
+          <Button type="button" variant="secondary" size="sm" onClick={handleExportCsv} disabled={loading || exporting}>
+            {exporting ? 'Exporting...' : 'Export CSV'}
+          </Button>
+        )}
+      />
       <div className="mc-page mc-page-narrow">
-        <PageHero
-          kicker={`MISSION CONTROL · ${rangeLabel.toUpperCase()}${roleFilter ? '' : ' · ALL ROLES'}`}
-          title={<>Your agent in <em>narrative</em></>}
-          subtitle="What Taali did, what it skipped, and where it was unsure. Not a dashboard — a daily standup in retrospect."
-          actions={(
-            <Button type="button" variant="secondary" size="sm" onClick={handleExportCsv} disabled={loading || exporting}>
-              {exporting ? 'Exporting...' : 'Export CSV'}
-            </Button>
-          )}
-        />
 
         <Panel className="mb-5 p-4">
           <div className="grid gap-3 md:grid-cols-4">

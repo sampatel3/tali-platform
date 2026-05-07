@@ -247,7 +247,9 @@ export const LandingPage = ({ onNavigate }) => {
             </button>
           </div>
 
-          {/* Hero composition — browser frame with AgentBar + 4 KPI tiles */}
+          {/* Hero composition — browser frame showing the unified
+              AgentHeader (HANDOFF unified-headers.md §2-§4): dark-purple
+              slab with right-side Agent mode panel, then 4 KPI tiles. */}
           <div
             className="overflow-hidden rounded-[16px] border border-[var(--line)] bg-[var(--bg-2)]"
             style={{ boxShadow: '0 24px 60px -30px rgba(91,44,168,0.35)' }}
@@ -260,39 +262,47 @@ export const LandingPage = ({ onNavigate }) => {
               <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#39c66d' }} />
               <span className="ml-3">app.taali.ai/jobs</span>
             </div>
-            <div
-              className="px-6 py-6"
-              style={{ background: 'linear-gradient(180deg, #f9f7fc 0%, #ffffff 100%)' }}
-            >
-              {/* Static AgentBar mock matching the canvas hero composition */}
-              <div className="mc-agent-bar" style={{ marginBottom: 16 }}>
-                <div className="mc-agent-row">
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 10, flex: '1 1 320px', minWidth: 0 }}>
-                    <div className="mc-agent-glyph">
-                      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#fff" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            {/* Static AgentHeader mock — mirrors the live AgentHeader on
+                the Jobs page so the landing reads as the actual product. */}
+            <div className="agent-header agent-running" style={{ minHeight: 220, padding: '24px 24px 26px' }}>
+              <div className="agent-header-inner">
+                <div className="agent-header-left">
+                  <div className="ah-kicker">JOBS · 5 ACTIVE ROLES</div>
+                  <div className="ah-title-row">
+                    <h1 style={{ fontSize: 38 }}>5 active <em>roles</em></h1>
+                  </div>
+                  <p className="ah-subtitle">You&apos;re hiring. Star a role to keep its candidates flowing in automatically.</p>
+                </div>
+                <aside className="agent-panel agent-on" style={{ width: 260, minHeight: 188 }}>
+                  <div className="agent-panel-head">
+                    <div className="agent-pulse-wrap">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83" />
                       </svg>
-                      <span className="mc-pulse-ring" aria-hidden="true" />
+                      <span className="agent-pulse" aria-hidden="true" />
                     </div>
-                    <div style={{ minWidth: 0 }}>
-                      <div className="mc-agent-title">
-                        <span>Agentic mode is ON</span>
-                        <span className="mc-agent-pending">3 awaiting your review</span>
+                    <div className="agent-status">
+                      <div className="agent-status-line">
+                        <span className="agent-mode">Agent mode</span>
+                        <span className="agent-state-pill state-on">ON</span>
                       </div>
-                      <div className="mc-agent-tick">Advanced Maya Chen to Review · 2m ago · because: assessment 8.4, role-fit 92%, recruiter shortlist match</div>
+                      <div className="agent-pending">3 awaiting your review</div>
                     </div>
                   </div>
-                  <div className="mc-agent-budget">
-                    <div className="mc-agent-budget-row">
+                  <div className="agent-tick">Advanced Maya Chen to Review · 2m ago</div>
+                  <div className="agent-budget">
+                    <div className="agent-budget-row">
                       <span>This month</span>
-                      <span style={{ fontWeight: 600 }}>$31 / $50</span>
+                      <span className="amt">$31 <span className="of">/ $50</span></span>
                     </div>
-                    <div className="mc-agent-budget-bar">
-                      <i style={{ width: '62%' }} />
+                    <div className="agent-budget-bar">
+                      <i className="fill" style={{ width: '62%' }} />
                     </div>
                   </div>
-                </div>
+                </aside>
               </div>
+            </div>
+            <div className="px-6 py-5 bg-[var(--bg-2)]">
               <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(4, minmax(0, 1fr))' }}>
                 {[
                   { k: 'CANDIDATES PROCESSED', v: '847', d: 'this week' },
