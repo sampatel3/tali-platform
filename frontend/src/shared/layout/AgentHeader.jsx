@@ -37,15 +37,15 @@ const formatUsd = (cents) => {
 const DEFAULT_BUDGET_USD = 50;
 
 // Inline activator shown inside the OFF-state panel: budget input + Activate
-// button. On Activate we call `onActivate(monthlyBudgetCents)` — the parent
-// page is responsible for hitting the backend and surfacing toast feedback.
+// button. `onActivate(monthlyBudgetCents)` is fire-and-forget — the parent
+// optimistically flips the panel to ON, so we don't need a local
+// "Activating…" state; the activator simply unmounts on the next render.
 //
 // When no `onActivate` is wired (e.g. Jobs list panel where activation is
 // per-role, not org-wide), we render only the guidance copy so the panel
 // reads as informational, not an unusable input.
 const AgentOffActivator = ({ onActivate, disabledReason }) => {
   const [budget, setBudget] = useState(String(DEFAULT_BUDGET_USD));
-  const [activating, setActivating] = useState(false);
   const [errorMsg, setErrorMsg] = useState(null);
 
   if (!onActivate) {
@@ -56,21 +56,14 @@ const AgentOffActivator = ({ onActivate, disabledReason }) => {
     );
   }
 
-  const submit = async () => {
+  const submit = () => {
     const dollars = Number(budget);
     if (!Number.isFinite(dollars) || dollars <= 0) {
       setErrorMsg('Enter a monthly cap greater than $0.');
       return;
     }
     setErrorMsg(null);
-    setActivating(true);
-    try {
-      await onActivate(Math.round(dollars * 100));
-    } catch (err) {
-      setErrorMsg(err?.message || 'Failed to turn on agent mode.');
-    } finally {
-      setActivating(false);
-    }
+    onActivate(Math.round(dollars * 100));
   };
 
   return (
@@ -87,21 +80,15 @@ const AgentOffActivator = ({ onActivate, disabledReason }) => {
           value={budget}
           onChange={(event) => setBudget(event.target.value)}
           aria-label="Role monthly budget in USD"
-          disabled={activating}
           inputMode="numeric"
         />
         <span className="agent-off-budget-suffix">/ month</span>
       </div>
       {errorMsg ? <div className="agent-off-error">{errorMsg}</div> : null}
       <div className="agent-actions">
-        <button
-          type="button"
-          className="agent-btn primary"
-          onClick={submit}
-          disabled={activating}
-        >
+        <button type="button" className="agent-btn primary" onClick={submit}>
           <Play size={11} strokeWidth={2} fill="currentColor" />
-          {activating ? 'Activating…' : 'Turn on agent'}
+          Turn on agent
         </button>
       </div>
     </>
@@ -131,17 +118,6 @@ const AgentPanel = ({
     : 0;
   const spentLabel = formatUsd(spentCents);
   const budgetLabel = formatUsd(budgetCents);
-  const [busy, setBusy] = useState(null); // 'pause' | 'resume' | null
-
-  const runWith = async (key, handler) => {
-    if (!handler) return;
-    setBusy(key);
-    try {
-      await handler();
-    } finally {
-      setBusy(null);
-    }
-  };
 
   return (
     <aside className={`agent-panel agent-${status}`}>
@@ -163,65 +139,70 @@ const AgentPanel = ({
         </div>
       </div>
 
-      {on && tick ? <div className="agent-tick">{tick}</div> : null}
-      {paused ? (
-        <div className="agent-tick">
-          Auto-paused — monthly cap reached. Raise the cap or resume to continue.
-        </div>
-      ) : null}
-
-      {on || paused ? (
-        <div className="agent-budget">
-          <div className="agent-budget-row">
-            <span title="Covers pre-screen, scoring, semantic search, assessments, and the agent on this role.">Role budget · this month</span>
-            <span className="amt">{spentLabel} <span className="of">/ {budgetLabel}</span></span>
+      {/* `key={status}` re-mounts the body when on/off/paused flips so the new
+          state plays the agentPanelEnter fade-in animation, giving the swap
+          a soft transition instead of a hard cut. */}
+      <div className="agent-panel-body" key={status}>
+        {on && tick ? <div className="agent-tick">{tick}</div> : null}
+        {paused ? (
+          <div className="agent-tick">
+            Auto-paused — monthly cap reached. Raise the cap or resume to continue.
           </div>
-          <div className="agent-budget-bar">
-            <i className="fill" style={{ width: `${pct}%` }} />
-          </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      {!on && !paused ? (
-        <AgentOffActivator
-          onActivate={onActivate}
-          disabledReason={offStateMessage}
-        />
-      ) : (
-        <div className="agent-actions">
-          {on && !paused ? (
+        {on || paused ? (
+          <div className="agent-budget">
+            <div className="agent-budget-row">
+              <span title="Covers pre-screen, scoring, semantic search, assessments, and the agent on this role.">Role budget · this month</span>
+              <span className="amt">{spentLabel} <span className="of">/ {budgetLabel}</span></span>
+            </div>
+            <div className="agent-budget-bar">
+              <i className="fill" style={{ width: `${pct}%` }} />
+            </div>
+          </div>
+        ) : null}
+
+        {!on && !paused ? (
+          <AgentOffActivator
+            onActivate={onActivate}
+            disabledReason={offStateMessage}
+          />
+        ) : (
+          <div className="agent-actions">
+            {on && !paused ? (
+              <button
+                type="button"
+                className="agent-btn"
+                onClick={onPause}
+                disabled={!onPause}
+              >
+                <Pause size={11} strokeWidth={2} />
+                Pause
+              </button>
+            ) : paused ? (
+              <button
+                type="button"
+                className="agent-btn primary"
+                onClick={onResume}
+                disabled={!onResume}
+              >
+                <Play size={11} strokeWidth={2} fill="currentColor" />
+                Resume
+              </button>
+            ) : null}
             <button
               type="button"
-              className="agent-btn"
-              onClick={() => runWith('pause', onPause)}
-              disabled={!onPause || busy === 'pause'}
+              className="agent-btn icon"
+              title="Configure agent"
+              aria-label="Configure agent"
+              onClick={onSettings}
+              disabled={!onSettings}
             >
-              <Pause size={11} strokeWidth={2} />
-              {busy === 'pause' ? 'Pausing…' : 'Pause'}
+              <SettingsIcon size={13} strokeWidth={1.7} />
             </button>
-          ) : paused ? (
-            <button
-              type="button"
-              className="agent-btn primary"
-              onClick={() => runWith('resume', onResume)}
-              disabled={!onResume || busy === 'resume'}
-            >
-              <Play size={11} strokeWidth={2} fill="currentColor" />
-              {busy === 'resume' ? 'Resuming…' : 'Resume'}
-            </button>
-          ) : null}
-          <button
-            type="button"
-            className="agent-btn icon"
-            title="Configure agent"
-            aria-label="Configure agent"
-            onClick={onSettings}
-            disabled={!onSettings}
-          >
-            <SettingsIcon size={13} strokeWidth={1.7} />
-          </button>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </aside>
   );
 };
