@@ -28,7 +28,6 @@ import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/Agent
 // migrated; remove that import here to avoid unused-import warnings.
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateSheet } from '../candidates/CandidateSheet';
-import { RequirementsEditor } from '../../shared/ui/RequirementsEditor';
 // CandidatesDirectoryPage is no longer embedded on the role detail —
 // the Candidates tab now renders a canvas-spec inline ctable directly.
 // Standalone /candidates route still uses the directory.
@@ -684,39 +683,31 @@ const RoleAgentSettingsTab = ({
           </div>
         </section>
 
-        {/* CV scoring criteria */}
+        {/* Recruiter intent for this role */}
         <section className="mc-agent-settings-card">
           <div className="mc-agent-settings-card-head">
             <div>
               <h2 className="mc-agent-settings-card-title">
-                CV scoring <em>criteria</em>
+                Role <em>intent</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                Job spec is the default. Add recruiter guidance below to refine. The agent applies this automatically as new candidates arrive.
+                What does success look like in this role? The agent reads this as guidance — context to reason about candidate fit, not a checklist of rules to enforce. The job spec + linked task are still the baseline; this is where you tell the agent what matters most.
               </p>
             </div>
           </div>
-          <div className="mc-agent-settings-callout">
-            <span className="mc-agent-settings-callout-num">01</span>
-            <span>Default: scores against the job spec + linked task. Add recruiter requirements below to weigh additional signals.</span>
-            <span className="mc-agent-settings-callout-tag">JOB SPEC</span>
-          </div>
           <div className="mc-agent-settings-textwrap">
-            <div className="mc-agent-settings-texthead">
-              <span>RECRUITER SCORING REQUIREMENTS</span>
-              <span style={{ color: 'var(--purple)' }}>
-                {recruiterCriteria.length
-                  ? `${recruiterCriteria.length} line${recruiterCriteria.length === 1 ? '' : 's'}`
-                  : 'No lines yet'}
-              </span>
-            </div>
-            {/* Same structured editor as Settings → AI agent so the
-                workspace-defaults surface and the per-role override
-                surface look and behave identically. */}
-            <RequirementsEditor
-              value={String(criteriaDraft || '').split('\n').map((s) => s.trim()).filter(Boolean)}
-              onChange={(nextLines) => setCriteriaDraft(nextLines.join('\n'))}
-              ariaLabelPrefix="Role requirement"
+            <textarea
+              className="mc-agent-settings-intent-textarea"
+              rows={8}
+              value={String(criteriaDraft || '')}
+              onChange={(e) => setCriteriaDraft(e.target.value)}
+              placeholder={
+                "e.g. We're looking for engineers who can move fast in early-stage chaos.\n"
+                + "5+ years backend matters less than 0→1 product experience.\n"
+                + "Strong written communication is critical — most of the role is async.\n"
+                + "If they've worked at Stripe, Linear, or Vercel they probably get it."
+              }
+              aria-label="Role intent"
             />
           </div>
         </section>

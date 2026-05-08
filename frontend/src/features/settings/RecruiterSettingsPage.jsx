@@ -22,11 +22,6 @@ import {
   WorkableLogo,
   formatRelativeDateTime,
 } from '../../shared/ui/RecruiterDesignPrimitives';
-import {
-  RequirementsEditor,
-  formatRequirement,
-  parseRequirement,
-} from '../../shared/ui/RequirementsEditor';
 import BackgroundJobsPanel from './BackgroundJobsPanel';
 import UsagePanel from './UsagePanel';
 
@@ -207,15 +202,30 @@ const AgentDefaultsForm = ({ requirements, budgetUsd, threshold, onChange }) => 
       <div className="settings-subcard">
         <div className="settings-subcard-head">
           <div>
-            <h3>Default role requirements</h3>
-            <p>Pre-fills the must-haves on every new role. Recruiters edit per role from the role page.</p>
+            <h3>Default role intent</h3>
+            <p>What does success look like in your roles? The agent uses this as guidance — context to reason about candidate fit, not a checklist of rules. Pre-fills the intent on every new role; recruiters refine per role from the role page.</p>
           </div>
         </div>
-        <RequirementsEditor
-          value={requirements}
-          onChange={(next) => onChange({ requirements: next })}
-          ariaLabelPrefix="Default requirement"
-        />
+        <label className="field">
+          <textarea
+            className="settings-intent-textarea"
+            rows={6}
+            value={(Array.isArray(requirements) ? requirements : []).join('\n')}
+            onChange={(e) => onChange({
+              requirements: String(e.target.value || '')
+                .split('\n')
+                .map((s) => s.replace(/\s+$/, ''))
+                .filter((line, i, arr) => !(line === '' && arr[i - 1] === '')),
+            })}
+            placeholder={
+              "e.g. We're looking for engineers who can move fast in early-stage chaos.\n"
+              + "5+ years backend matters less than 0→1 product experience.\n"
+              + "Strong written communication is critical — most of the role is async.\n"
+              + "If they've worked at Stripe, Linear, or Vercel they probably get it."
+            }
+            aria-label="Default role intent"
+          />
+        </label>
       </div>
 
       <div className="settings-subgrid settings-top-gap">
@@ -859,13 +869,11 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
   const handleSaveAgentDefaults = async () => {
     setAgentDefaultsSaving(true);
-    // Normalise every line through the structured editor's parse +
-    // format so anything saved here matches the shape the role page
-    // produces — unprefixed lines get a "Must have:" prefix on save.
+    // Preserve the recruiter's intent text verbatim — no "Must have:"
+    // prefix injection. Per the agent system prompt v5, the agent reads
+    // this as RECRUITER INTENT (priorities, not gates).
     const cleanedRequirements = (agentDefaultsForm.requirements || [])
       .map((item) => String(item || '').trim())
-      .filter(Boolean)
-      .map((item) => formatRequirement(parseRequirement(item)))
       .filter(Boolean);
     const budgetUsd = Number(agentDefaultsForm.budgetUsd);
     const budgetCents = Number.isFinite(budgetUsd) && budgetUsd > 0

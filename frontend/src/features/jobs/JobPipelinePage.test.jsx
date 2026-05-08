@@ -262,31 +262,26 @@ Banking transformation experience
     expect(querySectionTitle('What we offer')).not.toBeInTheDocument();
   });
 
-  it('saves recruiter criteria from the Agent settings tab', async () => {
-    apiClient.roles.update.mockResolvedValue({ data: { ...baseRole, additional_requirements: 'Payments experience' } });
+  it('saves recruiter intent from the Agent settings tab', async () => {
+    apiClient.roles.update.mockResolvedValue({ data: { ...baseRole, additional_requirements: 'Payments experience matters' } });
 
     renderPipeline();
     await openAgentSettingsTab();
 
-    // CV scoring criteria editor lives on the Agent settings tab. We
-    // moved off a free-text textarea onto a structured row editor
-    // (priority dropdown + free text + remove). Add two requirements
-    // and save — they should round-trip as "Must have: <text>" lines.
-    await screen.findByRole('heading', { name: /CV scoring/i, level: 2 });
+    // The structured Must-have / Preferred row editor was replaced with
+    // a freeform recruiter-intent textarea (system prompt v5 reads it
+    // as guidance, not gates). The text round-trips verbatim — no
+    // "Must have:" prefix injection on save.
+    await screen.findByRole('heading', { name: /Role intent/i, level: 2 });
 
-    fireEvent.click(screen.getByRole('button', { name: /Add requirement/i }));
-    fireEvent.change(screen.getByLabelText('Role requirement 1 text'), {
-      target: { value: 'Payments experience' },
-    });
-    fireEvent.click(screen.getByRole('button', { name: /Add requirement/i }));
-    fireEvent.change(screen.getByLabelText('Role requirement 2 text'), {
-      target: { value: 'Stakeholder governance' },
+    fireEvent.change(screen.getByLabelText('Role intent'), {
+      target: { value: 'Payments experience matters\nStakeholder governance is critical' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Save role settings/i }));
 
     await waitFor(() => {
       expect(apiClient.roles.update).toHaveBeenCalledWith(101, expect.objectContaining({
-        additional_requirements: 'Must have: Payments experience\nMust have: Stakeholder governance',
+        additional_requirements: 'Payments experience matters\nStakeholder governance is critical',
       }));
     });
   });
@@ -297,7 +292,7 @@ Banking transformation experience
     await screen.findByRole('heading', { name: /AI Native Engineer/i });
 
     fireEvent.click(screen.getByRole('button', { name: /^Agent settings$/i }));
-    expect(await screen.findByRole('heading', { name: /CV scoring/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Role intent/i })).toBeInTheDocument();
     expect(screen.getByText(/HOW THE AGENT RUNS THIS ROLE/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Reject threshold/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Autonomy rules/i })).toBeInTheDocument();
