@@ -8951,8 +8951,12 @@ button.eng-badge-button:focus-visible {
 .agent-panel {
   width: 300px;
   flex-shrink: 0;
-  /* Reserves vertical space so OFF state doesn't collapse the hero */
-  min-height: 208px;
+  /* Locked height so the box doesn't pop between states. OFF (copy +
+     budget input + button) is the tallest natural layout; ON / PAUSED
+     have empty room below the action row. min-height (vs fixed) lets
+     edge cases like the inline budget error grow gracefully without
+     clipping, while every common state still settles at exactly 240px. */
+  min-height: 240px;
   background: rgba(255, 255, 255, 0.06);
   border: 1px solid rgba(167, 139, 250, 0.32);
   border-radius: 14px;
@@ -8970,8 +8974,11 @@ button.eng-badge-button:focus-visible {
     box-shadow 700ms cubic-bezier(.4, 0, .2, 1);
 }
 
-/* OFF panel: pin Turn-on button to bottom so it doesn't float mid-card. */
-.agent-panel.agent-off .agent-actions { margin-top: auto; }
+/* Pin the action row to the bottom of the panel in every state, so the
+   Pause / Resume / Turn-on button always sits in the same place when
+   the user toggles agent mode. (Pairs with the locked .agent-panel
+   height — together they keep the box visually static across flips.) */
+.agent-panel .agent-actions { margin-top: auto; }
 .agent-panel.agent-off {
   border-color: rgba(255, 255, 255, 0.14);
   background: rgba(255, 255, 255, 0.04);
