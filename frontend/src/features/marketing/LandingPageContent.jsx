@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { Check } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { Check, Pause, Play } from 'lucide-react';
 
 import { AssessmentRuntimePreviewView } from '../assessment_runtime/AssessmentRuntimePreviewView';
 import { PRODUCT_WALKTHROUGH, PRODUCT_WALKTHROUGH_TASK } from '../demo/productWalkthroughModels';
@@ -164,6 +164,17 @@ export const LandingPage = ({ onNavigate }) => {
   const showcaseAssessment = PRODUCT_WALKTHROUGH_TASK;
   const runtimeShowcase = PRODUCT_WALKTHROUGH.runtime;
 
+  // Hero AgentHeader is interactive: lands OFF, auto-flips ON ~1.6s later
+  // so visitors passively witness the cross-fade animation. Once a visitor
+  // clicks the toggle themselves, the auto-play ref locks so we don't keep
+  // overriding their state.
+  const [agentOn, setAgentOn] = useState(false);
+  const userToggledRef = useRef(false);
+  const toggleAgent = () => {
+    userToggledRef.current = true;
+    setAgentOn((value) => !value);
+  };
+
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
     const sectionId = consumePendingMarketingSection() || window.location.hash.replace(/^#/, '');
@@ -173,6 +184,14 @@ export const LandingPage = ({ onNavigate }) => {
       scrollToMarketingSection(sectionId, { behavior: 'smooth' });
     }, 40);
 
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return undefined;
+    const timer = window.setTimeout(() => {
+      if (!userToggledRef.current) setAgentOn(true);
+    }, 1600);
     return () => window.clearTimeout(timer);
   }, []);
 
@@ -262,9 +281,16 @@ export const LandingPage = ({ onNavigate }) => {
               <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#39c66d' }} />
               <span className="ml-3">app.taali.ai/jobs</span>
             </div>
-            {/* Static AgentHeader mock — mirrors the live AgentHeader on
-                the Jobs page so the landing reads as the actual product. */}
-            <div className="agent-header agent-running" style={{ minHeight: 220, padding: '24px 24px 26px' }}>
+            {/* Live AgentHeader mock — same `.agent-running` / `.agent-quiet`
+                classes and `.ah-bright-overlay` layer as the real product, so
+                the OFF→ON cross-fade plays here exactly as it does in-app.
+                Hero auto-flips ON shortly after mount; visitors can click
+                the panel toggle to replay the transition. */}
+            <div
+              className={`agent-header ${agentOn ? 'agent-running' : 'agent-quiet'}`}
+              style={{ minHeight: 220, padding: '24px 24px 26px' }}
+            >
+              <span className="ah-bright-overlay" aria-hidden="true" />
               <div className="agent-header-inner">
                 <div className="agent-header-left">
                   <div className="ah-kicker">JOBS · 5 ACTIVE ROLES</div>
@@ -273,31 +299,67 @@ export const LandingPage = ({ onNavigate }) => {
                   </div>
                   <p className="ah-subtitle">You&apos;re hiring. Star a role to keep its candidates flowing in automatically.</p>
                 </div>
-                <aside className="agent-panel agent-on" style={{ width: 260, minHeight: 188 }}>
+                <aside
+                  className={`agent-panel agent-${agentOn ? 'on' : 'off'}`}
+                  style={{ width: 260, minHeight: 200 }}
+                >
                   <div className="agent-panel-head">
                     <div className="agent-pulse-wrap">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                         <path d="M12 2v4m0 12v4M4.93 4.93l2.83 2.83m8.48 8.48l2.83 2.83M2 12h4m12 0h4M4.93 19.07l2.83-2.83m8.48-8.48l2.83-2.83" />
                       </svg>
-                      <span className="agent-pulse" aria-hidden="true" />
+                      {agentOn ? <span className="agent-pulse" aria-hidden="true" /> : null}
                     </div>
                     <div className="agent-status">
                       <div className="agent-status-line">
                         <span className="agent-mode">Agent mode</span>
-                        <span className="agent-state-pill state-on">ON</span>
+                        <span className={`agent-state-pill state-${agentOn ? 'on' : 'off'}`}>
+                          {agentOn ? 'ON' : 'OFF'}
+                        </span>
                       </div>
-                      <div className="agent-pending">3 awaiting your review</div>
+                      {agentOn ? <div className="agent-pending">3 awaiting your review</div> : null}
                     </div>
                   </div>
-                  <div className="agent-tick">Advanced Maya Chen to Review · 2m ago</div>
-                  <div className="agent-budget">
-                    <div className="agent-budget-row">
-                      <span>This month</span>
-                      <span className="amt">$31 <span className="of">/ $50</span></span>
-                    </div>
-                    <div className="agent-budget-bar">
-                      <i className="fill" style={{ width: '62%' }} />
-                    </div>
+                  {/* `key` re-mounts the body on each toggle so the
+                      agentPanelEnter fade-up animation plays. */}
+                  <div className="agent-panel-body" key={agentOn ? 'on' : 'off'}>
+                    {agentOn ? (
+                      <>
+                        <div className="agent-tick">Advanced Maya Chen to Review · 2m ago</div>
+                        <div className="agent-budget">
+                          <div className="agent-budget-row">
+                            <span>This month</span>
+                            <span className="amt">$31 <span className="of">/ $50</span></span>
+                          </div>
+                          <div className="agent-budget-bar">
+                            <i className="fill" style={{ width: '62%' }} />
+                          </div>
+                        </div>
+                        <div className="agent-actions">
+                          <button type="button" className="agent-btn" onClick={toggleAgent}>
+                            <Pause size={11} strokeWidth={2} />
+                            Pause
+                          </button>
+                        </div>
+                      </>
+                    ) : (
+                      <>
+                        <div className="agent-off-copy">
+                          Set a monthly cap. Taali scores every CV, advances the best, pauses for your call.
+                        </div>
+                        <div className="agent-off-budget">
+                          <span className="agent-off-budget-prefix">$</span>
+                          <input type="number" defaultValue={50} aria-label="Monthly budget" inputMode="numeric" readOnly />
+                          <span className="agent-off-budget-suffix">/ month</span>
+                        </div>
+                        <div className="agent-actions">
+                          <button type="button" className="agent-btn primary" onClick={toggleAgent}>
+                            <Play size={11} strokeWidth={2} fill="currentColor" />
+                            Turn on agent
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
                 </aside>
               </div>
