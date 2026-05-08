@@ -10159,62 +10159,22 @@ button.eng-badge-button:focus-visible {
   min-width: 0;
 }
 
-.mc-agent-settings-hero {
-  display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 18px;
-  padding: 24px 28px;
-  background: linear-gradient(180deg, var(--purple-soft) 0%, var(--bg-2) 100%);
-  border: 1px solid color-mix(in oklab, var(--purple) 22%, var(--line));
-  border-radius: 18px;
+/* Configure-only intro for the Agent settings tab. The on/off toggle and
+   live state live on the AgentHeader banner at the top of the role page;
+   this tab just describes what the recruiter is configuring. Quieter
+   visual treatment — no card, no glyph, no aside — so it reads as a
+   page header rather than a control surface. */
+.mc-agent-settings-intro {
+  padding: 8px 4px 4px;
+  margin-bottom: 4px;
 }
 
-.mc-agent-settings-hero-glyph {
-  width: 48px;
-  height: 48px;
-  border-radius: 12px;
-  background: var(--purple);
-  color: #fff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-}
-
-.mc-agent-settings-hero-body {
-  min-width: 0;
-}
-
-.mc-agent-settings-hero-title {
-  font-family: var(--font-display);
-  font-size: 24px;
-  font-weight: 600;
-  letter-spacing: -0.02em;
-  margin: 4px 0 6px;
-}
-
-.mc-agent-settings-hero-help {
+.mc-agent-settings-intro-help {
   font-size: 13.5px;
   color: var(--ink-2);
   line-height: 1.55;
   max-width: 640px;
-  margin: 0;
-}
-
-.mc-agent-settings-hero-aside {
-  display: flex;
-  flex-direction: column;
-  align-items: flex-end;
-  gap: 6px;
-  flex-shrink: 0;
-}
-
-.mc-agent-settings-since {
-  font-family: var(--font-mono);
-  font-size: 10.5px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--purple);
+  margin: 6px 0 0;
 }
 
 .mc-agent-settings-card {

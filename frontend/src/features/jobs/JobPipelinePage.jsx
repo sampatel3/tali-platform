@@ -7,7 +7,6 @@ import {
   ChevronDown,
   Edit3,
   Loader2,
-  Settings2,
   Share2,
   Sparkles,
   X,
@@ -582,7 +581,6 @@ const FormattedJobSpecSection = ({ section, marker }) => {
 // for budget / must-haves / pause threshold / audit footer.
 const RoleAgentSettingsTab = ({
   role,
-  agentEnabled,
   agentStatus = null,
   criteriaDraft,
   setCriteriaDraft,
@@ -661,27 +659,15 @@ const RoleAgentSettingsTab = ({
   return (
     <div className="mc-agent-settings">
       <div className="mc-agent-settings-main">
-        {/* Hero banner */}
-        <section className="mc-agent-settings-hero">
-          <div className="mc-agent-settings-hero-glyph">
-            <Settings2 size={20} strokeWidth={2} />
-          </div>
-          <div className="mc-agent-settings-hero-body">
-            <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
-            <div className="mc-agent-settings-hero-title">
-              Agent mode is{' '}
-              <span style={{ color: 'var(--purple)' }}>{agentEnabled ? 'ON' : 'OFF'}</span>
-            </div>
-            <p className="mc-agent-settings-hero-help">
-              Overrides your <a href="#org-defaults" style={{ color: 'var(--purple)' }}>org defaults</a> for this role only. Toggle off to disable autonomous actions — the agent will still surface ranked candidates for review.
-            </p>
-          </div>
-          <div className="mc-agent-settings-hero-aside">
-            <span className={`mc-switch ${agentEnabled ? 'on' : ''}`} aria-label="Agent enabled" />
-            <span className="mc-agent-settings-since">
-              {agentEnabled ? 'ON · since this role was created' : 'OFF'}
-            </span>
-          </div>
+        {/* Configure-only header. The on/off toggle and live state live
+            in the AgentHeader banner at the top of every role page —
+            having a second toggle here was a confusing duplicate. This
+            tab is purely "configure how the agent runs when it's on." */}
+        <section className="mc-agent-settings-intro">
+          <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
+          <p className="mc-agent-settings-intro-help">
+            Overrides your <a href="#org-defaults" style={{ color: 'var(--purple)' }}>org defaults</a> for this role only. Configure scoring, threshold, autonomy, and budget here. To turn the agent on, off, or pause it, use the agent panel at the top of this page.
+          </p>
         </section>
 
         {/* CV scoring criteria */}
@@ -1954,7 +1940,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         ) : activeView === 'role-fit' ? (
           <RoleAgentSettingsTab
             role={role}
-            agentEnabled={role?.agentic_mode_enabled !== false}
             agentStatus={agentStatus}
             criteriaDraft={criteriaDraft}
             setCriteriaDraft={setCriteriaDraft}
