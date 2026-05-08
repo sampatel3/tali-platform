@@ -14,6 +14,9 @@ export const pathForPage = (page, options = {}) => {
       return `/verify-email${options.verifyEmailToken ? `?token=${encodeURIComponent(options.verifyEmailToken)}` : ''}`;
     case 'dashboard':
       return '/dashboard';
+    case 'home':
+    case 'hub':
+      return '/home';
     case 'jobs':
       return '/jobs';
     case 'chat':
@@ -53,7 +56,10 @@ export const pathForPage = (page, options = {}) => {
       return '/tasks/bespoke';
     case 'analytics':
     case 'reporting':
-      return '/reporting';
+      // Reporting and analytics now live at the bottom of the Hub. The
+      // dedicated route is gone; preserve the page identifier so old
+      // navigateToPage('reporting') calls land on /home.
+      return '/home';
     case 'settings':
       return '/settings';
     case 'settings-workable':

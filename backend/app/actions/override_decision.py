@@ -51,4 +51,5 @@ def run(
     decision.resolved_by_user_id = actor.user_id
     decision.override_action = override_action
     decision.resolution_note = note
+    decision.human_disposition = "overridden"
     return decision
