@@ -10,6 +10,7 @@ the action.
 from . import (  # noqa: F401  re-export for ``from app.actions import advance_stage``
     advance_stage,
     approve_decision,
+    ask_recruiter,
     override_decision,
     queue_decision,
     reject_application,
@@ -23,6 +24,7 @@ __all__ = [
     "Actor",
     "advance_stage",
     "approve_decision",
+    "ask_recruiter",
     "override_decision",
     "queue_decision",
     "reject_application",

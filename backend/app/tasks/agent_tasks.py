@@ -194,6 +194,94 @@ def agent_daily_review_role(self, role_id: int) -> dict:
 
 
 @celery_app.task(
+    name="app.tasks.agent_tasks.agent_cohort_tick_sweep",
+    bind=True,
+    max_retries=0,
+)
+def agent_cohort_tick_sweep(self) -> dict:
+    """Phase 7 cohort planner: every 30 min, fan a tick to each
+    agent-enabled, non-paused role.
+
+    Replaces the per-application event trigger. The orchestrator
+    surveys cohort state itself via ``survey_role_state`` and decides
+    what's worth doing this cycle. With agents off, this is a no-op
+    sweep — paused / disabled roles fall through.
+    """
+    from ..models.role import Role
+    from ..platform.database import SessionLocal
+
+    enqueued: list[int] = []
+    db = SessionLocal()
+    try:
+        roles = (
+            db.query(Role.id)
+            .filter(
+                Role.agentic_mode_enabled.is_(True),
+                Role.deleted_at.is_(None),
+                Role.agent_paused_at.is_(None),
+            )
+            .all()
+        )
+        for (role_id,) in roles:
+            agent_cohort_tick_role.delay(int(role_id))
+            enqueued.append(int(role_id))
+    except Exception:
+        logger.exception("agent_cohort_tick_sweep failed")
+        return {"status": "error", "enqueued": enqueued}
+    finally:
+        db.close()
+    logger.info(
+        "agent_cohort_tick_sweep enqueued %d role tick(s)",
+        len(enqueued),
+    )
+    return {"status": "ok", "enqueued_count": len(enqueued), "role_ids": enqueued}
+
+
+@celery_app.task(
+    name="app.tasks.agent_tasks.agent_cohort_tick_role",
+    bind=True,
+    max_retries=0,
+)
+def agent_cohort_tick_role(self, role_id: int) -> dict:
+    """One cohort tick for ``role_id``. Runs the orchestrator with
+    trigger="cron" and no application_id — the agent surveys the role
+    via ``survey_role_state`` and acts on what it finds.
+    """
+    from ..agent_runtime.orchestrator import run_cycle
+    from ..models.role import Role
+    from ..platform.database import SessionLocal
+
+    db = SessionLocal()
+    try:
+        role = db.query(Role).filter(Role.id == role_id).first()
+        if role is None:
+            return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        if not bool(role.agentic_mode_enabled) or role.agent_paused_at is not None:
+            return {"status": "skipped", "reason": "not_eligible", "role_id": role_id}
+        try:
+            run = run_cycle(
+                db,
+                role=role,
+                trigger="cron",
+                application_id=None,
+            )
+            db.commit()
+            return {
+                "status": "ok",
+                "role_id": role_id,
+                "agent_run_id": int(run.id),
+                "run_status": str(run.status),
+                "decisions_emitted": int(run.decisions_emitted),
+            }
+        except Exception:
+            db.rollback()
+            logger.exception("agent_cohort_tick_role failed role_id=%s", role_id)
+            return {"status": "error", "role_id": role_id}
+    finally:
+        db.close()
+
+
+@celery_app.task(
     name="app.tasks.agent_tasks.agent_manual_run",
     bind=True,
     max_retries=0,

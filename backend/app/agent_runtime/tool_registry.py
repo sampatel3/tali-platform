@@ -16,13 +16,14 @@ from sqlalchemy.orm import Session
 
 from datetime import datetime, timedelta, timezone
 
-from ..actions import queue_decision, score_cv, send_assessment
+from ..actions import ask_recruiter, queue_decision, score_cv, send_assessment
 from ..actions.types import Actor
 from ..mcp import handlers as mcp_handlers
+from ..models.agent_needs_input import NEEDS_INPUT_KINDS
 from ..models.agent_run import AgentRun
 from ..models.role import Role
 from ..services import cohort_signals_service
-from . import policy_evaluator
+from . import cohort_tools, policy_evaluator
 
 
 # Cohort signals are recomputed when older than this. The full pool query
@@ -95,6 +96,151 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "type": "object",
             "properties": {"candidate_id": {"type": "integer"}},
             "required": ["candidate_id"],
+        },
+    },
+    # ------------------------------------------------------------------
+    # COHORT SURVEY — call FIRST every cycle.
+    # Cheap, summary-shaped tools so the agent can see the whole role's
+    # state in one shot before drilling into individuals.
+    # ------------------------------------------------------------------
+    {
+        "name": "survey_role_state",
+        "description": (
+            "ALWAYS call this first. Returns the role's cohort state in a "
+            "single dict: counts of applications in each pipeline state "
+            "(needs_cv_fetch, needs_pre_screen, needs_score, "
+            "ready_for_assessment_decision, in_assessment, "
+            "ready_for_advance_decision, rejected, hired), plus role-config "
+            "intent_gaps (missing budget, threshold, must-haves), plus open "
+            "recruiter questions (so you don't re-ask them). Use the counts "
+            "to decide where the leverage is THIS cycle — do NOT iterate "
+            "individual applications when a batch action will do."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {},
+        },
+    },
+    {
+        "name": "find_apps_in_state",
+        "description": (
+            "Returns up to N application_ids in a single cohort state. Pair "
+            "with survey_role_state: 'survey says 47 apps need_pre_screen → "
+            "give me the first 25 ids' → batch_pre_screen on those ids."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "state": {
+                    "type": "string",
+                    "enum": list(cohort_tools.COHORT_STATES),
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
+            },
+            "required": ["state"],
+        },
+    },
+    {
+        "name": "read_pending_recruiter_inputs",
+        "description": (
+            "Returns the open + recently-resolved recruiter questions for "
+            "this role. ALWAYS call this after survey_role_state — if a "
+            "question you'd ask is already open, do NOT re-ask. If a "
+            "previously-asked question now has a response, use it (e.g. "
+            "the recruiter has approved a send-assessment batch — proceed "
+            "with send)."
+        ),
+        "input_schema": {"type": "object", "properties": {}},
+    },
+    # ------------------------------------------------------------------
+    # BATCH ACTIONS — auto-execute deterministic work across N apps in
+    # one tool call. Cheap risk: pre-screen + scoring only mutate
+    # cv_score_cache; sends/queues stay one-at-a-time.
+    # ------------------------------------------------------------------
+    {
+        "name": "batch_score_cv",
+        "description": (
+            "Enqueue CV-match scoring for up to 25 applications in one "
+            "call. Idempotent — applications that already have a fresh "
+            "score are skipped. Returns per-id status. Cheap auto-execute "
+            "tool; no recruiter approval needed."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_ids": {
+                    "type": "array",
+                    "items": {"type": "integer"},
+                    "minItems": 1,
+                    "maxItems": 25,
+                },
+                "force": {"type": "boolean", "default": False},
+            },
+            "required": ["application_ids"],
+        },
+    },
+    # ------------------------------------------------------------------
+    # ASK RECRUITER — third lane: agent surfaces a question and waits.
+    # Idempotent on (role_id, kind) so re-asking re-uses the open card.
+    # ------------------------------------------------------------------
+    {
+        "name": "ask_recruiter",
+        "description": (
+            "Open (or update) a recruiter-facing question on the role page. "
+            "Use sparingly — only when survey_role_state shows a real gap "
+            "you can't fill on your own (empty must_have intent, no monthly "
+            "budget, ambiguous threshold, two equally-strong candidates "
+            "needing a tie-break, or send-assessment HITL approval needed). "
+            "Idempotent on (role_id, kind): re-calling refreshes the existing "
+            "open card, so you can call freely without spamming. Always pair "
+            "with read_pending_recruiter_inputs first to skip already-open "
+            "asks."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kind": {
+                    "type": "string",
+                    "enum": list(NEEDS_INPUT_KINDS),
+                    "description": (
+                        "Which class of question. intent_slot_missing for "
+                        "empty must_have/preferred slots; monthly_budget_missing "
+                        "for null budget; threshold_ambiguous when score_threshold "
+                        "is unset and the cohort spread is high; "
+                        "send_assessment_approval for HITL gate; "
+                        "candidate_tie_break for advance/reject ambiguity; "
+                        "other as a last resort."
+                    ),
+                },
+                "prompt": {"type": "string", "description": "1-3 sentence question, recruiter-facing."},
+                "options": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "value": {"type": "string"},
+                            "label": {"type": "string"},
+                        },
+                        "required": ["value", "label"],
+                    },
+                    "description": (
+                        "Optional list of click-to-answer options. Mutually "
+                        "exclusive with response_schema."
+                    ),
+                },
+                "response_schema": {
+                    "type": "object",
+                    "description": (
+                        "Optional shape descriptor for free-text/numeric "
+                        "responses. Mutually exclusive with options."
+                    ),
+                },
+                "rationale": {
+                    "type": "string",
+                    "description": "1-2 sentence note on why you're asking — shown under the prompt to the recruiter.",
+                },
+            },
+            "required": ["kind", "prompt"],
         },
     },
     # ------------------------------------------------------------------
@@ -558,13 +704,47 @@ def _tool_score_cv(db: Session, *, agent_run: AgentRun, role: Role, args: dict[s
 
 def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
     actor = Actor.agent(int(agent_run.id))
+    application_id = int(args["application_id"])
+
+    # HITL gate per Role.agent_send_assessment_requires_approval. When
+    # set, instead of auto-sending, the agent opens an approval-style
+    # ``agent_needs_input`` row keyed on (role_id, send_assessment_approval).
+    # The recruiter approves on the role page; the next cycle reads the
+    # response and sends. This is the OpenAI-guide "high-risk action →
+    # human oversight" pattern.
+    if bool(getattr(role, "agent_send_assessment_requires_approval", False)):
+        existing = ask_recruiter.open(
+            db,
+            actor,
+            organization_id=int(role.organization_id),
+            role_id=int(role.id),
+            kind="send_assessment_approval",
+            prompt=(
+                f"Approve sending the assessment to application {application_id}? "
+                "I'll dispatch the invite as soon as you confirm."
+            ),
+            options=[
+                {"value": "approve", "label": "Approve & send"},
+                {"value": "skip", "label": "Skip this candidate"},
+            ],
+            rationale=(
+                "send_assessment_requires_approval is on for this role; "
+                "every send goes through the recruiter."
+            ),
+        )
+        return {
+            "status": "awaiting_recruiter_approval",
+            "needs_input_id": int(existing.id),
+            "application_id": application_id,
+        }
+
     task_id = args.get("task_id")
     duration = args.get("duration_minutes")
     result = send_assessment.run(
         db,
         actor,
         organization_id=int(role.organization_id),
-        application_id=int(args["application_id"]),
+        application_id=application_id,
         task_id=int(task_id) if task_id is not None else None,
         duration_minutes=int(duration) if duration is not None else 90,
     )
@@ -714,6 +894,102 @@ def _tool_agent_run_complete(
     }
 
 
+# ---------------------------------------------------------------------------
+# Cohort tools
+# ---------------------------------------------------------------------------
+
+
+def _tool_survey_role_state(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    return cohort_tools.survey_role_state(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+    )
+
+
+def _tool_find_apps_in_state(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    state = str(args.get("state") or "")
+    limit = int(args.get("limit") or 50)
+    ids = cohort_tools.find_apps_in_state(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+        state=state,
+        limit=limit,
+    )
+    return {"state": state, "application_ids": ids, "count": len(ids)}
+
+
+def _tool_read_pending_recruiter_inputs(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    rows = cohort_tools.read_pending_recruiter_inputs(
+        db,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+    )
+    return {"rows": rows}
+
+
+def _tool_batch_score_cv(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    """Run score_cv across N applications in one tool call."""
+    actor = Actor.agent(int(agent_run.id))
+    application_ids = [int(i) for i in (args.get("application_ids") or [])][:25]
+    force = bool(args.get("force", False))
+    out: list[dict[str, Any]] = []
+    for app_id in application_ids:
+        try:
+            job = score_cv.run(
+                db,
+                actor,
+                organization_id=int(role.organization_id),
+                application_id=app_id,
+                force=force,
+            )
+            if job is None:
+                out.append({"application_id": app_id, "status": "skipped"})
+            else:
+                out.append(
+                    {
+                        "application_id": app_id,
+                        "job_id": int(job.id),
+                        "status": str(job.status),
+                    }
+                )
+        except Exception as exc:  # pragma: no cover — defensive
+            out.append({"application_id": app_id, "status": "error", "error": str(exc)})
+    return {"results": out, "total": len(out)}
+
+
+def _tool_ask_recruiter(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    actor = Actor.agent(int(agent_run.id))
+    row = ask_recruiter.open(
+        db,
+        actor,
+        organization_id=int(role.organization_id),
+        role_id=int(role.id),
+        kind=str(args.get("kind") or ""),
+        prompt=str(args.get("prompt") or ""),
+        options=args.get("options"),
+        response_schema=args.get("response_schema"),
+        rationale=args.get("rationale"),
+    )
+    return {
+        "needs_input_id": int(row.id),
+        "kind": row.kind,
+        "is_open": row.is_open,
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+    }
+
+
 # Decision tools that count against role.agent_decision_budget_per_cycle.
 QUEUE_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
     {
@@ -739,6 +1015,12 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "queue_reject_decision": _tool_queue_reject_decision,
     "queue_skip_assessment_reject_decision": _tool_queue_skip_assessment_reject_decision,
     "evaluate_policy": _tool_evaluate_policy,
+    # Cohort survey + batch + ask-recruiter tools (Phase 7).
+    "survey_role_state": _tool_survey_role_state,
+    "find_apps_in_state": _tool_find_apps_in_state,
+    "read_pending_recruiter_inputs": _tool_read_pending_recruiter_inputs,
+    "batch_score_cv": _tool_batch_score_cv,
+    "ask_recruiter": _tool_ask_recruiter,
     "agent_run_complete": _tool_agent_run_complete,
 }
 

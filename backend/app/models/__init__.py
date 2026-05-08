@@ -74,6 +74,7 @@ from .decision_feedback import (
 )
 from .rubric_revision import REVISION_CAUSES, RubricRevision
 from .decision_policy import DecisionPolicy
+from .agent_needs_input import NEEDS_INPUT_KINDS, AgentNeedsInput
 from .anthropic_usage_reconciliation import AnthropicUsageReconciliation
 from .share_link import (
     SHARE_LINK_MODE_CLIENT,
@@ -149,6 +150,8 @@ __all__ = [
     "RubricRevision",
     "REVISION_CAUSES",
     "DecisionPolicy",
+    "AgentNeedsInput",
+    "NEEDS_INPUT_KINDS",
     "AnthropicUsageReconciliation",
     "ShareLink",
     "SHARE_LINK_MODE_RECRUITER",

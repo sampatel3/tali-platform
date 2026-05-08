@@ -2929,6 +2929,166 @@ html[data-theme="dark"] {
   color: var(--mute);
 }
 
+/* Phase 7 cohort planner: agent-asks-recruiter card, mounted at the top
+   of the role page above the sub-tabs. Hides itself when there are no
+   open questions, so a healthy role doesn't render an empty frame. */
+.agent-needs-input {
+  margin: 0 0 18px;
+  padding: 14px 18px 16px;
+  border: 1px solid color-mix(in oklab, var(--purple) 35%, var(--line));
+  border-radius: 14px;
+  background: color-mix(in oklab, var(--purple) 8%, var(--bg-2));
+}
+
+.agent-needs-input-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.agent-needs-input-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--purple) 20%, var(--bg));
+  color: var(--purple);
+  flex-shrink: 0;
+}
+
+.agent-needs-input-head b {
+  display: block;
+  color: var(--ink);
+  font-size: 13.5px;
+  font-weight: 600;
+}
+
+.agent-needs-input-head p {
+  margin: 2px 0 0;
+  color: var(--mute);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.agent-needs-input-error {
+  margin-bottom: 8px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: color-mix(in oklab, var(--danger, #c33) 12%, transparent);
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.agent-needs-input-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.agent-needs-input-row {
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+.agent-needs-input-prompt p {
+  margin: 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.agent-needs-input-rationale {
+  margin-top: 4px !important;
+  color: var(--mute) !important;
+  font-size: 11.5px !important;
+  font-style: italic;
+}
+
+.agent-needs-input-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+  align-items: center;
+}
+
+.agent-needs-input-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: var(--purple);
+  border: 1px solid var(--purple);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.agent-needs-input-option:hover:not(:disabled) {
+  filter: brightness(1.05);
+}
+
+.agent-needs-input-option:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.agent-needs-input-dismiss {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px solid var(--line);
+  color: var(--mute);
+  font-size: 12px;
+  cursor: pointer;
+  margin-left: auto;
+}
+
+.agent-needs-input-dismiss:hover:not(:disabled) {
+  border-color: var(--mute);
+  color: var(--ink);
+}
+
+.agent-needs-input-freeform {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+}
+
+.agent-needs-input-freeform input {
+  flex: 1;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  font-size: 12.5px;
+  background: var(--bg);
+  color: var(--ink);
+}
+
+.agent-needs-input-freeform button {
+  padding: 6px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--purple);
+  background: var(--purple);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
 .sub-tabs {
   display: flex;
   justify-content: space-between;

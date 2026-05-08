@@ -50,12 +50,18 @@ celery_app.conf.update(
             "task": "app.tasks.reconciliation_tasks.reconcile_anthropic_usage",
             "schedule": 86400.0,
         },
-        # Agent daily review: proactive per-role triage cycle. Iterates
-        # every role with agentic mode on (not paused), runs one cron
-        # cycle each. The agent looks for: applicants idle for >5 days,
-        # candidates with stale scores, assessments waiting on action —
-        # and surfaces what's worth recruiter attention. One cycle per
-        # role per day so the agent stops being purely reactive.
+        # Phase 7 cohort planner tick: every 30 min, fan a tick to each
+        # agent-enabled, non-paused role. The orchestrator surveys
+        # cohort state and acts on what it finds. Replaces the old
+        # per-application event trigger.
+        "agent-cohort-tick-every-30-minutes": {
+            "task": "app.tasks.agent_tasks.agent_cohort_tick_sweep",
+            "schedule": 1800.0,
+        },
+        # Agent daily review (legacy): kept for the proactive once-a-day
+        # sweep that surfaces idle candidates / stale scores / etc. The
+        # cohort-tick task above handles the bulk of work; daily review
+        # remains as a wider triage pass.
         "agent-daily-review-sweep": {
             "task": "app.tasks.agent_tasks.agent_daily_review_sweep",
             "schedule": 86400.0,

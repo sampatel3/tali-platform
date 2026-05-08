@@ -1,0 +1,190 @@
+"""ask_recruiter action: idempotent open, recruiter answer, dismiss."""
+
+from __future__ import annotations
+
+import pytest
+from fastapi import HTTPException
+
+from app.actions import ask_recruiter
+from app.actions.types import Actor
+from app.models.agent_run import AgentRun
+from app.models.user import User
+
+from .conftest import make_world
+
+
+def _agent_actor(db, role) -> Actor:
+    run = AgentRun(
+        organization_id=role.organization_id,
+        role_id=role.id,
+        trigger="cron",
+        status="running",
+        model_version="m",
+        prompt_version="p",
+    )
+    db.add(run)
+    db.flush()
+    return Actor.agent(int(run.id))
+
+
+def _recruiter_actor(db, organization_id: int) -> tuple[Actor, User]:
+    user = User(
+        organization_id=organization_id,
+        email=f"u-{id(db)}@x.test",
+        full_name="U",
+        hashed_password="x",
+        is_active=True,
+        is_verified=True,
+    )
+    db.add(user)
+    db.flush()
+    return Actor.recruiter(user), user
+
+
+def test_open_creates_a_row_for_known_kind(db):
+    org, role, _, _ = make_world(db)
+    actor = _agent_actor(db, role)
+    row = ask_recruiter.open(
+        db,
+        actor,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind="intent_slot_missing",
+        prompt="Set must_have skills",
+    )
+    assert row.id is not None
+    assert row.is_open
+    assert row.kind == "intent_slot_missing"
+
+
+def test_open_is_idempotent_on_role_kind(db):
+    org, role, _, _ = make_world(db)
+    actor = _agent_actor(db, role)
+    a = ask_recruiter.open(
+        db,
+        actor,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind="intent_slot_missing",
+        prompt="First framing",
+    )
+    b = ask_recruiter.open(
+        db,
+        actor,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind="intent_slot_missing",
+        prompt="Refined framing",
+    )
+    assert a.id == b.id  # same row
+    assert b.prompt == "Refined framing"  # but updated
+
+
+def test_open_rejects_unknown_kind(db):
+    org, role, _, _ = make_world(db)
+    actor = _agent_actor(db, role)
+    with pytest.raises(HTTPException):
+        ask_recruiter.open(
+            db,
+            actor,
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            kind="not_a_real_kind",
+            prompt="x",
+        )
+
+
+def test_open_rejects_recruiter_actor(db):
+    org, role, _, _ = make_world(db)
+    actor, _ = _recruiter_actor(db, int(org.id))
+    with pytest.raises(HTTPException):
+        ask_recruiter.open(
+            db,
+            actor,
+            organization_id=int(org.id),
+            role_id=int(role.id),
+            kind="intent_slot_missing",
+            prompt="x",
+        )
+
+
+def test_answer_records_response_and_actor(db):
+    org, role, _, _ = make_world(db)
+    agent = _agent_actor(db, role)
+    row = ask_recruiter.open(
+        db,
+        agent,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind="send_assessment_approval",
+        prompt="Approve send?",
+    )
+    rec_actor, rec_user = _recruiter_actor(db, int(org.id))
+    answered = ask_recruiter.answer(
+        db,
+        rec_actor,
+        organization_id=int(org.id),
+        needs_input_id=int(row.id),
+        response={"value": "approve"},
+    )
+    assert answered.resolved_at is not None
+    assert answered.response == {"value": "approve"}
+    assert answered.resolved_by_user_id == int(rec_user.id)
+    assert not answered.is_open
+
+
+def test_answer_rejects_already_answered(db):
+    org, role, _, _ = make_world(db)
+    agent = _agent_actor(db, role)
+    row = ask_recruiter.open(
+        db,
+        agent,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind="intent_slot_missing",
+        prompt="x",
+    )
+    rec, _ = _recruiter_actor(db, int(org.id))
+    ask_recruiter.answer(
+        db,
+        rec,
+        organization_id=int(org.id),
+        needs_input_id=int(row.id),
+        response={"value": "ok"},
+    )
+    with pytest.raises(HTTPException):
+        ask_recruiter.answer(
+            db,
+            rec,
+            organization_id=int(org.id),
+            needs_input_id=int(row.id),
+            response={"value": "second answer"},
+        )
+
+
+def test_dismiss_is_idempotent(db):
+    org, role, _, _ = make_world(db)
+    agent = _agent_actor(db, role)
+    row = ask_recruiter.open(
+        db,
+        agent,
+        organization_id=int(org.id),
+        role_id=int(role.id),
+        kind="intent_slot_missing",
+        prompt="x",
+    )
+    rec, _ = _recruiter_actor(db, int(org.id))
+    a = ask_recruiter.dismiss(
+        db,
+        rec,
+        organization_id=int(org.id),
+        needs_input_id=int(row.id),
+    )
+    b = ask_recruiter.dismiss(
+        db,
+        rec,
+        organization_id=int(org.id),
+        needs_input_id=int(row.id),
+    )
+    assert a.id == b.id
+    assert a.dismissed_at is not None

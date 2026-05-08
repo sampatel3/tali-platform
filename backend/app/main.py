@@ -353,6 +353,12 @@ from .domains.agentic import router as agentic_router  # noqa: E402
 
 app.include_router(agentic_router, prefix="/api/v1")
 
+# Agent needs-input: recruiter-facing questions raised by the orchestrator
+# during a cohort tick. Listed + answered inline on the role page.
+from .agent_runtime.needs_input_routes import router as agent_needs_input_router  # noqa: E402
+
+app.include_router(agent_needs_input_router, prefix="/api/v1")
+
 # ---------------------------------------------------------------------------
 # MCP server (read-only) — mounted at /mcp. Bearer JWT auth, same secret as
 # /api/v1/auth/jwt/login. See app/mcp/server.py for the tool surface.
