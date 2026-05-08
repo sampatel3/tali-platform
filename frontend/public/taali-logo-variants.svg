@@ -13,7 +13,7 @@
     <rect width="296" height="484" rx="28" fill="#FFFFFF" filter="url(#shadow)"/>
     <text x="32" y="62" fill="#1D1730" font-family="Arial, sans-serif" font-size="27" font-weight="700">Primary square</text>
     <text x="32" y="94" fill="#6E6580" font-family="Arial, sans-serif" font-size="19">Use for product + recruiter headers</text>
-    <rect x="94" y="146" width="108" height="108" rx="20.4" fill="#2A1854"/>
+    <rect x="94" y="146" width="108" height="108" rx="20.4" fill="#5E3AA8"/>
     <g transform="translate(96 148) scale(4.5)" stroke="#FFFFFF" stroke-width="0.6" stroke-linecap="round">
       <line x1="6" y1="4.5" x2="6" y2="19.5"/>
       <line x1="10" y1="4.5" x2="10" y2="19.5"/>
@@ -29,7 +29,7 @@
     <rect width="296" height="484" rx="28" fill="#FFFFFF" filter="url(#shadow)"/>
     <text x="32" y="62" fill="#1D1730" font-family="Arial, sans-serif" font-size="27" font-weight="700">Compact square</text>
     <text x="32" y="94" fill="#6E6580" font-family="Arial, sans-serif" font-size="19">Use in tight nav and control rows</text>
-    <rect x="112" y="164" width="72" height="72" rx="13.2" fill="#2A1854"/>
+    <rect x="112" y="164" width="72" height="72" rx="13.2" fill="#5E3AA8"/>
     <g transform="translate(113 165) scale(3)" stroke="#FFFFFF" stroke-width="0.92" stroke-linecap="round">
       <line x1="6" y1="4.5" x2="6" y2="19.5"/>
       <line x1="10" y1="4.5" x2="10" y2="19.5"/>

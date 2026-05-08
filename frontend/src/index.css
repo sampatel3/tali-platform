@@ -13,18 +13,26 @@
   --bg: #f7f4fb;
   --bg-2: #ffffff;
   --bg-3: #efe8f7;
-  /* Brand purple — v7, realigned to the agent-OFF hero anchor.
-     v6 (#b450ff) was the agent-ON glow — too bright for buttons,
-     reads as a "live worker" colour. The brand should default to the
-     agent-quiet hero's deep purple and let agent-on be a special
-     vivid state. So --purple now matches `--grad-dark-vert` start
-     (#2a1854); --purple-2 matches the gradient end (#1d1130) for
-     hover. Drives every purple in the system: buttons, accents,
-     kickers, marketing CTA, .btn-purple. The agent-running hero
-     keeps its hard-coded vivid recipe — the brightness is the
-     signal that the agent is live, not the brand. */
-  --purple: #2a1854;
-  --purple-2: #1d1130;
+  /* Brand purple — v8, lifted out of the agent-quiet anchor.
+     v7 sampled the literal `--grad-dark-vert` start (#2a1854) — at
+     21% lightness that crosses into "looks black", not purple.
+     v8 keeps the same hue axis as the gradient stops (H≈263°,
+     shared by #2a1854 / #3a1d6e / #b450ff) but lifts lightness to
+     ~44% so the brand actually reads as purple. Sits perceptually
+     midway between the agent-off anchor and the agent-on glow —
+     calm and deep, but unmistakably purple.
+
+     Drives every purple in the system that reads as the brand:
+     buttons (.btn-purple, .btn-primary:hover), kickers, accents
+     (text-[var(--purple)]), marketing CTA pill text, the Pending
+     count, focus rings. The agent-running hero keeps its hard-coded
+     vivid recipe — the brightness there is the signal that the
+     agent is live, not the brand identity. A few canvas / xterm
+     consumers hardcode the agent-on bright (#B450FF) for visibility
+     on dark surfaces; those are deliberate exceptions, not the
+     brand. */
+  --purple: #5e3aa8;
+  --purple-2: #4a2d80;
   --purple-soft: #ede5f8;
 
   /* v5 — deep-purple dark surfaces (HANDOFF unified-headers.md §1).
@@ -152,13 +160,11 @@ html[data-theme="dark"] {
   --bg: #0e0a18;
   --bg-2: #16102a;
   --bg-3: #1c1535;
-  /* Dark-mode --purple v7 — deep-purple sibling of the light value
-     (#2a1854), elevated for legibility on dark surfaces. The light
-     mode anchor #2a1854 would disappear against #0e0a18, so we lift
-     it into the same hue family but with enough luminance to clear
-     AA contrast for normal-size text. */
-  --purple: #6e4ba8;
-  --purple-2: #5a3d8a;
+  /* Dark-mode --purple v8 — sibling of the light value (#5e3aa8),
+     lifted into a slightly higher luminance so it stays readable on
+     #0e0a18 without losing the deep-purple character. */
+  --purple: #8867c4;
+  --purple-2: #6e4ba8;
   --purple-soft: #2e1a4e;
   --workable: #53a3ff;
   --workable-dark: #2d8cff;
