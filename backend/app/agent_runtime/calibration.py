@@ -23,11 +23,18 @@ _DEFAULT: dict[str, Any] = {
     "score_observations": [],   # rolling list of last N CV-match scores seen
     "recent_decisions": [],     # rolling list of last N decisions (type, reasoning_summary, status)
     "override_patterns": [],    # surfaced patterns from recruiter overrides
+    # Realized outcomes for previously-approved decisions. Closes the
+    # feedback loop: not "did the recruiter approve" (which only measures
+    # whether the recruiter agreed at queue time) but "what actually
+    # happened to the candidate after approval." See outcome_learning.py.
+    # Each entry: {decision_type, outcome, observed_at (ISO), application_id, decision_id?}
+    "outcomes": [],
 }
 
 _MAX_OBSERVATIONS = 50
 _MAX_RECENT_DECISIONS = 20
 _MAX_OVERRIDE_PATTERNS = 10
+_MAX_OUTCOMES = 50
 
 
 def load(role: Role) -> dict[str, Any]:
@@ -62,6 +69,10 @@ def save(db: Session, *, role: Role, updates: dict[str, Any]) -> None:
             buf = deque(existing.get(key, []), maxlen=_MAX_OVERRIDE_PATTERNS)
             buf.extend(value)
             existing[key] = list(buf)
+        elif key == "outcomes" and isinstance(value, list):
+            buf = deque(existing.get(key, []), maxlen=_MAX_OUTCOMES)
+            buf.extend(value)
+            existing[key] = list(buf)
         else:
             existing[key] = value
     role.agent_calibration = existing
@@ -94,4 +105,48 @@ def render_summary(calibration: dict[str, Any]) -> str:
         else "no recruiter overrides on record"
     )
 
-    return f"{agreement}\n{score_line}\n{pattern_line}"
+    # Track record: realized outcomes for previously-approved decisions.
+    # The agent's job is to advance the right people; this measures what
+    # happened *after* recruiters approved the recommendations, not just
+    # whether they approved at queue time. See outcome_learning.py.
+    outcomes = calibration.get("outcomes") or []
+    track_record_line = _render_track_record(outcomes)
+
+    return f"{agreement}\n{score_line}\n{pattern_line}\n{track_record_line}"
+
+
+def _render_track_record(outcomes: list[dict[str, Any]]) -> str:
+    """Render a one-line 'of your last N advances, M reached interview, K
+    were hired' summary so the agent can update its priors on whether
+    its advance recommendations are predictive."""
+    if not outcomes:
+        return "track record: no realized outcomes yet"
+
+    advances = [o for o in outcomes if o.get("decision_type") == "advance_to_interview"]
+    rejects = [
+        o for o in outcomes
+        if o.get("decision_type") in ("reject", "skip_assessment_reject")
+    ]
+
+    parts: list[str] = []
+
+    if advances:
+        n = len(advances)
+        interviewed = sum(1 for o in advances if o.get("outcome") == "interviewed")
+        hired = sum(1 for o in advances if o.get("outcome") == "hired")
+        parts.append(
+            f"of last {n} advance recommendation{'s' if n != 1 else ''}, "
+            f"{interviewed} reached interview, {hired} hired"
+        )
+
+    if rejects:
+        n = len(rejects)
+        confirmed = sum(1 for o in rejects if o.get("outcome") == "rejected_confirmed")
+        parts.append(
+            f"of last {n} reject recommendation{'s' if n != 1 else ''}, "
+            f"{confirmed} confirmed by recruiter"
+        )
+
+    if not parts:
+        return "track record: no realized outcomes yet"
+    return "track record: " + "; ".join(parts)
