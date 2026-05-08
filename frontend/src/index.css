@@ -10322,6 +10322,64 @@ button.eng-badge-button:focus-visible {
   box-sizing: border-box;
 }
 
+/* Freeform recruiter-intent textarea on the role-page Agent settings tab.
+   Replaces the structured Must-have / Preferred / Nice-to-have row UI —
+   the agent v5 system prompt reads this as RECRUITER INTENT (priorities,
+   not gates), so the field should look like prose, not a checklist. */
+.mc-agent-settings-intent-textarea {
+  width: 100%;
+  min-height: 168px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 14px 16px;
+  font-family: var(--font-sans, inherit);
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--ink);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.mc-agent-settings-intent-textarea:focus {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 18%, transparent);
+}
+
+.mc-agent-settings-intent-textarea::placeholder {
+  color: var(--mute);
+  opacity: 0.7;
+}
+
+/* Same shape on Settings → AI agent (workspace defaults) so the org and
+   role surfaces feel symmetrical. */
+.settings-intent-textarea {
+  width: 100%;
+  min-height: 144px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 12px 14px;
+  font-family: var(--font-sans, inherit);
+  font-size: 14px;
+  line-height: 1.6;
+  resize: vertical;
+  background: var(--bg);
+  color: var(--ink);
+  outline: none;
+  box-sizing: border-box;
+}
+
+.settings-intent-textarea:focus {
+  border-color: var(--purple);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple) 18%, transparent);
+}
+
+.settings-intent-textarea::placeholder {
+  color: var(--mute);
+  opacity: 0.7;
+}
+
 .mc-agent-settings-textarea:focus {
   background: var(--bg-2);
 }

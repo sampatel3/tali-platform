@@ -138,21 +138,21 @@ describe('SettingsPage recruiter surface', () => {
     renderSettingsRoute('/settings/agent');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /Default role requirements/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Default role intent/i })).toBeInTheDocument();
     });
-    // The structured editor renders one row per requirement — assert the
-    // seeded list shows up in the input fields, then save.
-    await waitFor(() => {
-      expect(screen.getByDisplayValue('5+ years backend')).toBeInTheDocument();
-    });
+    // The structured row editor was replaced with a freeform intent
+    // textarea (system prompt v5 reads it as guidance, not gates). The
+    // seeded list renders as newline-joined text in the textarea.
+    const textarea = await screen.findByLabelText('Default role intent');
+    expect(textarea).toHaveValue('5+ years backend\nStrong SQL');
 
     fireEvent.click(screen.getByRole('button', { name: 'Save agent defaults' }));
 
     await waitFor(() => {
-      // Unprefixed seeds round-trip back as "Must have: <text>" because
-      // the editor defaults the priority chip to "Must have".
+      // Recruiter intent is preserved verbatim — no "Must have:"
+      // prefix injection on save.
       expect(orgsApi.update).toHaveBeenCalledWith({
-        default_role_requirements: ['Must have: 5+ years backend', 'Must have: Strong SQL'],
+        default_role_requirements: ['5+ years backend', 'Strong SQL'],
         default_role_budget_cents: 20000,
         default_score_threshold: 70,
       });
