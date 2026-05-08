@@ -28,6 +28,7 @@ import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/Agent
 // migrated; remove that import here to avoid unused-import warnings.
 import { BackgroundJobsToaster } from '../candidates/BackgroundJobsToaster';
 import { CandidateSheet } from '../candidates/CandidateSheet';
+import { RequirementsEditor } from '../../shared/ui/RequirementsEditor';
 // CandidatesDirectoryPage is no longer embedded on the role detail —
 // the Candidates tab now renders a canvas-spec inline ctable directly.
 // Standalone /candidates route still uses the directory.
@@ -709,12 +710,13 @@ const RoleAgentSettingsTab = ({
                   : 'No lines yet'}
               </span>
             </div>
-            <textarea
-              rows={6}
-              className="mc-agent-settings-textarea"
-              value={criteriaDraft}
-              onChange={(event) => setCriteriaDraft(event.target.value)}
-              placeholder={'Must have: 4+ yrs production Python or Go\nMust have: Postgres internals, query planning experience\nPreferred: On-call rotation at >100k req/min scale\nNice to have: Open-source or technical writing'}
+            {/* Same structured editor as Settings → AI agent so the
+                workspace-defaults surface and the per-role override
+                surface look and behave identically. */}
+            <RequirementsEditor
+              value={String(criteriaDraft || '').split('\n').map((s) => s.trim()).filter(Boolean)}
+              onChange={(nextLines) => setCriteriaDraft(nextLines.join('\n'))}
+              ariaLabelPrefix="Role requirement"
             />
           </div>
         </section>

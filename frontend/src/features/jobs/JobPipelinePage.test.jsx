@@ -268,19 +268,25 @@ Banking transformation experience
     renderPipeline();
     await openAgentSettingsTab();
 
-    // CV scoring criteria editor lives on the Agent settings tab — its
-    // textarea is always editable, and Save role settings persists.
+    // CV scoring criteria editor lives on the Agent settings tab. We
+    // moved off a free-text textarea onto a structured row editor
+    // (priority dropdown + free text + remove). Add two requirements
+    // and save — they should round-trip as "Must have: <text>" lines.
     await screen.findByRole('heading', { name: /CV scoring/i, level: 2 });
 
-    const textarea = screen.getByPlaceholderText(/Must have:/i);
-    fireEvent.change(textarea, {
-      target: { value: 'Payments experience\nStakeholder governance' },
+    fireEvent.click(screen.getByRole('button', { name: /Add requirement/i }));
+    fireEvent.change(screen.getByLabelText('Role requirement 1 text'), {
+      target: { value: 'Payments experience' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Add requirement/i }));
+    fireEvent.change(screen.getByLabelText('Role requirement 2 text'), {
+      target: { value: 'Stakeholder governance' },
     });
     fireEvent.click(screen.getByRole('button', { name: /Save role settings/i }));
 
     await waitFor(() => {
       expect(apiClient.roles.update).toHaveBeenCalledWith(101, expect.objectContaining({
-        additional_requirements: 'Payments experience\nStakeholder governance',
+        additional_requirements: 'Must have: Payments experience\nMust have: Stakeholder governance',
       }));
     });
   });
