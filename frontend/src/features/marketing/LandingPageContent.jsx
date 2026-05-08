@@ -229,7 +229,7 @@ export const LandingPage = ({ onNavigate }) => {
             Built to hire engineers<br />who ship with AI<span className="text-[var(--purple)]">.</span>
           </h1>
           <p className="text-[18px] leading-[1.55] text-[var(--ink-2)]" style={{ maxWidth: 640, margin: '0 0 22px' }}>
-            Taali is the first agentic hiring platform — and the only one that measures how candidates actually <em className="not-italic font-medium text-[var(--ink)]">use AI</em> on the job. The agent triages your pipeline, runs hands-on assessments in a real IDE, and surfaces calibrated evidence. You stay in charge of every consequential decision.
+            Taali is the first agentic hiring platform — and the only one that measures how candidates actually <em className="not-italic font-medium text-[var(--ink)]">use AI</em> on the job. The agent <em className="not-italic font-medium text-[var(--ink)]">decides</em> what to work on each cycle — fetch CVs, score, send assessments, queue advances or rejects — paces it within budget, and asks you when it can&apos;t decide on its own. Every consequential call still goes through you.
           </p>
           <div className="flex flex-wrap gap-3 text-[13px] text-[var(--ink-2)]" style={{ marginBottom: 30 }}>
             {[
@@ -402,7 +402,7 @@ export const LandingPage = ({ onNavigate }) => {
               {
                 n: '01',
                 t: 'Triage — autonomously',
-                d: 'The agent scores every CV against your bar, paces invitations within budget, and surfaces only the candidates worth your attention. You set the criteria once; it works the pipeline 24/7.',
+                d: "Every cycle, the agent surveys the role, decides where the work is — fetch CVs, pre-screen, score, send assessments, queue advances or rejects — and pauses to ask you when it needs input it can't derive on its own. You set the criteria once; it works the pipeline 24/7 within the budget you set.",
               },
               {
                 n: '02',
@@ -426,6 +426,75 @@ export const LandingPage = ({ onNavigate }) => {
               </div>
             ))}
           </div>
+
+          {/* Agent decision log mock — proves "the agent decides + every
+              action is rule-traced + asks when stuck", same visual
+              language as the Maya Chen AI-usage trace below. Static
+              data: this is a marketing snippet, not a live read. */}
+          <div className="mt-14 overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
+            <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">
+              <span>AGENT DECISION LOG · ROLE 109 · SENIOR SCRUM MASTER</span>
+              <span className="font-semibold text-[var(--purple)]">TODAY</span>
+            </div>
+            <div className="flex flex-col gap-2.5 px-5 py-5 text-[12.5px]">
+              {[
+                {
+                  time: '14:32',
+                  action: 'QUEUE_ADVANCE',
+                  color: '#16a34a',
+                  message: 'Maya Chen — taali_score 82, assessment 78',
+                  note: 'rule_path: send_assessment → role_fit≥65 → pre_screen_clear · revision #12',
+                },
+                {
+                  time: '14:18',
+                  action: 'BATCH_SEND',
+                  color: 'var(--purple)',
+                  message: '8 assessments dispatched within budget ($31 of $50 MTD)',
+                  note: 'auto-paced — recruiter approval not required for this role',
+                },
+                {
+                  time: '14:05',
+                  action: 'ASK_RECRUITER',
+                  color: '#d97706',
+                  message: '"Set the must-have skills for this role" — open',
+                  note: "agent paused — won't queue rejects until you answer",
+                },
+                {
+                  time: '13:48',
+                  action: 'QUEUE_REJECT',
+                  color: '#16a34a',
+                  message: 'Tariq Al-Ahmad — role_fit 22, no assessment pending',
+                  note: 'rule_path: reject → role_fit≤30 + no_pending_assessment · revision #12',
+                },
+                {
+                  time: '13:32',
+                  action: 'BATCH_SCORE',
+                  color: 'var(--purple)',
+                  message: '47 candidates scored (cached 12, fresh 35)',
+                  note: 'auto-execute — deterministic, no approval gate',
+                },
+                {
+                  time: '13:15',
+                  action: 'SURVEY',
+                  color: 'var(--mute)',
+                  message: '405 apps · 47 needs_score · 8 ready_for_assessment_decision',
+                  note: 'cohort survey — what to do this cycle',
+                },
+              ].map((event, idx) => (
+                <div
+                  key={event.time}
+                  className={`grid grid-cols-[48px_120px_1fr] items-start gap-2.5 py-2 ${idx ? 'border-t border-[var(--line-2)]' : ''}`}
+                >
+                  <div className="font-[var(--font-mono)] text-[10.5px] text-[var(--mute)]">{event.time}</div>
+                  <div className="font-[var(--font-mono)] text-[10px] font-semibold tracking-[0.06em]" style={{ color: event.color }}>{event.action}</div>
+                  <div>
+                    <div className="leading-[1.45] text-[var(--ink)]">{event.message}</div>
+                    <div className="mt-0.5 text-[11px] italic text-[var(--mute)]">{event.note}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       </section>
 
@@ -442,13 +511,15 @@ export const LandingPage = ({ onNavigate }) => {
                 We&apos;re the only platform that measures it.
               </h2>
               <p className="mt-5 text-[16px] leading-[1.6] text-[var(--ink-2)]">
-                Every assessment runs in a real IDE with Claude or Copilot in the candidate&apos;s hand — exactly as they&apos;d work on the job.
-                We capture every prompt, paste, and decision, then score AI fluency as a first-class dimension alongside craft.
+                Every assessment opens a real in-browser IDE — editor, terminal, your repo, and Claude Code / Cursor / Copilot in the candidate&apos;s hand — exactly as they&apos;d work on the job.
+                Behind the scenes the runtime captures every prompt, paste, edit, file open, test run, and commit, time-stamped to the second.
+                Those traces feed a 6-axis rubric (prompt quality, error recovery, context utilisation, independence, design thinking, debugging strategy) so AI fluency is scored as a first-class dimension alongside craft.
               </p>
               <ul className="mt-7 flex flex-col gap-3.5">
                 {[
                   { t: 'AI fluency score', d: 'Did they prompt well? Catch a hallucination? Know when not to use it?' },
                   { t: 'Prompt-by-prompt replay', d: 'See exactly how they worked the agent — not just the final code.' },
+                  { t: 'Full session telemetry', d: 'Edit timeline, test runs, terminal output, file opens — everything tied back to the final report.' },
                   { t: 'Autopilot detection', d: 'We flag candidates who pasted without reading. Calibrated, not punitive.' },
                 ].map((bullet) => (
                   <li key={bullet.t} className="flex items-start gap-3">
@@ -492,6 +563,37 @@ export const LandingPage = ({ onNavigate }) => {
                 ))}
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* IDE PREVIEW — full-width band with the actual workspace
+          component (AssessmentRuntimePreviewView). Static defaults
+          render the revenue-recovery scenario with editor + terminal +
+          Claude Code conversation pane. Strongest "this is the real
+          thing" proof on the page. */}
+      <section id="ide" className="border-t border-[var(--line)] bg-[var(--bg-2)]">
+        <div className={`${containerClass} py-20`}>
+          <div className="mb-8 max-w-[760px]">
+            <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.14em] text-[var(--purple)]">
+              THE WORKSPACE
+            </div>
+            <h2 className="mt-3 font-[var(--font-display)] text-[clamp(32px,4vw,42px)] font-semibold leading-[1.1] tracking-[-0.025em] text-[var(--ink)]">
+              The actual IDE candidates work in. <em className="not-italic text-[var(--purple)]">Try it.</em>
+            </h2>
+            <p className="mt-4 text-[15.5px] leading-[1.6] text-[var(--ink-2)]">
+              Real editor, real terminal, real repo, real AI in the side panel — Claude Code by default, Cursor or Copilot if your candidates prefer.
+              Every keystroke, prompt, paste, test run and commit is captured time-stamped so the rubric below is grounded in evidence, not vibes.
+            </p>
+          </div>
+          <div className="overflow-hidden rounded-[14px] border border-[var(--line)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
+            <AssessmentRuntimePreviewView
+              heightClass="h-[44rem]"
+              lightMode={false}
+              taskName="Revenue Recovery Incident"
+              taskRole="Senior Backend Engineer"
+              taskContext="Restore the batch revenue-recovery flow before finance close."
+            />
           </div>
         </div>
       </section>
