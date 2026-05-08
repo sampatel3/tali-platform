@@ -26,11 +26,36 @@ This folder collects the core TAALI visual assets in one place so they are easy 
 
 ## Color reference
 
-- Primary square/logo fill: `#7F39FB`
-- Accent purple lines: `#9D00FF`
-- Deep purple lines: `#7F39FB`
+Brand purple v6 — re-anchored on the agent-on hero gradient so every
+purple in the product (buttons, kickers, .btn-purple, marketing CTA,
+the agent-running hero, the agent-quiet hero) reads as the same hue.
+Was `#7F39FB` (a more blue indigo); now `#B450FF` — the same bright
+violet that's already the dominant glow in the agent-on hero
+(`rgba(180, 80, 255)` sans alpha).
+
+- Primary square/logo fill: `#B450FF`
+- Accent purple lines: `#9D00FF`  *(unchanged — kept as the brighter, more saturated lines variant)*
+- Deep purple lines: `#B450FF`  *(now matches primary; the variants stack in saturation order: deep `#B450FF` → accent `#9D00FF` → soft `#B06BFF`)*
 - Soft purple lines: `#B06BFF`
 - Inverse line color: `#FFFFFF`
+
+### CSS tokens
+
+The frontend reads brand purples from CSS custom properties on `:root`
+in `frontend/src/index.css`. Touch `--purple` to retune everything:
+
+| Token | Light | Dark | Used for |
+| --- | --- | --- | --- |
+| `--purple` | `#B450FF` | `#C78AFF` | Buttons, kickers, accents, agent-on hero anchor |
+| `--purple-2` | `#9D3EFF` | `#D4A8FF` | Hover state on `.btn-purple` |
+| `--purple-soft` | `#F4E8FF` | `#2E1A4E` | Background washes on info chips, soft surfaces |
+| `--purple-lav` | `#C4A5FD` | `#C4A5FD` | Lavender accent on the hero top-right glow |
+| `--purple-glow` | `rgba(196, 165, 253, 0.45)` | (same) | Atmospheric blob in dark slabs |
+
+The agent-on hero gradient (`.agent-header.agent-running`) and the
+agent-quiet hero (`--grad-dark-vert`) are intentionally hard-coded
+sibling recipes anchored on the same purple — they look different
+(vivid vs. muted) but read as the same hue family.
 
 ## Implementation references
 

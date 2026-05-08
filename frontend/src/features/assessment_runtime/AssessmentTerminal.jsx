@@ -33,16 +33,16 @@ export const AssessmentTerminal = ({
       return {
         background: '#060b14',
         foreground: '#edf2ff',
-        cursor: '#7F39FB',
-        selectionBackground: 'rgba(127, 57, 251, 0.22)',
+        cursor: '#B450FF',
+        selectionBackground: 'rgba(180, 80, 255, 0.22)',
       };
     }
     const styles = window.getComputedStyle(hostRef.current);
     return {
       background: styles.getPropertyValue('--taali-runtime-terminal-bg').trim() || '#060b14',
       foreground: styles.getPropertyValue('--taali-runtime-terminal-text').trim() || '#edf2ff',
-      cursor: styles.getPropertyValue('--taali-purple').trim() || '#7F39FB',
-      selectionBackground: styles.getPropertyValue('--taali-runtime-selection').trim() || 'rgba(127, 57, 251, 0.22)',
+      cursor: styles.getPropertyValue('--taali-purple').trim() || '#B450FF',
+      selectionBackground: styles.getPropertyValue('--taali-runtime-selection').trim() || 'rgba(180, 80, 255, 0.22)',
     };
   };
 
