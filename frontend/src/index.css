@@ -829,7 +829,7 @@ html[data-theme="dark"] {
 }
 
 .settings-top-gap {
-  margin-top: 18px;
+  margin-top: 24px;
 }
 
 .settings-toggle-list {
@@ -1048,7 +1048,7 @@ html[data-theme="dark"] {
 }
 
 .wk-summary {
-  margin-top: 14px;
+  margin-top: 20px;
   padding: 14px 16px;
   border: 1px solid var(--line-2);
   border-radius: 12px;
@@ -1193,6 +1193,7 @@ html[data-theme="dark"] {
   padding: 14px 16px;
   border: 1px solid var(--line-2);
   border-radius: 12px;
+  margin-top: 20px;
 }
 
 .settings-banner.warning {
