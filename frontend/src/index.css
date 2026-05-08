@@ -1223,6 +1223,86 @@ html[data-theme="dark"] {
   gap: 16px;
 }
 
+/* Settings → AI agent: structured recruiter-requirements editor.
+   Each row is priority-dropdown + free-text + remove button. The
+   serialized line on the wire stays "Must have: 5+ yrs ..." so the
+   CV scorer reads the same shape it already reads. */
+.req-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.req-editor-empty {
+  padding: 16px 14px;
+  border: 1px dashed var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  font-size: 13px;
+  color: var(--mute);
+  text-align: center;
+}
+.req-editor-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.req-editor-row {
+  display: grid;
+  grid-template-columns: 160px 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.req-editor-priority {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  color: var(--ink);
+  font-size: 13px;
+}
+.req-editor-text {
+  height: 38px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg-2);
+  color: var(--ink);
+  font-size: 14px;
+  width: 100%;
+}
+.req-editor-priority:focus,
+.req-editor-text:focus {
+  outline: 0;
+  border-color: var(--purple);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple) 16%, transparent);
+}
+.req-editor-remove {
+  height: 38px;
+  width: 38px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--mute);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.req-editor-remove:hover {
+  border-color: var(--line-2);
+  color: var(--ink);
+}
+.req-editor-add { align-self: flex-start; }
+@media (max-width: 720px) {
+  .req-editor-row {
+    grid-template-columns: 1fr auto;
+  }
+  .req-editor-priority {
+    grid-column: 1 / -1;
+  }
+}
+
 .settings-subcard {
   padding: 18px 20px;
   border: 1px solid var(--line-2);

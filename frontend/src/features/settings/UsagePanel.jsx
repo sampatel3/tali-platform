@@ -3,20 +3,22 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { billing as billingApi } from '../../shared/api';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 
-// HANDOFF settings.md — Usage tab spec:
-// "Stacked daily bar chart is purely client-side from the
-//  /billing/usage-timeseries?period_days=30 payload. Three buckets, in
-//  stacking order from bottom: In-IDE assistance (purple), Scoring
-//  (lavender), Pre-screen summaries (sand)."
+// Three customer-facing surfaces in stacking order from bottom. We
+// renamed "In-IDE assistance" → "Workspace AI" because the original
+// label implied only the candidate IDE — the bucket actually rolls in
+// the recruiter chat, the autonomous agent, and interview-prep
+// generation, none of which run inside the candidate's IDE.
 const SURFACES = [
-  { id: 'in_ide', label: 'In-IDE assistance', color: '#7e6dff' },
-  { id: 'scoring', label: 'Scoring', color: '#bcb1f0' },
-  { id: 'prescreen', label: 'Pre-screen summaries', color: '#d8c8b0' },
+  { id: 'workspace', label: 'Workspace AI', color: '#7e6dff' },
+  { id: 'scoring', label: 'Scoring & matching', color: '#bcb1f0' },
+  { id: 'prescreen', label: 'Pre-screening', color: '#d8c8b0' },
 ];
 
-// Backend feature codes → one of the three customer-facing surfaces. Codes
-// not listed roll into "In-IDE assistance" (the broadest catch-all per the
-// design — it covers both the candidate IDE and the recruiter-side agent).
+// Backend feature codes → one of the three surfaces. Anything that
+// produces a numeric ranking against the role goes to "Scoring &
+// matching"; pre-screen sits on its own; everything else (assessment
+// IDE, recruiter chat, autonomous agent, interview prep) lands in
+// "Workspace AI".
 const FEATURE_TO_SURFACE = {
   prescreen: 'prescreen',
 
@@ -28,16 +30,16 @@ const FEATURE_TO_SURFACE = {
   pairwise_judge: 'scoring',
   fit_matching: 'scoring',
 
-  assessment: 'in_ide',
-  taali_chat: 'in_ide',
-  agent_autonomous: 'in_ide',
-  interview_focus: 'in_ide',
-  interview_tech: 'in_ide',
-  other: 'in_ide',
+  assessment: 'workspace',
+  taali_chat: 'workspace',
+  agent_autonomous: 'workspace',
+  interview_focus: 'workspace',
+  interview_tech: 'workspace',
+  other: 'workspace',
 };
 
 const surfaceFor = (featureKey) =>
-  FEATURE_TO_SURFACE[String(featureKey || '').toLowerCase()] || 'in_ide';
+  FEATURE_TO_SURFACE[String(featureKey || '').toLowerCase()] || 'workspace';
 
 const formatUsd = (n) => `$${Number(n || 0).toFixed(2)}`;
 const formatUsd4 = (n) => `$${Number(n || 0).toFixed(4)}`;
@@ -55,7 +57,7 @@ const pivotByDay = (buckets) => {
   for (const b of buckets) {
     const day = b.day || 'unknown';
     if (!byDay.has(day)) {
-      byDay.set(day, { day, total: 0, calls: 0, surfaces: { in_ide: 0, scoring: 0, prescreen: 0 } });
+      byDay.set(day, { day, total: 0, calls: 0, surfaces: { workspace: 0, scoring: 0, prescreen: 0 } });
     }
     const cell = byDay.get(day);
     const surface = surfaceFor(b.group_key);
@@ -68,7 +70,7 @@ const pivotByDay = (buckets) => {
 };
 
 const sumBySurface = (buckets) => {
-  const totals = { in_ide: { cost_usd: 0, event_count: 0 }, scoring: { cost_usd: 0, event_count: 0 }, prescreen: { cost_usd: 0, event_count: 0 } };
+  const totals = { workspace: { cost_usd: 0, event_count: 0 }, scoring: { cost_usd: 0, event_count: 0 }, prescreen: { cost_usd: 0, event_count: 0 } };
   for (const b of buckets) {
     const surface = surfaceFor(b.group_key);
     totals[surface].cost_usd += Number(b.cost_usd || 0);
