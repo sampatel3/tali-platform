@@ -50,6 +50,16 @@ celery_app.conf.update(
             "task": "app.tasks.reconciliation_tasks.reconcile_anthropic_usage",
             "schedule": 86400.0,
         },
+        # Agent daily review: proactive per-role triage cycle. Iterates
+        # every role with agentic mode on (not paused), runs one cron
+        # cycle each. The agent looks for: applicants idle for >5 days,
+        # candidates with stale scores, assessments waiting on action —
+        # and surfaces what's worth recruiter attention. One cycle per
+        # role per day so the agent stops being purely reactive.
+        "agent-daily-review-sweep": {
+            "task": "app.tasks.agent_tasks.agent_daily_review_sweep",
+            "schedule": 86400.0,
+        },
     },
 )
 

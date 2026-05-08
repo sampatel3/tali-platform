@@ -55,6 +55,32 @@ def _block_to_dict(block: Any) -> dict[str, Any]:
 
 
 def _initial_user_message(*, trigger: str, application_id: Optional[int]) -> str:
+    if trigger == "cron" and application_id is None:
+        return (
+            "Daily review tick. You're not reacting to a single event — "
+            "this is a proactive sweep across the role. Triage what's "
+            "worth recruiter attention right now.\n\n"
+            "Suggested flow:\n"
+            "1. search_applications with sort_by=created_at desc, limit ~25, "
+            "to see who arrived in the last 24h. Anything obviously above the "
+            "recruiter's bar gets a queue_advance_decision (or send_assessment "
+            "if still in CV review). Anything obviously below gets a "
+            "queue_reject_decision.\n"
+            "2. search_applications with pipeline_stage='in_assessment' to find "
+            "candidates whose assessment status looks stale — surface in your "
+            "agent_run_complete summary so the recruiter can chase. Don't queue "
+            "anything for them; reminders are a separate scheduled job.\n"
+            "3. search_applications with pipeline_stage='review' and "
+            "sort_by=taali_score desc to see who's at the top of the funnel "
+            "ready to advance. Use get_cohort_signals for context if you're "
+            "weighing borderline candidates.\n"
+            "4. Stay within the per-cycle decision budget — at most ONE queued "
+            "decision per cycle even on a daily review. The summary in "
+            "agent_run_complete is where you flag everything else worth a look "
+            "(it lands in the recruiter's audit log).\n"
+            "5. End with agent_run_complete and a 1-2 sentence summary of "
+            "what you saw + why you stopped."
+        )
     if application_id is not None and trigger == "event":
         return (
             f"Event-triggered cycle. The most recent applicant is "
