@@ -20,6 +20,7 @@ import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
 import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
+import AgentNeedsInputCard from './AgentNeedsInputCard';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
 // AgentRail (the legacy left "cockpit rail") was retired with the v3
@@ -1926,6 +1927,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       />
       <div className="page">
         <div className="mc-cockpit-main">
+        {/* Phase 7: orchestrator's open questions for this role. Hides
+            itself when there are none — won't render an empty frame. */}
+        <AgentNeedsInputCard roleId={role?.id} />
         <div className="sub-tabs sub-tabs-sticky">
           <div className="seg">
             <button type="button" className={activeView === 'table' ? 'active' : ''} onClick={() => setActiveView('table')}>Candidates</button>

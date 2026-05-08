@@ -95,6 +95,15 @@ class Role(Base):
     # when stale (>1 hour). See the agent's get_cohort_signals tool.
     agent_cohort_signals = Column(JSON, nullable=True)
     agent_cohort_signals_at = Column(DateTime(timezone=True), nullable=True)
+    # Per-role HITL toggle for the send-assessment step. When True, the
+    # agent writes an ``agent_needs_input`` row asking for explicit
+    # recruiter approval before invites go out instead of auto-executing.
+    # Defaults to True in the cohort-planner era (migration 067) so
+    # turning agent mode on never silently spends budget on assessments
+    # the recruiter didn't approve.
+    agent_send_assessment_requires_approval = Column(
+        Boolean, nullable=False, default=True, server_default="true"
+    )
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())

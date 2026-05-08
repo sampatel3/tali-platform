@@ -67,6 +67,9 @@ def _make_role(db, org: Organization) -> Role:
         job_spec_text="Build distributed systems.",
         agentic_mode_enabled=True,
         monthly_usd_budget_cents=5000,
+        # Phase 7: keep send_assessment auto-execute for these existing
+        # tests; HITL behaviour is covered by tests/cohort_planner/.
+        agent_send_assessment_requires_approval=False,
     )
     db.add(role)
     db.flush()
