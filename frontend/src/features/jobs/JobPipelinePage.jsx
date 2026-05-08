@@ -1809,21 +1809,32 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // OFF → ON. Activate agent mode for THIS role with the budget the
   // recruiter set in the panel. Backend requires monthly_usd_budget_cents
   // to be set when flipping agentic_mode_enabled to true.
+  // Optimistic: flip role.agentic_mode_enabled locally so the panel and
+  // hero state switch instantly; revert on failure. The full workspace
+  // refresh runs in the background so a 422-candidate role doesn't keep
+  // the button stuck on "Activating…" while the list reloads.
   const handleActivateAgent = async (monthlyBudgetCents) => {
     if (!Number.isFinite(numericRoleId)) return;
     if (!Number.isFinite(monthlyBudgetCents) || monthlyBudgetCents <= 0) {
       showToast('Set a monthly cap greater than $0 before activating.', 'error');
       throw new Error('Invalid budget');
     }
+    const prevRole = role;
+    setRole((cur) => (cur ? {
+      ...cur,
+      agentic_mode_enabled: true,
+      monthly_usd_budget_cents: monthlyBudgetCents,
+    } : cur));
     try {
       await rolesApi.update(numericRoleId, {
         agentic_mode_enabled: true,
         monthly_usd_budget_cents: monthlyBudgetCents,
       });
-      await loadRoleWorkspace();
+      void loadRoleWorkspace();
       const usd = (monthlyBudgetCents / 100).toFixed(monthlyBudgetCents % 100 === 0 ? 0 : 2);
       showToast(`Agent mode is on — Taali will work this role with a $${usd}/month cap.`, 'success');
     } catch (error) {
+      setRole(prevRole);
       const message = getErrorMessage(error, 'Failed to turn on agent mode.');
       showToast(message, 'error');
       throw new Error(message);
@@ -1831,14 +1842,18 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   };
 
   // ON → OFF. Manual pause flips agentic_mode_enabled to false. The user
-  // can re-enable from the same panel later.
+  // can re-enable from the same panel later. Optimistic flip + background
+  // refresh, same rationale as activate.
   const handlePauseAgent = async () => {
     if (!Number.isFinite(numericRoleId)) return;
+    const prevRole = role;
+    setRole((cur) => (cur ? { ...cur, agentic_mode_enabled: false } : cur));
     try {
       await rolesApi.update(numericRoleId, { agentic_mode_enabled: false });
-      await loadRoleWorkspace();
+      void loadRoleWorkspace();
       showToast('Agent mode paused for this role.', 'success');
     } catch (error) {
+      setRole(prevRole);
       showToast(getErrorMessage(error, 'Failed to pause agent mode.'), 'error');
     }
   };
@@ -1848,11 +1863,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // agentic_mode_enabled=true clears paused_at server-side.
   const handleResumeAgent = async () => {
     if (!Number.isFinite(numericRoleId)) return;
+    const prevRole = role;
+    setRole((cur) => (cur ? { ...cur, agentic_mode_enabled: true } : cur));
     try {
       await rolesApi.update(numericRoleId, { agentic_mode_enabled: true });
-      await loadRoleWorkspace();
+      void loadRoleWorkspace();
       showToast('Agent mode resumed. Raise the monthly cap if you want it to keep going.', 'success');
     } catch (error) {
+      setRole(prevRole);
       showToast(getErrorMessage(error, 'Failed to resume agent mode.'), 'error');
     }
   };

@@ -261,6 +261,10 @@ export const AgentHeader = ({
     <div
       className={`agent-header ${heroState} ${variant === 'compact' ? 'compact' : ''} ${className}`.trim()}
     >
+      {/* Bright running-state gradient layered as an opacity-faded overlay so
+          turning the agent on/off cross-fades the hero instead of snapping
+          (browsers can't transition `background` between gradient values). */}
+      <span className="ah-bright-overlay" aria-hidden="true" />
       <div className="agent-header-inner">
         <div className="agent-header-left">
           {backLink ? (
