@@ -1,11 +1,18 @@
 // Global search — the top-right pill that used to be a no-op placeholder.
 //
-// Plain word search across candidates / roles / tasks (the three things
-// the placeholder copy promised). Lists are fetched once on first focus
-// and cached in component state; filtering is client-side so typing
-// stays instant. There is always an "Ask Search AI" escape hatch at the
-// bottom of the dropdown that hands the query off to the /chat tab —
-// that's where natural-language / semantic search lives, not here.
+// Strategy is split per source:
+//
+// * Candidates: server-side substring search via /candidates/?q=… —
+//   the org may have thousands and the list endpoint paginates at 50,
+//   so a client-side cache would silently miss anyone past page 1.
+//   Debounced 200ms while the user types.
+// * Roles + tasks: cardinality is small (<100 in practice), the API
+//   returns flat arrays, so we cache once on first focus and filter
+//   client-side. Cheap and instant.
+//
+// "Ask Search AI" is the always-on escape hatch at the bottom of the
+// dropdown — hands the typed phrase to the /chat tab where natural-
+// language / semantic search lives. This pill stays plain word search.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Briefcase, CheckSquare, MessageSquare, Search, User } from 'lucide-react';
@@ -13,6 +20,8 @@ import { Briefcase, CheckSquare, MessageSquare, Search, User } from 'lucide-reac
 import { candidates as candidatesApi, roles as rolesApi, tasks as tasksApi } from '../api';
 
 const MAX_PER_GROUP = 5;
+const SERVER_SEARCH_LIMIT = 20;
+const DEBOUNCE_MS = 200;
 
 const norm = (value) => String(value || '').toLowerCase();
 
@@ -22,13 +31,6 @@ const candidateLabel = (row) => (
 const candidateSub = (row) => (
   String(row?.email || row?.position || '').trim()
 );
-const candidateSearchText = (row) => [
-  row?.full_name,
-  row?.name,
-  row?.email,
-  row?.position,
-  row?.id,
-].map(norm).join(' ');
 
 const roleLabel = (row) => (
   String(row?.short_name || row?.name || `Role #${row?.id}`).trim()
@@ -67,38 +69,83 @@ const groupConfig = [
   { id: 'tasks', label: 'Tasks', Icon: CheckSquare, sub: taskSub, primary: taskLabel },
 ];
 
+// Roles + tasks list endpoints return flat arrays today (no pagination,
+// no q param), so the array.isArray fallback is correct. Candidates is
+// the one that returns {items, total, limit, offset} — read .items.
+const arrayBody = (res) => (Array.isArray(res?.data) ? res.data : []);
+const itemsBody = (res) => {
+  const body = res?.data;
+  if (Array.isArray(body)) return body;
+  if (body && Array.isArray(body.items)) return body.items;
+  return [];
+};
+
 export const GlobalSearch = ({ onNavigate }) => {
   const wrapRef = useRef(null);
   const inputRef = useRef(null);
+  const candidateRequestRef = useRef(0);
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
-  const [loaded, setLoaded] = useState(false);
-  const [loading, setLoading] = useState(false);
+  const [staticLoaded, setStaticLoaded] = useState(false);
+  const [staticLoading, setStaticLoading] = useState(false);
+  const [candidateLoading, setCandidateLoading] = useState(false);
   const [error, setError] = useState(null);
-  const [data, setData] = useState({ candidates: [], roles: [], tasks: [] });
+  const [staticData, setStaticData] = useState({ roles: [], tasks: [] });
+  const [recentCandidates, setRecentCandidates] = useState([]);
+  const [candidateMatches, setCandidateMatches] = useState([]);
 
-  const ensureLoaded = useCallback(async () => {
-    if (loaded || loading) return;
-    setLoading(true);
+  // Roles + tasks: cache once. Candidates also fetched here (limit=20)
+  // for the no-query "recent" panel; live queries refetch with q=.
+  const ensureStaticLoaded = useCallback(async () => {
+    if (staticLoaded || staticLoading) return;
+    setStaticLoading(true);
     setError(null);
     try {
       const [candRes, rolesRes, tasksRes] = await Promise.all([
-        candidatesApi.list().catch(() => ({ data: [] })),
-        rolesApi.list().catch(() => ({ data: [] })),
-        tasksApi.list().catch(() => ({ data: [] })),
+        candidatesApi.list({ limit: SERVER_SEARCH_LIMIT }).catch(() => null),
+        rolesApi.list().catch(() => null),
+        tasksApi.list().catch(() => null),
       ]);
-      setData({
-        candidates: Array.isArray(candRes?.data) ? candRes.data : [],
-        roles: Array.isArray(rolesRes?.data) ? rolesRes.data : [],
-        tasks: Array.isArray(tasksRes?.data) ? tasksRes.data : [],
+      setRecentCandidates(itemsBody(candRes));
+      setStaticData({
+        roles: arrayBody(rolesRes),
+        tasks: arrayBody(tasksRes),
       });
-      setLoaded(true);
+      setStaticLoaded(true);
     } catch (err) {
       setError(err?.message || 'Failed to load search index.');
     } finally {
-      setLoading(false);
+      setStaticLoading(false);
     }
-  }, [loaded, loading]);
+  }, [staticLoaded, staticLoading]);
+
+  // Candidate live search: debounced server call. ``candidateRequestRef``
+  // lets a slow request lose to a faster newer one without overwriting
+  // results when the user has already moved on.
+  useEffect(() => {
+    const q = query.trim();
+    if (!q) {
+      setCandidateMatches([]);
+      setCandidateLoading(false);
+      return undefined;
+    }
+    const requestId = candidateRequestRef.current + 1;
+    candidateRequestRef.current = requestId;
+    setCandidateLoading(true);
+    const handle = window.setTimeout(async () => {
+      try {
+        const res = await candidatesApi.list({ q, limit: SERVER_SEARCH_LIMIT });
+        if (candidateRequestRef.current !== requestId) return;
+        setCandidateMatches(itemsBody(res));
+      } catch (err) {
+        if (candidateRequestRef.current !== requestId) return;
+        setError(err?.message || 'Candidate search failed.');
+      } finally {
+        if (candidateRequestRef.current === requestId) setCandidateLoading(false);
+      }
+    }, DEBOUNCE_MS);
+    return () => window.clearTimeout(handle);
+  }, [query]);
 
   // cmd/ctrl-K opens and focuses; Escape closes.
   useEffect(() => {
@@ -106,7 +153,7 @@ export const GlobalSearch = ({ onNavigate }) => {
       if ((e.metaKey || e.ctrlKey) && (e.key === 'k' || e.key === 'K')) {
         e.preventDefault();
         setOpen(true);
-        void ensureLoaded();
+        void ensureStaticLoaded();
         window.requestAnimationFrame(() => inputRef.current?.focus());
       } else if (e.key === 'Escape' && open) {
         setOpen(false);
@@ -115,7 +162,7 @@ export const GlobalSearch = ({ onNavigate }) => {
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
-  }, [ensureLoaded, open]);
+  }, [ensureStaticLoaded, open]);
 
   // click-outside closes the dropdown.
   useEffect(() => {
@@ -131,18 +178,20 @@ export const GlobalSearch = ({ onNavigate }) => {
     const q = query.trim().toLowerCase();
     if (!q) {
       return {
-        candidates: data.candidates.slice(0, MAX_PER_GROUP),
-        roles: data.roles.slice(0, MAX_PER_GROUP),
-        tasks: data.tasks.slice(0, MAX_PER_GROUP),
+        candidates: recentCandidates.slice(0, MAX_PER_GROUP),
+        roles: staticData.roles.slice(0, MAX_PER_GROUP),
+        tasks: staticData.tasks.slice(0, MAX_PER_GROUP),
       };
     }
-    const candidates = data.candidates.filter((row) => candidateSearchText(row).includes(q)).slice(0, MAX_PER_GROUP);
-    const roles = data.roles.filter((row) => roleSearchText(row).includes(q)).slice(0, MAX_PER_GROUP);
-    const tasks = data.tasks.filter((row) => taskSearchText(row).includes(q)).slice(0, MAX_PER_GROUP);
-    return { candidates, roles, tasks };
-  }, [data, query]);
+    return {
+      candidates: candidateMatches.slice(0, MAX_PER_GROUP),
+      roles: staticData.roles.filter((row) => roleSearchText(row).includes(q)).slice(0, MAX_PER_GROUP),
+      tasks: staticData.tasks.filter((row) => taskSearchText(row).includes(q)).slice(0, MAX_PER_GROUP),
+    };
+  }, [recentCandidates, staticData, candidateMatches, query]);
 
   const totalMatches = filtered.candidates.length + filtered.roles.length + filtered.tasks.length;
+  const isLoading = staticLoading || candidateLoading;
 
   const handleSelect = (group, row) => {
     setOpen(false);
@@ -188,7 +237,7 @@ export const GlobalSearch = ({ onNavigate }) => {
           onChange={(e) => setQuery(e.target.value)}
           onFocus={() => {
             setOpen(true);
-            void ensureLoaded();
+            void ensureStaticLoaded();
           }}
           aria-label="Search candidates, roles, and tasks"
         />
@@ -197,8 +246,8 @@ export const GlobalSearch = ({ onNavigate }) => {
 
       {open ? (
         <div className="mc-nav-search-popover" role="listbox">
-          {loading ? (
-            <div className="mc-nav-search-empty">Loading…</div>
+          {isLoading && totalMatches === 0 ? (
+            <div className="mc-nav-search-empty">Searching…</div>
           ) : error ? (
             <div className="mc-nav-search-empty">{error}</div>
           ) : totalMatches === 0 ? (
