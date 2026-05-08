@@ -343,6 +343,7 @@ from .domains.taali_chat import router as taali_chat_router  # noqa: E402
 app.include_router(taali_chat_router, prefix="/api/v1")
 
 # Agentic recruiting: per-job autonomous agent + recruiter approval queue.
+# The package's ``router`` already bundles routes/usage/cohort_signals.
 from .domains.agentic import router as agentic_router  # noqa: E402
 
 app.include_router(agentic_router, prefix="/api/v1")

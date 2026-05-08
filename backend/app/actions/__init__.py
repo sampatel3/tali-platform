@@ -12,7 +12,9 @@ from . import (  # noqa: F401  re-export for ``from app.actions import advance_s
     approve_decision,
     override_decision,
     queue_decision,
+    reject_application,
     score_cv,
+    send_assessment,
 )
 from .types import Actor
 
@@ -22,5 +24,7 @@ __all__ = [
     "approve_decision",
     "override_decision",
     "queue_decision",
+    "reject_application",
     "score_cv",
+    "send_assessment",
 ]

@@ -128,9 +128,11 @@ def on_application_created(
             )
 
     # Agent-native: if the role has agentic mode on, fire an autonomous
-    # cycle focused on this application. The task is a no-op when the
-    # role is paused or has agentic mode off, so this is safe to call
-    # unconditionally — we filter early just to skip the round-trip.
+    # cycle focused on this application. Wrapped in a per-role debounce
+    # so a burst of applicants (Workable bulk-import, etc.) coalesces
+    # into a single cycle: the first event claims a 60s slot and
+    # schedules the task with countdown=60s; subsequent events in the
+    # window no-op because the claim fails atomically.
     try:
         role_id = int(getattr(app, "role_id", 0) or 0)
         if role_id > 0:
@@ -140,13 +142,34 @@ def on_application_created(
 
             _db: _Session = _SessionLocal()
             try:
+                from ..agent_runtime.event_debounce import (
+                    DEFAULT_DEBOUNCE_SECONDS,
+                    try_claim_event_window,
+                )
                 from ..models.role import Role
 
                 role = _db.query(Role).filter(Role.id == role_id).first()
-                if role is not None and bool(getattr(role, "agentic_mode_enabled", False)) and role.agent_paused_at is None:
-                    from ..tasks.agent_tasks import agent_react_to_event
+                if (
+                    role is not None
+                    and bool(getattr(role, "agentic_mode_enabled", False))
+                    and role.agent_paused_at is None
+                ):
+                    if try_claim_event_window(_db, role=role):
+                        from ..tasks.agent_tasks import agent_react_to_event
 
-                    agent_react_to_event.delay(role_id=role_id, application_id=application_id)
+                        agent_react_to_event.apply_async(
+                            kwargs={
+                                "role_id": role_id,
+                                "application_id": application_id,
+                            },
+                            countdown=DEFAULT_DEBOUNCE_SECONDS,
+                        )
+                    else:
+                        logger.debug(
+                            "on_application_created agent-trigger debounced "
+                            "(cycle pending) role_id=%s application_id=%s",
+                            role_id, application_id,
+                        )
             finally:
                 _db.close()
     except Exception:  # pragma: no cover — defensive

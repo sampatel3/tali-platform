@@ -26,13 +26,17 @@ from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event
 from . import budget_guard, calibration
 from .system_prompt import PROMPT_VERSION, build_system_prompt
-from .tool_registry import AGENT_TOOLS, dispatch, is_run_complete
+from .tool_registry import AGENT_TOOLS, QUEUE_DECISION_TOOL_NAMES, dispatch, is_run_complete
 
 
 logger = logging.getLogger("taali.agent_runtime")
 
 
-MAX_TOOL_ROUNDS = 6
+# Tool surface in v3 has 13 tools. Bumping rounds up gives the agent enough
+# headroom to chain a cohort search → compare → decision sequence. Each round
+# is still capped to MAX_TOKENS_PER_ROUND, and the per-cycle token + decision
+# budgets in budget_guard.py provide hard ceilings independent of round count.
+MAX_TOOL_ROUNDS = 10
 MAX_TOKENS_PER_ROUND = 2048
 
 
@@ -50,18 +54,44 @@ def _block_to_dict(block: Any) -> dict[str, Any]:
     return {"type": btype or "unknown"}
 
 
-def _initial_user_message(*, application_id: Optional[int]) -> str:
+def _initial_user_message(*, trigger: str, application_id: Optional[int]) -> str:
+    if application_id is not None and trigger == "event":
+        return (
+            f"Event-triggered cycle. The most recent applicant is "
+            f"application_id={application_id}, but events are debounced — other "
+            f"applications for this role may have arrived in the same window. "
+            f"Suggested flow:\n"
+            "1. get_application on the focus id.\n"
+            "2. search_applications (stage='applied' or 'review', sort_by=created_at desc) "
+            "to surface any other recent arrivals worth a look.\n"
+            "3. For each candidate worth acting on: if score is fresh and clear, "
+            "queue/auto-execute; if borderline, use compare_applications or "
+            "get_cohort_signals before deciding; if no score yet, score_cv "
+            "and end the cycle (next cycle can act once it lands).\n"
+            "4. Stay within the per-cycle decision budget — at most one queued "
+            "decision per cycle.\n"
+            "5. End with agent_run_complete."
+        )
     if application_id is not None:
         return (
-            f"Focus on application_id={application_id}. "
-            f"Read it, optionally read its CV, decide whether to recommend "
-            f"advancing to a technical interview, and call agent_run_complete when done. "
-            f"If the candidate isn't ready (e.g. no CV-match score yet), call score_cv "
-            f"and then agent_run_complete — the next cycle can act on the result."
+            f"Focus on application_id={application_id}.\n\n"
+            "Suggested flow:\n"
+            "1. get_application — read its scores, stage, evidence.\n"
+            "2. If no fresh CV-match score, call score_cv and then agent_run_complete "
+            "(the next cycle can act on the result).\n"
+            "3. If the score is borderline, use compare_applications or "
+            "get_cohort_signals to see how this candidate ranks against the cohort "
+            "before deciding to advance or reject.\n"
+            "4. If clearly above-threshold and at the right stage, call send_assessment "
+            "(if still in CV review) or queue_advance_decision (if assessment is done).\n"
+            "5. If clearly below-threshold and missing requirements, queue_reject_decision "
+            "or queue_skip_assessment_reject_decision.\n"
+            "6. Always end with agent_run_complete."
         )
     return (
-        "Cycle tick — there's no specific application focus. "
-        "Use get_application or score_cv on candidates that look ready, then call agent_run_complete."
+        "Cycle tick — no specific application focus. Use search_applications "
+        "to find ready candidates (e.g. min_score=70 in stage='review'), then "
+        "act on at most one of them. Always end with agent_run_complete."
     )
 
 
@@ -81,15 +111,16 @@ def run_cycle(
     session — we ``flush`` at boundaries so ids populate, but never
     ``commit`` ourselves.
     """
-    org = (
-        role.organization
-        or db.query(Organization).filter(Organization.id == role.organization_id).first()
-    )
+    # Role has no `organization` backref defined on the model — fetch directly.
+    org = db.query(Organization).filter(Organization.id == role.organization_id).first()
     if org is None:
         raise ValueError(f"role {role.id} has no organization")
 
     client = get_client_for_org(org)
-    model = settings.resolved_claude_model
+    # Per-role override (Sonnet for borderline-judgment roles, etc.). Falls
+    # back to the global setting when unset.
+    role_model = (role.agent_model or "").strip() if isinstance(role.agent_model, str) else ""
+    model = role_model or settings.resolved_claude_model
 
     monthly = budget_guard.check_monthly_usd(db, role=role)
     if not monthly.ok:
@@ -129,7 +160,10 @@ def run_cycle(
         else f"{trigger} → no specific focus"
     )
     messages: list[dict[str, Any]] = [
-        {"role": "user", "content": _initial_user_message(application_id=application_id)}
+        {
+            "role": "user",
+            "content": _initial_user_message(trigger=trigger, application_id=application_id),
+        }
     ]
 
     tools_called_summary: dict[str, int] = {}
@@ -221,7 +255,7 @@ def run_cycle(
 
             try:
                 result = dispatch(name, args, db=db, agent_run=run, role=role)
-                if name == "queue_advance_decision":
+                if name in QUEUE_DECISION_TOOL_NAMES:
                     run.decisions_emitted += 1
                 if is_run_complete(result):
                     run_complete_payload = result

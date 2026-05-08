@@ -37,6 +37,7 @@ def agent_react_to_event(
     Skips silently if the role has agentic mode disabled or has been
     paused — re-enabling the role is the explicit unblock.
     """
+    from ..agent_runtime.event_debounce import clear_event_window
     from ..agent_runtime.orchestrator import run_cycle
     from ..models.role import Role
     from ..platform.database import SessionLocal
@@ -46,6 +47,10 @@ def agent_react_to_event(
         role = db.query(Role).filter(Role.id == role_id).first()
         if role is None:
             return {"status": "skipped", "reason": "role_not_found", "role_id": role_id}
+        # Release the debounce slot before running. Events arriving during
+        # this cycle then claim a fresh window and schedule the next one,
+        # rather than being silently swallowed.
+        clear_event_window(db, role=role)
         if not bool(role.agentic_mode_enabled):
             return {"status": "skipped", "reason": "agentic_mode_disabled", "role_id": role_id}
         if role.agent_paused_at is not None:
