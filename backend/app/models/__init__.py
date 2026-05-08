@@ -73,6 +73,7 @@ from .decision_feedback import (
     DecisionFeedback,
 )
 from .rubric_revision import REVISION_CAUSES, RubricRevision
+from .decision_policy import DecisionPolicy
 from .anthropic_usage_reconciliation import AnthropicUsageReconciliation
 from .share_link import (
     SHARE_LINK_MODE_CLIENT,
@@ -147,6 +148,7 @@ __all__ = [
     "FEEDBACK_SCOPES",
     "RubricRevision",
     "REVISION_CAUSES",
+    "DecisionPolicy",
     "AnthropicUsageReconciliation",
     "ShareLink",
     "SHARE_LINK_MODE_RECRUITER",

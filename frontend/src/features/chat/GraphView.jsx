@@ -12,7 +12,7 @@ import cytoscape from 'cytoscape';
 // Keep these literals in sync with the design tokens in colors_and_type.css /
 // :root in index.css (--purple, --ink, --green, --orange, --mute).
 const NODE_COLOR = {
-  Person: '#7F39FB',
+  Person: '#B450FF',
   Company: '#15121a',
   School: '#15A36A',
   Skill: '#D88A1C',

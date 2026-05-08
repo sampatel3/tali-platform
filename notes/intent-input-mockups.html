@@ -1,0 +1,828 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Default role intent — UX mockups</title>
+<style>
+  :root {
+    --ink: #1a1230;
+    --ink-2: #4a3d6b;
+    --muted: #7a6e94;
+    --line: #e8e2ee;
+    --line-2: #f1edf5;
+    --bg: #faf8fd;
+    --bg-2: #ffffff;
+    --purple: #7f39fb;
+    --purple-2: #6b21e8;
+    --purple-soft: #f0e7fb;
+    --green: #2f9461;
+    --green-soft: #e3f3eb;
+    --amber: #c98a13;
+    --amber-soft: #fbf1d8;
+    --red: #b73b3b;
+    --red-soft: #fbe5e5;
+    --radius-sm: 10px;
+    --radius: 14px;
+    --radius-lg: 22px;
+    --shadow-card: 0 1px 2px rgba(26, 18, 48, .04), 0 6px 20px rgba(26, 18, 48, .04);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 48px 24px 96px;
+  }
+  .page {
+    max-width: 1100px;
+    margin: 0 auto;
+  }
+  .page-head {
+    margin-bottom: 32px;
+  }
+  .page-head .eyebrow {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin: 0 0 6px;
+  }
+  .page-head h1 {
+    font-size: 28px;
+    margin: 0 0 8px;
+    letter-spacing: -0.01em;
+  }
+  .page-head p {
+    margin: 0;
+    color: var(--ink-2);
+    max-width: 720px;
+  }
+  .mockup {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    margin: 28px 0;
+    overflow: hidden;
+  }
+  .mockup-head {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--line-2);
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+    background: linear-gradient(180deg, color-mix(in oklab, var(--purple) 4%, var(--bg-2)) 0%, var(--bg-2) 100%);
+  }
+  .mockup-head .num {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 11px;
+    color: var(--purple);
+    background: var(--purple-soft);
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-weight: 600;
+  }
+  .mockup-head h2 {
+    font-size: 16px;
+    margin: 0;
+    font-weight: 600;
+  }
+  .mockup-head .tag {
+    margin-left: auto;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    color: var(--muted);
+    letter-spacing: 0.06em;
+  }
+  .mockup-body { padding: 24px; }
+  .mockup-tradeoff {
+    border-top: 1px dashed var(--line);
+    padding: 14px 24px;
+    background: color-mix(in oklab, var(--purple) 2%, var(--bg-2));
+    font-size: 12.5px;
+    color: var(--ink-2);
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 6px 14px;
+  }
+  .mockup-tradeoff dt {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    padding-top: 1px;
+  }
+  .mockup-tradeoff dd { margin: 0; }
+
+  /* Settings card to mimic the real subcard look */
+  .subcard {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px;
+    background: var(--bg-2);
+  }
+  .subcard h3 {
+    font-size: 15px;
+    margin: 0 0 6px;
+    font-weight: 600;
+  }
+  .subcard p.help {
+    font-size: 12.5px;
+    color: var(--muted);
+    margin: 0 0 16px;
+    max-width: 720px;
+  }
+
+  textarea, input[type=text] {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    font: inherit;
+    color: var(--ink);
+    background: var(--bg-2);
+    resize: vertical;
+    transition: border-color .12s, box-shadow .12s;
+  }
+  textarea:focus, input[type=text]:focus {
+    outline: none;
+    border-color: var(--purple);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple) 16%, transparent);
+  }
+  textarea { min-height: 140px; line-height: 1.55; }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 32px;
+    padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--bg-2);
+    color: var(--ink);
+    font: inherit;
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  .btn:hover { background: var(--purple-soft); border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); }
+  .btn--primary {
+    background: var(--purple);
+    border-color: var(--purple);
+    color: #fff;
+  }
+  .btn--primary:hover { background: var(--purple-2); border-color: var(--purple-2); }
+  .btn--ghost {
+    border: 1px dashed var(--line);
+    background: transparent;
+    color: var(--muted);
+  }
+  .btn .ico { font-size: 14px; line-height: 1; }
+
+  /* Chips */
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 10px 4px 8px;
+    font-size: 12px;
+    line-height: 1.2;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--bg-2);
+    color: var(--ink);
+  }
+  .chip .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--muted);
+  }
+  .chip .x {
+    margin-left: 2px;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: 14px;
+    line-height: 1;
+    padding: 0 2px;
+  }
+  .chip.must     { background: color-mix(in oklab, var(--red) 8%, var(--bg-2)); border-color: color-mix(in oklab, var(--red) 28%, var(--line)); color: color-mix(in oklab, var(--red) 70%, var(--ink)); }
+  .chip.must .dot { background: var(--red); }
+  .chip.preferred { background: color-mix(in oklab, var(--purple) 8%, var(--bg-2)); border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); color: color-mix(in oklab, var(--purple) 75%, var(--ink)); }
+  .chip.preferred .dot { background: var(--purple); }
+  .chip.nice     { background: color-mix(in oklab, var(--green) 8%, var(--bg-2)); border-color: color-mix(in oklab, var(--green) 28%, var(--line)); color: color-mix(in oklab, var(--green) 65%, var(--ink)); }
+  .chip.nice .dot { background: var(--green); }
+  .chip.constraint { background: color-mix(in oklab, var(--amber) 10%, var(--bg-2)); border-color: color-mix(in oklab, var(--amber) 32%, var(--line)); color: color-mix(in oklab, var(--amber) 70%, var(--ink)); }
+  .chip.constraint .dot { background: var(--amber); }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+
+  /* Section labels */
+  .section-label {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 18px 0 10px;
+  }
+  .section-label .pill-count {
+    background: var(--line-2);
+    color: var(--ink-2);
+    border-radius: 999px;
+    padding: 1px 8px;
+    font-size: 10px;
+  }
+
+  /* Option 1: Prose → chip extraction */
+  .opt1-action-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-top: 12px;
+  }
+  .opt1-action-row .hint { font-size: 12px; color: var(--muted); }
+  .opt1-preview {
+    margin-top: 18px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 16px;
+    background: color-mix(in oklab, var(--purple) 3%, var(--bg-2));
+  }
+  .opt1-preview .preview-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+  .opt1-preview .preview-head .label {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+  }
+  .opt1-preview .preview-head .recompute {
+    font-size: 12px;
+    color: var(--purple);
+    cursor: pointer;
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  .opt1-group {
+    margin-top: 10px;
+  }
+  .opt1-group:first-child { margin-top: 0; }
+  .opt1-group .head {
+    font-size: 11.5px;
+    font-weight: 600;
+    color: var(--ink-2);
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .opt1-group .head .swatch { width: 8px; height: 8px; border-radius: 2px; }
+  .opt1-group .head .swatch.must { background: var(--red); }
+  .opt1-group .head .swatch.preferred { background: var(--purple); }
+  .opt1-group .head .swatch.nice { background: var(--green); }
+  .opt1-group .head .swatch.constraint { background: var(--amber); }
+
+  /* Option 2: slash-command blocks */
+  .editor {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    min-height: 220px;
+    background: var(--bg-2);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .editor:focus-within {
+    border-color: var(--purple);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple) 16%, transparent);
+  }
+  .block {
+    border-left: 3px solid var(--line);
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: var(--line-2);
+    color: var(--ink);
+    font-size: 13px;
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .block .label {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    padding: 2px 6px;
+    border-radius: 4px;
+    white-space: nowrap;
+    flex-shrink: 0;
+    margin-top: 1px;
+  }
+  .block.must { background: color-mix(in oklab, var(--red) 7%, var(--bg-2)); border-left-color: var(--red); }
+  .block.must .label { background: color-mix(in oklab, var(--red) 16%, var(--bg-2)); color: color-mix(in oklab, var(--red) 70%, var(--ink)); }
+  .block.preferred { background: color-mix(in oklab, var(--purple) 6%, var(--bg-2)); border-left-color: var(--purple); }
+  .block.preferred .label { background: color-mix(in oklab, var(--purple) 14%, var(--bg-2)); color: color-mix(in oklab, var(--purple) 70%, var(--ink)); }
+  .block.nice { background: color-mix(in oklab, var(--green) 7%, var(--bg-2)); border-left-color: var(--green); }
+  .block.nice .label { background: color-mix(in oklab, var(--green) 15%, var(--bg-2)); color: color-mix(in oklab, var(--green) 65%, var(--ink)); }
+  .block.constraint { background: color-mix(in oklab, var(--amber) 9%, var(--bg-2)); border-left-color: var(--amber); }
+  .block.constraint .label { background: color-mix(in oklab, var(--amber) 18%, var(--bg-2)); color: color-mix(in oklab, var(--amber) 70%, var(--ink)); }
+  .block .text { flex: 1; }
+  .block .text[contenteditable]:focus { outline: none; }
+  .block-prose { color: var(--ink); font-size: 13.5px; line-height: 1.55; }
+  .block-prose[contenteditable]:focus { outline: none; }
+
+  .slash-menu {
+    margin-top: 6px;
+    display: inline-flex;
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+    font-size: 12px;
+  }
+  .slash-menu .item {
+    padding: 8px 12px;
+    border-right: 1px solid var(--line-2);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--ink-2);
+  }
+  .slash-menu .item:last-child { border-right: none; }
+  .slash-menu .item:hover { background: var(--purple-soft); color: var(--ink); }
+  .slash-menu .item kbd {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10px;
+    background: var(--line-2);
+    border: 1px solid var(--line);
+    padding: 1px 5px;
+    border-radius: 3px;
+    color: var(--muted);
+  }
+
+  /* Option 3: composer + columns */
+  .composer {
+    display: flex;
+    gap: 8px;
+    align-items: stretch;
+  }
+  .composer .select {
+    appearance: none;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 0 30px 0 14px;
+    font: inherit;
+    font-size: 13px;
+    background: var(--bg-2) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%237a6e94' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>") no-repeat right 12px center;
+    color: var(--ink);
+    cursor: pointer;
+    flex-shrink: 0;
+  }
+  .composer .select:focus {
+    outline: none;
+    border-color: var(--purple);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple) 16%, transparent);
+  }
+  .composer input[type=text] { flex: 1; }
+  .columns {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 12px;
+  }
+  .col {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    background: color-mix(in oklab, var(--bg) 60%, var(--bg-2));
+    min-height: 140px;
+  }
+  .col .col-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .col .col-head .swatch { width: 8px; height: 8px; border-radius: 2px; display: inline-block; margin-right: 6px; vertical-align: -1px; }
+  .col .col-head .swatch.must { background: var(--red); }
+  .col .col-head .swatch.preferred { background: var(--purple); }
+  .col .col-head .swatch.nice { background: var(--green); }
+  .col .col-head .swatch.constraint { background: var(--amber); }
+  .col ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+  .col li {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 12.5px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .col li .x { color: var(--muted); cursor: pointer; padding: 0 2px; }
+  .col .empty {
+    font-size: 12px;
+    color: var(--muted);
+    font-style: italic;
+    padding: 4px 2px;
+  }
+
+  /* Option 4: split view */
+  .split {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+  }
+  .split .pane {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 14px;
+    background: var(--bg-2);
+  }
+  .split .pane.right { background: color-mix(in oklab, var(--purple) 3%, var(--bg-2)); }
+  .pane-label {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .pane-label .live {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    color: var(--purple);
+    text-transform: none;
+    letter-spacing: 0;
+    font-family: inherit;
+    font-size: 11.5px;
+  }
+  .pane-label .live .pulse {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--purple);
+    animation: pulse 1.6s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.4; transform: scale(0.85); }
+    50% { opacity: 1; transform: scale(1); }
+  }
+  .split textarea { border: none; padding: 0; min-height: 220px; box-shadow: none !important; }
+  .split textarea:focus { box-shadow: none; }
+  .split .pane.left:focus-within {
+    border-color: var(--purple);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple) 16%, transparent);
+  }
+  .extracted-group {
+    margin-top: 10px;
+  }
+  .extracted-group:first-of-type { margin-top: 0; }
+  .extracted-group .label {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--ink-2);
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .extracted-group .label .swatch { width: 8px; height: 8px; border-radius: 2px; }
+  .extracted-group .label .swatch.must { background: var(--red); }
+  .extracted-group .label .swatch.preferred { background: var(--purple); }
+  .extracted-group .label .swatch.nice { background: var(--green); }
+  .extracted-group .label .swatch.constraint { background: var(--amber); }
+
+  /* Misc */
+  .footer-note {
+    margin-top: 32px;
+    text-align: center;
+    color: var(--muted);
+    font-size: 12px;
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="page-head">
+      <p class="eyebrow">Settings → AI agent → Default role intent</p>
+      <h1>Four ways to capture role intent</h1>
+      <p>All four mockups replace the same single textarea. Each handles must-have / preferred / nice-to-have / constraints differently. Open each, click around — they're interactive enough to feel.</p>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- Option 1 — Prose first, AI extracts chips                              -->
+    <!-- ===================================================================== -->
+    <div class="mockup">
+      <div class="mockup-head">
+        <span class="num">01</span>
+        <h2>Prose first, agent extracts chips</h2>
+        <span class="tag">Recommended</span>
+      </div>
+      <div class="mockup-body">
+        <div class="subcard">
+          <h3>Default role intent</h3>
+          <p class="help">Write naturally. The agent extracts what matters and shows you how it'll read this — review and correct before saving.</p>
+          <textarea id="opt1-textarea">We're hiring senior backend engineers who've shipped product, not just services. Python and Postgres are non-negotiable — that's the stack. Bonus if they've worked with LLMs in production. Must be in EU timezones (±2h of CET) and able to start within 60 days. We don't need PhDs or "10x" engineers, we need owners.</textarea>
+          <div class="opt1-action-row">
+            <span class="hint">~6s to extract · uses ~$0.01 of your role budget</span>
+            <button class="btn btn--primary" id="opt1-extract"><span class="ico">✦</span> Structure for agent</button>
+          </div>
+
+          <div class="opt1-preview" id="opt1-preview" hidden>
+            <div class="preview-head">
+              <span class="label">How the agent will read this</span>
+              <button class="recompute">Re-extract</button>
+            </div>
+
+            <div class="opt1-group">
+              <div class="head"><span class="swatch must"></span> Must-have</div>
+              <div class="chips">
+                <span class="chip must"><span class="dot"></span>Senior backend experience<span class="x">×</span></span>
+                <span class="chip must"><span class="dot"></span>Shipped product, not just services<span class="x">×</span></span>
+                <span class="chip must"><span class="dot"></span>Python<span class="x">×</span></span>
+                <span class="chip must"><span class="dot"></span>Postgres<span class="x">×</span></span>
+              </div>
+            </div>
+
+            <div class="opt1-group">
+              <div class="head"><span class="swatch nice"></span> Nice-to-have</div>
+              <div class="chips">
+                <span class="chip nice"><span class="dot"></span>Production LLM experience<span class="x">×</span></span>
+              </div>
+            </div>
+
+            <div class="opt1-group">
+              <div class="head"><span class="swatch constraint"></span> Constraints</div>
+              <div class="chips">
+                <span class="chip constraint"><span class="dot"></span>EU timezone (±2h CET)<span class="x">×</span></span>
+                <span class="chip constraint"><span class="dot"></span>Start within 60 days<span class="x">×</span></span>
+              </div>
+            </div>
+
+            <div class="opt1-group">
+              <div class="head"><span class="swatch preferred"></span> Anti-signals</div>
+              <div class="chips">
+                <span class="chip" style="background: color-mix(in oklab, var(--ink) 6%, var(--bg-2)); border-color: var(--line); color: var(--ink-2);"><span class="dot" style="background: var(--ink-2);"></span>"10x engineer" framing<span class="x">×</span></span>
+                <span class="chip" style="background: color-mix(in oklab, var(--ink) 6%, var(--bg-2)); border-color: var(--line); color: var(--ink-2);"><span class="dot" style="background: var(--ink-2);"></span>PhD requirement<span class="x">×</span></span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <dl class="mockup-tradeoff">
+        <dt>Strengths</dt><dd>Recruiter writes how they think. Agent does the categorization work — matches your "agent as first-class actor" positioning. Chips are reviewable so trust is preserved.</dd>
+        <dt>Risks</dt><dd>Extraction cost on every save. Recruiters may not notice misclassification if they don't review. Need a clear "stale chips" state when prose changes after extraction.</dd>
+      </dl>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- Option 2 — Slash command inline blocks                                 -->
+    <!-- ===================================================================== -->
+    <div class="mockup">
+      <div class="mockup-head">
+        <span class="num">02</span>
+        <h2>Slash-command inline blocks</h2>
+        <span class="tag">Linear / Notion feel</span>
+      </div>
+      <div class="mockup-body">
+        <div class="subcard">
+          <h3>Default role intent</h3>
+          <p class="help">Type freely. Use <kbd style="font-family:'Geist Mono',ui-monospace,monospace;font-size:11px;background:var(--line-2);border:1px solid var(--line);padding:1px 5px;border-radius:3px;">/</kbd> to add a typed block (must, preferred, nice, constraint). Plain prose still works — only tag what matters.</p>
+          <div class="editor" id="opt2-editor">
+            <div class="block-prose" contenteditable spellcheck="false">We're hiring senior backend engineers who've shipped product, not just services.</div>
+            <div class="block must"><span class="label">Must</span><div class="text" contenteditable spellcheck="false">Python &amp; Postgres — that's the stack</div></div>
+            <div class="block nice"><span class="label">Nice</span><div class="text" contenteditable spellcheck="false">Production LLM experience</div></div>
+            <div class="block constraint"><span class="label">Constraint</span><div class="text" contenteditable spellcheck="false">EU timezone, ±2h CET</div></div>
+            <div class="block constraint"><span class="label">Constraint</span><div class="text" contenteditable spellcheck="false">Start within 60 days</div></div>
+            <div class="block-prose" contenteditable spellcheck="false">No "10x engineer" framing, no PhD gating. We need owners.</div>
+            <div class="slash-menu">
+              <span class="item" data-add="must"><span style="color: var(--red);">●</span> Must-have <kbd>/m</kbd></span>
+              <span class="item" data-add="preferred"><span style="color: var(--purple);">●</span> Preferred <kbd>/p</kbd></span>
+              <span class="item" data-add="nice"><span style="color: var(--green);">●</span> Nice-to-have <kbd>/n</kbd></span>
+              <span class="item" data-add="constraint"><span style="color: var(--amber);">●</span> Constraint <kbd>/c</kbd></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <dl class="mockup-tradeoff">
+        <dt>Strengths</dt><dd>Single source of truth — what you see is what the agent gets. No extraction cost, no stale state. Recruiters who want pure prose can still write pure prose.</dd>
+        <dt>Risks</dt><dd>The slash shortcut needs discoverability — first-time users may miss it. Onboarding has to teach the pattern, otherwise it degrades to a plain textarea.</dd>
+      </dl>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- Option 3 — Composer + columns                                          -->
+    <!-- ===================================================================== -->
+    <div class="mockup">
+      <div class="mockup-head">
+        <span class="num">03</span>
+        <h2>Chip composer + 4 columns</h2>
+        <span class="tag">Most explicit</span>
+      </div>
+      <div class="mockup-body">
+        <div class="subcard">
+          <h3>Default role intent</h3>
+          <p class="help">Add one criterion at a time. Pick the bucket, type it, hit enter. Use this when you want zero ambiguity about what's a hard line vs. a nice-to-have.</p>
+          <div class="composer">
+            <select class="select" id="opt3-select">
+              <option value="must">Must-have</option>
+              <option value="preferred">Preferred</option>
+              <option value="nice">Nice-to-have</option>
+              <option value="constraint">Constraint</option>
+            </select>
+            <input type="text" id="opt3-input" placeholder="e.g. Shipped product, not just services" />
+            <button class="btn btn--primary" id="opt3-add">Add</button>
+          </div>
+          <div class="columns">
+            <div class="col">
+              <div class="col-head"><span><span class="swatch must"></span>Must</span><span>3</span></div>
+              <ul data-bucket="must">
+                <li><span>Senior backend experience</span><span class="x">×</span></li>
+                <li><span>Python &amp; Postgres</span><span class="x">×</span></li>
+                <li><span>Shipped product, not just services</span><span class="x">×</span></li>
+              </ul>
+            </div>
+            <div class="col">
+              <div class="col-head"><span><span class="swatch preferred"></span>Preferred</span><span>0</span></div>
+              <ul data-bucket="preferred"></ul>
+              <div class="empty">Nothing yet</div>
+            </div>
+            <div class="col">
+              <div class="col-head"><span><span class="swatch nice"></span>Nice</span><span>1</span></div>
+              <ul data-bucket="nice">
+                <li><span>Production LLM experience</span><span class="x">×</span></li>
+              </ul>
+            </div>
+            <div class="col">
+              <div class="col-head"><span><span class="swatch constraint"></span>Constraint</span><span>2</span></div>
+              <ul data-bucket="constraint">
+                <li><span>EU timezone (±2h CET)</span><span class="x">×</span></li>
+                <li><span>Start within 60 days</span><span class="x">×</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+      <dl class="mockup-tradeoff">
+        <dt>Strengths</dt><dd>Zero ambiguity. Every criterion has a category. Easy to scan, easy to delete, easy to reorder. Best if recruiters already think in checklists.</dd>
+        <dt>Risks</dt><dd>Contradicts your microcopy ("not a checklist of rules"). High friction — forces categorization before the recruiter has thought it through. Loses nuance like "they probably get it if they've worked at Stripe."</dd>
+      </dl>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- Option 4 — Split: prose left, live structure right                     -->
+    <!-- ===================================================================== -->
+    <div class="mockup">
+      <div class="mockup-head">
+        <span class="num">04</span>
+        <h2>Split view: prose ↔ live agent reading</h2>
+        <span class="tag">Highest transparency</span>
+      </div>
+      <div class="mockup-body">
+        <div class="subcard">
+          <h3>Default role intent</h3>
+          <p class="help">Write on the left. The right pane shows what the agent has heard, updating as you pause. Click any chip to highlight where it came from.</p>
+          <div class="split">
+            <div class="pane left">
+              <div class="pane-label"><span>Your intent</span><span style="color: var(--muted); font-family:inherit; text-transform:none; letter-spacing:0;">312 chars</span></div>
+              <textarea>We're hiring senior backend engineers who've shipped product, not just services. Python and Postgres are non-negotiable — that's the stack. Bonus if they've worked with LLMs in production. Must be in EU timezones (±2h of CET) and able to start within 60 days. We don't need PhDs or "10x" engineers, we need owners.</textarea>
+            </div>
+            <div class="pane right">
+              <div class="pane-label"><span>Agent will read as</span><span class="live"><span class="pulse"></span>live</span></div>
+              <div class="extracted-group">
+                <div class="label"><span class="swatch must"></span>Must-have</div>
+                <div class="chips">
+                  <span class="chip must"><span class="dot"></span>Senior backend</span>
+                  <span class="chip must"><span class="dot"></span>Shipped product</span>
+                  <span class="chip must"><span class="dot"></span>Python</span>
+                  <span class="chip must"><span class="dot"></span>Postgres</span>
+                </div>
+              </div>
+              <div class="extracted-group">
+                <div class="label"><span class="swatch nice"></span>Nice-to-have</div>
+                <div class="chips">
+                  <span class="chip nice"><span class="dot"></span>Production LLM experience</span>
+                </div>
+              </div>
+              <div class="extracted-group">
+                <div class="label"><span class="swatch constraint"></span>Constraints</div>
+                <div class="chips">
+                  <span class="chip constraint"><span class="dot"></span>EU timezone (±2h CET)</span>
+                  <span class="chip constraint"><span class="dot"></span>60-day start</span>
+                </div>
+              </div>
+              <div style="margin-top: 12px; font-size: 11.5px; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 10px;">
+                Click any chip to see the source sentence. Edit prose to retrain.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <dl class="mockup-tradeoff">
+        <dt>Strengths</dt><dd>Maximum trust — recruiter sees exactly what the agent inferred, in real time. Best for the "agent as first-class actor" pitch: makes the agent's reasoning visible.</dd>
+        <dt>Risks</dt><dd>Heaviest to build — needs a streaming extraction loop and source-mapping. More cost per keystroke (debounced). Two-pane layout is awkward on narrow screens.</dd>
+      </dl>
+    </div>
+
+    <p class="footer-note">Mockups are static-ish — interactive enough to evaluate the pattern. Real implementation would wire up to your settings store.</p>
+  </div>
+
+<script>
+  // Option 1 — show preview on click
+  document.getElementById('opt1-extract').addEventListener('click', () => {
+    const preview = document.getElementById('opt1-preview');
+    const btn = document.getElementById('opt1-extract');
+    btn.textContent = 'Extracting…';
+    btn.disabled = true;
+    setTimeout(() => {
+      preview.hidden = false;
+      btn.innerHTML = '<span class="ico">✦</span> Re-structure';
+      btn.disabled = false;
+      preview.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    }, 600);
+  });
+
+  // Chip ×s remove on click
+  document.body.addEventListener('click', (e) => {
+    if (e.target.classList.contains('x')) {
+      const chip = e.target.closest('.chip, li');
+      if (chip) chip.remove();
+    }
+  });
+
+  // Option 2 — slash menu adds blocks
+  document.querySelectorAll('.slash-menu .item').forEach((item) => {
+    item.addEventListener('click', () => {
+      const type = item.dataset.add;
+      const labels = { must: 'Must', preferred: 'Preferred', nice: 'Nice', constraint: 'Constraint' };
+      const block = document.createElement('div');
+      block.className = 'block ' + type;
+      block.innerHTML = `<span class="label">${labels[type]}</span><div class="text" contenteditable spellcheck="false">Type here…</div>`;
+      const menu = document.querySelector('#opt2-editor .slash-menu');
+      menu.parentNode.insertBefore(block, menu);
+      block.querySelector('.text').focus();
+      const sel = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(block.querySelector('.text'));
+      sel.removeAllRanges();
+      sel.addRange(range);
+    });
+  });
+
+  // Option 3 — add chip to column
+  function addOpt3() {
+    const select = document.getElementById('opt3-select');
+    const input = document.getElementById('opt3-input');
+    const value = input.value.trim();
+    if (!value) return;
+    const bucket = select.value;
+    const ul = document.querySelector(`.col ul[data-bucket="${bucket}"]`);
+    const li = document.createElement('li');
+    li.innerHTML = `<span></span><span class="x">×</span>`;
+    li.firstChild.textContent = value;
+    ul.appendChild(li);
+    input.value = '';
+    // bump count
+    const head = ul.parentElement.querySelector('.col-head span:last-child');
+    head.textContent = ul.children.length;
+    // hide empty
+    const empty = ul.parentElement.querySelector('.empty');
+    if (empty) empty.remove();
+    input.focus();
+  }
+  document.getElementById('opt3-add').addEventListener('click', addOpt3);
+  document.getElementById('opt3-input').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); addOpt3(); }
+  });
+</script>
+</body>
+</html>

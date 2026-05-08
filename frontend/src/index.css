@@ -13,22 +13,36 @@
   --bg: #f7f4fb;
   --bg-2: #ffffff;
   --bg-3: #efe8f7;
-  --purple: #7f39fb;
-  --purple-2: #6b21e8;
-  --purple-soft: #f0e7fb;
+  /* Brand purple — v7, realigned to the agent-OFF hero anchor.
+     v6 (#b450ff) was the agent-ON glow — too bright for buttons,
+     reads as a "live worker" colour. The brand should default to the
+     agent-quiet hero's deep purple and let agent-on be a special
+     vivid state. So --purple now matches `--grad-dark-vert` start
+     (#2a1854); --purple-2 matches the gradient end (#1d1130) for
+     hover. Drives every purple in the system: buttons, accents,
+     kickers, marketing CTA, .btn-purple. The agent-running hero
+     keeps its hard-coded vivid recipe — the brightness is the
+     signal that the agent is live, not the brand. */
+  --purple: #2a1854;
+  --purple-2: #1d1130;
+  --purple-soft: #ede5f8;
 
   /* v5 — deep-purple dark surfaces (HANDOFF unified-headers.md §1).
      Bumped up from v4 (#100a18 / #0d0719 / #1a0f2e / #2a1f3d) so the
      purple actually reads as purple, not black. Applies to the auth
      editorial pane, demo dark panels, IDE chrome, reporting narrator,
-     and every platform AgentHeader. */
+     and every platform AgentHeader. Re-anchored on --purple v6. */
   --ink-deep: #1a1228;       /* deepest panel bg, IDE chrome */
   --ink-deep-2: #1d1130;     /* card surface / gradient end */
-  --ink-deep-3: #2a1854;     /* mid panel / gradient start */
+  --ink-deep-3: #2a1854;     /* mid panel / gradient start (matches agent-quiet anchor) */
   --line-dark: #3a2a55;      /* border on dark panels */
-  --purple-glow: rgba(167, 139, 250, 0.45); /* atmospheric blob */
-  --purple-lav: #a78bfa;     /* lavender accent text on dark */
-  /* Signature dark gradients — same tokens, retuned to the new base */
+  --purple-glow: rgba(196, 165, 253, 0.45); /* atmospheric blob — hero top-right lavender */
+  --purple-lav: #c4a5fd;     /* lavender accent (hero top-right blob, sans alpha) */
+  /* Signature dark gradients — same family as the agent-running hero,
+     muted. Powers the agent-quiet (off) hero variant and the demo /
+     IDE chrome panels. The deeper #2a1854 anchor is the same hue as
+     --purple v6, just much darker — keep these in lockstep with
+     `.agent-header.agent-running` so on/off variants read as siblings. */
   --grad-dark-vert: linear-gradient(180deg, #2a1854 0%, #1d1130 100%);
   --grad-dark-diag: linear-gradient(135deg, #2a1854 0%, #1d1130 100%);
   --grad-dark-card: linear-gradient(160deg, #2a1854 0%, #3a2a55 100%);
@@ -138,9 +152,14 @@ html[data-theme="dark"] {
   --bg: #0e0a18;
   --bg-2: #16102a;
   --bg-3: #1c1535;
-  --purple: #9a5bff;
-  --purple-2: #b689ff;
-  --purple-soft: #2a1b4d;
+  /* Dark-mode --purple v7 — deep-purple sibling of the light value
+     (#2a1854), elevated for legibility on dark surfaces. The light
+     mode anchor #2a1854 would disappear against #0e0a18, so we lift
+     it into the same hue family but with enough luminance to clear
+     AA contrast for normal-size text. */
+  --purple: #6e4ba8;
+  --purple-2: #5a3d8a;
+  --purple-soft: #2e1a4e;
   --workable: #53a3ff;
   --workable-dark: #2d8cff;
   --shadow-sm: 0 1px 0 rgba(0, 0, 0, 0.3), 0 2px 6px rgba(0, 0, 0, 0.4);
@@ -810,7 +829,7 @@ html[data-theme="dark"] {
 }
 
 .settings-top-gap {
-  margin-top: 18px;
+  margin-top: 24px;
 }
 
 .settings-toggle-list {
@@ -886,6 +905,12 @@ html[data-theme="dark"] {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.settings-save-row {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line-2);
 }
 
 .settings-inline-actions.end {
@@ -1023,7 +1048,7 @@ html[data-theme="dark"] {
 }
 
 .wk-summary {
-  margin-top: 14px;
+  margin-top: 20px;
   padding: 14px 16px;
   border: 1px solid var(--line-2);
   border-radius: 12px;
@@ -1063,7 +1088,7 @@ html[data-theme="dark"] {
 .wk-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 14px;
+  gap: 20px;
 }
 
 .wk-mode-card {
@@ -1168,6 +1193,7 @@ html[data-theme="dark"] {
   padding: 14px 16px;
   border: 1px solid var(--line-2);
   border-radius: 12px;
+  margin-top: 20px;
 }
 
 .settings-banner.warning {
@@ -8575,19 +8601,17 @@ button.eng-badge-button:focus-visible {
 /* Compact variant deprecated — normalized to default height. */
 .agent-header.compact { padding: 32px 32px 36px; }
 
-/* === ON: vivid, saturated purple wash. Active worker, live brand colour.
-   Every stop is derived from --purple / --purple-lav so the agent-on hero,
-   the marketing CTA banner, and every primary button stay on the same
-   purple. Touch --purple to retune all three at once. === */
+/* === ON: vivid, saturated purple wash. The reference for the brand
+   purple — every stop here is the canonical agent-on look. The bright
+   rgba(180,80,255) radial accent is the same hue as --purple v6
+   (#b450ff sans alpha), so buttons / kickers / .btn-purple visually
+   align with the gradient's dominant purple without us having to
+   color-mix the gradient itself away from its tuned stops. === */
 .agent-header.agent-running {
   background:
-    radial-gradient(ellipse 80% 60% at 75% 0%,
-      color-mix(in oklab, var(--purple-lav) 75%, transparent) 0%, transparent 60%),
-    radial-gradient(ellipse 70% 80% at 10% 100%,
-      color-mix(in oklab, var(--purple) 60%, transparent) 0%, transparent 65%),
-    linear-gradient(180deg,
-      color-mix(in oklab, var(--purple) 55%, #000) 0%,
-      color-mix(in oklab, var(--purple) 30%, #000) 100%);
+    radial-gradient(ellipse 80% 60% at 75% 0%,  rgba(196,165,253,0.70) 0%, transparent 60%),
+    radial-gradient(ellipse 70% 80% at 10% 100%, rgba(180,80,255,0.55) 0%, transparent 65%),
+    linear-gradient(180deg, #3a1d6e 0%, #251248 100%);
   animation: agentHeaderPulse 6s ease-in-out infinite;
 }
 
@@ -8603,8 +8627,7 @@ button.eng-badge-button:focus-visible {
   right: 18%;
   width: 560px;
   height: 560px;
-  background: radial-gradient(circle,
-    color-mix(in oklab, var(--purple-lav) 50%, transparent), transparent 60%);
+  background: radial-gradient(circle, rgba(220,200,255,0.42), transparent 60%);
   filter: blur(20px);
   pointer-events: none;
   animation: agentGlowDrift1 9s ease-in-out infinite;
@@ -8617,8 +8640,7 @@ button.eng-badge-button:focus-visible {
   left: -5%;
   width: 540px;
   height: 540px;
-  background: radial-gradient(circle,
-    color-mix(in oklab, var(--purple) 50%, transparent), transparent 65%);
+  background: radial-gradient(circle, rgba(180,80,255,0.45), transparent 65%);
   pointer-events: none;
   animation: agentGlowDrift2 11s ease-in-out infinite;
 }

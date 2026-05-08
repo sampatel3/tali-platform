@@ -266,6 +266,7 @@ from .api.v1.users_fastapi import (
 )
 from .api.v1.assessments import router as assessments_router
 from .api.v1.organizations import router as organizations_router
+from .domains.identity_access.org_criteria_routes import router as org_criteria_router
 from .api.v1.webhooks import router as webhooks_router
 from .api.v1.tasks import router as tasks_router
 from .api.v1.analytics import router as analytics_router
@@ -311,6 +312,7 @@ app.include_router(
 
 app.include_router(assessments_router, prefix="/api/v1")
 app.include_router(organizations_router, prefix="/api/v1")
+app.include_router(org_criteria_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")
@@ -323,6 +325,9 @@ app.include_router(scoring_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
+from .decision_policy.routes import router as decision_policy_router  # noqa: E402
+
+app.include_router(decision_policy_router, prefix="/api/v1")
 # HANDOFF v2 §3 — public share viewer is mounted at /share/:token
 # (no /api/v1 prefix) so the URL the recruiter copy-pastes works in
 # any browser without auth and without exposing the API surface.

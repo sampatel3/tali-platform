@@ -19,7 +19,7 @@ from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v4.2026-05-08"
+PROMPT_VERSION = "agent.v5.policy-aware.bucketed.2026-05-08"
 
 
 def _render_bucketed_criteria(role: Role) -> str:
@@ -82,6 +82,15 @@ ALLOWLIST — you may ONLY call tools in this list:
     status="already_exists". Refuses with status="misconfigured" when the role has
     multiple linked tasks; in that case the recruiter must pick.
 
+  POLICY (ALWAYS call before any queue_* tool):
+  - evaluate_policy: runs the deterministic decision policy for one application.
+    Pulls pre-screen / CV-scoring / assessment-scoring sub-agents, reads recent
+    manual recruiter actions, and returns: decision_type, decision_point, confidence,
+    reasoning, rule_path, policy_revision_id, intent_overrode, skipped_due_to_manual.
+    If skipped_due_to_manual=True the recruiter has already acted — DO NOT queue.
+    If decision_type is one of queue_*, you may pass the same reasoning + the
+    rule_path/policy_revision_id (in evidence) into the matching queue tool.
+
   QUEUE FOR RECRUITER APPROVAL — recruiter sees these in their pending panel and clicks approve/override:
   - queue_advance_decision: advance candidate to technical interview
   - queue_reject_decision: reject after assessment / review
@@ -99,11 +108,14 @@ PERMANENTLY FORBIDDEN, regardless of how confident you are:
 QUEUE RULES:
 - For every queued decision, supply: 1-3 sentence reasoning, an evidence object citing
   the scores/CV excerpts/criteria you relied on, and a confidence in [0, 1].
+- ALWAYS run evaluate_policy first. The deterministic policy is the source of truth.
+  When the policy says queue, you queue. When the policy says skip / no_action, you
+  do NOT queue (call agent_run_complete instead).
 - Do not queue the same candidate more than once per cycle (idempotency would block it anyway).
 - queue_skip_assessment_reject_decision is the most impactful tool — the candidate never
-  gets to take the assessment. Use ONLY when CV-match AND pre-screen are clearly below
-  threshold AND requirements are not met. Otherwise prefer queue_reject_decision (post-assessment)
-  or just wait.
+  gets to take the assessment. Use ONLY when the policy returns
+  queue_skip_assessment_reject_decision. Otherwise prefer queue_reject_decision
+  (post-assessment) or just wait.
 - When uncertain, do NOT queue. Better to call agent_run_complete with no decision than to
   queue a weak one — the next event/cron will give you another shot.
 

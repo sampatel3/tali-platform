@@ -1,0 +1,561 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Default role intent — final design</title>
+<style>
+  :root {
+    --ink: #1a1230;
+    --ink-2: #4a3d6b;
+    --muted: #7a6e94;
+    --line: #e8e2ee;
+    --line-2: #f1edf5;
+    --bg: #faf8fd;
+    --bg-2: #ffffff;
+    --purple: #7f39fb;
+    --purple-2: #6b21e8;
+    --purple-soft: #f0e7fb;
+    --purple-lav: #a78bfa;
+
+    /* Bucket tones — all derived from --purple */
+    --bucket-must-bg: color-mix(in oklab, var(--purple-2) 10%, var(--bg-2));
+    --bucket-must-border: color-mix(in oklab, var(--purple-2) 35%, var(--line));
+    --bucket-must-text: var(--purple-2);
+    --bucket-must-dot: var(--purple-2);
+
+    --bucket-pref-bg: color-mix(in oklab, var(--purple) 7%, var(--bg-2));
+    --bucket-pref-border: color-mix(in oklab, var(--purple) 24%, var(--line));
+    --bucket-pref-text: var(--purple);
+    --bucket-pref-dot: var(--purple);
+
+    --bucket-cons-bg: color-mix(in oklab, var(--purple-lav) 10%, var(--bg-2));
+    --bucket-cons-border: color-mix(in oklab, var(--purple-lav) 30%, var(--line));
+    --bucket-cons-text: color-mix(in oklab, var(--purple-lav) 65%, var(--ink));
+    --bucket-cons-dot: var(--purple-lav);
+
+    --radius-sm: 10px;
+    --radius: 14px;
+    --radius-lg: 22px;
+    --shadow-card: 0 1px 2px rgba(26, 18, 48, .04), 0 6px 20px rgba(26, 18, 48, .04);
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Inter', system-ui, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    font-size: 14px;
+    line-height: 1.5;
+    padding: 48px 24px 96px;
+  }
+  .page { max-width: 1100px; margin: 0 auto; }
+  .page-head { margin-bottom: 32px; }
+  .page-head .eyebrow {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted); margin: 0 0 6px;
+  }
+  .page-head h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: -0.01em; }
+  .page-head p { margin: 0; color: var(--ink-2); max-width: 760px; }
+
+  .mockup {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-card);
+    margin: 28px 0;
+    overflow: hidden;
+  }
+  .mockup-head {
+    padding: 18px 24px;
+    border-bottom: 1px solid var(--line-2);
+    display: flex; align-items: baseline; gap: 12px;
+    background: linear-gradient(180deg, color-mix(in oklab, var(--purple) 4%, var(--bg-2)) 0%, var(--bg-2) 100%);
+  }
+  .mockup-head .num {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 11px; color: var(--purple); background: var(--purple-soft);
+    padding: 2px 8px; border-radius: 999px; font-weight: 600;
+  }
+  .mockup-head h2 { font-size: 16px; margin: 0; font-weight: 600; }
+  .mockup-head .tag {
+    margin-left: auto;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.06em;
+  }
+  .mockup-body { padding: 24px; }
+
+  .subcard {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px;
+    background: var(--bg-2);
+  }
+  .subcard h3 { font-size: 15px; margin: 0 0 6px; font-weight: 600; }
+  .subcard p.help {
+    font-size: 12.5px; color: var(--muted); margin: 0 0 16px; max-width: 720px;
+  }
+
+  textarea, input[type=text] {
+    width: 100%;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    font: inherit; color: var(--ink); background: var(--bg-2);
+    transition: border-color .12s, box-shadow .12s;
+  }
+  textarea:focus, input[type=text]:focus {
+    outline: none; border-color: var(--purple);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple) 16%, transparent);
+  }
+
+  .btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    height: 32px; padding: 0 14px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--bg-2); color: var(--ink);
+    font: inherit; font-size: 12.5px; cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  .btn:hover { background: var(--purple-soft); border-color: color-mix(in oklab, var(--purple) 30%, var(--line)); }
+  .btn--primary { background: var(--purple); border-color: var(--purple); color: #fff; }
+  .btn--primary:hover { background: var(--purple-2); border-color: var(--purple-2); }
+  .btn--ghost { background: transparent; color: var(--muted); }
+  .btn .ico { font-size: 14px; line-height: 1; }
+
+  /* Composer */
+  .composer {
+    display: flex; gap: 8px; align-items: stretch;
+  }
+  .composer .select {
+    appearance: none;
+    border: 1px solid var(--line); border-radius: var(--radius-sm);
+    padding: 0 30px 0 14px; font: inherit; font-size: 13px;
+    background: var(--bg-2) url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%237a6e94' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>") no-repeat right 12px center;
+    color: var(--ink); cursor: pointer; flex-shrink: 0;
+  }
+  .composer .select:focus {
+    outline: none; border-color: var(--purple);
+    box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple) 16%, transparent);
+  }
+  .composer input[type=text] { flex: 1; }
+
+  /* Columns */
+  .columns {
+    margin-top: 18px;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 12px;
+  }
+  .col {
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    background: color-mix(in oklab, var(--bg) 60%, var(--bg-2));
+    min-height: 160px;
+    display: flex;
+    flex-direction: column;
+  }
+  .col .col-head {
+    display: flex; align-items: center; justify-content: space-between;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--ink-2); margin-bottom: 10px;
+  }
+  .col .col-head .swatch {
+    width: 8px; height: 8px; border-radius: 2px; display: inline-block;
+    margin-right: 8px; vertical-align: -1px;
+  }
+  .col .col-head .swatch.must { background: var(--bucket-must-dot); }
+  .col .col-head .swatch.preferred { background: var(--bucket-pref-dot); }
+  .col .col-head .swatch.constraint { background: var(--bucket-cons-dot); }
+  .col .col-head .count {
+    background: var(--bg-2); border: 1px solid var(--line);
+    color: var(--muted); font-size: 10px;
+    padding: 1px 7px; border-radius: 999px;
+  }
+  .col ul { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; flex: 1; }
+  .col li {
+    background: var(--bg-2);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 7px 8px 7px 10px;
+    font-size: 12.5px;
+    display: flex; align-items: flex-start; justify-content: space-between; gap: 6px;
+    transition: border-color .12s, background .12s;
+  }
+  .col li:hover { border-color: color-mix(in oklab, var(--purple) 25%, var(--line)); }
+  .col li .text { line-height: 1.35; }
+  .col li .x {
+    color: var(--muted); cursor: pointer; padding: 0 2px;
+    opacity: 0; transition: opacity .12s;
+    flex-shrink: 0; line-height: 1;
+  }
+  .col li:hover .x { opacity: 1; }
+
+  /* Chip bucket variants — for pills */
+  .col[data-bucket="must"] li { background: var(--bucket-must-bg); border-color: var(--bucket-must-border); color: var(--bucket-must-text); }
+  .col[data-bucket="preferred"] li { background: var(--bucket-pref-bg); border-color: var(--bucket-pref-border); color: var(--bucket-pref-text); }
+  .col[data-bucket="constraint"] li { background: var(--bucket-cons-bg); border-color: var(--bucket-cons-border); color: var(--bucket-cons-text); }
+
+  /* Provenance source dot on role chips */
+  .source-dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    flex-shrink: 0;
+    margin-top: 5px;
+  }
+  .source-dot.workspace { background: var(--purple-lav); }
+  .source-dot.role { background: var(--purple-2); }
+
+  .col .empty {
+    font-size: 12px; color: var(--muted); font-style: italic;
+    padding: 8px 4px; text-align: center;
+  }
+
+  /* Threshold slider — purple aligned */
+  .slider-card {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 20px;
+    background: var(--bg-2);
+    max-width: 560px;
+  }
+  .slider-card h3 { font-size: 15px; margin: 0 0 6px; font-weight: 600; }
+  .slider-card p.help { font-size: 12.5px; color: var(--muted); margin: 0 0 16px; }
+
+  .slider-label {
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.08em;
+    color: var(--muted);
+    margin-bottom: 12px;
+    display: flex; justify-content: space-between; align-items: baseline;
+  }
+  .slider-label .value {
+    font-size: 22px; color: var(--ink); font-family: 'Geist', system-ui, sans-serif;
+    text-transform: none; letter-spacing: -0.01em; font-weight: 600;
+  }
+  .slider-label .value .of { color: var(--muted); font-size: 13px; font-weight: 400; }
+
+  /* Restyle the native range input */
+  .range {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; background: transparent;
+    margin: 0; padding: 12px 0;
+    cursor: pointer;
+  }
+  .range:focus { outline: none; }
+
+  /* WebKit track + thumb */
+  .range::-webkit-slider-runnable-track {
+    height: 6px;
+    border-radius: 999px;
+    background: linear-gradient(
+      to right,
+      var(--purple) 0%,
+      var(--purple) calc(var(--val, 0) * 1%),
+      color-mix(in oklab, var(--purple) 14%, var(--line-2)) calc(var(--val, 0) * 1%),
+      color-mix(in oklab, var(--purple) 14%, var(--line-2)) 100%
+    );
+  }
+  .range::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 18px; height: 18px;
+    border-radius: 50%;
+    background: var(--bg-2);
+    border: 2px solid var(--purple);
+    box-shadow: 0 1px 3px rgba(127, 57, 251, .25);
+    margin-top: -6px;
+    transition: transform .12s, box-shadow .12s;
+  }
+  .range:hover::-webkit-slider-thumb {
+    box-shadow: 0 0 0 6px color-mix(in oklab, var(--purple) 12%, transparent);
+  }
+  .range:active::-webkit-slider-thumb,
+  .range:focus::-webkit-slider-thumb {
+    box-shadow: 0 0 0 8px color-mix(in oklab, var(--purple) 18%, transparent);
+    background: var(--purple);
+  }
+
+  /* Firefox */
+  .range::-moz-range-track {
+    height: 6px; border-radius: 999px;
+    background: color-mix(in oklab, var(--purple) 14%, var(--line-2));
+  }
+  .range::-moz-range-progress {
+    height: 6px; border-radius: 999px;
+    background: var(--purple);
+  }
+  .range::-moz-range-thumb {
+    width: 18px; height: 18px; border-radius: 50%;
+    background: var(--bg-2); border: 2px solid var(--purple);
+    box-shadow: 0 1px 3px rgba(127, 57, 251, .25);
+    cursor: pointer;
+  }
+
+  .range-ticks {
+    display: flex; justify-content: space-between;
+    font-size: 11px; color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* Sync banner / role state pill */
+  .role-state {
+    display: flex; align-items: center; gap: 10px;
+    margin-bottom: 16px;
+    padding: 10px 14px;
+    background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
+    border: 1px solid color-mix(in oklab, var(--purple) 18%, var(--line));
+    border-radius: var(--radius-sm);
+    font-size: 12.5px;
+  }
+  .role-state .indicator {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: var(--purple);
+    flex-shrink: 0;
+  }
+  .role-state .text { color: var(--ink-2); }
+  .role-state .text strong { color: var(--ink); font-weight: 600; }
+  .role-state .actions { margin-left: auto; display: flex; gap: 6px; }
+  .role-state .btn { height: 28px; padding: 0 12px; font-size: 12px; }
+
+  /* Source legend */
+  .source-legend {
+    display: inline-flex; gap: 14px;
+    font-size: 11.5px; color: var(--muted);
+    margin-bottom: 14px;
+  }
+  .source-legend .item { display: flex; align-items: center; gap: 5px; }
+  .source-legend .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .source-legend .dot.workspace { background: var(--purple-lav); }
+  .source-legend .dot.role { background: var(--purple-2); }
+
+  /* Section divider */
+  .section-divider {
+    margin: 48px 0 24px;
+    text-align: center;
+  }
+  .section-divider .line {
+    height: 1px; background: var(--line);
+  }
+  .section-divider .label {
+    display: inline-block;
+    background: var(--bg);
+    color: var(--muted);
+    padding: 0 16px;
+    font-family: 'Geist Mono', ui-monospace, monospace;
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    margin-top: -10px;
+  }
+</style>
+</head>
+<body>
+  <div class="page">
+    <div class="page-head">
+      <p class="eyebrow">Settings → AI agent → Default role intent (final design)</p>
+      <h1>Composer + columns, with workspace sync</h1>
+      <p>Same component lives in two places: <strong>workspace defaults</strong> (Settings) and <strong>per-role intent</strong> (role page). Role inherits a snapshot at first edit; recruiter clicks <strong>Sync workspace</strong> to refresh workspace chips without losing role-only additions. Bucket colors are tones of <code>--purple</code>.</p>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- 1. Workspace defaults                                                  -->
+    <!-- ===================================================================== -->
+    <div class="mockup">
+      <div class="mockup-head">
+        <span class="num">A</span>
+        <h2>Workspace defaults — Settings → AI agent</h2>
+        <span class="tag">Source of truth</span>
+      </div>
+      <div class="mockup-body">
+        <div class="subcard">
+          <h3>Default role criteria</h3>
+          <p class="help">Set once. Every new role inherits these; recruiters can customize per role. Add one criterion at a time and pick the bucket. The agent reads must as the bar, preferred as positive signals, and constraints as logistics.</p>
+
+          <div class="composer">
+            <select class="select" id="ws-select">
+              <option value="must">Must-have</option>
+              <option value="preferred">Preferred</option>
+              <option value="constraint">Constraint</option>
+            </select>
+            <input type="text" id="ws-input" placeholder="e.g. Senior backend engineer who's shipped product" />
+            <button class="btn btn--primary" id="ws-add">Add</button>
+          </div>
+
+          <div class="columns" id="ws-columns">
+            <div class="col" data-bucket="must">
+              <div class="col-head"><span><span class="swatch must"></span>Must</span><span class="count">3</span></div>
+              <ul>
+                <li><span class="text">Senior backend (5+ yrs)</span><span class="x">×</span></li>
+                <li><span class="text">Python &amp; Postgres</span><span class="x">×</span></li>
+                <li><span class="text">Shipped product, not just services</span><span class="x">×</span></li>
+              </ul>
+            </div>
+            <div class="col" data-bucket="preferred">
+              <div class="col-head"><span><span class="swatch preferred"></span>Preferred</span><span class="count">2</span></div>
+              <ul>
+                <li><span class="text">Production LLM experience</span><span class="x">×</span></li>
+                <li><span class="text">Worked at Stripe / Linear / Vercel</span><span class="x">×</span></li>
+              </ul>
+            </div>
+            <div class="col" data-bucket="constraint">
+              <div class="col-head"><span><span class="swatch constraint"></span>Constraint</span><span class="count">2</span></div>
+              <ul>
+                <li><span class="text">EU timezone (±2h CET)</span><span class="x">×</span></li>
+                <li><span class="text">Start within 60 days</span><span class="x">×</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- 2. Role page                                                           -->
+    <!-- ===================================================================== -->
+    <div class="mockup">
+      <div class="mockup-head">
+        <span class="num">B</span>
+        <h2>Per-role intent — Role page → AI agent settings</h2>
+        <span class="tag">Inherits + customizes</span>
+      </div>
+      <div class="mockup-body">
+        <div class="subcard">
+          <h3>Role criteria</h3>
+          <p class="help">This role started from your workspace defaults. Edit, remove, or add chips freely. Use <strong>Sync workspace</strong> to pull in any workspace updates — your role-added chips are preserved.</p>
+
+          <div class="role-state">
+            <span class="indicator"></span>
+            <span class="text"><strong>Customized for this role</strong> · 5 from workspace · 2 added here</span>
+            <span class="actions">
+              <button class="btn"><span class="ico">↻</span> Sync workspace</button>
+              <button class="btn btn--ghost">Reset to defaults</button>
+            </span>
+          </div>
+
+          <div class="source-legend">
+            <span class="item"><span class="dot workspace"></span>From workspace</span>
+            <span class="item"><span class="dot role"></span>Added on this role</span>
+          </div>
+
+          <div class="composer">
+            <select class="select" id="role-select">
+              <option value="must">Must-have</option>
+              <option value="preferred">Preferred</option>
+              <option value="constraint">Constraint</option>
+            </select>
+            <input type="text" id="role-input" placeholder="Add a role-specific criterion…" />
+            <button class="btn btn--primary" id="role-add">Add</button>
+          </div>
+
+          <div class="columns" id="role-columns">
+            <div class="col" data-bucket="must">
+              <div class="col-head"><span><span class="swatch must"></span>Must</span><span class="count">4</span></div>
+              <ul>
+                <li><span class="source-dot workspace" title="From workspace"></span><span class="text">Senior backend (5+ yrs)</span><span class="x">×</span></li>
+                <li><span class="source-dot workspace" title="From workspace"></span><span class="text">Python &amp; Postgres</span><span class="x">×</span></li>
+                <li><span class="source-dot workspace" title="From workspace"></span><span class="text">Shipped product, not just services</span><span class="x">×</span></li>
+                <li><span class="source-dot role" title="Added on this role"></span><span class="text">Built async messaging at scale</span><span class="x">×</span></li>
+              </ul>
+            </div>
+            <div class="col" data-bucket="preferred">
+              <div class="col-head"><span><span class="swatch preferred"></span>Preferred</span><span class="count">2</span></div>
+              <ul>
+                <li><span class="source-dot workspace" title="From workspace"></span><span class="text">Production LLM experience</span><span class="x">×</span></li>
+                <li><span class="source-dot role" title="Added on this role"></span><span class="text">Open-source contributor</span><span class="x">×</span></li>
+              </ul>
+            </div>
+            <div class="col" data-bucket="constraint">
+              <div class="col-head"><span><span class="swatch constraint"></span>Constraint</span><span class="count">1</span></div>
+              <ul>
+                <li><span class="source-dot workspace" title="From workspace"></span><span class="text">EU timezone (±2h CET)</span><span class="x">×</span></li>
+              </ul>
+            </div>
+          </div>
+
+          <p style="font-size: 11.5px; color: var(--muted); margin: 14px 0 0;">
+            Tip: removed a workspace chip on this role? <a href="#" style="color: var(--purple); text-decoration: none;">Show 1 hidden</a>
+          </p>
+        </div>
+      </div>
+    </div>
+
+    <!-- ===================================================================== -->
+    <!-- 3. Threshold slider, fixed                                             -->
+    <!-- ===================================================================== -->
+    <div class="section-divider">
+      <div class="line"></div>
+      <span class="label">Bonus fix · Threshold slider</span>
+    </div>
+
+    <div class="mockup">
+      <div class="mockup-head">
+        <span class="num">C</span>
+        <h2>Default score threshold — purple-aligned</h2>
+        <span class="tag">Design system fix</span>
+      </div>
+      <div class="mockup-body">
+        <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 16px;">
+          <div class="slider-card">
+            <h3>Default score threshold</h3>
+            <p class="help">Minimum total score on a new role's auto-shortlist. Below = flagged for recruiter review.</p>
+            <div class="slider-label">
+              <span>Threshold</span>
+              <span class="value"><span id="t-val">72</span><span class="of"> / 100</span></span>
+            </div>
+            <input type="range" min="0" max="100" value="72" class="range" id="t-range" style="--val: 72;" oninput="this.style.setProperty('--val', this.value); document.getElementById('t-val').textContent = this.value;" />
+            <div class="range-ticks"><span>0</span><span>50</span><span>100</span></div>
+          </div>
+
+          <div class="slider-card" style="background: color-mix(in oklab, var(--bg) 50%, var(--bg-2));">
+            <h3 style="font-size: 13px; color: var(--muted); font-weight: 500; margin-bottom: 8px;">For comparison — the current native slider</h3>
+            <p class="help" style="margin-bottom: 18px;">No fill state, no purple, browser-default thumb.</p>
+            <input type="range" min="0" max="100" value="72" style="width: 100%;" />
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+<script>
+  // Add chips
+  function bindAdd(selectId, inputId, btnId, columnsId) {
+    const sel = document.getElementById(selectId);
+    const inp = document.getElementById(inputId);
+    const btn = document.getElementById(btnId);
+    const cols = document.getElementById(columnsId);
+    function add() {
+      const v = inp.value.trim();
+      if (!v) return;
+      const ul = cols.querySelector(`.col[data-bucket="${sel.value}"] ul`);
+      const li = document.createElement('li');
+      const isRole = columnsId === 'role-columns';
+      li.innerHTML = `${isRole ? '<span class="source-dot role" title="Added on this role"></span>' : ''}<span class="text"></span><span class="x">×</span>`;
+      li.querySelector('.text').textContent = v;
+      ul.appendChild(li);
+      const count = ul.parentElement.querySelector('.count');
+      count.textContent = ul.children.length;
+      inp.value = '';
+      inp.focus();
+    }
+    btn.addEventListener('click', add);
+    inp.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); add(); } });
+  }
+  bindAdd('ws-select', 'ws-input', 'ws-add', 'ws-columns');
+  bindAdd('role-select', 'role-input', 'role-add', 'role-columns');
+
+  // Remove chips
+  document.body.addEventListener('click', (e) => {
+    if (e.target.classList.contains('x')) {
+      const li = e.target.closest('li');
+      const ul = li.parentElement;
+      const count = ul.parentElement.querySelector('.count');
+      li.remove();
+      if (count) count.textContent = ul.children.length;
+    }
+  });
+</script>
+</body>
+</html>
