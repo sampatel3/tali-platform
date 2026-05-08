@@ -89,4 +89,5 @@ def run(
     decision.resolved_at = datetime.now(timezone.utc)
     decision.resolved_by_user_id = actor.user_id
     decision.resolution_note = note
+    decision.human_disposition = "approved"
     return decision

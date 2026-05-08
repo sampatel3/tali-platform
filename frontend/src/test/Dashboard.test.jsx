@@ -82,9 +82,26 @@ vi.mock('../shared/api', () => ({
     approveDecision: vi.fn(),
     overrideDecision: vi.fn(),
     discardPending: vi.fn(),
+    snoozeDecision: vi.fn(),
     listRuns: vi.fn().mockResolvedValue({ data: [] }),
     runNow: vi.fn(),
     status: vi.fn().mockResolvedValue({ data: {} }),
+    // Hub endpoints (see docs/HOME_HUB_DESIGN.md). HomePage polls
+    // orgStatus on mount; the others fire from sub-sections.
+    orgStatus: vi.fn().mockResolvedValue({ data: {
+      pending: 0, today: 0, auto_applied_today: 0,
+      org_budget_spent_cents: 0, org_budget_cap_cents: 0,
+      override_rate_pct: 0, teach_rate_pct: 0,
+      paused_role_count: 0, active_role_count: 0,
+      oldest_pending_age_seconds: null, last_decision_at: null,
+    } }),
+    kpis: vi.fn().mockResolvedValue({ data: {} }),
+    rolesBreakdown: vi.fn().mockResolvedValue({ data: [] }),
+    sendFeedback: vi.fn(),
+    cosignFeedback: vi.fn(),
+    revertFeedback: vi.fn(),
+    listFeedback: vi.fn().mockResolvedValue({ data: [] }),
+    realisedOutcomes: vi.fn().mockResolvedValue({ data: [] }),
   },
   default: {
     interceptors: {
@@ -259,24 +276,15 @@ describe('AssessmentsPage', () => {
     }, { timeout: 5000 });
   });
 
-  it('routes authenticated users to the jobs hub on root', async () => {
+  it('routes authenticated users to the Hub (/home) on root', async () => {
     organizationsApi.get.mockResolvedValue({
       data: { id: 1, name: 'Acme Labs' },
     });
-    rolesApi.list.mockResolvedValue({
-      data: [
-        {
-          id: 101,
-          name: 'Backend Engineer',
-          stage_counts: { applied: 2, invited: 1, in_assessment: 0, review: 0 },
-          active_candidates_count: 3,
-        },
-      ],
-    });
+    rolesApi.list.mockResolvedValue({ data: [] });
     renderApp();
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /active roles/i })).toBeInTheDocument();
+      expect(window.location.pathname).toBe('/home');
     }, { timeout: 5000 });
     expect(screen.queryByRole('heading', { name: 'Assessments' })).not.toBeInTheDocument();
   });
@@ -718,27 +726,22 @@ describe('AssessmentsPage', () => {
     });
   });
 
-  it('redirects /dashboard to /jobs (the canonical home)', async () => {
+  it('redirects /dashboard to /home (the Hub is the new canonical landing)', async () => {
     window.history.pushState({}, '', '/dashboard');
     rolesApi.list.mockResolvedValue({ data: [] });
     renderApp();
 
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/jobs');
-      expect(screen.getByRole('heading', { name: /active roles/i })).toBeInTheDocument();
+      expect(window.location.pathname).toBe('/home');
     });
   });
 
-  it('redirects /analytics to /reporting', async () => {
+  it('redirects /analytics and /reporting to /home (reporting folded in)', async () => {
+    // /analytics → /home (was /reporting before the Hub absorbed reporting).
     window.history.pushState({}, '', '/analytics');
     renderApp();
-
     await waitFor(() => {
-      expect(window.location.pathname).toBe('/reporting');
-      // Reporting now hydrates from /analytics/reporting-summary (HANDOFF
-      // chat.md design refresh) instead of the legacy /analytics/ endpoint.
-      expect(analyticsApi.reportingSummary).toHaveBeenCalled();
-      expect(screen.getByRole('heading', { name: /Your agent in narrative/i })).toBeInTheDocument();
+      expect(window.location.pathname).toBe('/home');
     });
   });
 

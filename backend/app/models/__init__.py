@@ -55,10 +55,17 @@ from .taali_chat_message import (
 )
 from .agent_run import AGENT_RUN_STATUSES, AGENT_RUN_TRIGGERS, AgentRun
 from .agent_decision import (
+    AGENT_DECISION_HUMAN_DISPOSITIONS,
     AGENT_DECISION_STATUSES,
     AGENT_DECISION_TYPES,
     AgentDecision,
 )
+from .decision_feedback import (
+    FAILURE_MODES,
+    FEEDBACK_SCOPES,
+    DecisionFeedback,
+)
+from .rubric_revision import REVISION_CAUSES, RubricRevision
 from .anthropic_usage_reconciliation import AnthropicUsageReconciliation
 from .share_link import (
     SHARE_LINK_MODE_CLIENT,
@@ -122,6 +129,12 @@ __all__ = [
     "AgentDecision",
     "AGENT_DECISION_TYPES",
     "AGENT_DECISION_STATUSES",
+    "AGENT_DECISION_HUMAN_DISPOSITIONS",
+    "DecisionFeedback",
+    "FAILURE_MODES",
+    "FEEDBACK_SCOPES",
+    "RubricRevision",
+    "REVISION_CAUSES",
     "AnthropicUsageReconciliation",
     "ShareLink",
     "SHARE_LINK_MODE_RECRUITER",

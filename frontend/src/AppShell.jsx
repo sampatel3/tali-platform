@@ -35,7 +35,7 @@ import {
   VerifyEmailPage,
 } from './features/auth';
 import { Shell as DashboardNav } from './shared/layout/Shell';
-import { ReportingPage } from './features/analytics/AnalyticsPage';
+import { HomePage } from './features/home/HomePage';
 import { CandidateWelcomePage } from './features/assessment_runtime/CandidateWelcomePage';
 import {
   ConnectWorkableButton,
@@ -128,6 +128,7 @@ const isProtectedRecruiterPath = (pathname, search = '') => {
   return (
     [
     '/dashboard',
+    '/home',
     '/jobs',
     '/assessments',
     '/candidates',
@@ -163,10 +164,9 @@ function AppContent() {
   const [loadingCandidateDetail, setLoadingCandidateDetail] = useState(false);
   const [startedAssessmentData, setStartedAssessmentData] = useState(null);
 
-  // Workflow v2 is the only recruiter workflow now. The legacy v1 paths
-  // (CandidatesPageContent, /assessments-as-home) were removed; git history
-  // has them if rollback is ever needed.
-  const defaultRecruiterRoute = '/jobs';
+  // The Hub (/home) is the agent-first landing — see docs/HOME_HUB_DESIGN.md.
+  // Replaces /reporting as the default route after sign-in.
+  const defaultRecruiterRoute = '/home';
   const nextRedirectPath = useMemo(
     () => resolveSafeNextPath(searchParams.get('next')),
     [searchParams]
@@ -473,6 +473,16 @@ function AppContent() {
       />
 
       <Route
+        path="/home"
+        element={(
+          <HomePage
+            onNavigate={navigateToPage}
+            NavComponent={DashboardNavWithMode}
+          />
+        )}
+      />
+
+      <Route
         path="/jobs"
         element={(
           <Suspense fallback={lazyFallback}>
@@ -641,14 +651,15 @@ function AppContent() {
         )}
       />
 
+      {/* Reporting + analytics fold into the Hub bottom section now.
+          Both routes 301 to /home — see docs/HOME_HUB_DESIGN.md §4. */}
       <Route
         path="/analytics"
-        element={<Navigate replace to="/reporting" />}
+        element={<Navigate replace to="/home" />}
       />
-
       <Route
         path="/reporting"
-        element={<ReportingPage onNavigate={navigateToPage} NavComponent={DashboardNavWithMode} />}
+        element={<Navigate replace to="/home" />}
       />
 
       <Route

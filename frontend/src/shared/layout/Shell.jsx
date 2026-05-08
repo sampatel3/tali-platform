@@ -4,7 +4,7 @@ import {
   Briefcase,
   CheckSquare,
   ChevronDown,
-  LineChart,
+  Home,
   LogOut,
   MessageSquare,
   Moon,
@@ -14,7 +14,7 @@ import {
 } from 'lucide-react';
 
 import { useAuth } from '../../context/AuthContext';
-import { organizations as organizationsApi } from '../api';
+import { agent as agentApi, organizations as organizationsApi } from '../api';
 import {
   readDarkModePreference,
   setDarkModePreference,
@@ -24,15 +24,15 @@ import { TaaliTile } from '../ui/Branding';
 import { useAgentStatusOrg } from './AgentBar';
 import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 
-// Nav: "Search" replaces the v3 "Chat" label — same NL-over-everything
-// surface, keeps the same `id: chat` and `/chat` route to preserve deep
-// links and badge ("AI") so the entry point stays visually unchanged.
+// Home is the agent-first landing — see docs/HOME_HUB_DESIGN.md. It
+// absorbs the old Reporting tab and surfaces the agent's pending review
+// queue. The pending badge is reactive (polled below).
 const NAV_TABS = [
-  { id: 'jobs',      label: 'Jobs',      Icon: Briefcase },
-  { id: 'chat',      label: 'Search',    Icon: MessageSquare, badge: 'AI' },
-  { id: 'tasks',     label: 'Tasks',     Icon: CheckSquare },
-  { id: 'reporting', label: 'Reporting', Icon: LineChart },
-  { id: 'settings',  label: 'Settings',  Icon: SettingsIcon },
+  { id: 'home',     label: 'Home',     Icon: Home },
+  { id: 'jobs',     label: 'Jobs',     Icon: Briefcase },
+  { id: 'chat',     label: 'Search',   Icon: MessageSquare, badge: 'AI' },
+  { id: 'tasks',    label: 'Tasks',    Icon: CheckSquare },
+  { id: 'settings', label: 'Settings', Icon: SettingsIcon },
 ];
 
 const pickUserName = (user) => {
@@ -49,6 +49,35 @@ const initialsFor = (name, org) => {
   const seed = `${name} ${org}`.trim();
   const letters = seed.split(/\s+/).filter(Boolean).map((w) => w[0]).join('');
   return letters.slice(0, 2).toUpperCase() || 'TA';
+};
+
+// Poll the org-wide pending count for the Home tab badge. 30s cadence is
+// the same as AgentBar — cheap aggregation, fine for a top-of-page nav.
+const useHomePendingCount = (isAuthenticated) => {
+  const [count, setCount] = useState(0);
+  useEffect(() => {
+    if (!isAuthenticated) {
+      setCount(0);
+      return undefined;
+    }
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await agentApi.orgStatus();
+        if (cancelled) return;
+        setCount(Number(res?.data?.pending || 0));
+      } catch {
+        // Silent — a transient 401/5xx shouldn't make the nav badge flicker.
+      }
+    };
+    void tick();
+    const id = window.setInterval(tick, 30_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [isAuthenticated]);
+  return count;
 };
 
 const useOrgName = (user) => {
@@ -136,9 +165,16 @@ export const Shell = ({ currentPage, onNavigate }) => {
   const displayName = pickUserName(user) || 'User';
   const initials = useMemo(() => initialsFor(displayName, orgName), [displayName, orgName]);
   const [menuOpen, setMenuOpen] = useState(false);
+  const homePending = useHomePendingCount(Boolean(user));
 
   // Map legacy page identifiers onto canonical tabs.
-  const resolvedPage = currentPage === 'assessments' ? 'candidates' : currentPage;
+  // 'reporting' / 'analytics' fold into 'home' (the Hub) — keep the icon
+  // highlighted while users on those legacy paths still hit the redirect.
+  const resolvedPage = (currentPage === 'assessments')
+    ? 'candidates'
+    : (currentPage === 'reporting' || currentPage === 'analytics')
+      ? 'home'
+      : currentPage;
   const handleNav = (id) => onNavigate?.(id);
   const handleLogout = () => {
     setMenuOpen(false);
@@ -178,19 +214,34 @@ export const Shell = ({ currentPage, onNavigate }) => {
         <span>taali<em>.</em></span>
       </button>
       <nav className="mc-nav-tabs" aria-label="Primary">
-        {NAV_TABS.map(({ id, label, Icon: TabIcon, badge }) => (
-          <button
-            key={id}
-            type="button"
-            className={`mc-nav-tab ${resolvedPage === id ? 'on' : ''}`.trim()}
-            onClick={() => handleNav(id)}
-            aria-current={resolvedPage === id ? 'page' : undefined}
-          >
-            <TabIcon size={15} strokeWidth={1.8} aria-hidden="true" />
-            <span>{label}</span>
-            {badge ? <span className="mc-badge" aria-hidden="true">{badge}</span> : null}
-          </button>
-        ))}
+        {NAV_TABS.map(({ id, label, Icon: TabIcon, badge }) => {
+          // Live pending-count badge on Home — overrides the static badge.
+          const liveBadge = (id === 'home' && homePending > 0) ? String(homePending) : null;
+          const visibleBadge = liveBadge ?? badge;
+          return (
+            <button
+              key={id}
+              type="button"
+              className={`mc-nav-tab ${resolvedPage === id ? 'on' : ''}`.trim()}
+              onClick={() => handleNav(id)}
+              aria-current={resolvedPage === id ? 'page' : undefined}
+            >
+              <TabIcon size={15} strokeWidth={1.8} aria-hidden="true" />
+              <span>{label}</span>
+              {visibleBadge
+                ? (
+                  <span
+                    className="mc-badge"
+                    aria-label={liveBadge ? `${liveBadge} pending` : undefined}
+                    aria-hidden={liveBadge ? undefined : true}
+                  >
+                    {visibleBadge}
+                  </span>
+                )
+                : null}
+            </button>
+          );
+        })}
       </nav>
       <div className="mc-nav-grow" />
       <div className="mc-nav-right">

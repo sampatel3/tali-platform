@@ -1755,6 +1755,25 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         backLink={{ label: 'All roles', onClick: () => onNavigate('jobs') }}
         actions={(
           <>
+            {/* Reverse deep-link to the Hub: when this role has pending
+                agent decisions, surface a one-click jump to the Home
+                review queue filtered to this role. Hidden when zero. */}
+            {(roleAgent?.pending || 0) > 0 ? (
+              <button
+                type="button"
+                className="btn btn-outline btn-sm"
+                title={`${roleAgent.pending} pending agent decisions for this role`}
+                onClick={() => {
+                  const params = new URLSearchParams({
+                    role: String(role?.id || ''),
+                    status: 'pending',
+                  });
+                  window.location.assign(`/home?${params.toString()}`);
+                }}
+              >
+                {roleAgent.pending} pending → Home
+              </button>
+            ) : null}
             <button type="button" className="btn btn-outline btn-sm" title="Share role" onClick={handleShareRole}>
               <Share2 size={13} />
               Share

@@ -78,9 +78,15 @@ def _safe_drop_all():
     from sqlalchemy import text
     _dispose_async_engine_before_teardown()
     with engine.connect() as conn:
+        # Disable FK enforcement for the duration of the drop. We have at
+        # least one cyclic FK pair (agent_decisions.feedback_id ↔
+        # decision_feedback.decision_id) which SQLite refuses to drop in
+        # any order while PRAGMA foreign_keys=ON.
+        conn.execute(text("PRAGMA foreign_keys=OFF"))
         # Drop in reverse dependency order (referencing tables first)
         for table in reversed(Base.metadata.sorted_tables):
             conn.execute(text(f"DROP TABLE IF EXISTS {table.name}"))
+        conn.execute(text("PRAGMA foreign_keys=ON"))
         conn.commit()
 
 

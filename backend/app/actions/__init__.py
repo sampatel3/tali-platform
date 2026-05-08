@@ -15,6 +15,7 @@ from . import (  # noqa: F401  re-export for ``from app.actions import advance_s
     reject_application,
     score_cv,
     send_assessment,
+    teach_decision,
 )
 from .types import Actor
 
@@ -27,4 +28,5 @@ __all__ = [
     "reject_application",
     "score_cv",
     "send_assessment",
+    "teach_decision",
 ]

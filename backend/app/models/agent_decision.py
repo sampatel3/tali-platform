@@ -10,12 +10,25 @@ AGENT_DECISION_TYPES = (
     "reject",
     "skip_assessment_reject",
 )
+# ``reverted_for_feedback`` is set by the "Send back & teach" action — the
+# decision goes back into the queue with the reviewer's correction note
+# attached, while a ``decision_feedback`` row carries the training signal.
 AGENT_DECISION_STATUSES = (
     "pending",
     "approved",
     "overridden",
+    "reverted_for_feedback",
     "discarded",
     "expired",
+)
+# ``human_disposition`` records *what kind* of human action resolved the
+# decision, regardless of the lifecycle state. ``approved``/``overridden``
+# mirror ``status``; ``taught`` is set when the resolver path was the teach
+# loop (regardless of whether the decision is back to pending or applied).
+AGENT_DECISION_HUMAN_DISPOSITIONS = (
+    "approved",
+    "overridden",
+    "taught",
 )
 
 
@@ -48,6 +61,25 @@ class AgentDecision(Base):
     resolved_by_user_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     resolution_note = Column(Text, nullable=True)
     override_action = Column(String, nullable=True)
+
+    # Hub-era fields (migration 063):
+    #   feedback_id: links to the latest decision_feedback row when the human
+    #     disposition was ``taught``.
+    #   human_disposition: orthogonal to status — answers "what kind of human
+    #     action resolved this," used by the Hub to compute teach- vs override-
+    #     rate without joining decision_feedback every time.
+    #   snoozed_until: pending rows are hidden from the queue until this time.
+    # ``feedback_id`` and ``decision_feedback.decision_id`` form a mutual FK
+    # cycle (a decision points at its current feedback row, the feedback
+    # points back at the decision). Mark this side ``use_alter`` so
+    # SQLAlchemy can sort table creation/deletion deterministically.
+    feedback_id = Column(
+        BigInteger,
+        ForeignKey("decision_feedback.id", use_alter=True, name="fk_agent_decisions_feedback_id"),
+        nullable=True,
+    )
+    human_disposition = Column(String, nullable=True)
+    snoozed_until = Column(DateTime(timezone=True), nullable=True)
 
     idempotency_key = Column(String, nullable=False)
 

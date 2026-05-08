@@ -12,12 +12,12 @@ All endpoints are org-scoped via ``get_current_user``.
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import desc
+from sqlalchemy import desc, or_
 from sqlalchemy.orm import Session
 
 from ...actions import approve_decision as approve_decision_action
@@ -195,6 +195,9 @@ def _run_to_payload(run: AgentRun) -> AgentRunPayload:
 def list_agent_decisions(
     role_id: Optional[int] = Query(default=None),
     status: str = Query(default="pending"),
+    decision_type: Optional[str] = Query(default=None, alias="type"),
+    q: Optional[str] = Query(default=None),
+    since: Optional[datetime] = Query(default=None),
     limit: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -202,18 +205,43 @@ def list_agent_decisions(
     if status not in AGENT_DECISION_STATUSES and status != "all":
         raise HTTPException(status_code=422, detail=f"unsupported status={status!r}")
 
-    q = (
+    query = (
         db.query(AgentDecision, Candidate)
         .join(CandidateApplication, CandidateApplication.id == AgentDecision.application_id)
         .outerjoin(Candidate, Candidate.id == CandidateApplication.candidate_id)
         .filter(AgentDecision.organization_id == current_user.organization_id)
     )
     if role_id is not None:
-        q = q.filter(AgentDecision.role_id == int(role_id))
+        query = query.filter(AgentDecision.role_id == int(role_id))
     if status != "all":
-        q = q.filter(AgentDecision.status == status)
-    q = q.order_by(desc(AgentDecision.created_at)).limit(limit)
-    rows = q.all()
+        query = query.filter(AgentDecision.status == status)
+    # Snooze: when listing pending, hide rows whose snooze hasn't elapsed.
+    if status == "pending":
+        now = datetime.now(timezone.utc)
+        query = query.filter(
+            or_(
+                AgentDecision.snoozed_until.is_(None),
+                AgentDecision.snoozed_until <= now,
+            )
+        )
+    if decision_type:
+        query = query.filter(AgentDecision.decision_type == decision_type)
+    if since is not None:
+        query = query.filter(AgentDecision.created_at >= since)
+    if q:
+        # Cheap text search across candidate name/email + reasoning. Good
+        # enough for a typeahead; if scale demands it, we move to a
+        # dedicated FTS column later.
+        like = f"%{q.strip()}%"
+        query = query.filter(
+            or_(
+                Candidate.name.ilike(like),
+                Candidate.email.ilike(like),
+                AgentDecision.reasoning.ilike(like),
+            )
+        )
+    query = query.order_by(desc(AgentDecision.created_at)).limit(limit)
+    rows = query.all()
     return [_decision_to_payload(decision, candidate) for decision, candidate in rows]
 
 
@@ -400,12 +428,17 @@ def agent_status(
     if role is None:
         raise HTTPException(status_code=404, detail=f"role {role_id} not found")
 
+    now = datetime.now(timezone.utc)
     pending = (
         db.query(AgentDecision)
         .filter(
             AgentDecision.organization_id == current_user.organization_id,
             AgentDecision.role_id == role_id,
             AgentDecision.status == "pending",
+            or_(
+                AgentDecision.snoozed_until.is_(None),
+                AgentDecision.snoozed_until <= now,
+            ),
         )
         .count()
     )
