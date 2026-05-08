@@ -416,6 +416,138 @@ export const Textarea = ({ className = '', ...props }) => (
   <textarea className={cx('taali-textarea', className)} {...props} />
 );
 
+
+// Single-select dropdown with the same floating-menu shell as MultiSelect.
+// Use this when a `<select>` would render as a native browser popup —
+// SingleSelect renders the option list as a portaled <div> menu so it
+// styles consistently across browsers and inherits the rest of the
+// `.taali-select-*` design tokens.
+export const SingleSelect = ({
+  className = '',
+  options = [],
+  value,
+  onChange,
+  disabled = false,
+  placeholder = 'Select…',
+  ariaLabel,
+  renderOption,
+  renderValue,
+  triggerClassName = '',
+}) => {
+  const controlId = useId();
+  const rootRef = useRef(null);
+  const triggerRef = useRef(null);
+  const menuRef = useRef(null);
+  const normalizedOptions = useMemo(
+    () => (Array.isArray(options) ? options.map((option) => ({
+      value: String(option?.value ?? ''),
+      label: String(option?.label ?? option?.value ?? ''),
+      disabled: Boolean(option?.disabled),
+      raw: option,
+    })) : []),
+    [options]
+  );
+  const currentKey = value === undefined || value === null ? '' : String(value);
+  const currentOption = normalizedOptions.find((option) => option.value === currentKey) || null;
+  const [open, setOpen] = useState(false);
+  const floatingMenuStyle = useFloatingMenuStyle(open, triggerRef);
+  const resolvedMenuStyle = floatingMenuStyle || _buildFloatingMenuStyle(triggerRef.current);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onPointerDown = (event) => {
+      if (
+        !rootRef.current?.contains(event.target)
+        && !menuRef.current?.contains(event.target)
+      ) {
+        setOpen(false);
+      }
+    };
+    const onKeyDown = (event) => {
+      if (event.key === 'Escape') setOpen(false);
+    };
+    document.addEventListener('mousedown', onPointerDown);
+    document.addEventListener('touchstart', onPointerDown, { passive: true });
+    document.addEventListener('keydown', onKeyDown);
+    return () => {
+      document.removeEventListener('mousedown', onPointerDown);
+      document.removeEventListener('touchstart', onPointerDown);
+      document.removeEventListener('keydown', onKeyDown);
+    };
+  }, [open]);
+
+  const choose = (next) => {
+    if (typeof onChange === 'function') onChange(next);
+    setOpen(false);
+  };
+
+  return (
+    <div ref={rootRef} className="taali-select-shell">
+      <button
+        ref={triggerRef}
+        type="button"
+        className={cx('taali-select-trigger', triggerClassName, className)}
+        disabled={disabled}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={ariaLabel}
+        aria-controls={`taali-singleselect-listbox-${controlId}`}
+        onClick={() => { if (!disabled) setOpen((current) => !current); }}
+        onKeyDown={(event) => {
+          if (disabled) return;
+          if (event.key === 'ArrowDown' || event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            setOpen(true);
+          }
+          if (event.key === 'Escape') setOpen(false);
+        }}
+      >
+        <span className={cx('taali-select-value', !currentOption ? 'taali-select-value-placeholder' : '')}>
+          {currentOption
+            ? (typeof renderValue === 'function' ? renderValue(currentOption.raw) : currentOption.label)
+            : placeholder}
+        </span>
+        <ChevronDown size={16} className={cx('taali-select-chevron', open ? 'rotate-180' : '')} aria-hidden />
+      </button>
+      {open && resolvedMenuStyle && typeof document !== 'undefined'
+        ? createPortal(
+            <div
+              ref={menuRef}
+              className="taali-select-menu"
+              style={resolvedMenuStyle}
+              role="listbox"
+              id={`taali-singleselect-listbox-${controlId}`}
+            >
+              {normalizedOptions.map((option) => {
+                const isSelected = option.value === currentKey;
+                return (
+                  <button
+                    key={`${controlId}-${option.value}`}
+                    type="button"
+                    role="option"
+                    aria-selected={isSelected}
+                    className={cx(
+                      'taali-select-option',
+                      isSelected ? 'taali-select-option-selected' : ''
+                    )}
+                    disabled={option.disabled}
+                    onClick={() => { if (!option.disabled) choose(option.value); }}
+                  >
+                    <span className="truncate">
+                      {typeof renderOption === 'function' ? renderOption(option.raw) : option.label}
+                    </span>
+                    {isSelected ? <Check size={14} aria-hidden /> : null}
+                  </button>
+                );
+              })}
+            </div>,
+            document.body
+          )
+        : null}
+    </div>
+  );
+};
+
 const BADGE_VARIANT_CLASS = {
   purple: 'taali-badge-purple',
   muted: 'taali-badge-muted',

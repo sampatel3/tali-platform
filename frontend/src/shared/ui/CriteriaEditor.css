@@ -70,23 +70,37 @@
   align-items: stretch;
   margin-bottom: 14px;
 }
-.ce-composer-select {
-  -webkit-appearance: none;
-  appearance: none;
-  border: 1px solid var(--line, #e8e2ee);
-  border-radius: 10px;
-  padding: 0 30px 0 14px;
-  font: inherit;
-  font-size: 13px;
+/* Bucket selector — Taali-native SingleSelect from TaaliPrimitives.
+ * Sized to align with the text input + Add button so the composer reads
+ * as one row. The shared .taali-select-trigger handles open/close state,
+ * focus ring, and the chevron rotation; we just tune the dimensions and
+ * the padding so the swatch + label fit neatly. */
+.ce-composer-bucket { flex-shrink: 0; min-width: 140px; }
+.ce-composer-bucket .taali-select-trigger,
+.ce-composer-bucket-trigger {
   height: 38px;
-  background-color: var(--bg-2, #fff);
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%237a6e94' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-  background-repeat: no-repeat;
-  background-position: right 12px center;
-  color: var(--ink, #1a1230);
-  cursor: pointer;
+  border-radius: 10px;
+  font-size: 13px;
+}
+/* Swatch + label inside the trigger and each option row. Mirrors the
+ * column-header swatches so the dropdown reads as part of the chip
+ * system, not a generic <select>. */
+.ce-bucket-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.ce-bucket-option-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
   flex-shrink: 0;
 }
+.ce-bucket-option-swatch--must { background: var(--ce-must-dot); }
+.ce-bucket-option-swatch--preferred { background: var(--ce-preferred-dot); }
+.ce-bucket-option-swatch--constraint { background: var(--ce-constraint-dot); }
+
 .ce-composer-input {
   flex: 1;
   border: 1px solid var(--line, #e8e2ee);
@@ -97,7 +111,6 @@
   background: var(--bg-2, #fff);
   color: var(--ink, #1a1230);
 }
-.ce-composer-select:focus,
 .ce-composer-input:focus {
   outline: none;
   border-color: var(--purple, #7f39fb);

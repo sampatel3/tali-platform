@@ -1,6 +1,7 @@
 /* eslint-disable react/prop-types */
 import { useMemo, useState } from 'react';
 
+import { SingleSelect } from './TaaliPrimitives';
 import './CriteriaEditor.css';
 
 const BUCKETS = [
@@ -9,9 +10,21 @@ const BUCKETS = [
   { key: 'constraint', label: 'Constraint', columnLabel: 'Constraint' },
 ];
 
+const BUCKET_OPTIONS = BUCKETS.map((b) => ({ value: b.key, label: b.label }));
+
+const renderBucketOption = (option) => (
+  <span className="ce-bucket-option">
+    <span
+      className={`ce-bucket-option-swatch ce-bucket-option-swatch--${option.value}`}
+      aria-hidden
+    />
+    {option.label}
+  </span>
+);
+
 const isActive = (chip) => !chip.deleted_at;
 
-const Composer = ({ onAdd, disabled, idPrefix }) => {
+const Composer = ({ onAdd, disabled }) => {
   const [text, setText] = useState('');
   const [bucket, setBucket] = useState('must');
 
@@ -24,18 +37,17 @@ const Composer = ({ onAdd, disabled, idPrefix }) => {
 
   return (
     <div className="ce-composer">
-      <select
-        className="ce-composer-select"
+      <SingleSelect
+        className="ce-composer-bucket"
+        triggerClassName="ce-composer-bucket-trigger"
+        options={BUCKET_OPTIONS}
         value={bucket}
-        onChange={(e) => setBucket(e.target.value)}
+        onChange={setBucket}
         disabled={disabled}
-        aria-label="Bucket"
-        id={`${idPrefix}-bucket`}
-      >
-        {BUCKETS.map((b) => (
-          <option key={b.key} value={b.key}>{b.label}</option>
-        ))}
-      </select>
+        ariaLabel="Bucket"
+        renderValue={renderBucketOption}
+        renderOption={renderBucketOption}
+      />
       <input
         type="text"
         className="ce-composer-input"
@@ -308,7 +320,6 @@ const CriteriaEditor = ({
   syncing = false,
   resetting = false,
 }) => {
-  const idPrefix = useMemo(() => `ce-${Math.random().toString(36).slice(2, 8)}`, []);
   const active = (criteria || []).filter(isActive);
 
   const grouped = useMemo(() => {
@@ -338,7 +349,7 @@ const CriteriaEditor = ({
 
       {mode === 'role' ? <SourceLegend /> : null}
 
-      <Composer onAdd={onCreate} disabled={busy} idPrefix={idPrefix} />
+      <Composer onAdd={onCreate} disabled={busy} />
 
       <div className="ce-columns">
         {BUCKETS.map((bucket) => (
