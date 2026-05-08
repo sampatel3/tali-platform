@@ -26,7 +26,8 @@ from app.models.organization import Organization
 from app.models.role import Role
 from app.models.taali_chat_conversation import TaaliChatConversation
 from app.models.user import User
-from app.taali_chat.service import _build_system_blocks, _ensure_conversation
+from app.taali_chat.service import _ensure_conversation
+from app.taali_chat.system_prompt import build_system_blocks as _build_system_blocks
 
 
 # Shared SQLite BigInteger PK workaround.

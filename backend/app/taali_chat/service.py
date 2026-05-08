@@ -43,7 +43,7 @@ from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event
 from . import streaming
-from .system_prompt import SYSTEM_PROMPT
+from .system_prompt import build_system_blocks
 from .tool_registry import TAALI_CHAT_TOOLS, dispatch_tool
 
 logger = logging.getLogger("taali.taali_chat")
@@ -231,7 +231,7 @@ def run_chat_turn(
 
     # Compose system blocks once per turn — the base SYSTEM_PROMPT plus
     # an optional role-context block when the conversation is role-scoped.
-    system_blocks = _build_system_blocks(db, conversation=conversation)
+    system_blocks = build_system_blocks(db, conversation=conversation)
 
     for round_index in range(MAX_TOOL_ROUNDS):
         # Each round is a fresh "step" in AI SDK terms; the message id is
@@ -366,103 +366,6 @@ def run_chat_turn(
 # ---------------------------------------------------------------------------
 # One Anthropic streaming round
 # ---------------------------------------------------------------------------
-
-
-def _build_system_blocks(
-    db: Session, *, conversation: TaaliChatConversation
-) -> list[dict[str, Any]]:
-    """Compose the system prompt for this conversation.
-
-    Always includes the cached base SYSTEM_PROMPT as the first block so
-    the prompt cache hit applies across every conversation in the
-    org/window. When the conversation is role-scoped, appends a second
-    cached block with the role's name + recent agent activity so the
-    chat tools can default to that role and Claude can reason about
-    'this role' without the user having to say 'role 42.'
-    """
-    blocks: list[dict[str, Any]] = [
-        {
-            "type": "text",
-            "text": SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
-    role_id = getattr(conversation, "role_id", None)
-    if role_id is None:
-        return blocks
-    context = _role_context_block(
-        db,
-        role_id=int(role_id),
-        organization_id=int(conversation.organization_id),
-    )
-    if context:
-        blocks.append(
-            {
-                "type": "text",
-                "text": context,
-                "cache_control": {"type": "ephemeral"},
-            }
-        )
-    return blocks
-
-
-def _role_context_block(db: Session, *, role_id: int, organization_id: int) -> str | None:
-    """Render a short prompt block summarising this role + recent agent
-    activity. Pulled fresh each turn so the recruiter sees current state
-    when they ask 'what's the agent doing on this role?'."""
-    from ..models.agent_decision import AgentDecision
-    from ..models.agent_run import AgentRun
-    from ..models.role import Role
-
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == role_id,
-            Role.organization_id == organization_id,
-            Role.deleted_at.is_(None),
-        )
-        .first()
-    )
-    if role is None:
-        return None
-
-    pending = (
-        db.query(AgentDecision)
-        .filter(
-            AgentDecision.role_id == role_id,
-            AgentDecision.organization_id == organization_id,
-            AgentDecision.status == "pending",
-        )
-        .count()
-    )
-    last_run = (
-        db.query(AgentRun)
-        .filter(
-            AgentRun.role_id == role_id,
-            AgentRun.organization_id == organization_id,
-        )
-        .order_by(AgentRun.started_at.desc())
-        .first()
-    )
-    last_run_line = "no agent cycles yet"
-    if last_run is not None:
-        ts = last_run.started_at.isoformat() if last_run.started_at else "?"
-        last_run_line = (
-            f"last agent cycle: {last_run.trigger} trigger, status={last_run.status}, "
-            f"{int(last_run.decisions_emitted or 0)} decision(s) emitted, started {ts}"
-        )
-
-    return (
-        f"# Role-scoped conversation\n"
-        f"This chat is about role_id={role_id}: {role.name!r}.\n"
-        f"When the user asks about 'the agent' / 'this role' / 'pending decisions' / "
-        f"'why did you queue X' without naming a role, default to this role.\n"
-        f"For agent-aware tools (list_recent_agent_decisions, list_recent_agent_runs, "
-        f"explain_agent_decision) you may omit role_id — the conversation's "
-        f"role scope applies.\n"
-        f"Current state: {pending} pending agent decision(s) awaiting recruiter review. "
-        f"{last_run_line}.\n"
-    )
 
 
 def _stream_one_round(

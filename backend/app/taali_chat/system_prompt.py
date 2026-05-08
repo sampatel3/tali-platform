@@ -1,11 +1,22 @@
 """System prompt for Taali Chat.
 
 Cached as the first prompt-cache breakpoint on every turn so the recruiter
-domain context only costs tokens once per cache window. Keep this stable
-— bumping the prompt invalidates the cache for every active conversation.
+domain context only costs tokens once per cache window. Keep SYSTEM_PROMPT
+stable — bumping it invalidates the cache for every active conversation.
+
+Also exports ``build_system_blocks(db, conversation)`` which composes the
+SYSTEM_PROMPT plus an optional role-context block when the conversation
+is role-scoped.
 """
 
 from __future__ import annotations
+
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from ..models.taali_chat_conversation import TaaliChatConversation
+
 
 SYSTEM_PROMPT = """You are Taali, an AI recruiting copilot embedded inside the Tali platform.
 
@@ -53,4 +64,102 @@ surface them briefly so the recruiter knows what wasn't searched.
 If you can't answer with the tools available, say so plainly. Don't guess.
 """
 
-__all__ = ["SYSTEM_PROMPT"]
+
+def build_system_blocks(
+    db: Session, *, conversation: TaaliChatConversation
+) -> list[dict[str, Any]]:
+    """Compose the system prompt for this conversation.
+
+    Always includes the cached base SYSTEM_PROMPT as the first block so
+    the prompt cache hit applies across every conversation in the
+    org/window. When the conversation is role-scoped, appends a second
+    cached block with the role's name + recent agent activity so the
+    chat tools can default to that role and Claude can reason about
+    'this role' without the user having to say 'role 42.'
+    """
+    blocks: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": SYSTEM_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    role_id = getattr(conversation, "role_id", None)
+    if role_id is None:
+        return blocks
+    context = _role_context_block(
+        db,
+        role_id=int(role_id),
+        organization_id=int(conversation.organization_id),
+    )
+    if context:
+        blocks.append(
+            {
+                "type": "text",
+                "text": context,
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+    return blocks
+
+
+def _role_context_block(db: Session, *, role_id: int, organization_id: int) -> str | None:
+    """Render a short prompt block summarising this role + recent agent
+    activity. Pulled fresh each turn so the recruiter sees current state
+    when they ask 'what's the agent doing on this role?'."""
+    from ..models.agent_decision import AgentDecision
+    from ..models.agent_run import AgentRun
+    from ..models.role import Role
+
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if role is None:
+        return None
+
+    pending = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role_id,
+            AgentDecision.organization_id == organization_id,
+            AgentDecision.status == "pending",
+        )
+        .count()
+    )
+    last_run = (
+        db.query(AgentRun)
+        .filter(
+            AgentRun.role_id == role_id,
+            AgentRun.organization_id == organization_id,
+        )
+        .order_by(AgentRun.started_at.desc())
+        .first()
+    )
+    last_run_line = "no agent cycles yet"
+    if last_run is not None:
+        ts = last_run.started_at.isoformat() if last_run.started_at else "?"
+        last_run_line = (
+            f"last agent cycle: {last_run.trigger} trigger, status={last_run.status}, "
+            f"{int(last_run.decisions_emitted or 0)} decision(s) emitted, started {ts}"
+        )
+
+    return (
+        f"# Role-scoped conversation\n"
+        f"This chat is about role_id={role_id}: {role.name!r}.\n"
+        f"When the user asks about 'the agent' / 'this role' / 'pending decisions' / "
+        f"'why did you queue X' without naming a role, default to this role.\n"
+        f"For agent-aware tools (list_recent_agent_decisions, list_recent_agent_runs, "
+        f"explain_agent_decision) you may omit role_id — the conversation's "
+        f"role scope applies.\n"
+        f"Current state: {pending} pending agent decision(s) awaiting recruiter review. "
+        f"{last_run_line}.\n"
+    )
+
+
+__all__ = ["SYSTEM_PROMPT", "build_system_blocks"]
