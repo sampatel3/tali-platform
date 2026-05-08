@@ -8780,7 +8780,7 @@ button.eng-badge-button:focus-visible {
   inset: 0;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 500ms ease;
+  transition: opacity 700ms cubic-bezier(.4, 0, .2, 1);
   background:
     radial-gradient(ellipse 80% 60% at 75% 0%,  rgba(196,165,253,0.70) 0%, transparent 60%),
     radial-gradient(ellipse 70% 80% at 10% 100%, rgba(180,80,255,0.55) 0%, transparent 65%),
@@ -8790,6 +8790,25 @@ button.eng-badge-button:focus-visible {
 .agent-header.agent-running .ah-bright-overlay {
   opacity: 1;
   animation: agentHeaderPulse 6s ease-in-out infinite;
+}
+
+/* Wrapper around the on/off/paused state body. Inherits the flex column
+   layout the parent `.agent-panel` used to host directly, so existing
+   spacing + `.agent-panel.agent-off .agent-actions { margin-top: auto }`
+   keep working. The React `key={status}` on this node re-mounts the body
+   on a real state flip, triggering the agentPanelEnter fade-in. */
+.agent-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  animation: agentPanelEnter 380ms cubic-bezier(.4, 0, .2, 1) both;
+}
+
+@keyframes agentPanelEnter {
+  0%   { opacity: 0; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes agentHeaderPulse {
@@ -8943,6 +8962,12 @@ button.eng-badge-button:focus-visible {
   gap: 10px;
   backdrop-filter: blur(8px);
   box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+  /* Smooth chrome change when on/off/paused flips, so the border + bg
+     fade in step with the hero's bright-overlay cross-fade. */
+  transition:
+    background-color 700ms cubic-bezier(.4, 0, .2, 1),
+    border-color 700ms cubic-bezier(.4, 0, .2, 1),
+    box-shadow 700ms cubic-bezier(.4, 0, .2, 1);
 }
 
 /* OFF panel: pin Turn-on button to bottom so it doesn't float mid-card. */
