@@ -40,6 +40,11 @@ router = APIRouter(prefix="/taali-chat", tags=["taali-chat"])
 class TurnRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=8000)
     conversation_id: Optional[int] = None
+    # Optional role scope. Used only on the FIRST turn of a new
+    # conversation (when conversation_id is None). The resulting
+    # TaaliChatConversation row records role_id; subsequent turns use
+    # the persisted scope and ignore this field.
+    role_id: Optional[int] = None
 
 
 class ConversationSummary(BaseModel):
@@ -48,6 +53,7 @@ class ConversationSummary(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     message_count: int
+    role_id: Optional[int] = None
 
 
 class ConversationDetail(BaseModel):
@@ -56,6 +62,7 @@ class ConversationDetail(BaseModel):
     created_at: datetime
     updated_at: Optional[datetime]
     messages: list[dict]
+    role_id: Optional[int] = None
 
 
 class ConversationRename(BaseModel):
@@ -105,6 +112,7 @@ def chat_turn(
                     turn=ChatTurnInput(
                         user_message=body.message,
                         conversation_id=body.conversation_id,
+                        role_id=body.role_id,
                     ),
                 ):
                     yield frame.body
@@ -174,6 +182,7 @@ def list_conversations(
             created_at=r.created_at,
             updated_at=r.updated_at,
             message_count=counts.get(r.id, 0),
+            role_id=r.role_id,
         )
         for r in rows
     ]
@@ -197,6 +206,7 @@ def get_conversation(
         title=convo.title,
         created_at=convo.created_at,
         updated_at=convo.updated_at,
+        role_id=convo.role_id,
         messages=[
             {
                 "id": m.id,
@@ -245,6 +255,7 @@ def rename_conversation(
         created_at=convo.created_at,
         updated_at=convo.updated_at,
         message_count=int(msg_count),
+        role_id=convo.role_id,
     )
 
 

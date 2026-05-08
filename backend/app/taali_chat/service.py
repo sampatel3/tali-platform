@@ -65,6 +65,11 @@ class ChatTurnInput:
 
     user_message: str
     conversation_id: int | None = None  # None = create new conversation
+    # Optional role scope. Used only when creating a new conversation.
+    # Once a conversation exists, its role_id is fixed (recorded on the
+    # TaaliChatConversation row) — passing a different role_id on a
+    # follow-up turn is ignored.
+    role_id: int | None = None
 
 
 @dataclass
@@ -81,7 +86,12 @@ class _RunningUsage:
 
 
 def _ensure_conversation(
-    db: Session, *, user: User, conversation_id: int | None, first_message: str
+    db: Session,
+    *,
+    user: User,
+    conversation_id: int | None,
+    first_message: str,
+    role_id: int | None = None,
 ) -> TaaliChatConversation:
     if conversation_id is not None:
         conversation = (
@@ -98,10 +108,30 @@ def _ensure_conversation(
             raise ValueError(f"conversation {conversation_id} not found")
         return conversation
 
+    # New conversation: validate role_id is org-scoped before persisting,
+    # so a recruiter can't open a chat scoped to another org's role even
+    # if they spoof the id.
+    safe_role_id: int | None = None
+    if role_id is not None:
+        from ..models.role import Role
+
+        owns = (
+            db.query(Role.id)
+            .filter(
+                Role.id == int(role_id),
+                Role.organization_id == user.organization_id,
+                Role.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if owns is not None:
+            safe_role_id = int(role_id)
+
     title = first_message.strip().split("\n", 1)[0][:80] or "New conversation"
     conversation = TaaliChatConversation(
         organization_id=user.organization_id,
         user_id=user.id,
+        role_id=safe_role_id,
         title=title,
     )
     db.add(conversation)
@@ -172,7 +202,11 @@ def run_chat_turn(
 
     try:
         conversation = _ensure_conversation(
-            db, user=user, conversation_id=turn.conversation_id, first_message=text
+            db,
+            user=user,
+            conversation_id=turn.conversation_id,
+            first_message=text,
+            role_id=turn.role_id,
         )
     except ValueError as exc:
         yield streaming.error(str(exc))
@@ -195,6 +229,10 @@ def run_chat_turn(
     # already includes the just-added user message).
     messages: list[dict[str, Any]] = list(history)
 
+    # Compose system blocks once per turn — the base SYSTEM_PROMPT plus
+    # an optional role-context block when the conversation is role-scoped.
+    system_blocks = _build_system_blocks(db, conversation=conversation)
+
     for round_index in range(MAX_TOOL_ROUNDS):
         # Each round is a fresh "step" in AI SDK terms; the message id is
         # synthetic but useful for the React client when annotating.
@@ -206,6 +244,7 @@ def run_chat_turn(
                 client=client,
                 model=model,
                 messages=messages,
+                system=system_blocks,
             )
         except Exception as exc:
             logger.exception("Anthropic stream failed: %s", exc)
@@ -329,22 +368,111 @@ def run_chat_turn(
 # ---------------------------------------------------------------------------
 
 
-def _stream_one_round(
-    *,
-    client: Anthropic,
-    model: str,
-    messages: list[dict[str, Any]],
-) -> Iterator[streaming.Frame]:
-    """Stream one Anthropic call. Yields frames; returns (blocks, stop, usage)."""
+def _build_system_blocks(
+    db: Session, *, conversation: TaaliChatConversation
+) -> list[dict[str, Any]]:
+    """Compose the system prompt for this conversation.
 
-    system = [
+    Always includes the cached base SYSTEM_PROMPT as the first block so
+    the prompt cache hit applies across every conversation in the
+    org/window. When the conversation is role-scoped, appends a second
+    cached block with the role's name + recent agent activity so the
+    chat tools can default to that role and Claude can reason about
+    'this role' without the user having to say 'role 42.'
+    """
+    blocks: list[dict[str, Any]] = [
         {
             "type": "text",
             "text": SYSTEM_PROMPT,
             "cache_control": {"type": "ephemeral"},
         }
     ]
+    role_id = getattr(conversation, "role_id", None)
+    if role_id is None:
+        return blocks
+    context = _role_context_block(
+        db,
+        role_id=int(role_id),
+        organization_id=int(conversation.organization_id),
+    )
+    if context:
+        blocks.append(
+            {
+                "type": "text",
+                "text": context,
+                "cache_control": {"type": "ephemeral"},
+            }
+        )
+    return blocks
 
+
+def _role_context_block(db: Session, *, role_id: int, organization_id: int) -> str | None:
+    """Render a short prompt block summarising this role + recent agent
+    activity. Pulled fresh each turn so the recruiter sees current state
+    when they ask 'what's the agent doing on this role?'."""
+    from ..models.agent_decision import AgentDecision
+    from ..models.agent_run import AgentRun
+    from ..models.role import Role
+
+    role = (
+        db.query(Role)
+        .filter(
+            Role.id == role_id,
+            Role.organization_id == organization_id,
+            Role.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if role is None:
+        return None
+
+    pending = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.role_id == role_id,
+            AgentDecision.organization_id == organization_id,
+            AgentDecision.status == "pending",
+        )
+        .count()
+    )
+    last_run = (
+        db.query(AgentRun)
+        .filter(
+            AgentRun.role_id == role_id,
+            AgentRun.organization_id == organization_id,
+        )
+        .order_by(AgentRun.started_at.desc())
+        .first()
+    )
+    last_run_line = "no agent cycles yet"
+    if last_run is not None:
+        ts = last_run.started_at.isoformat() if last_run.started_at else "?"
+        last_run_line = (
+            f"last agent cycle: {last_run.trigger} trigger, status={last_run.status}, "
+            f"{int(last_run.decisions_emitted or 0)} decision(s) emitted, started {ts}"
+        )
+
+    return (
+        f"# Role-scoped conversation\n"
+        f"This chat is about role_id={role_id}: {role.name!r}.\n"
+        f"When the user asks about 'the agent' / 'this role' / 'pending decisions' / "
+        f"'why did you queue X' without naming a role, default to this role.\n"
+        f"For agent-aware tools (list_recent_agent_decisions, list_recent_agent_runs, "
+        f"explain_agent_decision) you may omit role_id — the conversation's "
+        f"role scope applies.\n"
+        f"Current state: {pending} pending agent decision(s) awaiting recruiter review. "
+        f"{last_run_line}.\n"
+    )
+
+
+def _stream_one_round(
+    *,
+    client: Anthropic,
+    model: str,
+    messages: list[dict[str, Any]],
+    system: list[dict[str, Any]],
+) -> Iterator[streaming.Frame]:
+    """Stream one Anthropic call. Yields frames; returns (blocks, stop, usage)."""
     with client.messages.stream(
         model=model,
         max_tokens=MAX_TOKENS_PER_TURN,
