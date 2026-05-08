@@ -10282,6 +10282,65 @@ button.eng-badge-button:focus-visible {
   box-sizing: border-box;
 }
 
+/* Inheritance hint for the role intent textarea. Shows whether this
+   role's intent comes from org defaults (Settings → AI agent → Default
+   role intent) or has been customised; recruiters can revert to org
+   defaults from here. Visible without dominating the section. */
+.mc-agent-settings-intent-inheritance {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px 12px;
+  padding: 0 4px 10px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.mc-agent-settings-intent-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  font-weight: 500;
+}
+
+.mc-agent-settings-intent-pill.inherit {
+  background: color-mix(in oklab, var(--purple) 8%, var(--bg-2));
+  color: var(--purple);
+  border: 1px solid color-mix(in oklab, var(--purple) 24%, var(--line));
+}
+
+.mc-agent-settings-intent-pill.custom {
+  background: var(--bg-2);
+  color: var(--ink);
+  border: 1px solid var(--line);
+}
+
+.mc-agent-settings-intent-help {
+  color: var(--mute);
+}
+
+.mc-agent-settings-intent-revert {
+  appearance: none;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font: inherit;
+  color: var(--purple);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+}
+
+.mc-agent-settings-intent-revert:hover {
+  color: color-mix(in oklab, var(--purple) 80%, black);
+}
+
 /* Freeform recruiter-intent textarea on the role-page Agent settings tab.
    Replaces the structured Must-have / Preferred / Nice-to-have row UI —
    the agent v5 system prompt reads this as RECRUITER INTENT (priorities,

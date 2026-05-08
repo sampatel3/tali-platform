@@ -583,6 +583,7 @@ const RoleAgentSettingsTab = ({
   agentStatus = null,
   criteriaDraft,
   setCriteriaDraft,
+  orgDefaultRoleIntent = '',
   thresholdDraft,
   setThresholdDraft,
   thresholdValue,
@@ -681,6 +682,42 @@ const RoleAgentSettingsTab = ({
               </p>
             </div>
           </div>
+          {(() => {
+            // Inheritance state for the role intent vs. org defaults.
+            // Shown above the textarea so recruiters can see at a glance
+            // whether they're customising this role or inheriting from
+            // Settings → AI agent. "Inherits" includes both blank and
+            // exact-match cases — both mean "the agent reads the org
+            // default text as this role's intent."
+            const currentDraft = String(criteriaDraft || '').trim();
+            const orgDefault = String(orgDefaultRoleIntent || '').trim();
+            const hasOrgDefault = orgDefault.length > 0;
+            const isCustom = hasOrgDefault && currentDraft !== '' && currentDraft !== orgDefault;
+            return hasOrgDefault ? (
+              <div className="mc-agent-settings-intent-inheritance">
+                {isCustom ? (
+                  <>
+                    <span className="mc-agent-settings-intent-pill custom">Custom for this role</span>
+                    <button
+                      type="button"
+                      className="mc-agent-settings-intent-revert"
+                      onClick={() => setCriteriaDraft(orgDefault)}
+                      aria-label="Revert role intent to org defaults"
+                    >
+                      Revert to org defaults
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <span className="mc-agent-settings-intent-pill inherit">Inheriting from org defaults</span>
+                    <span className="mc-agent-settings-intent-help">
+                      Edit below to customise for this role only.
+                    </span>
+                  </>
+                )}
+              </div>
+            ) : null;
+          })()}
           <div className="mc-agent-settings-textwrap">
             <textarea
               className="mc-agent-settings-intent-textarea"
@@ -688,10 +725,11 @@ const RoleAgentSettingsTab = ({
               value={String(criteriaDraft || '')}
               onChange={(e) => setCriteriaDraft(e.target.value)}
               placeholder={
-                "e.g. We're looking for engineers who can move fast in early-stage chaos.\n"
-                + "5+ years backend matters less than 0→1 product experience.\n"
-                + "Strong written communication is critical — most of the role is async.\n"
-                + "If they've worked at Stripe, Linear, or Vercel they probably get it."
+                String(orgDefaultRoleIntent || '').trim()
+                  || "e.g. We're looking for engineers who can move fast in early-stage chaos.\n"
+                  + "5+ years backend matters less than 0→1 product experience.\n"
+                  + "Strong written communication is critical — most of the role is async.\n"
+                  + "If they've worked at Stripe, Linear, or Vercel they probably get it."
               }
               aria-label="Role intent"
             />
@@ -1054,6 +1092,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [fetchPendingDecisions, showToast]);
   const [role, setRole] = useState(null);
+  // Org-default role intent — joined from Settings → AI agent's
+  // ``default_role_requirements`` array. Used on the Agent settings
+  // tab to show whether this role's intent is inherited or customised.
+  const [orgDefaultRoleIntent, setOrgDefaultRoleIntent] = useState('');
   const [roleTasks, setRoleTasks] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
   const [roleApplications, setRoleApplications] = useState([]);
@@ -1089,17 +1131,27 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     setLoading(true);
     try {
-      const [roleRes, tasksRes, applicationsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes] = await Promise.all([
+      const [roleRes, tasksRes, applicationsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgRes] = await Promise.all([
         rolesApi.get(numericRoleId),
         rolesApi.listTasks(numericRoleId),
         rolesApi.listApplications(numericRoleId, { sort_by: 'pre_screen_score', sort_order: 'desc' }),
         rolesApi.batchScoreStatus(numericRoleId),
         rolesApi.fetchCvsStatus(numericRoleId),
         rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
+        // Org defaults — used to surface inheritance state on the role
+        // intent textarea. Defensive: optional-chained call + .catch so
+        // a missing API client (older tests) or transient failure
+        // doesn't blow up the whole role workspace load.
+        Promise.resolve(apiClient.organizations?.get?.() ?? { data: null })
+          .catch(() => ({ data: null })),
       ]);
       const nextRole = roleRes?.data || null;
       setRole(nextRole);
       setCriteriaDraft(nextRole?.additional_requirements || '');
+      const orgDefaults = Array.isArray(orgRes?.data?.default_role_requirements)
+        ? orgRes.data.default_role_requirements
+        : [];
+      setOrgDefaultRoleIntent(orgDefaults.map((s) => String(s || '').trim()).filter(Boolean).join('\n'));
       setThresholdDraft(nextRole?.auto_reject_threshold_100 != null ? String(nextRole.auto_reject_threshold_100) : '');
       setRoleTasks(Array.isArray(tasksRes?.data) ? tasksRes.data : []);
       setRoleApplications(Array.isArray(applicationsRes?.data) ? applicationsRes.data : []);
@@ -1934,6 +1986,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             agentStatus={agentStatus}
             criteriaDraft={criteriaDraft}
             setCriteriaDraft={setCriteriaDraft}
+            orgDefaultRoleIntent={orgDefaultRoleIntent}
             thresholdDraft={thresholdDraft}
             setThresholdDraft={setThresholdDraft}
             thresholdValue={thresholdValue}
