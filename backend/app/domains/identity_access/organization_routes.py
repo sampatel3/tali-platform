@@ -24,7 +24,6 @@ from ...schemas.organization import (
     WorkableConnect,
     WorkableTokenConnect,
 )
-from ...services.role_criteria_service import mirror_org_text_from_criteria
 from ...platform.config import settings
 from ...platform.secrets import encrypt_text
 from .access_policy import normalize_allowed_domains
@@ -197,20 +196,6 @@ def update_my_org(
     if data.invite_email_template is not None:
         template = (data.invite_email_template or "").strip()
         org.invite_email_template = template or None
-    if data.default_additional_requirements is not None:
-        default_reqs = (data.default_additional_requirements or "").strip()
-        org.default_additional_requirements = default_reqs or None
-    if data.default_role_requirements is not None:
-        cleaned = [
-            str(item).strip()
-            for item in data.default_role_requirements
-            if str(item).strip()
-        ]
-        # Mirror the cleaned list into the legacy free-text column so the CV
-        # scorer (which still reads default_additional_requirements) sees the
-        # same content. The new field is the source of truth for the UI.
-        org.default_role_requirements = cleaned
-        org.default_additional_requirements = "\n".join(cleaned) or None
     if data.default_role_budget_cents is not None:
         org.default_role_budget_cents = max(0, int(data.default_role_budget_cents))
     if data.default_score_threshold is not None:
@@ -301,8 +286,6 @@ def create_org_criterion(
     )
     db.add(chip)
     try:
-        db.flush()
-        mirror_org_text_from_criteria(db, org)
         db.commit()
         db.refresh(chip)
     except Exception:
@@ -341,8 +324,6 @@ def update_org_criterion(
     if "weight" in updates and updates["weight"] is not None:
         chip.weight = float(updates["weight"])
     try:
-        db.flush()
-        mirror_org_text_from_criteria(db, chip.organization)
         db.commit()
         db.refresh(chip)
     except Exception:
@@ -368,11 +349,8 @@ def delete_org_criterion(
     )
     if chip is None:
         raise HTTPException(status_code=404, detail="Criterion not found")
-    org = chip.organization
     chip.deleted_at = datetime.now(timezone.utc)
     try:
-        db.flush()
-        mirror_org_text_from_criteria(db, org)
         db.commit()
     except Exception:
         db.rollback()

@@ -68,23 +68,6 @@ def test_workspace_criteria_crud_round_trip(client):
     assert chip_id not in {c["id"] for c in listed_after}
 
 
-def test_workspace_criteria_mirrors_into_legacy_text(client):
-    """Legacy ``default_role_requirements`` + ``default_additional_requirements``
-    must stay populated from chip state — older readers (system_prompt
-    fallback, exports) keep working until the cleanup PR retires them."""
-    headers, _ = auth_headers(client)
-    _post_org_criterion(client, headers, text="Python", bucket="must")
-    _post_org_criterion(client, headers, text="LLM exp", bucket="preferred")
-    _post_org_criterion(client, headers, text="EU TZ", bucket="constraint")
-
-    org = client.get("/api/v1/organizations/me", headers=headers).json()
-    assert org["default_role_requirements"], "legacy list must be mirrored"
-    blob = org.get("default_additional_requirements") or ""
-    assert "MUST HAVE" in blob and "Python" in blob
-    assert "PREFERRED" in blob and "LLM exp" in blob
-    assert "CONSTRAINTS" in blob and "EU TZ" in blob
-
-
 # ---------------------------------------------------------------------------
 # Role-level chip flow + workspace sync + reset
 # ---------------------------------------------------------------------------

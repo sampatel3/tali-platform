@@ -187,10 +187,9 @@ class OrgResponse(BaseModel):
     credits_balance: int = 0
     default_assessment_duration_minutes: int = 30
     invite_email_template: Optional[str] = None
-    default_additional_requirements: Optional[str] = None
     # Settings → AI agent defaults (HANDOFF settings.md). New roles inherit
-    # these; existing roles aren't rewritten when defaults change.
-    default_role_requirements: List[str] = Field(default_factory=list)
+    # these; existing roles aren't rewritten when defaults change. The chip
+    # list itself is fetched separately from /organizations/me/criteria.
     default_role_budget_cents: Optional[int] = None
     default_score_threshold: Optional[int] = None
     # Workspace-wide spend cap (cents). NULL = no cap.
@@ -210,18 +209,6 @@ class OrgResponse(BaseModel):
     candidate_feedback_enabled: bool = True
     created_at: datetime
 
-    @field_validator("default_role_requirements", mode="before")
-    @classmethod
-    def _coerce_requirements(cls, value: Any) -> list[str]:
-        # The DB column is nullable JSON; orgs that predate the settings
-        # redesign return None here. Coerce to an empty list so the typed
-        # response stays valid.
-        if value is None:
-            return []
-        if isinstance(value, list):
-            return [str(item).strip() for item in value if str(item).strip()]
-        return []
-
     model_config = {"from_attributes": True}
 
 
@@ -240,12 +227,9 @@ class OrgUpdate(BaseModel):
     candidate_feedback_enabled: Optional[bool] = None
     default_assessment_duration_minutes: Optional[int] = Field(default=None, ge=15, le=180)
     invite_email_template: Optional[str] = Field(default=None, max_length=10000)
-    default_additional_requirements: Optional[str] = Field(default=None, max_length=12000)
-    # Settings → AI agent defaults. ``default_role_requirements`` is a list
-    # of short human-readable strings (one per requirement) that pre-fill the
-    # must-haves on every new role. The list is bounded so a stray paste
-    # can't blow up the JSON column.
-    default_role_requirements: Optional[List[str]] = Field(default=None, max_length=200)
+    # Settings → AI agent defaults. The chip list itself is managed via
+    # the /organizations/me/criteria endpoints; only budget + threshold
+    # live on this PATCH now.
     default_role_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
     default_score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
     monthly_spend_cap_cents: Optional[int] = Field(default=None, ge=0, le=100_000_000)

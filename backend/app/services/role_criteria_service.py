@@ -1,12 +1,14 @@
 """Manage workspace + role criteria — the structured chip-based intent model.
 
 Chips (rows in ``role_criteria`` and ``org_criteria``) are the source of truth.
-The legacy ``Role.additional_requirements`` text blob and
-``Organization.default_role_requirements`` JSON list are mirrored from the
-chip state via :func:`mirror_role_text_from_criteria` and
-:func:`mirror_org_text_from_criteria` so existing readers (system_prompt,
-fit_matching, Workable export) keep working unchanged until a follow-up PR
-retires them.
+The legacy ``Role.additional_requirements`` text blob is still kept in sync
+from chip state via :func:`mirror_role_text_from_criteria` so the v3 fit
+scorer / interview helpers / MCP payloads / sub-agents that still read the
+text column don't break. The legacy
+``Organization.default_role_requirements`` and
+``Organization.default_additional_requirements`` columns were dropped in
+alembic 067; readers consume :func:`render_org_intent_block` /
+:func:`render_org_intent_lines` instead.
 
 Sync model
 ----------
@@ -233,7 +235,9 @@ def reset_role_to_workspace(db: Session, role: Role) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy text mirror (chips → text columns)
+# Render helpers — used everywhere the agent prompts / scoring / interview
+# helpers need a text view of the chip state. Replaces the legacy reads of
+# ``role.additional_requirements`` and ``organization.default_role_requirements``.
 # ---------------------------------------------------------------------------
 
 _BUCKET_LABEL = {
@@ -263,9 +267,10 @@ def _bucketed_text(items: Iterable[tuple[str, str]]) -> str:
 
 
 def mirror_role_text_from_criteria(db: Session, role: Role) -> None:
-    """Re-derive ``role.additional_requirements`` from active recruiter chips.
-    Called on every chip CRUD so legacy readers stay in sync until they're
-    retired."""
+    """Re-derive ``role.additional_requirements`` from active recruiter
+    chips. Called on every chip CRUD so the legacy text column stays in
+    sync with chip state for the readers (interview helpers, MCP, sub-
+    agents, v3 fit scorer) that haven't been migrated yet."""
     items = [
         (c.bucket, c.text)
         for c in sorted(_active_recruiter_role_criteria(db, role), key=lambda c: c.ordering)
@@ -273,20 +278,54 @@ def mirror_role_text_from_criteria(db: Session, role: Role) -> None:
     role.additional_requirements = _bucketed_text(items) or None
 
 
-def mirror_org_text_from_criteria(db: Session, organization) -> None:
-    """Re-derive ``organization.default_role_requirements`` (JSON list) and
-    ``default_additional_requirements`` (text blob) from active workspace
-    chips. Both legacy fields stay populated for downstream readers."""
+def render_role_intent_block(role: Role) -> str:
+    """Bucketed text view of a role's recruiter chips. Empty string when
+    the role has none. Used by every reader that previously read
+    ``role.additional_requirements`` directly."""
+    if role is None:
+        return ""
+    chips = [
+        c for c in (role.criteria or [])
+        if c.deleted_at is None and c.source != CRITERION_SOURCE_DERIVED
+    ]
+    items = [
+        (c.bucket, c.text)
+        for c in sorted(chips, key=lambda c: c.ordering)
+    ]
+    return _bucketed_text(items)
+
+
+def render_role_intent_lines(role: Role) -> list[str]:
+    """Flat list of recruiter chip texts (one per chip) preserving order.
+    Used by readers that want individual bullets rather than the bucketed
+    text block."""
+    if role is None:
+        return []
+    chips = [
+        c for c in (role.criteria or [])
+        if c.deleted_at is None and c.source != CRITERION_SOURCE_DERIVED
+    ]
+    return [c.text.strip() for c in sorted(chips, key=lambda c: c.ordering) if (c.text or "").strip()]
+
+
+def render_org_intent_block(db: Session, organization) -> str:
+    """Bucketed text view of a workspace's chips. Empty when the workspace
+    has none. Used by readers that previously joined the legacy
+    ``organization.default_role_requirements`` JSON list into a text blob."""
     if organization is None or organization.id is None:
-        return
+        return ""
     chips = _active_org_criteria(db, organization.id)
     items = [(c.bucket, c.text) for c in chips]
-    organization.default_role_requirements = [
-        f"{_BUCKET_LABEL[bucket]}: {text}" if bucket != BUCKET_PREFERRED else text
-        for bucket, text in items
-        if (text or "").strip()
-    ] or None
-    organization.default_additional_requirements = _bucketed_text(items) or None
+    return _bucketed_text(items)
+
+
+def render_org_intent_lines(db: Session, organization) -> list[str]:
+    """Flat list of workspace chip texts. Replaces direct reads of the
+    legacy ``organization.default_role_requirements`` JSON column."""
+    if organization is None or organization.id is None:
+        return []
+    chips = _active_org_criteria(db, organization.id)
+    return [c.text.strip() for c in chips if (c.text or "").strip()]
 
 
 # ---------------------------------------------------------------------------

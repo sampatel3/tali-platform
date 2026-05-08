@@ -115,13 +115,6 @@ def resolved_workable_mode(org: Organization) -> str:
     return "read_only"
 
 
-def resolved_role_requirements(org: Organization) -> list[str]:
-    raw = getattr(org, "default_role_requirements", None)
-    if isinstance(raw, list):
-        return [str(item).strip() for item in raw if str(item).strip()]
-    return []
-
-
 def org_response_payload(org: Organization) -> OrgResponse:
     response = OrgResponse.model_validate(org)
     response.workable_config = WorkableConfigBase(**resolved_workable_config(org))
@@ -130,6 +123,5 @@ def org_response_payload(org: Organization) -> OrgResponse:
     response.scoring_policy = ScoringPolicy(**resolved_scoring_policy(org))
     response.ai_tooling_config = AiToolingConfig(**resolved_ai_tooling_config(org))
     response.notification_preferences = NotificationPreferences(**resolved_notification_preferences(org))
-    response.default_role_requirements = resolved_role_requirements(org)
     response.workable_mode = resolved_workable_mode(org)
     return response

@@ -42,14 +42,12 @@ class Organization(Base):
     anthropic_workspace_provisioning_failed_at = Column(DateTime(timezone=True), nullable=True)
     default_assessment_duration_minutes = Column(Integer, default=30, nullable=False)
     invite_email_template = Column(Text, nullable=True)
-    # Org-wide default for the per-role additional_requirements field used by
-    # CV scoring. Auto-copied into role.additional_requirements on role
-    # create (manual + Workable import) when the role's own value is empty.
-    default_additional_requirements = Column(Text, nullable=True)
-    # Settings → AI agent defaults (HANDOFF settings.md). Each is read once at
-    # role-create time; per-role overrides win and existing roles are never
-    # rewritten when these change.
-    default_role_requirements = Column(JSON, nullable=True)
+    # Settings → AI agent defaults (HANDOFF settings.md). Read once at role
+    # create time; per-role overrides win and existing roles are never
+    # rewritten when these change. The chip list itself lives in
+    # ``org_criteria`` — the legacy ``default_role_requirements`` JSON +
+    # ``default_additional_requirements`` text columns were dropped in
+    # alembic 067.
     default_role_budget_cents = Column(Integer, nullable=True)
     default_score_threshold = Column(Integer, nullable=True)
     # Workspace-wide spend cap (cents). When projected month-end > cap, the

@@ -74,23 +74,12 @@ def create_role(
     # org has chip-based defaults, ``sync_all_criteria`` snapshots them
     # directly. As a last resort we fall back to the org's legacy text
     # columns so older orgs that never migrated to chips still seed roles.
+    # If the request supplies explicit ``additional_requirements`` text
+    # (legacy callers / Workable import payloads) we honour it: the
+    # ``sync_all_criteria`` service parses that text into chips with
+    # bucket inference. Otherwise the role snapshot inherits the
+    # workspace chip set directly via ``org_criteria``.
     requested_reqs = (data.additional_requirements or "").strip() or None
-    if requested_reqs is None and org is not None:
-        has_chips = any(
-            c.deleted_at is None for c in (org.criteria or [])
-        )
-        if not has_chips:
-            list_default = getattr(org, "default_role_requirements", None)
-            if isinstance(list_default, list):
-                joined = "\n".join(
-                    str(item).strip() for item in list_default if str(item).strip()
-                )
-                requested_reqs = joined or None
-            if requested_reqs is None:
-                blob_default = (
-                    getattr(org, "default_additional_requirements", None) or ""
-                ).strip()
-                requested_reqs = blob_default or None
 
     monthly_budget_cents = data.monthly_usd_budget_cents
     if monthly_budget_cents is None and org is not None:
