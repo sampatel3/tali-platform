@@ -288,6 +288,11 @@ function AppContent() {
       roleId: Object.prototype.hasOwnProperty.call(options, 'roleId')
         ? options.roleId
         : null,
+      chatInitialQuery: Object.prototype.hasOwnProperty.call(options, 'initialQuery')
+        ? options.initialQuery
+        : (Object.prototype.hasOwnProperty.call(options, 'chatInitialQuery')
+          ? options.chatInitialQuery
+          : null),
     });
 
     if (nextPath) {

@@ -7785,7 +7785,15 @@ button.eng-badge-button:focus-visible {
   gap: 10px;
 }
 
-.mc-nav-search {
+/* Global search — pill input + dropdown popover. The placeholder pill
+   used to be a no-op; this is the working version with a typed-word
+   fallback over candidates/roles/tasks plus an "Ask Search AI" handoff
+   to the /chat tab. */
+.mc-nav-search-wrap {
+  position: relative;
+}
+
+.mc-nav-search-form {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -7797,14 +7805,31 @@ button.eng-badge-button:focus-visible {
   font-size: 11.5px;
   color: var(--mute);
   min-width: 240px;
-  cursor: pointer;
+  transition: border-color 0.12s ease, background 0.12s ease;
 }
 
-.mc-nav-search:hover {
-  border-color: var(--ink-soft);
+.mc-nav-search-wrap.open .mc-nav-search-form,
+.mc-nav-search-form:focus-within,
+.mc-nav-search-form:hover {
+  border-color: color-mix(in oklab, var(--purple) 45%, var(--line));
+  background: var(--bg-2);
 }
 
-.mc-nav-search kbd {
+.mc-nav-search-input {
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  border: 0;
+  outline: none;
+  font: inherit;
+  color: var(--ink);
+}
+
+.mc-nav-search-input::placeholder {
+  color: var(--mute);
+}
+
+.mc-nav-search-form kbd {
   margin-left: auto;
   display: inline-block;
   padding: 1px 6px;
@@ -7815,6 +7840,124 @@ button.eng-badge-button:focus-visible {
   color: var(--ink-2);
   font-family: inherit;
   font-size: 10px;
+}
+
+.mc-nav-search-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 360px;
+  max-width: 460px;
+  background: var(--bg-2);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  box-shadow: var(--shadow-lg);
+  z-index: 200;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.mc-nav-search-empty {
+  padding: 18px 16px;
+  font-size: 13px;
+  color: var(--mute);
+  text-align: center;
+}
+
+.mc-nav-search-groups {
+  max-height: 360px;
+  overflow-y: auto;
+  padding: 6px 6px 4px;
+}
+
+.mc-nav-search-group + .mc-nav-search-group {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid var(--line-2);
+}
+
+.mc-nav-search-grouphead {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px 4px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--mute);
+}
+
+.mc-nav-search-grouphead .count {
+  margin-left: auto;
+  color: var(--mute-2);
+}
+
+.mc-nav-search-row {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background 0.1s ease;
+}
+
+.mc-nav-search-row:hover,
+.mc-nav-search-row:focus-visible {
+  background: color-mix(in oklab, var(--purple) 8%, var(--bg-2));
+  outline: none;
+}
+
+.mc-nav-search-row .title {
+  font-size: 13.5px;
+  color: var(--ink);
+  font-weight: 500;
+}
+
+.mc-nav-search-row .sub {
+  font-size: 11.5px;
+  color: var(--mute);
+}
+
+.mc-nav-search-ai {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border: 0;
+  border-top: 1px solid var(--line);
+  background: color-mix(in oklab, var(--purple) 6%, var(--bg-2));
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s ease;
+}
+
+.mc-nav-search-ai:hover {
+  background: color-mix(in oklab, var(--purple) 12%, var(--bg-2));
+}
+
+.mc-nav-search-ai em {
+  font-style: normal;
+  color: var(--mute);
+  font-weight: 400;
+}
+
+.mc-nav-search-ai .arrow {
+  margin-left: auto;
+  color: var(--purple);
+  transition: transform 0.18s ease;
+}
+
+.mc-nav-search-ai:hover .arrow {
+  transform: translateX(3px);
 }
 
 .mc-icon-btn {
@@ -8351,12 +8494,19 @@ button.eng-badge-button:focus-visible {
 /* Compact variant deprecated — normalized to default height. */
 .agent-header.compact { padding: 32px 32px 36px; }
 
-/* === ON: vivid, saturated purple wash. Active worker, live brand colour. === */
+/* === ON: vivid, saturated purple wash. Active worker, live brand colour.
+   Every stop is derived from --purple / --purple-lav so the agent-on hero,
+   the marketing CTA banner, and every primary button stay on the same
+   purple. Touch --purple to retune all three at once. === */
 .agent-header.agent-running {
   background:
-    radial-gradient(ellipse 80% 60% at 75% 0%,  rgba(196,165,253,0.70) 0%, transparent 60%),
-    radial-gradient(ellipse 70% 80% at 10% 100%, rgba(180,80,255,0.55) 0%, transparent 65%),
-    linear-gradient(180deg, #3a1d6e 0%, #251248 100%);
+    radial-gradient(ellipse 80% 60% at 75% 0%,
+      color-mix(in oklab, var(--purple-lav) 75%, transparent) 0%, transparent 60%),
+    radial-gradient(ellipse 70% 80% at 10% 100%,
+      color-mix(in oklab, var(--purple) 60%, transparent) 0%, transparent 65%),
+    linear-gradient(180deg,
+      color-mix(in oklab, var(--purple) 55%, #000) 0%,
+      color-mix(in oklab, var(--purple) 30%, #000) 100%);
   animation: agentHeaderPulse 6s ease-in-out infinite;
 }
 
@@ -8372,7 +8522,8 @@ button.eng-badge-button:focus-visible {
   right: 18%;
   width: 560px;
   height: 560px;
-  background: radial-gradient(circle, rgba(220,200,255,0.42), transparent 60%);
+  background: radial-gradient(circle,
+    color-mix(in oklab, var(--purple-lav) 50%, transparent), transparent 60%);
   filter: blur(20px);
   pointer-events: none;
   animation: agentGlowDrift1 9s ease-in-out infinite;
@@ -8385,7 +8536,8 @@ button.eng-badge-button:focus-visible {
   left: -5%;
   width: 540px;
   height: 540px;
-  background: radial-gradient(circle, rgba(180,80,255,0.45), transparent 65%);
+  background: radial-gradient(circle,
+    color-mix(in oklab, var(--purple) 50%, transparent), transparent 65%);
   pointer-events: none;
   animation: agentGlowDrift2 11s ease-in-out infinite;
 }

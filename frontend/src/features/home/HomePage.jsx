@@ -16,6 +16,7 @@ import { HomeNow } from './HomeNow';
 import { HomeRoles } from './HomeRoles';
 import { HomeSignal } from './HomeSignal';
 import { HomeEverything } from './HomeEverything';
+import { HomePlatformUpdates } from './HomePlatformUpdates';
 
 const ORG_STATUS_POLL_MS = 30_000;
 
@@ -47,7 +48,7 @@ const greetingFor = (user) => {
   const name = String(user?.full_name || user?.name || '').trim().split(/\s+/)[0]
     || (user?.email ? String(user.email).split('@')[0] : '')
     || 'there';
-  return `${greetingForHour(new Date())}, ${name}.`;
+  return `${greetingForHour(new Date())}, ${name}`;
 };
 
 export const HomePage = ({ onNavigate, NavComponent }) => {
@@ -343,6 +344,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
           loading={loadingSignal}
           reload={reloadAll}
         />
+
+        <HomePlatformUpdates />
 
         <HomeEverything
           rows={decisions}

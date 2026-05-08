@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import './chat.css';
 import EmptyState from './EmptyState';
 import Composer from './Composer';
@@ -78,10 +78,23 @@ const ChatPage = ({ onNavigate = null, NavComponent = null } = {}) => {
   const navigate = useNavigate();
   const { conversationId: routeId } = useParams();
   const conversationId = routeId ? Number(routeId) : null;
+  const [searchParams, setSearchParams] = useSearchParams();
 
   const [conversations, setConversations] = useState([]);
   const [composer, setComposer] = useState('');
   const [pendingDeleteId, setPendingDeleteId] = useState(null);
+
+  // The global search bar hands off to /chat with ?q=<query>. Seed the
+  // composer once so the user lands on the chat with their phrase already
+  // typed; we drop the param right after so a refresh won't re-seed.
+  useEffect(() => {
+    const seed = searchParams.get('q');
+    if (!seed) return;
+    setComposer(seed);
+    const next = new URLSearchParams(searchParams);
+    next.delete('q');
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
 
   // Conversations created by the current send() flow. Hydrating their
   // history from the API would race with the in-flight stream — the

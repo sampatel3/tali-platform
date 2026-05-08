@@ -2,12 +2,47 @@ import React, { createContext, useCallback, useContext, useState } from 'react';
 
 const ToastContext = createContext(null);
 
+// Toasts auto-dismiss after 5s, but they're also the only place users
+// learn that something happened (a candidate synced, a role was created,
+// a Workable run finished). Once dismissed they're gone, so we mirror
+// every toast into a session-scoped activity log that the Home page
+// surfaces as "Platform updates" — chatty by nature, hidden by default.
+const ACTIVITY_CAP = 200;
+
+// Heuristic categoriser. Keeps the log filterable without forcing every
+// existing showToast call site to learn a new arg. Anything that mentions
+// a candidate/role/sync/import is treated as routine "platform" chatter
+// (hidden by default on Home); errors and explicit "decision" mentions
+// stay visible.
+const inferActivityKind = (message, type) => {
+  if (type === 'error') return 'error';
+  const text = String(message || '').toLowerCase();
+  if (/\b(candidate|application|cv|invit|sync|import|workable)\b/.test(text)) return 'sync';
+  if (/\b(role|job)\b/.test(text)) return 'role';
+  if (/\b(decision|approve|override|teach|snooz)\b/.test(text)) return 'decision';
+  if (type === 'success') return 'success';
+  return 'info';
+};
+
 export function ToastProvider({ children }) {
   const [toasts, setToasts] = useState([]);
+  const [activities, setActivities] = useState([]);
 
   const showToast = useCallback((message, type = 'info') => {
-    const id = Date.now();
-    setToasts((prev) => [...prev, { id, message: String(message), type }]);
+    const id = Date.now() + Math.random();
+    const text = String(message);
+    setToasts((prev) => [...prev, { id, message: text, type }]);
+    setActivities((prev) => {
+      const entry = {
+        id,
+        message: text,
+        type,
+        kind: inferActivityKind(text, type),
+        createdAt: new Date().toISOString(),
+      };
+      const next = [entry, ...prev];
+      return next.length > ACTIVITY_CAP ? next.slice(0, ACTIVITY_CAP) : next;
+    });
     setTimeout(() => {
       setToasts((prev) => prev.filter((t) => t.id !== id));
     }, 5000);
@@ -17,8 +52,18 @@ export function ToastProvider({ children }) {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
+  const clearActivities = useCallback(() => {
+    setActivities([]);
+  }, []);
+
   return (
-    <ToastContext.Provider value={{ showToast, toasts, dismiss }}>
+    <ToastContext.Provider value={{
+      showToast,
+      toasts,
+      dismiss,
+      activities,
+      clearActivities,
+    }}>
       {children}
       <ToastContainer toasts={toasts} onDismiss={dismiss} />
     </ToastContext.Provider>
@@ -59,6 +104,14 @@ function ToastContainer({ toasts, onDismiss }) {
 
 export function useToast() {
   const ctx = useContext(ToastContext);
-  if (!ctx) return { showToast: () => {}, toasts: [], dismiss: () => {} };
+  if (!ctx) {
+    return {
+      showToast: () => {},
+      toasts: [],
+      dismiss: () => {},
+      activities: [],
+      clearActivities: () => {},
+    };
+  }
   return ctx;
 }

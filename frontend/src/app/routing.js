@@ -19,10 +19,16 @@ export const pathForPage = (page, options = {}) => {
       return '/home';
     case 'jobs':
       return '/jobs';
-    case 'chat':
-      return options.chatConversationId
+    case 'chat': {
+      const base = options.chatConversationId
         ? `/chat/${encodeURIComponent(options.chatConversationId)}`
         : '/chat';
+      // Carrying a prefill from the global search → /chat keeps the
+      // typed phrase visible in the composer so the user can refine
+      // before sending.
+      const q = options.chatInitialQuery ? String(options.chatInitialQuery).trim() : '';
+      return q ? `${base}?q=${encodeURIComponent(q)}` : base;
+    }
     case 'job-pipeline':
       return options.roleId
         ? `/jobs/${encodeURIComponent(options.roleId)}`
