@@ -92,6 +92,9 @@ const BespokeTaskRequestPage = lazy(() =>
 const SettingsPage = lazy(() =>
   import('./features/settings/SettingsPage').then((m) => ({ default: m.SettingsPage }))
 );
+const DecisionPolicyPage = lazy(() =>
+  import('./features/decision_policy/DecisionPolicyPage')
+);
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
@@ -684,6 +687,15 @@ function AppContent() {
             errorDescription={searchParams.get('error_description')}
             onNavigate={navigateToPage}
           />
+        )}
+      />
+
+      <Route
+        path="/admin/decision-policy/*"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <DecisionPolicyPage />
+          </Suspense>
         )}
       />
 

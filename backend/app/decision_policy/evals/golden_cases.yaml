@@ -1,0 +1,85 @@
+# Golden cases — synthetic application states with expected verdicts.
+# Each case is run against a bootstrap policy (org default, score_threshold=65).
+# `expected.decision_type` MUST match what the engine produces; mismatch
+# fails the eval. Hand-curated to cover every decision point + override.
+
+cases:
+  - name: strong_candidate_queues_send_assessment
+    inputs:
+      scores:
+        role_fit_score: 80
+        pre_screen_score: 75
+      flags:
+        has_pending_assessment: false
+    expected:
+      decision_type: queue_send_assessment
+      decision_point: send_assessment
+
+  - name: low_candidate_queues_reject
+    inputs:
+      scores:
+        role_fit_score: 10
+        pre_screen_score: 5
+      flags:
+        no_pending_assessment: true
+    expected:
+      decision_type: queue_reject_decision
+      decision_point: reject
+
+  - name: post_assessment_strong_advances
+    inputs:
+      scores:
+        role_fit_score: 70
+        pre_screen_score: 70
+        taali_score: 82
+        assessment_score: 78
+      flags:
+        assessment_completed: true
+    expected:
+      decision_type: queue_advance_decision
+      decision_point: advance_to_interview
+
+  - name: must_have_block_auto_rejects
+    inputs:
+      scores:
+        role_fit_score: 95
+        pre_screen_score: 95
+      flags:
+        must_have_blocked: true
+    expected:
+      decision_type: auto_reject
+      decision_point: send_assessment
+
+  - name: recent_recruiter_send_skips
+    inputs:
+      scores:
+        role_fit_score: 85
+        pre_screen_score: 75
+      flags:
+        has_pending_assessment: true  # recruiter sent already
+      manual_actions:
+        - kind: sent_assessment
+    expected:
+      skipped_due_to_manual: true
+
+  - name: borderline_no_action
+    inputs:
+      scores:
+        role_fit_score: 50
+        pre_screen_score: 40
+      flags:
+        has_pending_assessment: false
+    expected:
+      decision_type: no_action
+
+  - name: pending_assessment_skips_send
+    inputs:
+      scores:
+        role_fit_score: 80
+        pre_screen_score: 75
+      flags:
+        has_pending_assessment: true
+    expected:
+      decision_type_in:
+        - skip
+        - no_action
