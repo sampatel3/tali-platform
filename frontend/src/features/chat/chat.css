@@ -15,9 +15,9 @@
   --c-bg: var(--bg, #f7f4fb);
   --c-bg-2: var(--bg-2, #ffffff);
   --c-bg-3: var(--bg-3, #efe8f7);
-  --c-purple: var(--purple, #7f39fb);
-  --c-purple-2: var(--purple-2, #6b21e8);
-  --c-purple-soft: var(--purple-soft, #e9ddfe);
+  --c-purple: var(--purple, #b450ff);
+  --c-purple-2: var(--purple-2, #9d3eff);
+  --c-purple-soft: var(--purple-soft, #f4e8ff);
   --c-green: var(--green, #15a36a);
   --c-red: var(--red, #e64a4a);
   --c-amber: var(--amber, #d88a1c);
