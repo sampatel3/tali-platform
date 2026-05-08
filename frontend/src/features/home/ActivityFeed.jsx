@@ -12,6 +12,14 @@ import { Check, X } from 'lucide-react';
 
 import { Avatar, TypeBadge, formatRelativeAge, initialsFrom } from './atoms';
 
+// Import home.css here so any surface that renders <ActivityFeed />
+// (the Hub today, marketing landing tomorrow, anywhere else later)
+// gets the .home-section + .rq-stream-* styles without having to
+// remember to import home.css separately. HomePage continues to
+// import home.css for the rest of the Hub layout — duplicate
+// side-effect imports are deduped by Vite's module graph.
+import './home.css';
+
 
 export const ActivityFeed = ({ rows, selectedId, onSelect, onNavigate }) => (
   <section className="home-section">
