@@ -22,12 +22,18 @@ vi.mock('../../shared/api', () => ({
     fetchCvs: vi.fn(),
     batchPreScreen: vi.fn(),
     batchScore: vi.fn(),
+    createCriterion: vi.fn(),
+    updateCriterion: vi.fn(),
+    deleteCriterion: vi.fn(),
+    syncCriteriaWithWorkspace: vi.fn(),
+    resetCriteriaToWorkspace: vi.fn(),
   },
   tasks: {
     list: vi.fn(),
   },
   organizations: {
     get: vi.fn().mockResolvedValue({ data: { default_role_requirements: [] } }),
+    listCriteria: vi.fn().mockResolvedValue({ data: [] }),
   },
   agent: {
     status: vi.fn().mockResolvedValue({ data: null }),
@@ -265,63 +271,87 @@ Banking transformation experience
     expect(querySectionTitle('What we offer')).not.toBeInTheDocument();
   });
 
-  it('saves recruiter intent from the Agent settings tab', async () => {
-    apiClient.roles.update.mockResolvedValue({ data: { ...baseRole, additional_requirements: 'Payments experience matters' } });
+  it('adds a role-only criterion via the chip composer', async () => {
+    const newCriterion = {
+      id: 99,
+      source: 'recruiter',
+      bucket: 'must',
+      text: 'Payments experience matters',
+      org_criterion_id: null,
+      ordering: 0,
+      weight: 1.0,
+      must_have: true,
+    };
+    apiClient.roles.createCriterion.mockResolvedValue({ data: newCriterion });
+    apiClient.roles.get.mockResolvedValue({
+      data: { ...baseRole, criteria: [newCriterion], suppressed_org_criterion_ids: [] },
+    });
 
     renderPipeline();
     await openAgentSettingsTab();
+    await screen.findByRole('heading', { name: /Role criteria/i, level: 2 });
 
-    // The structured Must-have / Preferred row editor was replaced with
-    // a freeform recruiter-intent textarea (system prompt v5 reads it
-    // as guidance, not gates). The text round-trips verbatim — no
-    // "Must have:" prefix injection on save.
-    await screen.findByRole('heading', { name: /Role intent/i, level: 2 });
-
-    fireEvent.change(screen.getByLabelText('Role intent'), {
-      target: { value: 'Payments experience matters\nStakeholder governance is critical' },
+    fireEvent.change(screen.getByLabelText('Criterion text'), {
+      target: { value: 'Payments experience matters' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /Save role settings/i }));
+    fireEvent.click(screen.getByRole('button', { name: /^Add$/ }));
 
     await waitFor(() => {
-      expect(apiClient.roles.update).toHaveBeenCalledWith(101, expect.objectContaining({
-        additional_requirements: 'Payments experience matters\nStakeholder governance is critical',
-      }));
+      expect(apiClient.roles.createCriterion).toHaveBeenCalledWith(
+        101,
+        expect.objectContaining({ text: 'Payments experience matters', bucket: 'must' }),
+      );
     });
   });
 
-  it('shows the inheritance hint on the role intent textarea', async () => {
-    apiClient.organizations.get.mockResolvedValueOnce({
-      data: { default_role_requirements: ['5+ years backend', 'Strong SQL'] },
+  it('shows the inheritance state when the role has no customizations', async () => {
+    // Role inherits two workspace chips (org_criterion_id set, no
+    // customized_at, no role-only additions). The role-state pill must
+    // read "Inheriting from workspace" rather than "Customized".
+    apiClient.organizations.listCriteria.mockResolvedValueOnce({
+      data: [
+        { id: 5, bucket: 'must', text: '5+ years backend', ordering: 0, weight: 1.0, created_at: '2026-05-08T00:00:00Z' },
+        { id: 6, bucket: 'preferred', text: 'Strong SQL', ordering: 1, weight: 1.0, created_at: '2026-05-08T00:00:00Z' },
+      ],
     });
-    // Role with no override yet — should read as "Inheriting from org defaults".
     apiClient.roles.get.mockResolvedValueOnce({
-      data: { ...baseRole, additional_requirements: '' },
+      data: {
+        ...baseRole,
+        suppressed_org_criterion_ids: [],
+        criteria: [
+          { id: 50, source: 'recruiter', bucket: 'must', text: '5+ years backend', org_criterion_id: 5, customized_at: null, ordering: 0, weight: 1.0, must_have: true },
+          { id: 51, source: 'recruiter', bucket: 'preferred', text: 'Strong SQL', org_criterion_id: 6, customized_at: null, ordering: 1, weight: 1.0, must_have: false },
+        ],
+      },
     });
     renderPipeline();
     await openAgentSettingsTab();
 
-    expect(await screen.findByText(/Inheriting from org defaults/i)).toBeInTheDocument();
-    expect(screen.getByLabelText('Role intent')).toHaveAttribute(
-      'placeholder',
-      expect.stringContaining('5+ years backend'),
-    );
+    expect(await screen.findByText(/Inheriting from workspace/i)).toBeInTheDocument();
   });
 
-  it('shows custom + revert when the role intent diverges from org defaults', async () => {
-    apiClient.organizations.get.mockResolvedValueOnce({
-      data: { default_role_requirements: ['5+ years backend', 'Strong SQL'] },
+  it('shows the customized state when the recruiter has added a role-only chip', async () => {
+    apiClient.organizations.listCriteria.mockResolvedValueOnce({
+      data: [
+        { id: 5, bucket: 'must', text: '5+ years backend', ordering: 0, weight: 1.0, created_at: '2026-05-08T00:00:00Z' },
+      ],
     });
     apiClient.roles.get.mockResolvedValueOnce({
-      data: { ...baseRole, additional_requirements: 'Custom intent for this role' },
+      data: {
+        ...baseRole,
+        suppressed_org_criterion_ids: [],
+        criteria: [
+          { id: 50, source: 'recruiter', bucket: 'must', text: '5+ years backend', org_criterion_id: 5, customized_at: null, ordering: 0, weight: 1.0, must_have: true },
+          { id: 51, source: 'recruiter', bucket: 'preferred', text: 'Custom for this role', org_criterion_id: null, customized_at: null, ordering: 1, weight: 1.0, must_have: false },
+        ],
+      },
     });
     renderPipeline();
     await openAgentSettingsTab();
 
-    expect(await screen.findByText(/Custom for this role/i)).toBeInTheDocument();
-    const revert = screen.getByRole('button', { name: /Revert role intent to org defaults/i });
-    fireEvent.click(revert);
-    // After revert, the textarea content matches org defaults — pill flips back to "Inheriting".
-    expect(await screen.findByText(/Inheriting from org defaults/i)).toBeInTheDocument();
+    expect(await screen.findByText(/Customized for this role/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Sync workspace/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Reset to defaults/i })).toBeInTheDocument();
   });
 
   it('opens Agent settings and Job spec tabs (renamed from role fit / activity per HANDOFF v2 §4.1)', async () => {
@@ -330,7 +360,7 @@ Banking transformation experience
     await screen.findByRole('heading', { name: /AI Native Engineer/i });
 
     fireEvent.click(screen.getByRole('button', { name: /^Agent settings$/i }));
-    expect(await screen.findByRole('heading', { name: /Role intent/i })).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /Role criteria/i })).toBeInTheDocument();
     expect(screen.getByText(/HOW THE AGENT RUNS THIS ROLE/i)).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Reject threshold/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /Autonomy rules/i })).toBeInTheDocument();

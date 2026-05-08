@@ -305,6 +305,9 @@ def update_role(
         role.agent_decision_budget_per_cycle = updates["agent_decision_budget_per_cycle"]
     if "monthly_usd_budget_cents" in updates:
         role.monthly_usd_budget_cents = updates["monthly_usd_budget_cents"]
+    if "suppressed_org_criterion_ids" in updates:
+        raw = updates["suppressed_org_criterion_ids"] or []
+        role.suppressed_org_criterion_ids = [int(x) for x in raw]
     try:
         if recruiter_criteria_changed:
             sync_recruiter_criteria(db, role)

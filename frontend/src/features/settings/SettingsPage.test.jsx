@@ -17,6 +17,10 @@ vi.mock('../../shared/api', () => ({
     syncWorkable: vi.fn(),
     cancelWorkableSync: vi.fn(),
     clearWorkableData: vi.fn(),
+    listCriteria: vi.fn(),
+    createCriterion: vi.fn(),
+    updateCriterion: vi.fn(),
+    deleteCriterion: vi.fn(),
   },
   billing: {
     usage: vi.fn(),
@@ -113,6 +117,7 @@ describe('SettingsPage recruiter surface', () => {
     orgsApi.getWorkableMembers.mockResolvedValue({ data: { members: [] } });
     orgsApi.getWorkableDisqualificationReasons.mockResolvedValue({ data: { disqualification_reasons: [] } });
     orgsApi.getWorkableStages.mockResolvedValue({ data: { stages: [] } });
+    orgsApi.listCriteria.mockResolvedValue({ data: [] });
     billingApi.usage.mockResolvedValue({ data: { usage: [], total_cost: 0 } });
     billingApi.costs.mockResolvedValue({ data: { total_cost_usd: 0 } });
     billingApi.credits.mockResolvedValue({ data: { credits_balance: 0, packs: [] } });
@@ -134,25 +139,20 @@ describe('SettingsPage recruiter surface', () => {
     expect(screen.getByRole('button', { name: 'Save invite template' })).toBeInTheDocument();
   });
 
-  it('saves the three workspace defaults from the AI agent tab', async () => {
+  it('saves budget + threshold from the AI agent tab (chips save inline)', async () => {
+    // The textarea was replaced with a chip composer. Workspace chips load
+    // from /organizations/me/criteria and CRUD inline; only budget +
+    // threshold are batched behind the "Save budget & threshold" button.
     renderSettingsRoute('/settings/agent');
 
     await waitFor(() => {
-      expect(screen.getByRole('heading', { name: /Default role intent/i })).toBeInTheDocument();
+      expect(screen.getByRole('heading', { name: /Default role criteria/i })).toBeInTheDocument();
     });
-    // The structured row editor was replaced with a freeform intent
-    // textarea (system prompt v5 reads it as guidance, not gates). The
-    // seeded list renders as newline-joined text in the textarea.
-    const textarea = await screen.findByLabelText('Default role intent');
-    expect(textarea).toHaveValue('5+ years backend\nStrong SQL');
 
-    fireEvent.click(screen.getByRole('button', { name: 'Save agent defaults' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save budget & threshold' }));
 
     await waitFor(() => {
-      // Recruiter intent is preserved verbatim — no "Must have:"
-      // prefix injection on save.
       expect(orgsApi.update).toHaveBeenCalledWith({
-        default_role_requirements: ['5+ years backend', 'Strong SQL'],
         default_role_budget_cents: 20000,
         default_score_threshold: 70,
       });

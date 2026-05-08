@@ -92,6 +92,10 @@ class RoleUpdate(BaseModel):
     # Universal monthly USD cap (cents) for ALL Anthropic spend on the role.
     monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
     score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
+    # Workspace criterion ids the recruiter has explicitly hidden from
+    # this role. Editable via PATCH so the chip editor's "Show hidden →
+    # Add back" action can clear an entry without going through Sync.
+    suppressed_org_criterion_ids: Optional[list[int]] = Field(default=None, max_length=200)
 
 
 CRITERION_BUCKET_VALUES = ("must", "preferred", "constraint")

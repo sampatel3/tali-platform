@@ -21,4 +21,9 @@ export const organizations = {
   }),
   cancelWorkableSync: (runId = null) => api.post('/workable/sync/cancel', runId != null ? { run_id: runId } : {}),
   clearWorkableData: () => api.post('/workable/clear'),
+  // Workspace criteria — Settings → AI agent chip composer.
+  listCriteria: () => api.get('/organizations/me/criteria'),
+  createCriterion: (data) => api.post('/organizations/me/criteria', data),
+  updateCriterion: (id, data) => api.patch(`/organizations/me/criteria/${id}`, data),
+  deleteCriterion: (id) => api.delete(`/organizations/me/criteria/${id}`),
 };
