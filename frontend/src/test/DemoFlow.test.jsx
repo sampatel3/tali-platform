@@ -86,14 +86,12 @@ describe('Demo flow redesign', () => {
     expect(screen.getAllByRole('button', { name: /^Book a demo$/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByRole('button', { name: /Try the live walkthrough/i }).length).toBeGreaterThan(0);
     // Hero composition shows the unified AgentHeader's right-side panel
-    // ("Agent mode" label + state pill "ON"), per HANDOFF unified-headers.md §2.
-    // The hero AgentHeader renders OFF first then auto-flips ON ~1.6s
-    // later (interactive cross-fade). Wait for the ON-state copy.
+    // ("Agent mode" label + state pill "OFF" initially). The auto-flip
+    // to ON is now driven by an IntersectionObserver scrolling past
+    // #how-it-works — JSDom doesn't fire intersection entries, so the
+    // panel stays OFF in tests. Assert the OFF copy ("Set a monthly cap…").
     expect(screen.getByText(/^Agent mode$/i)).toBeInTheDocument();
-    await waitFor(
-      () => expect(screen.getByText(/3 awaiting your review/i)).toBeInTheDocument(),
-      { timeout: 3000 },
-    );
+    expect(screen.getByText(/Set a monthly cap/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Maya Chen/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/CANDIDATES PROCESSED/i)).toBeInTheDocument();
     // "What your candidate actually sees" section was removed in v4 (HANDOFF chat.md)
