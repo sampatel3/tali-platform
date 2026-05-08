@@ -161,8 +161,8 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
       {NavComponent ? <NavComponent currentPage="tasks" onNavigate={onNavigate} /> : null}
       <AgentHeader
         kicker="03 · TASKS"
-        title={<>Tasks the engineering team built for <em>you</em></>}
-        subtitle="Browse read-only assessment tasks, preview the candidate workspace, and use them when assigning candidates from jobs."
+        title={<>Task <em>catalogue</em></>}
+        subtitle="Browse the assessment task library, preview the candidate workspace, and assign tasks to candidates from a role. Need something the catalogue doesn't cover? Request a custom task and the team will build it for you."
         actions={(
           <button
             type="button"
@@ -170,7 +170,7 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
             onClick={() => onNavigate?.('tasks-bespoke')}
           >
             <span className="ico"><Lock size={14} /></span>
-            <span className="t"><b>Read-only catalog</b><br /><span>Contact Taali to build a bespoke task for candidate assessment</span></span>
+            <span className="t"><b>Request a custom task</b><br /><span>Get in touch — we'll build a bespoke assessment for your role</span></span>
           </button>
         )}
       />

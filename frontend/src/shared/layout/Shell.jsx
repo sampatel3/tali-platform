@@ -8,7 +8,6 @@ import {
   LogOut,
   MessageSquare,
   Moon,
-  Search,
   Settings as SettingsIcon,
   Sun,
 } from 'lucide-react';
@@ -22,6 +21,7 @@ import {
 } from '../../lib/themePreference';
 import { TaaliTile } from '../ui/Branding';
 import { useAgentStatusOrg } from './AgentBar';
+import { GlobalSearch } from './GlobalSearch';
 import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 
 // Home is the agent-first landing — see docs/HOME_HUB_DESIGN.md. It
@@ -257,11 +257,7 @@ export const Shell = ({ currentPage, onNavigate }) => {
             Agent running
           </button>
         ) : null}
-        <button type="button" className="mc-nav-search" aria-label="Open command palette">
-          <Search size={13} strokeWidth={2} />
-          <span>Search candidates, roles, tasks…</span>
-          <kbd>⌘K</kbd>
-        </button>
+        <GlobalSearch onNavigate={onNavigate} />
         <button type="button" className="mc-icon-btn" aria-label="Notifications">
           <Bell size={15} strokeWidth={1.7} />
           <span className="mc-dot" aria-hidden="true" />

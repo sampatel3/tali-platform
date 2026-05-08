@@ -169,9 +169,13 @@ const renderAppOnTasksPage = async () => {
     fireEvent.click(tasksNav);
   });
 
-  // Wait for Tasks page to load (lazy + API)
+  // Wait for Tasks page to load (lazy + API). The h1 splits "Task" and
+  // "catalogue" across an <em>, so byText (which only joins direct text
+  // nodes) won't find it — byRole reads the full accessible name.
   await waitFor(() => {
-    expect(screen.getByText(/Tasks the engineering team built for/i, { selector: 'h1' })).toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 1, name: /task\s+catalogue/i }),
+    ).toBeInTheDocument();
   }, { timeout: 5000 });
 
   return result;
@@ -195,9 +199,17 @@ describe('TasksPage', () => {
     await renderAppOnTasksPage();
 
     await waitFor(() => {
-      expect(screen.getByText(/Tasks the engineering team built for/i, { selector: 'h1' })).toBeInTheDocument();
-      expect(screen.getByText(/Read-only catalog/i)).toBeInTheDocument();
+      expect(
+        screen.getByRole('heading', { level: 1, name: /task\s+catalogue/i }),
+      ).toBeInTheDocument();
     }, { timeout: 5000 });
+
+    // The custom-task CTA is the only "Request a custom task" element;
+    // assert via the button's accessible name so we don't depend on its
+    // markup (the inner <b>/<br>/<span> structure changes with copy).
+    expect(
+      screen.getByRole('button', { name: /Request a custom task/i }),
+    ).toBeInTheDocument();
   });
 
   it('renders task list', async () => {
