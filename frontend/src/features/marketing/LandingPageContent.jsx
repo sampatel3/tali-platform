@@ -164,12 +164,17 @@ export const LandingPage = ({ onNavigate }) => {
   const showcaseAssessment = PRODUCT_WALKTHROUGH_TASK;
   const runtimeShowcase = PRODUCT_WALKTHROUGH.runtime;
 
-  // Hero AgentHeader is interactive: lands OFF, auto-flips ON ~1.6s later
-  // so visitors passively witness the cross-fade animation. Once a visitor
-  // clicks the toggle themselves, the auto-play ref locks so we don't keep
+  // Hero AgentHeader is interactive. The agent flips ON only when the
+  // visitor scrolls to the edge of the next section, simulating a real
+  // click on the "Turn on agent" button (button presses for 220ms, then
+  // state flips with the same cross-fade animation we ship in-app). Once
+  // the visitor clicks the toggle themselves, refs lock so we don't keep
   // overriding their state.
   const [agentOn, setAgentOn] = useState(false);
+  const [pressing, setPressing] = useState(false);
   const userToggledRef = useRef(false);
+  const autoTriggeredRef = useRef(false);
+
   const toggleAgent = () => {
     userToggledRef.current = true;
     setAgentOn((value) => !value);
@@ -189,10 +194,33 @@ export const LandingPage = ({ onNavigate }) => {
 
   useEffect(() => {
     if (typeof window === 'undefined') return undefined;
-    const timer = window.setTimeout(() => {
-      if (!userToggledRef.current) setAgentOn(true);
-    }, 1600);
-    return () => window.clearTimeout(timer);
+    if (typeof IntersectionObserver === 'undefined') return undefined;
+    const target = document.getElementById('how-it-works');
+    if (!target) return undefined;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          if (entry.isIntersecting && !autoTriggeredRef.current && !userToggledRef.current) {
+            autoTriggeredRef.current = true;
+            // Fake a click on the OFF panel's "Turn on agent" button:
+            // press for 220ms (CSS scales it down + dims), then flip state.
+            setPressing(true);
+            window.setTimeout(() => {
+              setAgentOn(true);
+              setPressing(false);
+            }, 220);
+            observer.disconnect();
+            break;
+          }
+        }
+      },
+      // Fire as soon as the next section's top edge enters the viewport,
+      // i.e. just before the visitor breaks past the hero.
+      { threshold: 0 },
+    );
+    observer.observe(target);
+    return () => observer.disconnect();
   }, []);
 
   return (
@@ -288,7 +316,14 @@ export const LandingPage = ({ onNavigate }) => {
                 the panel toggle to replay the transition. */}
             <div
               className={`agent-header ${agentOn ? 'agent-running' : 'agent-quiet'}`}
-              style={{ minHeight: 220, padding: '24px 24px 26px' }}
+              /* Header + panel heights locked so OFF↔ON toggle never reflows
+                 the surrounding layout. Panel is min-height 215 (fits the
+                 OFF copy + budget input + button and the ON head-with-pending
+                 + tick + budget + button identically); header floor matches
+                 panel + 24+26 padding. min-height (not fixed height) so the
+                 mobile breakpoint that stacks the panel below the title
+                 still grows naturally. */
+              style={{ minHeight: 265, padding: '24px 24px 26px' }}
             >
               <span className="ah-bright-overlay" aria-hidden="true" />
               <div className="agent-header-inner">
@@ -301,7 +336,7 @@ export const LandingPage = ({ onNavigate }) => {
                 </div>
                 <aside
                   className={`agent-panel agent-${agentOn ? 'on' : 'off'}`}
-                  style={{ width: 260, minHeight: 200 }}
+                  style={{ width: 300, minHeight: 215 }}
                 >
                   <div className="agent-panel-head">
                     <div className="agent-pulse-wrap">
@@ -353,7 +388,11 @@ export const LandingPage = ({ onNavigate }) => {
                           <span className="agent-off-budget-suffix">/ month</span>
                         </div>
                         <div className="agent-actions">
-                          <button type="button" className="agent-btn primary" onClick={toggleAgent}>
+                          <button
+                            type="button"
+                            className={`agent-btn primary${pressing ? ' is-pressing' : ''}`}
+                            onClick={toggleAgent}
+                          >
                             <Play size={11} strokeWidth={2} fill="currentColor" />
                             Turn on agent
                           </button>
@@ -634,7 +673,7 @@ export const LandingPage = ({ onNavigate }) => {
 
       {/* BOTTOM CTA — softened, token-based purple gradient (v4) */}
       <section className="bg-[var(--bg)]">
-        <div className={`${containerClass} pb-24 pt-10`}>
+        <div className={`${containerClass} py-16`}>
           <div
             className="relative overflow-hidden rounded-[18px] px-12 py-14"
             style={{
