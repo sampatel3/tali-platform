@@ -162,17 +162,7 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
       <AgentHeader
         kicker="03 · TASKS"
         title={<>Task <em>catalogue</em></>}
-        subtitle="Browse the assessment task library, preview the candidate workspace, and assign tasks to candidates from a role. Need something the catalogue doesn't cover? Request a custom task and the team will build it for you."
-        actions={(
-          <button
-            type="button"
-            className="eng-badge eng-badge-button"
-            onClick={() => onNavigate?.('tasks-bespoke')}
-          >
-            <span className="ico"><Lock size={14} /></span>
-            <span className="t"><b>Request a custom task</b><br /><span>Get in touch — we'll build a bespoke assessment for your role</span></span>
-          </button>
-        )}
+        subtitle="Browse the assessment task library, preview the candidate workspace, and assign tasks to candidates from a role."
       />
       <div className="mc-page">
 
@@ -273,6 +263,23 @@ export const TasksPage = ({ onNavigate, NavComponent = null }) => {
             ))}
           </div>
         )}
+
+        <aside className="tasks-bespoke-cta">
+          <div className="tasks-bespoke-cta-body">
+            <span className="tasks-bespoke-cta-icon"><Lock size={16} /></span>
+            <div>
+              <b>Don't see what you need?</b>
+              <p>Request a bespoke assessment for your role — the team will build it.</p>
+            </div>
+          </div>
+          <button
+            type="button"
+            className="tasks-bespoke-cta-btn"
+            onClick={() => onNavigate?.('tasks-bespoke')}
+          >
+            Request a custom task →
+          </button>
+        </aside>
       </div>
     </div>
   );
