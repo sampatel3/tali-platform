@@ -73,7 +73,7 @@ import {
 import { NLSearchBar } from './NLSearchBar';
 import { CandidateGraphView } from './CandidateGraphView';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
-import { GraphStatusChip, PreScreenChip } from './CandidateStatusChips';
+import { FraudChip, GraphStatusChip, PreScreenChip } from './CandidateStatusChips';
 import { PendingAgentDecisionsPanel } from './agent/PendingAgentDecisionsPanel';
 
 const PAGE_SIZE = 50;
@@ -2356,6 +2356,7 @@ export const CandidatesDirectoryPage = ({
                                 runAt={application.pre_screen_run_at}
                                 compact
                               />
+                              <FraudChip application={application} compact />
                               <GraphStatusChip
                                 syncedAt={application.graph_synced_at}
                                 stale={!!application.graph_stale}

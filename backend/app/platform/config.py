@@ -232,6 +232,16 @@ class Settings(BaseSettings):
     # Recommended: 30 (catches only clear mismatches).
     PRE_SCREEN_THRESHOLD: int = 30
 
+    # Pre-screen fraud detection — currently the only signal is "CV
+    # copy-pasted from the JD". When the copy-paste fraction of the CV
+    # crosses FRAUD_COPY_PASTE_THRESHOLD (0.0–1.0), the pre-screen agent
+    # caps the candidate's score at FRAUD_PENALTY_CAP_SCORE so the gate
+    # filters them before the expensive v3 call. Cap defaults below
+    # PRE_SCREEN_THRESHOLD intentionally — fraud-positive should always
+    # skip CV match. Set the threshold to 1.0 to disable the signal.
+    FRAUD_COPY_PASTE_THRESHOLD: float = 0.05
+    FRAUD_PENALTY_CAP_SCORE: float = 10.0
+
     # MVP feature flags (default to MVP-safe behavior).
     # Stripe is now the live payment processor for credit top-ups; default
     # changed True → False as part of the 2026-04-29 usage-pricing cutover.

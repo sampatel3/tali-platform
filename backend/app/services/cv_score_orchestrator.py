@@ -52,6 +52,11 @@ from .fit_matching_service import (
     calculate_cv_job_match_v4_sync,
 )
 from .claude_client_resolver import get_client_for_org as _resolve_anthropic_client
+from .fraud_detection import (
+    apply_fraud_penalty,
+    build_fraud_signals_payload,
+    detect_cv_copy_paste,
+)
 from .pricing_service import Feature
 from .spec_normalizer import normalize_spec
 from .usage_metering_service import (
@@ -524,40 +529,66 @@ def _execute_scoring_v3(
             cache_hit=pre.cache_hit,
             entity_id=f"application:{application.id}",
         )
+
+        # Deterministic fraud check runs in the same gate so a CV that
+        # copy-pasted the JD is filtered out before the expensive v3 call.
+        fraud = detect_cv_copy_paste(
+            cv_text,
+            job_spec_text,
+            threshold=settings.FRAUD_COPY_PASTE_THRESHOLD,
+        )
+        gated_score, fraud_capped = apply_fraud_penalty(
+            pre.score,
+            fraud,
+            cap_score=settings.FRAUD_PENALTY_CAP_SCORE,
+        )
+        fraud_signals = build_fraud_signals_payload(fraud)
         threshold = settings.PRE_SCREEN_THRESHOLD
         # Only filter when we have a numeric score AND it's below threshold.
         # None score (parse failure/error) always falls through to v3.
-        if pre.score is not None and pre.score < threshold:
+        if gated_score is not None and gated_score < threshold:
             now = datetime.now(timezone.utc)
+            if fraud_capped:
+                summary = (
+                    f"Pre-screen filtered: CV contains {fraud.score:.0%} text copied "
+                    f"verbatim from the job description (threshold {fraud.threshold:.0%})."
+                )
+                pre_screen_reason = summary
+            else:
+                summary = f"Pre-screen filtered: score {gated_score:.0f}/100 (threshold {threshold}). {pre.reason}"
+                pre_screen_reason = pre.reason
             details = {
                 "scoring_version": V3_PROMPT_VERSION,
-                "pre_screen_score_100": pre.score,
+                "pre_screen_score_100": gated_score,
                 "pre_screen_decision": "no",
-                "pre_screen_reason": pre.reason,
+                "pre_screen_reason": pre_screen_reason,
                 "pre_screen_trace_id": pre.trace_id,
                 "pre_screen_prompt_version": PRE_SCREEN_VERSION,
-                "summary": f"Pre-screen filtered: score {pre.score:.0f}/100 (threshold {threshold}). {pre.reason}",
+                "summary": summary,
                 "recommendation": "no",
+                "fraud_signals": fraud_signals,
+                "fraud_capped": fraud_capped,
+                "llm_score_100": pre.score,
             }
             application.cv_match_score = None
             application.cv_match_details = details
             application.cv_match_scored_at = now
             # Write pre_screen_score_100 directly so the directory sort and
             # score display shows the pre-screen score for filtered candidates.
-            application.pre_screen_score_100 = pre.score
-            job.cache_hit = "pre_screen_filtered"
+            application.pre_screen_score_100 = gated_score
+            job.cache_hit = "pre_screen_filtered" if not fraud_capped else "fraud_filtered"
             job.status = SCORE_JOB_DONE
             job.finished_at = now
             _emit_cv_scored_event(
                 db,
                 application=application,
                 job=job,
-                score_100=pre.score,
-                recommendation="pre_screened_out",
+                score_100=gated_score,
+                recommendation="pre_screened_out" if not fraud_capped else "fraud_filtered",
                 prompt_version=PRE_SCREEN_VERSION,
                 model_version=V3_MODEL_VERSION,
                 trace_id=pre.trace_id or f"job-{job.id}",
-                cache_hit="pre_screen_filtered",
+                cache_hit=job.cache_hit,
             )
             return
 

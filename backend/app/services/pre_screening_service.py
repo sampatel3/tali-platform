@@ -6,7 +6,13 @@ from typing import Any
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
 from ..models.role import Role
+from ..platform.config import settings
 from .document_service import sanitize_json_for_storage, sanitize_text_for_storage
+from .fraud_detection import (
+    apply_fraud_penalty,
+    build_fraud_signals_payload,
+    detect_cv_copy_paste,
+)
 from .taali_scoring import compute_role_fit_score
 from .workable_actions_service import render_workable_note_template
 
@@ -339,8 +345,34 @@ def execute_pre_screen_only(app: CandidateApplication) -> dict[str, Any]:
     except Exception as exc:  # noqa: BLE001 — guard the LLM call
         return {"status": "error", "reason": f"pre_screen_failed: {exc}"[:200]}
 
-    score = pre.score
-    recommendation = pre_screen_recommendation_label(score)
+    # Deterministic fraud check — currently CV ↔ JD copy-paste only.
+    # Always compute (so we can calibrate the threshold from real data
+    # later) but only cap the score when the threshold is crossed.
+    fraud = detect_cv_copy_paste(
+        cv_text,
+        job_spec_text,
+        threshold=settings.FRAUD_COPY_PASTE_THRESHOLD,
+    )
+    score, fraud_capped = apply_fraud_penalty(
+        pre.score,
+        fraud,
+        cap_score=settings.FRAUD_PENALTY_CAP_SCORE,
+    )
+    fraud_signals = build_fraud_signals_payload(fraud)
+    if fraud_capped:
+        # Replace the LLM rationale with a fraud-specific one so the
+        # directory and report copy doesn't claim the candidate is a poor
+        # skills match when the real reason is plagiarism.
+        recommendation = "Below threshold"
+        summary = (
+            f"Pre-screen filtered: CV contains {fraud.score:.0%} text copied "
+            f"verbatim from the job description (threshold {fraud.threshold:.0%})."
+        )
+        decision = "no"
+    else:
+        recommendation = pre_screen_recommendation_label(score)
+        summary = sanitize_text_for_storage(str(pre.reason or "").strip()) or None
+        decision = pre.decision
 
     # Persist on the application. We deliberately do NOT touch cv_match_*
     # so a subsequent score job can still run.
@@ -349,17 +381,20 @@ def execute_pre_screen_only(app: CandidateApplication) -> dict[str, Any]:
     app.pre_screen_recommendation = recommendation
     app.pre_screen_evidence = sanitize_json_for_storage(
         {
-            "summary": sanitize_text_for_storage(str(pre.reason or "").strip()) or None,
+            "summary": summary,
             "matching_skills": [],
             "missing_skills": [],
             "concerns": [],
             "score_rationale_bullets": [],
             "requirements_coverage": {},
             "requirements_assessment": [],
-            "decision": pre.decision,
+            "decision": decision,
             "trace_id": pre.trace_id,
             "prompt_version": pre.prompt_version,
             "cache_hit": pre.cache_hit,
+            "fraud_signals": fraud_signals,
+            "fraud_capped": fraud_capped,
+            "llm_score_100": pre.score,  # original LLM score before cap
         }
     )
     app.pre_screen_run_at = _utcnow()
@@ -373,9 +408,10 @@ def execute_pre_screen_only(app: CandidateApplication) -> dict[str, Any]:
         "status": "ok",
         "score": score,
         "recommendation": recommendation,
-        "decision": pre.decision,
-        "reason": pre.reason,
+        "decision": decision,
+        "reason": summary or pre.reason,
         "cache_hit": pre.cache_hit,
+        "fraud_capped": fraud_capped,
     }
 
 

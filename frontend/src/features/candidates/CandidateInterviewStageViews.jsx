@@ -228,6 +228,8 @@ export const CandidateStageOneScreeningTab = ({
   const missingSkills = safeList(preScreenEvidence?.missing_skills);
   const concerns = safeList(preScreenEvidence?.concerns);
   const screeningSummary = safeText(preScreenEvidence?.summary);
+  const fraudCopyPaste = preScreenEvidence?.fraud_signals?.cv_copy_paste || null;
+  const fraudTriggered = !!fraudCopyPaste?.triggered;
 
   return (
     <div className="space-y-4">
@@ -261,6 +263,42 @@ export const CandidateStageOneScreeningTab = ({
           <p className="mt-4 text-sm leading-6 text-[var(--taali-text)]">{screeningSummary}</p>
         ) : null}
       </Panel>
+
+      {fraudTriggered ? (
+        <Panel className="p-4 border border-[var(--taali-danger)]/40 bg-[var(--taali-danger)]/5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-xs font-semibold uppercase tracking-[0.08em] text-[var(--taali-danger)]">
+                CV plagiarism flag
+              </div>
+              <div className="mt-2 text-sm font-semibold text-[var(--taali-text)]">
+                {Math.round(Number(fraudCopyPaste.score || 0) * 100)}% of the CV is copied verbatim from the job description.
+              </div>
+              <p className="mt-2 text-sm leading-6 text-[var(--taali-muted)]">
+                The pre-screen agent capped this candidate&rsquo;s score so they were filtered before the full CV match ran. Review the matched chunks below — common boilerplate like &ldquo;strong communication skills&rdquo; would not normally trigger this.
+              </p>
+            </div>
+            <Badge variant="danger" className="font-mono text-[11px]">
+              Threshold {Math.round(Number(fraudCopyPaste.threshold || 0) * 100)}%
+            </Badge>
+          </div>
+          {Array.isArray(fraudCopyPaste.evidence) && fraudCopyPaste.evidence.length > 0 ? (
+            <ul className="mt-3 space-y-2">
+              {fraudCopyPaste.evidence.slice(0, 5).map((snippet, idx) => (
+                <li
+                  key={`${snippet.cv_word_offset}-${idx}`}
+                  className="rounded border border-[var(--taali-danger)]/30 bg-white/60 p-2 text-xs leading-5 text-[var(--taali-text)]"
+                >
+                  &ldquo;{snippet.text}&rdquo;
+                  <span className="ml-2 text-[var(--taali-muted)]">
+                    ({snippet.word_count} words)
+                  </span>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </Panel>
+      ) : null}
 
       <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
         <InterviewPackPanel
