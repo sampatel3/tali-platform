@@ -1,68 +1,438 @@
-"""Keep ``RoleCriterion`` rows in sync with the recruiter-supplied requirement
-text and the Requirements section of an uploaded job spec.
+"""Manage workspace + role criteria — the structured chip-based intent model.
 
-These helpers are the single write path for criteria today. Until the
-frontend exposes per-criterion editing, ``Role.additional_requirements`` and
-``Role.job_spec_text`` remain the authoring surface — every save reparses
-those fields and upserts the matching ``recruiter`` and ``derived_from_spec``
-criteria so downstream scoring (cv_match_v4) can key off stable IDs.
+Chips (rows in ``role_criteria`` and ``org_criteria``) are the source of truth.
+The legacy ``Role.additional_requirements`` text blob and
+``Organization.default_role_requirements`` JSON list are mirrored from the
+chip state via :func:`mirror_role_text_from_criteria` and
+:func:`mirror_org_text_from_criteria` so existing readers (system_prompt,
+fit_matching, Workable export) keep working unchanged until a follow-up PR
+retires them.
+
+Sync model
+----------
+
+- **Workspace** authors a list of ``OrganizationCriterion`` rows on Settings →
+  AI agent. Each carries a stable ``id`` and a ``bucket``.
+- **Role create / Workable import** snapshots all current workspace criteria
+  into ``role_criteria`` rows with ``org_criterion_id`` set. Recruiters can
+  edit, remove, or add chips on the role page.
+- **Sync workspace** (per-role action) re-applies workspace text + bucket on
+  any role chip whose ``customized_at`` is null and whose ``org_criterion_id``
+  still exists in workspace. Suppressed and customized chips are left alone.
+  New workspace chips are added; chips whose workspace counterpart was deleted
+  drop their ``org_criterion_id`` (become role-only).
+- **Reset to defaults** soft-deletes every existing role chip and re-snapshots
+  workspace.
+- ``derived_from_spec`` chips (parsed from the job spec) are independent of
+  the workspace flow; they keep being managed by :func:`sync_derived_criteria`
+  on spec upload.
 """
 
 from __future__ import annotations
 
+import re
+from datetime import datetime, timezone
+from typing import Iterable
+
 from sqlalchemy.orm import Session
 
+from ..models.org_criterion import (
+    BUCKET_CONSTRAINT,
+    BUCKET_MUST,
+    BUCKET_PREFERRED,
+    OrganizationCriterion,
+)
 from ..models.role import Role
 from ..models.role_criterion import (
     CRITERION_SOURCE_DERIVED,
     CRITERION_SOURCE_RECRUITER,
     RoleCriterion,
 )
-from .fit_matching_service import _extract_recruiter_requirements
 from .spec_normalizer import derive_criteria_texts, normalize_spec
 
 
-def _replace_criteria(
+_MAX_CRITERIA_FROM_TEXT = 16
+_MAX_TEXT_LEN = 220
+
+
+# ---------------------------------------------------------------------------
+# Bucket inference (legacy text → bucket)
+# ---------------------------------------------------------------------------
+
+# Longest-prefix-first so "Must have:" wins over "Must:".
+_BUCKET_PREFIXES: tuple[tuple[str, str], ...] = (
+    ("must have:", BUCKET_MUST),
+    ("must-have:", BUCKET_MUST),
+    ("must:", BUCKET_MUST),
+    ("required:", BUCKET_MUST),
+    ("constraint:", BUCKET_CONSTRAINT),
+    ("constraints:", BUCKET_CONSTRAINT),
+    ("nice to have:", BUCKET_PREFERRED),
+    ("nice-to-have:", BUCKET_PREFERRED),
+    ("nice:", BUCKET_PREFERRED),
+    ("preferred:", BUCKET_PREFERRED),
+)
+
+
+def _infer_bucket_from_prefix(text: str) -> tuple[str, str]:
+    """Return ``(bucket, stripped_text)``. Prefix consumed if matched."""
+    raw = (text or "").strip()
+    if not raw:
+        return BUCKET_PREFERRED, ""
+    lowered = raw.lower()
+    for prefix, bucket in _BUCKET_PREFIXES:
+        if lowered.startswith(prefix):
+            return bucket, raw[len(prefix):].strip()
+    return BUCKET_PREFERRED, raw
+
+
+# ---------------------------------------------------------------------------
+# Snapshot from workspace
+# ---------------------------------------------------------------------------
+
+
+def _active_org_criteria(db: Session, organization_id: int) -> list[OrganizationCriterion]:
+    return (
+        db.query(OrganizationCriterion)
+        .filter(
+            OrganizationCriterion.organization_id == organization_id,
+            OrganizationCriterion.deleted_at.is_(None),
+        )
+        .order_by(OrganizationCriterion.ordering, OrganizationCriterion.id)
+        .all()
+    )
+
+
+def _active_recruiter_role_criteria(db: Session, role: Role) -> list[RoleCriterion]:
+    """Query directly so we don't depend on relationship freshness within a
+    session that just added/deleted rows."""
+    if role.id is None:
+        return []
+    return (
+        db.query(RoleCriterion)
+        .filter(
+            RoleCriterion.role_id == role.id,
+            RoleCriterion.deleted_at.is_(None),
+            RoleCriterion.source != CRITERION_SOURCE_DERIVED,
+        )
+        .order_by(RoleCriterion.ordering, RoleCriterion.id)
+        .all()
+    )
+
+
+def snapshot_workspace_criteria(db: Session, role: Role) -> None:
+    """Copy every active workspace criterion into ``role_criteria`` for the
+    given role. Idempotent: rows already linked via ``org_criterion_id`` are
+    overwritten. Used at role create + Workable import time and as the seed
+    for "Reset to defaults".
+
+    This does NOT touch ``derived_from_spec`` rows or role-only additions.
+    """
+    if role.organization_id is None:
+        return
+    org_criteria = _active_org_criteria(db, role.organization_id)
+    existing_by_org = {
+        c.org_criterion_id: c
+        for c in _active_recruiter_role_criteria(db, role)
+        if c.org_criterion_id is not None
+    }
+    for ordering, oc in enumerate(org_criteria):
+        existing = existing_by_org.get(oc.id)
+        if existing is None:
+            db.add(
+                RoleCriterion(
+                    role_id=role.id,
+                    source=CRITERION_SOURCE_RECRUITER,
+                    ordering=ordering,
+                    weight=float(oc.weight or 1.0),
+                    must_have=(oc.bucket == BUCKET_MUST),
+                    bucket=oc.bucket,
+                    org_criterion_id=oc.id,
+                    customized_at=None,
+                    text=oc.text,
+                )
+            )
+        else:
+            # Preserve recruiter customizations; otherwise re-sync.
+            if existing.customized_at is None:
+                existing.text = oc.text
+                existing.bucket = oc.bucket
+                existing.must_have = oc.bucket == BUCKET_MUST
+                existing.weight = float(oc.weight or 1.0)
+                existing.ordering = ordering
+
+
+def sync_role_with_workspace(db: Session, role: Role) -> None:
+    """Re-apply workspace text + bucket to non-customized, non-suppressed role
+    chips, add any newly-introduced workspace chips, and clear
+    ``org_criterion_id`` on chips whose workspace counterpart is gone.
+    """
+    if role.organization_id is None:
+        return
+    org_criteria = _active_org_criteria(db, role.organization_id)
+    org_by_id = {oc.id: oc for oc in org_criteria}
+    suppressed = set(int(x) for x in (role.suppressed_org_criterion_ids or []))
+
+    # 1. Update or detach existing workspace-derived role chips.
+    for c in _active_recruiter_role_criteria(db, role):
+        if c.org_criterion_id is None:
+            continue  # role-only addition
+        oc = org_by_id.get(c.org_criterion_id)
+        if oc is None:
+            # Workspace deleted this chip — keep the role's copy as a
+            # role-only addition.
+            c.org_criterion_id = None
+            continue
+        if c.customized_at is not None:
+            continue  # recruiter edited; don't overwrite
+        c.text = oc.text
+        c.bucket = oc.bucket
+        c.must_have = oc.bucket == BUCKET_MUST
+        c.weight = float(oc.weight or 1.0)
+
+    # 2. Add any workspace chips not yet linked + not suppressed.
+    linked_ids = {
+        c.org_criterion_id
+        for c in _active_recruiter_role_criteria(db, role)
+        if c.org_criterion_id is not None
+    }
+    next_ordering = max(
+        (c.ordering for c in _active_recruiter_role_criteria(db, role)),
+        default=-1,
+    ) + 1
+    for oc in org_criteria:
+        if oc.id in linked_ids or oc.id in suppressed:
+            continue
+        db.add(
+            RoleCriterion(
+                role_id=role.id,
+                source=CRITERION_SOURCE_RECRUITER,
+                ordering=next_ordering,
+                weight=float(oc.weight or 1.0),
+                must_have=(oc.bucket == BUCKET_MUST),
+                bucket=oc.bucket,
+                org_criterion_id=oc.id,
+                customized_at=None,
+                text=oc.text,
+            )
+        )
+        next_ordering += 1
+
+
+def reset_role_to_workspace(db: Session, role: Role) -> None:
+    """Hard-delete every recruiter-source role chip and re-snapshot workspace.
+    Suppressions are cleared so all workspace chips return.
+
+    ``derived_from_spec`` chips are untouched.
+    """
+    for c in _active_recruiter_role_criteria(db, role):
+        db.delete(c)
+    role.suppressed_org_criterion_ids = []
+    db.flush()
+    snapshot_workspace_criteria(db, role)
+
+
+# ---------------------------------------------------------------------------
+# Legacy text mirror (chips → text columns)
+# ---------------------------------------------------------------------------
+
+_BUCKET_LABEL = {
+    BUCKET_MUST: "MUST HAVE",
+    BUCKET_PREFERRED: "PREFERRED",
+    BUCKET_CONSTRAINT: "CONSTRAINTS",
+}
+
+
+def _bucketed_text(items: Iterable[tuple[str, str]]) -> str:
+    """``items`` = sequence of ``(bucket, text)`` tuples. Returns a stable
+    multi-line string: one section per bucket, only when populated, in the
+    canonical order ``must -> preferred -> constraint``."""
+    by_bucket: dict[str, list[str]] = {b: [] for b in (BUCKET_MUST, BUCKET_PREFERRED, BUCKET_CONSTRAINT)}
+    for bucket, text in items:
+        text = (text or "").strip()
+        if not text:
+            continue
+        by_bucket.setdefault(bucket, []).append(text)
+    sections: list[str] = []
+    for bucket in (BUCKET_MUST, BUCKET_PREFERRED, BUCKET_CONSTRAINT):
+        rows = by_bucket.get(bucket) or []
+        if not rows:
+            continue
+        sections.append(_BUCKET_LABEL[bucket] + ":\n" + "\n".join(f"- {r}" for r in rows))
+    return "\n\n".join(sections)
+
+
+def mirror_role_text_from_criteria(db: Session, role: Role) -> None:
+    """Re-derive ``role.additional_requirements`` from active recruiter chips.
+    Called on every chip CRUD so legacy readers stay in sync until they're
+    retired."""
+    items = [
+        (c.bucket, c.text)
+        for c in sorted(_active_recruiter_role_criteria(db, role), key=lambda c: c.ordering)
+    ]
+    role.additional_requirements = _bucketed_text(items) or None
+
+
+def mirror_org_text_from_criteria(db: Session, organization) -> None:
+    """Re-derive ``organization.default_role_requirements`` (JSON list) and
+    ``default_additional_requirements`` (text blob) from active workspace
+    chips. Both legacy fields stay populated for downstream readers."""
+    if organization is None or organization.id is None:
+        return
+    chips = _active_org_criteria(db, organization.id)
+    items = [(c.bucket, c.text) for c in chips]
+    organization.default_role_requirements = [
+        f"{_BUCKET_LABEL[bucket]}: {text}" if bucket != BUCKET_PREFERRED else text
+        for bucket, text in items
+        if (text or "").strip()
+    ] or None
+    organization.default_additional_requirements = _bucketed_text(items) or None
+
+
+# ---------------------------------------------------------------------------
+# Spec-derived sync (unchanged, plus bucket default)
+# ---------------------------------------------------------------------------
+
+
+def _replace_derived_criteria(
     db: Session,
     role: Role,
     *,
-    source: str,
     texts: list[str],
 ) -> None:
-    existing = [c for c in (role.criteria or []) if c.source == source]
+    existing = [
+        c for c in (role.criteria or [])
+        if c.source == CRITERION_SOURCE_DERIVED and c.deleted_at is None
+    ]
     for criterion in existing:
         db.delete(criterion)
     for ordering, text in enumerate(texts):
         db.add(
             RoleCriterion(
                 role_id=role.id,
-                source=source,
+                source=CRITERION_SOURCE_DERIVED,
                 ordering=ordering,
                 weight=1.0,
                 must_have=False,
+                bucket=BUCKET_PREFERRED,
                 text=text,
             )
         )
 
 
-def sync_recruiter_criteria(db: Session, role: Role) -> None:
-    """Re-derive ``recruiter``-source criteria from ``role.additional_requirements``."""
-    texts = _extract_recruiter_requirements(role.additional_requirements)
-    _replace_criteria(db, role, source=CRITERION_SOURCE_RECRUITER, texts=texts)
-
-
 def sync_derived_criteria(db: Session, role: Role) -> None:
-    """Re-derive ``derived_from_spec`` criteria from the Requirements section.
-
-    Falls back to no derived criteria when the spec has no recognizable
-    Requirements heading — that signals the recruiter to add explicit
-    must-haves rather than let the system anchor on boilerplate.
-    """
+    """Re-derive ``derived_from_spec`` criteria from the Requirements section
+    of the uploaded job spec. Falls back to no derived criteria when the spec
+    has no recognizable Requirements heading."""
     spec = normalize_spec(role.job_spec_text)
     texts = derive_criteria_texts(spec.requirements)
-    _replace_criteria(db, role, source=CRITERION_SOURCE_DERIVED, texts=texts)
+    _replace_derived_criteria(db, role, texts=texts)
+
+
+# ---------------------------------------------------------------------------
+# Backwards-compatible facade
+# ---------------------------------------------------------------------------
+
+
+def _split_legacy_text(text: str | None) -> list[str]:
+    """Split a free-text requirements blob into discrete bullets.
+    Same shape as alembic 040 / fit_matching extractor — preserves order,
+    dedupes, caps at 16 entries, trims to 220 chars each."""
+    raw = (text or "").strip()
+    if not raw:
+        return []
+    parts = re.split(r"[\n;]+", raw)
+    if len(parts) <= 1:
+        sentence_parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", raw)
+        if len(sentence_parts) > 1:
+            parts = sentence_parts
+    items: list[str] = []
+    seen: set[str] = set()
+    for part in parts:
+        cleaned = re.sub(r"^\s*(?:[-*•]|\d+[\).\-\s])\s*", "", str(part or "")).strip()
+        if not cleaned:
+            continue
+        compact = re.sub(r"\s+", " ", cleaned)
+        lowered = compact.lower()
+        if lowered in seen:
+            continue
+        seen.add(lowered)
+        items.append(compact[:_MAX_TEXT_LEN])
+        if len(items) >= _MAX_CRITERIA_FROM_TEXT:
+            break
+    if not items:
+        return [re.sub(r"\s+", " ", raw)[:_MAX_TEXT_LEN]]
+    return items
+
+
+def replace_recruiter_criteria_from_text(db: Session, role: Role, text: str | None) -> None:
+    """Hard-delete current recruiter chips on the role and rebuild from a
+    free-text blob with bucket prefix inference. Used by legacy callers
+    (Workable import, role create with explicit ``additional_requirements``)
+    to bridge the text-only world into chips."""
+    for c in _active_recruiter_role_criteria(db, role):
+        db.delete(c)
+    bullets = _split_legacy_text(text)
+    for ordering, bullet in enumerate(bullets):
+        bucket, stripped = _infer_bucket_from_prefix(bullet)
+        if not stripped:
+            continue
+        db.add(
+            RoleCriterion(
+                role_id=role.id,
+                source=CRITERION_SOURCE_RECRUITER,
+                ordering=ordering,
+                weight=1.0,
+                must_have=(bucket == BUCKET_MUST),
+                bucket=bucket,
+                org_criterion_id=None,  # legacy text => role-only
+                customized_at=None,
+                text=stripped,
+            )
+        )
+
+
+# Back-compat shims kept so existing call sites in routes / role import don't
+# explode. The chip-based flow inverts the old relationship: text is now
+# derived from chips, not the other way around.
+
+def sync_recruiter_criteria(db: Session, role: Role) -> None:
+    """Old contract: re-derive recruiter chips from ``role.additional_requirements``.
+    New contract: if the text blob looks like it was hand-edited (i.e. it
+    differs from what the current chips would produce), parse it back into
+    chips so legacy PATCH callers still work. Otherwise just mirror chips
+    back to text to keep the columns in sync."""
+    text = (role.additional_requirements or "").strip()
+    if not text:
+        for c in _active_recruiter_role_criteria(db, role):
+            db.delete(c)
+        db.flush()
+        mirror_role_text_from_criteria(db, role)
+        return
+    # Compare current text to what chips would produce. If different, the
+    # caller hand-edited the text → re-parse into chips.
+    current_mirror_items = [
+        (c.bucket, c.text)
+        for c in sorted(_active_recruiter_role_criteria(db, role), key=lambda c: c.ordering)
+    ]
+    expected_text = _bucketed_text(current_mirror_items)
+    if text != expected_text:
+        replace_recruiter_criteria_from_text(db, role, text)
+    db.flush()
+    mirror_role_text_from_criteria(db, role)
 
 
 def sync_all_criteria(db: Session, role: Role) -> None:
-    sync_recruiter_criteria(db, role)
+    """On role create / Workable import: if the role already has
+    ``additional_requirements`` text (legacy callers), parse it into chips;
+    otherwise snapshot workspace criteria. Spec-derived criteria are
+    refreshed from the job spec. Final step mirrors chips back to the
+    legacy text blob."""
+    text = (role.additional_requirements or "").strip()
+    if text:
+        replace_recruiter_criteria_from_text(db, role, text)
+    else:
+        snapshot_workspace_criteria(db, role)
     sync_derived_criteria(db, role)
+    db.flush()
+    mirror_role_text_from_criteria(db, role)

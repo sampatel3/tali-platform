@@ -73,6 +73,12 @@ class Organization(Base):
     users = relationship("User", back_populates="organization")
     assessments = relationship("Assessment", back_populates="organization")
     roles = relationship("Role", cascade="all, delete-orphan")
+    criteria = relationship(
+        "OrganizationCriterion",
+        back_populates="organization",
+        cascade="all, delete-orphan",
+        order_by="OrganizationCriterion.ordering",
+    )
     applications = relationship("CandidateApplication", back_populates="organization", cascade="all, delete-orphan")
     credit_ledger_entries = relationship("BillingCreditLedger", back_populates="organization", cascade="all, delete-orphan")
     workable_sync_runs = relationship("WorkableSyncRun", back_populates="organization", cascade="all, delete-orphan")

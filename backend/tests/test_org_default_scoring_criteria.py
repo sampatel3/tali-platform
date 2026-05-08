@@ -64,6 +64,11 @@ def test_org_default_starts_unset(client):
 
 
 def test_role_create_inherits_org_default(client):
+    """Org legacy text default → role chips (with bucket inference) → role
+    text mirror (canonical bucketed format). The exact-string match against
+    the original input no longer holds: chips are now the source of truth
+    and the text column is a derived view. The bullets and buckets must be
+    preserved end-to-end though."""
     headers, _ = auth_headers(client)
     default_text = "Must have: 5+ years AWS\nPreferred: Banking domain"
     _set_org_default(client, headers, default_text)
@@ -71,7 +76,14 @@ def test_role_create_inherits_org_default(client):
     resp = _create_role(client, headers)
     assert resp.status_code == 201, resp.text
     role = resp.json()
-    assert role["additional_requirements"] == default_text
+    assert role["additional_requirements"] is not None
+    body = role["additional_requirements"]
+    assert "MUST HAVE" in body and "5+ years AWS" in body
+    assert "PREFERRED" in body and "Banking domain" in body
+    # chips were created with the right buckets
+    chip_buckets = {(c["bucket"], c["text"]) for c in role.get("criteria", [])}
+    assert ("must", "5+ years AWS") in chip_buckets
+    assert ("preferred", "Banking domain") in chip_buckets
 
 
 def test_role_create_explicit_overrides_default(client):
@@ -81,7 +93,10 @@ def test_role_create_explicit_overrides_default(client):
     explicit = "Must have: GCP only"
     resp = _create_role(client, headers, additional_requirements=explicit)
     assert resp.status_code == 201
-    assert resp.json()["additional_requirements"] == explicit
+    body = resp.json()["additional_requirements"]
+    assert "MUST HAVE" in body and "GCP only" in body
+    # the org default ("AWS") must NOT appear — explicit text wins
+    assert "AWS" not in body
 
 
 def test_role_create_no_default_no_explicit_yields_none(client):
@@ -102,4 +117,5 @@ def test_role_create_blank_explicit_falls_back_to_default(client):
 
     resp = _create_role(client, headers, additional_requirements="")
     assert resp.status_code == 201
-    assert resp.json()["additional_requirements"] == default_text
+    body = resp.json()["additional_requirements"]
+    assert body is not None and "MUST HAVE" in body and "AWS" in body

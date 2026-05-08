@@ -9,11 +9,50 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..models.org_criterion import (
+    BUCKET_CONSTRAINT,
+    BUCKET_MUST,
+    BUCKET_PREFERRED,
+)
 from ..models.role import Role
+from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v4.2026-05-07"
+PROMPT_VERSION = "agent.v4.2026-05-08"
+
+
+def _render_bucketed_criteria(role: Role) -> str:
+    """Render the role's recruiter-source criteria as MUST HAVE / PREFERRED /
+    CONSTRAINTS sections. Falls back to the legacy ``additional_requirements``
+    text blob when no chips exist (older roles, pre-migration). Empty
+    string means the agent gets no recruiter intent injected."""
+    chips = [
+        c for c in (role.criteria or [])
+        if c.deleted_at is None and c.source != CRITERION_SOURCE_DERIVED
+    ]
+    if chips:
+        sections: list[str] = []
+        for bucket, label, hint in (
+            (BUCKET_MUST, "MUST HAVE", "treat as the bar — flag candidates who don't meet these"),
+            (BUCKET_PREFERRED, "PREFERRED", "positive signals — weigh in fit, don't gate"),
+            (BUCKET_CONSTRAINT, "CONSTRAINTS", "logistics — surface mismatches separately from fit score"),
+        ):
+            rows = [c for c in chips if c.bucket == bucket]
+            if not rows:
+                continue
+            rows.sort(key=lambda c: c.ordering)
+            body = "\n".join(f"- {(c.text or '').strip()}" for c in rows if (c.text or '').strip())
+            if not body:
+                continue
+            sections.append(f"{label} ({hint}):\n{body}")
+        if sections:
+            return "\n\n".join(sections)
+    # Pre-migration / no chips → fall back to the legacy text blob.
+    legacy = (role.additional_requirements or "").strip()
+    if legacy:
+        return f"ADDITIONAL REQUIREMENTS:\n{legacy[:2000]}"
+    return ""
 
 
 _STATIC_HEADER = """\
@@ -100,13 +139,13 @@ def build_system_prompt(
     calibration_summary = calibration_mod.render_summary(calibration)
 
     job_spec = (role.job_spec_text or "").strip() or "(no job spec attached)"
-    additional_reqs = (role.additional_requirements or "").strip()
+    criteria_block = _render_bucketed_criteria(role)
     interview_focus = role.interview_focus or {}
 
     role_block = (
         f"ROLE: {role.name} (id={role.id})\n"
         f"JOB SPEC:\n{job_spec[:6000]}"
-        + (f"\n\nADDITIONAL REQUIREMENTS:\n{additional_reqs[:2000]}" if additional_reqs else "")
+        + (f"\n\n{criteria_block}" if criteria_block else "")
         + (f"\n\nINTERVIEW FOCUS HINTS: {interview_focus}" if interview_focus else "")
     )
 

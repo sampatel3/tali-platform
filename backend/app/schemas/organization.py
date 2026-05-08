@@ -143,6 +143,32 @@ class NotificationPreferencesUpdate(BaseModel):
     agent_paused: Optional[bool] = None
 
 
+class OrgCriterionResponse(BaseModel):
+    id: int
+    ordering: int
+    weight: float
+    bucket: Literal["must", "preferred", "constraint"]
+    text: str
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    model_config = {"from_attributes": True}
+
+
+class OrgCriterionCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=220)
+    bucket: Literal["must", "preferred", "constraint"] = "preferred"
+    ordering: Optional[int] = Field(default=None, ge=0, le=10_000)
+    weight: Optional[float] = Field(default=None, ge=0.0, le=10.0)
+
+
+class OrgCriterionUpdate(BaseModel):
+    text: Optional[str] = Field(default=None, min_length=1, max_length=220)
+    bucket: Optional[Literal["must", "preferred", "constraint"]] = None
+    ordering: Optional[int] = Field(default=None, ge=0, le=10_000)
+    weight: Optional[float] = Field(default=None, ge=0.0, le=10.0)
+
+
 class OrgResponse(BaseModel):
     id: int
     name: str

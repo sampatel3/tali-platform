@@ -94,15 +94,47 @@ class RoleUpdate(BaseModel):
     score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
 
 
+CRITERION_BUCKET_VALUES = ("must", "preferred", "constraint")
+
+
 class RoleCriterionResponse(BaseModel):
     id: int
     source: Literal["recruiter", "derived_from_spec", "recruiter_constraint"]
     ordering: int
     weight: float
     must_have: bool
+    bucket: Literal["must", "preferred", "constraint"]
+    # Provenance: the workspace criterion this row was copied from, if any.
+    # ``null`` = role-only addition.
+    org_criterion_id: Optional[int] = None
+    customized_at: Optional[datetime] = None
     text: str
 
     model_config = {"from_attributes": True}
+
+
+class RoleCriterionCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=220)
+    bucket: Literal["must", "preferred", "constraint"] = "preferred"
+    ordering: Optional[int] = Field(default=None, ge=0, le=10_000)
+    weight: Optional[float] = Field(default=None, ge=0.0, le=10.0)
+
+
+class RoleCriterionUpdate(BaseModel):
+    text: Optional[str] = Field(default=None, min_length=1, max_length=220)
+    bucket: Optional[Literal["must", "preferred", "constraint"]] = None
+    ordering: Optional[int] = Field(default=None, ge=0, le=10_000)
+    weight: Optional[float] = Field(default=None, ge=0.0, le=10.0)
+
+
+class RoleCriteriaSummary(BaseModel):
+    """Summary of a role's effective criteria state for the UI."""
+
+    workspace_count: int = 0
+    role_added_count: int = 0
+    customized_count: int = 0
+    suppressed_count: int = 0
+    workspace_updated_at: Optional[datetime] = None
 
 
 class RoleResponse(BaseModel):

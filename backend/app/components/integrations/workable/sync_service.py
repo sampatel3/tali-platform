@@ -1169,21 +1169,10 @@ class WorkableSyncService:
             )
         created = False
         if not role:
-            # Seed defaults from the workspace settings. Workable itself
-            # doesn't supply scoring criteria, budget, or thresholds, so
-            # newly-created roles inherit them at import time. Existing roles
-            # (re-sync) keep whatever they already have.
-            list_default = getattr(org, "default_role_requirements", None)
-            if isinstance(list_default, list):
-                joined = "\n".join(
-                    str(item).strip() for item in list_default if str(item).strip()
-                )
-                org_default = joined or None
-            else:
-                org_default = (
-                    (getattr(org, "default_additional_requirements", None) or "").strip()
-                    or None
-                )
+            # Seed budget + threshold from workspace settings. Workable itself
+            # doesn't supply criteria so the new role's chip set is snapshotted
+            # from ``org_criteria`` further down via ``sync_all_criteria``.
+            # Existing roles (re-sync) keep their own chips.
             org_budget = getattr(org, "default_role_budget_cents", None)
             org_threshold = getattr(org, "default_score_threshold", None)
             role = Role(
@@ -1191,7 +1180,7 @@ class WorkableSyncService:
                 source="workable",
                 workable_job_id=job_id or None,
                 name=title,
-                additional_requirements=org_default,
+                additional_requirements=None,
                 monthly_usd_budget_cents=(
                     int(org_budget) if org_budget is not None else None
                 ),
@@ -1246,6 +1235,14 @@ class WorkableSyncService:
             templates = build_role_interview_pack_templates(role)
             role.screening_pack_template = templates.get("screening")
             role.tech_interview_pack_template = templates.get("tech_stage_2")
+        if created:
+            from ....services.role_criteria_service import sync_all_criteria
+
+            sync_all_criteria(db, role)
+        else:
+            from ....services.role_criteria_service import sync_derived_criteria
+
+            sync_derived_criteria(db, role)
         return role, created
 
     def _sync_candidate_for_role(

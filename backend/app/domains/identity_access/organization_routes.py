@@ -9,13 +9,22 @@ from ...platform.database import get_db
 from ...deps import get_current_user
 from ...models.user import User
 from ...models.organization import Organization
+from ...models.org_criterion import (
+    BUCKET_PREFERRED,
+    CRITERION_BUCKETS,
+    OrganizationCriterion,
+)
 from ...schemas.organization import (
+    OrgCriterionCreate,
+    OrgCriterionResponse,
+    OrgCriterionUpdate,
     OrgResponse,
     OrgUpdate,
     WorkableConfigBase,
     WorkableConnect,
     WorkableTokenConnect,
 )
+from ...services.role_criteria_service import mirror_org_text_from_criteria
 from ...platform.config import settings
 from ...platform.secrets import encrypt_text
 from .access_policy import normalize_allowed_domains
@@ -226,6 +235,149 @@ def update_my_org(
     org.ai_tooling_config = resolved_ai_tooling_config(org)
     org.notification_preferences = resolved_notification_preferences(org)
     return org_response_payload(org)
+
+
+# ---------------------------------------------------------------------------
+# Workspace criteria — Settings → AI agent chips
+# ---------------------------------------------------------------------------
+
+
+def _active_org_criteria_query(db: Session, organization_id: int):
+    return (
+        db.query(OrganizationCriterion)
+        .filter(
+            OrganizationCriterion.organization_id == organization_id,
+            OrganizationCriterion.deleted_at.is_(None),
+        )
+        .order_by(OrganizationCriterion.ordering, OrganizationCriterion.id)
+    )
+
+
+def _next_org_criterion_ordering(db: Session, organization_id: int) -> int:
+    last = (
+        _active_org_criteria_query(db, organization_id)
+        .order_by(OrganizationCriterion.ordering.desc(), OrganizationCriterion.id.desc())
+        .first()
+    )
+    return (last.ordering + 1) if last else 0
+
+
+@router.get("/me/criteria", response_model=list[OrgCriterionResponse])
+def list_org_criteria(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return _active_org_criteria_query(db, current_user.organization_id).all()
+
+
+@router.post(
+    "/me/criteria",
+    response_model=OrgCriterionResponse,
+    status_code=201,
+)
+def create_org_criterion(
+    data: OrgCriterionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    org = (
+        db.query(Organization)
+        .filter(Organization.id == current_user.organization_id)
+        .first()
+    )
+    if org is None:
+        raise HTTPException(status_code=404, detail="Organization not found")
+    ordering = (
+        data.ordering
+        if data.ordering is not None
+        else _next_org_criterion_ordering(db, org.id)
+    )
+    chip = OrganizationCriterion(
+        organization_id=org.id,
+        ordering=int(ordering),
+        weight=float(data.weight) if data.weight is not None else 1.0,
+        bucket=data.bucket or BUCKET_PREFERRED,
+        text=data.text.strip(),
+    )
+    db.add(chip)
+    try:
+        db.flush()
+        mirror_org_text_from_criteria(db, org)
+        db.commit()
+        db.refresh(chip)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to create criterion")
+    return chip
+
+
+@router.patch("/me/criteria/{criterion_id}", response_model=OrgCriterionResponse)
+def update_org_criterion(
+    criterion_id: int,
+    data: OrgCriterionUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    chip = (
+        db.query(OrganizationCriterion)
+        .filter(
+            OrganizationCriterion.id == criterion_id,
+            OrganizationCriterion.organization_id == current_user.organization_id,
+            OrganizationCriterion.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if chip is None:
+        raise HTTPException(status_code=404, detail="Criterion not found")
+    updates = data.model_dump(exclude_unset=True)
+    if "text" in updates and updates["text"] is not None:
+        chip.text = updates["text"].strip()
+    if "bucket" in updates and updates["bucket"] is not None:
+        if updates["bucket"] not in CRITERION_BUCKETS:
+            raise HTTPException(status_code=422, detail="Invalid bucket")
+        chip.bucket = updates["bucket"]
+    if "ordering" in updates and updates["ordering"] is not None:
+        chip.ordering = int(updates["ordering"])
+    if "weight" in updates and updates["weight"] is not None:
+        chip.weight = float(updates["weight"])
+    try:
+        db.flush()
+        mirror_org_text_from_criteria(db, chip.organization)
+        db.commit()
+        db.refresh(chip)
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update criterion")
+    return chip
+
+
+@router.delete("/me/criteria/{criterion_id}", status_code=204)
+def delete_org_criterion(
+    criterion_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    chip = (
+        db.query(OrganizationCriterion)
+        .filter(
+            OrganizationCriterion.id == criterion_id,
+            OrganizationCriterion.organization_id == current_user.organization_id,
+            OrganizationCriterion.deleted_at.is_(None),
+        )
+        .first()
+    )
+    if chip is None:
+        raise HTTPException(status_code=404, detail="Criterion not found")
+    org = chip.organization
+    chip.deleted_at = datetime.now(timezone.utc)
+    try:
+        db.flush()
+        mirror_org_text_from_criteria(db, org)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to delete criterion")
+    return None
 
 
 @router.get("/workable/authorize-url")
