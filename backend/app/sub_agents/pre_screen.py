@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 from ..cv_matching.runner_pre_screen import run_pre_screen
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
+from ..platform.config import settings
 from ..platform.database import SessionLocal
+from ..services.fraud_detection import (
+    apply_fraud_penalty,
+    build_fraud_signals_payload,
+    detect_cv_copy_paste,
+)
 from .base import SubAgent, SubAgentRequest, SubAgentResult
 from .registry import register_sub_agent
 
@@ -132,16 +138,43 @@ class PreScreenSubAgent:
                 tokens_used=int((result.input_tokens or 0) + (result.output_tokens or 0)),
             )
 
-        score = float(result.score) if result.score is not None else _decision_to_score(
-            result.decision
+        raw_score = (
+            float(result.score)
+            if result.score is not None
+            else _decision_to_score(result.decision)
         )
+        # Deterministic fraud check is part of the pre-screen agent — a CV
+        # that copy-pasted the JD is capped below the gate so the downstream
+        # decision policy filters it out without spending v3 tokens.
+        fraud = detect_cv_copy_paste(
+            cv_text,
+            jd_text,
+            threshold=settings.FRAUD_COPY_PASTE_THRESHOLD,
+        )
+        score, fraud_capped = apply_fraud_penalty(
+            raw_score,
+            fraud,
+            cap_score=settings.FRAUD_PENALTY_CAP_SCORE,
+        )
+        if fraud_capped:
+            decision = "no"
+            reason = (
+                f"CV contains {fraud.score:.0%} text copied verbatim from the "
+                f"job description (threshold {fraud.threshold:.0%})."
+            )
+        else:
+            decision = result.decision
+            reason = result.reason
         return SubAgentResult(
             sub_agent=self.name,
             ok=True,
             output={
                 "score": score,
-                "decision": result.decision,
-                "reason": result.reason,
+                "decision": decision,
+                "reason": reason,
+                "fraud_signals": build_fraud_signals_payload(fraud),
+                "fraud_capped": fraud_capped,
+                "llm_score_100": raw_score,
             },
             confidence=1.0 if result.cache_hit else 0.9,
             cache_hit=result.cache_hit,

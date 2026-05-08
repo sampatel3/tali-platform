@@ -29,6 +29,27 @@ export function PreScreenChip({ recommendation, runAt = null, compact = false })
 }
 
 /**
+ * Fraud / CV-plagiarism chip.
+ * Reads `pre_screen_evidence.fraud_signals.cv_copy_paste` produced by the
+ * pre-screen agent. Renders nothing when no signal is present or when the
+ * detector did not trigger — we don't want to clutter clean rows.
+ */
+export function FraudChip({ application, compact = false }) {
+  const signal = application?.pre_screen_evidence?.fraud_signals?.cv_copy_paste;
+  if (!signal || !signal.triggered) return null;
+  const pct = Math.round(Number(signal.score || 0) * 100);
+  const title = (
+    `CV plagiarism detected: ${pct}% of the CV text is copied verbatim from the `
+    + `job description (threshold ${Math.round(Number(signal.threshold || 0) * 100)}%).`
+  );
+  return (
+    <span className="ps-chip ps-chip--rejected" title={title}>
+      {compact ? `Plagiarism · ${pct}%` : `Possible CV plagiarism · ${pct}%`}
+    </span>
+  );
+}
+
+/**
  * Graph sync status chip.
  * Reads `graph_synced_at` and `graph_stale` from the application/candidate row.
  */
