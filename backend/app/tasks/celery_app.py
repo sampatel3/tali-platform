@@ -60,6 +60,15 @@ celery_app.conf.update(
             "task": "app.tasks.agent_tasks.agent_daily_review_sweep",
             "schedule": 86400.0,
         },
+        # Nightly DecisionPolicy retune. Aggregates explicit feedback +
+        # silent overrides + manual recruiter actions over the window
+        # since the last cause='feedback_retune' revision and writes a
+        # new (inactive by default) policy. Auto-apply is per-org via
+        # workspace_settings.decision_policy_auto_apply.
+        "decision-policy-nightly-retune": {
+            "task": "app.tasks.decision_policy_tasks.nightly_retune_sweep",
+            "schedule": 86400.0,
+        },
     },
 )
 

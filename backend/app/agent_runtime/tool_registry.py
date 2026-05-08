@@ -22,6 +22,7 @@ from ..mcp import handlers as mcp_handlers
 from ..models.agent_run import AgentRun
 from ..models.role import Role
 from ..services import cohort_signals_service
+from . import policy_evaluator
 
 
 # Cohort signals are recomputed when older than this. The full pool query
@@ -363,6 +364,37 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         },
     },
     # ------------------------------------------------------------------
+    # POLICY — call BEFORE any queue_* tool.
+    # ------------------------------------------------------------------
+    {
+        "name": "evaluate_policy",
+        "description": (
+            "Run the deterministic decision policy against this application. "
+            "Pulls pre-screen, CV-scoring, assessment-scoring, and recent "
+            "manual recruiter actions, builds the policy inputs, and returns "
+            "the verdict + reasoning trace + policy_revision_id. ALWAYS call "
+            "this before queue_advance_decision / queue_reject_decision / "
+            "queue_skip_assessment_reject_decision so the human-readable "
+            "reasoning + audit trail are anchored to the policy. If the "
+            "verdict says skipped_due_to_manual=true, do NOT queue — the "
+            "recruiter has already acted. If the verdict's decision_type is "
+            "queue_*, you may pass the same reasoning into the matching "
+            "queue tool."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_id": {"type": "integer"},
+                "skip_cache": {
+                    "type": "boolean",
+                    "default": False,
+                    "description": "Force sub-agents to recompute rather than use cached scores. Use sparingly.",
+                },
+            },
+            "required": ["application_id"],
+        },
+    },
+    # ------------------------------------------------------------------
     # TERMINAL
     # ------------------------------------------------------------------
     {
@@ -539,10 +571,38 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     return result.as_dict()
 
 
+def _stamp_policy_revision_in_evidence(
+    db: Session, *, role: Role, evidence: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Augment the agent's ``evidence`` dict with the active policy
+    revision id so every queued decision is traceable to the policy
+    that produced it. Idempotent: if the agent already supplied a
+    ``policy_revision_id``, it wins.
+    """
+    base: dict[str, Any] = dict(evidence or {})
+    if base.get("policy_revision_id"):
+        return base
+    try:
+        from ..decision_policy.engine import load_active_policy
+
+        row = load_active_policy(
+            db,
+            organization_id=int(role.organization_id),
+            role_id=int(role.id),
+        )
+        base["policy_revision_id"] = int(row.revision_id)
+    except Exception:  # pragma: no cover — never block queueing on this
+        pass
+    return base
+
+
 def _queue(
     db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any], decision_type: str
 ) -> Any:
     actor = Actor.agent(int(agent_run.id))
+    evidence = _stamp_policy_revision_in_evidence(
+        db, role=role, evidence=args.get("evidence")
+    )
     decision = queue_decision.run(
         db,
         actor,
@@ -551,7 +611,7 @@ def _queue(
         application_id=int(args["application_id"]),
         decision_type=decision_type,
         reasoning=str(args["reasoning"]),
-        evidence=args.get("evidence"),
+        evidence=evidence,
         confidence=float(args["confidence"]),
         model_version=str(agent_run.model_version or ""),
         prompt_version=str(agent_run.prompt_version or ""),
@@ -575,6 +635,71 @@ def _tool_queue_skip_assessment_reject_decision(
     db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
 ) -> Any:
     return _queue(db, agent_run=agent_run, role=role, args=args, decision_type="skip_assessment_reject")
+
+
+def _tool_evaluate_policy(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    """Bridge: gather sub-agent outputs and run the deterministic engine."""
+    import logging
+
+    application_id = int(args["application_id"])
+    skip_cache = bool(args.get("skip_cache", False))
+    metering_context = {
+        "agent_run_id": int(agent_run.id),
+        "feature": "evaluate_policy",
+    }
+    verdict, sub_outputs = policy_evaluator.evaluate_for_application(
+        db,
+        role=role,
+        application_id=application_id,
+        metering_context=metering_context,
+        skip_cache=skip_cache,
+    )
+    # Telemetry: structured log so the Hub's signals dashboard can
+    # bucket evaluations per (org, role, decision_type, revision).
+    logging.getLogger("taali.policy.evaluation").info(
+        "policy_evaluation",
+        extra={
+            "event": "policy_evaluation",
+            "organization_id": int(role.organization_id),
+            "role_id": int(role.id),
+            "application_id": application_id,
+            "agent_run_id": int(agent_run.id),
+            "policy_revision_id": verdict.policy_revision_id,
+            "decision_type": verdict.decision_type,
+            "decision_point": verdict.decision_point,
+            "confidence": float(verdict.confidence),
+            "intent_overrode": bool(verdict.intent_overrode),
+            "skipped_due_to_manual": bool(verdict.skipped_due_to_manual),
+        },
+    )
+    return {
+        "decision_type": verdict.decision_type,
+        "decision_point": verdict.decision_point,
+        "confidence": float(verdict.confidence),
+        "reasoning": verdict.reasoning,
+        "rule_path": list(verdict.rule_path),
+        "policy_revision_id": (
+            int(verdict.policy_revision_id)
+            if verdict.policy_revision_id is not None
+            else None
+        ),
+        "intent_overrode": bool(verdict.intent_overrode),
+        "skipped_due_to_manual": bool(verdict.skipped_due_to_manual),
+        "sub_agent_outputs": {
+            name: (
+                {
+                    "ok": sa.ok,
+                    "output": sa.output,
+                    "confidence": sa.confidence,
+                    "cache_hit": sa.cache_hit,
+                    "error": sa.error,
+                }
+            )
+            for name, sa in sub_outputs.items()
+        },
+    }
 
 
 def _tool_agent_run_complete(
@@ -613,6 +738,7 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "queue_advance_decision": _tool_queue_advance_decision,
     "queue_reject_decision": _tool_queue_reject_decision,
     "queue_skip_assessment_reject_decision": _tool_queue_skip_assessment_reject_decision,
+    "evaluate_policy": _tool_evaluate_policy,
     "agent_run_complete": _tool_agent_run_complete,
 }
 

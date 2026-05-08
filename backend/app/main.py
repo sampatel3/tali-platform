@@ -323,6 +323,9 @@ app.include_router(scoring_router, prefix="/api/v1")
 app.include_router(workable_router, prefix="/api/v1")
 app.include_router(background_jobs_router, prefix="/api/v1")
 app.include_router(share_links_router, prefix="/api/v1")
+from .decision_policy.routes import router as decision_policy_router  # noqa: E402
+
+app.include_router(decision_policy_router, prefix="/api/v1")
 # HANDOFF v2 §3 — public share viewer is mounted at /share/:token
 # (no /api/v1 prefix) so the URL the recruiter copy-pastes works in
 # any browser without auth and without exposing the API surface.
