@@ -26,6 +26,9 @@ vi.mock('../../shared/api', () => ({
   tasks: {
     list: vi.fn(),
   },
+  organizations: {
+    get: vi.fn().mockResolvedValue({ data: { default_role_requirements: [] } }),
+  },
   agent: {
     status: vi.fn().mockResolvedValue({ data: null }),
     usageBreakdown: vi.fn().mockResolvedValue({ data: null }),
@@ -284,6 +287,41 @@ Banking transformation experience
         additional_requirements: 'Payments experience matters\nStakeholder governance is critical',
       }));
     });
+  });
+
+  it('shows the inheritance hint on the role intent textarea', async () => {
+    apiClient.organizations.get.mockResolvedValueOnce({
+      data: { default_role_requirements: ['5+ years backend', 'Strong SQL'] },
+    });
+    // Role with no override yet — should read as "Inheriting from org defaults".
+    apiClient.roles.get.mockResolvedValueOnce({
+      data: { ...baseRole, additional_requirements: '' },
+    });
+    renderPipeline();
+    await openAgentSettingsTab();
+
+    expect(await screen.findByText(/Inheriting from org defaults/i)).toBeInTheDocument();
+    expect(screen.getByLabelText('Role intent')).toHaveAttribute(
+      'placeholder',
+      expect.stringContaining('5+ years backend'),
+    );
+  });
+
+  it('shows custom + revert when the role intent diverges from org defaults', async () => {
+    apiClient.organizations.get.mockResolvedValueOnce({
+      data: { default_role_requirements: ['5+ years backend', 'Strong SQL'] },
+    });
+    apiClient.roles.get.mockResolvedValueOnce({
+      data: { ...baseRole, additional_requirements: 'Custom intent for this role' },
+    });
+    renderPipeline();
+    await openAgentSettingsTab();
+
+    expect(await screen.findByText(/Custom for this role/i)).toBeInTheDocument();
+    const revert = screen.getByRole('button', { name: /Revert role intent to org defaults/i });
+    fireEvent.click(revert);
+    // After revert, the textarea content matches org defaults — pill flips back to "Inheriting".
+    expect(await screen.findByText(/Inheriting from org defaults/i)).toBeInTheDocument();
   });
 
   it('opens Agent settings and Job spec tabs (renamed from role fit / activity per HANDOFF v2 §4.1)', async () => {
