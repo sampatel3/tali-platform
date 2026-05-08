@@ -26,36 +26,76 @@ This folder collects the core TAALI visual assets in one place so they are easy 
 
 ## Color reference
 
-Brand purple v6 — re-anchored on the agent-on hero gradient so every
-purple in the product (buttons, kickers, .btn-purple, marketing CTA,
-the agent-running hero, the agent-quiet hero) reads as the same hue.
-Was `#7F39FB` (a more blue indigo); now `#B450FF` — the same bright
-violet that's already the dominant glow in the agent-on hero
-(`rgba(180, 80, 255)` sans alpha).
+Brand purple v8 — lifted out of the agent-quiet anchor.
 
-- Primary square/logo fill: `#B450FF`
-- Accent purple lines: `#9D00FF`  *(unchanged — kept as the brighter, more saturated lines variant)*
-- Deep purple lines: `#B450FF`  *(now matches primary; the variants stack in saturation order: deep `#B450FF` → accent `#9D00FF` → soft `#B06BFF`)*
+v7 sampled the literal `--grad-dark-vert` start (`#2A1854`), but at
+21% lightness that crossed into "looks black," not purple. v8 keeps
+the same hue axis as the gradient stops (H≈263°, the same axis as
+`#2A1854` / `#3A1D6E` / `#B450FF`) and lifts lightness to ≈44% — the
+brand still reads as deep and calm, but unmistakably purple. It sits
+perceptually midway between the agent-off anchor (calm, deep) and
+the agent-on glow (vivid, live). The bright violet stays reserved
+for the agent-running hero — its brightness is the signal that the
+agent is working *right now*, not the brand identity.
+
+- Primary square/logo fill: `#5E3AA8`
+- Accent purple lines: `#9D00FF`  *(unchanged — bright accent variant for high-energy contexts)*
+- Deep purple lines: `#5E3AA8`  *(matches primary; variants stack: deep `#5E3AA8` → accent `#9D00FF` → soft `#B06BFF`)*
 - Soft purple lines: `#B06BFF`
 - Inverse line color: `#FFFFFF`
 
 ### CSS tokens
 
 The frontend reads brand purples from CSS custom properties on `:root`
-in `frontend/src/index.css`. Touch `--purple` to retune everything:
+in `frontend/src/index.css`. Touch `--purple` to retune the brand —
+buttons, kickers, accents, the marketing CTA pill text, focus rings
+all cascade from this one token.
 
 | Token | Light | Dark | Used for |
 | --- | --- | --- | --- |
-| `--purple` | `#B450FF` | `#C78AFF` | Buttons, kickers, accents, agent-on hero anchor |
-| `--purple-2` | `#9D3EFF` | `#D4A8FF` | Hover state on `.btn-purple` |
-| `--purple-soft` | `#F4E8FF` | `#2E1A4E` | Background washes on info chips, soft surfaces |
-| `--purple-lav` | `#C4A5FD` | `#C4A5FD` | Lavender accent on the hero top-right glow |
-| `--purple-glow` | `rgba(196, 165, 253, 0.45)` | (same) | Atmospheric blob in dark slabs |
+| `--purple` | `#5E3AA8` | `#8867C4` | Brand purple. Buttons, kickers, accents, focus rings. Dark mode lifted into the same hue family for AA contrast on `#0E0A18`. |
+| `--purple-2` | `#4A2D80` | `#6E4BA8` | Hover state on `.btn-purple`, `.btn-primary:hover`. |
+| `--purple-soft` | `#EDE5F8` | `#2E1A4E` | Background washes on info chips, soft surfaces. |
+| `--purple-lav` | `#C4A5FD` | `#C4A5FD` | Lavender accent — the hero top-right glow, terminal cursor, anywhere a *visible* purple is needed on a dark surface. |
+| `--purple-glow` | `rgba(196, 165, 253, 0.45)` | (same) | Atmospheric blob in dark slabs. |
 
-The agent-on hero gradient (`.agent-header.agent-running`) and the
-agent-quiet hero (`--grad-dark-vert`) are intentionally hard-coded
-sibling recipes anchored on the same purple — they look different
-(vivid vs. muted) but read as the same hue family.
+### Agent-on vs. agent-off vs. brand
+
+The two hero variants are intentionally *not* anchored on `--purple`
+— each has its own job:
+
+- **`.agent-header.agent-running`** (vivid) — hard-coded
+  `linear-gradient(180deg, #3A1D6E → #251248)` plus `rgba(180,80,255)`
+  and `rgba(196,165,253)` radial glows. The brightness is the
+  signal: *the agent is live, working right now.* Don't reuse this
+  recipe for ambient brand surfaces.
+- **`.agent-header.agent-quiet`** (calm) — uses `--grad-dark-vert`
+  (`#2A1854 → #1D1130`). Default state for every page hero. Calmer
+  cousin of the brand `--purple`; same hue axis (H≈263°), darker
+  lightness so the hero reads as a still surface, not a button.
+- **Brand `--purple` (`#5E3AA8`)** — the readable middle. Same hue
+  axis as both heroes; lightness sits between them. Use for every
+  surface that should *be* purple: buttons, kickers, accents, the
+  marketing CTA pill text, focus rings, the soft Pending count.
+
+### Visibility exceptions
+
+A handful of consumers render to canvas / xterm, where they can't
+read CSS custom properties or sit on a fixed dark surface that the
+brand `#5E3AA8` would still under-contrast. These keep a hard-coded
+bright purple by design — scoped exceptions, not the brand:
+
+- `frontend/src/features/chat/GraphView.jsx` — Cytoscape `Person`
+  node colour (`#B450FF`). Canvas, no CSS-var resolution.
+- `frontend/src/features/assessment_runtime/AssessmentTerminal.jsx`
+  — xterm cursor and selection. Always renders against the dark
+  terminal bg.
+- `frontend/src/features/chat/chat.css` — CSS-var fallback literals
+  (`var(--purple, #b450ff)`) — only kick in if `--purple` is
+  undefined, which never happens in practice. Cosmetic.
+
+When changing the brand purple, leave these alone — they're not
+brand surfaces.
 
 ## Implementation references
 
