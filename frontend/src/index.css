@@ -8742,7 +8742,7 @@ button.eng-badge-button:focus-visible {
 
 .agent-header {
   color: #fff;
-  border-bottom: 1px solid var(--line-dark);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   position: relative;
   overflow: hidden;
   padding: 32px 32px 36px;
@@ -8750,6 +8750,9 @@ button.eng-badge-button:focus-visible {
   min-height: 280px;
   display: flex;
   align-items: center;
+  /* Quiet base — the bright running gradient fades in on top via the
+     .ah-bright-overlay layer so OFF→ON cross-fades cleanly. */
+  background: var(--grad-dark-vert);
 }
 
 .agent-header-inner {
@@ -8767,17 +8770,25 @@ button.eng-badge-button:focus-visible {
 /* Compact variant deprecated — normalized to default height. */
 .agent-header.compact { padding: 32px 32px 36px; }
 
-/* === ON: vivid, saturated purple wash. The reference for the brand
-   purple — every stop here is the canonical agent-on look. The bright
-   rgba(180,80,255) radial accent is the same hue as --purple v6
-   (#b450ff sans alpha), so buttons / kickers / .btn-purple visually
-   align with the gradient's dominant purple without us having to
-   color-mix the gradient itself away from its tuned stops. === */
-.agent-header.agent-running {
+/* === Bright agent-running gradient lives on a separate overlay layer so
+   the OFF→ON state change cross-fades opacity instead of snapping between
+   two `background` values (which browsers can't interpolate). The dark
+   quiet base stays painted on `.agent-header`; the overlay simply fades
+   in on top of it when the agent is running. === */
+.ah-bright-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 500ms ease;
   background:
     radial-gradient(ellipse 80% 60% at 75% 0%,  rgba(196,165,253,0.70) 0%, transparent 60%),
     radial-gradient(ellipse 70% 80% at 10% 100%, rgba(180,80,255,0.55) 0%, transparent 65%),
     linear-gradient(180deg, #3a1d6e 0%, #251248 100%);
+}
+
+.agent-header.agent-running .ah-bright-overlay {
+  opacity: 1;
   animation: agentHeaderPulse 6s ease-in-out infinite;
 }
 
@@ -8786,45 +8797,16 @@ button.eng-badge-button:focus-visible {
   50%      { filter: saturate(1.15) brightness(1.08); }
 }
 
-.agent-header.agent-running::before {
-  content: "";
-  position: absolute;
-  top: -20%;
-  right: 18%;
-  width: 560px;
-  height: 560px;
-  background: radial-gradient(circle, rgba(220,200,255,0.42), transparent 60%);
-  filter: blur(20px);
-  pointer-events: none;
-  animation: agentGlowDrift1 9s ease-in-out infinite;
-}
+/* Bright glow drift pseudos used to sit on .agent-header.agent-running, but
+   in the new cross-fade architecture the bright wash lives on the
+   .ah-bright-overlay child so the OFF→ON state can interpolate. The pseudos
+   conflicted with the overlay's stacking, so the agentHeaderPulse on the
+   overlay carries the breathing motion on its own now. */
 
-.agent-header.agent-running::after {
-  content: "";
-  position: absolute;
-  bottom: -40%;
-  left: -5%;
-  width: 540px;
-  height: 540px;
-  background: radial-gradient(circle, rgba(180,80,255,0.45), transparent 65%);
-  pointer-events: none;
-  animation: agentGlowDrift2 11s ease-in-out infinite;
-}
-
-@keyframes agentGlowDrift1 {
-  0%, 100% { transform: translate(0, 0)        scale(1);    opacity: .85; }
-  50%      { transform: translate(-30px, 18px) scale(1.08); opacity: 1;   }
-}
-
-@keyframes agentGlowDrift2 {
-  0%, 100% { transform: translate(0, 0)         scale(1);    opacity: .8;  }
-  50%      { transform: translate(28px, -22px)  scale(1.10); opacity: 1;   }
-}
-
-/* === OFF / no-agent: same purple base, glows muted, no animation. === */
+/* === OFF / no-agent: same purple base (now on .agent-header itself),
+   glows muted, no animation. === */
 .agent-header.agent-quiet {
-  background: var(--grad-dark-vert);
-  border-bottom-color: rgba(255, 255, 255, 0.06);
+  /* base background + border now live on .agent-header */
 }
 
 .agent-header.agent-quiet::before {
