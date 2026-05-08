@@ -102,6 +102,38 @@ def test_file_size_guard_for_api_and_service_paths() -> None:
     )
 
 
+def test_alembic_resolves_to_a_single_head() -> None:
+    """The migration graph must always reduce to one head.
+
+    Two PRs landing on main with overlapping migration ancestry can leave
+    alembic with multiple heads. ``alembic upgrade head`` then refuses to
+    pick between them, the Railway start script fails fast on the
+    migration step, and uvicorn never boots — production restart-loops.
+
+    This test catches that pre-merge: it loads the migration graph the
+    same way alembic itself does and asserts ``len(heads) == 1``. When
+    a CI run fails here, the fix is a small merge-marker migration
+    (e.g. ``revision = "065_merge_*"`` with a tuple ``down_revision``
+    pointing at every current head).
+    """
+    from alembic.config import Config
+    from alembic.script import ScriptDirectory
+
+    cfg = Config(str(PROJECT_ROOT / "alembic.ini"))
+    # The alembic.ini's ``script_location`` is a path relative to the
+    # config file's directory; resolving it manually keeps this test
+    # independent of the working dir pytest is launched from.
+    cfg.set_main_option("script_location", str(PROJECT_ROOT / "alembic"))
+    script = ScriptDirectory.from_config(cfg)
+    heads = list(script.get_heads())
+
+    assert len(heads) == 1, (
+        "Alembic must resolve to exactly one head; found "
+        f"{len(heads)}: {heads}. Add a merge migration with these "
+        "as its `down_revision` tuple."
+    )
+
+
 def test_no_imports_of_removed_service_shims() -> None:
     removed_shim_names = [
         "access_control_service",
