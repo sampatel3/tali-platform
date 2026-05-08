@@ -3,7 +3,6 @@ import { Check, Pause, Play } from 'lucide-react';
 
 import { AssessmentRuntimePreviewView } from '../assessment_runtime/AssessmentRuntimePreviewView';
 import { ActivityFeed } from '../home/ActivityFeed';
-import { DIMENSIONS } from '../../scoring/scoringDimensions';
 import { PRODUCT_WALKTHROUGH, PRODUCT_WALKTHROUGH_TASK } from '../demo/productWalkthroughModels';
 import {
   consumePendingMarketingSection,
@@ -20,58 +19,44 @@ const containerClass = 'mx-auto max-w-[1360px] px-6 md:px-10 xl:px-16';
 const _NOW = Date.now();
 const MARKETING_DECISION_FEED_ROWS = [
   {
-    id: 4821,
+    id: 21,
     status: 'pending',
     decision_type: 'advance_to_interview',
     candidate_name: 'Maya Chen',
     application_id: 1042,
     role_id: 109,
-    confidence: 0.82,
-    reasoning:
-      'TAALI 82, assessment 78. Strong test-first instinct in the runtime trace; caught a flawed AI suggestion at minute 14 and adapted the SELECT … FOR UPDATE pattern instead of pasting it. Recommend advancing to technical interview.',
+    reasoning: "Strong fit. Top of this role's pipeline.",
     created_at: new Date(_NOW - 6 * 60 * 1000).toISOString(),
   },
   {
-    id: 4820,
+    id: 20,
     status: 'pending',
     decision_type: 'reject',
     candidate_name: 'Tariq Al-Ahmad',
     application_id: 1018,
     role_id: 109,
-    confidence: 0.71,
-    reasoning:
-      'role_fit 22 against the role bar of 65. CV missing cloud-platform experience and three of five must-have skills. No assessment scheduled. Recommend reject; no_pending_assessment so safe to close.',
+    reasoning: 'Well below your bar. Missing the must-have skills.',
     created_at: new Date(_NOW - 44 * 60 * 1000).toISOString(),
   },
   {
-    id: 4819,
+    id: 19,
     status: 'approved',
     decision_type: 'advance_to_interview',
     candidate_name: 'Priya Raman',
     application_id: 1003,
     role_id: 109,
-    resolution_note: 'approved by Sam · 18m ago',
     resolved_at: new Date(_NOW - 18 * 60 * 1000).toISOString(),
   },
   {
-    id: 4818,
+    id: 18,
     status: 'overridden',
     decision_type: 'reject',
     candidate_name: 'Jonas Weber',
     application_id: 994,
     role_id: 109,
     human_disposition: 'taught',
-    resolution_note: 'override → advance · "missing_signal: ignored open-source contributions"',
+    resolution_note: 'override → advance',
     resolved_at: new Date(_NOW - 52 * 60 * 1000).toISOString(),
-  },
-  {
-    id: 4817,
-    status: 'approved',
-    decision_type: 'advance_to_interview',
-    candidate_name: 'Léa Fontaine',
-    application_id: 982,
-    role_id: 109,
-    resolved_at: new Date(_NOW - 95 * 60 * 1000).toISOString(),
   },
 ];
 
@@ -592,54 +577,50 @@ export const LandingPage = ({ onNavigate }) => {
               </ul>
             </div>
 
-            {/* Standing report bars — same dimension list + bar layout
-                used in CandidateFeedbackReportView (the actual recipient-
-                facing report). DIMENSIONS comes from the canonical
-                scoring/scoringDimensions module; mock score values only. */}
+            {/* Standing report bars — bar layout from
+                CandidateFeedbackReportView, simplified to 5 recruiter-
+                readable labels (the canonical 8 dimensions collapse
+                into roughly these buckets in a recruiter's mental
+                model). Mock score values only. */}
             <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
               <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">
-                <span>MAYA CHEN · STANDING REPORT</span>
-                <span className="font-semibold text-[var(--purple)]">TAALI 82</span>
+                <span>MAYA CHEN · CANDIDATE REPORT</span>
+                <span className="font-semibold text-[var(--purple)]">Strong overall fit</span>
               </div>
-              <div className="space-y-3 px-5 py-5">
+              <div className="space-y-4 px-5 py-6">
                 {[
-                  { id: 'task_completion', score: 88 },
-                  { id: 'prompt_clarity', score: 84 },
-                  { id: 'context_provision', score: 76 },
-                  { id: 'independence_efficiency', score: 81 },
-                  { id: 'response_utilization', score: 79 },
-                  { id: 'debugging_design', score: 86 },
-                  { id: 'written_communication', score: 74 },
-                  { id: 'role_fit', score: 80 },
-                ].map(({ id, score }) => {
-                  const dim = DIMENSIONS.find((d) => d.id === id);
-                  return (
-                    <div
-                      key={id}
-                      className="grid grid-cols-[180px_minmax(0,1fr)_64px] items-center gap-2"
-                    >
-                      <div className="text-[13px] text-[var(--ink)]">{dim?.label || id}</div>
-                      <div className="h-2 overflow-hidden bg-[var(--line)]">
-                        <div className="h-2 bg-[var(--purple)]" style={{ width: `${score}%` }} />
-                      </div>
-                      <div className="text-right font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">
-                        {score} / 100
-                      </div>
+                  { label: 'Coding ability', score: 88 },
+                  { label: 'Working with AI', score: 84 },
+                  { label: 'Problem solving', score: 86 },
+                  { label: 'Independence', score: 81 },
+                  { label: 'Communication', score: 74 },
+                ].map(({ label, score }) => (
+                  <div
+                    key={label}
+                    className="grid grid-cols-[160px_minmax(0,1fr)] items-center gap-3"
+                  >
+                    <div className="text-[14px] text-[var(--ink)]">{label}</div>
+                    <div className="h-2 overflow-hidden rounded-full bg-[var(--line)]">
+                      <div className="h-2 rounded-full bg-[var(--purple)]" style={{ width: `${score}%` }} />
                     </div>
-                  );
-                })}
+                  </div>
+                ))}
               </div>
             </div>
           </div>
 
           {/* IDE preview at the end of the AI-NATIVE section — the
               actual workspace component (AssessmentRuntimePreviewView).
-              Scaled to 70% via CSS transform so the IDE renders at its
-              natural 1440-wide layout but visually fits inside the
-              landing container without cramping. The wrapper compensates
-              for the scale (width 142.857% = 1/0.7) and the outer band
-              clips with overflow-hidden. */}
-          <div className="mt-12 overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
+              Scaled to 80% via CSS transform so the IDE renders at its
+              natural 1440-wide layout and visually fits the landing
+              band without cramping. The wrapper compensates for the
+              scale (width 125% = 1/0.8) and the outer band clips with
+              overflow-hidden. */}
+          <p className="mt-12 mb-3 text-[14px] text-[var(--ink-2)]">
+            <strong className="text-[var(--ink)]">Candidates work here.</strong>{' '}
+            Real editor, real terminal, AI in the side panel — and we watch how they use it.
+          </p>
+          <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
             <div className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[11px] text-[var(--mute)]">
               <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#f06' }} />
               <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#ffb020' }} />
@@ -647,12 +628,12 @@ export const LandingPage = ({ onNavigate }) => {
               <span className="ml-3">app.taali.ai/assess/preview</span>
               <span className="ml-auto rounded-full bg-[color:var(--bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--mute)]">Locked preview</span>
             </div>
-            <div style={{ height: 600, overflow: 'hidden', position: 'relative' }}>
+            <div style={{ height: 640, overflow: 'hidden', position: 'relative' }}>
               <div
                 style={{
-                  width: '142.857%',
-                  height: 'calc(100% / 0.7)',
-                  transform: 'scale(0.7)',
+                  width: '125%',
+                  height: 'calc(100% / 0.8)',
+                  transform: 'scale(0.8)',
                   transformOrigin: 'top left',
                 }}
               >
