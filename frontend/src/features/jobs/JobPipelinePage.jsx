@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowUpDown,
   BriefcaseBusiness,
@@ -7,6 +7,7 @@ import {
   ChevronDown,
   Edit3,
   Loader2,
+  MessageSquare,
   Share2,
   Sparkles,
   X,
@@ -580,6 +581,7 @@ const FormattedJobSpecSection = ({ section, marker }) => {
 // for budget / must-haves / pause threshold / audit footer.
 const RoleAgentSettingsTab = ({
   role,
+  onAskAboutRole,
   agentStatus = null,
   criteriaDraft,
   setCriteriaDraft,
@@ -663,10 +665,25 @@ const RoleAgentSettingsTab = ({
             having a second toggle here was a confusing duplicate. This
             tab is purely "configure how the agent runs when it's on." */}
         <section className="mc-agent-settings-intro">
-          <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
-          <p className="mc-agent-settings-intro-help">
-            Overrides your <a href="#org-defaults" style={{ color: 'var(--purple)' }}>org defaults</a> for this role only. Configure scoring, threshold, autonomy, and budget here. To turn the agent on, off, or pause it, use the agent panel at the top of this page.
-          </p>
+          <div className="mc-agent-settings-intro-row">
+            <div>
+              <div className="mc-kicker">HOW THE AGENT RUNS THIS ROLE</div>
+              <p className="mc-agent-settings-intro-help">
+                Overrides your <a href="#org-defaults" style={{ color: 'var(--purple)' }}>org defaults</a> for this role only. Configure scoring, threshold, autonomy, and budget here. To turn the agent on, off, or pause it, use the agent panel at the top of this page.
+              </p>
+            </div>
+            {onAskAboutRole ? (
+              <button
+                type="button"
+                className="mc-agent-settings-ask-taali"
+                onClick={onAskAboutRole}
+                aria-label="Ask Taali about this role"
+              >
+                <MessageSquare size={14} strokeWidth={2} />
+                Ask Taali about this role
+              </button>
+            ) : null}
+          </div>
         </section>
 
         {/* Recruiter intent for this role */}
@@ -960,6 +977,7 @@ const RoleAgentSettingsTab = ({
 
 export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = null }) => {
   const { roleId } = useParams();
+  const navigate = useNavigate();
   const rolesApi = apiClient.roles;
   const tasksApi = 'tasks' in apiClient ? apiClient.tasks : null;
   const { showToast } = useToast();
@@ -1931,6 +1949,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
         ) : activeView === 'role-fit' ? (
           <RoleAgentSettingsTab
             role={role}
+            onAskAboutRole={() => navigate(`/chat?role_id=${role.id}`)}
             agentStatus={agentStatus}
             criteriaDraft={criteriaDraft}
             setCriteriaDraft={setCriteriaDraft}

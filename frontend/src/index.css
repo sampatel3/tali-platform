@@ -10177,6 +10177,47 @@ button.eng-badge-button:focus-visible {
   margin: 6px 0 0;
 }
 
+/* Intro row: kicker + help on the left, "Ask Taali about this role"
+   button on the right. The button opens the role-scoped Taali Chat
+   conversation pre-filled with role_id so the agent's tools default to
+   this role and the recruiter can ask "why did you queue Lucas?" /
+   "what did the agent do today?" without restating the role. */
+.mc-agent-settings-intro-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.mc-agent-settings-ask-taali {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 14px;
+  background: var(--bg-2);
+  color: var(--purple);
+  border: 1px solid color-mix(in oklab, var(--purple) 32%, var(--line));
+  border-radius: 999px;
+  font-family: var(--font-sans, inherit);
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: -0.005em;
+  cursor: pointer;
+  transition: background 120ms ease, border-color 120ms ease, transform 80ms ease;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.mc-agent-settings-ask-taali:hover {
+  background: color-mix(in oklab, var(--purple) 6%, var(--bg-2));
+  border-color: var(--purple);
+}
+
+.mc-agent-settings-ask-taali:active {
+  transform: translateY(1px);
+}
+
 .mc-agent-settings-card {
   background: var(--bg-2);
   border: 1px solid var(--line);

@@ -286,6 +286,32 @@ Banking transformation experience
     });
   });
 
+  it('Ask Taali about this role launcher navigates to /chat with role_id query param', async () => {
+    // Render a stub /chat route that surfaces the search-string in the
+    // DOM so we can assert on the navigation target. MemoryRouter
+    // doesn't update window.location, so we read it via useLocation.
+    const { useLocation } = await import('react-router-dom');
+    const ChatStub = () => {
+      const loc = useLocation();
+      return <div data-testid="chat-stub-search">{loc.search}</div>;
+    };
+    render(
+      <MemoryRouter initialEntries={['/jobs/101']}>
+        <Routes>
+          <Route path="/jobs/:roleId" element={<JobPipelinePage onNavigate={vi.fn()} />} />
+          <Route path="/chat" element={<ChatStub />} />
+        </Routes>
+      </MemoryRouter>,
+    );
+
+    await openAgentSettingsTab();
+    const launcher = await screen.findByRole('button', { name: /Ask Taali about this role/i });
+    fireEvent.click(launcher);
+
+    const stub = await screen.findByTestId('chat-stub-search');
+    expect(stub.textContent).toBe('?role_id=101');
+  });
+
   it('opens Agent settings and Job spec tabs (renamed from role fit / activity per HANDOFF v2 §4.1)', async () => {
     renderPipeline();
 

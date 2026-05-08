@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import './chat.css';
 import EmptyState from './EmptyState';
 import Composer from './Composer';
@@ -78,6 +78,14 @@ const ChatPage = ({ onNavigate = null, NavComponent = null } = {}) => {
   const navigate = useNavigate();
   const { conversationId: routeId } = useParams();
   const conversationId = routeId ? Number(routeId) : null;
+  // Role-scoped chat: when the user lands here from the role page's
+  // "Ask Taali about this role" launcher, the URL carries ?role_id=N.
+  // We pass this to useChatStream which only includes it on the FIRST
+  // turn of a new conversation; the backend persists it on the
+  // TaaliChatConversation row so subsequent turns inherit the scope.
+  const [searchParams] = useSearchParams();
+  const roleIdParam = searchParams.get('role_id');
+  const roleId = roleIdParam && /^\d+$/.test(roleIdParam) ? Number(roleIdParam) : null;
 
   const [conversations, setConversations] = useState([]);
   const [composer, setComposer] = useState('');
@@ -100,7 +108,7 @@ const ChatPage = ({ onNavigate = null, NavComponent = null } = {}) => {
   );
 
   const { messages, isStreaming, error, send, stop, setHistory, reset } =
-    useChatStream({ conversationId, onConversationId });
+    useChatStream({ conversationId, roleId, onConversationId });
 
   const refreshConversations = useCallback(async () => {
     try {

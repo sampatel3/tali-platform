@@ -34,7 +34,7 @@ const parseLine = (line) => {
   }
 };
 
-const useChatStream = ({ conversationId, onConversationId } = {}) => {
+const useChatStream = ({ conversationId, roleId = null, onConversationId } = {}) => {
   const [messages, setMessages] = useState([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState(null);
@@ -86,6 +86,13 @@ const useChatStream = ({ conversationId, onConversationId } = {}) => {
           body: JSON.stringify({
             message: text,
             conversation_id: conversationId ?? null,
+            // role_id is only meaningful on the FIRST turn of a new
+            // conversation. Once a conversation exists the backend reads
+            // role scope from the persisted row and ignores this field —
+            // sending it is harmless but we elide for cleanliness.
+            ...(conversationId == null && roleId != null
+              ? { role_id: Number(roleId) }
+              : {}),
           }),
         });
         if (!resp.ok) {
