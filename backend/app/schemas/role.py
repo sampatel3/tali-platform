@@ -4,7 +4,6 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, EmailStr, Field
 
 ROLE_DESCRIPTION_MAX_LENGTH = 20000
-ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH = 12000
 
 
 class InterviewFocusQuestion(BaseModel):
@@ -61,7 +60,9 @@ class ApplicationInterviewResponse(BaseModel):
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
-    additional_requirements: Optional[str] = Field(default=None, max_length=ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH)
+    # ``additional_requirements`` was retired in alembic 068. Use the
+    # /roles/{id}/criteria endpoints to author chips after the role is
+    # created; new roles also inherit workspace chips at create time.
     screening_pack_template: Optional[InterviewPack] = None
     tech_interview_pack_template: Optional[InterviewPack] = None
     auto_reject_enabled: Optional[bool] = None
@@ -76,7 +77,6 @@ class RoleCreate(BaseModel):
 class RoleUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
-    additional_requirements: Optional[str] = Field(default=None, max_length=ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH)
     screening_pack_template: Optional[InterviewPack] = None
     tech_interview_pack_template: Optional[InterviewPack] = None
     auto_reject_enabled: Optional[bool] = None
@@ -92,6 +92,13 @@ class RoleUpdate(BaseModel):
     # Universal monthly USD cap (cents) for ALL Anthropic spend on the role.
     monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
     score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
+    # Workspace criterion ids the recruiter has explicitly hidden from
+    # this role. Editable via PATCH so the chip editor's "Show hidden →
+    # Add back" action can clear an entry without going through Sync.
+    suppressed_org_criterion_ids: Optional[list[int]] = Field(default=None, max_length=200)
+
+
+CRITERION_BUCKET_VALUES = ("must", "preferred", "constraint")
 
 
 class RoleCriterionResponse(BaseModel):
@@ -100,9 +107,38 @@ class RoleCriterionResponse(BaseModel):
     ordering: int
     weight: float
     must_have: bool
+    bucket: Literal["must", "preferred", "constraint"]
+    # Provenance: the workspace criterion this row was copied from, if any.
+    # ``null`` = role-only addition.
+    org_criterion_id: Optional[int] = None
+    customized_at: Optional[datetime] = None
     text: str
 
     model_config = {"from_attributes": True}
+
+
+class RoleCriterionCreate(BaseModel):
+    text: str = Field(min_length=1, max_length=220)
+    bucket: Literal["must", "preferred", "constraint"] = "preferred"
+    ordering: Optional[int] = Field(default=None, ge=0, le=10_000)
+    weight: Optional[float] = Field(default=None, ge=0.0, le=10.0)
+
+
+class RoleCriterionUpdate(BaseModel):
+    text: Optional[str] = Field(default=None, min_length=1, max_length=220)
+    bucket: Optional[Literal["must", "preferred", "constraint"]] = None
+    ordering: Optional[int] = Field(default=None, ge=0, le=10_000)
+    weight: Optional[float] = Field(default=None, ge=0.0, le=10.0)
+
+
+class RoleCriteriaSummary(BaseModel):
+    """Summary of a role's effective criteria state for the UI."""
+
+    workspace_count: int = 0
+    role_added_count: int = 0
+    customized_count: int = 0
+    suppressed_count: int = 0
+    workspace_updated_at: Optional[datetime] = None
 
 
 class RoleResponse(BaseModel):
@@ -110,7 +146,6 @@ class RoleResponse(BaseModel):
     organization_id: int
     name: str
     description: Optional[str] = None
-    additional_requirements: Optional[str] = None
     criteria: list[RoleCriterionResponse] = Field(default_factory=list)
     source: Optional[str] = "manual"
     workable_job_id: Optional[str] = None

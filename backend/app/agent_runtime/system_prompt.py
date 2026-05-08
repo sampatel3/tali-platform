@@ -9,11 +9,44 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..models.org_criterion import (
+    BUCKET_CONSTRAINT,
+    BUCKET_MUST,
+    BUCKET_PREFERRED,
+)
 from ..models.role import Role
+from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v5.policy-aware.2026-05-08"
+PROMPT_VERSION = "agent.v5.policy-aware.bucketed.2026-05-08"
+
+
+def _render_bucketed_criteria(role: Role) -> str:
+    """Render the role's recruiter-source criteria as MUST HAVE / PREFERRED /
+    CONSTRAINTS sections with hint phrasing for each bucket. Returns an
+    empty string when the role has no chips."""
+    chips = [
+        c for c in (role.criteria or [])
+        if c.deleted_at is None and c.source != CRITERION_SOURCE_DERIVED
+    ]
+    if not chips:
+        return ""
+    sections: list[str] = []
+    for bucket, label, hint in (
+        (BUCKET_MUST, "MUST HAVE", "treat as the bar — flag candidates who don't meet these"),
+        (BUCKET_PREFERRED, "PREFERRED", "positive signals — weigh in fit, don't gate"),
+        (BUCKET_CONSTRAINT, "CONSTRAINTS", "logistics — surface mismatches separately from fit score"),
+    ):
+        rows = [c for c in chips if c.bucket == bucket]
+        if not rows:
+            continue
+        rows.sort(key=lambda c: c.ordering)
+        body = "\n".join(f"- {(c.text or '').strip()}" for c in rows if (c.text or '').strip())
+        if not body:
+            continue
+        sections.append(f"{label} ({hint}):\n{body}")
+    return "\n\n".join(sections)
 
 
 _STATIC_HEADER = """\
@@ -112,13 +145,13 @@ def build_system_prompt(
     calibration_summary = calibration_mod.render_summary(calibration)
 
     job_spec = (role.job_spec_text or "").strip() or "(no job spec attached)"
-    additional_reqs = (role.additional_requirements or "").strip()
+    criteria_block = _render_bucketed_criteria(role)
     interview_focus = role.interview_focus or {}
 
     role_block = (
         f"ROLE: {role.name} (id={role.id})\n"
         f"JOB SPEC:\n{job_spec[:6000]}"
-        + (f"\n\nADDITIONAL REQUIREMENTS:\n{additional_reqs[:2000]}" if additional_reqs else "")
+        + (f"\n\n{criteria_block}" if criteria_block else "")
         + (f"\n\nINTERVIEW FOCUS HINTS: {interview_focus}" if interview_focus else "")
     )
 

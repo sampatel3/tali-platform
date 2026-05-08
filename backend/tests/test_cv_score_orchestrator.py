@@ -32,7 +32,7 @@ from app.services.cv_score_orchestrator import (
     enqueue_score,
     mark_role_scores_stale,
 )
-from app.services.role_criteria_service import sync_recruiter_criteria
+from app.models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
 
 
 @pytest.fixture(autouse=True)
@@ -70,11 +70,19 @@ def session():
         organization_id=org.id,
         name="Backend Engineer",
         job_spec_text="Description\nA backend role.\nRequirements\n- 5+ years Python\n",
-        additional_requirements="- 5+ years Python\n- AWS",
     )
     db.add(role)
     db.flush()
-    sync_recruiter_criteria(db, role)
+    # Add the recruiter criteria as chips directly — the legacy text→chips
+    # path is gone post-alembic-068.
+    db.add(RoleCriterion(
+        role_id=role.id, source=CRITERION_SOURCE_RECRUITER, ordering=0,
+        weight=1.0, must_have=True, bucket="must", text="5+ years Python",
+    ))
+    db.add(RoleCriterion(
+        role_id=role.id, source=CRITERION_SOURCE_RECRUITER, ordering=1,
+        weight=1.0, must_have=True, bucket="must", text="AWS",
+    ))
     db.commit()
     db.refresh(role)
     candidate = Candidate(organization_id=org.id, email="cand@example.com")

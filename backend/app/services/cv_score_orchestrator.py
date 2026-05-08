@@ -82,6 +82,7 @@ def _criteria_payload(role: Role | None) -> list[dict]:
                 "id": int(c.id),
                 "text": str(c.text or "").strip(),
                 "must_have": bool(c.must_have),
+                "bucket": str(getattr(c, "bucket", None) or ("must" if bool(c.must_have) else "preferred")),
                 "source": str(c.source or "recruiter"),
             }
         )
@@ -97,7 +98,10 @@ def compute_cache_key(
     prompt_version: str,
     model: str,
 ) -> str:
-    """Hash the v4 (or v3) inputs into a deterministic cache key."""
+    """Hash the v4 (or v3) inputs into a deterministic cache key.
+
+    ``bucket`` is included so a recruiter changing must → preferred
+    invalidates the cache (the agent reasoning weights buckets differently)."""
     payload = {
         "cv": cv_text or "",
         "spec_description": spec_description or "",
@@ -107,6 +111,7 @@ def compute_cache_key(
                 "id": int(c["id"]),
                 "text": str(c.get("text") or ""),
                 "must_have": bool(c.get("must_have")),
+                "bucket": str(c.get("bucket") or ("must" if bool(c.get("must_have")) else "preferred")),
             }
             for c in criteria
         ],

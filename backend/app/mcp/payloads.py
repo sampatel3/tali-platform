@@ -15,6 +15,7 @@ from typing import Any
 from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
+from ..services.role_criteria_service import render_role_intent_block
 from .urls import application_url, candidate_url, role_url
 
 # Score keys exposed via ``search_applications.score_type`` and
@@ -79,7 +80,7 @@ def role_detail(
     )
     payload["description"] = role.description
     payload["job_spec_text"] = role.job_spec_text
-    payload["additional_requirements"] = role.additional_requirements
+    payload["recruiter_criteria_text"] = render_role_intent_block(role) or None
     payload["criteria"] = [
         {
             "id": c.id,

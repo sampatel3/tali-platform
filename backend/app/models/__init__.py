@@ -6,6 +6,13 @@ from .candidate_application import CandidateApplication
 from .candidate_application_event import CandidateApplicationEvent
 from .application_interview import ApplicationInterview
 from .role import Role, role_tasks
+from .org_criterion import (
+    BUCKET_CONSTRAINT,
+    BUCKET_MUST,
+    BUCKET_PREFERRED,
+    CRITERION_BUCKETS,
+    OrganizationCriterion,
+)
 from .role_criterion import (
     CRITERION_SOURCE_DERIVED,
     CRITERION_SOURCE_RECRUITER,
@@ -91,6 +98,11 @@ __all__ = [
     "CRITERION_SOURCE_RECRUITER",
     "CRITERION_SOURCE_DERIVED",
     "CRITERION_SOURCE_RECRUITER_CONSTRAINT",
+    "OrganizationCriterion",
+    "BUCKET_MUST",
+    "BUCKET_PREFERRED",
+    "BUCKET_CONSTRAINT",
+    "CRITERION_BUCKETS",
     "CvMatchOverride",
     "CvParseCache",
     "CvScoreCache",

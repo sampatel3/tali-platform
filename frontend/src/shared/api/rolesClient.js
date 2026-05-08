@@ -8,6 +8,14 @@ export const roles = {
   remove: (id) => api.delete(`/roles/${id}`),
   star: (id) => api.post(`/roles/${id}/star`),
   unstar: (id) => api.delete(`/roles/${id}/star`),
+  // Per-role criteria chip CRUD + workspace sync.
+  createCriterion: (roleId, data) => api.post(`/roles/${roleId}/criteria`, data),
+  updateCriterion: (roleId, criterionId, data) =>
+    api.patch(`/roles/${roleId}/criteria/${criterionId}`, data),
+  deleteCriterion: (roleId, criterionId) =>
+    api.delete(`/roles/${roleId}/criteria/${criterionId}`),
+  syncCriteriaWithWorkspace: (roleId) => api.post(`/roles/${roleId}/criteria/sync`),
+  resetCriteriaToWorkspace: (roleId) => api.post(`/roles/${roleId}/criteria/reset`),
   regenerateInterviewFocus: (roleId) => api.post(`/roles/${roleId}/regenerate-interview-focus`),
   uploadJobSpec: (roleId, file) => {
     const form = new FormData();

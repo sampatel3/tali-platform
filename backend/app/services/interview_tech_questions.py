@@ -16,6 +16,7 @@ from typing import Any
 from ..models.candidate_application import CandidateApplication
 from ..platform.config import settings
 from .interview_tech_prompt import generate_tech_questions
+from .role_criteria_service import render_role_intent_block
 
 
 _EVIDENCE_PREFIX_BY_SOURCE = {
@@ -163,7 +164,7 @@ def maybe_generate_tech_questions(
     try:
         return generate_tech_questions(
             job_spec_text=str(role.job_spec_text or "").strip(),
-            recruiter_requirements=str(getattr(role, "additional_requirements", "") or "").strip() or None,
+            recruiter_requirements=render_role_intent_block(role) or None,
             requirements_assessment=requirements_assessment,
             transcript_text=latest_screening_transcript_text(application),
             recruiter_notes=str(getattr(application, "notes", "") or "").strip() or None,

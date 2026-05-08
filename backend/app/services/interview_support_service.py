@@ -6,6 +6,7 @@ from typing import Any
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from .document_service import sanitize_json_for_storage, sanitize_text_for_storage
+from .role_criteria_service import render_role_intent_lines
 from .interview_tech_questions import (
     deterministic_tech_questions,
     format_evidence_anchor,
@@ -227,8 +228,8 @@ def build_role_interview_pack_templates(role: Role) -> dict[str, dict[str, Any]]
         )
 
     additional_topics = []
-    for raw in str(role.additional_requirements or "").splitlines():
-        topic = _clean_text(raw.lstrip("-* "), max_len=180)
+    for raw in render_role_intent_lines(role):
+        topic = _clean_text(raw, max_len=180)
         if topic:
             additional_topics.append(topic)
         if len(additional_topics) >= 4:

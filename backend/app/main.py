@@ -266,6 +266,7 @@ from .api.v1.users_fastapi import (
 )
 from .api.v1.assessments import router as assessments_router
 from .api.v1.organizations import router as organizations_router
+from .domains.identity_access.org_criteria_routes import router as org_criteria_router
 from .api.v1.webhooks import router as webhooks_router
 from .api.v1.tasks import router as tasks_router
 from .api.v1.analytics import router as analytics_router
@@ -311,6 +312,7 @@ app.include_router(
 
 app.include_router(assessments_router, prefix="/api/v1")
 app.include_router(organizations_router, prefix="/api/v1")
+app.include_router(org_criteria_router, prefix="/api/v1")
 app.include_router(users_router, prefix="/api/v1")
 app.include_router(auth_router, prefix="/api/v1")
 app.include_router(webhooks_router, prefix="/api/v1")

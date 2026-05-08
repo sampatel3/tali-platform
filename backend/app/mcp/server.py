@@ -25,6 +25,7 @@ from ..models.candidate import Candidate
 from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..platform.database import SessionLocal
+from ..services.role_criteria_service import render_role_intent_block
 from . import handlers
 from .auth import MCPAuthError, authenticate_request
 
@@ -293,8 +294,9 @@ def _markdown_role(role: Role) -> str:
         f"Role ID: `{role.id}`  ·  Source: `{role.source}`",
         "",
     ]
-    if role.additional_requirements:
-        parts.extend(["## Additional requirements", role.additional_requirements.strip(), ""])
+    intent_block = render_role_intent_block(role)
+    if intent_block:
+        parts.extend(["## Recruiter criteria", intent_block, ""])
     if spec:
         parts.extend(["## Job spec", spec, ""])
     return "\n".join(parts).strip() + "\n"

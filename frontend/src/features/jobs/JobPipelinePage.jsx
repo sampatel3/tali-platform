@@ -18,6 +18,7 @@ import { useToast } from '../../context/ToastContext';
 import { useJobStatus } from '../../contexts/JobStatusContext';
 import { Spinner } from '../../shared/ui/TaaliPrimitives';
 import { ConfirmActionDialog } from '../../shared/ui/ConfirmActionDialog';
+import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 import { ProcessCandidatesDialog } from './ProcessCandidatesDialog';
 import { useAgentStatus } from '../../shared/layout/AgentBar';
 import { AgentHeader, buildAgentPropFromStatus } from '../../shared/layout/AgentHeader';
@@ -91,11 +92,6 @@ const resolvePipelineCardFooterStatus = (application) => {
   if (stage === 'review') return 'Decision';
   return resolveAssessmentId(application) ? 'Assessment linked' : 'No task yet';
 };
-
-const splitCriteriaDraft = (criteriaDraft = '') => String(criteriaDraft || '')
-  .split('\n')
-  .map((entry) => entry.replace(/^[\s*-]+/, '').trim())
-  .filter(Boolean);
 
 const SPEC_META_LABELS = {
   application: 'applyUrl',
@@ -581,9 +577,17 @@ const FormattedJobSpecSection = ({ section, marker }) => {
 const RoleAgentSettingsTab = ({
   role,
   agentStatus = null,
-  criteriaDraft,
-  setCriteriaDraft,
-  orgDefaultRoleIntent = '',
+  roleCriteria,
+  workspaceCriteria,
+  criteriaBusy,
+  criteriaSyncing,
+  criteriaResetting,
+  onCreateCriterion,
+  onUpdateCriterion,
+  onDeleteCriterion,
+  onSyncCriteria,
+  onResetCriteria,
+  onRestoreHiddenCriterion,
   thresholdDraft,
   setThresholdDraft,
   thresholdValue,
@@ -675,65 +679,28 @@ const RoleAgentSettingsTab = ({
           <div className="mc-agent-settings-card-head">
             <div>
               <h2 className="mc-agent-settings-card-title">
-                Role <em>intent</em>
+                Role <em>criteria</em>
               </h2>
               <p className="mc-agent-settings-card-help">
-                What does success look like in this role? The agent reads this as guidance — context to reason about candidate fit, not a checklist of rules to enforce. The job spec + linked task are still the baseline; this is where you tell the agent what matters most.
+                Add, edit, or remove chips freely — this role inherits from workspace defaults and you can customize per role. <strong>Sync workspace</strong> pulls in workspace updates without losing chips you've added here. <strong>Reset</strong> drops your customizations and re-snapshots workspace.
               </p>
             </div>
           </div>
-          {(() => {
-            // Inheritance state for the role intent vs. org defaults.
-            // Shown above the textarea so recruiters can see at a glance
-            // whether they're customising this role or inheriting from
-            // Settings → AI agent. "Inherits" includes both blank and
-            // exact-match cases — both mean "the agent reads the org
-            // default text as this role's intent."
-            const currentDraft = String(criteriaDraft || '').trim();
-            const orgDefault = String(orgDefaultRoleIntent || '').trim();
-            const hasOrgDefault = orgDefault.length > 0;
-            const isCustom = hasOrgDefault && currentDraft !== '' && currentDraft !== orgDefault;
-            return hasOrgDefault ? (
-              <div className="mc-agent-settings-intent-inheritance">
-                {isCustom ? (
-                  <>
-                    <span className="mc-agent-settings-intent-pill custom">Custom for this role</span>
-                    <button
-                      type="button"
-                      className="mc-agent-settings-intent-revert"
-                      onClick={() => setCriteriaDraft(orgDefault)}
-                      aria-label="Revert role intent to org defaults"
-                    >
-                      Revert to org defaults
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span className="mc-agent-settings-intent-pill inherit">Inheriting from org defaults</span>
-                    <span className="mc-agent-settings-intent-help">
-                      Edit below to customise for this role only.
-                    </span>
-                  </>
-                )}
-              </div>
-            ) : null;
-          })()}
-          <div className="mc-agent-settings-textwrap">
-            <textarea
-              className="mc-agent-settings-intent-textarea"
-              rows={8}
-              value={String(criteriaDraft || '')}
-              onChange={(e) => setCriteriaDraft(e.target.value)}
-              placeholder={
-                String(orgDefaultRoleIntent || '').trim()
-                  || "e.g. We're looking for engineers who can move fast in early-stage chaos.\n"
-                  + "5+ years backend matters less than 0→1 product experience.\n"
-                  + "Strong written communication is critical — most of the role is async.\n"
-                  + "If they've worked at Stripe, Linear, or Vercel they probably get it."
-              }
-              aria-label="Role intent"
-            />
-          </div>
+          <CriteriaEditor
+            mode="role"
+            criteria={roleCriteria}
+            workspaceCriteria={workspaceCriteria}
+            suppressedIds={Array.isArray(role?.suppressed_org_criterion_ids) ? role.suppressed_org_criterion_ids : []}
+            busy={criteriaBusy}
+            syncing={criteriaSyncing}
+            resetting={criteriaResetting}
+            onCreate={onCreateCriterion}
+            onUpdate={onUpdateCriterion}
+            onDelete={onDeleteCriterion}
+            onSync={onSyncCriteria}
+            onReset={onResetCriteria}
+            onRestoreHidden={onRestoreHiddenCriterion}
+          />
         </section>
 
         {/* Reject threshold */}
@@ -760,11 +727,9 @@ const RoleAgentSettingsTab = ({
               value={thresholdDisplay}
               onChange={(event) => setThresholdDraft(event.target.value)}
               aria-label="Reject threshold percent"
-              className="mc-agent-settings-slider-input"
+              className="ce-range mc-agent-settings-slider-input"
+              style={{ '--ce-range-val': thresholdDisplay }}
             />
-            <div className="mc-agent-settings-slider-track">
-              <div className="mc-agent-settings-slider-thumb" style={{ left: `${thresholdDisplay}%` }} />
-            </div>
             <div className="mc-agent-settings-slider-scale">
               <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
             </div>
@@ -1092,10 +1057,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     }
   }, [fetchPendingDecisions, showToast]);
   const [role, setRole] = useState(null);
-  // Org-default role intent — joined from Settings → AI agent's
-  // ``default_role_requirements`` array. Used on the Agent settings
-  // tab to show whether this role's intent is inherited or customised.
-  const [orgDefaultRoleIntent, setOrgDefaultRoleIntent] = useState('');
+  // Workspace chips loaded once per role-workspace load. Used by the
+  // role page chip editor for the "Show hidden" suppressed-chips view
+  // (we need the workspace text/bucket for chips the recruiter has
+  // hidden from this role).
+  const [workspaceCriteria, setWorkspaceCriteria] = useState([]);
+  const [criteriaBusy, setCriteriaBusy] = useState(false);
+  const [criteriaSyncing, setCriteriaSyncing] = useState(false);
+  const [criteriaResetting, setCriteriaResetting] = useState(false);
   const [roleTasks, setRoleTasks] = useState([]);
   const [allTasks, setAllTasks] = useState([]);
   const [roleApplications, setRoleApplications] = useState([]);
@@ -1105,7 +1074,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [processDialogOpen, setProcessDialogOpen] = useState(false);
   const [loading, setLoading] = useState(true);
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
-  const [criteriaDraft, setCriteriaDraft] = useState('');
   const [thresholdDraft, setThresholdDraft] = useState('');
   const [refreshTick, setRefreshTick] = useState(0);
   const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
@@ -1131,27 +1099,23 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     setLoading(true);
     try {
-      const [roleRes, tasksRes, applicationsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgRes] = await Promise.all([
+      const [roleRes, tasksRes, applicationsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
         rolesApi.get(numericRoleId),
         rolesApi.listTasks(numericRoleId),
         rolesApi.listApplications(numericRoleId, { sort_by: 'pre_screen_score', sort_order: 'desc' }),
         rolesApi.batchScoreStatus(numericRoleId),
         rolesApi.fetchCvsStatus(numericRoleId),
         rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
-        // Org defaults — used to surface inheritance state on the role
-        // intent textarea. Defensive: optional-chained call + .catch so
-        // a missing API client (older tests) or transient failure
+        // Workspace chips for the suppressed-chips ("hidden from this
+        // role") view in the chip editor. Defensive: optional-chained
+        // call + .catch so a missing API client or transient failure
         // doesn't blow up the whole role workspace load.
-        Promise.resolve(apiClient.organizations?.get?.() ?? { data: null })
-          .catch(() => ({ data: null })),
+        Promise.resolve(apiClient.organizations?.listCriteria?.() ?? { data: [] })
+          .catch(() => ({ data: [] })),
       ]);
       const nextRole = roleRes?.data || null;
       setRole(nextRole);
-      setCriteriaDraft(nextRole?.additional_requirements || '');
-      const orgDefaults = Array.isArray(orgRes?.data?.default_role_requirements)
-        ? orgRes.data.default_role_requirements
-        : [];
-      setOrgDefaultRoleIntent(orgDefaults.map((s) => String(s || '').trim()).filter(Boolean).join('\n'));
+      setWorkspaceCriteria(Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : []);
       setThresholdDraft(nextRole?.auto_reject_threshold_100 != null ? String(nextRole.auto_reject_threshold_100) : '');
       setRoleTasks(Array.isArray(tasksRes?.data) ? tasksRes.data : []);
       setRoleApplications(Array.isArray(applicationsRes?.data) ? applicationsRes.data : []);
@@ -1346,7 +1310,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     items: activeApplications.filter((application) => String(application?.pipeline_stage || '').toLowerCase() === stage.key),
   })), [activeApplications]);
 
-  const recruiterCriteria = useMemo(() => splitCriteriaDraft(criteriaDraft), [criteriaDraft]);
+  // Recruiter chips on this role (excludes derived_from_spec entries — those
+  // come from the job spec parser and are managed separately).
+  const roleCriteria = useMemo(() => (
+    Array.isArray(role?.criteria)
+      ? role.criteria.filter((c) => !c.deleted_at && c.source !== 'derived_from_spec')
+      : []
+  ), [role]);
+  const recruiterCriteria = useMemo(() => roleCriteria.map((c) => c.text).filter(Boolean), [roleCriteria]);
   const parsedJobSpec = useMemo(() => parseJobSpec(
     role?.job_spec_text || role?.description || role?.summary || role?.job_summary || '',
     role?.name || ''
@@ -1537,18 +1508,119 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setSavingRoleConfig(true);
     try {
       await rolesApi.update(numericRoleId, {
-        additional_requirements: criteriaDraft.trim() || null,
         auto_reject_threshold_100: thresholdDraft === '' ? null : Number(normalizeThreshold(thresholdDraft)),
       });
       await loadRoleWorkspace();
       setRefreshTick((value) => value + 1);
-      showToast('Role scoring guidance updated.', 'success');
+      showToast('Reject threshold updated.', 'success');
     } catch (error) {
-      showToast(getErrorMessage(error, 'Failed to save role scoring guidance.'), 'error');
+      showToast(getErrorMessage(error, 'Failed to save reject threshold.'), 'error');
     } finally {
       setSavingRoleConfig(false);
     }
   };
+
+  // Per-role chip CRUD + sync/reset. Each call hits the API immediately;
+  // the role response carries the updated criteria + suppressed list so
+  // we just re-load the role workspace afterwards.
+  const refreshRoleAfterCriteriaChange = useCallback(async (nextRoleData) => {
+    if (nextRoleData) {
+      setRole(nextRoleData);
+    } else {
+      await loadRoleWorkspace();
+    }
+    setRefreshTick((value) => value + 1);
+  }, [loadRoleWorkspace]);
+
+  const handleCreateRoleCriterion = useCallback(async ({ text, bucket }) => {
+    if (!Number.isFinite(numericRoleId)) return;
+    setCriteriaBusy(true);
+    try {
+      await rolesApi.createCriterion(numericRoleId, { text, bucket });
+      await refreshRoleAfterCriteriaChange();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to add criterion.'), 'error');
+    } finally {
+      setCriteriaBusy(false);
+    }
+  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
+
+  const handleUpdateRoleCriterion = useCallback(async (criterionId, updates) => {
+    if (!Number.isFinite(numericRoleId)) return;
+    setCriteriaBusy(true);
+    try {
+      await rolesApi.updateCriterion(numericRoleId, criterionId, updates);
+      await refreshRoleAfterCriteriaChange();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to update criterion.'), 'error');
+    } finally {
+      setCriteriaBusy(false);
+    }
+  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
+
+  const handleDeleteRoleCriterion = useCallback(async (criterionId) => {
+    if (!Number.isFinite(numericRoleId)) return;
+    setCriteriaBusy(true);
+    try {
+      await rolesApi.deleteCriterion(numericRoleId, criterionId);
+      await refreshRoleAfterCriteriaChange();
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to remove criterion.'), 'error');
+    } finally {
+      setCriteriaBusy(false);
+    }
+  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
+
+  const handleSyncRoleCriteria = useCallback(async () => {
+    if (!Number.isFinite(numericRoleId)) return;
+    setCriteriaSyncing(true);
+    try {
+      const res = await rolesApi.syncCriteriaWithWorkspace(numericRoleId);
+      await refreshRoleAfterCriteriaChange(res?.data);
+      showToast('Workspace updates pulled in.', 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to sync workspace criteria.'), 'error');
+    } finally {
+      setCriteriaSyncing(false);
+    }
+  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
+
+  const handleResetRoleCriteria = useCallback(async () => {
+    if (!Number.isFinite(numericRoleId)) return;
+    setCriteriaResetting(true);
+    try {
+      const res = await rolesApi.resetCriteriaToWorkspace(numericRoleId);
+      await refreshRoleAfterCriteriaChange(res?.data);
+      showToast('Criteria reset to workspace defaults.', 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to reset criteria.'), 'error');
+    } finally {
+      setCriteriaResetting(false);
+    }
+  }, [numericRoleId, refreshRoleAfterCriteriaChange, showToast]);
+
+  // Restore a hidden (suppressed) workspace chip on this role: re-add it
+  // by calling create with the workspace text + bucket. The backend
+  // doesn't drop the suppressed_org_criterion_ids entry automatically
+  // here — Sync workspace would still skip the chip — so we additionally
+  // remove it from the suppressed list via PATCH.
+  const handleRestoreHiddenCriterion = useCallback(async (workspaceChip) => {
+    if (!Number.isFinite(numericRoleId) || !workspaceChip) return;
+    setCriteriaBusy(true);
+    try {
+      const remainingSuppressed = (role?.suppressed_org_criterion_ids || [])
+        .filter((id) => Number(id) !== Number(workspaceChip.id));
+      // First, drop the suppression so Sync would also re-add it next time.
+      await rolesApi.update(numericRoleId, { suppressed_org_criterion_ids: remainingSuppressed });
+      // Then sync to bring the chip back with full provenance (org_criterion_id set).
+      const res = await rolesApi.syncCriteriaWithWorkspace(numericRoleId);
+      await refreshRoleAfterCriteriaChange(res?.data);
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to restore criterion.'), 'error');
+    } finally {
+      setCriteriaBusy(false);
+    }
+  }, [numericRoleId, role, refreshRoleAfterCriteriaChange, showToast]);
 
   const handleRoleSheetSubmit = async ({
     name,
@@ -2003,9 +2075,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
           <RoleAgentSettingsTab
             role={role}
             agentStatus={agentStatus}
-            criteriaDraft={criteriaDraft}
-            setCriteriaDraft={setCriteriaDraft}
-            orgDefaultRoleIntent={orgDefaultRoleIntent}
+            roleCriteria={roleCriteria}
+            workspaceCriteria={workspaceCriteria}
+            criteriaBusy={criteriaBusy}
+            criteriaSyncing={criteriaSyncing}
+            criteriaResetting={criteriaResetting}
+            onCreateCriterion={handleCreateRoleCriterion}
+            onUpdateCriterion={handleUpdateRoleCriterion}
+            onDeleteCriterion={handleDeleteRoleCriterion}
+            onSyncCriteria={handleSyncRoleCriteria}
+            onResetCriteria={handleResetRoleCriteria}
+            onRestoreHiddenCriterion={handleRestoreHiddenCriterion}
             thresholdDraft={thresholdDraft}
             setThresholdDraft={setThresholdDraft}
             thresholdValue={thresholdValue}

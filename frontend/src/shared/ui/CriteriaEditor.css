@@ -1,0 +1,424 @@
+/*
+ * CriteriaEditor — chip composer + 3-column layout used by both
+ * Settings → AI agent (workspace) and the per-role intent tab.
+ *
+ * Bucket palette is monotonal: derived from --purple at three saturations
+ * (deep / primary / lavender). No red/amber/green so the editor reads as
+ * part of the platform's purple-first design system.
+ */
+
+.ce-editor {
+  /* Bucket tones — derived from --purple. */
+  --ce-must-bg: color-mix(in oklab, var(--purple-2, #6b21e8) 10%, var(--bg-2, #fff));
+  --ce-must-border: color-mix(in oklab, var(--purple-2, #6b21e8) 36%, var(--line, #e8e2ee));
+  --ce-must-text: var(--purple-2, #6b21e8);
+  --ce-must-dot: var(--purple-2, #6b21e8);
+
+  --ce-preferred-bg: color-mix(in oklab, var(--purple, #7f39fb) 7%, var(--bg-2, #fff));
+  --ce-preferred-border: color-mix(in oklab, var(--purple, #7f39fb) 24%, var(--line, #e8e2ee));
+  --ce-preferred-text: var(--purple, #7f39fb);
+  --ce-preferred-dot: var(--purple, #7f39fb);
+
+  --ce-constraint-bg: color-mix(in oklab, var(--purple-lav, #a78bfa) 12%, var(--bg-2, #fff));
+  --ce-constraint-border: color-mix(in oklab, var(--purple-lav, #a78bfa) 32%, var(--line, #e8e2ee));
+  --ce-constraint-text: color-mix(in oklab, var(--purple-lav, #a78bfa) 60%, var(--ink, #1a1230));
+  --ce-constraint-dot: var(--purple-lav, #a78bfa);
+}
+
+.ce-editor[data-busy] { opacity: 0.7; pointer-events: none; }
+
+/* Role-state pill bar (workspace defaults vs custom + sync/reset actions). */
+.ce-role-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  background: color-mix(in oklab, var(--purple, #7f39fb) 5%, var(--bg-2, #fff));
+  border: 1px solid color-mix(in oklab, var(--purple, #7f39fb) 18%, var(--line, #e8e2ee));
+  border-radius: 10px;
+  font-size: 12.5px;
+  margin-bottom: 14px;
+  flex-wrap: wrap;
+}
+.ce-role-state-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background: var(--purple, #7f39fb);
+}
+.ce-role-state-dot.is-inheriting { background: color-mix(in oklab, var(--purple, #7f39fb) 60%, transparent); }
+.ce-role-state-text { color: var(--ink-2, #4a3d6b); flex: 1 1 auto; min-width: 200px; }
+.ce-role-state-text strong { color: var(--ink, #1a1230); font-weight: 600; }
+.ce-role-state-actions { margin-left: auto; display: flex; gap: 6px; flex-wrap: wrap; }
+
+/* Source legend (role mode). */
+.ce-legend {
+  display: inline-flex;
+  gap: 14px;
+  font-size: 11.5px;
+  color: var(--muted, #7a6e94);
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.ce-legend-item { display: inline-flex; align-items: center; gap: 5px; }
+
+/* Composer row. */
+.ce-composer {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  margin-bottom: 14px;
+}
+.ce-composer-select {
+  -webkit-appearance: none;
+  appearance: none;
+  border: 1px solid var(--line, #e8e2ee);
+  border-radius: 10px;
+  padding: 0 30px 0 14px;
+  font: inherit;
+  font-size: 13px;
+  height: 38px;
+  background-color: var(--bg-2, #fff);
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'><path d='M1 1l4 4 4-4' stroke='%237a6e94' stroke-width='1.5' fill='none' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+  color: var(--ink, #1a1230);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.ce-composer-input {
+  flex: 1;
+  border: 1px solid var(--line, #e8e2ee);
+  border-radius: 10px;
+  padding: 0 14px;
+  height: 38px;
+  font: inherit;
+  background: var(--bg-2, #fff);
+  color: var(--ink, #1a1230);
+}
+.ce-composer-select:focus,
+.ce-composer-input:focus {
+  outline: none;
+  border-color: var(--purple, #7f39fb);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple, #7f39fb) 16%, transparent);
+}
+.ce-composer-add {
+  height: 38px;
+  padding: 0 16px;
+  border-radius: 999px;
+  border: 1px solid var(--purple, #7f39fb);
+  background: var(--purple, #7f39fb);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, opacity .12s;
+}
+.ce-composer-add:hover:not(:disabled) {
+  background: var(--purple-2, #6b21e8);
+  border-color: var(--purple-2, #6b21e8);
+}
+.ce-composer-add:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* Buttons inside the role-state bar. */
+.ce-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--line, #e8e2ee);
+  background: var(--bg-2, #fff);
+  color: var(--ink, #1a1230);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background .12s, border-color .12s, opacity .12s;
+}
+.ce-btn:hover:not(:disabled) {
+  background: var(--purple-soft, #f0e7fb);
+  border-color: color-mix(in oklab, var(--purple, #7f39fb) 30%, var(--line, #e8e2ee));
+}
+.ce-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.ce-btn--ghost { border: 1px dashed var(--line, #e8e2ee); background: transparent; color: var(--muted, #7a6e94); }
+.ce-btn--ghost:hover:not(:disabled) { background: transparent; color: var(--ink-2, #4a3d6b); }
+
+/* 3-column layout. Stacks on narrow screens. */
+.ce-columns {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+@media (max-width: 720px) { .ce-columns { grid-template-columns: 1fr; } }
+
+.ce-col {
+  border: 1px solid var(--line, #e8e2ee);
+  border-radius: 10px;
+  padding: 12px;
+  background: color-mix(in oklab, var(--bg, #faf8fd) 60%, var(--bg-2, #fff));
+  display: flex;
+  flex-direction: column;
+  min-height: 140px;
+}
+.ce-col-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-2, #4a3d6b);
+  margin-bottom: 10px;
+}
+.ce-col-label { display: inline-flex; align-items: center; }
+.ce-col-swatch {
+  width: 8px;
+  height: 8px;
+  border-radius: 2px;
+  display: inline-block;
+  margin-right: 8px;
+  vertical-align: -1px;
+}
+.ce-col-swatch--must      { background: var(--ce-must-dot); }
+.ce-col-swatch--preferred { background: var(--ce-preferred-dot); }
+.ce-col-swatch--constraint { background: var(--ce-constraint-dot); }
+.ce-col-count {
+  background: var(--bg-2, #fff);
+  border: 1px solid var(--line, #e8e2ee);
+  color: var(--muted, #7a6e94);
+  font-size: 10px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  font-family: 'Geist', system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+.ce-col-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+}
+.ce-col-empty {
+  font-size: 12px;
+  color: var(--muted, #7a6e94);
+  font-style: italic;
+  padding: 6px 4px;
+  text-align: center;
+}
+
+/* Chips inside columns. */
+.ce-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 6px 6px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--line, #e8e2ee);
+  background: var(--bg-2, #fff);
+  font-size: 12.5px;
+  color: var(--ink, #1a1230);
+  transition: border-color .12s, background .12s;
+}
+.ce-chip--must {
+  background: var(--ce-must-bg);
+  border-color: var(--ce-must-border);
+  color: var(--ce-must-text);
+}
+.ce-chip--preferred {
+  background: var(--ce-preferred-bg);
+  border-color: var(--ce-preferred-border);
+  color: var(--ce-preferred-text);
+}
+.ce-chip--constraint {
+  background: var(--ce-constraint-bg);
+  border-color: var(--ce-constraint-border);
+  color: var(--ce-constraint-text);
+}
+.ce-chip:hover {
+  border-color: color-mix(in oklab, var(--purple, #7f39fb) 30%, var(--line, #e8e2ee));
+}
+.ce-chip-text {
+  flex: 1;
+  background: none;
+  border: 0;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  cursor: text;
+  padding: 0;
+  line-height: 1.35;
+}
+.ce-chip-text:disabled { cursor: default; }
+.ce-chip-edit {
+  flex: 1;
+  border: 1px solid color-mix(in oklab, var(--purple, #7f39fb) 40%, var(--line, #e8e2ee));
+  border-radius: 6px;
+  padding: 2px 6px;
+  font: inherit;
+  background: var(--bg-2, #fff);
+  color: var(--ink, #1a1230);
+}
+.ce-chip-edit:focus {
+  outline: none;
+  border-color: var(--purple, #7f39fb);
+  box-shadow: 0 0 0 3px color-mix(in oklab, var(--purple, #7f39fb) 16%, transparent);
+}
+.ce-chip-delete {
+  background: none;
+  border: 0;
+  color: var(--muted, #7a6e94);
+  cursor: pointer;
+  padding: 0 4px;
+  font-size: 14px;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity .12s, color .12s;
+}
+.ce-chip:hover .ce-chip-delete,
+.ce-chip:focus-within .ce-chip-delete { opacity: 1; }
+.ce-chip-delete:hover { color: var(--purple-2, #6b21e8); }
+
+/* Provenance dots — role mode. Tonal variation of purple. */
+.ce-source-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  display: inline-block;
+}
+.ce-source-dot--workspace { background: var(--purple-lav, #a78bfa); }
+.ce-source-dot--edited    { background: color-mix(in oklab, var(--purple-lav, #a78bfa) 50%, var(--purple-2, #6b21e8)); }
+.ce-source-dot--role      { background: var(--purple-2, #6b21e8); }
+
+/* Hidden chips (suppressed workspace chips) section. */
+.ce-hidden { margin-top: 14px; }
+.ce-hidden-toggle {
+  background: none;
+  border: 0;
+  color: var(--purple, #7f39fb);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 0;
+}
+.ce-hidden-toggle:hover { color: var(--purple-2, #6b21e8); text-decoration: underline; }
+.ce-hidden-list {
+  list-style: none;
+  padding: 8px 0 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ce-hidden-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border: 1px dashed var(--line, #e8e2ee);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--muted, #7a6e94);
+  background: color-mix(in oklab, var(--bg, #faf8fd) 70%, var(--bg-2, #fff));
+}
+.ce-hidden-text { flex: 1; color: var(--ink-2, #4a3d6b); text-decoration: line-through; }
+.ce-hidden-bucket {
+  font-family: 'Geist Mono', ui-monospace, monospace;
+  font-size: 9.5px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--muted, #7a6e94);
+  padding: 1px 6px;
+  background: var(--bg-2, #fff);
+  border: 1px solid var(--line, #e8e2ee);
+  border-radius: 999px;
+}
+.ce-hidden-restore {
+  background: none;
+  border: 1px solid var(--line, #e8e2ee);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font: inherit;
+  font-size: 11.5px;
+  color: var(--ink-2, #4a3d6b);
+  cursor: pointer;
+}
+.ce-hidden-restore:hover:not(:disabled) {
+  background: var(--purple-soft, #f0e7fb);
+  border-color: color-mix(in oklab, var(--purple, #7f39fb) 30%, var(--line, #e8e2ee));
+  color: var(--ink, #1a1230);
+}
+.ce-hidden-restore:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ------------------------------------------------------------------------
+ * Threshold slider — purple-aligned. Used outside CriteriaEditor too
+ * (Settings → AI agent default threshold + role page reject threshold).
+ * Add ``ce-range`` to any <input type="range"> to opt in.
+ * ------------------------------------------------------------------------ */
+input[type="range"].ce-range {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  background: transparent;
+  margin: 0;
+  padding: 12px 0;
+  cursor: pointer;
+}
+input[type="range"].ce-range:focus { outline: none; }
+input[type="range"].ce-range::-webkit-slider-runnable-track {
+  height: 6px;
+  border-radius: 999px;
+  background: linear-gradient(
+    to right,
+    var(--purple, #7f39fb) 0%,
+    var(--purple, #7f39fb) calc(var(--ce-range-val, 0) * 1%),
+    color-mix(in oklab, var(--purple, #7f39fb) 14%, var(--line-2, #f1edf5)) calc(var(--ce-range-val, 0) * 1%),
+    color-mix(in oklab, var(--purple, #7f39fb) 14%, var(--line-2, #f1edf5)) 100%
+  );
+}
+input[type="range"].ce-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-2, #fff);
+  border: 2px solid var(--purple, #7f39fb);
+  box-shadow: 0 1px 3px rgba(127, 57, 251, .25);
+  margin-top: -6px;
+  transition: box-shadow .12s, background .12s;
+}
+input[type="range"].ce-range:hover::-webkit-slider-thumb {
+  box-shadow: 0 0 0 6px color-mix(in oklab, var(--purple, #7f39fb) 12%, transparent);
+}
+input[type="range"].ce-range:active::-webkit-slider-thumb,
+input[type="range"].ce-range:focus::-webkit-slider-thumb {
+  box-shadow: 0 0 0 8px color-mix(in oklab, var(--purple, #7f39fb) 18%, transparent);
+  background: var(--purple, #7f39fb);
+}
+input[type="range"].ce-range::-moz-range-track {
+  height: 6px;
+  border-radius: 999px;
+  background: color-mix(in oklab, var(--purple, #7f39fb) 14%, var(--line-2, #f1edf5));
+}
+input[type="range"].ce-range::-moz-range-progress {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--purple, #7f39fb);
+}
+input[type="range"].ce-range::-moz-range-thumb {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: var(--bg-2, #fff);
+  border: 2px solid var(--purple, #7f39fb);
+  box-shadow: 0 1px 3px rgba(127, 57, 251, .25);
+  cursor: pointer;
+}

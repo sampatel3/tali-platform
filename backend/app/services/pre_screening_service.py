@@ -317,11 +317,20 @@ def execute_pre_screen_only(app: CandidateApplication) -> dict[str, Any]:
         text = str(c.text or "").strip()
         if not text:
             continue
+        bucket = str(getattr(c, "bucket", None) or ("must" if bool(c.must_have) else "preferred"))
+        # Constraints (timezone, start date, etc.) are pass/fail filters about
+        # logistics, not candidate quality. We surface them with MUST_HAVE
+        # priority so the pre-screen call flags mismatches prominently — the
+        # agent can decide whether the constraint is fatal or worth a chat.
+        if bucket in ("must", "constraint"):
+            priority = Priority.MUST_HAVE
+        else:
+            priority = Priority.STRONG_PREFERENCE
         requirements.append(
             RequirementInput(
                 id=f"crit_{int(c.id)}",
                 requirement=text,
-                priority=Priority.MUST_HAVE if bool(c.must_have) else Priority.STRONG_PREFERENCE,
+                priority=priority,
             )
         )
 

@@ -15,14 +15,33 @@ from ...models.role import Role
 from ...models.task import Task
 from ...models.user import User
 from ...platform.database import get_db
-from ...schemas.role import RoleCreate, RoleResponse, RoleTaskLinkRequest, RoleUpdate
+from ...models.org_criterion import (
+    BUCKET_PREFERRED,
+    CRITERION_BUCKETS,
+    OrganizationCriterion,
+)
+from ...models.role_criterion import (
+    CRITERION_SOURCE_DERIVED,
+    CRITERION_SOURCE_RECRUITER,
+    RoleCriterion,
+)
+from ...schemas.role import (
+    RoleCreate,
+    RoleCriterionCreate,
+    RoleCriterionResponse,
+    RoleCriterionUpdate,
+    RoleResponse,
+    RoleTaskLinkRequest,
+    RoleUpdate,
+)
 from ...services.application_events import on_role_jd_attached
 from ...services.document_service import process_document_upload
 from ...services.cv_score_orchestrator import mark_role_scores_stale
 from ...services.role_criteria_service import (
+    reset_role_to_workspace,
     sync_all_criteria,
     sync_derived_criteria,
-    sync_recruiter_criteria,
+    sync_role_with_workspace,
 )
 from .role_support import get_role, role_to_response
 from .pipeline_service import role_pipeline_counts
@@ -48,20 +67,11 @@ def create_role(
         .first()
     )
 
-    requested_reqs = (data.additional_requirements or "").strip() or None
-    if requested_reqs is None and org is not None:
-        list_default = getattr(org, "default_role_requirements", None)
-        if isinstance(list_default, list):
-            joined = "\n".join(
-                str(item).strip() for item in list_default if str(item).strip()
-            )
-            requested_reqs = joined or None
-        if requested_reqs is None:
-            blob_default = (
-                getattr(org, "default_additional_requirements", None) or ""
-            ).strip()
-            requested_reqs = blob_default or None
-
+    # When the request supplies explicit ``additional_requirements`` text we
+    # honour it (legacy callers / Workable import). When it doesn't and the
+    # org has chip-based defaults, ``sync_all_criteria`` snapshots them
+    # New roles inherit workspace criteria via ``snapshot_workspace_criteria``
+    # in ``sync_all_criteria`` below.
     monthly_budget_cents = data.monthly_usd_budget_cents
     if monthly_budget_cents is None and org is not None:
         org_budget = getattr(org, "default_role_budget_cents", None)
@@ -78,7 +88,6 @@ def create_role(
         organization_id=current_user.organization_id,
         name=data.name.strip(),
         description=(data.description or None),
-        additional_requirements=requested_reqs,
         screening_pack_template=(data.screening_pack_template.model_dump() if data.screening_pack_template else None),
         tech_interview_pack_template=(data.tech_interview_pack_template.model_dump() if data.tech_interview_pack_template else None),
         auto_reject_enabled=data.auto_reject_enabled,
@@ -231,9 +240,6 @@ def update_role(
         role.name = updates["name"].strip()
     if "description" in updates:
         role.description = updates["description"] or None
-    recruiter_criteria_changed = "additional_requirements" in updates
-    if recruiter_criteria_changed:
-        role.additional_requirements = updates["additional_requirements"] or None
     if "screening_pack_template" in updates:
         template = updates["screening_pack_template"]
         role.screening_pack_template = template.model_dump() if template else None
@@ -275,15 +281,188 @@ def update_role(
         role.agent_decision_budget_per_cycle = updates["agent_decision_budget_per_cycle"]
     if "monthly_usd_budget_cents" in updates:
         role.monthly_usd_budget_cents = updates["monthly_usd_budget_cents"]
+    if "suppressed_org_criterion_ids" in updates:
+        raw = updates["suppressed_org_criterion_ids"] or []
+        role.suppressed_org_criterion_ids = [int(x) for x in raw]
     try:
-        if recruiter_criteria_changed:
-            sync_recruiter_criteria(db, role)
-            mark_role_scores_stale(db, role.id)
         db.commit()
         db.refresh(role)
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update role")
+    return role_to_response(role)
+
+
+# ---------------------------------------------------------------------------
+# Per-role criteria — chip CRUD, sync, reset
+# ---------------------------------------------------------------------------
+
+
+def _get_role_criterion(
+    db: Session, role: Role, criterion_id: int
+) -> RoleCriterion:
+    chip = (
+        db.query(RoleCriterion)
+        .filter(
+            RoleCriterion.id == criterion_id,
+            RoleCriterion.role_id == role.id,
+            RoleCriterion.deleted_at.is_(None),
+            RoleCriterion.source != CRITERION_SOURCE_DERIVED,
+        )
+        .first()
+    )
+    if chip is None:
+        raise HTTPException(status_code=404, detail="Criterion not found")
+    return chip
+
+
+def _next_role_criterion_ordering(db: Session, role: Role) -> int:
+    last = (
+        db.query(RoleCriterion)
+        .filter(
+            RoleCriterion.role_id == role.id,
+            RoleCriterion.deleted_at.is_(None),
+            RoleCriterion.source != CRITERION_SOURCE_DERIVED,
+        )
+        .order_by(RoleCriterion.ordering.desc(), RoleCriterion.id.desc())
+        .first()
+    )
+    return (last.ordering + 1) if last else 0
+
+
+def _commit_role_criterion_change(db: Session, role: Role) -> None:
+    """Mark scores stale + commit. Called after every chip CRUD on a role."""
+    db.flush()
+    mark_role_scores_stale(db, role.id)
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to update role criteria")
+
+
+@router.post(
+    "/roles/{role_id}/criteria",
+    response_model=RoleCriterionResponse,
+    status_code=201,
+)
+def create_role_criterion(
+    role_id: int,
+    data: RoleCriterionCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    role = get_role(role_id, current_user.organization_id, db)
+    bucket = data.bucket or BUCKET_PREFERRED
+    if bucket not in CRITERION_BUCKETS:
+        raise HTTPException(status_code=422, detail="Invalid bucket")
+    chip = RoleCriterion(
+        role_id=role.id,
+        source=CRITERION_SOURCE_RECRUITER,
+        ordering=int(data.ordering) if data.ordering is not None else _next_role_criterion_ordering(db, role),
+        weight=float(data.weight) if data.weight is not None else 1.0,
+        must_have=(bucket == "must"),
+        bucket=bucket,
+        org_criterion_id=None,
+        text=data.text.strip(),
+    )
+    db.add(chip)
+    _commit_role_criterion_change(db, role)
+    db.refresh(chip)
+    return chip
+
+
+@router.patch(
+    "/roles/{role_id}/criteria/{criterion_id}",
+    response_model=RoleCriterionResponse,
+)
+def update_role_criterion(
+    role_id: int,
+    criterion_id: int,
+    data: RoleCriterionUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    role = get_role(role_id, current_user.organization_id, db)
+    chip = _get_role_criterion(db, role, criterion_id)
+    updates = data.model_dump(exclude_unset=True)
+    text_changed = "text" in updates and updates["text"] is not None and updates["text"].strip() != (chip.text or "")
+    bucket_changed = "bucket" in updates and updates["bucket"] is not None and updates["bucket"] != chip.bucket
+    if "text" in updates and updates["text"] is not None:
+        chip.text = updates["text"].strip()
+    if "bucket" in updates and updates["bucket"] is not None:
+        if updates["bucket"] not in CRITERION_BUCKETS:
+            raise HTTPException(status_code=422, detail="Invalid bucket")
+        chip.bucket = updates["bucket"]
+        chip.must_have = chip.bucket == "must"
+    if "ordering" in updates and updates["ordering"] is not None:
+        chip.ordering = int(updates["ordering"])
+    if "weight" in updates and updates["weight"] is not None:
+        chip.weight = float(updates["weight"])
+    # Mark customized so a later "Sync workspace" doesn't overwrite recruiter
+    # edits to a workspace-derived chip. Pure ordering/weight tweaks don't
+    # count as content customization.
+    if (text_changed or bucket_changed) and chip.org_criterion_id is not None:
+        chip.customized_at = datetime.now(timezone.utc)
+    _commit_role_criterion_change(db, role)
+    db.refresh(chip)
+    return chip
+
+
+@router.delete(
+    "/roles/{role_id}/criteria/{criterion_id}",
+    status_code=204,
+)
+def delete_role_criterion(
+    role_id: int,
+    criterion_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    role = get_role(role_id, current_user.organization_id, db)
+    chip = _get_role_criterion(db, role, criterion_id)
+    # If this chip was inherited from workspace, remember the suppression so
+    # "Sync workspace" doesn't immediately re-add it. Pure role-only chips
+    # just go away.
+    if chip.org_criterion_id is not None:
+        suppressed = list(role.suppressed_org_criterion_ids or [])
+        if chip.org_criterion_id not in suppressed:
+            suppressed.append(int(chip.org_criterion_id))
+        role.suppressed_org_criterion_ids = suppressed
+    db.delete(chip)
+    _commit_role_criterion_change(db, role)
+    return None
+
+
+@router.post("/roles/{role_id}/criteria/sync", response_model=RoleResponse)
+def sync_role_criteria_with_workspace(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Re-apply workspace text + bucket on non-customized, non-suppressed
+    role chips, add any newly-introduced workspace chips, drop the
+    workspace link on chips whose workspace counterpart is gone."""
+    role = get_role(role_id, current_user.organization_id, db)
+    sync_role_with_workspace(db, role)
+    _commit_role_criterion_change(db, role)
+    db.refresh(role)
+    return role_to_response(role)
+
+
+@router.post("/roles/{role_id}/criteria/reset", response_model=RoleResponse)
+def reset_role_criteria_to_workspace(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Hard-delete every recruiter chip on this role and re-snapshot
+    workspace defaults. Suppressions are cleared. ``derived_from_spec``
+    chips are untouched."""
+    role = get_role(role_id, current_user.organization_id, db)
+    reset_role_to_workspace(db, role)
+    _commit_role_criterion_change(db, role)
+    db.refresh(role)
     return role_to_response(role)
 
 

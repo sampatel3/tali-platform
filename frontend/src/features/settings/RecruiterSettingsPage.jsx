@@ -24,6 +24,7 @@ import {
 } from '../../shared/ui/RecruiterDesignPrimitives';
 import BackgroundJobsPanel from './BackgroundJobsPanel';
 import UsagePanel from './UsagePanel';
+import CriteriaEditor from '../../shared/ui/CriteriaEditor';
 
 const WORKABLE_SCOPE_OPTIONS = [
   { id: 'r_jobs', label: 'r_jobs', description: 'Read jobs and roles from Workable.' },
@@ -188,44 +189,40 @@ const ToggleCard = ({ title, description, checked, onChange, badge = null }) => 
   </div>
 );
 
-// Settings → AI agent tab. Three workspace defaults inherited at
-// role-create time: a structured requirements list, a default monthly
-// budget, and a 0..100 score threshold. Uses the same settings-subcard
-// styling as every other tab on this page so the IA stays consistent.
-const AgentDefaultsForm = ({ requirements, budgetUsd, threshold, onChange }) => {
-  const cleanedItems = (Array.isArray(requirements) ? requirements : [])
-    .map((item) => String(item || '').trim())
-    .filter(Boolean);
+// Settings → AI agent tab. Workspace defaults inherited at role-create
+// time: a chip-based requirements list (must / preferred / constraint),
+// a default monthly budget, and a 0..100 score threshold. Uses the
+// same settings-subcard styling as every other tab so the IA stays
+// consistent.
+const AgentDefaultsForm = ({
+  criteria,
+  criteriaBusy,
+  onCreateCriterion,
+  onUpdateCriterion,
+  onDeleteCriterion,
+  budgetUsd,
+  threshold,
+  onChange,
+}) => {
   const thresholdDisplay = Math.max(0, Math.min(100, Number(threshold) || 0));
+  const activeCount = (Array.isArray(criteria) ? criteria : []).filter((c) => !c.deleted_at).length;
   return (
     <>
       <div className="settings-subcard">
         <div className="settings-subcard-head">
           <div>
-            <h3>Default role intent</h3>
-            <p>What does success look like in your roles? The agent uses this as guidance — context to reason about candidate fit, not a checklist of rules. Pre-fills the intent on every new role; recruiters refine per role from the role page.</p>
+            <h3>Default role criteria</h3>
+            <p>Add one criterion at a time and pick the bucket. The agent reads <strong>must-haves</strong> as the bar, <strong>preferred</strong> as positive signals, and <strong>constraints</strong> as logistics (timezone, start date). Every new role inherits these; recruiters can customize per role.</p>
           </div>
         </div>
-        <label className="field">
-          <textarea
-            className="settings-intent-textarea"
-            rows={6}
-            value={(Array.isArray(requirements) ? requirements : []).join('\n')}
-            onChange={(e) => onChange({
-              requirements: String(e.target.value || '')
-                .split('\n')
-                .map((s) => s.replace(/\s+$/, ''))
-                .filter((line, i, arr) => !(line === '' && arr[i - 1] === '')),
-            })}
-            placeholder={
-              "e.g. We're looking for engineers who can move fast in early-stage chaos.\n"
-              + "5+ years backend matters less than 0→1 product experience.\n"
-              + "Strong written communication is critical — most of the role is async.\n"
-              + "If they've worked at Stripe, Linear, or Vercel they probably get it."
-            }
-            aria-label="Default role intent"
-          />
-        </label>
+        <CriteriaEditor
+          mode="workspace"
+          criteria={criteria}
+          busy={criteriaBusy}
+          onCreate={onCreateCriterion}
+          onUpdate={onUpdateCriterion}
+          onDelete={onDeleteCriterion}
+        />
       </div>
 
       <div className="settings-subgrid settings-top-gap">
@@ -263,14 +260,16 @@ const AgentDefaultsForm = ({ requirements, budgetUsd, threshold, onChange }) => 
               min={0}
               max={100}
               value={thresholdDisplay}
+              className="ce-range"
+              style={{ '--ce-range-val': thresholdDisplay }}
               onChange={(event) => onChange({ threshold: Number(event.target.value) })}
               aria-label="Default score threshold"
             />
           </label>
           <div className="settings-summary-note" style={{ marginTop: 8 }}>
-            {cleanedItems.length
-              ? `${cleanedItems.length} default requirement${cleanedItems.length === 1 ? '' : 's'} will be copied into each new role.`
-              : 'No default requirements set yet.'}
+            {activeCount
+              ? `${activeCount} default ${activeCount === 1 ? 'criterion' : 'criteria'} will be copied into each new role.`
+              : 'No default criteria set yet.'}
           </div>
         </div>
       </div>
@@ -356,14 +355,17 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const [checkoutLoading, setCheckoutLoading] = useState(false);
   const [emailTemplatePreview, setEmailTemplatePreview] = useState(DEFAULT_INVITE_TEMPLATE);
   const [apiSaving, setApiSaving] = useState(false);
-  // HANDOFF settings.md — AI agent tab. Three workspace-wide defaults
-  // every new role inherits. The textarea is one requirement per line.
+  // HANDOFF settings.md — AI agent tab. Workspace-wide defaults every
+  // new role inherits. ``criteria`` are now structured chips loaded
+  // separately from /organizations/me/criteria; budget + threshold stay
+  // on the org PATCH endpoint.
   const [agentDefaultsForm, setAgentDefaultsForm] = useState({
-    requirements: [],
     budgetUsd: '',
     threshold: 70,
   });
   const [agentDefaultsSaving, setAgentDefaultsSaving] = useState(false);
+  const [orgCriteria, setOrgCriteria] = useState([]);
+  const [orgCriteriaBusy, setOrgCriteriaBusy] = useState(false);
   // Workspace spend cap (cents). Lives on the Billing tab and is enforced
   // by the agent before it sends new invites.
   const [spendCapForm, setSpendCapForm] = useState({ usd: '' });
@@ -664,15 +666,8 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     setEmailTemplatePreview(
       String(orgData.invite_email_template || '').trim() || DEFAULT_INVITE_TEMPLATE
     );
-    // Agent defaults — backend may send the new typed list; fall back to
-    // splitting the legacy text blob so workspaces predating the redesign
-    // still see their requirements.
-    const seedList = Array.isArray(orgData.default_role_requirements)
-      ? orgData.default_role_requirements.map((item) => String(item || '').trim()).filter(Boolean)
-      : String(orgData.default_additional_requirements || '')
-        .split('\n')
-        .map((line) => line.trim())
-        .filter(Boolean);
+    // Agent defaults — budget + threshold come off the org record; chips
+    // load separately from /organizations/me/criteria.
     const seedBudgetCents = Number.isFinite(Number(orgData.default_role_budget_cents))
       ? Number(orgData.default_role_budget_cents)
       : null;
@@ -680,7 +675,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       ? Number(orgData.default_score_threshold)
       : 70;
     setAgentDefaultsForm({
-      requirements: seedList,
       budgetUsd: seedBudgetCents != null ? String((seedBudgetCents / 100).toFixed(2)) : '',
       threshold: Math.max(0, Math.min(100, seedThreshold)),
     });
@@ -869,12 +863,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
 
   const handleSaveAgentDefaults = async () => {
     setAgentDefaultsSaving(true);
-    // Preserve the recruiter's intent text verbatim — no "Must have:"
-    // prefix injection. Per the agent system prompt v5, the agent reads
-    // this as RECRUITER INTENT (priorities, not gates).
-    const cleanedRequirements = (agentDefaultsForm.requirements || [])
-      .map((item) => String(item || '').trim())
-      .filter(Boolean);
     const budgetUsd = Number(agentDefaultsForm.budgetUsd);
     const budgetCents = Number.isFinite(budgetUsd) && budgetUsd > 0
       ? Math.round(budgetUsd * 100)
@@ -882,7 +870,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const threshold = Math.max(0, Math.min(100, Number(agentDefaultsForm.threshold) || 0));
     try {
       const res = await orgsApi.update({
-        default_role_requirements: cleanedRequirements,
         default_role_budget_cents: budgetCents == null ? 0 : budgetCents,
         default_score_threshold: threshold,
       });
@@ -894,6 +881,62 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       setAgentDefaultsSaving(false);
     }
   };
+
+  const loadOrgCriteria = useCallback(async () => {
+    try {
+      const res = await orgsApi.listCriteria();
+      setOrgCriteria(Array.isArray(res?.data) ? res.data : []);
+    } catch (error) {
+      // Surface as a toast on first load, then leave the editor empty so
+      // the recruiter can still author chips.
+      showToast(getErrorMessage(error, 'Failed to load workspace criteria.'), 'error');
+      setOrgCriteria([]);
+    }
+  }, [showToast]);
+
+  const handleCreateOrgCriterion = useCallback(async ({ text, bucket }) => {
+    setOrgCriteriaBusy(true);
+    try {
+      const res = await orgsApi.createCriterion({ text, bucket });
+      setOrgCriteria((prev) => [...prev, res?.data].filter(Boolean));
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to add criterion.'), 'error');
+    } finally {
+      setOrgCriteriaBusy(false);
+    }
+  }, [showToast]);
+
+  const handleUpdateOrgCriterion = useCallback(async (id, updates) => {
+    setOrgCriteriaBusy(true);
+    try {
+      const res = await orgsApi.updateCriterion(id, updates);
+      setOrgCriteria((prev) => prev.map((c) => (c.id === id ? (res?.data || c) : c)));
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to update criterion.'), 'error');
+    } finally {
+      setOrgCriteriaBusy(false);
+    }
+  }, [showToast]);
+
+  const handleDeleteOrgCriterion = useCallback(async (id) => {
+    setOrgCriteriaBusy(true);
+    try {
+      await orgsApi.deleteCriterion(id);
+      setOrgCriteria((prev) => prev.filter((c) => c.id !== id));
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to remove criterion.'), 'error');
+    } finally {
+      setOrgCriteriaBusy(false);
+    }
+  }, [showToast]);
+
+  // Lazy-load workspace chips when the AI agent tab is opened. Defined
+  // after ``loadOrgCriteria`` so the dependency exists at first render.
+  useEffect(() => {
+    if (activeSection === 'agent') {
+      void loadOrgCriteria();
+    }
+  }, [activeSection, loadOrgCriteria]);
 
   const handleSaveSpendCap = async () => {
     setSpendCapSaving(true);
@@ -1371,14 +1414,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                   subtitle="Workspace-wide defaults inherited by every new role. Per-role overrides on the role page win — existing roles are not retroactively updated when these change."
                 >
                   <AgentDefaultsForm
-                    requirements={agentDefaultsForm.requirements}
+                    criteria={orgCriteria}
+                    criteriaBusy={orgCriteriaBusy}
+                    onCreateCriterion={handleCreateOrgCriterion}
+                    onUpdateCriterion={handleUpdateOrgCriterion}
+                    onDeleteCriterion={handleDeleteOrgCriterion}
                     budgetUsd={agentDefaultsForm.budgetUsd}
                     threshold={agentDefaultsForm.threshold}
                     onChange={(next) => setAgentDefaultsForm((prev) => ({ ...prev, ...next }))}
                   />
                   <div className="settings-save-row">
                     <div className="settings-inline-note">
-                      Saved values seed the role page on every newly imported or created role.
+                      Criteria save as you add them. Budget &amp; threshold need a save click.
                     </div>
                     <button
                       type="button"
@@ -1386,7 +1433,7 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                       onClick={handleSaveAgentDefaults}
                       disabled={agentDefaultsSaving}
                     >
-                      {agentDefaultsSaving ? 'Saving...' : 'Save agent defaults'}
+                      {agentDefaultsSaving ? 'Saving...' : 'Save budget & threshold'}
                     </button>
                   </div>
                 </SectionPanel>
