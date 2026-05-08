@@ -1,4 +1,22 @@
-"""Tests for the role criteria sync service."""
+"""Tests for the chip-based role criteria service.
+
+After alembic 068 dropped ``Role.additional_requirements``, the old
+text → chips parser path is gone. The remaining service surface is:
+
+- ``snapshot_workspace_criteria`` — copy active ``OrganizationCriterion``
+  rows into ``role_criteria`` with provenance (``org_criterion_id``).
+- ``sync_role_with_workspace`` — re-apply workspace text + bucket on
+  non-customized chips, add new workspace chips, drop the workspace
+  link on chips whose workspace counterpart is gone.
+- ``reset_role_to_workspace`` — hard-delete recruiter chips + clear
+  suppressions + re-snapshot workspace.
+- ``sync_derived_criteria`` — parse the job spec's Requirements section
+  into ``derived_from_spec`` chips.
+- ``sync_all_criteria`` — snapshot workspace + sync derived (used at
+  role create + Workable import time).
+- ``render_role_intent_block`` / ``render_role_intent_lines`` —
+  read-only views of recruiter chips for downstream consumers.
+"""
 
 from __future__ import annotations
 
@@ -6,16 +24,25 @@ import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from app.models import Organization, Role, RoleCriterion
+from app.models import (
+    Organization,
+    OrganizationCriterion,
+    Role,
+    RoleCriterion,
+)
 from app.platform.database import Base
 from app.models.role_criterion import (
     CRITERION_SOURCE_DERIVED,
     CRITERION_SOURCE_RECRUITER,
 )
 from app.services.role_criteria_service import (
+    render_role_intent_block,
+    render_role_intent_lines,
+    reset_role_to_workspace,
+    snapshot_workspace_criteria,
     sync_all_criteria,
     sync_derived_criteria,
-    sync_recruiter_criteria,
+    sync_role_with_workspace,
 )
 
 
@@ -33,62 +60,195 @@ def session():
     db.close()
 
 
-def _criteria_by_source(role: Role, source: str) -> list[RoleCriterion]:
+def _add_org_chip(db, org, *, text, bucket="preferred", ordering=0):
+    chip = OrganizationCriterion(
+        organization_id=org.id, ordering=ordering, weight=1.0, bucket=bucket, text=text
+    )
+    db.add(chip)
+    db.flush()
+    return chip
+
+
+def _make_role(db, org, **kwargs):
+    role = Role(organization_id=org.id, name=kwargs.pop("name", "Backend Engineer"), **kwargs)
+    db.add(role)
+    db.flush()
+    return role
+
+
+def _recruiter_chips(role):
     return sorted(
-        [c for c in role.criteria if c.source == source],
+        [c for c in role.criteria if c.source == CRITERION_SOURCE_RECRUITER and c.deleted_at is None],
         key=lambda c: c.ordering,
     )
 
 
-def test_sync_recruiter_criteria_creates_one_row_per_bullet(session) -> None:
+# ---------------------------------------------------------------------------
+# Snapshot workspace → role
+# ---------------------------------------------------------------------------
+
+
+def test_snapshot_copies_each_workspace_chip_with_provenance(session):
     db, org = session
-    role = Role(
-        organization_id=org.id,
-        name="Backend Engineer",
-        additional_requirements="- 5+ years Python\n- AWS or GCP\n- Postgres",
+    a = _add_org_chip(db, org, text="Python", bucket="must", ordering=0)
+    b = _add_org_chip(db, org, text="LLMs", bucket="preferred", ordering=1)
+
+    role = _make_role(db, org)
+    snapshot_workspace_criteria(db, role)
+    db.commit()
+    db.refresh(role)
+
+    chips = _recruiter_chips(role)
+    assert {c.text for c in chips} == {"Python", "LLMs"}
+    by_text = {c.text: c for c in chips}
+    assert by_text["Python"].org_criterion_id == a.id
+    assert by_text["Python"].bucket == "must"
+    assert by_text["Python"].must_have is True
+    assert by_text["LLMs"].org_criterion_id == b.id
+    assert by_text["LLMs"].bucket == "preferred"
+
+
+def test_snapshot_is_idempotent_on_unchanged_workspace(session):
+    db, org = session
+    _add_org_chip(db, org, text="Python", bucket="must")
+    role = _make_role(db, org)
+    snapshot_workspace_criteria(db, role)
+    db.commit()
+    snapshot_workspace_criteria(db, role)
+    db.commit()
+    db.refresh(role)
+    assert len(_recruiter_chips(role)) == 1
+
+
+# ---------------------------------------------------------------------------
+# Sync workspace
+# ---------------------------------------------------------------------------
+
+
+def test_sync_pulls_in_new_workspace_chips_without_disturbing_role_only(session):
+    db, org = session
+    workspace = _add_org_chip(db, org, text="Python", bucket="must", ordering=0)
+    role = _make_role(db, org)
+    snapshot_workspace_criteria(db, role)
+    # Recruiter adds a role-only chip.
+    db.add(
+        RoleCriterion(
+            role_id=role.id,
+            source=CRITERION_SOURCE_RECRUITER,
+            ordering=99,
+            weight=1.0,
+            must_have=False,
+            bucket="preferred",
+            text="role-only",
+            org_criterion_id=None,
+        )
     )
-    db.add(role)
+    db.commit()
+    db.refresh(role)
+
+    # Workspace adds a new chip.
+    _add_org_chip(db, org, text="Postgres", bucket="must", ordering=1)
+
+    sync_role_with_workspace(db, role)
+    db.commit()
+    db.refresh(role)
+    chips = _recruiter_chips(role)
+    texts = {c.text for c in chips}
+    assert {"Python", "Postgres", "role-only"}.issubset(texts)
+
+
+def test_sync_skips_customized_workspace_chips(session):
+    db, org = session
+    workspace = _add_org_chip(db, org, text="Python", bucket="must")
+    role = _make_role(db, org)
+    snapshot_workspace_criteria(db, role)
+    db.commit()
+    db.refresh(role)
+
+    # Recruiter customizes the chip on the role.
+    role_chip = next(c for c in _recruiter_chips(role) if c.org_criterion_id == workspace.id)
+    role_chip.text = "Python 3.11+"
+    from datetime import datetime, timezone
+    role_chip.customized_at = datetime.now(timezone.utc)
+
+    # Workspace edits the same chip.
+    workspace.text = "Python (any version)"
+
+    sync_role_with_workspace(db, role)
+    db.commit()
+    db.refresh(role)
+    same = next(c for c in _recruiter_chips(role) if c.org_criterion_id == workspace.id)
+    assert same.text == "Python 3.11+"
+
+
+def test_sync_drops_workspace_link_when_workspace_chip_is_deleted(session):
+    db, org = session
+    workspace = _add_org_chip(db, org, text="Python", bucket="must")
+    role = _make_role(db, org)
+    snapshot_workspace_criteria(db, role)
+    db.commit()
+    db.refresh(role)
+
+    # Workspace soft-deletes the chip.
+    from datetime import datetime, timezone
+    workspace.deleted_at = datetime.now(timezone.utc)
     db.flush()
 
-    sync_recruiter_criteria(db, role)
+    sync_role_with_workspace(db, role)
     db.commit()
     db.refresh(role)
+    chips = _recruiter_chips(role)
+    assert len(chips) == 1
+    assert chips[0].text == "Python"  # role keeps its copy
+    assert chips[0].org_criterion_id is None  # provenance dropped
 
-    items = _criteria_by_source(role, CRITERION_SOURCE_RECRUITER)
-    assert [c.text for c in items] == ["5+ years Python", "AWS or GCP", "Postgres"]
-    assert [c.ordering for c in items] == [0, 1, 2]
-    assert all(c.weight == 1.0 and c.must_have is False for c in items)
+
+# ---------------------------------------------------------------------------
+# Reset
+# ---------------------------------------------------------------------------
 
 
-def test_sync_recruiter_criteria_replaces_old_rows_on_resync(session) -> None:
+def test_reset_drops_role_only_chips_and_clears_suppressions(session):
     db, org = session
-    role = Role(
-        organization_id=org.id,
-        name="Backend Engineer",
-        additional_requirements="- TypeScript\n- React",
+    workspace = _add_org_chip(db, org, text="Python", bucket="must")
+    role = _make_role(db, org)
+    snapshot_workspace_criteria(db, role)
+    db.add(
+        RoleCriterion(
+            role_id=role.id,
+            source=CRITERION_SOURCE_RECRUITER,
+            ordering=99,
+            weight=1.0,
+            must_have=False,
+            bucket="preferred",
+            text="role-only",
+            org_criterion_id=None,
+        )
     )
-    db.add(role)
-    db.flush()
-    sync_recruiter_criteria(db, role)
-    db.commit()
-    db.refresh(role)
-    first_ids = {c.id for c in role.criteria}
-
-    role.additional_requirements = "- TypeScript\n- Node.js"
-    sync_recruiter_criteria(db, role)
+    role.suppressed_org_criterion_ids = [workspace.id]
     db.commit()
     db.refresh(role)
 
-    items = _criteria_by_source(role, CRITERION_SOURCE_RECRUITER)
-    assert [c.text for c in items] == ["TypeScript", "Node.js"]
-    assert {c.id for c in items}.isdisjoint(first_ids), "old criteria rows should be hard-deleted"
+    reset_role_to_workspace(db, role)
+    db.commit()
+    db.refresh(role)
+    chips = _recruiter_chips(role)
+    assert len(chips) == 1
+    assert chips[0].text == "Python"
+    assert chips[0].org_criterion_id == workspace.id
+    assert role.suppressed_org_criterion_ids == []
 
 
-def test_sync_derived_criteria_pulls_from_requirements_section(session) -> None:
+# ---------------------------------------------------------------------------
+# Spec-derived sync
+# ---------------------------------------------------------------------------
+
+
+def test_sync_derived_pulls_from_requirements_section(session):
     db, org = session
-    role = Role(
-        organization_id=org.id,
-        name="Senior Engineer",
+    role = _make_role(
+        db,
+        org,
         job_spec_text=(
             "Description\n"
             "Senior backend role.\n"
@@ -99,76 +259,95 @@ def test_sync_derived_criteria_pulls_from_requirements_section(session) -> None:
             "- Health insurance\n"
         ),
     )
-    db.add(role)
-    db.flush()
 
     sync_derived_criteria(db, role)
     db.commit()
     db.refresh(role)
 
-    items = _criteria_by_source(role, CRITERION_SOURCE_DERIVED)
-    texts = [c.text for c in items]
+    derived = sorted(
+        [c for c in role.criteria if c.source == CRITERION_SOURCE_DERIVED],
+        key=lambda c: c.ordering,
+    )
+    texts = [c.text for c in derived]
     assert "5+ years Python" in texts
     assert "Postgres at scale" in texts
-    # Benefits content must NOT leak into derived criteria.
     assert not any("Health insurance" in t for t in texts)
 
 
-def test_sync_derived_criteria_yields_nothing_when_no_requirements_heading(session) -> None:
+def test_sync_derived_yields_nothing_when_no_requirements_heading(session):
     db, org = session
-    role = Role(
-        organization_id=org.id,
-        name="Senior Engineer",
-        job_spec_text="A great opportunity for a backend engineer who loves Python.",
+    role = _make_role(
+        db, org, job_spec_text="A great opportunity for a backend engineer who loves Python."
     )
-    db.add(role)
-    db.flush()
-
     sync_derived_criteria(db, role)
     db.commit()
     db.refresh(role)
+    derived = [c for c in role.criteria if c.source == CRITERION_SOURCE_DERIVED]
+    assert derived == []
 
-    items = _criteria_by_source(role, CRITERION_SOURCE_DERIVED)
-    assert items == [], "no Requirements heading → no derived criteria (recruiter must add must-haves)"
 
-
-def test_sync_all_runs_both_sources_independently(session) -> None:
+def test_sync_all_snapshots_workspace_and_syncs_derived(session):
     db, org = session
-    role = Role(
-        organization_id=org.id,
-        name="Senior Engineer",
-        additional_requirements="- Recruiter must-have",
-        job_spec_text="Requirements\n- Spec-derived item\n",
+    _add_org_chip(db, org, text="Recruiter must-have", bucket="must")
+    role = _make_role(
+        db, org, job_spec_text="Requirements\n- Spec-derived item\n"
     )
-    db.add(role)
-    db.flush()
 
     sync_all_criteria(db, role)
     db.commit()
     db.refresh(role)
 
-    recruiter = _criteria_by_source(role, CRITERION_SOURCE_RECRUITER)
-    derived = _criteria_by_source(role, CRITERION_SOURCE_DERIVED)
+    recruiter = _recruiter_chips(role)
+    derived = sorted(
+        [c for c in role.criteria if c.source == CRITERION_SOURCE_DERIVED],
+        key=lambda c: c.ordering,
+    )
     assert [c.text for c in recruiter] == ["Recruiter must-have"]
     assert [c.text for c in derived] == ["Spec-derived item"]
 
 
-def test_sync_recruiter_criteria_clears_when_text_removed(session) -> None:
-    db, org = session
-    role = Role(
-        organization_id=org.id,
-        name="Backend Engineer",
-        additional_requirements="- 5+ years Python",
-    )
-    db.add(role)
-    db.flush()
-    sync_recruiter_criteria(db, role)
-    db.commit()
-    db.refresh(role)
-    assert len(_criteria_by_source(role, CRITERION_SOURCE_RECRUITER)) == 1
+# ---------------------------------------------------------------------------
+# Render helpers
+# ---------------------------------------------------------------------------
 
-    role.additional_requirements = None
-    sync_recruiter_criteria(db, role)
+
+def test_render_role_intent_block_groups_by_bucket(session):
+    db, org = session
+    _add_org_chip(db, org, text="Python", bucket="must")
+    _add_org_chip(db, org, text="LLMs", bucket="preferred", ordering=1)
+    _add_org_chip(db, org, text="EU TZ", bucket="constraint", ordering=2)
+    role = _make_role(db, org)
+    snapshot_workspace_criteria(db, role)
     db.commit()
     db.refresh(role)
-    assert _criteria_by_source(role, CRITERION_SOURCE_RECRUITER) == []
+
+    block = render_role_intent_block(role)
+    assert "MUST HAVE" in block and "Python" in block
+    assert "PREFERRED" in block and "LLMs" in block
+    assert "CONSTRAINTS" in block and "EU TZ" in block
+
+
+def test_render_role_intent_lines_returns_flat_chip_text(session):
+    db, org = session
+    _add_org_chip(db, org, text="Python", bucket="must")
+    _add_org_chip(db, org, text="LLMs", bucket="preferred", ordering=1)
+    role = _make_role(db, org)
+    snapshot_workspace_criteria(db, role)
+    db.commit()
+    db.refresh(role)
+
+    lines = render_role_intent_lines(role)
+    assert lines == ["Python", "LLMs"]
+
+
+def test_render_helpers_skip_derived_chips(session):
+    """Derived-from-spec chips are produced by the parser and are NOT
+    recruiter intent — they shouldn't bleed into the prompt sections."""
+    db, org = session
+    role = _make_role(db, org, job_spec_text="Requirements\n- Spec item\n")
+    sync_derived_criteria(db, role)
+    db.commit()
+    db.refresh(role)
+
+    assert render_role_intent_block(role) == ""
+    assert render_role_intent_lines(role) == []

@@ -38,11 +38,9 @@ from ...services.application_events import on_role_jd_attached
 from ...services.document_service import process_document_upload
 from ...services.cv_score_orchestrator import mark_role_scores_stale
 from ...services.role_criteria_service import (
-    mirror_role_text_from_criteria,
     reset_role_to_workspace,
     sync_all_criteria,
     sync_derived_criteria,
-    sync_recruiter_criteria,
     sync_role_with_workspace,
 )
 from .role_support import get_role, role_to_response
@@ -72,15 +70,8 @@ def create_role(
     # When the request supplies explicit ``additional_requirements`` text we
     # honour it (legacy callers / Workable import). When it doesn't and the
     # org has chip-based defaults, ``sync_all_criteria`` snapshots them
-    # directly. As a last resort we fall back to the org's legacy text
-    # columns so older orgs that never migrated to chips still seed roles.
-    # If the request supplies explicit ``additional_requirements`` text
-    # (legacy callers / Workable import payloads) we honour it: the
-    # ``sync_all_criteria`` service parses that text into chips with
-    # bucket inference. Otherwise the role snapshot inherits the
-    # workspace chip set directly via ``org_criteria``.
-    requested_reqs = (data.additional_requirements or "").strip() or None
-
+    # New roles inherit workspace criteria via ``snapshot_workspace_criteria``
+    # in ``sync_all_criteria`` below.
     monthly_budget_cents = data.monthly_usd_budget_cents
     if monthly_budget_cents is None and org is not None:
         org_budget = getattr(org, "default_role_budget_cents", None)
@@ -97,7 +88,6 @@ def create_role(
         organization_id=current_user.organization_id,
         name=data.name.strip(),
         description=(data.description or None),
-        additional_requirements=requested_reqs,
         screening_pack_template=(data.screening_pack_template.model_dump() if data.screening_pack_template else None),
         tech_interview_pack_template=(data.tech_interview_pack_template.model_dump() if data.tech_interview_pack_template else None),
         auto_reject_enabled=data.auto_reject_enabled,
@@ -250,9 +240,6 @@ def update_role(
         role.name = updates["name"].strip()
     if "description" in updates:
         role.description = updates["description"] or None
-    recruiter_criteria_changed = "additional_requirements" in updates
-    if recruiter_criteria_changed:
-        role.additional_requirements = updates["additional_requirements"] or None
     if "screening_pack_template" in updates:
         template = updates["screening_pack_template"]
         role.screening_pack_template = template.model_dump() if template else None
@@ -298,9 +285,6 @@ def update_role(
         raw = updates["suppressed_org_criterion_ids"] or []
         role.suppressed_org_criterion_ids = [int(x) for x in raw]
     try:
-        if recruiter_criteria_changed:
-            sync_recruiter_criteria(db, role)
-            mark_role_scores_stale(db, role.id)
         db.commit()
         db.refresh(role)
     except Exception:
@@ -347,9 +331,8 @@ def _next_role_criterion_ordering(db: Session, role: Role) -> int:
 
 
 def _commit_role_criterion_change(db: Session, role: Role) -> None:
-    """Mirror chips back to the legacy text blob, mark scores stale, commit."""
+    """Mark scores stale + commit. Called after every chip CRUD on a role."""
     db.flush()
-    mirror_role_text_from_criteria(db, role)
     mark_role_scores_stale(db, role.id)
     try:
         db.commit()

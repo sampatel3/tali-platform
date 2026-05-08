@@ -4,7 +4,6 @@ from typing import Any, Literal, Optional
 from pydantic import BaseModel, EmailStr, Field
 
 ROLE_DESCRIPTION_MAX_LENGTH = 20000
-ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH = 12000
 
 
 class InterviewFocusQuestion(BaseModel):
@@ -61,7 +60,9 @@ class ApplicationInterviewResponse(BaseModel):
 class RoleCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
-    additional_requirements: Optional[str] = Field(default=None, max_length=ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH)
+    # ``additional_requirements`` was retired in alembic 068. Use the
+    # /roles/{id}/criteria endpoints to author chips after the role is
+    # created; new roles also inherit workspace chips at create time.
     screening_pack_template: Optional[InterviewPack] = None
     tech_interview_pack_template: Optional[InterviewPack] = None
     auto_reject_enabled: Optional[bool] = None
@@ -76,7 +77,6 @@ class RoleCreate(BaseModel):
 class RoleUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
-    additional_requirements: Optional[str] = Field(default=None, max_length=ROLE_ADDITIONAL_REQUIREMENTS_MAX_LENGTH)
     screening_pack_template: Optional[InterviewPack] = None
     tech_interview_pack_template: Optional[InterviewPack] = None
     auto_reject_enabled: Optional[bool] = None
@@ -146,7 +146,6 @@ class RoleResponse(BaseModel):
     organization_id: int
     name: str
     description: Optional[str] = None
-    additional_requirements: Optional[str] = None
     criteria: list[RoleCriterionResponse] = Field(default_factory=list)
     source: Optional[str] = "manual"
     workable_job_id: Optional[str] = None

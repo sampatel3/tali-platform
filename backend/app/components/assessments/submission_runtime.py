@@ -535,11 +535,14 @@ def submit_assessment_impl(
                 except CvMatchValidationError as exc:
                     scoring_errors.append({"component": "cv_job_match", "error": exc.reason})
             else:
-                additional = (
-                    str(role_for_criteria.additional_requirements or "").strip() or None
+                from ...services.role_criteria_service import render_role_intent_lines
+
+                chip_lines = (
+                    render_role_intent_lines(role_for_criteria)
                     if role_for_criteria is not None
-                    else None
+                    else []
                 )
+                additional = "\n".join(chip_lines) or None
                 cv_match_result = calculate_cv_job_match_sync(
                     cv_text=cv_text,
                     job_spec_text=job_spec_text,

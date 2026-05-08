@@ -24,35 +24,29 @@ PROMPT_VERSION = "agent.v4.2026-05-08"
 
 def _render_bucketed_criteria(role: Role) -> str:
     """Render the role's recruiter-source criteria as MUST HAVE / PREFERRED /
-    CONSTRAINTS sections. Falls back to the legacy ``additional_requirements``
-    text blob when no chips exist (older roles, pre-migration). Empty
-    string means the agent gets no recruiter intent injected."""
+    CONSTRAINTS sections with hint phrasing for each bucket. Returns an
+    empty string when the role has no chips."""
     chips = [
         c for c in (role.criteria or [])
         if c.deleted_at is None and c.source != CRITERION_SOURCE_DERIVED
     ]
-    if chips:
-        sections: list[str] = []
-        for bucket, label, hint in (
-            (BUCKET_MUST, "MUST HAVE", "treat as the bar — flag candidates who don't meet these"),
-            (BUCKET_PREFERRED, "PREFERRED", "positive signals — weigh in fit, don't gate"),
-            (BUCKET_CONSTRAINT, "CONSTRAINTS", "logistics — surface mismatches separately from fit score"),
-        ):
-            rows = [c for c in chips if c.bucket == bucket]
-            if not rows:
-                continue
-            rows.sort(key=lambda c: c.ordering)
-            body = "\n".join(f"- {(c.text or '').strip()}" for c in rows if (c.text or '').strip())
-            if not body:
-                continue
-            sections.append(f"{label} ({hint}):\n{body}")
-        if sections:
-            return "\n\n".join(sections)
-    # Pre-migration / no chips → fall back to the legacy text blob.
-    legacy = (role.additional_requirements or "").strip()
-    if legacy:
-        return f"ADDITIONAL REQUIREMENTS:\n{legacy[:2000]}"
-    return ""
+    if not chips:
+        return ""
+    sections: list[str] = []
+    for bucket, label, hint in (
+        (BUCKET_MUST, "MUST HAVE", "treat as the bar — flag candidates who don't meet these"),
+        (BUCKET_PREFERRED, "PREFERRED", "positive signals — weigh in fit, don't gate"),
+        (BUCKET_CONSTRAINT, "CONSTRAINTS", "logistics — surface mismatches separately from fit score"),
+    ):
+        rows = [c for c in chips if c.bucket == bucket]
+        if not rows:
+            continue
+        rows.sort(key=lambda c: c.ordering)
+        body = "\n".join(f"- {(c.text or '').strip()}" for c in rows if (c.text or '').strip())
+        if not body:
+            continue
+        sections.append(f"{label} ({hint}):\n{body}")
+    return "\n\n".join(sections)
 
 
 _STATIC_HEADER = """\

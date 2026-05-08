@@ -30,7 +30,11 @@ class Role(Base):
     job_spec_filename = Column(String, nullable=True)
     job_spec_text = Column(Text, nullable=True)
     job_spec_uploaded_at = Column(DateTime(timezone=True), nullable=True)
-    additional_requirements = Column(Text, nullable=True)
+    # Recruiter intent lives in ``role_criteria`` rows now (see alembic
+    # 066 + 068). The legacy ``additional_requirements`` text column was
+    # dropped in 068; readers consume :func:`render_role_intent_block`
+    # / :func:`render_role_intent_lines`.
+
     # Workspace criterion ids the recruiter has explicitly removed from
     # this role. Sync workspace skips these; "Show hidden" surfaces them
     # so the recruiter can add them back.

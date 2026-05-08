@@ -39,6 +39,7 @@ def generate_role_interview_focus(self, role_id: int) -> dict:
     from ..platform.database import SessionLocal
     from ..services.interview_focus_service import generate_interview_focus_sync
     from ..services.interview_support_service import build_role_interview_pack_templates
+    from ..services.role_criteria_service import render_role_intent_block
 
     db = SessionLocal()
     try:
@@ -56,7 +57,7 @@ def generate_role_interview_focus(self, role_id: int) -> dict:
                 job_spec_text=job_spec_text,
                 api_key=settings.ANTHROPIC_API_KEY,
                 model=settings.resolved_claude_scoring_model,
-                additional_requirements=(role.additional_requirements or "").strip() or None,
+                additional_requirements=render_role_intent_block(role) or None,
                 metering={
                     "feature": "interview_focus",
                     "organization_id": getattr(role, "organization_id", None),

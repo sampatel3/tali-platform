@@ -201,7 +201,6 @@ def role_to_response(
         organization_id=role.organization_id,
         name=role.name,
         description=role.description,
-        additional_requirements=role.additional_requirements,
         criteria=criteria,
         source=role.source,
         workable_job_id=role.workable_job_id,

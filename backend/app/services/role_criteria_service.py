@@ -1,14 +1,12 @@
 """Manage workspace + role criteria — the structured chip-based intent model.
 
-Chips (rows in ``role_criteria`` and ``org_criteria``) are the source of truth.
-The legacy ``Role.additional_requirements`` text blob is still kept in sync
-from chip state via :func:`mirror_role_text_from_criteria` so the v3 fit
-scorer / interview helpers / MCP payloads / sub-agents that still read the
-text column don't break. The legacy
-``Organization.default_role_requirements`` and
-``Organization.default_additional_requirements`` columns were dropped in
-alembic 067; readers consume :func:`render_org_intent_block` /
-:func:`render_org_intent_lines` instead.
+Chips (rows in ``role_criteria`` and ``org_criteria``) are the source of
+truth. The legacy text columns (``Role.additional_requirements``,
+``Organization.default_role_requirements``,
+``Organization.default_additional_requirements``) were dropped in
+alembic 067 + 068; downstream readers consume
+:func:`render_role_intent_block` / :func:`render_role_intent_lines` /
+:func:`render_org_intent_block` / :func:`render_org_intent_lines`.
 
 Sync model
 ----------
@@ -32,7 +30,6 @@ Sync model
 
 from __future__ import annotations
 
-import re
 from datetime import datetime, timezone
 from typing import Iterable
 
@@ -51,41 +48,6 @@ from ..models.role_criterion import (
     RoleCriterion,
 )
 from .spec_normalizer import derive_criteria_texts, normalize_spec
-
-
-_MAX_CRITERIA_FROM_TEXT = 16
-_MAX_TEXT_LEN = 220
-
-
-# ---------------------------------------------------------------------------
-# Bucket inference (legacy text → bucket)
-# ---------------------------------------------------------------------------
-
-# Longest-prefix-first so "Must have:" wins over "Must:".
-_BUCKET_PREFIXES: tuple[tuple[str, str], ...] = (
-    ("must have:", BUCKET_MUST),
-    ("must-have:", BUCKET_MUST),
-    ("must:", BUCKET_MUST),
-    ("required:", BUCKET_MUST),
-    ("constraint:", BUCKET_CONSTRAINT),
-    ("constraints:", BUCKET_CONSTRAINT),
-    ("nice to have:", BUCKET_PREFERRED),
-    ("nice-to-have:", BUCKET_PREFERRED),
-    ("nice:", BUCKET_PREFERRED),
-    ("preferred:", BUCKET_PREFERRED),
-)
-
-
-def _infer_bucket_from_prefix(text: str) -> tuple[str, str]:
-    """Return ``(bucket, stripped_text)``. Prefix consumed if matched."""
-    raw = (text or "").strip()
-    if not raw:
-        return BUCKET_PREFERRED, ""
-    lowered = raw.lower()
-    for prefix, bucket in _BUCKET_PREFIXES:
-        if lowered.startswith(prefix):
-            return bucket, raw[len(prefix):].strip()
-    return BUCKET_PREFERRED, raw
 
 
 # ---------------------------------------------------------------------------
@@ -236,8 +198,7 @@ def reset_role_to_workspace(db: Session, role: Role) -> None:
 
 # ---------------------------------------------------------------------------
 # Render helpers — used everywhere the agent prompts / scoring / interview
-# helpers need a text view of the chip state. Replaces the legacy reads of
-# ``role.additional_requirements`` and ``organization.default_role_requirements``.
+# helpers / MCP payloads need a text view of the chip state.
 # ---------------------------------------------------------------------------
 
 _BUCKET_LABEL = {
@@ -264,18 +225,6 @@ def _bucketed_text(items: Iterable[tuple[str, str]]) -> str:
             continue
         sections.append(_BUCKET_LABEL[bucket] + ":\n" + "\n".join(f"- {r}" for r in rows))
     return "\n\n".join(sections)
-
-
-def mirror_role_text_from_criteria(db: Session, role: Role) -> None:
-    """Re-derive ``role.additional_requirements`` from active recruiter
-    chips. Called on every chip CRUD so the legacy text column stays in
-    sync with chip state for the readers (interview helpers, MCP, sub-
-    agents, v3 fit scorer) that haven't been migrated yet."""
-    items = [
-        (c.bucket, c.text)
-        for c in sorted(_active_recruiter_role_criteria(db, role), key=lambda c: c.ordering)
-    ]
-    role.additional_requirements = _bucketed_text(items) or None
 
 
 def render_role_intent_block(role: Role) -> str:
@@ -368,110 +317,10 @@ def sync_derived_criteria(db: Session, role: Role) -> None:
     _replace_derived_criteria(db, role, texts=texts)
 
 
-# ---------------------------------------------------------------------------
-# Backwards-compatible facade
-# ---------------------------------------------------------------------------
-
-
-def _split_legacy_text(text: str | None) -> list[str]:
-    """Split a free-text requirements blob into discrete bullets.
-    Same shape as alembic 040 / fit_matching extractor — preserves order,
-    dedupes, caps at 16 entries, trims to 220 chars each."""
-    raw = (text or "").strip()
-    if not raw:
-        return []
-    parts = re.split(r"[\n;]+", raw)
-    if len(parts) <= 1:
-        sentence_parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", raw)
-        if len(sentence_parts) > 1:
-            parts = sentence_parts
-    items: list[str] = []
-    seen: set[str] = set()
-    for part in parts:
-        cleaned = re.sub(r"^\s*(?:[-*•]|\d+[\).\-\s])\s*", "", str(part or "")).strip()
-        if not cleaned:
-            continue
-        compact = re.sub(r"\s+", " ", cleaned)
-        lowered = compact.lower()
-        if lowered in seen:
-            continue
-        seen.add(lowered)
-        items.append(compact[:_MAX_TEXT_LEN])
-        if len(items) >= _MAX_CRITERIA_FROM_TEXT:
-            break
-    if not items:
-        return [re.sub(r"\s+", " ", raw)[:_MAX_TEXT_LEN]]
-    return items
-
-
-def replace_recruiter_criteria_from_text(db: Session, role: Role, text: str | None) -> None:
-    """Hard-delete current recruiter chips on the role and rebuild from a
-    free-text blob with bucket prefix inference. Used by legacy callers
-    (Workable import, role create with explicit ``additional_requirements``)
-    to bridge the text-only world into chips."""
-    for c in _active_recruiter_role_criteria(db, role):
-        db.delete(c)
-    bullets = _split_legacy_text(text)
-    for ordering, bullet in enumerate(bullets):
-        bucket, stripped = _infer_bucket_from_prefix(bullet)
-        if not stripped:
-            continue
-        db.add(
-            RoleCriterion(
-                role_id=role.id,
-                source=CRITERION_SOURCE_RECRUITER,
-                ordering=ordering,
-                weight=1.0,
-                must_have=(bucket == BUCKET_MUST),
-                bucket=bucket,
-                org_criterion_id=None,  # legacy text => role-only
-                customized_at=None,
-                text=stripped,
-            )
-        )
-
-
-# Back-compat shims kept so existing call sites in routes / role import don't
-# explode. The chip-based flow inverts the old relationship: text is now
-# derived from chips, not the other way around.
-
-def sync_recruiter_criteria(db: Session, role: Role) -> None:
-    """Old contract: re-derive recruiter chips from ``role.additional_requirements``.
-    New contract: if the text blob looks like it was hand-edited (i.e. it
-    differs from what the current chips would produce), parse it back into
-    chips so legacy PATCH callers still work. Otherwise just mirror chips
-    back to text to keep the columns in sync."""
-    text = (role.additional_requirements or "").strip()
-    if not text:
-        for c in _active_recruiter_role_criteria(db, role):
-            db.delete(c)
-        db.flush()
-        mirror_role_text_from_criteria(db, role)
-        return
-    # Compare current text to what chips would produce. If different, the
-    # caller hand-edited the text → re-parse into chips.
-    current_mirror_items = [
-        (c.bucket, c.text)
-        for c in sorted(_active_recruiter_role_criteria(db, role), key=lambda c: c.ordering)
-    ]
-    expected_text = _bucketed_text(current_mirror_items)
-    if text != expected_text:
-        replace_recruiter_criteria_from_text(db, role, text)
-    db.flush()
-    mirror_role_text_from_criteria(db, role)
-
-
 def sync_all_criteria(db: Session, role: Role) -> None:
-    """On role create / Workable import: if the role already has
-    ``additional_requirements`` text (legacy callers), parse it into chips;
-    otherwise snapshot workspace criteria. Spec-derived criteria are
-    refreshed from the job spec. Final step mirrors chips back to the
-    legacy text blob."""
-    text = (role.additional_requirements or "").strip()
-    if text:
-        replace_recruiter_criteria_from_text(db, role, text)
-    else:
-        snapshot_workspace_criteria(db, role)
+    """On role create / Workable import: snapshot the workspace chip set
+    into ``role_criteria`` (with ``org_criterion_id`` provenance) and
+    refresh spec-derived chips from the job spec text."""
+    snapshot_workspace_criteria(db, role)
     sync_derived_criteria(db, role)
     db.flush()
-    mirror_role_text_from_criteria(db, role)

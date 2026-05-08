@@ -59,20 +59,21 @@ def test_role_create_inherits_workspace_chips(client):
     assert len(inherited) == 2
 
 
-def test_role_create_with_explicit_text_parses_into_chips(client):
-    """Legacy back-compat path: callers (Workable import, scripted creates)
-    can still POST ``additional_requirements`` text. It's parsed into
-    chips with bucket prefix inference."""
+def test_role_create_rejects_legacy_additional_requirements_field(client):
+    """``additional_requirements`` was retired in alembic 068. Pydantic
+    rejects it (or silently drops it via ``extra='ignore'``); either
+    way no chip is created from the legacy field. Callers are expected
+    to author chips via /roles/{id}/criteria after the role exists, or
+    inherit the workspace defaults snapshot at create time."""
     headers, _ = auth_headers(client)
-    explicit = "Must have: GCP only\nPreferred: Healthcare experience"
-    resp = _create_role(client, headers, additional_requirements=explicit)
-    assert resp.status_code == 201
-    chips = resp.json().get("criteria", [])
-    chip_buckets = {(c["bucket"], c["text"]) for c in chips}
-    assert ("must", "GCP only") in chip_buckets
-    assert ("preferred", "Healthcare experience") in chip_buckets
-    # No org chip provenance — the role is using its own parsed text.
-    assert all(c.get("org_criterion_id") is None for c in chips)
+    resp = _create_role(client, headers, additional_requirements="Must have: GCP only")
+    # Pydantic v2 default is to ignore extras silently; either response
+    # is acceptable here. The contract is: NO chip with that text.
+    if resp.status_code == 201:
+        texts = {c["text"] for c in resp.json().get("criteria", [])}
+        assert "GCP only" not in texts and "Must have: GCP only" not in texts
+    else:
+        assert resp.status_code in (400, 422)
 
 
 def test_role_create_no_workspace_no_explicit_yields_empty_criteria(client):
