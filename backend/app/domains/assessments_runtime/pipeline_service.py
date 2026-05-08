@@ -393,6 +393,23 @@ def transition_stage(
         },
         idempotency_key=idempotency_key,
     )
+
+    # Best-effort outcome-learning hook. Imported here (not at module top)
+    # so the pipeline_service has no hard dependency on agent_runtime
+    # internals — keeps test setup that doesn't need the agent simple.
+    try:
+        from ...agent_runtime import outcome_learning
+
+        outcome_learning.record_advance_outcome_on_stage(
+            db, application=app, new_stage=target,
+        )
+    except Exception:  # pragma: no cover — never block a stage transition
+        import logging
+        logging.getLogger("taali.pipeline_service").exception(
+            "outcome_learning hook on stage transition failed (application_id=%s)",
+            app.id,
+        )
+
     return app
 
 
@@ -452,6 +469,24 @@ def transition_outcome(
         },
         idempotency_key=idempotency_key,
     )
+
+    # Best-effort outcome-learning hook. Same pattern as transition_stage
+    # — imported here so pipeline_service has no hard dependency on
+    # agent_runtime, and any failure inside it never blocks the
+    # outcome change.
+    try:
+        from ...agent_runtime import outcome_learning
+
+        outcome_learning.record_outcome_on_outcome_change(
+            db, application=app, new_outcome=target,
+        )
+    except Exception:  # pragma: no cover — never block an outcome change
+        import logging
+        logging.getLogger("taali.pipeline_service").exception(
+            "outcome_learning hook on outcome change failed (application_id=%s)",
+            app.id,
+        )
+
     return app
 
 
