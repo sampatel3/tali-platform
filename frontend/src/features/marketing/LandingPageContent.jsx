@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Check, Pause, Play } from 'lucide-react';
 
 import { AssessmentRuntimePreviewView } from '../assessment_runtime/AssessmentRuntimePreviewView';
-import { RadarChart } from '../../shared/ui/RadarChart';
+import { ActivityFeed } from '../home/ActivityFeed';
 import { DIMENSIONS } from '../../scoring/scoringDimensions';
 import { PRODUCT_WALKTHROUGH, PRODUCT_WALKTHROUGH_TASK } from '../demo/productWalkthroughModels';
 import {
@@ -12,6 +12,68 @@ import {
 import { MarketingNav, TaaliLogo } from '../../shared/layout/TaaliLayout';
 
 const containerClass = 'mx-auto max-w-[1360px] px-6 md:px-10 xl:px-16';
+
+// Mock rows for the marketing decision feed. Shape mirrors the
+// AgentDecision API response that ActivityFeed consumes on /home.
+// Timestamps are anchored to a recent UTC moment so formatRelativeAge
+// renders human-readable "Xm/h ago" labels.
+const _NOW = Date.now();
+const MARKETING_DECISION_FEED_ROWS = [
+  {
+    id: 4821,
+    status: 'pending',
+    decision_type: 'advance_to_interview',
+    candidate_name: 'Maya Chen',
+    application_id: 1042,
+    role_id: 109,
+    confidence: 0.82,
+    reasoning:
+      'TAALI 82, assessment 78. Strong test-first instinct in the runtime trace; caught a flawed AI suggestion at minute 14 and adapted the SELECT … FOR UPDATE pattern instead of pasting it. Recommend advancing to technical interview.',
+    created_at: new Date(_NOW - 6 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 4820,
+    status: 'pending',
+    decision_type: 'reject',
+    candidate_name: 'Tariq Al-Ahmad',
+    application_id: 1018,
+    role_id: 109,
+    confidence: 0.71,
+    reasoning:
+      'role_fit 22 against the role bar of 65. CV missing cloud-platform experience and three of five must-have skills. No assessment scheduled. Recommend reject; no_pending_assessment so safe to close.',
+    created_at: new Date(_NOW - 44 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 4819,
+    status: 'approved',
+    decision_type: 'advance_to_interview',
+    candidate_name: 'Priya Raman',
+    application_id: 1003,
+    role_id: 109,
+    resolution_note: 'approved by Sam · 18m ago',
+    resolved_at: new Date(_NOW - 18 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 4818,
+    status: 'overridden',
+    decision_type: 'reject',
+    candidate_name: 'Jonas Weber',
+    application_id: 994,
+    role_id: 109,
+    human_disposition: 'taught',
+    resolution_note: 'override → advance · "missing_signal: ignored open-source contributions"',
+    resolved_at: new Date(_NOW - 52 * 60 * 1000).toISOString(),
+  },
+  {
+    id: 4817,
+    status: 'approved',
+    decision_type: 'advance_to_interview',
+    candidate_name: 'Léa Fontaine',
+    application_id: 982,
+    role_id: 109,
+    resolved_at: new Date(_NOW - 95 * 60 * 1000).toISOString(),
+  },
+];
 
 const dashboardCandidates = [
   { name: 'Candidate', status: 'submitted' },
@@ -468,72 +530,26 @@ export const LandingPage = ({ onNavigate }) => {
             ))}
           </div>
 
-          {/* Agent decision log mock — proves "the agent decides + every
-              action is rule-traced + asks when stuck", same visual
-              language as the Maya Chen AI-usage trace below. Static
-              data: this is a marketing snippet, not a live read. */}
+          {/* Decision feed — uses the live <ActivityFeed /> component
+              from features/home (the same one rendered on the Hub at
+              /home), fed mock rows that match its expected shape.
+              Wrapped in browser chrome so the visual reads as a product
+              snapshot, not a marketing illustration. */}
           <div className="mt-14 overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
-            <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">
-              <span>AGENT DECISION LOG · ROLE 109 · SENIOR SCRUM MASTER</span>
-              <span className="font-semibold text-[var(--purple)]">TODAY</span>
+            <div className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[11px] text-[var(--mute)]">
+              <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#f06' }} />
+              <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#ffb020' }} />
+              <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#39c66d' }} />
+              <span className="ml-3">app.taali.ai/home</span>
+              <span className="ml-auto rounded-full bg-[color:var(--bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--mute)]">Locked preview</span>
             </div>
-            <div className="flex flex-col gap-2.5 px-5 py-5 text-[12.5px]">
-              {[
-                {
-                  time: '14:32',
-                  action: 'QUEUE_ADVANCE',
-                  color: '#16a34a',
-                  message: 'Maya Chen — taali_score 82, assessment 78',
-                  note: 'rule_path: send_assessment → role_fit≥65 → pre_screen_clear · revision #12',
-                },
-                {
-                  time: '14:18',
-                  action: 'BATCH_SEND',
-                  color: 'var(--purple)',
-                  message: '8 assessments dispatched within budget ($31 of $50 MTD)',
-                  note: 'auto-paced — recruiter approval not required for this role',
-                },
-                {
-                  time: '14:05',
-                  action: 'ASK_RECRUITER',
-                  color: '#d97706',
-                  message: '"Set the must-have skills for this role" — open',
-                  note: "agent paused — won't queue rejects until you answer",
-                },
-                {
-                  time: '13:48',
-                  action: 'QUEUE_REJECT',
-                  color: '#16a34a',
-                  message: 'Tariq Al-Ahmad — role_fit 22, no assessment pending',
-                  note: 'rule_path: reject → role_fit≤30 + no_pending_assessment · revision #12',
-                },
-                {
-                  time: '13:32',
-                  action: 'BATCH_SCORE',
-                  color: 'var(--purple)',
-                  message: '47 candidates scored (cached 12, fresh 35)',
-                  note: 'auto-execute — deterministic, no approval gate',
-                },
-                {
-                  time: '13:15',
-                  action: 'SURVEY',
-                  color: 'var(--mute)',
-                  message: '405 apps · 47 needs_score · 8 ready_for_assessment_decision',
-                  note: 'cohort survey — what to do this cycle',
-                },
-              ].map((event, idx) => (
-                <div
-                  key={event.time}
-                  className={`grid grid-cols-[48px_120px_1fr] items-start gap-2.5 py-2 ${idx ? 'border-t border-[var(--line-2)]' : ''}`}
-                >
-                  <div className="font-[var(--font-mono)] text-[10.5px] text-[var(--mute)]">{event.time}</div>
-                  <div className="font-[var(--font-mono)] text-[10px] font-semibold tracking-[0.06em]" style={{ color: event.color }}>{event.action}</div>
-                  <div>
-                    <div className="leading-[1.45] text-[var(--ink)]">{event.message}</div>
-                    <div className="mt-0.5 text-[11px] italic text-[var(--mute)]">{event.note}</div>
-                  </div>
-                </div>
-              ))}
+            <div className="px-5 py-5">
+              <ActivityFeed
+                rows={MARKETING_DECISION_FEED_ROWS}
+                selectedId={null}
+                onSelect={() => {}}
+                onNavigate={() => {}}
+              />
             </div>
           </div>
         </div>
@@ -576,64 +592,53 @@ export const LandingPage = ({ onNavigate }) => {
               </ul>
             </div>
 
-            {/* AI usage trace mock */}
+            {/* Standing report bars — same dimension list + bar layout
+                used in CandidateFeedbackReportView (the actual recipient-
+                facing report). DIMENSIONS comes from the canonical
+                scoring/scoringDimensions module; mock score values only. */}
             <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
-              {/* Scoring rubric mock — uses the actual product RadarChart
-                  + DIMENSIONS (the canonical 8-axis scoring schema from
-                  /scoring/scoringDimensions.ts). Mock score values; the
-                  shape, labels, and rendering are the live product. */}
               <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">
                 <span>MAYA CHEN · STANDING REPORT</span>
                 <span className="font-semibold text-[var(--purple)]">TAALI 82</span>
               </div>
-              <div className="grid gap-5 px-5 py-5 md:grid-cols-[200px_1fr]">
-                <div className="flex items-center justify-center">
-                  <RadarChart
-                    size={200}
-                    values={[
-                      { k: 'task_completion', label: 'Task', v: 88 },
-                      { k: 'prompt_clarity', label: 'Prompt', v: 84 },
-                      { k: 'context_provision', label: 'Context', v: 76 },
-                      { k: 'independence_efficiency', label: 'Indep.', v: 81 },
-                      { k: 'response_utilization', label: 'Response', v: 79 },
-                      { k: 'debugging_design', label: 'Debug', v: 86 },
-                      { k: 'written_communication', label: 'Comm.', v: 74 },
-                      { k: 'role_fit', label: 'Role fit', v: 80 },
-                    ]}
-                  />
-                </div>
-                <div className="flex flex-col gap-2 text-[12px]">
-                  {[
-                    { id: 'prompt_clarity', score: 84 },
-                    { id: 'context_provision', score: 76 },
-                    { id: 'response_utilization', score: 79 },
-                    { id: 'debugging_design', score: 86 },
-                    { id: 'task_completion', score: 88 },
-                  ].map(({ id, score }) => {
-                    const dim = DIMENSIONS.find((d) => d.id === id);
-                    return (
-                      <div key={id} className="grid grid-cols-[1fr_auto_44px] items-center gap-3 border-b border-[var(--line-2)] py-1.5 last:border-b-0">
-                        <div>
-                          <div className="font-medium text-[var(--ink)]">{dim?.label}</div>
-                          <div className="text-[10.5px] leading-[1.4] text-[var(--mute)]">{dim?.shortDescription}</div>
-                        </div>
-                        <div className="h-1 w-16 overflow-hidden rounded-full bg-[var(--line)]">
-                          <div className="h-full bg-[var(--purple)]" style={{ width: `${score}%` }} />
-                        </div>
-                        <div className="text-right font-[var(--font-mono)] text-[12px] font-semibold text-[var(--ink)]">{score}</div>
+              <div className="space-y-3 px-5 py-5">
+                {[
+                  { id: 'task_completion', score: 88 },
+                  { id: 'prompt_clarity', score: 84 },
+                  { id: 'context_provision', score: 76 },
+                  { id: 'independence_efficiency', score: 81 },
+                  { id: 'response_utilization', score: 79 },
+                  { id: 'debugging_design', score: 86 },
+                  { id: 'written_communication', score: 74 },
+                  { id: 'role_fit', score: 80 },
+                ].map(({ id, score }) => {
+                  const dim = DIMENSIONS.find((d) => d.id === id);
+                  return (
+                    <div
+                      key={id}
+                      className="grid grid-cols-[180px_minmax(0,1fr)_64px] items-center gap-2"
+                    >
+                      <div className="text-[13px] text-[var(--ink)]">{dim?.label || id}</div>
+                      <div className="h-2 overflow-hidden bg-[var(--line)]">
+                        <div className="h-2 bg-[var(--purple)]" style={{ width: `${score}%` }} />
                       </div>
-                    );
-                  })}
-                </div>
+                      <div className="text-right font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">
+                        {score} / 100
+                      </div>
+                    </div>
+                  );
+                })}
               </div>
             </div>
           </div>
 
           {/* IDE preview at the end of the AI-NATIVE section — the
-              actual workspace candidates work in. Full container width
-              with a tall stage so the file tree + editor + terminal +
-              Claude Code panel all fit cleanly without cramping
-              (mirrors the demo showcase's 78vh stage). */}
+              actual workspace component (AssessmentRuntimePreviewView).
+              Scaled to 70% via CSS transform so the IDE renders at its
+              natural 1440-wide layout but visually fits inside the
+              landing container without cramping. The wrapper compensates
+              for the scale (width 142.857% = 1/0.7) and the outer band
+              clips with overflow-hidden. */}
           <div className="mt-12 overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
             <div className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[11px] text-[var(--mute)]">
               <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#f06' }} />
@@ -642,13 +647,24 @@ export const LandingPage = ({ onNavigate }) => {
               <span className="ml-3">app.taali.ai/assess/preview</span>
               <span className="ml-auto rounded-full bg-[color:var(--bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--mute)]">Locked preview</span>
             </div>
-            <AssessmentRuntimePreviewView
-              heightClass="h-[78vh] min-h-[640px]"
-              lightMode={false}
-              taskName="Revenue Recovery Incident"
-              taskRole="Senior Backend Engineer"
-              taskContext="Restore the batch revenue-recovery flow before finance close."
-            />
+            <div style={{ height: 600, overflow: 'hidden', position: 'relative' }}>
+              <div
+                style={{
+                  width: '142.857%',
+                  height: 'calc(100% / 0.7)',
+                  transform: 'scale(0.7)',
+                  transformOrigin: 'top left',
+                }}
+              >
+                <AssessmentRuntimePreviewView
+                  heightClass="h-full"
+                  lightMode={false}
+                  taskName="Revenue Recovery Incident"
+                  taskRole="Senior Backend Engineer"
+                  taskContext="Restore the batch revenue-recovery flow before finance close."
+                />
+              </div>
+            </div>
           </div>
         </div>
       </section>
