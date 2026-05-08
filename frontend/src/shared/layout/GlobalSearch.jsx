@@ -2,10 +2,10 @@
 //
 // Strategy is split per source:
 //
-// * Candidates: server-side substring search via /candidates/?q=… —
-//   the org may have thousands and the list endpoint paginates at 50,
-//   so a client-side cache would silently miss anyone past page 1.
-//   Debounced 200ms while the user types.
+// * Candidates: server-side substring search via /applications?search=… —
+//   each row is an application (candidate × role) so a candidate who
+//   applied to three roles shows three times, and selecting one lands
+//   on that specific standing report. Debounced 200ms while typing.
 // * Roles + tasks: cardinality is small (<100 in practice), the API
 //   returns flat arrays, so we cache once on first focus and filter
 //   client-side. Cheap and instant.
@@ -17,7 +17,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Briefcase, CheckSquare, MessageSquare, Search, User } from 'lucide-react';
 
-import { candidates as candidatesApi, roles as rolesApi, tasks as tasksApi } from '../api';
+import { roles as rolesApi, tasks as tasksApi } from '../api';
 
 const MAX_PER_GROUP = 5;
 const SERVER_SEARCH_LIMIT = 20;
@@ -25,12 +25,16 @@ const DEBOUNCE_MS = 200;
 
 const norm = (value) => String(value || '').toLowerCase();
 
+// Each row is an application — one (candidate, role) pair.
 const candidateLabel = (row) => (
-  String(row?.full_name || row?.name || row?.email || `Candidate #${row?.id}`).trim()
+  String(row?.candidate_name || row?.candidate_email || `Application #${row?.id}`).trim()
 );
-const candidateSub = (row) => (
-  String(row?.email || row?.position || '').trim()
-);
+const candidateSub = (row) => {
+  const role = String(row?.role_name || row?.candidate_position || '').trim();
+  const email = String(row?.candidate_email || '').trim();
+  if (role && email) return `${role} · ${email}`;
+  return role || email;
+};
 
 const roleLabel = (row) => (
   String(row?.short_name || row?.name || `Role #${row?.id}`).trim()
@@ -94,19 +98,23 @@ export const GlobalSearch = ({ onNavigate }) => {
   const [recentCandidates, setRecentCandidates] = useState([]);
   const [candidateMatches, setCandidateMatches] = useState([]);
 
-  // Roles + tasks: cache once. Candidates also fetched here (limit=20)
-  // for the no-query "recent" panel; live queries refetch with q=.
+  // Roles + tasks: cache once. Recent applications also fetched here
+  // (limit=20) for the no-query "recent" panel; live queries refetch
+  // with search=.
   const ensureStaticLoaded = useCallback(async () => {
     if (staticLoaded || staticLoading) return;
     setStaticLoading(true);
     setError(null);
     try {
-      const [candRes, rolesRes, tasksRes] = await Promise.all([
-        candidatesApi.list({ limit: SERVER_SEARCH_LIMIT }).catch(() => null),
+      const [appsRes, rolesRes, tasksRes] = await Promise.all([
+        rolesApi.listApplicationsGlobal({
+          limit: SERVER_SEARCH_LIMIT,
+          application_outcome: 'all',
+        }).catch(() => null),
         rolesApi.list().catch(() => null),
         tasksApi.list().catch(() => null),
       ]);
-      setRecentCandidates(itemsBody(candRes));
+      setRecentCandidates(itemsBody(appsRes));
       setStaticData({
         roles: arrayBody(rolesRes),
         tasks: arrayBody(tasksRes),
@@ -134,7 +142,11 @@ export const GlobalSearch = ({ onNavigate }) => {
     setCandidateLoading(true);
     const handle = window.setTimeout(async () => {
       try {
-        const res = await candidatesApi.list({ q, limit: SERVER_SEARCH_LIMIT });
+        const res = await rolesApi.listApplicationsGlobal({
+          search: q,
+          limit: SERVER_SEARCH_LIMIT,
+          application_outcome: 'all',
+        });
         if (candidateRequestRef.current !== requestId) return;
         setCandidateMatches(itemsBody(res));
       } catch (err) {
@@ -197,10 +209,7 @@ export const GlobalSearch = ({ onNavigate }) => {
     setOpen(false);
     setQuery('');
     if (group === 'candidates') {
-      // Candidates don't have a 1:1 application id without role context;
-      // jump to the directory pre-filtered by name so the user lands on
-      // the correct row.
-      onNavigate?.('candidates', { search: candidateLabel(row) });
+      onNavigate?.('candidate-report', { candidateApplicationId: row?.id });
     } else if (group === 'roles') {
       onNavigate?.('job-pipeline', { roleId: row?.id });
     } else if (group === 'tasks') {
