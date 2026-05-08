@@ -101,7 +101,10 @@ describe('Demo flow redesign', () => {
     expect(screen.getByRole('heading', { name: /An autonomous agent in your pipeline/i })).toBeInTheDocument();
     expect(screen.getByText(/HOW THE AGENT WORKS/i)).toBeInTheDocument();
     expect(screen.getByText(/We're the only platform that measures it\./i)).toBeInTheDocument();
-    expect(screen.getByText(/AI USAGE TRACE/i)).toBeInTheDocument();
+    // The right-column mock now renders the actual product STANDING REPORT
+    // (radar + dimension breakdown via shared/ui/RadarChart + scoring/scoringDimensions).
+    // "Standing report" also appears in the Decide step body, so getAllByText.
+    expect(screen.getAllByText(/STANDING REPORT/i).length).toBeGreaterThan(0);
     expect(screen.getByRole('button', { name: 'How it works' })).toBeInTheDocument();
   });
 
