@@ -2,6 +2,8 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Check, Pause, Play } from 'lucide-react';
 
 import { AssessmentRuntimePreviewView } from '../assessment_runtime/AssessmentRuntimePreviewView';
+import { RadarChart } from '../../shared/ui/RadarChart';
+import { DIMENSIONS } from '../../scoring/scoringDimensions';
 import { PRODUCT_WALKTHROUGH, PRODUCT_WALKTHROUGH_TASK } from '../demo/productWalkthroughModels';
 import {
   consumePendingMarketingSection,
@@ -576,58 +578,72 @@ export const LandingPage = ({ onNavigate }) => {
 
             {/* AI usage trace mock */}
             <div className="overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
+              {/* Scoring rubric mock — uses the actual product RadarChart
+                  + DIMENSIONS (the canonical 8-axis scoring schema from
+                  /scoring/scoringDimensions.ts). Mock score values; the
+                  shape, labels, and rendering are the live product. */}
               <div className="flex items-center justify-between border-b border-[var(--line)] px-4 py-3 font-[var(--font-mono)] text-[11.5px] text-[var(--mute)]">
-                <span>MAYA CHEN · AI USAGE TRACE</span>
-                <span className="font-semibold text-[var(--purple)]">FLUENCY 8.7</span>
+                <span>MAYA CHEN · STANDING REPORT</span>
+                <span className="font-semibold text-[var(--purple)]">TAALI 82</span>
               </div>
-              <div className="flex flex-col gap-2.5 px-5 py-5 text-[12.5px]">
-                {[
-                  { time: '12:04', action: 'PROMPT', color: 'var(--purple)', message: '"explain what idempotency keys do in this retry handler"', note: 'Read first, then asked' },
-                  { time: '12:07', action: 'EDIT', color: '#16a34a', message: 'Wrote test for duplicate-key collision before fix', note: 'Test-first instinct' },
-                  { time: '12:14', action: 'PROMPT', color: 'var(--purple)', message: '"this suggests a UNIQUE constraint — what about a race?"', note: 'Caught a flawed suggestion' },
-                  { time: '12:22', action: 'PASTE', color: '#d97706', message: 'Pasted SELECT … FOR UPDATE pattern, modified for our schema', note: "Adapted, didn't copy" },
-                  { time: '12:31', action: 'COMMIT', color: '#16a34a', message: 'Fix + 3 tests covering retry, race, and partial-failure', note: 'Shipped' },
-                ].map((event, idx) => (
-                  <div
-                    key={event.time}
-                    className={`grid grid-cols-[48px_70px_1fr] items-start gap-2.5 py-2 ${idx ? 'border-t border-[var(--line-2)]' : ''}`}
-                  >
-                    <div className="font-[var(--font-mono)] text-[10.5px] text-[var(--mute)]">{event.time}</div>
-                    <div className="font-[var(--font-mono)] text-[10px] font-semibold tracking-[0.06em]" style={{ color: event.color }}>{event.action}</div>
-                    <div>
-                      <div className="leading-[1.45] text-[var(--ink)]">{event.message}</div>
-                      <div className="mt-0.5 text-[11px] italic text-[var(--mute)]">{event.note}</div>
-                    </div>
-                  </div>
-                ))}
+              <div className="grid gap-5 px-5 py-5 md:grid-cols-[200px_1fr]">
+                <div className="flex items-center justify-center">
+                  <RadarChart
+                    size={200}
+                    values={[
+                      { k: 'task_completion', label: 'Task', v: 88 },
+                      { k: 'prompt_clarity', label: 'Prompt', v: 84 },
+                      { k: 'context_provision', label: 'Context', v: 76 },
+                      { k: 'independence_efficiency', label: 'Indep.', v: 81 },
+                      { k: 'response_utilization', label: 'Response', v: 79 },
+                      { k: 'debugging_design', label: 'Debug', v: 86 },
+                      { k: 'written_communication', label: 'Comm.', v: 74 },
+                      { k: 'role_fit', label: 'Role fit', v: 80 },
+                    ]}
+                  />
+                </div>
+                <div className="flex flex-col gap-2 text-[12px]">
+                  {[
+                    { id: 'prompt_clarity', score: 84 },
+                    { id: 'context_provision', score: 76 },
+                    { id: 'response_utilization', score: 79 },
+                    { id: 'debugging_design', score: 86 },
+                    { id: 'task_completion', score: 88 },
+                  ].map(({ id, score }) => {
+                    const dim = DIMENSIONS.find((d) => d.id === id);
+                    return (
+                      <div key={id} className="grid grid-cols-[1fr_auto_44px] items-center gap-3 border-b border-[var(--line-2)] py-1.5 last:border-b-0">
+                        <div>
+                          <div className="font-medium text-[var(--ink)]">{dim?.label}</div>
+                          <div className="text-[10.5px] leading-[1.4] text-[var(--mute)]">{dim?.shortDescription}</div>
+                        </div>
+                        <div className="h-1 w-16 overflow-hidden rounded-full bg-[var(--line)]">
+                          <div className="h-full bg-[var(--purple)]" style={{ width: `${score}%` }} />
+                        </div>
+                        <div className="text-right font-[var(--font-mono)] text-[12px] font-semibold text-[var(--ink)]">{score}</div>
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </section>
 
-      {/* IDE PREVIEW — full-width band with the actual workspace
-          component (AssessmentRuntimePreviewView). Static defaults
-          render the revenue-recovery scenario with editor + terminal +
-          Claude Code conversation pane. Strongest "this is the real
-          thing" proof on the page. */}
-      <section id="ide" className="border-t border-[var(--line)] bg-[var(--bg-2)]">
-        <div className={`${containerClass} py-20`}>
-          <div className="mb-8 max-w-[760px]">
-            <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.14em] text-[var(--purple)]">
-              THE WORKSPACE
+          {/* IDE preview at the end of the AI-NATIVE section — the
+              actual workspace candidates work in. Full container width
+              with a tall stage so the file tree + editor + terminal +
+              Claude Code panel all fit cleanly without cramping
+              (mirrors the demo showcase's 78vh stage). */}
+          <div className="mt-12 overflow-hidden rounded-[14px] border border-[var(--line)] bg-[var(--bg-2)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
+            <div className="flex items-center gap-2 border-b border-[var(--line)] px-4 py-2.5 font-[var(--font-mono)] text-[11px] text-[var(--mute)]">
+              <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#f06' }} />
+              <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#ffb020' }} />
+              <span className="h-[9px] w-[9px] rounded-full" style={{ background: '#39c66d' }} />
+              <span className="ml-3">app.taali.ai/assess/preview</span>
+              <span className="ml-auto rounded-full bg-[color:var(--bg)] px-2 py-0.5 text-[10px] font-semibold text-[var(--mute)]">Locked preview</span>
             </div>
-            <h2 className="mt-3 font-[var(--font-display)] text-[clamp(32px,4vw,42px)] font-semibold leading-[1.1] tracking-[-0.025em] text-[var(--ink)]">
-              The actual IDE candidates work in. <em className="not-italic text-[var(--purple)]">Try it.</em>
-            </h2>
-            <p className="mt-4 text-[15.5px] leading-[1.6] text-[var(--ink-2)]">
-              Real editor, real terminal, real repo, real AI in the side panel — Claude Code by default, Cursor or Copilot if your candidates prefer.
-              Every keystroke, prompt, paste, test run and commit is captured time-stamped so the rubric below is grounded in evidence, not vibes.
-            </p>
-          </div>
-          <div className="overflow-hidden rounded-[14px] border border-[var(--line)] shadow-[0_24px_60px_-30px_rgba(91,44,168,0.4)]">
             <AssessmentRuntimePreviewView
-              heightClass="h-[44rem]"
+              heightClass="h-[78vh] min-h-[640px]"
               lightMode={false}
               taskName="Revenue Recovery Incident"
               taskRole="Senior Backend Engineer"
