@@ -26,36 +26,65 @@ This folder collects the core TAALI visual assets in one place so they are easy 
 
 ## Color reference
 
-Brand purple v6 — re-anchored on the agent-on hero gradient so every
-purple in the product (buttons, kickers, .btn-purple, marketing CTA,
-the agent-running hero, the agent-quiet hero) reads as the same hue.
-Was `#7F39FB` (a more blue indigo); now `#B450FF` — the same bright
-violet that's already the dominant glow in the agent-on hero
-(`rgba(180, 80, 255)` sans alpha).
+Brand purple v7 — re-anchored on the **agent-OFF** hero. v6 anchored
+on the agent-on bright violet `#B450FF` and that read as too "live" /
+loud for everything that isn't an active worker. The brand should
+default to the calm, deep agent-quiet purple; the bright violet is
+reserved for the agent-running hero only — its job is to signal "the
+agent is working right now," not to set the brand identity.
 
-- Primary square/logo fill: `#B450FF`
-- Accent purple lines: `#9D00FF`  *(unchanged — kept as the brighter, more saturated lines variant)*
-- Deep purple lines: `#B450FF`  *(now matches primary; the variants stack in saturation order: deep `#B450FF` → accent `#9D00FF` → soft `#B06BFF`)*
+- Primary square/logo fill: `#2A1854`
+- Accent purple lines: `#9D00FF`  *(unchanged — bright accent variant for high-energy contexts)*
+- Deep purple lines: `#2A1854`  *(matches primary; variants stack: deep `#2A1854` → accent `#9D00FF` → soft `#B06BFF`)*
 - Soft purple lines: `#B06BFF`
 - Inverse line color: `#FFFFFF`
 
 ### CSS tokens
 
 The frontend reads brand purples from CSS custom properties on `:root`
-in `frontend/src/index.css`. Touch `--purple` to retune everything:
+in `frontend/src/index.css`. Touch `--purple` to retune the brand —
+buttons, kickers, accents, the marketing CTA pill text, focus rings
+all cascade from this one token.
 
 | Token | Light | Dark | Used for |
 | --- | --- | --- | --- |
-| `--purple` | `#B450FF` | `#C78AFF` | Buttons, kickers, accents, agent-on hero anchor |
-| `--purple-2` | `#9D3EFF` | `#D4A8FF` | Hover state on `.btn-purple` |
-| `--purple-soft` | `#F4E8FF` | `#2E1A4E` | Background washes on info chips, soft surfaces |
-| `--purple-lav` | `#C4A5FD` | `#C4A5FD` | Lavender accent on the hero top-right glow |
-| `--purple-glow` | `rgba(196, 165, 253, 0.45)` | (same) | Atmospheric blob in dark slabs |
+| `--purple` | `#2A1854` | `#6E4BA8` | Brand purple. Buttons, kickers, accents, focus rings. Dark mode is lifted into the same hue family for AA contrast on dark surfaces. |
+| `--purple-2` | `#1D1130` | `#5A3D8A` | Hover state on `.btn-purple`, `.btn-primary:hover`. |
+| `--purple-soft` | `#EDE5F8` | `#2E1A4E` | Background washes on info chips, soft surfaces. |
+| `--purple-lav` | `#C4A5FD` | `#C4A5FD` | Lavender accent — the hero top-right glow, terminal cursor, anywhere a *visible* purple is needed against a dark surface. |
+| `--purple-glow` | `rgba(196, 165, 253, 0.45)` | (same) | Atmospheric blob in dark slabs. |
 
-The agent-on hero gradient (`.agent-header.agent-running`) and the
-agent-quiet hero (`--grad-dark-vert`) are intentionally hard-coded
-sibling recipes anchored on the same purple — they look different
-(vivid vs. muted) but read as the same hue family.
+### Agent-on vs. agent-off
+
+The two hero variants are intentionally *not* anchored on `--purple`:
+
+- **`.agent-header.agent-running`** (vivid) — hard-coded
+  `linear-gradient(180deg, #3A1D6E → #251248)` plus `rgba(180,80,255)`
+  and `rgba(196,165,253)` radial glows. The brightness is the
+  signal: *the agent is live, working right now.* Don't reuse this
+  recipe for ambient brand surfaces.
+- **`.agent-header.agent-quiet`** (calm) — uses `--grad-dark-vert`
+  (`#2A1854 → #1D1130`). Same anchor as `--purple` (light mode);
+  this is the brand reference. Default state for every page hero.
+
+### Visibility exceptions
+
+A handful of consumers render to canvas / xterm, where they can't
+read CSS custom properties or sit on a fixed dark surface that the
+deep `#2A1854` would disappear into. These keep a hard-coded bright
+purple by design — they're scoped exceptions, not the brand:
+
+- `frontend/src/features/chat/GraphView.jsx` — Cytoscape `Person`
+  node colour (`#B450FF`). Canvas, no CSS-var resolution.
+- `frontend/src/features/assessment_runtime/AssessmentTerminal.jsx`
+  — xterm cursor and selection. Always renders against the dark
+  terminal bg.
+- `frontend/src/features/chat/chat.css` — CSS-var fallback literals
+  (`var(--purple, #b450ff)`) — only kick in if `--purple` is
+  undefined, which never happens in practice. Cosmetic.
+
+When changing the brand purple, leave these alone — they're not
+brand surfaces.
 
 ## Implementation references
 
