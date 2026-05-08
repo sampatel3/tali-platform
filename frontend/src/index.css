@@ -13,16 +13,19 @@
   --bg: #f7f4fb;
   --bg-2: #ffffff;
   --bg-3: #efe8f7;
-  /* Brand purple — v6, realigned to the agent-on hero gradient.
-     Was #7f39fb (a more blue indigo); now matches the bright violet
-     that's already the dominant visible purple in the agent-running
-     hero (the rgba(180,80,255) radial accent, sans alpha).
-     Drives every purple in the system: buttons, accents, kickers,
-     marketing CTA, hero gradients (both on/off variants). Touch
-     this token to retune everything. */
-  --purple: #b450ff;
-  --purple-2: #9d3eff;
-  --purple-soft: #f4e8ff;
+  /* Brand purple — v7, realigned to the agent-OFF hero anchor.
+     v6 (#b450ff) was the agent-ON glow — too bright for buttons,
+     reads as a "live worker" colour. The brand should default to the
+     agent-quiet hero's deep purple and let agent-on be a special
+     vivid state. So --purple now matches `--grad-dark-vert` start
+     (#2a1854); --purple-2 matches the gradient end (#1d1130) for
+     hover. Drives every purple in the system: buttons, accents,
+     kickers, marketing CTA, .btn-purple. The agent-running hero
+     keeps its hard-coded vivid recipe — the brightness is the
+     signal that the agent is live, not the brand. */
+  --purple: #2a1854;
+  --purple-2: #1d1130;
+  --purple-soft: #ede5f8;
 
   /* v5 — deep-purple dark surfaces (HANDOFF unified-headers.md §1).
      Bumped up from v4 (#100a18 / #0d0719 / #1a0f2e / #2a1f3d) so the
@@ -149,10 +152,13 @@ html[data-theme="dark"] {
   --bg: #0e0a18;
   --bg-2: #16102a;
   --bg-3: #1c1535;
-  /* Dark-mode --purple v6 — same family as light (#b450ff), tuned a
-     touch lighter so it stays legible on dark surfaces. */
-  --purple: #c78aff;
-  --purple-2: #d4a8ff;
+  /* Dark-mode --purple v7 — deep-purple sibling of the light value
+     (#2a1854), elevated for legibility on dark surfaces. The light
+     mode anchor #2a1854 would disappear against #0e0a18, so we lift
+     it into the same hue family but with enough luminance to clear
+     AA contrast for normal-size text. */
+  --purple: #6e4ba8;
+  --purple-2: #5a3d8a;
   --purple-soft: #2e1a4e;
   --workable: #53a3ff;
   --workable-dark: #2d8cff;
@@ -899,6 +905,12 @@ html[data-theme="dark"] {
   justify-content: space-between;
   gap: 12px;
   flex-wrap: wrap;
+}
+
+.settings-save-row {
+  margin-top: 24px;
+  padding-top: 20px;
+  border-top: 1px solid var(--line-2);
 }
 
 .settings-inline-actions.end {
