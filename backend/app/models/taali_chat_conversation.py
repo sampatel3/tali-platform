@@ -20,6 +20,12 @@ class TaaliChatConversation(Base):
         Integer, ForeignKey("organizations.id"), index=True, nullable=False
     )
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
+    # Optional role scope. When set, the chat is "ask Taali about this role":
+    # the system prompt mentions the role + recent agent activity, and the
+    # agent-aware tools (get_recent_agent_decisions etc.) default to this
+    # role_id without the recruiter having to specify it. Null = global
+    # cross-role chat (existing behavior).
+    role_id = Column(Integer, ForeignKey("roles.id"), index=True, nullable=True)
     title = Column(String, nullable=True)
 
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)

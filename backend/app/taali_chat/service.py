@@ -43,7 +43,7 @@ from ..services.claude_client_resolver import get_client_for_org
 from ..services.pricing_service import Feature
 from ..services.usage_metering_service import record_event
 from . import streaming
-from .system_prompt import SYSTEM_PROMPT
+from .system_prompt import build_system_blocks
 from .tool_registry import TAALI_CHAT_TOOLS, dispatch_tool
 
 logger = logging.getLogger("taali.taali_chat")
@@ -65,6 +65,11 @@ class ChatTurnInput:
 
     user_message: str
     conversation_id: int | None = None  # None = create new conversation
+    # Optional role scope. Used only when creating a new conversation.
+    # Once a conversation exists, its role_id is fixed (recorded on the
+    # TaaliChatConversation row) — passing a different role_id on a
+    # follow-up turn is ignored.
+    role_id: int | None = None
 
 
 @dataclass
@@ -81,7 +86,12 @@ class _RunningUsage:
 
 
 def _ensure_conversation(
-    db: Session, *, user: User, conversation_id: int | None, first_message: str
+    db: Session,
+    *,
+    user: User,
+    conversation_id: int | None,
+    first_message: str,
+    role_id: int | None = None,
 ) -> TaaliChatConversation:
     if conversation_id is not None:
         conversation = (
@@ -98,10 +108,30 @@ def _ensure_conversation(
             raise ValueError(f"conversation {conversation_id} not found")
         return conversation
 
+    # New conversation: validate role_id is org-scoped before persisting,
+    # so a recruiter can't open a chat scoped to another org's role even
+    # if they spoof the id.
+    safe_role_id: int | None = None
+    if role_id is not None:
+        from ..models.role import Role
+
+        owns = (
+            db.query(Role.id)
+            .filter(
+                Role.id == int(role_id),
+                Role.organization_id == user.organization_id,
+                Role.deleted_at.is_(None),
+            )
+            .first()
+        )
+        if owns is not None:
+            safe_role_id = int(role_id)
+
     title = first_message.strip().split("\n", 1)[0][:80] or "New conversation"
     conversation = TaaliChatConversation(
         organization_id=user.organization_id,
         user_id=user.id,
+        role_id=safe_role_id,
         title=title,
     )
     db.add(conversation)
@@ -172,7 +202,11 @@ def run_chat_turn(
 
     try:
         conversation = _ensure_conversation(
-            db, user=user, conversation_id=turn.conversation_id, first_message=text
+            db,
+            user=user,
+            conversation_id=turn.conversation_id,
+            first_message=text,
+            role_id=turn.role_id,
         )
     except ValueError as exc:
         yield streaming.error(str(exc))
@@ -195,6 +229,10 @@ def run_chat_turn(
     # already includes the just-added user message).
     messages: list[dict[str, Any]] = list(history)
 
+    # Compose system blocks once per turn — the base SYSTEM_PROMPT plus
+    # an optional role-context block when the conversation is role-scoped.
+    system_blocks = build_system_blocks(db, conversation=conversation)
+
     for round_index in range(MAX_TOOL_ROUNDS):
         # Each round is a fresh "step" in AI SDK terms; the message id is
         # synthetic but useful for the React client when annotating.
@@ -206,6 +244,7 @@ def run_chat_turn(
                 client=client,
                 model=model,
                 messages=messages,
+                system=system_blocks,
             )
         except Exception as exc:
             logger.exception("Anthropic stream failed: %s", exc)
@@ -334,17 +373,9 @@ def _stream_one_round(
     client: Anthropic,
     model: str,
     messages: list[dict[str, Any]],
+    system: list[dict[str, Any]],
 ) -> Iterator[streaming.Frame]:
     """Stream one Anthropic call. Yields frames; returns (blocks, stop, usage)."""
-
-    system = [
-        {
-            "type": "text",
-            "text": SYSTEM_PROMPT,
-            "cache_control": {"type": "ephemeral"},
-        }
-    ]
-
     with client.messages.stream(
         model=model,
         max_tokens=MAX_TOKENS_PER_TURN,

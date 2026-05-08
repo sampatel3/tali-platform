@@ -563,3 +563,184 @@ def get_candidate_cv(
         "experience_entries": candidate.experience_entries,
         "education_entries": candidate.education_entries,
     }
+
+
+# ---------------------------------------------------------------------------
+# Agent-aware tools (used by role-scoped Taali Chat to explain decisions)
+# ---------------------------------------------------------------------------
+
+
+def list_recent_agent_decisions(
+    db: Session,
+    user: User,
+    *,
+    role_id: int | None = None,
+    status: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Recent agent decisions visible to the recruiter.
+
+    Used by the role-scoped Taali Chat to answer "why did the agent
+    queue Lucas?" and "what did the agent decide today?". Accepts an
+    optional status filter (e.g. ``pending`` / ``approved`` /
+    ``overridden``) and an optional role_id (defaults to all roles in
+    the org when None).
+    """
+    from ..models.agent_decision import AGENT_DECISION_STATUSES, AgentDecision
+
+    if status and status not in AGENT_DECISION_STATUSES:
+        raise ValueError(
+            f"status must be one of {list(AGENT_DECISION_STATUSES)} or null, got {status!r}"
+        )
+    capped = max(1, min(int(limit), 100))
+    query = (
+        db.query(AgentDecision)
+        .filter(AgentDecision.organization_id == user.organization_id)
+    )
+    if role_id is not None:
+        query = query.filter(AgentDecision.role_id == int(role_id))
+    if status:
+        query = query.filter(AgentDecision.status == status)
+
+    rows = (
+        query.order_by(
+            AgentDecision.created_at.desc(),
+            AgentDecision.id.desc(),
+        )
+        .limit(capped)
+        .all()
+    )
+    return [_agent_decision_payload(row) for row in rows]
+
+
+def list_recent_agent_runs(
+    db: Session,
+    user: User,
+    *,
+    role_id: int | None = None,
+    trigger: str | None = None,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Recent autonomous-cycle log entries.
+
+    Each row is one ``AgentRun`` — the cycle's trigger, status, decisions
+    emitted, tools called, error if any, model + prompt versions for
+    A/B observation. Lets the recruiter ask "what did the agent do
+    today?" or "why did the cycle fail this morning?".
+    """
+    from ..models.agent_run import AGENT_RUN_TRIGGERS, AgentRun
+
+    if trigger and trigger not in AGENT_RUN_TRIGGERS:
+        raise ValueError(
+            f"trigger must be one of {list(AGENT_RUN_TRIGGERS)} or null, got {trigger!r}"
+        )
+    capped = max(1, min(int(limit), 100))
+    query = (
+        db.query(AgentRun)
+        .filter(AgentRun.organization_id == user.organization_id)
+    )
+    if role_id is not None:
+        query = query.filter(AgentRun.role_id == int(role_id))
+    if trigger:
+        query = query.filter(AgentRun.trigger == trigger)
+
+    rows = (
+        query.order_by(AgentRun.started_at.desc(), AgentRun.id.desc())
+        .limit(capped)
+        .all()
+    )
+    return [_agent_run_payload(row) for row in rows]
+
+
+def explain_agent_decision(
+    db: Session,
+    user: User,
+    *,
+    decision_id: int,
+) -> dict[str, Any]:
+    """Full reasoning detail for one agent decision.
+
+    Returns the decision (reasoning + evidence + confidence + status)
+    plus the linked AgentRun (trigger, model_version, tools_called,
+    started_at, finished_at) so the recruiter can drill into "what
+    cycle produced this and what evidence did the agent see."
+    """
+    from ..models.agent_decision import AgentDecision
+    from ..models.agent_run import AgentRun
+
+    decision = (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.id == int(decision_id),
+            AgentDecision.organization_id == user.organization_id,
+        )
+        .first()
+    )
+    if decision is None:
+        raise ValueError(f"agent_decision {decision_id} not found")
+
+    run_payload: dict[str, Any] | None = None
+    if decision.agent_run_id is not None:
+        run_row = (
+            db.query(AgentRun)
+            .filter(
+                AgentRun.id == int(decision.agent_run_id),
+                AgentRun.organization_id == user.organization_id,
+            )
+            .first()
+        )
+        if run_row is not None:
+            run_payload = _agent_run_payload(run_row)
+
+    return {
+        "decision": _agent_decision_payload(decision),
+        "agent_run": run_payload,
+    }
+
+
+def _agent_decision_payload(row: Any) -> dict[str, Any]:
+    return {
+        "id": int(row.id),
+        "role_id": int(row.role_id),
+        "application_id": int(row.application_id),
+        "agent_run_id": (int(row.agent_run_id) if row.agent_run_id is not None else None),
+        "decision_type": str(row.decision_type),
+        "recommendation": str(row.recommendation),
+        "status": str(row.status),
+        "reasoning": str(row.reasoning),
+        "evidence": row.evidence if isinstance(row.evidence, dict) else None,
+        "confidence": (float(row.confidence) if row.confidence is not None else None),
+        "model_version": str(row.model_version),
+        "prompt_version": str(row.prompt_version),
+        "created_at": (row.created_at.isoformat() if row.created_at else None),
+        "resolved_at": (row.resolved_at.isoformat() if row.resolved_at else None),
+        "resolved_by_user_id": (
+            int(row.resolved_by_user_id) if row.resolved_by_user_id is not None else None
+        ),
+        "resolution_note": row.resolution_note,
+        "override_action": row.override_action,
+    }
+
+
+def _agent_run_payload(row: Any) -> dict[str, Any]:
+    return {
+        "id": int(row.id),
+        "role_id": int(row.role_id),
+        "trigger": str(row.trigger),
+        "trigger_event_id": (
+            int(row.trigger_event_id) if row.trigger_event_id is not None else None
+        ),
+        "status": str(row.status),
+        "started_at": (row.started_at.isoformat() if row.started_at else None),
+        "finished_at": (row.finished_at.isoformat() if row.finished_at else None),
+        "input_tokens": int(row.input_tokens or 0),
+        "output_tokens": int(row.output_tokens or 0),
+        "cache_read_tokens": int(row.cache_read_tokens or 0),
+        "cache_creation_tokens": int(row.cache_creation_tokens or 0),
+        "total_cost_micro_usd": int(row.total_cost_micro_usd or 0),
+        "decisions_emitted": int(row.decisions_emitted or 0),
+        "tools_called": row.tools_called if isinstance(row.tools_called, list) else [],
+        "error": row.error,
+        "model_version": str(row.model_version),
+        "prompt_version": str(row.prompt_version),
+    }

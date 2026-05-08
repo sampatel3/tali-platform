@@ -212,6 +212,76 @@ TAALI_CHAT_TOOLS: list[dict[str, Any]] = [
             "required": ["candidate_id"],
         },
     },
+    # ----- Agent-aware tools -----
+    # When the conversation is role-scoped (TaaliChatConversation.role_id
+    # set), the chat service injects "default role_id = X" into the
+    # system prompt so these tools fall back to that role without the
+    # recruiter spelling it out. Outside a role-scoped conversation the
+    # recruiter passes role_id explicitly or omits it for org-wide.
+    {
+        "name": "list_recent_agent_decisions",
+        "description": (
+            "Recent decisions queued by the autonomous agent (advance / reject "
+            "/ skip-assessment-reject) — what was queued, the reasoning the "
+            "agent gave, the recruiter's resolution (pending / approved / "
+            "overridden / discarded). Use to answer 'why did the agent queue "
+            "Lucas?' or 'what did the agent decide today?'. Filter by status "
+            "to surface just pending decisions awaiting recruiter review."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "role_id": {
+                    "type": "integer",
+                    "description": "Restrict to one role. Defaults to the conversation's role when set.",
+                },
+                "status": {
+                    "type": "string",
+                    "enum": ["pending", "approved", "overridden", "discarded", "expired"],
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+            },
+        },
+    },
+    {
+        "name": "list_recent_agent_runs",
+        "description": (
+            "Recent autonomous-cycle log entries — one row per agent cycle. "
+            "Each row has trigger (event/cron/manual), status (succeeded/"
+            "failed/aborted/budget_paused), tools called, decisions emitted, "
+            "errors if any, model + prompt versions. Use to answer 'what "
+            "did the agent do today?' or 'why did the cycle fail this morning?'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "role_id": {
+                    "type": "integer",
+                    "description": "Restrict to one role. Defaults to the conversation's role when set.",
+                },
+                "trigger": {
+                    "type": "string",
+                    "enum": ["event", "cron", "manual"],
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100, "default": 20},
+            },
+        },
+    },
+    {
+        "name": "explain_agent_decision",
+        "description": (
+            "Drilldown for one queued agent decision. Returns the decision "
+            "(reasoning + cited evidence + confidence + status) plus the "
+            "linked AgentRun (which cycle produced it, what tools the agent "
+            "called, model + prompt versions). Use when the recruiter asks "
+            "'why did you queue this one' on a specific decision."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"decision_id": {"type": "integer"}},
+            "required": ["decision_id"],
+        },
+    },
 ]
 
 
@@ -225,6 +295,9 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "nl_search_candidates": handlers.nl_search_candidates,
     "graph_search_candidates": handlers.graph_search_candidates,
     "get_candidate_cv": handlers.get_candidate_cv,
+    "list_recent_agent_decisions": handlers.list_recent_agent_decisions,
+    "list_recent_agent_runs": handlers.list_recent_agent_runs,
+    "explain_agent_decision": handlers.explain_agent_decision,
 }
 
 
