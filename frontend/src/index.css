@@ -9090,10 +9090,11 @@ button.eng-badge-button:focus-visible {
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.20);
   border-left: 2px solid var(--purple-lav);
+  /* Single line + ellipsis. Multi-line ticks would push the panel
+     past its min-height and visibly resize the hero box on toggle. */
+  white-space: nowrap;
   overflow: hidden;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
+  text-overflow: ellipsis;
 }
 
 .agent-budget { display: flex; flex-direction: column; gap: 5px; }
@@ -9201,6 +9202,7 @@ button.eng-badge-button:focus-visible {
   justify-content: center;
   gap: 6px;
   cursor: pointer;
+  transition: transform 130ms cubic-bezier(.4, 0, .2, 1), filter 130ms ease;
 }
 
 .agent-btn:hover { background: rgba(255, 255, 255, 0.16); }
@@ -9208,6 +9210,15 @@ button.eng-badge-button:focus-visible {
 .agent-btn.icon { flex: 0 0 30px; padding: 0; color: rgba(255, 255, 255, 0.78); }
 .agent-btn.primary { background: var(--purple); border-color: transparent; }
 .agent-btn.primary:hover { background: color-mix(in oklab, var(--purple) 90%, white); }
+
+/* Simulated click — fired briefly when the landing-hero scroll trigger
+   "presses" the Turn on agent button before flipping the panel state, so
+   visitors visually see the button respond instead of state changing on
+   its own. */
+.agent-btn.is-pressing {
+  transform: scale(0.94);
+  filter: brightness(0.85);
+}
 
 /* ============== Pre/Post-title slots ============== */
 .agent-header-left .ah-pre { margin-bottom: 14px; }
