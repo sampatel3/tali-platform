@@ -257,24 +257,24 @@ if settings.SENTRY_DSN and settings.SENTRY_DSN.startswith("https://"):
     )
 
 # Include routers
-from .api.v1.users_fastapi import (
+from .domains.identity_access.users_fastapi import (
     UserRead,
     UserCreate,
     UserUpdate,
     auth_backend,
     fastapi_users,
 )
-from .api.v1.assessments import router as assessments_router
-from .api.v1.organizations import router as organizations_router
+from .domains.assessments_runtime.routes import router as assessments_router
+from .domains.identity_access.organization_routes import router as organizations_router
 from .domains.identity_access.org_criteria_routes import router as org_criteria_router
-from .api.v1.webhooks import router as webhooks_router
-from .api.v1.tasks import router as tasks_router
-from .api.v1.analytics import router as analytics_router
-from .api.v1.billing import router as billing_router
-from .api.v1.candidates import router as candidates_router
-from .api.v1.roles import router as roles_router
-from .api.v1.scoring import router as scoring_router
-from .api.v1.users import router as users_router
+from .domains.billing_webhooks.webhook_routes import router as webhooks_router
+from .domains.tasks_repository.routes import router as tasks_router
+from .domains.assessments_runtime.analytics_routes import router as analytics_router
+from .domains.billing_webhooks.billing_routes import router as billing_router
+from .domains.candidates_documents.routes import router as candidates_router
+from .domains.assessments_runtime.roles_routes import router as roles_router
+from .domains.assessments_runtime.scoring_routes import router as scoring_router
+from .domains.identity_access.user_routes import router as users_router
 from .api.v1.workable import router as workable_router
 from .api.v1.auth import router as auth_router
 from .api.v1.background_jobs import router as background_jobs_router
@@ -631,7 +631,10 @@ def graphiti_search_debug(request: Request):
         return {"status": "unconfigured"}
 
     query = request.query_params.get("q", "full stack developer")
-    org_id = int(request.query_params.get("org_id", "0"))
+    try:
+        org_id = int(request.query_params.get("org_id", "0"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="org_id must be an integer")
     group_id = graph_client.group_id_for_org(org_id) if org_id else None
 
     graphiti = graph_client.get_graphiti()
@@ -683,12 +686,19 @@ def graphiti_cypher_debug(request: Request):
     if not graph_client.is_configured():
         return {"status": "unconfigured"}
 
-    query = request.query_params.get("q", "full stack developer")
-    org_id = int(request.query_params.get("org_id", "2"))
-    group_id = f"org-{org_id}"
+    try:
+        org_id = int(request.query_params.get("org_id", "2"))
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="org_id must be an integer")
+    group_id = f"org-{org_id}"  # always org-{int}, no user-controlled chars
+
+    raw_query = request.query_params.get("q", "full stack developer")
+    # Cypher driver in use rejects parameterised calls — escape quotes and cap length
+    # (same pattern as candidate_graph.search._cypher_subgraph_by_query).
+    safe_q = raw_query.replace("\\", "\\\\").replace("'", "\\'")[:200]
 
     graphiti = graph_client.get_graphiti()
-    out = {"group_id": group_id, "query": query}
+    out = {"group_id": group_id, "query": raw_query}
 
     def safe_records(r):
         rows = []
@@ -710,12 +720,11 @@ def graphiti_cypher_debug(request: Request):
     except Exception as exc:
         out["rel_types_error"] = str(exc)
 
-    # Sample edges for this org — any relationship type, no params
-    safe_gid = group_id.replace("'", "")  # sanitise (group_id is always "org-N")
+    # Sample edges for this org — any relationship type
     try:
         r = graph_client.run_async(
             graphiti.driver.execute_query(
-                f"MATCH (s)-[e]->(t) WHERE e.group_id = '{safe_gid}' "
+                f"MATCH (s)-[e]->(t) WHERE e.group_id = '{group_id}' "
                 f"RETURN type(e) AS rel, e.fact AS fact, s.name AS s, t.name AS t LIMIT 5"
             ), timeout=10.0,
         )
@@ -723,14 +732,13 @@ def graphiti_cypher_debug(request: Request):
     except Exception as exc:
         out["org_edges_error"] = str(exc)
 
-    # Try the actual subgraph Cypher without params
-    safe_q = query.lower().replace("'", "")
+    # Run the actual subgraph Cypher
     try:
         r = graph_client.run_async(
             graphiti.driver.execute_query(
                 f"MATCH (s:Entity)-[e:RELATES_TO]->(t:Entity) "
-                f"WHERE e.group_id = '{safe_gid}' "
-                f"AND toLower(e.fact) CONTAINS '{safe_q}' "
+                f"WHERE e.group_id = '{group_id}' "
+                f"AND toLower(e.fact) CONTAINS toLower('{safe_q}') "
                 f"RETURN s.uuid AS s_uuid, s.name AS s, t.uuid AS t_uuid, t.name AS t, "
                 f"e.name AS e_name, e.fact AS fact LIMIT 10"
             ), timeout=10.0,

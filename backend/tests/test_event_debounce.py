@@ -164,16 +164,11 @@ def test_claim_only_targets_specified_role(db):
 
 @pytest.mark.skip(
     reason=(
-        "Per-application event-debounce trigger was retired in Phase 7 "
-        "— application_events.on_application_created no longer enqueues "
-        "agent_react_to_event. The cohort planner runs role-wide on a "
-        "Celery beat schedule (agent_cohort_tick) instead. The "
-        "try_claim_event_window primitive in agent_runtime/event_debounce.py "
-        "is now orphaned but kept for the cohort tick's own claim logic. "
-        "This test asserts a positive enqueue that no longer happens. "
-        "TODO: either remove this test entirely or rewrite against the "
-        "current cohort-tick path once that's the canonical entry point."
-    ),
+        "Obsolete: Phase 7 (PR #109) removed the per-application "
+        "agent_react_to_event trigger from on_application_created; the "
+        "agent now wakes via the cohort-planner beat, not per-app. The "
+        "debounce primitive is still exercised by the unit tests above."
+    )
 )
 def test_on_application_created_enqueues_only_first_event_in_window(db):
     """Three apps for one role within the same window → one Celery enqueue."""

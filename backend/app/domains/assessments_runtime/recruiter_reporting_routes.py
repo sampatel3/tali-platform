@@ -26,7 +26,6 @@ from ...services.evaluation_result_service import (
     normalize_stored_evaluation_result,
 )
 from ...components.assessments.repository import utcnow
-from ...components.notifications.service import send_candidate_feedback_ready_sync
 
 router = APIRouter()
 
@@ -57,15 +56,6 @@ def _dispatch_candidate_feedback_email(
     role_title: str,
     feedback_link: str,
 ) -> None:
-    if settings.MVP_DISABLE_CELERY:
-        send_candidate_feedback_ready_sync(
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            org_name=org_name,
-            role_title=role_title,
-            feedback_link=feedback_link,
-        )
-        return
     from ...tasks.assessment_tasks import send_candidate_feedback_ready_email
 
     send_candidate_feedback_ready_email.delay(

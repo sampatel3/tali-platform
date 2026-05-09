@@ -58,27 +58,12 @@ def _dispatch_rejection_email(
     org_name: str,
     position: str,
 ) -> None:
-    """Send the rejection email via Celery in prod, sync in MVP mode.
+    """Enqueue the rejection email on Celery.
 
     Best-effort: any exception is logged and swallowed — the rejection
     has already landed in the DB before this fires.
     """
     if not (settings.RESEND_API_KEY or "").strip():
-        return
-    if settings.MVP_DISABLE_CELERY:
-        from ..components.notifications.service import send_application_rejected_sync
-
-        try:
-            send_application_rejected_sync(
-                candidate_email=candidate_email,
-                candidate_name=candidate_name,
-                org_name=org_name,
-                position=position,
-            )
-        except Exception:  # pragma: no cover — best-effort
-            logger.exception(
-                "rejection email sync dispatch failed (candidate=%s)", candidate_email
-            )
         return
     from ..components.notifications.tasks import send_application_rejected_email
 

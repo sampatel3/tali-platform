@@ -23,7 +23,11 @@ def _ensure_sqlite_env() -> None:
     )
     os.environ.setdefault("MVP_DISABLE_WORKABLE", "true")
     os.environ.setdefault("MVP_DISABLE_STRIPE", "true")
-    os.environ.setdefault("MVP_DISABLE_CELERY", "true")
+    # Mirror conftest.py: run Celery tasks inline so evals don't need a broker.
+    from app.tasks.celery_app import celery_app
+
+    celery_app.conf.task_always_eager = True
+    celery_app.conf.task_eager_propagates = True
 
 
 @dataclass

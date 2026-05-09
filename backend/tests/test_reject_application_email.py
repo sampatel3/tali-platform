@@ -271,17 +271,13 @@ def test_no_email_when_candidate_has_no_email_address(db):
 
 
 def test_dispatch_short_circuits_when_resend_unconfigured(db, monkeypatch):
-    """No RESEND_API_KEY → dispatcher is a no-op (doesn't import Celery / Resend)."""
+    """No RESEND_API_KEY → dispatcher is a no-op (doesn't enqueue the Celery task)."""
     from app.actions import reject_application as reject_module
     from app.platform.config import settings as cfg
 
     monkeypatch.setattr(cfg, "RESEND_API_KEY", "")
 
-    # Calling the underlying dispatcher directly should not raise and should
-    # not invoke the sync helper or Celery task. Patch both to assert.
     with patch(
-        "app.components.notifications.service.send_application_rejected_sync"
-    ) as mock_sync, patch(
         "app.components.notifications.tasks.send_application_rejected_email"
     ) as mock_celery:
         reject_module._dispatch_rejection_email(
@@ -291,21 +287,19 @@ def test_dispatch_short_circuits_when_resend_unconfigured(db, monkeypatch):
             position="Role",
         )
 
-    assert not mock_sync.called
     assert not mock_celery.called
 
 
-def test_dispatch_uses_sync_helper_when_celery_disabled(db, monkeypatch):
-    """conftest sets MVP_DISABLE_CELERY=true — sync path should be used."""
+def test_dispatch_enqueues_celery_task(db, monkeypatch):
+    """RESEND_API_KEY set → dispatcher enqueues the Celery rejection task."""
     from app.actions import reject_application as reject_module
     from app.platform.config import settings as cfg
 
     monkeypatch.setattr(cfg, "RESEND_API_KEY", "test-key")
-    monkeypatch.setattr(cfg, "MVP_DISABLE_CELERY", True)
 
     with patch(
-        "app.components.notifications.service.send_application_rejected_sync"
-    ) as mock_sync:
+        "app.components.notifications.tasks.send_application_rejected_email"
+    ) as mock_celery:
         reject_module._dispatch_rejection_email(
             candidate_email="x@x.test",
             candidate_name="X",
@@ -313,21 +307,20 @@ def test_dispatch_uses_sync_helper_when_celery_disabled(db, monkeypatch):
             position="Role",
         )
 
-    assert mock_sync.called
+    assert mock_celery.delay.called
 
 
 def test_dispatch_swallows_exceptions(db, monkeypatch):
-    """Email-side failures must not propagate — the rejection has already landed."""
+    """Enqueue failures must not propagate — the rejection has already landed."""
     from app.actions import reject_application as reject_module
     from app.platform.config import settings as cfg
 
     monkeypatch.setattr(cfg, "RESEND_API_KEY", "test-key")
-    monkeypatch.setattr(cfg, "MVP_DISABLE_CELERY", True)
 
     with patch(
-        "app.components.notifications.service.send_application_rejected_sync",
-        side_effect=RuntimeError("resend down"),
-    ):
+        "app.components.notifications.tasks.send_application_rejected_email"
+    ) as mock_celery:
+        mock_celery.delay.side_effect = RuntimeError("broker down")
         # Should not raise.
         reject_module._dispatch_rejection_email(
             candidate_email="x@x.test",

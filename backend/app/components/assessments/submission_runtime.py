@@ -13,7 +13,6 @@ from fastapi import HTTPException
 logger = logging.getLogger("taali.assessments")
 from sqlalchemy.orm import Session
 
-from ...components.notifications.service import send_results_notification_sync
 from ...components.scoring.analytics import compute_all_heuristics
 from ...components.scoring.service import calculate_mvp_score, generate_heuristic_summary
 from ...models.assessment import Assessment, AssessmentStatus
@@ -876,7 +875,7 @@ def submit_assessment_impl(
 
     # --- 5. Notifications ---
     notify_user = db.query(User).filter(User.organization_id == assessment.organization_id).first()
-    if notify_user and not settings_obj.MVP_DISABLE_CELERY:
+    if notify_user:
         from ...tasks.assessment_tasks import send_results_email
 
         candidate_name = (
@@ -893,7 +892,6 @@ def submit_assessment_impl(
 
     if (
         not settings_obj.MVP_DISABLE_WORKABLE
-        and not settings_obj.MVP_DISABLE_CELERY
         and org
         and org.workable_connected
         and org.workable_access_token
@@ -914,19 +912,6 @@ def submit_assessment_impl(
                 "results_url": f"{settings_obj.FRONTEND_URL}/assessments/{assessment.id}",
             },
             request_id=get_request_id(),
-        )
-
-    if notify_user and settings_obj.MVP_DISABLE_CELERY:
-        candidate_name = (
-            (assessment.candidate.full_name or assessment.candidate.email)
-            if assessment.candidate
-            else "Candidate"
-        )
-        send_results_notification_sync(
-            user_email=notify_user.email,
-            candidate_name=candidate_name,
-            score=assessment.score or 0,
-            assessment_id=assessment.id,
         )
 
     return {

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import logging
-import threading
 from datetime import datetime, timezone
 from typing import Literal
 
@@ -10,7 +9,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from ...components.integrations.workable.sync_runner import execute_workable_sync_run
 from ...components.integrations.workable.service import WorkableService
 from ...deps import get_current_user
 from ...models.candidate import Candidate
@@ -242,47 +240,16 @@ def _enqueue_sync(
     mode: str,
     selected_job_shortcodes: list[str] | None = None,
 ) -> str:
-    """Queue sync in Celery when enabled; fallback to local thread otherwise."""
-    if not settings.MVP_DISABLE_CELERY:
-        try:
-            from ...tasks.workable_tasks import run_workable_sync_run_task
+    """Queue the Workable sync run on Celery."""
+    from ...tasks.workable_tasks import run_workable_sync_run_task
 
-            run_workable_sync_run_task.delay(
-                org_id=org_id,
-                run_id=run_id,
-                mode=mode,
-                selected_job_shortcodes=selected_job_shortcodes or None,
-            )
-            return "celery"
-        except Exception as exc:
-            logger.exception(
-                "Failed to enqueue Workable sync in Celery for org_id=%s run_id=%s; falling back to thread: %s",
-                org_id,
-                run_id,
-                exc,
-            )
-
-    thread = threading.Thread(
-        target=_run_sync_in_background,
-        args=(org_id, run_id, mode, selected_job_shortcodes),
-        daemon=True,
-    )
-    thread.start()
-    return "thread"
-
-
-def _run_sync_in_background(
-    org_id: int,
-    run_id: int,
-    mode: str,
-    selected_job_shortcodes: list[str] | None = None,
-) -> None:
-    execute_workable_sync_run(
+    run_workable_sync_run_task.delay(
         org_id=org_id,
         run_id=run_id,
         mode=mode,
-        selected_job_shortcodes=selected_job_shortcodes,
+        selected_job_shortcodes=selected_job_shortcodes or None,
     )
+    return "celery"
 
 
 def kick_off_filtered_sync(

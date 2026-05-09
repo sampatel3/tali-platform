@@ -18,10 +18,15 @@ def send_assessment_email(
     assessment_id: int | None = None,
     candidate_facing_brand: str | None = None,
     reply_to: str | None = None,
+    request_id: str | None = None,
 ):
     """Send assessment invitation email to candidate."""
     from .email_client import EmailService
 
+    log_extra = {"request_id": request_id or self.request.id}
+    if not (settings.RESEND_API_KEY or "").strip():
+        logger.info(f"RESEND_API_KEY not set — skipping assessment email to {candidate_email}", extra=log_extra)
+        return {"success": False, "skipped": True}
     try:
         email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
         result = email_svc.send_assessment_invite(
@@ -37,10 +42,10 @@ def send_assessment_email(
         )
         if not result["success"]:
             raise Exception(result.get("error", "Email send failed"))
-        logger.info(f"Assessment email sent to {candidate_email}")
+        logger.info(f"Assessment email sent to {candidate_email}", extra=log_extra)
         return result
     except Exception as exc:
-        logger.error(f"Failed to send assessment email to {candidate_email}: {exc}")
+        logger.error(f"Failed to send assessment email to {candidate_email}: {exc}", extra=log_extra)
         raise self.retry(exc=exc)
 
 
@@ -55,6 +60,9 @@ def send_application_rejected_email(
     """Send candidate-facing rejection email (best-effort, retries on transient failure)."""
     from .email_client import EmailService
 
+    if not (settings.RESEND_API_KEY or "").strip():
+        logger.info(f"RESEND_API_KEY not set — skipping rejection email to {candidate_email}")
+        return {"success": False, "skipped": True}
     try:
         email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
         result = email_svc.send_application_rejected(
@@ -77,6 +85,9 @@ def send_results_email(self, user_email: str, candidate_name: str, score: float,
     """Notify hiring manager that assessment is complete."""
     from .email_client import EmailService
 
+    if not (settings.RESEND_API_KEY or "").strip():
+        logger.info(f"RESEND_API_KEY not set — skipping results email to {user_email}")
+        return {"success": False, "skipped": True}
     try:
         email_svc = EmailService(api_key=settings.RESEND_API_KEY, from_email=settings.EMAIL_FROM)
         result = email_svc.send_results_notification(

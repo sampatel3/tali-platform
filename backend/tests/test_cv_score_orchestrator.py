@@ -9,7 +9,6 @@ adds stale rows for already-scored apps.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.models import (
@@ -37,7 +36,6 @@ from app.models.role_criterion import CRITERION_SOURCE_RECRUITER, RoleCriterion
 
 @pytest.fixture(autouse=True)
 def _force_inline_celery(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setattr(settings, "MVP_DISABLE_CELERY", True)
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key-not-used")
     # Skip the pre-screen gate — these tests target the orchestrator's
     # behaviour around the v3 cv_match pipeline (cache, errors, retries),
@@ -47,20 +45,16 @@ def _force_inline_celery(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture()
 def session():
-    # Share the conftest-managed in-memory DB so cv_matching helpers that
-    # open their own SessionLocal() see the same tables this fixture
-    # creates. A bare ":memory:" engine here would only populate the
-    # local connection, leaving SessionLocal() callers with the empty
-    # app-side engine and "no such table" failures.
-    import os
+    # Reuse the conftest-managed engine so cv_matching helpers that open
+    # their own SessionLocal() (via app.platform.database) see the same
+    # tables this fixture creates. With Celery in eager mode, the worker
+    # task body runs SessionLocal() against the app's engine — using a
+    # private engine here caused "no such table" failures in batch runs
+    # because table creation didn't propagate to the app-side connection.
+    from app.platform.database import engine as app_engine
 
-    engine = create_engine(
-        os.environ["DATABASE_URL"],
-        connect_args={"check_same_thread": False, "timeout": 30},
-    )
-    keepalive = engine.connect()
-    Base.metadata.create_all(engine)
-    Session = sessionmaker(bind=engine, expire_on_commit=False)
+    Base.metadata.create_all(app_engine)
+    Session = sessionmaker(bind=app_engine, expire_on_commit=False)
     db = Session()
     org = Organization(name="Acme", slug="acme")
     db.add(org)
@@ -102,15 +96,15 @@ def session():
         yield db, org, role, app
     finally:
         db.close()
-        # Drop tables so each test starts clean — the conftest-managed
-        # shared DB persists across the suite, so we own teardown here.
+        # Drop tables so each test starts clean. The conftest-managed
+        # engine persists; we reset its schema between cv-score tests.
         from sqlalchemy import text
-        with engine.connect() as conn:
+        with app_engine.connect() as conn:
+            conn.execute(text("PRAGMA foreign_keys=OFF"))
             for table in reversed(Base.metadata.sorted_tables):
                 conn.execute(text(f"DROP TABLE IF EXISTS {table.name}"))
+            conn.execute(text("PRAGMA foreign_keys=ON"))
             conn.commit()
-        keepalive.close()
-        engine.dispose()
 
 
 def _stub_match_output(score: float = 78.5, *, status: ScoringStatus = ScoringStatus.OK, error_reason: str = "") -> CVMatchOutput:
@@ -143,6 +137,10 @@ def test_enqueue_runs_inline_and_creates_done_job(monkeypatch, session) -> None:
 
     job = enqueue_score(db, app)
     db.commit()
+    # Celery runs in eager mode (conftest); the task opens its own
+    # SessionLocal and commits the score result. Refresh the test
+    # session's view so we see the updated job + application rows.
+    db.refresh(job)
     db.refresh(app)
 
     assert job is not None
@@ -181,6 +179,7 @@ def test_second_enqueue_with_same_inputs_hits_cache_no_claude_call(monkeypatch, 
     # from the runner's result.
     second_job = enqueue_score(db, app, force=True)
     db.commit()
+    db.refresh(second_job)
 
     assert second_job is not None
     assert second_job.status == SCORE_JOB_DONE
@@ -197,6 +196,7 @@ def test_validation_error_marks_job_error(monkeypatch, session) -> None:
 
     job = enqueue_score(db, app)
     db.commit()
+    db.refresh(job)
     db.refresh(app)
 
     assert job is not None
@@ -214,6 +214,7 @@ def test_existing_pending_job_is_reused_when_not_forced(monkeypatch, session) ->
 
     first = enqueue_score(db, app)
     db.commit()
+    db.refresh(first)
     assert first is not None
     assert first.status == SCORE_JOB_DONE
 

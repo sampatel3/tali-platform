@@ -239,7 +239,6 @@ def test_dispatch_resolves_candidate_facing_brand_from_workspace_settings(db, mo
     from datetime import datetime, timezone
 
     monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(cfg, "MVP_DISABLE_CELERY", True)
 
     org = Organization(
         name="Acme Hiring Inc",
@@ -279,8 +278,8 @@ def test_dispatch_resolves_candidate_facing_brand_from_workspace_settings(db, mo
     db.flush()
 
     with patch(
-        "app.domains.integrations_notifications.invite_flow.send_assessment_invite_sync"
-    ) as mock_sync:
+        "app.tasks.assessment_tasks.send_assessment_email"
+    ) as mock_celery:
         dispatch_assessment_invite(
             assessment=a,
             org=org,
@@ -290,8 +289,8 @@ def test_dispatch_resolves_candidate_facing_brand_from_workspace_settings(db, mo
             reply_to="recruiter@acmehiring.com",
         )
 
-    assert mock_sync.called
-    kwargs = mock_sync.call_args.kwargs
+    assert mock_celery.delay.called
+    kwargs = mock_celery.delay.call_args.kwargs
     assert kwargs["candidate_facing_brand"] == "Acme Careers"
     assert kwargs["reply_to"] == "recruiter@acmehiring.com"
     assert kwargs["org_name"] == "Acme Hiring Inc"
@@ -310,7 +309,6 @@ def test_dispatch_passes_none_brand_when_workspace_setting_missing(db, monkeypat
     from datetime import datetime, timezone
 
     monkeypatch.setattr(cfg, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(cfg, "MVP_DISABLE_CELERY", True)
 
     org = Organization(
         name="Acme Hiring Inc", slug=f"a2-{id(db)}", workspace_settings=None,
@@ -345,8 +343,8 @@ def test_dispatch_passes_none_brand_when_workspace_setting_missing(db, monkeypat
     db.flush()
 
     with patch(
-        "app.domains.integrations_notifications.invite_flow.send_assessment_invite_sync"
-    ) as mock_sync:
+        "app.tasks.assessment_tasks.send_assessment_email"
+    ) as mock_celery:
         dispatch_assessment_invite(
             assessment=a,
             org=org,
@@ -355,6 +353,6 @@ def test_dispatch_passes_none_brand_when_workspace_setting_missing(db, monkeypat
             position="Backend",
         )
 
-    kwargs = mock_sync.call_args.kwargs
+    kwargs = mock_celery.delay.call_args.kwargs
     assert kwargs["candidate_facing_brand"] is None
     assert kwargs["reply_to"] is None  # default when caller doesn't set it

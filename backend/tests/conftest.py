@@ -16,11 +16,18 @@ os.environ["DATABASE_URL"] = "sqlite:///file:taalitest?mode=memory&cache=shared"
 # tests can opt-in by monkeypatching settings.
 os.environ["MVP_DISABLE_WORKABLE"] = "true"
 os.environ["MVP_DISABLE_STRIPE"] = "true"
-os.environ["MVP_DISABLE_CELERY"] = "true"
 os.environ["CLAUDE_MODEL"] = "claude-3-5-haiku-latest"
 # Preserve test fixtures that create/update/delete tasks through API helpers.
 os.environ["TASK_AUTHORING_API_ENABLED"] = "true"
 os.environ["GITHUB_MOCK_MODE"] = "true"
+# Run Celery tasks inline so unit/API tests don't need a live broker.
+# Calling `.delay()` invokes the task body in-process and returns a
+# completed AsyncResult. Tests that need to assert dispatch should patch
+# the task at its call site (the production code path is unchanged).
+from app.tasks.celery_app import celery_app as _celery_app  # noqa: E402
+
+_celery_app.conf.task_always_eager = True
+_celery_app.conf.task_eager_propagates = True
 
 import asyncio
 import time

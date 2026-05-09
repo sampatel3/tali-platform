@@ -301,9 +301,9 @@ def _refresh_rank_score(app: CandidateApplication) -> None:
 
 
 # Scoring is owned by services.cv_score_orchestrator. Routes call
-# enqueue_score(db, app); inline (MVP_DISABLE_CELERY) and Celery paths share
-# the same _execute_scoring body. The legacy _compute_cv_match_for_application
-# helper that lived here was deleted in the move to async + cached scoring.
+# enqueue_score(db, app), which dispatches to the Celery scoring queue.
+# The legacy _compute_cv_match_for_application helper that lived here was
+# deleted in the move to async + cached scoring.
 
 
 def _latest_active_assessment_for_application(app: CandidateApplication, db: Session) -> Assessment | None:
@@ -709,6 +709,17 @@ def create_application(
     return application_to_response(app)
 
 
+_SORT_COLUMN_MAP = {
+    "pre_screen_score": CandidateApplication.pre_screen_score_100,
+    "rank_score": CandidateApplication.rank_score,
+    "workable_score": CandidateApplication.workable_score,
+    "cv_match_score": CandidateApplication.cv_match_score,
+    "cv_match_scored_at": CandidateApplication.cv_match_scored_at,
+    "taali_score": CandidateApplication.taali_score_cache_100,
+    "created_at": CandidateApplication.created_at,
+}
+
+
 @router.get("/roles/{role_id}/applications")
 def list_role_applications(
     role_id: int,
@@ -726,6 +737,8 @@ def list_role_applications(
     pipeline_stage: str | None = Query(default=None),
     application_outcome: str | None = Query(default=None),
     include_cv_text: bool = Query(False, description="Include full CV text for each application (for viewer)"),
+    limit: int = Query(default=500, ge=1, le=2000),
+    offset: int = Query(default=0, ge=0),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -768,34 +781,25 @@ def list_role_applications(
             threshold *= 10.0
         query = query.filter(CandidateApplication.cv_match_score >= threshold)
 
-    apps = query.all()
+    sort_col = _SORT_COLUMN_MAP.get(sort_by, CandidateApplication.created_at)
+    direction = desc if sort_order != "asc" else asc
+    # NULLS LAST so unscored apps don't dominate the top of a desc sort.
+    query = query.order_by(
+        direction(sort_col).nullslast(),
+        direction(CandidateApplication.created_at).nullslast(),
+    )
+
+    apps = query.offset(offset).limit(limit).all()
 
     # List context: use the cached-score payload to avoid per-row Anthropic
     # calls (interview-pack regeneration). Detail-only fields (cv_sections,
     # assessment_preview, assessment_history, candidate_interview_kit) stay
     # absent and the schema treats them as optional. The dedicated detail
     # endpoint below still uses application_detail_payload.
-    out = [ApplicationDetailResponse(**application_list_payload(app, include_cv_text=include_cv_text)) for app in apps]
-
-    def _sort_value(item: ApplicationDetailResponse):
-        if sort_by == "pre_screen_score":
-            return item.pre_screen_score if item.pre_screen_score is not None else float("-inf")
-        if sort_by == "taali_score":
-            return item.taali_score if item.taali_score is not None else float("-inf")
-        if sort_by == "rank_score":
-            return item.rank_score if item.rank_score is not None else float("-inf")
-        if sort_by == "workable_score":
-            return item.workable_score if item.workable_score is not None else float("-inf")
-        if sort_by == "cv_match_score":
-            return item.cv_match_score if item.cv_match_score is not None else float("-inf")
-        return item.created_at or datetime.min.replace(tzinfo=timezone.utc)
-
-    reverse = sort_order != "asc"
-    out.sort(
-        key=lambda item: (_sort_value(item), item.created_at or datetime.min.replace(tzinfo=timezone.utc)),
-        reverse=reverse,
-    )
-    return out
+    return [
+        ApplicationDetailResponse(**application_list_payload(app, include_cv_text=include_cv_text))
+        for app in apps
+    ]
 
 
 @router.get("/applications/{application_id}", response_model=ApplicationDetailResponse)
@@ -2441,164 +2445,6 @@ def is_batch_fetch_cancelled(role_id: int) -> bool:
     return _is_cancelled(_BATCH_FETCH_CANCEL_PREFIX, role_id)
 
 
-def _run_batch_score(role_id: int, org_id: int, *, include_scored: bool = False, applied_after: str | None = None) -> None:
-    """Background worker: score applications for a role (inline/dev path).
-
-    By default, only unscored applications are processed. When include_scored=True,
-    already-scored applications are re-scored as well. applied_after restricts to
-    candidates whose Workable application date is on or after that ISO date.
-    """
-    db = SessionLocal()
-    try:
-        org = db.query(Organization).filter(Organization.id == org_id).first()
-        if not org:
-            return
-        role = db.query(Role).filter(Role.id == role_id, Role.organization_id == org_id).first()
-        if not role:
-            return
-
-        apps_query = (
-            db.query(CandidateApplication)
-            .options(
-                joinedload(CandidateApplication.candidate),
-                joinedload(CandidateApplication.role),
-                joinedload(CandidateApplication.interviews),
-                joinedload(CandidateApplication.assessments).joinedload(Assessment.task),
-            )
-            .filter(
-                CandidateApplication.role_id == role_id,
-                CandidateApplication.organization_id == org_id,
-                CandidateApplication.deleted_at.is_(None),
-            )
-        )
-        if not include_scored:
-            apps_query = apps_query.filter(CandidateApplication.cv_match_score.is_(None))
-        if applied_after:
-            try:
-                from ...models.candidate import Candidate as _Candidate
-                cutoff = datetime.fromisoformat(applied_after)
-                if cutoff.tzinfo is None:
-                    cutoff = cutoff.replace(tzinfo=timezone.utc)
-                apps_query = (
-                    apps_query
-                    .join(_Candidate, CandidateApplication.candidate_id == _Candidate.id)
-                    .filter(_Candidate.workable_created_at >= cutoff)
-                )
-            except (ValueError, Exception) as exc:
-                logger.warning("_run_batch_score: invalid applied_after=%s: %s", applied_after, exc)
-        apps = apps_query.all()
-
-        total = len(apps)
-        progress = _batch_score_progress.get(role_id, {})
-        progress.update(
-            {
-                "total": total,
-                "scored": 0,
-                "errors": 0,
-                "status": "running",
-                "include_scored": bool(include_scored),
-            }
-        )
-        _batch_score_progress[role_id] = progress
-
-        job_spec_text = ((role.job_spec_text if role else None) or "").strip()
-
-        for idx, app in enumerate(apps):
-            try:
-                # Fetch CV from Workable if missing
-                if not (app.cv_text or "").strip():
-                    if app.candidate and (app.candidate.cv_text or "").strip():
-                        app.cv_file_url = app.candidate.cv_file_url
-                        app.cv_filename = app.candidate.cv_filename
-                        app.cv_text = app.candidate.cv_text
-                        app.cv_uploaded_at = app.candidate.cv_uploaded_at
-                    elif app.source == "workable":
-                        _try_fetch_cv_from_workable(app, app.candidate, db, org)
-
-                cv_text = (app.cv_text or "").strip()
-                if not cv_text or not job_spec_text or not settings.ANTHROPIC_API_KEY:
-                    progress["scored"] = idx + 1
-                    continue
-
-                # Idempotency: if not forcing a rescore, skip applications that
-                # are already scored OR were filtered "Below threshold" by a
-                # previous pre-screen run (with no CV change since). Cuts the
-                # batch loop down to actual work that needs doing.
-                if not include_scored:
-                    if app.cv_match_score is not None:
-                        progress["scored"] = idx + 1
-                        continue
-                    if (
-                        (app.pre_screen_recommendation or "") == "Below threshold"
-                        and app.pre_screen_run_at is not None
-                        and (app.cv_uploaded_at is None or app.cv_uploaded_at <= app.pre_screen_run_at)
-                    ):
-                        progress["scored"] = idx + 1
-                        continue
-
-                # Route through the orchestrator: cache hits skip Claude, misses
-                # call v4 (with criteria) or v3 (without). Inline path keeps the
-                # legacy thread-loop behaviour intact when Celery is disabled.
-                job = enqueue_score(db, app, force=include_scored)
-                if job is not None and job.status == "error":
-                    progress["errors"] = progress.get("errors", 0) + 1
-                _refresh_rank_score(app)
-                refresh_application_score_cache(app, db=db)
-                refresh_application_interview_support(app)
-                run_auto_reject_if_needed(
-                    db=db,
-                    org=org,
-                    app=app,
-                    role=role,
-                    actor_type="system",
-                )
-                db.flush()
-            except Exception:
-                logger.exception("Batch score failed for application_id=%s", app.id)
-                progress["errors"] = progress.get("errors", 0) + 1
-
-            progress["scored"] = idx + 1
-            _batch_score_progress[role_id] = progress
-
-            if (idx + 1) % 5 == 0:
-                try:
-                    db.commit()
-                except Exception:
-                    db.rollback()
-
-        try:
-            db.commit()
-        except Exception:
-            db.rollback()
-
-        progress["status"] = "completed"
-        _batch_score_progress[role_id] = progress
-        _update_job_run(
-            progress.get("run_id"),
-            status="completed",
-            counters={
-                "total": int(progress.get("total", 0) or 0),
-                "scored": int(progress.get("scored", 0) or 0),
-                "errors": int(progress.get("errors", 0) or 0),
-                "pre_screened_out": int(progress.get("pre_screened_out", 0) or 0),
-                "include_scored": bool(progress.get("include_scored")),
-            },
-            finished=True,
-        )
-    except Exception as exc:
-        logger.exception("Batch scoring failed for role_id=%s", role_id)
-        progress = _batch_score_progress.get(role_id, {})
-        progress["status"] = "failed"
-        _batch_score_progress[role_id] = progress
-        _update_job_run(
-            progress.get("run_id"),
-            status="failed",
-            error=str(exc)[:500],
-            finished=True,
-        )
-    finally:
-        db.close()
-
 
 @router.post("/roles/{role_id}/batch-score")
 def batch_score_role(
@@ -2761,19 +2607,9 @@ def batch_score_role(
     # restart mid-batch (in-process dict is wiped on restart).
     _write_batch_meta(role_id, total=target_count, started_at=batch_started_at, include_scored=bool(include_scored))
 
-    if settings.MVP_DISABLE_CELERY:
-        # Inline path keeps tests + dev environments working without a broker.
-        thread = threading.Thread(
-            target=_run_batch_score,
-            args=(role_id, current_user.organization_id),
-            kwargs={"include_scored": include_scored, "applied_after": applied_after},
-            daemon=True,
-        )
-        thread.start()
-    else:
-        from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
+    from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
 
-        _celery_batch_score_role.delay(role_id, include_scored=include_scored, applied_after=applied_after)
+    _celery_batch_score_role.delay(role_id, include_scored=include_scored, applied_after=applied_after)
 
     return {
         "status": "started",
@@ -3198,17 +3034,8 @@ def batch_score_status(
                     "run_id": q_run_id,
                 }
                 _write_batch_meta(role_id, total=q_count, started_at=q_started_at, include_scored=q_include)
-                if settings.MVP_DISABLE_CELERY:
-                    import threading as _threading
-                    _threading.Thread(
-                        target=_run_batch_score,
-                        args=(role_id, current_user.organization_id),
-                        kwargs={"include_scored": q_include, "applied_after": q_after},
-                        daemon=True,
-                    ).start()
-                else:
-                    from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
-                    _celery_batch_score_role.delay(role_id, include_scored=q_include, applied_after=q_after)
+                from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
+                _celery_batch_score_role.delay(role_id, include_scored=q_include, applied_after=q_after)
                 status = "running"
                 queued_next = None  # now running, no longer queued
         else:
@@ -3410,19 +3237,10 @@ def batch_score_all_roles(
             include_scored=bool(include_scored),
         )
 
-        if settings.MVP_DISABLE_CELERY:
-            thread = threading.Thread(
-                target=_run_batch_score,
-                args=(role.id, current_user.organization_id),
-                kwargs={"include_scored": include_scored, "applied_after": applied_after},
-                daemon=True,
-            )
-            thread.start()
-        else:
-            from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
-            _celery_batch_score_role.delay(
-                role.id, include_scored=include_scored, applied_after=applied_after
-            )
+        from ...tasks.scoring_tasks import batch_score_role as _celery_batch_score_role
+        _celery_batch_score_role.delay(
+            role.id, include_scored=include_scored, applied_after=applied_after
+        )
 
         dispatched.append({"role_id": role.id, "target": target_count})
 

@@ -28,7 +28,6 @@ def test_workable_sync_manual_trigger_success(client, db, monkeypatch):
     db.commit()
 
     monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", True)
 
     def fake_sync(
         self,
@@ -76,7 +75,9 @@ def test_workable_sync_manual_trigger_success(client, db, monkeypatch):
 
 
 def test_workable_sync_status_shows_in_progress_after_start(client, db, monkeypatch):
-    """After POST /sync, GET /status must return sync_in_progress true until background finishes."""
+    """After POST /sync, GET /status reports sync_in_progress=True until the
+    Celery worker finishes. We mock the Celery dispatch so the run record
+    stays in 'running' state and the status endpoint can be observed."""
     headers, email = auth_headers(client, email="sync-inprogress@example.com", organization_name="Sync Org 2")
     owner = db.query(User).filter(User.email == email).first()
     assert owner is not None
@@ -88,53 +89,25 @@ def test_workable_sync_status_shows_in_progress_after_start(client, db, monkeypa
     db.commit()
 
     monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", True)
 
-    # Slow fake sync so we can poll while in progress
-    import time
-    def slow_fake_sync(
-        self,
-        db_session,
-        org_obj,
-        full_resync=False,
-        run_id=None,
-        mode="metadata",
-        selected_job_shortcodes=None,
-    ):
-        time.sleep(1.0)
-        org_obj.workable_last_sync_status = "success"
-        org_obj.workable_last_sync_summary = {
-            "jobs_seen": 2,
-            "run_id": run_id,
-            "mode": mode,
-            "selected_job_shortcodes": selected_job_shortcodes or [],
-        }
-        db_session.commit()
-        return {"jobs_seen": 2}
+    # No-op the Celery dispatch so the run record is left in "running" state
+    # for the status endpoint to observe.
+    from app.tasks import workable_tasks
 
-    monkeypatch.setattr(workable_sync_runner.WorkableSyncService, "sync_org", slow_fake_sync)
+    class _NoOpTask:
+        def delay(self, **_kwargs):
+            return None
+
+    monkeypatch.setattr(workable_tasks, "run_workable_sync_run_task", _NoOpTask())
 
     resp = client.post("/api/v1/workable/sync", headers=headers)
     assert resp.status_code == 200
     assert resp.json().get("status") == "started"
 
-    # Immediately after start, status should report in progress (DB-backed)
     status_resp = client.get("/api/v1/workable/sync/status", headers=headers)
     status_resp.raise_for_status()
     data = status_resp.json()
     assert data.get("sync_in_progress") is True
-
-    # Wait for background to finish
-    for _ in range(15):
-        time.sleep(0.3)
-        status_resp = client.get("/api/v1/workable/sync/status", headers=headers)
-        data = status_resp.json()
-        if not data.get("sync_in_progress"):
-            assert data.get("workable_last_sync_summary", {}).get("jobs_seen") == 2
-            time.sleep(0.3)  # let background thread close connection
-            break
-    else:
-        assert False, "Sync did not finish within ~4.5s"
 
 
 def test_workable_sync_reuses_existing_running_run(client, db, monkeypatch):
@@ -149,24 +122,16 @@ def test_workable_sync_reuses_existing_running_run(client, db, monkeypatch):
     db.commit()
 
     monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", True)
 
-    def slow_fake_sync(
-        self,
-        db_session,
-        org_obj,
-        full_resync=False,
-        run_id=None,
-        mode="metadata",
-        selected_job_shortcodes=None,
-    ):
-        time.sleep(1.0)
-        org_obj.workable_last_sync_status = "success"
-        org_obj.workable_last_sync_summary = {"jobs_seen": 1, "run_id": run_id, "mode": mode}
-        db_session.commit()
-        return {"jobs_seen": 1}
+    # Mock the Celery dispatch so the first run stays in "running" state and
+    # the second POST hits the dedup path.
+    from app.tasks import workable_tasks
 
-    monkeypatch.setattr(workable_sync_runner.WorkableSyncService, "sync_org", slow_fake_sync)
+    class _NoOpTask:
+        def delay(self, **_kwargs):
+            return None
+
+    monkeypatch.setattr(workable_tasks, "run_workable_sync_run_task", _NoOpTask())
 
     first = client.post("/api/v1/workable/sync", headers=headers)
     assert first.status_code == 200, first.text
@@ -181,21 +146,10 @@ def test_workable_sync_reuses_existing_running_run(client, db, monkeypatch):
     assert second_payload.get("run_id") == run_id
     assert second_payload.get("execution_backend") == "existing"
 
-    for _ in range(15):
-        time.sleep(0.3)
-        status_resp = client.get("/api/v1/workable/sync/status", headers=headers)
-        status_resp.raise_for_status()
-        data = status_resp.json()
-        if not data.get("sync_in_progress"):
-            break
-    else:
-        assert False, "Sync did not finish within ~4.5s"
-
 
 def test_workable_clear_soft_deletes(client, db, monkeypatch):
     """POST /workable/clear soft-deletes workable roles/apps/candidates and returns counts."""
     monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", True)
     headers, email = auth_headers(client, email="clear@example.com", organization_name="Clear Org")
     owner = db.query(User).filter(User.email == email).first()
     assert owner is not None
@@ -388,7 +342,6 @@ def test_workable_sync_cancel_accepts_optional_run_id(client, db, monkeypatch):
 
 def test_workable_sync_queues_to_celery_when_enabled(client, db, monkeypatch):
     monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", False)
 
     headers, email = auth_headers(client, email="celery-queue@example.com", organization_name="Celery Queue Org")
     owner = db.query(User).filter(User.email == email).first()
@@ -423,7 +376,6 @@ def test_workable_sync_queues_to_celery_when_enabled(client, db, monkeypatch):
 
 def test_workable_sync_passes_selected_role_shortcodes(client, db, monkeypatch):
     monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_WORKABLE", False)
-    monkeypatch.setattr(workable_routes.settings, "MVP_DISABLE_CELERY", False)
 
     headers, email = auth_headers(client, email="scoped-sync@example.com", organization_name="Scoped Sync Org")
     owner = db.query(User).filter(User.email == email).first()

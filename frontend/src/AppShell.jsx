@@ -14,17 +14,12 @@ import { Loader2 } from 'lucide-react';
 import { useAuth } from './context/AuthContext';
 import { ToastProvider } from './context/ToastContext';
 import { JobStatusProvider } from './contexts/JobStatusContext';
-import { BackgroundJobsToaster } from './features/candidates/BackgroundJobsToaster';
 import {
   assessments as assessmentsApi,
   organizations as organizationsApi,
 } from './shared/api';
 import { pathForPage } from './app/routing';
 import { ErrorBoundary } from './shared/ui/ErrorBoundary';
-import {
-  PRODUCT_WALKTHROUGH,
-  PRODUCT_WALKTHROUGH_START_DATA,
-} from './features/demo/productWalkthroughModels';
 
 import { LandingPage } from './features/marketing/LandingPage';
 import {
@@ -35,13 +30,21 @@ import {
   VerifyEmailPage,
 } from './features/auth';
 import { Shell as DashboardNav } from './shared/layout/Shell';
-import { HomePage } from './features/home/HomePage';
-import { CandidateWelcomePage } from './features/assessment_runtime/CandidateWelcomePage';
 import {
   ConnectWorkableButton,
   WorkableCallbackPage,
 } from './features/integrations/WorkableConnection';
 import { StatsCard, StatusBadge } from './shared/ui/DashboardAtoms';
+
+const HomePage = lazy(() =>
+  import('./features/home/HomePage').then((m) => ({ default: m.HomePage }))
+);
+const CandidateWelcomePage = lazy(() =>
+  import('./features/assessment_runtime/CandidateWelcomePage').then((m) => ({ default: m.CandidateWelcomePage }))
+);
+const BackgroundJobsToaster = lazy(() =>
+  import('./features/candidates/BackgroundJobsToaster').then((m) => ({ default: m.BackgroundJobsToaster }))
+);
 
 const AssessmentPage = lazy(() => import('./features/assessment_runtime/AssessmentPage'));
 const CandidateFeedbackPage = lazy(() =>
@@ -369,12 +372,14 @@ function AppContent() {
   const CandidateWelcomeRoute = () => {
     const { token } = useParams();
     return (
-      <CandidateWelcomePage
-        token={token || null}
-        assessmentId={null}
-        onNavigate={navigateToPage}
-        onStarted={handleCandidateStarted}
-      />
+      <Suspense fallback={lazyFallback}>
+        <CandidateWelcomePage
+          token={token || null}
+          assessmentId={null}
+          onNavigate={navigateToPage}
+          onStarted={handleCandidateStarted}
+        />
+      </Suspense>
     );
   };
 
@@ -390,28 +395,42 @@ function AppContent() {
     const token = searchParams.get('token');
     if (!token) return <Navigate to="/" replace />;
     return (
-      <CandidateWelcomePage
-        token={token}
-        assessmentId={Number(assessmentId)}
-        onNavigate={navigateToPage}
-        onStarted={handleCandidateStarted}
-      />
+      <Suspense fallback={lazyFallback}>
+        <CandidateWelcomePage
+          token={token}
+          assessmentId={Number(assessmentId)}
+          onNavigate={navigateToPage}
+          onStarted={handleCandidateStarted}
+        />
+      </Suspense>
     );
   };
 
   const AssessmentLiveRoute = () => {
     const token = searchParams.get('token');
     const demo = searchParams.get('demo') === '1';
+    const [demoFixtures, setDemoFixtures] = useState(null);
+    useEffect(() => {
+      if (demo && !demoFixtures) {
+        import('./features/demo/productWalkthroughModels').then((m) =>
+          setDemoFixtures({
+            startData: m.PRODUCT_WALKTHROUGH_START_DATA,
+            runtime: m.PRODUCT_WALKTHROUGH.runtime,
+          })
+        );
+      }
+    }, [demo, demoFixtures]);
+    if (demo && !demoFixtures) return lazyFallback;
     return (
       <Suspense fallback={lazyFallback}>
         <AssessmentPage
           token={demo ? null : token}
-          startData={demo ? PRODUCT_WALKTHROUGH_START_DATA : startedAssessmentData}
+          startData={demo ? demoFixtures.startData : startedAssessmentData}
           demoMode={demo}
-          demoProfile={{
-            ...PRODUCT_WALKTHROUGH.runtime,
-            output: PRODUCT_WALKTHROUGH.runtime.output,
-          }}
+          demoProfile={demo ? {
+            ...demoFixtures.runtime,
+            output: demoFixtures.runtime.output,
+          } : undefined}
         />
       </Suspense>
     );
@@ -483,10 +502,12 @@ function AppContent() {
       <Route
         path="/home"
         element={(
-          <HomePage
-            onNavigate={navigateToPage}
-            NavComponent={DashboardNavWithMode}
-          />
+          <Suspense fallback={lazyFallback}>
+            <HomePage
+              onNavigate={navigateToPage}
+              NavComponent={DashboardNavWithMode}
+            />
+          </Suspense>
         )}
       />
 
@@ -731,7 +752,9 @@ function App() {
             <AppContent />
           </ErrorBoundary>
           {/* Global job panel — outside routes so it survives navigation */}
-          <BackgroundJobsToaster />
+          <Suspense fallback={null}>
+            <BackgroundJobsToaster />
+          </Suspense>
         </JobStatusProvider>
       </ToastProvider>
     </BrowserRouter>

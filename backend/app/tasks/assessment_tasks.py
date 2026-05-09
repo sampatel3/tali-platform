@@ -5,52 +5,14 @@ from ..platform.config import settings
 logger = logging.getLogger(__name__)
 
 
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def send_assessment_email(self, candidate_email: str, candidate_name: str, token: str, org_name: str, position: str, assessment_id: int | None = None, request_id: str | None = None):
-    """Send assessment invitation email to candidate."""
-    from ..domains.integrations_notifications.adapters import build_email_adapter
-
-    try:
-        email_svc = build_email_adapter()
-        result = email_svc.send_assessment_invite(
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            token=token,
-            assessment_id=assessment_id,
-            org_name=org_name,
-            position=position,
-            frontend_url=settings.FRONTEND_URL,
-        )
-        if not result["success"]:
-            raise Exception(result.get("error", "Email send failed"))
-        logger.info(f"Assessment email sent to {candidate_email}", extra={"request_id": request_id or self.request.id})
-        return result
-    except Exception as exc:
-        logger.error(f"Failed to send assessment email to {candidate_email}: {exc}", extra={"request_id": request_id or self.request.id})
-        raise self.retry(exc=exc)
-
-
-@celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
-def send_results_email(self, user_email: str, candidate_name: str, score: float, assessment_id: int, request_id: str | None = None):
-    """Notify hiring manager that assessment is complete."""
-    from ..domains.integrations_notifications.adapters import build_email_adapter
-
-    try:
-        email_svc = build_email_adapter()
-        result = email_svc.send_results_notification(
-            user_email=user_email,
-            candidate_name=candidate_name,
-            score=score,
-            assessment_id=assessment_id,
-            frontend_url=settings.FRONTEND_URL,
-        )
-        if not result["success"]:
-            raise Exception(result.get("error", "Email send failed"))
-        logger.info(f"Results email sent to {user_email} for assessment {assessment_id}", extra={"request_id": request_id or self.request.id})
-        return result
-    except Exception as exc:
-        logger.error(f"Failed to send results email: {exc}", extra={"request_id": request_id or self.request.id})
-        raise self.retry(exc=exc)
+# send_assessment_email and send_results_email moved to
+# app.components.notifications.tasks (the canonical email-task module).
+# Re-export for backwards compatibility with importers that still reference
+# them at this path; safe to remove once those imports are migrated.
+from ..components.notifications.tasks import (  # noqa: F401
+    send_assessment_email,
+    send_results_email,
+)
 
 
 @celery_app.task(bind=True, max_retries=3, default_retry_delay=60)
@@ -66,6 +28,14 @@ def send_candidate_feedback_ready_email(
     """Notify candidate that their feedback report is ready."""
     from ..domains.integrations_notifications.adapters import build_email_adapter
 
+    log_extra = {"request_id": request_id or self.request.id}
+    if not (settings.RESEND_API_KEY or "").strip():
+        logger.info(
+            "RESEND_API_KEY not set — skipping candidate feedback email to %s",
+            candidate_email,
+            extra=log_extra,
+        )
+        return {"success": False, "skipped": True}
     try:
         email_svc = build_email_adapter()
         result = email_svc.send_candidate_feedback_ready(

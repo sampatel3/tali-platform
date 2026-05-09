@@ -5,8 +5,7 @@ Replaces the synchronous in-request Claude calls in
 
   enqueue_score(application)
       → creates a CvScoreJob row in `pending`
-      → if MVP_DISABLE_CELERY (tests, dev), runs the task inline
-      → otherwise dispatches the Celery task
+      → dispatches the Celery scoring task (eager mode in tests)
 
   score_application_job(application_id)  [Celery task]
       → computes cache_key from (cv_text, normalized_spec, criteria, prompt_version, model)
@@ -270,54 +269,22 @@ def enqueue_score(
     db.add(job)
     db.flush()  # populate job.id
 
-    if settings.MVP_DISABLE_CELERY:
-        # Run inline so unit/dev environments don't need a broker. The job
-        # object is mutated in place by _execute_scoring; the caller commits.
-        _run_score_job_inline(db, job_id=job.id, force_full_score=bypass_pre_screen)
-    else:
-        from ..tasks.scoring_tasks import score_application_job
+    from ..tasks.scoring_tasks import score_application_job
 
-        # Commit BEFORE dispatching so the worker (on a different DB
-        # connection) sees the new pending job. Without this, batch
-        # rescores raced: workers picked up the celery task, queried
-        # _latest_job, found the previous error/done job because the
-        # API server hadn't committed yet, and bailed out as "skipped".
-        db.commit()
+    # Commit BEFORE dispatching so the worker (on a different DB
+    # connection) sees the new pending job. Without this, batch
+    # rescores raced: workers picked up the celery task, queried
+    # _latest_job, found the previous error/done job because the
+    # API server hadn't committed yet, and bailed out as "skipped".
+    db.commit()
 
-        async_result = score_application_job.delay(
-            application.id,
-            job_id=int(job.id),
-            force_full_score=bypass_pre_screen,
-        )
-        job.celery_task_id = str(async_result.id)
-    return job
-
-
-def _run_score_job_inline(
-    db: Session,
-    *,
-    job_id: int,
-    force_full_score: bool = False,
-) -> None:
-    """Run a job within the current request's session (used when Celery is disabled).
-
-    Mirrors the Celery task body but reuses the active ``db`` so the work
-    participates in the request's transaction.
-    """
-    job = db.query(CvScoreJob).filter(CvScoreJob.id == job_id).first()
-    if job is None:
-        return
-    application = (
-        db.query(CandidateApplication)
-        .filter(CandidateApplication.id == job.application_id)
-        .first()
+    async_result = score_application_job.delay(
+        application.id,
+        job_id=int(job.id),
+        force_full_score=bypass_pre_screen,
     )
-    if application is None:
-        job.status = SCORE_JOB_ERROR
-        job.error_message = "application_not_found"
-        job.finished_at = datetime.now(timezone.utc)
-        return
-    _execute_scoring(db, application=application, job=job, force_full_score=force_full_score)
+    job.celery_task_id = str(async_result.id)
+    return job
 
 
 def _execute_scoring(

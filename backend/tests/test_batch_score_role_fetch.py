@@ -33,7 +33,6 @@ from app.tasks.scoring_tasks import batch_score_role
 
 @pytest.fixture(autouse=True)
 def _force_inline_celery(monkeypatch):
-    monkeypatch.setattr(settings, "MVP_DISABLE_CELERY", True)
     monkeypatch.setattr(settings, "ANTHROPIC_API_KEY", "test-key")
 
 
@@ -150,9 +149,9 @@ def test_batch_score_role_fetches_missing_cvs(session_factory, monkeypatch):
     )
 
     # Stub the per-app score dispatcher so we don't try to call Anthropic.
-    # `enqueue_score` runs the inline path because MVP_DISABLE_CELERY=True;
-    # _execute_scoring would call the legacy v3 / v4 flow. Stub _execute_scoring
-    # to a no-op success.
+    # In tests Celery runs in eager mode (conftest.py), so .delay() invokes
+    # the score_application_job body in-process, which calls _execute_scoring.
+    # Stub _execute_scoring to a no-op success so we don't hit the v3/v4 LLM flow.
     def _fake_execute_scoring(db, *, application, job, **_unused):
         application.cv_match_score = 75.0
         application.cv_match_details = {"summary": "stub"}

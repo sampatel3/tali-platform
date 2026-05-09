@@ -30,7 +30,6 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from ...components.notifications.service import send_assessment_invite_sync
 from ...models.assessment import Assessment
 from ...models.organization import Organization
 from ...platform.config import settings
@@ -73,18 +72,6 @@ def _send_taali_invite_email(
     candidate_facing_brand: str | None,
     reply_to: str | None,
 ) -> None:
-    if settings.MVP_DISABLE_CELERY:
-        send_assessment_invite_sync(
-            candidate_email=candidate_email,
-            candidate_name=candidate_name,
-            token=token,
-            assessment_id=assessment_id,
-            org_name=org_name,
-            position=position,
-            candidate_facing_brand=candidate_facing_brand,
-            reply_to=reply_to,
-        )
-        return
     from ...tasks.assessment_tasks import send_assessment_email
 
     send_assessment_email.delay(

@@ -4,6 +4,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     JSON,
     String,
@@ -20,6 +21,14 @@ class CandidateApplication(Base):
     __tablename__ = "candidate_applications"
     __table_args__ = (
         UniqueConstraint("candidate_id", "role_id", name="uq_candidate_role_application"),
+        Index(
+            "ix_candidate_applications_org_role_status",
+            "organization_id",
+            "role_id",
+            "status",
+        ),
+        Index("ix_candidate_applications_cv_uploaded_at", "cv_uploaded_at"),
+        Index("ix_candidate_applications_deleted_at", "deleted_at"),
     )
 
     id = Column(Integer, primary_key=True, index=True)
