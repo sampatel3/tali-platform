@@ -1,11 +1,14 @@
-# Two-Task Human Pilot Runbook
+# Human Pilot Runbook
 
-Date: 2026-03-03
+Date: 2026-03-03 (canonical task set updated 2026-05-09 from 2 → 5 tasks)
 
-This runbook is for the first human pilot of the two canonical assessment tasks:
+This runbook is for human pilots of the canonical assessment tasks:
 
 - `ai_eng_genai_production_readiness`
 - `data_eng_aws_glue_pipeline_recovery`
+- `platform_eng_aws_eks_misconfig_triage`
+- `platform_eng_azure_aks_misconfig_triage`
+- `scrum_master_sprint_recovery_scenario`
 
 ## Goal
 
@@ -19,7 +22,7 @@ Confirm that real candidate sessions behave correctly in production:
 
 ## Preflight
 
-Confirm the catalog is still exactly the two canonical tasks:
+Confirm the catalog is still exactly the canonical tasks:
 
 ```bash
 PUBLIC_DB_URL=$(railway variables --service Postgres --json | /Users/sampatel/tali-platform/backend/.venv/bin/python -c "import json,sys; print(json.load(sys.stdin)['DATABASE_PUBLIC_URL'])")
@@ -28,25 +31,27 @@ DATABASE_PUBLIC_URL="$PUBLIC_DB_URL" /Users/sampatel/tali-platform/backend/.venv
 
 Expected preflight state:
 
-- `active_template_count` is `2`
-- `active_task_keys` are the two canonical task keys above
+- `active_template_count` is `5`
+- `active_task_keys` are the five canonical task keys above
 - `alerts` is empty
 
 Use a later `--since` timestamp once the pilot starts if you want the report to show only pilot-era sessions.
 
 ## Expected Runtime Shape
 
-For the AI task:
+For the AI task (`ai_eng_genai_production_readiness`):
 
 - start returns `200`
 - bootstrap succeeds
 - baseline submit shape is `5 passed / 8 total`
 
-For the data task:
+For the data task (`data_eng_aws_glue_pipeline_recovery`):
 
 - start returns `200`
 - bootstrap succeeds
 - baseline submit shape is `0 passed / 7 total`
+
+For the platform-eng AWS, platform-eng Azure, and scrum-master tasks: baseline shapes still need to be captured during their first dry-run — record them here when known.
 
 These are the untouched baseline expectations, not the target candidate outcome.
 
@@ -54,9 +59,8 @@ These are the untouched baseline expectations, not the target candidate outcome.
 
 Use a small first batch:
 
-1. Run 1 human session on the AI task.
-2. Run 1 human session on the data task.
-3. Review outcomes before expanding volume.
+1. Run one human session per canonical task (5 sessions total).
+2. Review outcomes before expanding volume on any one task.
 
 During the session, verify manually:
 
@@ -84,10 +88,10 @@ railway logs --service resourceful-adaptation --environment production --lines 2
 
 Pause the pilot immediately if any of these appear:
 
-- active template count is not `2`
+- active template count drops below `5` (or grows unexpectedly without an update to `CANONICAL_TASK_KEYS`)
 - any bootstrap failure is recorded
 - any completed assessment has `tests_total = 0`
-- candidate start fails for either task
+- candidate start fails for any canonical task
 - evaluator reports rubric mismatch with the role
 - candidates hit missing dependency, missing file, or permission errors
 

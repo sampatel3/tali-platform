@@ -3,7 +3,7 @@
 from html import escape as _html_escape
 from string import Template as _StringTemplate
 
-from ...platform.brand import BRAND_NAME, BRAND_PRODUCT_NAME
+from ...platform.brand import BRAND_NAME
 
 
 def _h(value: str | None) -> str:
@@ -18,6 +18,238 @@ def _h(value: str | None) -> str:
     return _html_escape(str(value), quote=True)
 
 
+# =============================================================================
+# Taali Email Design System — shared shell + body helpers
+# =============================================================================
+# Used by every transactional email except ``assessment_invite_html``, which
+# has its own self-contained template (designer handoff 2026-05-07). Future
+# cleanup can de-dup that one too. Tokens here mirror the canonical template
+# so all emails read as one coherent system: cream background, dark plum
+# text, purple accents, pill CTA.
+
+_TAALI_FONT = "-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+
+
+def _taali_paragraph(html: str) -> str:
+    return (
+        f'<p class="body-lg" style="margin:0 0 16px 0;font-family:{_TAALI_FONT};'
+        f'font-size:16px;line-height:1.6;color:#2e2745;">{html}</p>'
+    )
+
+
+def _taali_intro(html_paragraphs: str) -> str:
+    return (
+        f'<tr><td class="px-40" style="padding:8px 40px 4px 40px;">'
+        f'{html_paragraphs}'
+        f'</td></tr>'
+    )
+
+
+def _taali_cta_row(label: str, link: str) -> str:
+    return (
+        f'<tr><td class="px-40" style="padding:18px 40px 8px 40px;">'
+        f'<table role="presentation" cellpadding="0" cellspacing="0" border="0" class="btn-cta">'
+        f'<tr><td bgcolor="#1d1730" style="border-radius:999px;mso-padding-alt:14px 28px;">'
+        f'<!--[if mso]>&nbsp;<![endif]-->'
+        f'<a href="{link}" target="_blank" style="display:inline-block;padding:14px 28px;'
+        f'font-family:{_TAALI_FONT};font-size:15px;font-weight:600;line-height:1;'
+        f'color:#ffffff;background-color:#1d1730;border-radius:999px;letter-spacing:-0.005em;">'
+        f'{label}&nbsp;&rarr;</a>'
+        f'<!--[if mso]>&nbsp;<![endif]-->'
+        f'</td></tr></table></td></tr>'
+    )
+
+
+def _taali_link_fallback(link: str) -> str:
+    return (
+        f'<tr><td class="px-40" style="padding:14px 40px 8px 40px;">'
+        f'<p style="margin:0;font-family:{_TAALI_FONT};font-size:13px;'
+        f'line-height:1.55;color:#6e6580;">'
+        f'Button not working? Paste this into your browser:<br />'
+        f'<a href="{link}" target="_blank" style="color:#6b21e8;text-decoration:underline;'
+        f'word-break:break-all;">{link}</a>'
+        f'</p></td></tr>'
+    )
+
+
+def _taali_notice_card(inner_html: str) -> str:
+    return (
+        f'<tr><td class="px-40" style="padding:24px 40px 8px 40px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="background-color:#f7f4fb;border:1px solid #efe8f7;border-radius:10px;">'
+        f'<tr><td style="padding:14px 16px;font-family:{_TAALI_FONT};font-size:13px;'
+        f'line-height:1.55;color:#2e2745;">{inner_html}</td></tr></table>'
+        f'</td></tr>'
+    )
+
+
+def _taali_signoff(inner_html: str) -> str:
+    return (
+        f'<tr><td class="px-40" style="padding:22px 40px 36px 40px;">'
+        f'<p style="margin:0;font-family:{_TAALI_FONT};font-size:14px;line-height:1.55;'
+        f'color:#2e2745;">{inner_html}</p>'
+        f'</td></tr>'
+    )
+
+
+def _taali_score_callout(score: float) -> str:
+    """Big composite score in a Taali notice-card. Always plum, no
+    red/amber/green — at-a-glance is the headline number, not the colour
+    (matches the in-product convention of using purple variations rather
+    than traffic-light colours)."""
+    return (
+        f'<tr><td class="px-40" style="padding:18px 40px 8px 40px;">'
+        f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" '
+        f'style="background-color:#f7f4fb;border:1px solid #efe8f7;border-radius:10px;">'
+        f'<tr><td style="padding:22px 24px;text-align:center;font-family:{_TAALI_FONT};">'
+        f'<div style="font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#6e6580;">Composite score</div>'
+        f'<div style="margin-top:8px;font-size:42px;font-weight:600;letter-spacing:-0.02em;color:#1d1730;line-height:1;">{score:.0f}<span style="font-size:24px;color:#6e6580;">%</span></div>'
+        f'</td></tr></table>'
+        f'</td></tr>'
+    )
+
+
+_TAALI_EMAIL_SHELL = _StringTemplate("""<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+  <meta name="color-scheme" content="light only" />
+  <meta name="supported-color-schemes" content="light only" />
+  <title>${title}</title>
+  <!--[if mso]>
+  <style type="text/css">
+    table, td, div, h1, h2, p { font-family: Arial, Helvetica, sans-serif !important; }
+    .btn-cta a { padding: 14px 28px !important; }
+  </style>
+  <![endif]-->
+  <style type="text/css">
+    body { margin: 0 !important; padding: 0 !important; width: 100% !important; -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+    table { border-collapse: collapse !important; mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+    img { border: 0; line-height: 100%; outline: none; text-decoration: none; -ms-interpolation-mode: bicubic; }
+    a { text-decoration: none; }
+    @media screen and (max-width: 620px) {
+      .container { width: 100% !important; }
+      .px-32 { padding-left: 24px !important; padding-right: 24px !important; }
+      .px-40 { padding-left: 24px !important; padding-right: 24px !important; }
+      .h-display { font-size: 22px !important; line-height: 1.25 !important; }
+      .body-lg { font-size: 16px !important; line-height: 1.55 !important; }
+      .btn-cta a { display: block !important; width: 100% !important; box-sizing: border-box !important; text-align: center !important; }
+    }
+  </style>
+</head>
+<body style="margin:0;padding:0;background-color:#f4f3f0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1d1730;">
+
+  <div style="display:none;max-height:0;overflow:hidden;mso-hide:all;font-size:1px;line-height:1px;color:#f4f3f0;opacity:0;">
+    ${preview}
+    &#847; &zwnj; &nbsp; &#847; &zwnj; &nbsp; &#847; &zwnj; &nbsp; &#847; &zwnj; &nbsp; &#847; &zwnj; &nbsp; &#847; &zwnj; &nbsp; &#847; &zwnj; &nbsp;
+  </div>
+
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0" style="background-color:#f4f3f0;">
+    <tr>
+      <td align="center" style="padding:24px 12px;">
+        <table role="presentation" class="container" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;background-color:#ffffff;border:1px solid #e7e0f0;border-radius:14px;overflow:hidden;">
+
+          <tr>
+            <td class="px-32" style="padding:22px 32px;border-bottom:1px solid #efe8f7;">
+              <table role="presentation" width="100%" cellpadding="0" cellspacing="0" border="0">
+                <tr>
+                  <td align="left" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#6e6580;">${eyebrow_left}</td>
+                  <td align="right" style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;letter-spacing:0.14em;text-transform:uppercase;color:#9e96ae;">${eyebrow_right}</td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          ${header_block}
+
+          ${body}
+
+          <tr>
+            <td class="px-32" style="padding:18px 32px 22px 32px;background-color:#fafaf8;border-top:1px solid #efe8f7;">
+              <p style="margin:0;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;font-size:11px;line-height:1.55;color:#9e96ae;">
+                ${footer}
+              </p>
+            </td>
+          </tr>
+
+        </table>
+        <table role="presentation" width="600" cellpadding="0" cellspacing="0" border="0" style="width:600px;max-width:600px;">
+          <tr><td style="height:24px;line-height:24px;font-size:24px;">&nbsp;</td></tr>
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>""")
+
+
+def _taali_header_block(*, subtitle: str, headline: str) -> str:
+    """Render subtitle (optional) + headline as one HTML block.
+
+    Adjusts headline top padding so vertical rhythm is correct whether
+    or not a subtitle line is present.
+    """
+    headline_html = (
+        f'<h1 class="h-display" style="margin:0;font-family:{_TAALI_FONT};'
+        f'font-size:26px;line-height:1.22;font-weight:600;'
+        f'letter-spacing:-0.02em;color:#1d1730;">{headline}</h1>'
+    )
+    if subtitle:
+        return (
+            f'<tr><td class="px-40" style="padding:36px 40px 8px 40px;">'
+            f'<div style="font-family:{_TAALI_FONT};font-size:13px;font-weight:500;'
+            f'color:#6e6580;letter-spacing:-0.005em;">{subtitle}</div>'
+            f'</td></tr>'
+            f'<tr><td class="px-40" style="padding:6px 40px 18px 40px;">'
+            f'{headline_html}</td></tr>'
+        )
+    return (
+        f'<tr><td class="px-40" style="padding:36px 40px 18px 40px;">'
+        f'{headline_html}</td></tr>'
+    )
+
+
+def _render_taali_email(
+    *,
+    title: str,
+    preview: str,
+    eyebrow_left: str,
+    eyebrow_right: str,
+    subtitle: str,
+    headline: str,
+    body: str,
+    footer: str,
+) -> str:
+    return _TAALI_EMAIL_SHELL.substitute(
+        title=title,
+        preview=preview,
+        eyebrow_left=eyebrow_left,
+        eyebrow_right=eyebrow_right,
+        header_block=_taali_header_block(subtitle=subtitle, headline=headline),
+        body=body,
+        footer=footer,
+    )
+
+
+def _taali_footer_org(org_name_safe: str) -> str:
+    return (
+        f'Sent on behalf of {org_name_safe} via '
+        f'<a href="https://taali.ai" target="_blank" style="color:#9e96ae;text-decoration:underline;">Taali</a>, '
+        f'their assessment platform.'
+    )
+
+
+def _taali_footer_brand(extra: str = "") -> str:
+    base = (
+        f'Sent by <a href="https://taali.ai" target="_blank" '
+        f'style="color:#9e96ae;text-decoration:underline;">Taali</a>.'
+    )
+    return f"{base} {extra}".strip()
+
+
 def application_rejected_html(
     candidate_name: str,
     org_name: str,
@@ -26,56 +258,42 @@ def application_rejected_html(
     """Brief, professional candidate-rejection email.
 
     Used when a recruiter rejects an application — including via approving
-    an agent-queued ``reject`` decision. We keep the body short and avoid
-    detailed feedback by default; orgs that want to share scores or
-    excerpts can do so manually before clicking approve.
+    an agent-queued ``reject`` decision. Body kept short on purpose; orgs
+    that want to share scores or excerpts do so manually before clicking
+    approve.
     """
-    return f"""\
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 20px;">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-          <tr>
-            <td style="background-color:#1f2937;padding:32px 40px;text-align:center;">
-              <h1 style="margin:0;color:#ffffff;font-size:24px;font-weight:700;letter-spacing:-0.5px;">{org_name}</h1>
-              <p style="margin:6px 0 0;color:#9ca3af;font-size:13px;">Application update</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:40px;">
-              <h2 style="margin:0 0 16px;color:#1f2937;font-size:20px;">Hi {candidate_name},</h2>
-              <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">
-                Thank you for your interest in the <strong>{position}</strong> role at
-                <strong>{org_name}</strong>, and for the time you put into your application.
-              </p>
-              <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">
-                After careful review we&#39;ve decided not to move forward with your
-                application at this time. We received many strong submissions, and
-                this decision is in no way a reflection on the quality of your work.
-              </p>
-              <p style="margin:0 0 24px;color:#4b5563;font-size:16px;line-height:1.6;">
-                We&#39;ll keep your details on file and reach out if a future opening
-                looks like a better fit. We wish you the best in your search.
-              </p>
-              <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
-              <p style="margin:0;color:#9ca3af;font-size:13px;text-align:center;">
-                Sent via {BRAND_NAME} on behalf of {org_name}.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
+    cand = _h(candidate_name) or "there"
+    org = _h(org_name)
+    pos = _h(position)
+    intro = _taali_intro(
+        _taali_paragraph(f"Hi {cand},")
+        + _taali_paragraph(
+            f'Thank you for your interest in the '
+            f'<strong style="color:#1d1730;font-weight:600;">{pos}</strong> role at '
+            f'<strong style="color:#1d1730;font-weight:600;">{org}</strong>, '
+            f'and for the time you put into your application.'
+        )
+        + _taali_paragraph(
+            "After careful review we&rsquo;ve decided not to move forward with your "
+            "application at this time. We received many strong submissions, and this "
+            "decision is in no way a reflection on the quality of your work."
+        )
+        + _taali_paragraph(
+            "We&rsquo;ll keep your details on file and reach out if a future opening "
+            "looks like a better fit. We wish you the best in your search."
+        )
+    )
+    signoff = _taali_signoff(f"Warm regards,<br />The {org} hiring team")
+    return _render_taali_email(
+        title=f"Application update — {org}",
+        preview=f"Update on your {pos} application at {org}.",
+        eyebrow_left="Application",
+        eyebrow_right="Update",
+        subtitle=org,
+        headline="Update on your application",
+        body=intro + signoff,
+        footer=_taali_footer_org(org),
+    )
 
 
 def assessment_invite_text(
@@ -364,68 +582,39 @@ def results_notification_html(
     score: float,
     results_link: str,
 ) -> str:
-    if score >= 70:
-        score_colour = "#16a34a"
-    elif score >= 40:
-        score_colour = "#d97706"
-    else:
-        score_colour = "#dc2626"
+    """Recruiter-facing assessment-completed notification.
 
-    return f"""\
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 20px;">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-          <tr>
-            <td style="background-color:#6366f1;padding:32px 40px;text-align:center;">
-              <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:-0.5px;">{BRAND_NAME}</h1>
-              <p style="margin:4px 0 0;color:#c7d2fe;font-size:14px;">{BRAND_PRODUCT_NAME}</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:40px;">
-              <h2 style="margin:0 0 16px;color:#1f2937;font-size:22px;">Assessment Completed</h2>
-              <p style="margin:0 0 16px;color:#4b5563;font-size:16px;line-height:1.6;">
-                <strong>{candidate_name}</strong> has completed their technical assessment.
-              </p>
-              <table width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 24px;background-color:#f9fafb;border-radius:8px;border:1px solid #e5e7eb;">
-                <tr>
-                  <td style="padding:24px;text-align:center;">
-                    <p style="margin:0 0 4px;color:#6b7280;font-size:14px;text-transform:uppercase;letter-spacing:0.5px;">Score</p>
-                    <p style="margin:0;color:{score_colour};font-size:36px;font-weight:700;">{score:.0f}%</p>
-                  </td>
-                </tr>
-              </table>
-              <table cellpadding="0" cellspacing="0" style="margin:0 auto 24px;">
-                <tr>
-                  <td style="background-color:#6366f1;border-radius:6px;text-align:center;">
-                    <a href="{results_link}"
-                       style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;">
-                      View Full Results
-                    </a>
-                  </td>
-                </tr>
-              </table>
-              <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
-              <p style="margin:0;color:#9ca3af;font-size:13px;text-align:center;">
-                This notification was sent by {BRAND_NAME}. You are receiving this because
-                you are listed as a reviewer for this assessment.
-              </p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
+    Score callout is a single plum tone (no traffic-light colours) to
+    match the in-product convention of using purple variations rather
+    than red/amber/green.
+    """
+    cand = _h(candidate_name) or "A candidate"
+    link = _h(results_link)
+    intro = _taali_intro(
+        _taali_paragraph(
+            f'<strong style="color:#1d1730;font-weight:600;">{cand}</strong> has '
+            f'completed their technical assessment. The full breakdown — radar, '
+            f'prompt log, fit analysis — is ready in the dashboard.'
+        )
+    )
+    body = (
+        intro
+        + _taali_score_callout(score)
+        + _taali_cta_row("View full results", link)
+        + _taali_link_fallback(link)
+    )
+    return _render_taali_email(
+        title=f"Results: {cand} — {score:.0f}%",
+        preview=f"{cand} scored {score:.0f}%. View the full breakdown in {BRAND_NAME}.",
+        eyebrow_left="Assessment",
+        eyebrow_right="Results ready",
+        subtitle=BRAND_NAME,
+        headline=f"{cand}&rsquo;s assessment is in",
+        body=body,
+        footer=_taali_footer_brand(
+            "You&rsquo;re receiving this because you&rsquo;re listed as a reviewer."
+        ),
+    )
 
 
 def candidate_feedback_ready_html(
@@ -434,54 +623,33 @@ def candidate_feedback_ready_html(
     role_title: str,
     feedback_link: str,
 ) -> str:
-    return f"""\
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-</head>
-<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 20px;">
-    <tr>
-      <td align="center">
-        <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-          <tr>
-            <td style="background-color:#6366f1;padding:32px 40px;text-align:center;">
-              <h1 style="margin:0;color:#ffffff;font-size:28px;font-weight:700;letter-spacing:-0.5px;">{BRAND_NAME}</h1>
-              <p style="margin:4px 0 0;color:#c7d2fe;font-size:14px;">{BRAND_PRODUCT_NAME}</p>
-            </td>
-          </tr>
-          <tr>
-            <td style="padding:40px;">
-              <h2 style="margin:0 0 16px;color:#1f2937;font-size:22px;">Your AI collaboration results are ready</h2>
-              <p style="margin:0 0 12px;color:#4b5563;font-size:16px;line-height:1.6;">
-                Hi {candidate_name},
-              </p>
-              <p style="margin:0 0 20px;color:#4b5563;font-size:16px;line-height:1.6;">
-                Your {BRAND_NAME} feedback report for <strong>{role_title}</strong> at <strong>{org_name}</strong>
-                is now available.
-              </p>
-              <table cellpadding="0" cellspacing="0" style="margin:0 auto 22px;">
-                <tr>
-                  <td style="background-color:#6366f1;border-radius:6px;text-align:center;">
-                    <a href="{feedback_link}"
-                       style="display:inline-block;padding:14px 30px;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;">
-                      View Feedback Report
-                    </a>
-                  </td>
-                </tr>
-              </table>
-              <p style="margin:0 0 8px;color:#9ca3af;font-size:13px;">Or copy this link into your browser:</p>
-              <p style="margin:0;color:#6366f1;font-size:13px;word-break:break-all;">{feedback_link}</p>
-            </td>
-          </tr>
-        </table>
-      </td>
-    </tr>
-  </table>
-</body>
-</html>"""
+    cand = _h(candidate_name) or "there"
+    org = _h(org_name)
+    role = _h(role_title)
+    link = _h(feedback_link)
+    intro = _taali_intro(
+        _taali_paragraph(f"Hi {cand},")
+        + _taali_paragraph(
+            f'Your AI-collaboration feedback report for the '
+            f'<strong style="color:#1d1730;font-weight:600;">{role}</strong> role at '
+            f'<strong style="color:#1d1730;font-weight:600;">{org}</strong> is now available.'
+        )
+    )
+    body = (
+        intro
+        + _taali_cta_row("View feedback report", link)
+        + _taali_link_fallback(link)
+    )
+    return _render_taali_email(
+        title=f"Your feedback report — {org}",
+        preview=f"Your AI-collaboration feedback for {role} at {org} is ready.",
+        eyebrow_left="Application",
+        eyebrow_right="Feedback ready",
+        subtitle=org,
+        headline="Your feedback report is ready",
+        body=body,
+        footer=_taali_footer_org(org),
+    )
 
 
 def assessment_expiry_reminder_html(
@@ -490,101 +658,96 @@ def assessment_expiry_reminder_html(
     assessment_link: str,
     expiry_text: str,
 ) -> str:
-    return f"""\
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 20px;">
-    <tr><td align="center">
-      <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-        <tr><td style="background-color:#d97706;padding:28px;text-align:center;">
-          <h1 style="margin:0;color:#ffffff;font-size:26px;">{BRAND_NAME}</h1>
-          <p style="margin:6px 0 0;color:#ffedd5;font-size:13px;">Assessment reminder</p>
-        </td></tr>
-        <tr><td style="padding:36px;">
-          <h2 style="margin:0 0 14px;color:#1f2937;font-size:22px;">Your assessment expires soon</h2>
-          <p style="margin:0 0 10px;color:#4b5563;font-size:16px;line-height:1.6;">Hi {candidate_name},</p>
-          <p style="margin:0 0 10px;color:#4b5563;font-size:16px;line-height:1.6;">
-            This is a reminder that your <strong>{task_name}</strong> assessment link expires on <strong>{expiry_text}</strong>.
-          </p>
-          <p style="margin:0 0 22px;color:#4b5563;font-size:16px;line-height:1.6;">
-            Please complete your assessment before it expires.
-          </p>
-          <table cellpadding="0" cellspacing="0" style="margin:0 auto 20px;"><tr><td style="background-color:#6366f1;border-radius:6px;text-align:center;">
-            <a href="{assessment_link}" style="display:inline-block;padding:14px 28px;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;">Continue Assessment</a>
-          </td></tr></table>
-          <p style="margin:0;color:#9ca3af;font-size:13px;word-break:break-all;">{assessment_link}</p>
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>"""
+    cand = _h(candidate_name) or "there"
+    task = _h(task_name)
+    link = _h(assessment_link)
+    expiry = _h(expiry_text)
+    intro = _taali_intro(
+        _taali_paragraph(f"Hi {cand},")
+        + _taali_paragraph(
+            f'This is a reminder that your '
+            f'<strong style="color:#1d1730;font-weight:600;">{task}</strong> '
+            f'assessment link expires on '
+            f'<strong style="color:#1d1730;font-weight:600;">{expiry}</strong>. '
+            f'Please complete your assessment before then.'
+        )
+    )
+    body = (
+        intro
+        + _taali_cta_row("Continue assessment", link)
+        + _taali_link_fallback(link)
+    )
+    return _render_taali_email(
+        title=f"Your {BRAND_NAME} assessment expires soon",
+        preview=f"Your assessment expires on {expiry}. Continue when you&rsquo;re ready.",
+        eyebrow_left="Assessment",
+        eyebrow_right="Reminder",
+        subtitle=BRAND_NAME,
+        headline="Your assessment expires soon",
+        body=body,
+        footer=_taali_footer_brand(
+            "If you&rsquo;ve already submitted, you can ignore this email."
+        ),
+    )
 
 
 def email_verification_html(full_name: str, verification_link: str) -> str:
-    return f"""\
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 20px;">
-    <tr><td align="center">
-      <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-        <tr><td style="background-color:#6366f1;padding:32px;text-align:center;">
-          <h1 style="margin:0;color:#ffffff;font-size:28px;">{BRAND_NAME}</h1>
-          <p style="margin:4px 0 0;color:#c7d2fe;font-size:14px;">{BRAND_PRODUCT_NAME}</p>
-        </td></tr>
-        <tr><td style="padding:40px;">
-          <h2 style="margin:0 0 16px;color:#1f2937;font-size:22px;">Verify your email</h2>
-          <p style="margin:0 0 8px;color:#4b5563;font-size:16px;line-height:1.6;">
-            Hi {full_name},
-          </p>
-          <p style="margin:0 0 24px;color:#4b5563;font-size:16px;line-height:1.6;">
-            Thanks for signing up for {BRAND_NAME}. Please verify your email address by clicking the button below.
-          </p>
-          <table cellpadding="0" cellspacing="0" style="margin:0 auto 24px;"><tr><td style="background-color:#6366f1;border-radius:6px;text-align:center;">
-            <a href="{verification_link}" style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;">Verify Email</a>
-          </td></tr></table>
-          <p style="margin:0 0 8px;color:#9ca3af;font-size:13px;">Or copy this link into your browser:</p>
-          <p style="margin:0 0 24px;color:#6366f1;font-size:13px;word-break:break-all;">{verification_link}</p>
-          <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
-          <p style="margin:0;color:#9ca3af;font-size:13px;text-align:center;">
-            This link expires in 24 hours. If you didn't create a {BRAND_NAME} account, you can ignore this email.
-          </p>
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>"""
+    name = _h(full_name) or "there"
+    link = _h(verification_link)
+    intro = _taali_intro(
+        _taali_paragraph(f"Hi {name},")
+        + _taali_paragraph(
+            f'Thanks for signing up for '
+            f'<strong style="color:#1d1730;font-weight:600;">{BRAND_NAME}</strong>. '
+            f'Please verify your email address so we can finish setting up your workspace.'
+        )
+    )
+    body = (
+        intro
+        + _taali_cta_row("Verify email", link)
+        + _taali_link_fallback(link)
+        + _taali_notice_card(
+            f"This link expires in 24 hours. If you didn&rsquo;t create a "
+            f"{BRAND_NAME} account, you can ignore this email."
+        )
+    )
+    return _render_taali_email(
+        title=f"Verify your email — {BRAND_NAME}",
+        preview=f"Confirm your {BRAND_NAME} email address. Link expires in 24 hours.",
+        eyebrow_left="Account",
+        eyebrow_right="Verify email",
+        subtitle=BRAND_NAME,
+        headline="Verify your email",
+        body=body,
+        footer=_taali_footer_brand("If this wasn&rsquo;t you, no action is needed."),
+    )
 
 
 def password_reset_html(reset_link: str) -> str:
-    return f"""\
-<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"></head>
-<body style="margin:0;padding:0;background-color:#f4f4f7;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;">
-  <table width="100%" cellpadding="0" cellspacing="0" style="background-color:#f4f4f7;padding:40px 20px;">
-    <tr><td align="center">
-      <table width="600" cellpadding="0" cellspacing="0" style="background-color:#ffffff;border-radius:8px;box-shadow:0 2px 8px rgba(0,0,0,0.08);">
-        <tr><td style="background-color:#6366f1;padding:32px;text-align:center;">
-          <h1 style="margin:0;color:#ffffff;font-size:28px;">{BRAND_NAME}</h1>
-        </td></tr>
-        <tr><td style="padding:40px;">
-          <h2 style="margin:0 0 16px;color:#1f2937;font-size:22px;">Reset your password</h2>
-          <p style="margin:0 0 24px;color:#4b5563;font-size:16px;line-height:1.6;">
-            Click the button below to set a new password. This link expires in 1 hour.
-          </p>
-          <table cellpadding="0" cellspacing="0"><tr><td style="background-color:#6366f1;border-radius:6px;text-align:center;">
-            <a href="{reset_link}" style="display:inline-block;padding:14px 32px;color:#ffffff;font-size:16px;font-weight:600;text-decoration:none;">Reset password</a>
-          </td></tr></table>
-          <p style="margin:24px 0 0;color:#9ca3af;font-size:13px;">If you didn't request this, you can ignore this email.</p>
-        </td></tr>
-      </table>
-    </td></tr>
-  </table>
-</body>
-</html>"""
+    link = _h(reset_link)
+    intro = _taali_intro(
+        _taali_paragraph(
+            f'Click the button below to set a new password for your '
+            f'<strong style="color:#1d1730;font-weight:600;">{BRAND_NAME}</strong> '
+            f'account. This link expires in 1 hour.'
+        )
+    )
+    body = (
+        intro
+        + _taali_cta_row("Reset password", link)
+        + _taali_link_fallback(link)
+        + _taali_notice_card(
+            "If you didn&rsquo;t request this, you can ignore this email — "
+            "your password won&rsquo;t change."
+        )
+    )
+    return _render_taali_email(
+        title=f"Reset your password — {BRAND_NAME}",
+        preview=f"Reset your {BRAND_NAME} password. Link expires in 1 hour.",
+        eyebrow_left="Account",
+        eyebrow_right="Reset password",
+        subtitle=BRAND_NAME,
+        headline="Reset your password",
+        body=body,
+        footer=_taali_footer_brand("If this wasn&rsquo;t you, no action is needed."),
+    )
