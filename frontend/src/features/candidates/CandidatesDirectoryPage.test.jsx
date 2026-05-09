@@ -178,7 +178,7 @@ describe('CandidatesDirectoryPage', () => {
     expect(showToast).toHaveBeenCalledWith('Bulk reject finished. 1/2 updated, 1 failed.', 'error');
   }, 10000);
 
-  it('rejects a Workable-linked candidate from the inline drawer with two-step confirmation', async () => {
+  it('rejects a Workable-linked candidate from the drawer via the reject card', async () => {
     render(<MemoryRouter><CandidatesDirectoryPage onNavigate={vi.fn()} /></MemoryRouter>);
 
     const aliceName = await screen.findByText('Alice Workable');
@@ -187,9 +187,16 @@ describe('CandidatesDirectoryPage', () => {
 
     fireEvent.click(aliceRow);
 
-    expect(await screen.findByText('Send Taali assessment')).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Reject' }));
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm reject' }));
+    // Drawer opens on the Move forward tab by default; the reject card
+    // sits alongside the Workable stage cards. Its accessible name is
+    // "Reject Closes the application" because the subtitle is part of
+    // the button. The bulk reject control on the page also matches
+    // /^Reject/, so we target the card by its full subtitle. Picking
+    // it flips the confirm-button label to "Reject candidate".
+    fireEvent.click(
+      await screen.findByRole('button', { name: /Reject\s+Closes the application/ }),
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Reject candidate' }));
 
     expect(confirmMock).not.toHaveBeenCalled();
 
