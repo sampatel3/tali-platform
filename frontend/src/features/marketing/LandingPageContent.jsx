@@ -534,6 +534,7 @@ export const LandingPage = ({ onNavigate }) => {
                 selectedId={null}
                 onSelect={() => {}}
                 onNavigate={() => {}}
+                subtitle="Every recommendation the agent has made for this role today. Approve, override, or teach it in one click."
               />
             </div>
           </div>
