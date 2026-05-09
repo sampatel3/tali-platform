@@ -22,6 +22,9 @@ from app.platform.database import SessionLocal  # noqa: E402
 CANONICAL_TASK_KEYS = (
     "ai_eng_genai_production_readiness",
     "data_eng_aws_glue_pipeline_recovery",
+    "platform_eng_aws_eks_misconfig_triage",
+    "platform_eng_azure_aks_misconfig_triage",
+    "scrum_master_sprint_recovery_scenario",
 )
 
 
@@ -180,7 +183,7 @@ def main() -> int:
         ]
 
         alerts: list[str] = []
-        if len(active_task_keys) != 2 or sorted(active_task_keys) != sorted(CANONICAL_TASK_KEYS):
+        if sorted(active_task_keys) != sorted(CANONICAL_TASK_KEYS):
             alerts.append("active_template_catalog_mismatch")
         for summary in task_summaries:
             if summary["bootstrap_failures"] > 0:
