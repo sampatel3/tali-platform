@@ -153,11 +153,15 @@ export function CandidateTriageDrawer({
   }, [applicationId, workableStageOptions]);
 
   // Bring the drawer into view whenever the open application changes.
-  // jsdom doesn't implement ``scrollIntoView``; guard for tests.
+  // ``block: 'nearest'`` only scrolls if the drawer is currently off-
+  // screen — if it's already visible (e.g. clicking a row that's mid-
+  // page), no scroll fires, so the candidate's own row stays where
+  // it was. ``scrollIntoView`` is not implemented in jsdom; guard for
+  // tests.
   useEffect(() => {
     if (!applicationId || !containerRef.current) return;
     if (typeof containerRef.current.scrollIntoView !== 'function') return;
-    containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
   }, [applicationId]);
 
   if (!application) return null;

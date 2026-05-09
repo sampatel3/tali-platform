@@ -147,7 +147,11 @@ export function useCandidateTriage({
       return;
     }
     event.preventDefault();
-    setTriageApplicationId(Number(application?.id) || null);
+    const nextId = Number(application?.id) || null;
+    // Toggle: clicking the same candidate's row again closes the
+    // drawer. Clicking a different candidate moves the drawer to
+    // that row.
+    setTriageApplicationId((current) => (current === nextId ? null : nextId));
   }, []);
 
   const drawerProps = useMemo(() => ({
