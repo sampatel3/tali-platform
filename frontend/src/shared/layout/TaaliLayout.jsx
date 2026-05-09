@@ -12,9 +12,12 @@ import { navigateToMarketingSection } from '../../lib/marketingScroll';
 import { TaaliTile } from '../ui/Branding';
 import { formatHeaderOrgLabel, normalizeHeaderOrgName } from './headerIdentity';
 
+// The standalone Candidates directory was deprecated 2026-05-09 — the
+// triage drawer now lives on the role detail page, so there is no
+// separate "all candidates" tab any more. Drill-downs from a role still
+// link to the per-candidate standing report.
 const APP_TABS = [
   { id: 'jobs', label: 'Jobs' },
-  { id: 'candidates', label: 'Candidates' },
   { id: 'tasks', label: 'Tasks' },
   { id: 'reporting', label: 'Reporting' },
   { id: 'settings', label: 'Settings' },

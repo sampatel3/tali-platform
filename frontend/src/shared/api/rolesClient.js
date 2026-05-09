@@ -52,6 +52,11 @@ export const roles = {
   updateApplication: (applicationId, data) => api.patch(`/applications/${applicationId}`, data),
   updateApplicationStage: (applicationId, data) => api.patch(`/applications/${applicationId}/stage`, data),
   updateApplicationOutcome: (applicationId, data) => api.patch(`/applications/${applicationId}/outcome`, data),
+  // Hand-back to Workable: pushes the candidate into the chosen Workable
+  // stage. `data` is `{ target_stage: string, reason?: string }`. Used at
+  // the end of the Tali pipeline (typically when stage === 'review').
+  moveApplicationToWorkableStage: (applicationId, data) =>
+    api.post(`/applications/${applicationId}/workable/move-stage`, data),
   uploadApplicationCv: (applicationId, file) => {
     const form = new FormData();
     form.append('file', file);

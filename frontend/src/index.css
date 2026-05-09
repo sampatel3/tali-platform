@@ -4183,20 +4183,38 @@ html[data-theme="dark"] {
   flex: 1;
 }
 
+/* Reject is destructive but the overall design system avoids red/amber/
+   green chips in favour of purple tones. The two-tap pattern (hover hint
+   → confirm) does the "are you sure" work that red used to. */
 .candidate-triage-reject {
-  color: var(--red);
-  border-color: color-mix(in oklab, var(--red) 30%, var(--line));
+  color: var(--ink-2);
+  border-color: var(--line);
 }
 
 .candidate-triage-reject:hover:not(:disabled) {
-  background: color-mix(in oklab, var(--red) 8%, transparent);
-  border-color: var(--red);
+  background: color-mix(in oklab, var(--purple) 6%, transparent);
+  border-color: color-mix(in oklab, var(--purple) 35%, var(--line));
+  color: var(--ink);
 }
 
 .candidate-triage-reject.confirm {
-  background: var(--red);
-  border-color: var(--red);
+  background: var(--purple);
+  border-color: var(--purple);
   color: #fff;
+}
+
+.candidate-triage-label-meta {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-transform: none;
+  color: var(--mute);
+  margin-left: 4px;
+}
+
+.candidate-triage-label-meta strong {
+  color: var(--ink-2);
+  font-weight: 600;
 }
 
 .candidate-triage-close {

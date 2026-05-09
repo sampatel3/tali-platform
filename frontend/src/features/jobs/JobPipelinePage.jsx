@@ -32,7 +32,7 @@ import { CandidateSheet } from '../candidates/CandidateSheet';
 // CandidatesDirectoryPage is no longer embedded on the role detail —
 // the Candidates tab now renders a canvas-spec inline ctable directly.
 // Standalone /candidates route still uses the directory.
-import { candidateReportHref } from '../candidates/CandidateTriageDrawer';
+import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
 import { RoleSheet } from '../candidates/RoleSheet';
 import { getErrorMessage, trimOrUndefined } from '../candidates/candidatesUiUtils';
 
@@ -1735,7 +1735,119 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     onNavigate('candidate-report', navOptions);
   }, [numericRoleId, onNavigate]);
 
+  // ── Triage drawer state + handlers ──────────────────────────────────
+  // Plain click on a candidate row opens the drawer in-place. Modifier-
+  // click (cmd/ctrl/shift/alt) keeps the link's default behaviour so the
+  // "open full report in a new tab" escape hatch still works.
+  const [triageApplicationId, setTriageApplicationId] = useState(null);
+  const [triageBusyStage, setTriageBusyStage] = useState(false);
+  const [triageBusyAssessment, setTriageBusyAssessment] = useState(false);
+  const [triageBusyReject, setTriageBusyReject] = useState(false);
+  const [triageBusyWorkable, setTriageBusyWorkable] = useState(false);
+  const [workableStages, setWorkableStages] = useState([]);
+  const [loadingWorkableStages, setLoadingWorkableStages] = useState(false);
+
+  const triageApplication = useMemo(
+    () => roleApplications.find((a) => Number(a?.id) === Number(triageApplicationId)) || null,
+    [roleApplications, triageApplicationId],
+  );
+
+  // Pull the role's Workable stages once we know the job shortcode. We
+  // load eagerly so the picker is ready by the time the recruiter opens
+  // the drawer at ``review``; failures fall back to an empty list and
+  // the picker shows a "no Workable stages found" placeholder.
+  useEffect(() => {
+    const shortcode = role?.workable_job_id;
+    if (!shortcode) {
+      setWorkableStages([]);
+      return undefined;
+    }
+    let cancelled = false;
+    setLoadingWorkableStages(true);
+    apiClient.organizations.getWorkableStages({ shortcode })
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res?.data?.stages) ? res.data.stages : [];
+        setWorkableStages(list);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setWorkableStages([]);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setLoadingWorkableStages(false);
+      });
+    return () => { cancelled = true; };
+  }, [role?.workable_job_id]);
+
+  const closeTriageDrawer = useCallback(() => {
+    setTriageApplicationId(null);
+  }, []);
+
+  const handleTriageMoveStage = useCallback(async (application, nextStage) => {
+    if (!application?.id || !nextStage) return;
+    setTriageBusyStage(true);
+    try {
+      await rolesApi.updateApplicationStage(application.id, { pipeline_stage: nextStage });
+      await loadRoleWorkspace();
+      showToast(`Moved to ${String(nextStage).replace(/_/g, ' ')}.`, 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to move stage.'), 'error');
+    } finally {
+      setTriageBusyStage(false);
+    }
+  }, [rolesApi, loadRoleWorkspace, showToast]);
+
+  const handleTriageSendAssessment = useCallback(async (application, taskId) => {
+    if (!application?.id || !taskId) return;
+    setTriageBusyAssessment(true);
+    try {
+      await rolesApi.createAssessment(application.id, { task_id: Number(taskId) });
+      await loadRoleWorkspace();
+      showToast('Assessment invite sent.', 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to send invite.'), 'error');
+    } finally {
+      setTriageBusyAssessment(false);
+    }
+  }, [rolesApi, loadRoleWorkspace, showToast]);
+
+  const handleTriageReject = useCallback(async (application) => {
+    if (!application?.id) return;
+    setTriageBusyReject(true);
+    try {
+      await rolesApi.updateApplicationOutcome(application.id, {
+        application_outcome: 'rejected',
+        reason: 'Recruiter reject from role view',
+      });
+      await loadRoleWorkspace();
+      showToast('Candidate rejected.', 'success');
+      setTriageApplicationId(null);
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to reject.'), 'error');
+    } finally {
+      setTriageBusyReject(false);
+    }
+  }, [rolesApi, loadRoleWorkspace, showToast]);
+
+  const handleTriageMoveToWorkable = useCallback(async (application, targetStage) => {
+    if (!application?.id || !targetStage) return;
+    setTriageBusyWorkable(true);
+    try {
+      await rolesApi.moveApplicationToWorkableStage(application.id, { target_stage: targetStage });
+      await loadRoleWorkspace();
+      showToast(`Sent to Workable: ${targetStage}.`, 'success');
+    } catch (error) {
+      showToast(getErrorMessage(error, 'Failed to move in Workable.'), 'error');
+    } finally {
+      setTriageBusyWorkable(false);
+    }
+  }, [rolesApi, loadRoleWorkspace, showToast]);
+
   const handlePipelineReportClick = useCallback((event, application) => {
+    // Modifier-click keeps the anchor's default behaviour (new tab,
+    // download, etc.) so power-users still get the full standing report.
     if (
       event.defaultPrevented
       || event.metaKey
@@ -1747,8 +1859,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       return;
     }
     event.preventDefault();
-    viewCandidateReport(application);
-  }, [viewCandidateReport]);
+    setTriageApplicationId(Number(application?.id) || null);
+  }, []);
 
   const handleRegenerateInterviewFocus = async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -2410,6 +2522,26 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             })()}
           </>
         )}
+
+        {triageApplication ? (
+          <CandidateTriageDrawer
+            application={triageApplication}
+            roleTasks={roleTasks}
+            mode="inline"
+            stageBusy={triageBusyStage}
+            assessmentBusy={triageBusyAssessment}
+            rejectBusy={triageBusyReject}
+            workableStages={workableStages}
+            loadingWorkableStages={loadingWorkableStages}
+            workableMoveBusy={triageBusyWorkable}
+            onClose={closeTriageDrawer}
+            onMoveStage={handleTriageMoveStage}
+            onSendAssessment={handleTriageSendAssessment}
+            onReject={handleTriageReject}
+            onMoveToWorkableStage={handleTriageMoveToWorkable}
+            onViewFullReport={viewCandidateReport}
+          />
+        ) : null}
 
         <RoleSheet
           open={roleSheetOpen}

@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import {
   ExternalLink,
   Loader2,
+  LogOut,
   Send,
   X,
 } from 'lucide-react';
@@ -19,6 +20,12 @@ export const TRIAGE_STAGE_OPTIONS = [
   { value: 'in_assessment', label: 'Assessment' },
   { value: 'review', label: 'Review' },
 ];
+
+const formatWorkableStageOption = (stage) => {
+  const slug = stage?.slug || stage?.kind || '';
+  const name = stage?.name || stage?.kind || slug || 'Stage';
+  return { value: String(slug), label: String(name) };
+};
 
 export const candidateReportHref = (application, fromRoleId = null) => {
   if (!application?.id) return '/candidates';
@@ -79,13 +86,21 @@ export function CandidateTriageDrawer({
   stageBusy = false,
   assessmentBusy = false,
   rejectBusy = false,
+  // Workable hand-back: when the candidate has a Workable origin and is at
+  // ``review``, the recruiter can push them straight into the next Workable
+  // stage. Stages are fetched per-job by the parent and passed in.
+  workableStages = [],
+  loadingWorkableStages = false,
+  workableMoveBusy = false,
   onClose = null,
   onMoveStage,
   onSendAssessment,
   onViewFullReport,
   onReject,
+  onMoveToWorkableStage,
 }) {
   const [selectedTaskId, setSelectedTaskId] = useState('');
+  const [selectedWorkableStage, setSelectedWorkableStage] = useState('');
   const [confirmReject, setConfirmReject] = useState(false);
 
   const applicationId = application?.id || null;
@@ -101,6 +116,17 @@ export function CandidateTriageDrawer({
     ? 'Imported from Workable'
     : 'Added in Taali';
   const canAct = application?.application_outcome === 'open';
+  const hasWorkableLink = Boolean(application?.workable_candidate_id);
+  // Hand-back is the natural last step out of ``review`` for Workable
+  // candidates. We surface the picker eagerly when at review (the most
+  // common case) but keep it usable from any stage as long as there's a
+  // Workable link to write back to.
+  const showWorkableHandback = hasWorkableLink && Boolean(onMoveToWorkableStage);
+  const workableStageOptions = useMemo(
+    () => (Array.isArray(workableStages) ? workableStages.map(formatWorkableStageOption) : []),
+    [workableStages],
+  );
+  const currentWorkableStage = String(application?.workable_stage || '').toLowerCase();
 
   useEffect(() => {
     setConfirmReject(false);
@@ -112,6 +138,13 @@ export function CandidateTriageDrawer({
       roleTasks.some((task) => String(task.id) === String(current)) ? current : ''
     ));
   }, [applicationId, roleTasks]);
+
+  useEffect(() => {
+    setSelectedWorkableStage((current) => {
+      if (!current) return current;
+      return workableStageOptions.some((stage) => stage.value === current) ? current : '';
+    });
+  }, [applicationId, workableStageOptions]);
 
   if (!application) return null;
 
@@ -130,6 +163,11 @@ export function CandidateTriageDrawer({
       return;
     }
     onReject?.(application);
+  };
+
+  const handleWorkableMove = () => {
+    if (!selectedWorkableStage || workableMoveBusy) return;
+    onMoveToWorkableStage?.(application, selectedWorkableStage);
   };
 
   return (
@@ -224,6 +262,60 @@ export function CandidateTriageDrawer({
               </Button>
             </div>
           </div>
+
+          {showWorkableHandback ? (
+            <div className="candidate-triage-section">
+              <div className="candidate-triage-label">
+                Hand back to Workable
+                {currentWorkableStage ? (
+                  <span className="candidate-triage-label-meta">
+                    {' · currently '}<strong>{currentWorkableStage}</strong>
+                  </span>
+                ) : null}
+              </div>
+              <div className="candidate-triage-row">
+                <select
+                  className="candidate-triage-task-select"
+                  value={selectedWorkableStage}
+                  onChange={(event) => setSelectedWorkableStage(event.target.value)}
+                  aria-label="Workable stage"
+                  disabled={loadingWorkableStages || !workableStageOptions.length}
+                >
+                  <option value="">
+                    {loadingWorkableStages
+                      ? 'Loading Workable stages...'
+                      : workableStageOptions.length
+                        ? 'Select a Workable stage...'
+                        : 'No Workable stages found'}
+                  </option>
+                  {workableStageOptions.map((stage) => (
+                    <option
+                      key={stage.value}
+                      value={stage.value}
+                      disabled={stage.value === currentWorkableStage}
+                    >
+                      {stage.label}
+                    </option>
+                  ))}
+                </select>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  size="sm"
+                  className="candidate-triage-send"
+                  disabled={!canAct || !selectedWorkableStage || workableMoveBusy}
+                  onClick={handleWorkableMove}
+                >
+                  {workableMoveBusy ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <LogOut size={14} />
+                  )}
+                  {workableMoveBusy ? 'Sending...' : 'Send to Workable'}
+                </Button>
+              </div>
+            </div>
+          ) : null}
 
           <div className="candidate-triage-section">
             <div className="candidate-triage-label">Other actions</div>
