@@ -4013,10 +4013,16 @@ html[data-theme="dark"] {
 }
 
 .candidate-triage-inline {
-  min-width: 1280px;
+  /* Was `min-width: 1280px` — that was inherited from the directory
+     page where it sat inline within a wide table. On the role page
+     the drawer mounts below the candidates list and needs to fit
+     whatever container it lands in. */
+  width: 100%;
+  border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   border-left: 3px solid var(--purple);
   padding: 22px 28px 24px 25px;
+  margin-top: 16px;
   animation: candidate-triage-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 

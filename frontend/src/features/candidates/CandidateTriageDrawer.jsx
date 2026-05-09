@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ExternalLink,
   Loader2,
@@ -102,6 +102,10 @@ export function CandidateTriageDrawer({
   const [selectedTaskId, setSelectedTaskId] = useState('');
   const [selectedWorkableStage, setSelectedWorkableStage] = useState('');
   const [confirmReject, setConfirmReject] = useState(false);
+  // Drawer mounts below the candidates table on the role page; without
+  // this scroll-into-view the recruiter clicks a row and sees nothing
+  // change because the drawer is below the fold.
+  const containerRef = useRef(null);
 
   const applicationId = application?.id || null;
   const assessmentId = useMemo(() => resolveAssessmentId(application), [application]);
@@ -146,6 +150,16 @@ export function CandidateTriageDrawer({
     });
   }, [applicationId, workableStageOptions]);
 
+  // Bring the drawer into view whenever the open application changes.
+  // Recruiter clicks a candidate, drawer mounts below the table — without
+  // this they'd think nothing happened and have to scroll to find it.
+  // ``scrollIntoView`` is not implemented in jsdom, so guard for tests.
+  useEffect(() => {
+    if (!applicationId || !containerRef.current) return;
+    if (typeof containerRef.current.scrollIntoView !== 'function') return;
+    containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [applicationId]);
+
   if (!application) return null;
 
   const reportHref = candidateReportHref(application);
@@ -171,7 +185,7 @@ export function CandidateTriageDrawer({
   };
 
   return (
-    <div className={`candidate-triage candidate-triage-${mode}`}>
+    <div ref={containerRef} className={`candidate-triage candidate-triage-${mode}`}>
       <div className="candidate-triage-grid">
         <section className="candidate-triage-identity" aria-label={`${candidateName} triage summary`}>
           <div className="candidate-triage-person">
