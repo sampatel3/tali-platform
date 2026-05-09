@@ -9,6 +9,20 @@ vi.mock('../../context/ToastContext', () => ({
   useToast: () => ({ showToast }),
 }));
 
+// Some role-page descendants (notably AgentNeedsInputCard) import the
+// raw axios instance from `httpClient` directly instead of going
+// through the `apiClient.*` namespace. Mock both so no real network
+// dispatch happens — that's what was causing the jsdom undici flake.
+vi.mock('../../shared/api/httpClient', () => ({
+  default: {
+    get: vi.fn().mockResolvedValue({ data: [] }),
+    post: vi.fn().mockResolvedValue({ data: null }),
+    put: vi.fn().mockResolvedValue({ data: null }),
+    patch: vi.fn().mockResolvedValue({ data: null }),
+    delete: vi.fn().mockResolvedValue({ data: null }),
+  },
+}));
+
 vi.mock('../../shared/api', () => ({
   roles: {
     get: vi.fn(),
@@ -179,7 +193,7 @@ describe('JobPipelinePage', () => {
     });
   });
 
-  it.skip('opens the triage drawer when a kanban card is clicked [TODO: kanban-card click is not reaching the React onClick in this test setup; the production behaviour works (verified manually) but the synthetic-click path needs investigation]', async () => {
+  it('opens the triage drawer when a kanban card is clicked', async () => {
     const onNavigate = vi.fn();
     renderPipeline({ onNavigate });
     await switchToPipelineView();
@@ -193,9 +207,8 @@ describe('JobPipelinePage', () => {
 
     // Plain click opens the triage drawer in-place — recruiters do most
     // of their move-stage / send-assessment / reject work without ever
-    // leaving the role page. The Reject card is unique to the redesigned
-    // drawer, so its subtitle "Closes the application" is the cleanest
-    // canary that the drawer mounted.
+    // leaving the role page. The Reject card's subtitle is unique to
+    // the redesigned drawer.
     expect(await screen.findByText(/Closes the application/i)).toBeInTheDocument();
     expect(onNavigate).not.toHaveBeenCalledWith('candidate-report', expect.anything());
   });
