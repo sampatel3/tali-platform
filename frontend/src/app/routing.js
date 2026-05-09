@@ -42,9 +42,12 @@ export const pathForPage = (page, options = {}) => {
     case 'showcase':
       return '/showcase';
     case 'candidates':
-      return '/candidates';
+      // The standalone /candidates directory is deprecated. Anything
+      // that asked for it lands on /jobs — the triage drawer now lives
+      // there alongside the candidate list per role.
+      return '/jobs';
     case 'candidate-report': {
-      if (!options.candidateApplicationId) return '/candidates';
+      if (!options.candidateApplicationId) return '/jobs';
       const base = `/candidates/${encodeURIComponent(options.candidateApplicationId)}`;
       if (Number.isFinite(Number(options.fromRoleId))) {
         return `${base}?from=jobs/${encodeURIComponent(options.fromRoleId)}`;

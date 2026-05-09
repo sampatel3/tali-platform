@@ -32,7 +32,8 @@ import { CandidateSheet } from '../candidates/CandidateSheet';
 // CandidatesDirectoryPage is no longer embedded on the role detail —
 // the Candidates tab now renders a canvas-spec inline ctable directly.
 // Standalone /candidates route still uses the directory.
-import { candidateReportHref } from '../candidates/CandidateTriageDrawer';
+import { CandidateTriageDrawer, candidateReportHref } from '../candidates/CandidateTriageDrawer';
+import { useCandidateTriage } from './useCandidateTriage';
 import { RoleSheet } from '../candidates/RoleSheet';
 import { getErrorMessage, trimOrUndefined } from '../candidates/candidatesUiUtils';
 
@@ -1085,7 +1086,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   // this; the embedded directory re-mounts via key so its internal
   // `stageFilters` re-seeds from the new initial value.
   const [tableStageFilter, setTableStageFilter] = useState('all');
-  const [tableSortBy, setTableSortBy] = useState('composite');
+  // Sort direction for the candidates table. ``'desc'`` (default) puts
+  // the strongest scores first; ``'asc'`` flips it.
+  const [tableSortBy, setTableSortBy] = useState('desc');
   const [roleSheetOpen, setRoleSheetOpen] = useState(false);
   const [candidateSheetOpen, setCandidateSheetOpen] = useState(false);
   const [roleSheetError, setRoleSheetError] = useState('');
@@ -1735,20 +1738,24 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     onNavigate('candidate-report', navOptions);
   }, [numericRoleId, onNavigate]);
 
-  const handlePipelineReportClick = useCallback((event, application) => {
-    if (
-      event.defaultPrevented
-      || event.metaKey
-      || event.ctrlKey
-      || event.shiftKey
-      || event.altKey
-      || event.button !== 0
-    ) {
-      return;
-    }
-    event.preventDefault();
-    viewCandidateReport(application);
-  }, [viewCandidateReport]);
+  // Triage drawer state, handlers and Workable-stage fetch live in the
+  // useCandidateTriage hook so this page stays under the architecture
+  // gate's line cap. Plain row click opens the drawer; modifier-click
+  // keeps the anchor's default behaviour so the standing-report escape
+  // hatch still works in a new tab.
+  const {
+    triageApplication,
+    drawerProps: triageDrawerProps,
+    handleRowClick: handlePipelineReportClick,
+  } = useCandidateTriage({
+    role,
+    roleApplications,
+    roleTasks,
+    loadRoleWorkspace,
+    showToast,
+    rolesApi,
+    viewCandidateReport,
+  });
 
   const handleRegenerateInterviewFocus = async () => {
     if (!Number.isFinite(numericRoleId)) return;
@@ -2235,18 +2242,16 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 type="button"
                 className="btn btn-outline btn-sm"
                 onClick={() => {
-                  // Toggle between composite (Taali score desc) and CV-match
-                  // recency. `tableSortBy` is the directory's sort key —
-                  // changing it bumps the table key so the embedded
-                  // CandidatesDirectoryPage remounts with the new
-                  // initialSortOption and re-fetches.
-                  setTableSortBy((prev) => (prev === 'composite' ? 'cv' : 'composite'));
+                  // Single sort dimension: score, ascending or descending.
+                  // ``tableSortBy === 'asc'`` means low-to-high; anything
+                  // else (the default) sorts high-to-low.
+                  setTableSortBy((prev) => (prev === 'asc' ? 'desc' : 'asc'));
                 }}
-                aria-label="Sort table"
-                title="Sort"
+                aria-label="Sort table by score"
+                title="Sort by score"
               >
                 <ArrowUpDown size={12} />
-                Sort: {tableSortBy === 'composite' ? 'Taali score' : 'CV match'}
+                Sort: Score {tableSortBy === 'asc' ? '↑' : '↓'}
               </button>
               {/* HANDOFF v2 §4 / canvas jobs-detail-candidates — primary
                   recruiter action is the cascade Process flow (Fetch CVs
@@ -2305,12 +2310,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                   ?? a?.cv_match_score;
                 return Number.isFinite(Number(raw)) ? Number(raw) : -1;
               };
-              const cmpCv = (a) => {
-                const raw = a?.cv_match_scored_at;
-                return raw ? new Date(raw).getTime() : 0;
-              };
               const sorted = [...filteredApps].sort((a, b) => (
-                tableSortBy === 'cv' ? cmpCv(b) - cmpCv(a) : cmpScore(b) - cmpScore(a)
+                tableSortBy === 'asc' ? cmpScore(a) - cmpScore(b) : cmpScore(b) - cmpScore(a)
               ));
               if (sorted.length === 0) {
                 return (
@@ -2410,6 +2411,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             })()}
           </>
         )}
+
+        {triageApplication ? <CandidateTriageDrawer {...triageDrawerProps} /> : null}
 
         <RoleSheet
           open={roleSheetOpen}

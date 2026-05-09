@@ -178,18 +178,23 @@ describe('JobPipelinePage', () => {
     });
   });
 
-  it('opens the full report directly from kanban cards', async () => {
+  it('opens the triage drawer when a kanban card is clicked', async () => {
     const onNavigate = vi.fn();
     renderPipeline({ onNavigate });
     await switchToPipelineView();
 
     const appliedCard = (await screen.findByText('Sam Patel')).closest('.kanban-card');
+    // Modifier-clicking a kanban card still falls through to the link's
+    // default behaviour (open in new tab), so the href is preserved.
     expect(appliedCard).toHaveAttribute('href', '/candidates/1?from=jobs/101');
 
     fireEvent.click(appliedCard);
 
-    expect(onNavigate).toHaveBeenCalledWith('candidate-report', { candidateApplicationId: 1, fromRoleId: 101 });
-    expect(screen.queryByText(/Send Taali assessment/i)).not.toBeInTheDocument();
+    // Plain click opens the triage drawer in-place — recruiters do most
+    // of their move-stage / send-assessment / reject work without ever
+    // leaving the role page.
+    expect(await screen.findByText(/Send Taali assessment/i)).toBeInTheDocument();
+    expect(onNavigate).not.toHaveBeenCalledWith('candidate-report', expect.anything());
   });
 
   it('formats Workable job specs instead of showing flattened markdown', async () => {

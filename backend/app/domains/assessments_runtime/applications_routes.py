@@ -11,9 +11,11 @@ import re
 
 from fastapi import APIRouter, Body, Depends, File, HTTPException, Query, UploadFile, status
 from fastapi.responses import FileResponse, RedirectResponse, Response
+from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import asc, desc, func, or_
 from sqlalchemy.orm import Session, joinedload
+from typing import Optional
 
 from ...actions import advance_stage as advance_stage_action
 from ...actions.types import Actor
@@ -93,6 +95,7 @@ from ...services.interview_support_service import refresh_application_interview_
 from ...services.pre_screening_service import refresh_pre_screening_fields
 from ...services.workable_actions_service import (
     disqualify_candidate_in_workable,
+    move_candidate_in_workable,
     revert_candidate_disqualification_in_workable,
 )
 from ...services.assessment_repository_service import (
@@ -1789,6 +1792,108 @@ def update_application_outcome(
         raise HTTPException(status_code=500, detail="Failed to update application outcome")
     # Outcome changes don't change scoring inputs; reuse the cached
     # interview pack so the PATCH stays snappy.
+    return application_to_response(app, use_cached_score_summary=True)
+
+
+class WorkableMoveStageRequest(BaseModel):
+    """Body for the recruiter-initiated hand-back to Workable.
+
+    `target_stage` is the Workable stage slug or kind (e.g. ``"phone_screen"``,
+    ``"interview"``) — what the picker shows is what we POST. The Workable API
+    accepts this directly via ``POST /spi/v3/candidates/{id}/move``.
+    """
+
+    target_stage: str = Field(min_length=1, max_length=200)
+    reason: Optional[str] = Field(default=None, max_length=2000)
+
+
+@router.post("/applications/{application_id}/workable/move-stage", response_model=ApplicationResponse)
+def move_application_in_workable(
+    application_id: int,
+    data: WorkableMoveStageRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Hand a candidate back to Workable by moving them to a chosen stage.
+
+    Used at the end of the Tali pipeline (typically when ``pipeline_stage``
+    is ``review``) to push the candidate into the next stage of the
+    recruiter's Workable pipeline — e.g. ``phone_screen`` or ``interview``.
+    Tali's own pipeline stage is not changed; this is purely a write-back
+    to the ATS.
+    """
+    app = get_application(application_id, current_user.organization_id, db)
+    if not app.workable_candidate_id:
+        raise HTTPException(
+            status_code=400,
+            detail="Application is not linked to a Workable candidate",
+        )
+    org = (
+        db.query(Organization)
+        .filter(Organization.id == current_user.organization_id)
+        .first()
+    )
+    role = db.query(Role).filter(Role.id == app.role_id).first() if app.role_id else None
+    target_stage = str(data.target_stage or "").strip()
+    try:
+        ensure_pipeline_fields(app)
+        initialize_pipeline_event_if_missing(
+            db,
+            app=app,
+            actor_type="system",
+            actor_id=current_user.id,
+            reason="Pipeline initialized before Workable hand-back",
+        )
+        result = move_candidate_in_workable(
+            org=org,
+            candidate_id=str(app.workable_candidate_id),
+            target_stage=target_stage,
+            role=role,
+        )
+        if not result.get("success"):
+            append_application_event(
+                db,
+                app=app,
+                event_type="workable_move_stage_failed",
+                actor_type="recruiter",
+                actor_id=current_user.id,
+                reason=data.reason or result.get("message") or "Workable move failed",
+                metadata={
+                    "target_stage": target_stage,
+                    "code": result.get("code"),
+                    "workable_candidate_id": app.workable_candidate_id,
+                    "response": result.get("response"),
+                },
+            )
+            db.commit()
+            raise HTTPException(
+                status_code=502,
+                detail=result.get("message") or "Failed to move candidate in Workable",
+            )
+        # Reflect the new Workable stage on our row so the UI shows it
+        # straight away without waiting for the next sync cycle.
+        app.workable_stage = target_stage
+        append_application_event(
+            db,
+            app=app,
+            event_type="workable_moved",
+            actor_type="recruiter",
+            actor_id=current_user.id,
+            reason=data.reason or "Recruiter handed candidate back to Workable",
+            metadata={
+                "target_stage": target_stage,
+                "workable_candidate_id": app.workable_candidate_id,
+                "workable_actor_member_id": (result.get("config") or {}).get("actor_member_id"),
+            },
+        )
+        db.commit()
+        db.refresh(app)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="Failed to move candidate in Workable")
     return application_to_response(app, use_cached_score_summary=True)
 
 

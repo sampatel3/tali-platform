@@ -62,9 +62,6 @@ const LazyAssessmentResultsPage = lazy(() =>
 const AssessmentsPage = lazy(() =>
   import('./features/assessments/AssessmentsPage').then((m) => ({ default: m.AssessmentsPage }))
 );
-const CandidatesDirectoryPage = lazy(() =>
-  import('./features/candidates/CandidatesDirectoryPage').then((m) => ({ default: m.CandidatesDirectoryPage }))
-);
 const ChatPage = lazy(() =>
   import('./features/chat/ChatPage').then((m) => ({ default: m.ChatPage }))
 );
@@ -533,17 +530,12 @@ function AppContent() {
         )}
       />
 
-      <Route
-        path="/candidates"
-        element={(
-          <Suspense fallback={lazyFallback}>
-            <CandidatesDirectoryPage
-              onNavigate={navigateToPage}
-              NavComponent={DashboardNavWithMode}
-            />
-          </Suspense>
-        )}
-      />
+      {/* The standalone /candidates directory is deprecated — the
+          triage drawer now lives on the role page (JobPipelinePage), so
+          there is no separate "all candidates" list. Redirect any stale
+          bookmarks to /jobs. The drill-down route /candidates/:id
+          stays mounted below; that's the standing report, still used. */}
+      <Route path="/candidates" element={<Navigate to="/jobs" replace />} />
 
       {/* Taali Chat — agentic chat over the same MCP tools served at /mcp.
           Backend at /api/v1/taali-chat/*. */}
