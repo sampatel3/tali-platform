@@ -12914,25 +12914,6 @@ button.eng-badge-button:focus-visible {
   max-width: 520px;
 }
 
-.mc-demo-lead-quote {
-  margin: 24px 0 0;
-  color: rgba(255, 255, 255, 0.78);
-  font-size: 13px;
-  line-height: 1.6;
-  font-style: italic;
-  max-width: 480px;
-}
-
-.mc-demo-lead-quote-source {
-  display: block;
-  margin-top: 8px;
-  font-style: normal;
-  font-family: var(--font-mono);
-  font-size: 11px;
-  letter-spacing: 0.06em;
-  color: rgba(255, 255, 255, 0.6);
-}
-
 /* Live agent feed terminal */
 .mc-demo-feed {
   background: var(--ink-deep);
@@ -12978,11 +12959,11 @@ button.eng-badge-button:focus-visible {
 
 .mc-demo-feed-row {
   display: grid;
-  grid-template-columns: 40px 90px 1fr;
-  gap: 10px;
+  grid-template-columns: 80px 1fr;
+  gap: 12px;
+  padding: 4px 0;
 }
 
-.mc-demo-feed-time { color: rgba(255, 255, 255, 0.35); }
 .mc-demo-feed-msg { color: rgba(255, 255, 255, 0.85); }
 
 .mc-demo-feed-cursor {
@@ -13232,23 +13213,6 @@ button.eng-badge-button:focus-visible {
   color: var(--ink);
   font-weight: 600;
 }
-
-.mc-demo-lead-trusted {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 24px;
-  align-items: center;
-  margin-top: 30px;
-  padding-top: 24px;
-  border-top: 1px solid var(--line);
-  color: var(--mute);
-  font-size: 11.5px;
-  font-family: var(--font-mono);
-  letter-spacing: 0.04em;
-}
-
-.mc-demo-lead-trusted span:first-child { color: var(--mute); }
-.mc-demo-lead-trusted span:not(:first-child) { color: var(--ink-2); font-weight: 500; }
 
 /* ================== JOBS LIST KPI ROW — Phase 6.2 ================== */
 

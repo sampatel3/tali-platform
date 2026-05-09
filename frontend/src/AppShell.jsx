@@ -71,6 +71,9 @@ const ChatPage = lazy(() =>
 const ChatShowcaseView = lazy(() =>
   import('./features/chat/ChatShowcaseView').then((m) => ({ default: m.ChatShowcaseView }))
 );
+const HomeShowcaseView = lazy(() =>
+  import('./features/home/HomeShowcaseView').then((m) => ({ default: m.HomeShowcaseView }))
+);
 const CandidateStandingReportPage = lazy(() =>
   import('./features/candidates/CandidateStandingReportPage').then((m) => ({ default: m.CandidateStandingReportPage }))
 );
@@ -567,6 +570,18 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <ChatShowcaseView />
+          </Suspense>
+        )}
+      />
+      {/* Public, auth-free Hub snapshot — the agent narrator + decision
+          feed surface, fed by fixture data. Used by the demo showcase
+          so the "Workflow & decisions" tab can render without auth and
+          without hitting the agent APIs. */}
+      <Route
+        path="/showcase/home"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <HomeShowcaseView />
           </Suspense>
         )}
       />

@@ -2,30 +2,40 @@ import React, { useState } from 'react';
 
 import { TaaliTile } from '../../shared/ui/Branding';
 
-// Live agent feed terminal — renders the agent narrating decisions in
-// real time on the dark editorial pane. Pulls colors directly from the
-// v4 dark-purple token family so it stays in sync with auth + reporting.
+// Recruiter-readable agent feed shown on the dark editorial pane. Same
+// vocabulary the real Hub decision feed uses (advance / reject / taught)
+// so the lead-capture surface mirrors what the visitor will see once
+// they're inside the product.
 const AGENT_FEED_ROWS = [
-  ['00:00', 'var(--purple-lav)', 'agent.start', 'reading 3 new applications…'],
-  ['00:02', '#7dd0a8', 'cv.score', 'maya chen → 92  (cleared all 6 dimensions)'],
-  ['00:04', '#7dd0a8', 'cv.score', 'jordan patel → 88'],
-  ['00:05', '#e8b167', 'cv.score', 'tom liu → 47  (below 55 threshold)'],
-  ['00:06', 'var(--purple-lav)', 'invite.send', 'maya, jordan → 90-min assessment'],
-  ['00:08', 'var(--purple-lav)', 'agent.note', '"jordan: strong system design, weak on ai prompting — flag for hm"'],
+  { type: 'advance', name: 'Maya Chen', detail: 'Strong fit. Top of pipeline.', tone: 'good' },
+  { type: 'advance', name: 'Jordan Patel', detail: 'Strong system design — flag for hiring manager.', tone: 'good' },
+  { type: 'reject',  name: 'Tom Liu',     detail: 'Well below your bar. Missing must-have skills.', tone: 'mute' },
+  { type: 'pending', name: 'Tariq Al-Ahmad', detail: 'Borderline — paused for your call.', tone: 'pend' },
 ];
 
 const AgentLiveFeed = () => (
   <div className="mc-demo-feed">
     <div className="mc-demo-feed-head">
       <span className="mc-demo-feed-dot" aria-hidden="true" />
-      <span className="mc-demo-feed-label">TAALI · LIVE AGENT FEED · STRIPE / SR. BACKEND</span>
-      <span className="mc-demo-feed-now">NOW</span>
+      <span className="mc-demo-feed-label">TAALI · DECISION FEED · SR. BACKEND</span>
+      <span className="mc-demo-feed-now">LIVE</span>
     </div>
     {AGENT_FEED_ROWS.map((row, i) => (
-      <div key={i} className="mc-demo-feed-row" style={{ opacity: 0.4 + i * 0.1 }}>
-        <span className="mc-demo-feed-time">{row[0]}</span>
-        <span className="mc-demo-feed-event" style={{ color: row[1] }}>{row[2]}</span>
-        <span className="mc-demo-feed-msg">{row[3]}</span>
+      <div key={i} className="mc-demo-feed-row" style={{ opacity: 0.55 + i * 0.11 }}>
+        <span
+          className="mc-demo-feed-event"
+          style={{
+            color:
+              row.tone === 'good' ? '#7dd0a8'
+                : row.tone === 'pend' ? '#e8b167'
+                  : 'var(--purple-lav)',
+          }}
+        >
+          {row.type}
+        </span>
+        <span className="mc-demo-feed-msg">
+          <strong style={{ color: 'rgba(255, 255, 255, 0.95)' }}>{row.name}</strong> — {row.detail}
+        </span>
       </div>
     ))}
     <div className="mc-demo-feed-cursor" aria-hidden="true">
@@ -103,17 +113,11 @@ export const DemoLeadPage = ({ onNavigate }) => {
           </h1>
           <p className="mc-demo-lead-sub">
             A recruiter that doesn't sleep. Taali's agent reads every application, runs the
-            assessment, scores six axes of AI-collaboration, and brings you a ranked shortlist by
+            assessment, scores how candidates code <em>and</em> work with AI, and brings you a ranked shortlist by
             morning. You walk in with a verdict, not an inbox.
           </p>
 
           <AgentLiveFeed />
-
-          <p className="mc-demo-lead-quote">
-            "We replaced the first two weeks of every search with Taali. Top of funnel went from a
-            chore to a calendar block."
-            <span className="mc-demo-lead-quote-source">— HEAD OF TALENT, SERIES B INFRA CO.</span>
-          </p>
         </div>
       </aside>
 
@@ -230,14 +234,6 @@ export const DemoLeadPage = ({ onNavigate }) => {
               </div>
             </div>
           </form>
-
-          <div className="mc-demo-lead-trusted">
-            <span>TRUSTED BY</span>
-            <span>STRIPE</span>
-            <span>LINEAR</span>
-            <span>VERCEL</span>
-            <span>RAMP</span>
-          </div>
         </div>
       </main>
     </div>

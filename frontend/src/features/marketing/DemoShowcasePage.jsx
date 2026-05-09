@@ -50,15 +50,15 @@ const SHOWCASE_TABS = [
   {
     k: 'scoring',
     n: '03',
-    label: 'Six-axis scoring',
-    sub: 'Evidence-linked, calibrated to your bar',
+    label: 'Standing report',
+    sub: 'Recruiter-readable, evidence-linked',
     src: `/c/demo?view=client&k=${REPORT_SHOWCASE_TOKEN}&showcase=1`,
     urlLabel: 'taali.ai/c/demo · candidate standing report',
     why: {
       headline: 'The standing report your hiring manager opens.',
       outcomes: [
-        'Score ring + AI fluency radar + per-axis evidence',
-        'Each axis links to the moment in the session it came from',
+        'Five recruiter-readable bars: coding, AI use, problem solving, independence, communication',
+        'Every score links back to the moment in the session it came from',
         'Shareable link, expiring, no PDFs, no leaks',
       ],
     },
@@ -82,16 +82,16 @@ const SHOWCASE_TABS = [
   {
     k: 'workflow',
     n: '05',
-    label: 'Workflow & decisions',
-    sub: 'The agent narrator + decisions feed',
-    src: '/reporting?demo=1&showcase=1',
-    urlLabel: 'taali.ai/reporting · agent narrator',
+    label: 'Hub · the agent narrator',
+    sub: 'Every decision the agent makes that needs you',
+    src: '/showcase/home',
+    urlLabel: 'taali.ai/home · agent narrator',
     why: {
-      headline: 'Every consequential decision, on the record.',
+      headline: 'The Hub is where you keep the agent honest.',
       outcomes: [
-        'Agent narrator turns the last 24h into one paragraph',
-        'Decisions feed: advanced, rejected, flagged — all reviewable',
-        'Anomalies surface where the agent paused for your judgment',
+        'Decision feed: advanced, rejected, flagged — all reviewable, all reversible',
+        'Pending sidebar surfaces where the agent paused for your judgment',
+        'Approve, override, or teach — your calls become its training signal',
       ],
     },
   },
@@ -123,7 +123,8 @@ const useFrameLoadGuard = () => {
     const sameRoute = frameUrl.pathname === intendedUrl.pathname;
     let allowed = sameRoute;
 
-    if (tab.k === 'chat') {
+    if (tab.k === 'chat' || tab.k === 'workflow') {
+      // /showcase/* routes are public-by-design — no query params required.
       allowed = sameRoute;
     } else if (tab.k === 'scoring') {
       allowed = sameRoute
@@ -176,7 +177,7 @@ export const DemoShowcasePage = ({ onNavigate }) => {
         <span className="mc-show-spacer" />
         <span className="mc-show-chip green">Demo data · resets daily</span>
         <button type="button" className="mc-show-btn" onClick={() => onNavigate?.('landing')}>Skip the tour</button>
-        <button type="button" className="mc-show-btn primary" onClick={() => onNavigate?.('demo-lead')}>Talk to founder →</button>
+        <button type="button" className="mc-show-btn primary" onClick={() => onNavigate?.('demo-lead')}>Start with free credits →</button>
       </div>
 
       {/* HERO */}
@@ -187,8 +188,10 @@ export const DemoShowcasePage = ({ onNavigate }) => {
             Your hiring funnel,<br />now with an <em>agent</em><br />at the top of it.
           </h1>
           <p className="mc-show-hero-sub">
-            Every tab below is a <b>real product surface</b> — the same code your team will use in production,
-            running on a sandbox seeded with a Senior Backend role. Click around. Nothing here is a mock.
+            The agent decides what to work on each cycle — fetch CVs, score, send assessments,
+            queue advances or rejects — paces it within the budget you set, and pauses to ask
+            you when it can&apos;t decide on its own. Every consequential call still goes through
+            you. Every tab below is a <b>real product surface</b>, not a mock.
           </p>
         </div>
       </section>
@@ -288,18 +291,15 @@ export const DemoShowcasePage = ({ onNavigate }) => {
           <div>
             <div className="mc-show-kicker mc-show-mb-10">READY TO PUT IT TO WORK?</div>
             <h2 className="mc-show-cta-h">
-              Wire your <em>real pipeline</em> into Taali. Free for 14 days.
+              Wire your <em>real pipeline</em> into Taali. Start with $1.50 in free credits.
             </h2>
             <p className="mc-show-cta-sub">
-              Connect Workable or Greenhouse, point Taali at one role, and watch your agent triage your next batch of CVs by morning. No card. Cancel any time.
+              Connect Workable, point the agent at one role, and watch it triage your next batch of CVs by morning. Usage-based — like Anthropic, OpenAI, Cursor. No card, no subscription, no monthly minimum.
             </p>
           </div>
           <div className="mc-show-cta-side">
             <button type="button" className="mc-show-btn primary tall" onClick={() => onNavigate?.('demo-lead')}>
-              Start the 14-day trial →
-            </button>
-            <button type="button" className="mc-show-btn tall" onClick={() => onNavigate?.('demo-lead')}>
-              Book a 20-min call instead
+              Start with free credits →
             </button>
             <div className="mc-show-cta-foot">SOC 2 · GDPR · NEVER USED FOR TRAINING</div>
           </div>
