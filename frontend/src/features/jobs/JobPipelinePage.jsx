@@ -2069,6 +2069,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
               })}
             </div>
 
+            {triageApplication ? (
+              <div className="kanban-triage-row">
+                <CandidateTriageDrawer {...triageDrawerProps} />
+              </div>
+            ) : null}
+
             {/* Role-level interview focus panel removed — interview guidance is per-candidate now,
                 surfaced in the candidate score sheet (kit + screening pack). */}
           </div>
@@ -2352,56 +2358,68 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                             : stage === 'review' && score != null && score < 50 ? 'Reject recommended'
                             : null);
                         const isAgentRow = Boolean(agentLabel) && stage === 'review';
+                        const isTriageRow = (
+                          triageApplication
+                          && Number(triageApplication.id) === Number(application.id)
+                        );
                         return (
-                          <tr
-                            key={application.id}
-                            className={isAgentRow ? 'agent-row' : ''}
-                            onClick={(event) => handlePipelineReportClick(event, application)}
-                            onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
-                            style={{ cursor: 'pointer' }}
-                          >
-                            <td>
-                              <div className="name">{buildApplicationTitle(application)}</div>
-                              <div className="sub">
-                                {application?.candidate_position
-                                  || application?.candidate_email
-                                  || 'No position captured'}
-                              </div>
-                            </td>
-                            <td>
-                              {score != null ? (
-                                <span className={`score-pill ${scoreClass}`}>{score}</span>
-                              ) : (
-                                <span className="score-pill mid" style={{ opacity: 0.5 }}>—</span>
-                              )}
-                            </td>
-                            <td>
-                              <span className="stage-pill">{stageLabel}</span>
-                            </td>
-                            <td className="ctable-status">{statusText}</td>
-                            <td>
-                              {agentLabel ? (
-                                <span className="ai-action">
-                                  <Sparkles size={11} strokeWidth={2} />
-                                  {agentLabel}
-                                </span>
-                              ) : (
-                                <span className="ctable-em">—</span>
-                              )}
-                            </td>
-                            <td>
-                              <a
-                                href={candidateReportHref(application, numericRoleId)}
-                                className="btn btn-ghost btn-sm"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  handlePipelineReportClick(event, application);
-                                }}
-                              >
-                                View →
-                              </a>
-                            </td>
-                          </tr>
+                          <React.Fragment key={application.id}>
+                            <tr
+                              className={isAgentRow ? 'agent-row' : ''}
+                              onClick={(event) => handlePipelineReportClick(event, application)}
+                              onMouseEnter={() => prefetchDocumentBlob({ applicationId: application.id, docType: 'cv' })}
+                              style={{ cursor: 'pointer' }}
+                            >
+                              <td>
+                                <div className="name">{buildApplicationTitle(application)}</div>
+                                <div className="sub">
+                                  {application?.candidate_position
+                                    || application?.candidate_email
+                                    || 'No position captured'}
+                                </div>
+                              </td>
+                              <td>
+                                {score != null ? (
+                                  <span className={`score-pill ${scoreClass}`}>{score}</span>
+                                ) : (
+                                  <span className="score-pill mid" style={{ opacity: 0.5 }}>—</span>
+                                )}
+                              </td>
+                              <td>
+                                <span className="stage-pill">{stageLabel}</span>
+                              </td>
+                              <td className="ctable-status">{statusText}</td>
+                              <td>
+                                {agentLabel ? (
+                                  <span className="ai-action">
+                                    <Sparkles size={11} strokeWidth={2} />
+                                    {agentLabel}
+                                  </span>
+                                ) : (
+                                  <span className="ctable-em">—</span>
+                                )}
+                              </td>
+                              <td>
+                                <a
+                                  href={candidateReportHref(application, numericRoleId)}
+                                  className="btn btn-ghost btn-sm"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    handlePipelineReportClick(event, application);
+                                  }}
+                                >
+                                  View →
+                                </a>
+                              </td>
+                            </tr>
+                            {isTriageRow ? (
+                              <tr className="ctable-triage-row">
+                                <td colSpan={6} className="ctable-triage-cell">
+                                  <CandidateTriageDrawer {...triageDrawerProps} />
+                                </td>
+                              </tr>
+                            ) : null}
+                          </React.Fragment>
                         );
                       })}
                     </tbody>
@@ -2411,8 +2429,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             })()}
           </>
         )}
-
-        {triageApplication ? <CandidateTriageDrawer {...triageDrawerProps} /> : null}
 
         <RoleSheet
           open={roleSheetOpen}

@@ -4512,6 +4512,26 @@ html[data-theme="dark"] {
   font-size: 11.5px;
 }
 
+/* When the drawer renders inline within the candidates table, the
+   parent <td> needs to drop the table cell padding so the drawer
+   sits flush under the row. */
+.ctable-triage-row > .ctable-triage-cell {
+  padding: 0;
+  background: transparent;
+}
+.ctable-triage-row > .ctable-triage-cell .candidate-triage-inline {
+  /* Already has its own border-left + padding from the .candidate-
+     triage-inline rules; reset the margin we added for the
+     bottom-of-page render so the drawer sits flush against the row
+     above it. */
+  margin-top: 0;
+  border-top: 0;
+}
+
+.kanban-triage-row {
+  margin-top: 16px;
+}
+
 .c-hero {
   background: var(--bg-2);
   border: 1px solid var(--line);
