@@ -308,6 +308,14 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   const navigate = useNavigate();
   const sectionRefs = useRef({});
   const workableSyncPollRef = useRef(null);
+  // Tracks the org id we've already seeded the various form state
+  // objects from. The big "reset forms from orgData" effect below runs
+  // every time `orgData` reference changes — including the Workable
+  // sync-status polling that does `setOrgData(prev => ({...prev, ...}))`
+  // every few seconds. Without this guard the polling would clobber any
+  // unsaved input the recruiter just typed (e.g. picking "Workable
+  // actor member" then watching it revert when the next poll lands).
+  const formsInitForOrgIdRef = useRef(null);
   // One-shot guard: auto-default the disqualification reason at most once
   // per page load. Without this the effect would refire on every reasons
   // refresh and re-write the same value.
@@ -636,7 +644,18 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
   }, [activeSection, fetchWorkableSyncStatus, loadBilling, loadTeam, loadWorkableLookups, loadWorkableSyncJobs]);
 
   useEffect(() => {
-    if (!orgData) return;
+    if (!orgData) {
+      formsInitForOrgIdRef.current = null;
+      return;
+    }
+    // Only seed the forms once per org. Without this, the Workable
+    // sync-status polling reaches into setOrgData every few seconds,
+    // bumps the orgData reference, and re-runs this effect — which
+    // wipes any unsaved input the user just typed (e.g. the
+    // "Workable actor member" select going back to "Select member"
+    // a few seconds after they pick someone).
+    if (formsInitForOrgIdRef.current === orgData.id) return;
+    formsInitForOrgIdRef.current = orgData.id;
     const workspaceSettings = {
       ...DEFAULT_WORKSPACE_SETTINGS,
       ...(orgData.workspace_settings || {}),
