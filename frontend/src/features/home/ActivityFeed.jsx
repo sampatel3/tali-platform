@@ -21,13 +21,25 @@ import { Avatar, TypeBadge, formatRelativeAge, initialsFrom } from './atoms';
 import './home.css';
 
 
-export const ActivityFeed = ({ rows, selectedId, onSelect, onNavigate }) => (
+// Default subtitle is the Hub framing (mentions the toolbar + detail
+// panel that surround the feed at /home). Marketing surfaces pass an
+// override since they render the feed standalone.
+const DEFAULT_SUBTITLE =
+  'Reverse-chronological. Filtered by the toolbar above. Pending rows jump into the detail panel.';
+
+export const ActivityFeed = ({
+  rows,
+  selectedId,
+  onSelect,
+  onNavigate,
+  subtitle = DEFAULT_SUBTITLE,
+}) => (
   <section className="home-section">
     <div className="home-section-head">
       <div>
         <span className="kicker">ACTIVITY · {rows.length} ROWS</span>
         <h3 className="home-section-title">Decision feed<em>.</em></h3>
-        <p className="home-section-sub">Reverse-chronological. Filtered by the toolbar above. Pending rows jump into the detail panel.</p>
+        <p className="home-section-sub">{subtitle}</p>
       </div>
     </div>
     {rows.length === 0 ? (
