@@ -1,11 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import {
-  ExternalLink,
-  Loader2,
-  LogOut,
-  Send,
-  X,
-} from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Loader2, X } from 'lucide-react';
 
 import { Button } from '../../shared/ui/TaaliPrimitives';
 import { CandidateAuditTimeline } from './CandidateAuditTimeline';
@@ -14,6 +8,11 @@ import {
   WorkableScorePip,
 } from '../../shared/ui/RecruiterDesignPrimitives';
 
+// Pipeline stages — exported because tests and parents still import the
+// list. The drawer itself no longer renders a segmented control for
+// these (stage transitions happen automatically via Send assessment /
+// Reject / Move-to-Workable), but keeping the export avoids ripple-out
+// breakage in callers that read it.
 export const TRIAGE_STAGE_OPTIONS = [
   { value: 'applied', label: 'Applied' },
   { value: 'invited', label: 'Invited' },
@@ -28,7 +27,7 @@ const formatWorkableStageOption = (stage) => {
 };
 
 export const candidateReportHref = (application, fromRoleId = null) => {
-  if (!application?.id) return '/candidates';
+  if (!application?.id) return '/jobs';
   const base = `/candidates/${encodeURIComponent(application.id)}`;
   if (Number.isFinite(Number(fromRoleId))) {
     return `${base}?from=jobs/${encodeURIComponent(fromRoleId)}`;
@@ -77,79 +76,96 @@ const stopPlainNavigation = (event) => (
   || event.button !== 0
 );
 
+const REJECT_VALUE = '__reject__';
+
 export function CandidateTriageDrawer({
   application,
   roleTasks = [],
   mode = 'inline',
   activityLabel = '',
   loadingActivity = false,
+  // eslint-disable-next-line no-unused-vars -- kept for API parity; the
+  // segmented control was retired in favour of automatic stage
+  // transitions driven by the action buttons.
   stageBusy = false,
   assessmentBusy = false,
   rejectBusy = false,
-  // Workable hand-back: when the candidate has a Workable origin and is at
-  // ``review``, the recruiter can push them straight into the next Workable
-  // stage. Stages are fetched per-job by the parent and passed in.
   workableStages = [],
   loadingWorkableStages = false,
   workableMoveBusy = false,
   onClose = null,
+  // eslint-disable-next-line no-unused-vars -- kept for API parity.
   onMoveStage,
   onSendAssessment,
   onViewFullReport,
   onReject,
   onMoveToWorkableStage,
 }) {
+  // Default to the "move forward" tab — recruiters open the drawer on a
+  // candidate who already has a score most of the time, so picking the
+  // next pipeline step is the dominant action.
+  const [activeTab, setActiveTab] = useState('move');
   const [selectedTaskId, setSelectedTaskId] = useState('');
-  const [selectedWorkableStage, setSelectedWorkableStage] = useState('');
-  const [confirmReject, setConfirmReject] = useState(false);
+  // ``selectedMoveAction`` is either a Workable stage slug or
+  // ``REJECT_VALUE``. One picker, one confirm button.
+  const [selectedMoveAction, setSelectedMoveAction] = useState('');
+  const [showDetails, setShowDetails] = useState(false);
+  const containerRef = useRef(null);
 
   const applicationId = application?.id || null;
   const assessmentId = useMemo(() => resolveAssessmentId(application), [application]);
-  const currentStage = String(application?.pipeline_stage || 'applied').toLowerCase();
   const candidateName = formatCandidateTitle(application);
   const roleLabel = application?.role_name || application?.candidate_position || 'Role';
-  const roleMeta = [
-    application?.candidate_location,
-    application?.candidate_headline,
-  ].filter(Boolean).join(' · ');
+  const currentStage = String(application?.pipeline_stage || 'applied').toLowerCase();
   const sourceLabel = application?.workable_sourced || application?.workable_candidate_id
     ? 'Imported from Workable'
     : 'Added in Taali';
   const canAct = application?.application_outcome === 'open';
   const hasWorkableLink = Boolean(application?.workable_candidate_id);
-  // Hand-back is the natural last step out of ``review`` for Workable
-  // candidates. We surface the picker eagerly when at review (the most
-  // common case) but keep it usable from any stage as long as there's a
-  // Workable link to write back to.
-  const showWorkableHandback = hasWorkableLink && Boolean(onMoveToWorkableStage);
+  const showMoveToWorkable = hasWorkableLink && Boolean(onMoveToWorkableStage);
   const workableStageOptions = useMemo(
     () => (Array.isArray(workableStages) ? workableStages.map(formatWorkableStageOption) : []),
     [workableStages],
   );
   const currentWorkableStage = String(application?.workable_stage || '').toLowerCase();
 
+  // Reset selections whenever a different candidate's drawer opens.
   useEffect(() => {
-    setConfirmReject(false);
+    setActiveTab('move');
+    setSelectedMoveAction('');
+    setShowDetails(false);
     if (roleTasks.length === 1) {
       setSelectedTaskId(String(roleTasks[0].id));
-      return;
+    } else {
+      setSelectedTaskId((current) => (
+        roleTasks.some((task) => String(task.id) === String(current)) ? current : ''
+      ));
     }
-    setSelectedTaskId((current) => (
-      roleTasks.some((task) => String(task.id) === String(current)) ? current : ''
-    ));
   }, [applicationId, roleTasks]);
 
+  // Drop the stage selection if the underlying stage list changes (rare,
+  // but happens after the role's Workable shortcode is fetched).
   useEffect(() => {
-    setSelectedWorkableStage((current) => {
-      if (!current) return current;
+    setSelectedMoveAction((current) => {
+      if (!current || current === REJECT_VALUE) return current;
       return workableStageOptions.some((stage) => stage.value === current) ? current : '';
     });
   }, [applicationId, workableStageOptions]);
+
+  // Bring the drawer into view whenever the open application changes.
+  // jsdom doesn't implement ``scrollIntoView``; guard for tests.
+  useEffect(() => {
+    if (!applicationId || !containerRef.current) return;
+    if (typeof containerRef.current.scrollIntoView !== 'function') return;
+    containerRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [applicationId]);
 
   if (!application) return null;
 
   const reportHref = candidateReportHref(application);
   const sendLabel = assessmentId ? 'Send retake' : 'Send invite';
+  const isRejectSelected = selectedMoveAction === REJECT_VALUE;
+  const moveBusy = isRejectSelected ? rejectBusy : workableMoveBusy;
 
   const handleReportClick = (event) => {
     if (stopPlainNavigation(event)) return;
@@ -157,214 +173,230 @@ export function CandidateTriageDrawer({
     onViewFullReport?.(application);
   };
 
-  const handleRejectClick = () => {
-    if (!confirmReject) {
-      setConfirmReject(true);
+  const handleConfirmMove = () => {
+    if (!selectedMoveAction || moveBusy) return;
+    if (isRejectSelected) {
+      onReject?.(application);
       return;
     }
-    onReject?.(application);
+    onMoveToWorkableStage?.(application, selectedMoveAction);
   };
 
-  const handleWorkableMove = () => {
-    if (!selectedWorkableStage || workableMoveBusy) return;
-    onMoveToWorkableStage?.(application, selectedWorkableStage);
-  };
+  const moveButtonLabel = (() => {
+    if (moveBusy) return isRejectSelected ? 'Rejecting…' : 'Sending…';
+    if (isRejectSelected) return 'Reject candidate';
+    if (selectedMoveAction) {
+      const picked = workableStageOptions.find((s) => s.value === selectedMoveAction);
+      return picked ? `Send to Workable: ${picked.label}` : 'Send to Workable';
+    }
+    return 'Pick an option';
+  })();
 
   return (
-    <div className={`candidate-triage candidate-triage-${mode}`}>
-      <div className="candidate-triage-grid">
-        <section className="candidate-triage-identity" aria-label={`${candidateName} triage summary`}>
-          <div className="candidate-triage-person">
-            <CandidateAvatar
-              name={candidateName}
-              imageUrl={application.candidate_image_url}
-              size={44}
-            />
-            <div className="min-w-0">
-              <div className="candidate-triage-name">
-                {candidateName}
-              </div>
-              <div className="candidate-triage-role">
-                {roleLabel}{roleMeta ? ` · ${roleMeta}` : ''}
-              </div>
-              <div className="candidate-triage-email">
-                {application?.candidate_email || 'No email captured'}
-              </div>
-            </div>
-          </div>
+    <div ref={containerRef} className={`candidate-triage candidate-triage-${mode} ctc`}>
+      {onClose ? (
+        <button
+          type="button"
+          className="ctc-close"
+          onClick={onClose}
+          aria-label="Close candidate drawer"
+        >
+          <X size={16} />
+        </button>
+      ) : null}
 
-          <div className="candidate-triage-scores">
-            <div className="candidate-triage-score-card">
-              <div className="k">Pre-screen</div>
-              <div className="v">{formatScore(resolvePreScreenScore(application))}</div>
-            </div>
-            <div className="candidate-triage-score-card">
-              <div className="k">Taali</div>
-              <div className="v">{formatScore(resolveTaaliScore(application))}</div>
-            </div>
-            <div className="candidate-triage-score-card">
-              <div className="k">Workable</div>
-              <div className="v">
-                {application.workable_score_raw != null ? (
-                  <WorkableScorePip value={application.workable_score_raw} />
-                ) : (
-                  '—'
-                )}
-              </div>
-            </div>
-          </div>
-        </section>
-
-        <section className="candidate-triage-actions" aria-label={`${candidateName} triage actions`}>
-          <div className="candidate-triage-section">
-            <div className="candidate-triage-label">Stage</div>
-            <div className="candidate-triage-stage-seg" role="group" aria-label="Candidate stage">
-              {TRIAGE_STAGE_OPTIONS.map((stage) => (
-                <button
-                  key={stage.value}
-                  type="button"
-                  className={stage.value === currentStage ? 'on' : ''}
-                  disabled={!canAct || stageBusy || stage.value === currentStage}
-                  onClick={() => onMoveStage?.(application, stage.value)}
-                >
-                  {stage.label}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="candidate-triage-section">
-            <div className="candidate-triage-label">Send Taali assessment</div>
-            <div className="candidate-triage-row">
-              <select
-                className="candidate-triage-task-select"
-                value={selectedTaskId}
-                onChange={(event) => setSelectedTaskId(event.target.value)}
-                aria-label="Assessment task"
-              >
-                <option value="">Select a task...</option>
-                {roleTasks.map((task) => (
-                  <option key={task.id} value={task.id}>
-                    {task.name}
-                  </option>
-                ))}
-              </select>
-              <Button
-                type="button"
-                variant="primary"
-                size="sm"
-                className="candidate-triage-send"
-                disabled={!selectedTaskId || assessmentBusy}
-                onClick={() => onSendAssessment?.(application, selectedTaskId)}
-              >
-                {assessmentBusy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
-                {assessmentBusy ? 'Sending...' : sendLabel}
-              </Button>
-            </div>
-          </div>
-
-          {showWorkableHandback ? (
-            <div className="candidate-triage-section">
-              <div className="candidate-triage-label">
-                Hand back to Workable
-                {currentWorkableStage ? (
-                  <span className="candidate-triage-label-meta">
-                    {' · currently '}<strong>{currentWorkableStage}</strong>
+      <div className="ctc-head">
+        <CandidateAvatar
+          name={candidateName}
+          imageUrl={application.candidate_image_url}
+          size={32}
+        />
+        <div className="ctc-head-text">
+          <div className="ctc-name">{candidateName}</div>
+          <div className="ctc-meta">
+            <span className="ctc-meta-role">{roleLabel}</span>
+            <span className="ctc-meta-dot" />
+            <span className="ctc-meta-stage">
+              Stage <span className="ctc-stage-chip">{currentStage}</span>
+            </span>
+            {currentWorkableStage ? (
+              <>
+                <span className="ctc-meta-dot" />
+                <span className="ctc-meta-workable">
+                  Workable <span className="ctc-stage-chip ctc-stage-chip-workable">
+                    {currentWorkableStage}
                   </span>
-                ) : null}
-              </div>
-              <div className="candidate-triage-row">
-                <select
-                  className="candidate-triage-task-select"
-                  value={selectedWorkableStage}
-                  onChange={(event) => setSelectedWorkableStage(event.target.value)}
-                  aria-label="Workable stage"
-                  disabled={loadingWorkableStages || !workableStageOptions.length}
-                >
-                  <option value="">
-                    {loadingWorkableStages
-                      ? 'Loading Workable stages...'
-                      : workableStageOptions.length
-                        ? 'Select a Workable stage...'
-                        : 'No Workable stages found'}
-                  </option>
-                  {workableStageOptions.map((stage) => (
-                    <option
-                      key={stage.value}
-                      value={stage.value}
-                      disabled={stage.value === currentWorkableStage}
-                    >
-                      {stage.label}
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="sm"
-                  className="candidate-triage-send"
-                  disabled={!canAct || !selectedWorkableStage || workableMoveBusy}
-                  onClick={handleWorkableMove}
-                >
-                  {workableMoveBusy ? (
-                    <Loader2 size={14} className="animate-spin" />
-                  ) : (
-                    <LogOut size={14} />
-                  )}
-                  {workableMoveBusy ? 'Sending...' : 'Send to Workable'}
-                </Button>
-              </div>
+                </span>
+              </>
+            ) : null}
+          </div>
+        </div>
+        <button
+          type="button"
+          className="ctc-toggle-link"
+          onClick={() => setShowDetails((prev) => !prev)}
+        >
+          {showDetails ? 'Hide details' : 'Show details'}
+        </button>
+      </div>
+
+      {showDetails ? (
+        <div className="ctc-details">
+          <div className="ctc-scores">
+            <span>Pre-screen <strong>{formatScore(resolvePreScreenScore(application))}</strong></span>
+            <span>Taali <strong>{formatScore(resolveTaaliScore(application))}</strong></span>
+            <span>
+              Workable{' '}
+              {application.workable_score_raw != null ? (
+                <WorkableScorePip value={application.workable_score_raw} />
+              ) : (
+                <strong>—</strong>
+              )}
+            </span>
+            <span className="ctc-grow" />
+            <span className="ctc-meta-faint">{application?.candidate_email || 'No email captured'}</span>
+          </div>
+          {applicationId ? (
+            <div className="ctc-timeline">
+              <CandidateAuditTimeline applicationId={applicationId} />
             </div>
           ) : null}
-
-          <div className="candidate-triage-section">
-            <div className="candidate-triage-label">Other actions</div>
-            <div className="candidate-triage-row">
-              <a
-                className="btn btn-outline btn-sm candidate-triage-report-link"
-                href={reportHref}
-                onClick={handleReportClick}
-              >
-                <ExternalLink size={13} />
-                View full report
-              </a>
-              <span className="candidate-triage-action-spacer" />
-              <button
-                type="button"
-                className={`btn btn-outline btn-sm candidate-triage-reject ${confirmReject ? 'confirm' : ''}`}
-                disabled={!canAct || rejectBusy}
-                onClick={handleRejectClick}
-              >
-                {rejectBusy ? 'Rejecting...' : confirmReject ? 'Confirm reject' : 'Reject'}
-              </button>
-            </div>
-          </div>
-        </section>
-
-        {applicationId ? (
-          <section className="candidate-triage-timeline mt-3">
-            <CandidateAuditTimeline applicationId={applicationId} />
-          </section>
-        ) : null}
-
-        {onClose ? (
-          <button
-            type="button"
-            className="candidate-triage-close"
-            onClick={onClose}
-            aria-label="Close candidate drawer"
-          >
-            <X size={16} />
-          </button>
-        ) : null}
-
-        <div className="candidate-triage-foot">
-          <span>{loadingActivity ? 'Loading activity...' : (activityLabel || 'Last activity not captured')}</span>
-          <span className="dot" />
-          <span>{sourceLabel}</span>
-          <span className="grow" />
-          <span>Esc closes</span>
         </div>
+      ) : null}
+
+      <div className="ctc-tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'move'}
+          className={activeTab === 'move' ? 'on' : ''}
+          onClick={() => setActiveTab('move')}
+        >
+          Move forward
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={activeTab === 'send'}
+          className={activeTab === 'send' ? 'on' : ''}
+          onClick={() => setActiveTab('send')}
+        >
+          Send assessment
+        </button>
+      </div>
+
+      {activeTab === 'send' ? (
+        <div className="ctc-tab-pane" role="tabpanel">
+          <div className="ctc-cards">
+            {roleTasks.length === 0 ? (
+              <div className="ctc-empty">No tasks linked to this role yet.</div>
+            ) : (
+              roleTasks.map((task) => {
+                const isOn = String(selectedTaskId) === String(task.id);
+                return (
+                  <button
+                    key={task.id}
+                    type="button"
+                    className={`ctc-card ${isOn ? 'on' : ''}`}
+                    onClick={() => setSelectedTaskId(String(task.id))}
+                  >
+                    <div className="ctc-card-title">{task.name}</div>
+                    <div className="ctc-card-sub">~60 min · in-browser IDE</div>
+                  </button>
+                );
+              })
+            )}
+          </div>
+          <div className="ctc-action-row">
+            <a
+              className="ctc-link"
+              href={reportHref}
+              onClick={handleReportClick}
+            >
+              View full report →
+            </a>
+            <span className="ctc-grow" />
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              disabled={!canAct || !selectedTaskId || assessmentBusy}
+              onClick={() => onSendAssessment?.(application, selectedTaskId)}
+            >
+              {assessmentBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+              {assessmentBusy ? 'Sending…' : sendLabel}
+            </Button>
+          </div>
+        </div>
+      ) : (
+        <div className="ctc-tab-pane" role="tabpanel">
+          <div className="ctc-cards">
+            {showMoveToWorkable ? (
+              loadingWorkableStages ? (
+                <div className="ctc-empty">Loading Workable stages…</div>
+              ) : workableStageOptions.length === 0 ? (
+                <div className="ctc-empty">No Workable stages found for this role.</div>
+              ) : (
+                workableStageOptions.map((stage) => {
+                  const isCurrent = stage.value === currentWorkableStage;
+                  const isOn = selectedMoveAction === stage.value;
+                  return (
+                    <button
+                      key={stage.value}
+                      type="button"
+                      className={`ctc-card ${isOn ? 'on' : ''}`}
+                      disabled={isCurrent}
+                      onClick={() => setSelectedMoveAction(stage.value)}
+                    >
+                      <div className="ctc-card-title">{stage.label}</div>
+                      {isCurrent ? <div className="ctc-card-sub">Current stage</div> : null}
+                    </button>
+                  );
+                })
+              )
+            ) : null}
+            {/* Reject is the only "move out of pipeline" option that
+                always appears, even for non-Workable candidates. Visually
+                differentiated by a deeper plum tint per the platform's
+                "purple variations, not red/amber/green" convention. */}
+            <button
+              type="button"
+              className={`ctc-card ctc-card-reject ${selectedMoveAction === REJECT_VALUE ? 'on' : ''}`}
+              disabled={!canAct}
+              onClick={() => setSelectedMoveAction(REJECT_VALUE)}
+            >
+              <div className="ctc-card-title">Reject</div>
+              <div className="ctc-card-sub">Closes the application</div>
+            </button>
+          </div>
+          <div className="ctc-action-row">
+            <a
+              className="ctc-link"
+              href={reportHref}
+              onClick={handleReportClick}
+            >
+              View full report →
+            </a>
+            <span className="ctc-grow" />
+            <Button
+              type="button"
+              variant="primary"
+              size="sm"
+              className={isRejectSelected ? 'ctc-confirm-reject' : ''}
+              disabled={!canAct || !selectedMoveAction || moveBusy}
+              onClick={handleConfirmMove}
+            >
+              {moveBusy ? <Loader2 size={14} className="animate-spin" /> : null}
+              {moveButtonLabel}
+            </Button>
+          </div>
+        </div>
+      )}
+
+      <div className="ctc-foot">
+        <span>{loadingActivity ? 'Loading activity…' : (activityLabel || sourceLabel)}</span>
+        <span className="ctc-grow" />
+        <span>Esc closes</span>
       </div>
     </div>
   );

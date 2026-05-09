@@ -9,6 +9,20 @@ vi.mock('../../context/ToastContext', () => ({
   useToast: () => ({ showToast }),
 }));
 
+// Some role-page descendants (notably AgentNeedsInputCard) import the
+// raw axios instance from `httpClient` directly instead of going
+// through the `apiClient.*` namespace. Mock both so no real network
+// dispatch happens — that's what was causing the jsdom undici flake.
+vi.mock('../../shared/api/httpClient', () => ({
+  default: {
+    get: vi.fn().mockResolvedValue({ data: [] }),
+    post: vi.fn().mockResolvedValue({ data: null }),
+    put: vi.fn().mockResolvedValue({ data: null }),
+    patch: vi.fn().mockResolvedValue({ data: null }),
+    delete: vi.fn().mockResolvedValue({ data: null }),
+  },
+}));
+
 vi.mock('../../shared/api', () => ({
   roles: {
     get: vi.fn(),
@@ -34,6 +48,7 @@ vi.mock('../../shared/api', () => ({
   organizations: {
     get: vi.fn().mockResolvedValue({ data: { default_role_requirements: [] } }),
     listCriteria: vi.fn().mockResolvedValue({ data: [] }),
+    getWorkableStages: vi.fn().mockResolvedValue({ data: { stages: [] } }),
   },
   agent: {
     status: vi.fn().mockResolvedValue({ data: null }),
@@ -192,8 +207,9 @@ describe('JobPipelinePage', () => {
 
     // Plain click opens the triage drawer in-place — recruiters do most
     // of their move-stage / send-assessment / reject work without ever
-    // leaving the role page.
-    expect(await screen.findByText(/Send Taali assessment/i)).toBeInTheDocument();
+    // leaving the role page. The Reject card's subtitle is unique to
+    // the redesigned drawer.
+    expect(await screen.findByText(/Closes the application/i)).toBeInTheDocument();
     expect(onNavigate).not.toHaveBeenCalledWith('candidate-report', expect.anything());
   });
 

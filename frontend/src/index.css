@@ -4013,10 +4013,16 @@ html[data-theme="dark"] {
 }
 
 .candidate-triage-inline {
-  min-width: 1280px;
+  /* Was `min-width: 1280px` — that was inherited from the directory
+     page where it sat inline within a wide table. On the role page
+     the drawer mounts below the candidates list and needs to fit
+     whatever container it lands in. */
+  width: 100%;
+  border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   border-left: 3px solid var(--purple);
   padding: 22px 28px 24px 25px;
+  margin-top: 16px;
   animation: candidate-triage-in 0.22s cubic-bezier(0.2, 0.7, 0.2, 1);
 }
 
@@ -4259,6 +4265,251 @@ html[data-theme="dark"] {
 
 .candidate-triage-foot .grow {
   flex: 1;
+}
+
+/* ---------------------------------------------------------------------
+   Candidate triage drawer — Option C (compact / tabbed)
+   --------------------------------------------------------------------- */
+
+.ctc {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 22px 16px 20px;
+}
+
+.ctc-close {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--mute);
+  cursor: pointer;
+}
+.ctc-close:hover { background: var(--bg-3); color: var(--ink); }
+
+.ctc-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-right: 36px;
+}
+.ctc-head-text { min-width: 0; flex: 1; }
+.ctc-name {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+  letter-spacing: -0.005em;
+}
+.ctc-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 2px;
+  font-size: 11.5px;
+  color: var(--mute);
+}
+.ctc-meta-role { color: var(--ink-2); }
+.ctc-meta-dot {
+  display: inline-block;
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--mute-2);
+}
+.ctc-meta-stage,
+.ctc-meta-workable { display: inline-flex; align-items: center; gap: 5px; }
+.ctc-stage-chip {
+  background: color-mix(in oklab, var(--purple) 10%, var(--bg));
+  color: var(--purple);
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-weight: 600;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  font-family: var(--font-mono);
+}
+.ctc-stage-chip-workable {
+  background: var(--bg-3);
+  color: var(--ink-2);
+}
+
+.ctc-toggle-link {
+  background: transparent;
+  border: 0;
+  color: var(--mute);
+  font-size: 11.5px;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.ctc-toggle-link:hover { color: var(--ink); }
+
+.ctc-details {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+.ctc-scores {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 18px;
+  font-size: 12px;
+  color: var(--mute);
+}
+.ctc-scores strong {
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.ctc-meta-faint { color: var(--mute-2); font-family: var(--font-mono); font-size: 11px; }
+.ctc-timeline { margin-top: 4px; }
+
+.ctc-tabs {
+  display: inline-flex;
+  gap: 2px;
+  align-self: flex-start;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--bg);
+  padding: 3px;
+}
+.ctc-tabs button {
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--mute);
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 14px;
+  transition: background 0.12s, color 0.12s;
+}
+.ctc-tabs button:hover:not(.on) { color: var(--ink); }
+.ctc-tabs button.on {
+  background: var(--purple);
+  color: #fff;
+}
+
+.ctc-tab-pane {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ctc-cards {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.ctc-card {
+  flex: 0 1 auto;
+  min-width: 130px;
+  max-width: 240px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  padding: 10px 14px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+  transition: background 0.12s, border-color 0.12s, box-shadow 0.12s;
+}
+.ctc-card:hover:not(.on):not(:disabled) {
+  background: color-mix(in oklab, var(--purple) 4%, var(--bg));
+  border-color: color-mix(in oklab, var(--purple) 22%, var(--line));
+}
+.ctc-card.on {
+  background: color-mix(in oklab, var(--purple) 8%, var(--bg));
+  border-color: var(--purple);
+  box-shadow: 0 0 0 1px var(--purple);
+}
+.ctc-card:disabled { cursor: default; opacity: 0.55; }
+.ctc-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+  letter-spacing: -0.005em;
+  color: var(--ink);
+}
+.ctc-card-sub {
+  font-size: 11px;
+  color: var(--mute);
+  margin-top: 3px;
+}
+
+/* Reject card — same row as the Workable stages, deeper plum so it
+   reads as a different intent without breaking the purple-only colour
+   convention used elsewhere in the product. */
+.ctc-card-reject {
+  border-color: color-mix(in oklab, var(--ink) 30%, var(--line));
+}
+.ctc-card-reject:hover:not(.on):not(:disabled) {
+  background: color-mix(in oklab, var(--ink) 4%, var(--bg));
+  border-color: color-mix(in oklab, var(--ink) 45%, var(--line));
+}
+.ctc-card-reject.on {
+  background: var(--ink);
+  border-color: var(--ink);
+  box-shadow: 0 0 0 1px var(--ink);
+}
+.ctc-card-reject.on .ctc-card-title,
+.ctc-card-reject.on .ctc-card-sub { color: #fff; }
+
+.ctc-empty {
+  font-size: 12.5px;
+  color: var(--mute);
+  padding: 8px 4px;
+}
+
+.ctc-action-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding-top: 4px;
+}
+.ctc-link {
+  font-size: 12px;
+  color: var(--mute);
+  text-decoration: none;
+}
+.ctc-link:hover { color: var(--ink); }
+.ctc-grow { flex: 1; }
+
+.ctc-confirm-reject {
+  background: var(--ink) !important;
+  border-color: var(--ink) !important;
+  color: #fff !important;
+}
+.ctc-confirm-reject:hover {
+  background: color-mix(in oklab, var(--ink) 88%, black) !important;
+  border-color: color-mix(in oklab, var(--ink) 88%, black) !important;
+}
+
+.ctc-foot {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 4px;
+  padding-top: 12px;
+  border-top: 1px dashed var(--line);
+  color: var(--mute);
+  font-size: 11.5px;
 }
 
 .c-hero {
