@@ -130,8 +130,11 @@ export function useCandidateTriage({
   }, [rolesApi, loadRoleWorkspace, showToast]);
 
   // Plain click on a candidate row opens the drawer in-place. Modifier-
-  // click (cmd/ctrl/shift/alt) keeps the anchor's default behaviour so
-  // power-users still get the full standing report in a new tab.
+  // click (cmd/ctrl/shift/alt) and middle-click keep the anchor's
+  // default behaviour so power-users still get the full standing
+  // report in a new tab. ``event.button > 0`` treats undefined as a
+  // left click, which matters for synthetic events from
+  // @testing-library where ``button`` may not be set.
   const handleRowClick = useCallback((event, application) => {
     if (
       event.defaultPrevented
@@ -139,7 +142,7 @@ export function useCandidateTriage({
       || event.ctrlKey
       || event.shiftKey
       || event.altKey
-      || event.button !== 0
+      || event.button > 0
     ) {
       return;
     }
