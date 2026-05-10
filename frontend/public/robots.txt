@@ -6,6 +6,5 @@
 
 User-agent: *
 Disallow: /deck
-Disallow: /deck-legacy
 Disallow: /_deck/
 Disallow: /dev/

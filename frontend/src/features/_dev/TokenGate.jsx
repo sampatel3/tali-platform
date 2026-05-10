@@ -58,7 +58,7 @@ function expectedToken() {
   return (import.meta.env?.VITE_DEV_TOKEN || '').trim();
 }
 
-export default function TokenGate({ children, label = 'this page' }) {
+export default function TokenGate({ children }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [authed, setAuthed] = useState(false);
 
@@ -101,6 +101,7 @@ export default function TokenGate({ children, label = 'this page' }) {
 
   if (authed) return children;
 
+  // Plain 404 on bad/missing token — don't reveal that a gated page exists.
   return (
     <div
       style={{
@@ -108,52 +109,17 @@ export default function TokenGate({ children, label = 'this page' }) {
         display: 'flex',
         alignItems: 'center',
         justifyContent: 'center',
-        background: '#0d0a14',
-        color: '#e8def8',
+        background: '#fff',
+        color: '#1a1228',
         fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
         padding: '24px',
       }}
     >
-      <div style={{ maxWidth: 420, textAlign: 'center' }}>
-        <div
-          style={{
-            fontSize: 14,
-            letterSpacing: '0.16em',
-            textTransform: 'uppercase',
-            opacity: 0.6,
-            marginBottom: 12,
-          }}
-        >
-          Tali · Internal
-        </div>
-        <h1 style={{ fontSize: 28, margin: '0 0 12px', fontWeight: 600 }}>
-          Access required
+      <div style={{ textAlign: 'center' }}>
+        <h1 style={{ fontSize: 24, margin: '0 0 8px', fontWeight: 600 }}>
+          404
         </h1>
-        <p style={{ margin: '0 0 24px', lineHeight: 1.5, opacity: 0.75 }}>
-          {label} is for invited viewers. If you have an access link, open it
-          again — the token in the URL grants entry. Otherwise contact{' '}
-          <a
-            href="mailto:sam@taali.ai"
-            style={{ color: '#c8a8ff', textDecoration: 'underline' }}
-          >
-            sam@taali.ai
-          </a>
-          .
-        </p>
-        <a
-          href="https://taali.ai"
-          style={{
-            display: 'inline-block',
-            padding: '10px 18px',
-            background: '#7f39fb',
-            color: '#fff',
-            borderRadius: 8,
-            textDecoration: 'none',
-            fontWeight: 500,
-          }}
-        >
-          Go to taali.ai
-        </a>
+        <p style={{ margin: 0, opacity: 0.6 }}>This page could not be found.</p>
       </div>
     </div>
   );
