@@ -45,6 +45,9 @@ const CandidateWelcomePage = lazy(() =>
 const BackgroundJobsToaster = lazy(() =>
   import('./features/candidates/BackgroundJobsToaster').then((m) => ({ default: m.BackgroundJobsToaster }))
 );
+const ToastShowcasePage = lazy(() =>
+  import('./features/dev/ToastShowcasePage').then((m) => ({ default: m.ToastShowcasePage }))
+);
 
 const AssessmentPage = lazy(() => import('./features/assessment_runtime/AssessmentPage'));
 const CandidateFeedbackPage = lazy(() =>
@@ -728,6 +731,15 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <DecisionPolicyPage />
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/dev/toasters"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <ToastShowcasePage />
           </Suspense>
         )}
       />

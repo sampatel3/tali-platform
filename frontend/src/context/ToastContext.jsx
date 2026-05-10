@@ -70,6 +70,33 @@ export function ToastProvider({ children }) {
   );
 }
 
+// Map toast variants onto the Taali semantic tokens defined in index.css.
+// Body text always uses --ink for readability; the variant only colours the
+// surface, border, and the small accent dot. See /dev/toasters for the
+// full design comparison and rationale.
+const VARIANT_TOKENS = {
+  success: {
+    bg: 'var(--taali-success-soft)',
+    border: 'var(--taali-success-border)',
+    accent: 'var(--taali-success)',
+  },
+  error: {
+    bg: 'var(--taali-danger-soft)',
+    border: 'var(--taali-danger-border)',
+    accent: 'var(--taali-danger)',
+  },
+  warning: {
+    bg: 'var(--taali-warning-soft)',
+    border: 'var(--taali-warning-border)',
+    accent: 'var(--taali-warning)',
+  },
+  info: {
+    bg: 'var(--taali-info-soft)',
+    border: 'var(--taali-info-border)',
+    accent: 'var(--taali-info)',
+  },
+};
+
 function ToastContainer({ toasts, onDismiss }) {
   if (!toasts.length) return null;
   return (
@@ -78,26 +105,38 @@ function ToastContainer({ toasts, onDismiss }) {
       role="region"
       aria-label="Notifications"
     >
-      {toasts.map((t) => (
-        <div
-          key={t.id}
-          className={`
-            rounded-lg border-2 px-4 py-3 shadow-lg text-sm
-            ${t.type === 'error' ? 'border-red-300 bg-red-50 text-red-900' : ''}
-            ${t.type === 'success' ? 'border-green-300 bg-green-50 text-green-900' : ''}
-            ${t.type === 'info' || !t.type ? 'border-[var(--taali-border)] bg-[var(--taali-surface)] text-[var(--taali-text)]' : ''}
-          `}
-        >
-          <p className="break-words">{t.message}</p>
-          <button
-            type="button"
-            onClick={() => onDismiss(t.id)}
-            className="mt-2 text-xs font-medium underline focus:outline-none focus:ring-2 focus:ring-offset-1"
+      {toasts.map((t) => {
+        const tokens = VARIANT_TOKENS[t.type] || VARIANT_TOKENS.info;
+        return (
+          <div
+            key={t.id}
+            className="rounded-lg border px-4 py-3 shadow-sm text-sm"
+            style={{
+              background: tokens.bg,
+              borderColor: tokens.border,
+              color: 'var(--ink)',
+            }}
+            role={t.type === 'error' ? 'alert' : 'status'}
           >
-            Dismiss
-          </button>
-        </div>
-      ))}
+            <p className="break-words">
+              <span
+                aria-hidden="true"
+                className="inline-block h-2 w-2 rounded-full mr-2 align-middle"
+                style={{ background: tokens.accent }}
+              />
+              {t.message}
+            </p>
+            <button
+              type="button"
+              onClick={() => onDismiss(t.id)}
+              className="mt-2 text-xs font-medium underline focus:outline-none focus:ring-2 focus:ring-offset-1"
+              style={{ color: tokens.accent }}
+            >
+              Dismiss
+            </button>
+          </div>
+        );
+      })}
     </div>
   );
 }
