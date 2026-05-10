@@ -1106,7 +1106,14 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       const [roleRes, tasksRes, applicationsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
         rolesApi.get(numericRoleId),
         rolesApi.listTasks(numericRoleId),
-        rolesApi.listApplications(numericRoleId, { sort_by: 'pre_screen_score', sort_order: 'desc' }),
+        // Pull all outcomes (open + rejected + withdrawn + hired) so the
+        // "Rejected" tab can show closed applications without a second
+        // round-trip. Backend default is `application_outcome=open`.
+        rolesApi.listApplications(numericRoleId, {
+          sort_by: 'pre_screen_score',
+          sort_order: 'desc',
+          application_outcome: 'all',
+        }),
         rolesApi.batchScoreStatus(numericRoleId),
         rolesApi.fetchCvsStatus(numericRoleId),
         rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
@@ -1233,6 +1240,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     };
   }, [fetchCvsProgress, preScreenProgress, loadRoleWorkspace, numericRoleId, rolesApi]);
 
+  const rejectedApplications = useMemo(() => (
+    roleApplications.filter((application) => application?.application_outcome === 'rejected')
+  ), [roleApplications]);
   const activeApplications = useMemo(() => (
     roleApplications.filter((application) => application?.application_outcome === 'open')
   ), [roleApplications]);
@@ -2229,6 +2239,12 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     const items = (groupedApplications.find((g) => g.key === stage.key)?.items) || [];
                     return { key: stage.key, label: stage.label, count: items.length };
                   }),
+                  // Rejected is an *outcome* not a *stage*; it lives at
+                  // the right of the strip so the active-pipeline tabs
+                  // (All / Applied / Invited / In assessment / Review)
+                  // read left-to-right as a recruiter would walk the
+                  // funnel.
+                  { key: 'rejected', label: 'Rejected', count: rejectedApplications.length },
                 ].map((seg) => (
                   <button
                     key={seg.key}
@@ -2306,9 +2322,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 uses the directory. */}
             {(() => {
               const activeStage = tableStageFilter;
-              const filteredApps = activeStage === 'all'
-                ? activeApplications
-                : activeApplications.filter((a) => String(a?.pipeline_stage || '').toLowerCase() === activeStage);
+              const filteredApps = activeStage === 'rejected'
+                ? rejectedApplications
+                : activeStage === 'all'
+                  ? activeApplications
+                  : activeApplications.filter((a) => String(a?.pipeline_stage || '').toLowerCase() === activeStage);
               const cmpScore = (a) => {
                 const raw = a?.score_summary?.taali_score
                   ?? a?.taali_score
