@@ -104,6 +104,12 @@ const DecisionPolicyPage = lazy(() =>
 const InvestmentDeckPage = lazy(() =>
   import('./features/dev/InvestmentDeckPage')
 );
+const TokenGate = lazy(() =>
+  import('./features/_dev/TokenGate')
+);
+const DeckIframe = lazy(() =>
+  import('./features/_dev/DeckIframe')
+);
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
@@ -738,14 +744,28 @@ function AppContent() {
         )}
       />
 
-      {/* Internal investment-deck screenshot canvas. Not linked from
-          anywhere; reach by direct URL only. See
-          features/dev/InvestmentDeckPage.jsx. */}
+      {/* Internal investor deck. Token-gated: reach via
+          /deck?k=<VITE_DEV_TOKEN>. See features/_dev/TokenGate.jsx and
+          public/_deck/index.html. The legacy React-based deck still lives
+          at /deck-legacy for the screenshot canvas. */}
       <Route
         path="/deck"
         element={(
           <Suspense fallback={lazyFallback}>
-            <InvestmentDeckPage />
+            <TokenGate label="The Taali investor deck">
+              <DeckIframe />
+            </TokenGate>
+          </Suspense>
+        )}
+      />
+
+      <Route
+        path="/deck-legacy"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <TokenGate label="The legacy deck canvas">
+              <InvestmentDeckPage />
+            </TokenGate>
           </Suspense>
         )}
       />
@@ -754,7 +774,9 @@ function AppContent() {
         path="/dev/toasters"
         element={(
           <Suspense fallback={lazyFallback}>
-            <ToastShowcasePage />
+            <TokenGate label="The toaster showcase">
+              <ToastShowcasePage />
+            </TokenGate>
           </Suspense>
         )}
       />
