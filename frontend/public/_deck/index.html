@@ -334,11 +334,11 @@
       </div>
       <div class="pillar">
         <div class="p-num"><span>03</span><span class="name">AUDITABLE</span></div>
-        <div class="p-title">Rule-traced. No black box.</div>
-        <div class="p-body">DecisionPolicy is pure-Python, pinned to a versioned RubricRevision. Every queued decision carries policy_revision_id + rule_path. Override once → nightly retune updates the policy. Defensible to your hiring committee.</div>
+        <div class="p-title">Every call traceable. <em>Learns from your overrides.</em></div>
+        <div class="p-body">The agent makes the call. You see why — which signals it weighed, which rubric version, which evidence clip. Override it and that judgement trains the next loop overnight. No black-box rejections to defend in front of your hiring committee.</div>
         <div class="p-meta">
-          <span><b>policy_revision_id</b> on every verdict</span>
-          <span><b>Nightly retune</b> from your overrides</span>
+          <span><b>Evidence-linked</b> verdict on every advance / reject</span>
+          <span><b>Overrides</b> retrain the policy nightly</span>
         </div>
       </div>
     </div>
@@ -357,9 +357,6 @@
       <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>Product — the workspace</span></div>
       <h2 class="slide-title" style="font-size:64px;">Real IDE, real AI in the side panel. <em>We watch how they use it.</em></h2>
     </div>
-
-    <!-- handoff note: replace mock with real product IDE capture before final send -->
-    <div class="capture-badge" style="left: 88px; top: 232px; background: rgba(127,57,251,0.12); color: #7f39fb; border: 1px dashed rgba(127,57,251,0.5);"><span class="dot" style="background:#7f39fb;"></span>Handoff: swap mock for live product capture (taali.ai/assess)</div>
 
     <div class="ide light">
       <div class="ide-bar">
@@ -724,9 +721,9 @@
       <div class="traction">
         <div class="th">// Traction · live now</div>
         <div class="pilot">
-          <span class="nm">DeepLight</span>
-          <span class="ds">First design partner — UAE engineering hires running on Taali for cohort scoring + AI-fluency rubric.</span>
-          <span class="live"><span class="blip"></span>Live pilot · production</span>
+          <span class="nm">Design partner pilot · UAE</span>
+          <span class="ds">First customer running engineering hires on Taali — cohort scoring, AI-fluency rubric, recruiter-in-the-loop overrides feeding the policy retune. Named reference available under NDA.</span>
+          <span class="live"><span class="blip"></span>Live · production</span>
         </div>
         <div class="stats">
           <div class="s"><div class="n">Phase 7</div><div class="l">Cohort-planner agent shipped Apr 2026</div></div>
@@ -735,7 +732,7 @@
           <div class="s"><div class="n">$1.50</div><div class="l">Free credits unlock — full platform on one role, no card</div></div>
         </div>
         <div class="next">
-          <b>Next:</b> 5 paying UAE customers by Q2 close · 25 across GCC by Q3 · $1M ARR run-rate target by Q4 2026.
+          <b>Next:</b> Pipeline of UAE design partners in conversation. Specific commercial milestones held until close — happy to walk through 1:1.
         </div>
       </div>
     </div>
@@ -752,7 +749,7 @@
   <section data-slide="financials" data-screen-label="09 Financials">
     <div class="slide-head">
       <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>Revenue model &amp; forecast</span></div>
-      <h2 class="slide-title" style="font-size:60px;">Per-seat SaaS, priced where Workable sits. <em>One enterprise tier covers the FDE pilot model.</em></h2>
+      <h2 class="slide-title" style="font-size:60px;">Per-seat SaaS, priced where Workable sits. <em>Enterprise tier funds the FDE motion.</em></h2>
     </div>
 
     <div class="fin-grid">
@@ -762,23 +759,23 @@
         <div class="fin-tier">
           <span class="name">Starter</span>
           <span class="price">$249<em> / recruiter / mo</em></span>
-          <span class="note">Up to 5 active roles. CV scoring, assessments, decision feed. Self-serve, Workable-only.</span>
+          <span class="note">Up to 5 active roles. CV scoring, assessments, decision feed. Self-serve, single-ATS.</span>
         </div>
 
         <div class="fin-tier pri">
           <span class="name">Team <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.16em; color:#7f39fb; padding-left:8px;">// MOST PILOTS</span></span>
           <span class="price">$549<em> / recruiter / mo</em></span>
-          <span class="note">Unlimited roles, full ATS sync, override-trained policy, 5-axis fluency, audit export. The Deeplight pilot tier.</span>
+          <span class="note">Unlimited roles, full ATS sync, override-trained policy, 5-axis fluency, audit export. Where the wedge lands.</span>
         </div>
 
         <div class="fin-tier">
           <span class="name">Enterprise</span>
           <span class="price">from $80k<em> / yr</em></span>
-          <span class="note">FDE-led: bespoke rubrics, on-prem assessment recordings, SSO, regulatory audit packs. Two LOIs in conversation.</span>
+          <span class="note">FDE-led: bespoke rubrics, on-prem assessment recordings, SSO, regulatory audit packs. Pipeline building.</span>
         </div>
 
         <div class="fin-tier" style="background: transparent; border: none; padding: 4px 0; grid-template-columns: 1fr;">
-          <span class="note" style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; color: rgba(20,15,40,0.55);">Compute pass-through: $0.40 / completed assessment (Anthropic + sandbox). Margin neutral by design.</span>
+          <span class="note" style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; color: rgba(20,15,40,0.55);">Compute pass-through: ~$0.40 / completed assessment (Anthropic + sandbox). Margin neutral by design.</span>
         </div>
       </div>
 
@@ -790,40 +787,44 @@
             <span></span><span>2026</span><span>2027</span><span>2028</span><span>2029</span>
           </div>
           <div class="fin-row">
-            <span class="lbl">Paying recruiters</span>
-            <span class="v">12</span><span class="v">85</span><span class="v">340</span><span class="v">920</span>
+            <span class="lbl">Paying logos</span>
+            <span class="v">11</span><span class="v">80</span><span class="v">230</span><span class="v">510</span>
+          </div>
+          <div class="fin-row">
+            <span class="lbl">Recruiter seats</span>
+            <span class="v">14</span><span class="v">110</span><span class="v">290</span><span class="v">720</span>
           </div>
           <div class="fin-row">
             <span class="lbl">Enterprise contracts</span>
-            <span class="v">1</span><span class="v">4</span><span class="v">12</span><span class="v">28</span>
+            <span class="v">0</span><span class="v">3</span><span class="v">10</span><span class="v">20</span>
           </div>
           <div class="fin-row">
             <span class="lbl">Net revenue retention</span>
-            <span class="v">—</span><span class="v">112%</span><span class="v">124%</span><span class="v">128%</span>
+            <span class="v">—</span><span class="v">110%</span><span class="v">118%</span><span class="v">124%</span>
           </div>
           <div class="fin-row tot">
-            <span class="lbl">ARR (USD)</span>
-            <span class="v">$0.18M</span><span class="v">$1.2M</span><span class="v">$5.8M</span><span class="v">$18M</span>
+            <span class="lbl">ARR exit (USD)</span>
+            <span class="v">$95k</span><span class="v">$1.0M</span><span class="v">$2.8M</span><span class="v">$6.9M</span>
           </div>
           <div class="fin-row">
             <span class="lbl">Gross margin</span>
-            <span class="v">68%</span><span class="v">74%</span><span class="v">78%</span><span class="v">81%</span>
+            <span class="v">60%</span><span class="v">70%</span><span class="v">76%</span><span class="v">81%</span>
           </div>
           <div class="fin-row">
             <span class="lbl">Burn / mo</span>
-            <span class="v">$48k</span><span class="v">$95k</span><span class="v">$180k</span><span class="v">break-even</span>
+            <span class="v">$50k</span><span class="v">$130k</span><span class="v">$230k</span><span class="v">$360k</span>
           </div>
         </div>
 
         <div class="fin-assumptions">
           <b>// Assumptions</b>
-          UAE TAM 5,400 active recruiters · 2.4% Y1 → 17% Y4 wedge penetration · ASP blended $6.6k/recruiter/yr · ATS integrations (Greenhouse, Ashby) ship Q2'27 unlocking US/EU mid-market · enterprise ACV held flat at $120k pending deeper rubric work. Detailed model with sensitivity bands available on request — building in Claude Code now.
+          UAE TAM ~5,400 active recruiters · founder-led GCC sales 2026, Greenhouse + Ashby integrations ship Q2'27 unlocking remote-led US/EU mid-market 2028 · ASP blended $6.6k/recruiter/yr (Team tier dominant) · enterprise ACV climbs $90k → $120k as audit-pack maturity grows · NRR rises as 5-axis scoring graduates more roles per logo · Y4 gross profit ($5.6M) covers projected burn ($4.3M) — break-even reachable inside Y4 on plan. Detailed model + sensitivity bands available on request.
         </div>
       </div>
     </div>
 
     <div class="slide-foot">
-      <span>09 / 11 · Financials · forecast in progress</span>
+      <span>09 / 11 · Financials · bottom-up</span>
       <span class="brand">taali<span class="p">.</span></span>
     </div>
   </section>
@@ -858,15 +859,16 @@
       <div class="ask-card">
         <div class="lbl">// The ask</div>
         <div>
-          <div class="amt">$750K<span class="u" style="font-size: 32px;"> pre-seed</span></div>
+          <div class="amt placeholder">Pre-seed<span class="u" style="font-size: 26px;"> · round &amp; size finalising</span></div>
           <div class="stage">Rolling close · soft commits welcome</div>
         </div>
 
         <div class="ask-uof">
-          <div class="uh">// Use of funds — 18 months</div>
-          <div class="uof"><span class="pct">55%</span><span class="desc"><b>GTM:</b> 2 FTEs ($200k each) — UAE BD lead + GTM/marketing — convert design partners into paying customers.</span></div>
-          <div class="uof"><span class="pct">30%</span><span class="desc"><b>Forward-deployed engineer:</b> ATS integrations (Greenhouse · Ashby), customer onboarding, agent tuning per cohort.</span></div>
-          <div class="uof"><span class="pct">15%</span><span class="desc"><b>Runway + infra:</b> Anthropic spend, retune compute, security & compliance for enterprise pilots.</span></div>
+          <div class="uh">// Use of funds — high level</div>
+          <div class="uof"><span class="pct">·</span><span class="desc"><b>GTM:</b> UAE BD + GTM motion — convert design-partner pipeline into paying logos.</span></div>
+          <div class="uof"><span class="pct">·</span><span class="desc"><b>Forward-deployed engineering:</b> ATS integrations (Greenhouse · Ashby), customer onboarding, per-cohort agent tuning.</span></div>
+          <div class="uof"><span class="pct">·</span><span class="desc"><b>Runway + infra:</b> compute, retune cycles, security &amp; compliance for enterprise pilots.</span></div>
+          <div class="uof placeholder-note"><span class="pct"></span><span class="desc">Detailed breakdown + 18-month plan shared 1:1 once we're in conversation.</span></div>
         </div>
 
         <div class="ask-cta">
@@ -885,58 +887,50 @@
   <!-- ═══════════════════════════════════════════════════════════════════════
        10 · VISION (closing)
        ════════════════════════════════════════════════════════════════════ -->
-  <section data-slide="close" data-screen-label="10 Vision">
+  <section data-slide="close" data-screen-label="11 Close">
     <div class="tally-grid"></div>
 
-    <div class="close-top">
-      <div class="wm">taali<span class="p">.</span></div>
-      <div class="meta">11 · Vision · where work is going</div>
+    <div class="cz-head">
+      <div class="eyebrow"><span class="num">11</span><span class="dot">·</span><span>Close</span></div>
+      <div class="cz-mark">taali<span class="p">.</span></div>
     </div>
 
-    <div class="close-body">
-      <div class="h">The CV is dead. <em>The assessment is the new resume.</em></div>
-      <div class="sub">Every signal recruiters used to trust — schools, titles, work history, the resume itself — is now AI-generated noise. The only honest signal left is watching someone do the work, with the tools they'll actually use, observed end-to-end. Taali is building the capability graph for the AI era — starting with engineers, generalizing to every role AI has rewritten.</div>
-
-      <div class="eras">
-        <div class="era">
-          <span class="yr">// Era · 2010s</span>
-          <span class="ti">CV-led hiring.</span>
-          <span class="bd">Recruiters read paper credentials. Trust = brand, school, title. Now broken: 78% AI-generated CVs, $600B in fraud, recruiter trust collapsing.</span>
-          <span class="sig">→ funnel can't self-filter</span>
-        </div>
-        <div class="era">
-          <span class="yr">// Era · 2020s</span>
-          <span class="ti">Assessment bolted on.</span>
-          <span class="bd">HackerRank, Codility, CodeSignal staple a leetcode test onto a CV pipeline. Now broken: sealed sandbox, no AI, irrelevant to how engineers actually ship work.</span>
-          <span class="sig">→ measures the wrong skill</span>
-        </div>
-        <div class="era now">
-          <span class="yr">// Era · NOW</span>
-          <span class="ti">Capability-first. <em>Agent-led.</em></span>
-          <span class="bd">The agent runs each role. The assessment <em>is</em> the resume — recorded, replayable, evidence-linked, portable. Every assessment becomes a node in a capability graph that follows the candidate, not the company.</span>
-          <span class="sig">→ Taali · the capability graph</span>
-        </div>
+    <div class="cz-hero">
+      <div class="cz-statement">
+        The CV is dead.<br/>
+        <em>The assessment is the new resume.</em>
+      </div>
+      <div class="cz-tagline">
+        Building the capability graph for the AI era — agent-led hiring, evidence-linked verdicts, portable proof of what people can actually do alongside AI. Engineering first. UAE first. Every role AI has rewritten next.
       </div>
     </div>
 
-    <div class="kicker">
-      <div class="k-line">
-        <span class="k-tag">// the wedge</span>
-        <span class="k-text">Engineering hiring + AI fluency. Live now, paying pilots, urgent pain.</span>
+    <div class="cz-pillars">
+      <div class="cz-pill">
+        <span class="cz-pill-tag">// the wedge</span>
+        <span class="cz-pill-text">Engineering hiring + AI fluency. Live in UAE today.</span>
       </div>
-      <div class="k-line k-now">
-        <span class="k-tag">// the company</span>
-        <span class="k-text"><b>The capability graph.</b> Every knowledge worker, every assessment, every verified skill — one portable record of what humans can actually do alongside AI.</span>
+      <div class="cz-pill">
+        <span class="cz-pill-tag">// the market</span>
+        <span class="cz-pill-text">$4.5B global recruiting software by 2028 — and a 27% YoY home market.</span>
+      </div>
+      <div class="cz-pill cz-pill-now">
+        <span class="cz-pill-tag">// the company</span>
+        <span class="cz-pill-text">Portable record of what every knowledge worker can do alongside AI.</span>
       </div>
     </div>
 
-    <div class="close-foot">
-      <div class="pillars">
-        <span><b>Sam Patel</b> · Founder</span>
-        <span><a href="mailto:sam@taali.ai">sam@taali.ai</a></span>
-        <span><a href="https://www.taali.ai">taali.ai</a></span>
+    <div class="cz-foot">
+      <div class="cz-contact">
+        <div class="cz-name">Sam Patel</div>
+        <div class="cz-role">Founder · Taali</div>
+        <div class="cz-links">
+          <a href="mailto:sam@taali.ai">sam@taali.ai</a>
+          <span class="sep">·</span>
+          <a href="https://www.taali.ai">taali.ai</a>
+        </div>
       </div>
-      <div>11 / 11 — thank you.</div>
+      <div class="cz-thanks">11 / 11 · thank you.</div>
     </div>
   </section>
 
