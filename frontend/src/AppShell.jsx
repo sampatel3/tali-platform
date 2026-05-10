@@ -101,8 +101,11 @@ const SettingsPage = lazy(() =>
 const DecisionPolicyPage = lazy(() =>
   import('./features/decision_policy/DecisionPolicyPage')
 );
-const InvestmentDeckPage = lazy(() =>
-  import('./features/dev/InvestmentDeckPage')
+const TokenGate = lazy(() =>
+  import('./features/_dev/TokenGate')
+);
+const DeckIframe = lazy(() =>
+  import('./features/_dev/DeckIframe')
 );
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
@@ -738,14 +741,15 @@ function AppContent() {
         )}
       />
 
-      {/* Internal investment-deck screenshot canvas. Not linked from
-          anywhere; reach by direct URL only. See
-          features/dev/InvestmentDeckPage.jsx. */}
+      {/* Internal investor deck. Reach via /deck?k=<VITE_DEV_TOKEN>.
+          See features/_dev/TokenGate.jsx and public/_deck/index.html. */}
       <Route
         path="/deck"
         element={(
           <Suspense fallback={lazyFallback}>
-            <InvestmentDeckPage />
+            <TokenGate>
+              <DeckIframe />
+            </TokenGate>
           </Suspense>
         )}
       />
@@ -754,7 +758,9 @@ function AppContent() {
         path="/dev/toasters"
         element={(
           <Suspense fallback={lazyFallback}>
-            <ToastShowcasePage />
+            <TokenGate>
+              <ToastShowcasePage />
+            </TokenGate>
           </Suspense>
         )}
       />

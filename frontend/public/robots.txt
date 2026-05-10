@@ -1,0 +1,10 @@
+# Tali — robots.txt
+# Internal / dev / investor pages. These routes are token-gated in the app
+# (see features/_dev/TokenGate.jsx) and additionally emit a noindex meta
+# tag at runtime, but listing them here keeps well-behaved crawlers off
+# them entirely.
+
+User-agent: *
+Disallow: /deck
+Disallow: /_deck/
+Disallow: /dev/

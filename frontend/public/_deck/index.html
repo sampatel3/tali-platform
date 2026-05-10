@@ -1,0 +1,965 @@
+<!doctype html>
+<html lang="en" data-cover="a" data-problem="a" data-why="a">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Taali · Investor Deck · 2026</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&display=swap">
+<link rel="stylesheet" href="investor-deck/tokens.css">
+<link rel="stylesheet" href="investor-deck/deck.css">
+</head>
+<body>
+
+<deck-stage>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       01 · COVER (3 variations)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="cover" data-screen-label="01 Cover">
+    <div class="cover-grid"></div>
+
+    <div class="cover-top">
+      <div class="cover-wordmark">taali<span class="p">.</span></div>
+      <div class="cover-meta">
+        <span><b>Pre-seed</b> · 2026</span>
+        <span>UAE · MENA</span>
+        <span>Investor deck</span>
+      </div>
+    </div>
+
+    <!-- Variant A — engineer-credible -->
+    <div class="cover-body cv cv-a">
+      <div class="cover-eyebrow">// 01 · The recruiter's agent</div>
+      <div class="cover-headline">Hire engineers who <em>ship</em> with AI<span class="p">.</span></div>
+      <div class="cover-sub">Taali is the agent that runs your engineering pipeline — and the only one that scores how candidates actually <em>work</em> with AI. Real IDE. Real Claude. Real evidence.</div>
+      <div class="cover-pillars">
+        <span class="cover-pillar"><b>01</b> Agentic loop</span>
+        <span class="cover-pillar"><b>02</b> AI-fluency scoring</span>
+        <span class="cover-pillar"><b>03</b> Auditable verdicts</span>
+      </div>
+    </div>
+
+    <!-- Variant B — vision-first -->
+    <div class="cover-body cv cv-b">
+      <div class="cover-eyebrow">// 01 · Built for the AI-native era</div>
+      <div class="cover-headline">The recruiter's <em>agent</em><span class="p">.</span></div>
+      <div class="cover-sub">One agent runs each role end-to-end. Watches candidates as they arrive, scores fluency on a real IDE, queues the calls that matter to you. Built in the UAE for the way engineers ship now.</div>
+      <div class="cover-pillars">
+        <span class="cover-pillar">Runs <b>24/7</b> — pauses for your judgment</span>
+        <span class="cover-pillar"><b>AI-native</b> assessment from day one</span>
+        <span class="cover-pillar"><b>UAE-native</b> · Emiratisation-ready</span>
+      </div>
+    </div>
+
+    <!-- Variant C — bold/contrarian -->
+    <div class="cover-body cv cv-c">
+      <div class="cover-eyebrow">// 01 · 2026 — the assessment is the product</div>
+      <div class="cover-headline">Your hiring stack is measuring the <em>wrong thing</em><span class="p">.</span></div>
+      <div class="cover-sub">Engineers ship with Claude, Cursor and Copilot on day one. Assessments still test leetcode in a sandbox. We rebuilt the loop around how engineers actually work — and gave it an agent.</div>
+      <div class="cover-pillars">
+        <span class="cover-pillar"><b>78%</b> of CVs are AI-written</span>
+        <span class="cover-pillar"><b>0</b> incumbents score AI fluency</span>
+        <span class="cover-pillar"><b>1</b> agent runs the loop</span>
+      </div>
+    </div>
+
+    <div class="cover-foot">
+      <span>Sam Patel · Founder</span>
+      <span><a href="mailto:hello@taali.ai">hello@taali.ai</a></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       02 · PROBLEM (3 variations)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="problem" data-screen-label="02 Problem">
+    <div class="tally-grid tg-tr"></div>
+
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">02</span><span class="dot">·</span><span>Problem</span></div>
+      <h2 class="slide-title">Hiring engineers in 2026 is broken — <em>three ways at once</em>.</h2>
+    </div>
+
+    <!-- Variant A: 3 cards -->
+    <div class="problem-a cv cv-a" style="display:grid; grid-template-columns: repeat(3, 1fr); gap: 32px; flex: 1;">
+      <div class="problem-card">
+        <div class="pc-eyebrow">// 01 · The flood</div>
+        <div class="pc-stat">78<span class="unit">%</span></div>
+        <div class="pc-title">Of CVs now contain AI-generated content.</div>
+        <div class="pc-body">ChatGPT averages <b>14 embellishments</b> per CV. 59% of hiring managers suspect candidates of misrepresenting themselves with AI. Resume fraud already costs employers $600B per year.</div>
+        <div class="pc-source">Jobcannon · Crosschq · Gartner</div>
+      </div>
+      <div class="problem-card">
+        <div class="pc-eyebrow">// 02 · The blindspot</div>
+        <div class="pc-stat">5<span class="unit">×</span></div>
+        <div class="pc-title">Cheating spike on legacy assessments.</div>
+        <div class="pc-body">Engineering work is done with Claude, Cursor, Copilot. Legacy assessments measure leetcode in a sterile sandbox. One tech leader saw <b>80% of candidates use an LLM despite explicit prohibition</b>.</div>
+        <div class="pc-source">Karat · 500,000+ technical interviews</div>
+      </div>
+      <div class="problem-card">
+        <div class="pc-eyebrow">// 03 · The UAE squeeze</div>
+        <div class="pc-stat">10<span class="unit">%</span></div>
+        <div class="pc-title">Emiratisation deadline. December 2026.</div>
+        <div class="pc-body">Every UAE company with 50+ staff must hit 10% Emirati skilled hires by year-end or pay <b>AED 6,000/month per missing hire</b>. Plus 10,000 AI/ML engineers needed by 2031.</div>
+        <div class="pc-source">UAE Government · National AI Strategy 2031</div>
+      </div>
+    </div>
+
+    <!-- Variant B: split — measured vs. real -->
+    <div class="problem-b cv cv-b" style="grid-template-columns: 1fr 1fr; gap: 28px; flex: 1;">
+      <div class="problem-split">
+        <div class="ps-label">// What assessments measure</div>
+        <div class="ps-title">Leetcode in a sandbox.<br/>No AI. No internet. No tools.</div>
+        <div class="ps-mock">
+          <div class="mock-row"><span class="dot"></span><span class="k">env:</span> <span>sealed sandbox</span></div>
+          <div class="mock-row"><span class="dot"></span><span class="k">tools:</span> <span>none</span></div>
+          <div class="mock-row"><span class="dot"></span><span class="k">internet:</span> <span>blocked</span></div>
+          <div class="mock-row"><span class="dot"></span><span class="k">ai:</span> <span>"please don't use"</span></div>
+          <div class="mock-row"><span class="dot"></span><span class="k">measures:</span> <span>recall + speed</span></div>
+        </div>
+        <div class="ps-foot">HackerRank · Codility · CoderPad</div>
+      </div>
+      <div class="problem-split real">
+        <div class="ps-label">// What engineers actually do</div>
+        <div class="ps-title">Pair with Claude all day.<br/>Ship from prompts to PRs.</div>
+        <div class="ps-mock">
+          <div class="mock-row on"><span class="dot"></span><span class="k">env:</span> <span>real repo, real CI</span></div>
+          <div class="mock-row on"><span class="dot"></span><span class="k">tools:</span> <span>Claude · Cursor · Copilot</span></div>
+          <div class="mock-row on"><span class="dot"></span><span class="k">workflow:</span> <span>prompt → diff → test → merge</span></div>
+          <div class="mock-row on"><span class="dot"></span><span class="k">skill:</span> <span>knowing what to ask, when to override</span></div>
+          <div class="mock-row on"><span class="dot"></span><span class="k">measures:</span> <span>nobody scores this. yet.</span></div>
+        </div>
+        <div class="ps-foot">// the gap is the wedge</div>
+      </div>
+    </div>
+
+    <!-- Variant C: stat-forward -->
+    <div class="problem-c cv cv-c" style="flex:1; flex-direction: column; justify-content: space-between;">
+      <div class="big-num">
+        <span class="pct">78%</span>
+        <span class="caption">of CVs in 2026 contain <b>AI-generated content</b>.<br/>The flood broke the screening funnel.</span>
+      </div>
+      <div class="stat-row">
+        <div class="stat-cell">
+          <div class="n"><em>5×</em> spike</div>
+          <div class="lbl">Cheating detected on legacy technical assessments. 80% of candidates use an LLM despite explicit prohibition.</div>
+          <div class="src">Karat · 500k+ interviews</div>
+        </div>
+        <div class="stat-cell">
+          <div class="n">$<em>600B</em>/yr</div>
+          <div class="lbl">Global cost of resume fraud — Gartner predicts 1 in 4 candidates will be fraudulent by 2028.</div>
+          <div class="src">Crosschq · Gartner</div>
+        </div>
+        <div class="stat-cell">
+          <div class="n"><em>10%</em> by Dec 26</div>
+          <div class="lbl">UAE Emiratisation mandate — 50+ staff orgs miss it, pay AED 6k/month per missing hire.</div>
+          <div class="src">UAE Government</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="slide-foot">
+      <span>02 / 10 · The problem</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       03 · WHY NOW (3 variations)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="why" data-screen-label="03 Why now">
+    <div class="tally-grid tg-br"></div>
+
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">03</span><span class="dot">·</span><span>Why now</span></div>
+      <h2 class="slide-title">Three tailwinds converge — and the window is <em>18 months</em>.</h2>
+    </div>
+
+    <!-- Variant A: timeline -->
+    <div class="cv cv-a" style="flex:1; display:flex; flex-direction:column;">
+      <div class="why-a" style="display:grid; grid-template-columns: repeat(3, 1fr); flex:1;">
+        <div class="why-step">
+          <div class="yr">2024</div>
+          <div class="yt">AI moves into every dev workflow.</div>
+          <div class="yb">Claude Code, Cursor and Copilot become how engineers ship code. Hiring assessments that pretend AI doesn't exist start measuring the wrong skill.</div>
+        </div>
+        <div class="why-step">
+          <div class="yr">2025</div>
+          <div class="yt">AI-CV flood + fraud crisis breaks recruiter trust.</div>
+          <div class="yb">78% of applications contain AI-generated content. 1 in 3 hiring managers catches a fake identity or proxy candidate. The funnel can no longer self-filter.</div>
+        </div>
+        <div class="why-step">
+          <div class="yr">2026 <span class="now">NOW</span></div>
+          <div class="yt">UAE Emiratisation + AI Strategy 2031 land together.</div>
+          <div class="yb">10% Emirati skilled-hire deadline by year-end. 10,000 AI/ML engineers needed by 2031. Local-first hiring tooling has explicit policy tailwind.</div>
+        </div>
+      </div>
+      <div class="why-window">
+        <span class="lbl">// the window</span>
+        <span class="txt">Incumbents are bolting AI onto legacy surfaces. Nobody has built around <em style="color:#a78bfa; font-style:normal;">agent + AI-native</em> from day one. Owning that wedge is an 18-month decision.</span>
+      </div>
+    </div>
+
+    <!-- Variant B: convergence chart -->
+    <div class="why-b cv cv-b">
+      <div class="why-chart">
+        <svg viewBox="0 0 800 460" preserveAspectRatio="none">
+          <!-- grid -->
+          <g stroke="#e7e0f0" stroke-width="1">
+            <line x1="60" y1="60" x2="60" y2="400"/>
+            <line x1="60" y1="400" x2="780" y2="400"/>
+            <line x1="60" y1="320" x2="780" y2="320" stroke-dasharray="3 4" stroke="#f0eaf7"/>
+            <line x1="60" y1="240" x2="780" y2="240" stroke-dasharray="3 4" stroke="#f0eaf7"/>
+            <line x1="60" y1="160" x2="780" y2="160" stroke-dasharray="3 4" stroke="#f0eaf7"/>
+            <line x1="60" y1="80" x2="780" y2="80" stroke-dasharray="3 4" stroke="#f0eaf7"/>
+          </g>
+          <!-- x labels -->
+          <g fill="#9e96ae" font-family="Geist Mono" font-size="12" letter-spacing="2">
+            <text x="120" y="430">2022</text>
+            <text x="280" y="430">2024</text>
+            <text x="440" y="430">2025</text>
+            <text x="600" y="430">2026</text>
+            <text x="720" y="430">2027</text>
+          </g>
+          <!-- y label -->
+          <g fill="#9e96ae" font-family="Geist Mono" font-size="11" letter-spacing="1.5">
+            <text x="20" y="84">HIGH</text>
+            <text x="20" y="404">LOW</text>
+          </g>
+          <!-- AI usage -->
+          <path d="M60 380 L180 365 L300 320 L420 230 L540 140 L660 80 L780 60" fill="none" stroke="#7f39fb" stroke-width="3" stroke-linecap="round"/>
+          <!-- Fraud -->
+          <path d="M60 360 L180 340 L300 300 L420 220 L540 130 L660 95 L780 75" fill="none" stroke="#d88a1c" stroke-width="3" stroke-linecap="round"/>
+          <!-- UAE policy -->
+          <path d="M60 395 L180 392 L300 388 L420 380 L540 250 L660 110 L780 88" fill="none" stroke="#15a36a" stroke-width="3" stroke-linecap="round"/>
+          <!-- now line -->
+          <line x1="600" y1="40" x2="600" y2="400" stroke="#1d1730" stroke-width="2" stroke-dasharray="4 4"/>
+          <text x="608" y="56" fill="#1d1730" font-family="Geist Mono" font-size="11" font-weight="600" letter-spacing="2">NOW · 2026</text>
+          <!-- convergence dot -->
+          <circle cx="660" cy="95" r="14" fill="#7f39fb" fill-opacity="0.18"/>
+          <circle cx="660" cy="95" r="6" fill="#7f39fb"/>
+          <text x="678" y="100" fill="#1d1730" font-family="Geist" font-size="13" font-weight="600">Convergence</text>
+        </svg>
+      </div>
+      <div class="why-legend">
+        <div class="leg">
+          <div class="ln"><span class="swatch" style="background:#7f39fb"></span><span class="yr">2022 →</span></div>
+          <div class="ti">AI in every dev workflow.</div>
+          <div class="bd">Claude, Cursor and Copilot become how engineers ship code. Assessments that pretend AI doesn't exist measure the wrong skill.</div>
+        </div>
+        <div class="leg">
+          <div class="ln"><span class="swatch" style="background:#d88a1c"></span><span class="yr">2024 →</span></div>
+          <div class="ti">CV-fraud crisis hits recruiter trust.</div>
+          <div class="bd">78% of CVs are AI-generated. 1 in 3 hiring managers catches a fake identity. The funnel stops self-filtering.</div>
+        </div>
+        <div class="leg">
+          <div class="ln"><span class="swatch" style="background:#15a36a"></span><span class="yr">2026 →</span></div>
+          <div class="ti">UAE policy lands.</div>
+          <div class="bd">Emiratisation deadline + AI Strategy 2031 — 10% Emirati skilled hires + 10,000 AI/ML engineers. Local-first hiring tooling has explicit tailwind.</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Variant C: tailwind callouts -->
+    <div class="why-c cv cv-c" style="flex:1; flex-direction:column;">
+      <div class="why-tail">
+        <div class="yr">2024 → ongoing</div>
+        <div>
+          <div class="ti">AI moves into every dev workflow.</div>
+          <div class="bd">Claude Code, Cursor, Copilot become the way engineers ship. Assessments that pretend AI doesn't exist measure the wrong skill.</div>
+        </div>
+        <div class="stat">+312<span class="u">%</span></div>
+      </div>
+      <div class="why-tail">
+        <div class="yr">2025</div>
+        <div>
+          <div class="ti">AI-CV flood breaks the funnel.</div>
+          <div class="bd">78% of applications contain AI-generated content. 1 in 3 managers catches a fake identity. Recruiter trust collapses.</div>
+        </div>
+        <div class="stat">$600B<span class="u">/yr</span></div>
+      </div>
+      <div class="why-tail">
+        <div class="yr">2026 — now</div>
+        <div>
+          <div class="ti">UAE policy lands together.</div>
+          <div class="bd">Emiratisation deadline + AI Strategy 2031. 10% skilled hires by Dec; 10,000 AI/ML engineers by 2031. Explicit local tailwind.</div>
+        </div>
+        <div class="stat">10k<span class="u">eng</span></div>
+      </div>
+      <div class="why-window-c">
+        <span class="lbl">// the window</span>
+        <span>Incumbents bolt AI onto legacy surfaces. <em style="color:#a78bfa; font-style:normal;">Nobody has built around agent + AI-native from day one.</em> Owning that wedge is an 18-month decision.</span>
+      </div>
+    </div>
+
+    <div class="slide-foot">
+      <span>03 / 10 · Why now</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       04 · SOLUTION
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="solution" data-screen-label="04 Solution">
+    <div class="tally-grid tg-r"></div>
+
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">04</span><span class="dot">·</span><span>Solution</span></div>
+      <h2 class="slide-title">One agent runs the loop. <em>You decide what matters.</em></h2>
+      <p class="slide-sub">Taali works each active role end-to-end — picks up new candidates the moment they arrive, batches the cheap deterministic work, queues high-stakes calls for your sign-off, and asks when input is genuinely missing. Every assessment opens a real in-browser IDE with Claude in the candidate's hand — every prompt, paste, edit and test run captured and scored.</p>
+    </div>
+
+    <div class="solution-grid">
+      <div class="pillar">
+        <div class="p-num"><span>01</span><span class="name">AGENTIC</span></div>
+        <div class="p-title">Runs the loop. Pauses for you.</div>
+        <div class="p-body">Single LLM orchestrator + deterministic decision policy. Works each active role in real time — picks up candidates the moment they arrive, batches the deterministic work, queues high-stakes decisions for human approval. Never silently spends budget.</div>
+        <div class="p-meta">
+          <span><b>Always-on</b> per active role</span>
+          <span><b>5</b> specialist sub-agents</span>
+          <span><b>Human gate</b> on every advance / reject</span>
+        </div>
+      </div>
+      <div class="pillar hero">
+        <div class="p-num"><span>02</span><span class="name">AI-NATIVE</span></div>
+        <div class="p-title">Real IDE. Real Claude.</div>
+        <div class="p-body">Editor, terminal, repo, AI side panel — exactly the workspace candidates would work in on day one. We capture every prompt, paste, edit and test run, then score AI fluency on a 5-axis rubric as a first-class dimension.</div>
+        <div class="p-meta">
+          <span><b>5-axis</b> rubric · coding · AI · problem solving · independence · communication</span>
+          <span><b>Live</b> fraud + autopilot detection</span>
+        </div>
+      </div>
+      <div class="pillar">
+        <div class="p-num"><span>03</span><span class="name">AUDITABLE</span></div>
+        <div class="p-title">Rule-traced. No black box.</div>
+        <div class="p-body">DecisionPolicy is pure-Python, pinned to a versioned RubricRevision. Every queued decision carries policy_revision_id + rule_path. Override once → nightly retune updates the policy. Defensible to your hiring committee.</div>
+        <div class="p-meta">
+          <span><b>policy_revision_id</b> on every verdict</span>
+          <span><b>Nightly retune</b> from your overrides</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="slide-foot">
+      <span>04 / 11 · Solution</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       05 · WORKSPACE (IDE mock)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="workspace" data-screen-label="05 Workspace">
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">05</span><span class="dot">·</span><span>Product — the workspace</span></div>
+      <h2 class="slide-title" style="font-size:64px;">Real IDE, real AI in the side panel. <em>We watch how they use it.</em></h2>
+    </div>
+
+    <!-- handoff note: replace mock with real product IDE capture before final send -->
+    <div class="capture-badge" style="left: 88px; top: 232px; background: rgba(127,57,251,0.12); color: #7f39fb; border: 1px dashed rgba(127,57,251,0.5);"><span class="dot" style="background:#7f39fb;"></span>Handoff: swap mock for live product capture (taali.ai/assess)</div>
+
+    <div class="ide light">
+      <div class="ide-bar">
+        <div class="dots"><i></i><i></i><i></i></div>
+        <span class="task">TASK 01 / 01</span>
+        <span class="ttl">Revenue Recovery Incident</span>
+        <span class="role">Senior Backend Engineer</span>
+        <div class="spacer"></div>
+        <span class="pill live">● LIVE</span>
+        <span class="pill">CLAUDE · $6.20 / $12.00</span>
+        <span class="pill t">27 : 14 left</span>
+        <span class="pill">Submit ↗</span>
+      </div>
+      <div class="ide-body">
+        <div class="ide-files">
+          <div class="lbl">Repository</div>
+          <div class="f dir"><span class="ind">▾</span>tali-revenue/</div>
+          <div class="f"><span class="ind">  </span>README.md</div>
+          <div class="f"><span class="ind">  </span>incident_notes.md</div>
+          <div class="f dir"><span class="ind">▾</span>src/</div>
+          <div class="f act"><span class="ind">  </span>revenue_recovery.py</div>
+          <div class="f"><span class="ind">  </span>validators.py</div>
+          <div class="f dir"><span class="ind">▾</span>tests/</div>
+          <div class="f"><span class="ind">  </span>test_revenue_recovery.py</div>
+        </div>
+        <div class="ide-code">
+          <div class="crumb">
+            <span class="file">src/revenue_recovery.py</span>
+            <span class="lang">PYTHON</span>
+            <div class="actions">
+              <span>Save</span>
+              <span>Run tests</span>
+              <span>Run</span>
+            </div>
+          </div>
+<pre><span class="ln"> 1</span><span class="cm"># Restore reconcile flow before finance close — schema drift</span>
+<span class="ln"> 2</span><span class="kw">def</span> <span class="fn">reconcile_batch</span>(records, schema_version):
+<span class="em-line"><span class="ln"> 3</span>    required = {<span class="st">"transaction_id"</span>, <span class="st">"amount_cents"</span>, <span class="st">"posted_at"</span>}</span>
+<span class="em-line"><span class="ln"> 4</span>    missing = required.difference(records.columns)</span>
+<span class="ln"> 5</span>    <span class="kw">if</span> missing:
+<span class="ln"> 6</span>        <span class="kw">raise</span> ValueError(<span class="st">f"Schema drift: {sorted(missing)}"</span>)
+<span class="ln"> 7</span>
+<span class="ln"> 8</span>    <span class="cm"># Coerce legacy schema_version=<span class="nm">2</span> → <span class="nm">3</span> (split posted_at column)</span>
+<span class="ln"> 9</span>    <span class="kw">if</span> schema_version == <span class="nm">2</span>:
+<span class="ln">10</span>        records = _split_posted_at(records)
+<span class="ln">11</span>
+<span class="ln">12</span>    grouped = records.groupby(<span class="st">"merchant_id"</span>, sort=<span class="kw">False</span>)
+<span class="ln">13</span>    <span class="kw">return</span> [_finalize(group) <span class="kw">for</span> _, group <span class="kw">in</span> grouped]
+</pre>
+        </div>
+        <div class="ide-claude">
+          <div class="head"><span>●</span><span class="b">Claude Sonnet</span><span style="margin-left:auto;">14 turns</span></div>
+          <div class="msgs">
+            <div class="msg cand">
+              <span class="who">Candidate · 18:42</span>
+              <div class="bb">The CI run says <code>amount_cents</code> missing on schema v2. Can you read incident_notes.md and tell me whether v2 ever shipped that column?</div>
+            </div>
+            <div class="msg">
+              <span class="who">Claude · 18:42</span>
+              <div class="bb">incident_notes.md: v2 used <code>amount</code> (decimal). Migration utility _split_posted_at was supposed to coerce → cents but skips when source is null. That's your drift.</div>
+            </div>
+            <div class="msg cand">
+              <span class="who">Candidate · 18:43</span>
+              <div class="bb">Right — let me write a coercion path before the column check, then add a regression test.</div>
+            </div>
+          </div>
+          <div class="input"><span class="blink"></span><span>Ask Claude…</span></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- floating capture badges -->
+    <div class="capture-badge" style="left: 88px; top: 600px;"><span class="dot"></span>Prompt captured · 14 turns</div>
+    <div class="capture-badge" style="left: 88px; top: 660px;"><span class="dot"></span>Paste detected · 0 lines</div>
+    <div class="capture-badge" style="right: 88px; bottom: 124px;"><span class="dot"></span>5-axis fluency · scoring live</div>
+
+    <div class="slide-foot">
+      <span>05 / 10 · Workspace · live in browser</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       06 · PIPELINE (now vs post-funding)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="pipeline" data-screen-label="06 Pipeline">
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">06</span><span class="dot">·</span><span>Product — pipeline</span></div>
+      <h2 class="slide-title" style="font-size:60px;">Taali on every stage of your pipeline. <em>What's live now → what unlocks with the raise.</em></h2>
+    </div>
+
+    <div class="pipeline">
+      <!-- 01 Apply -->
+      <div class="pipe-col">
+        <div class="pipe-head"><span class="n">01</span><span>Apply</span></div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Workable sync</span>
+          <span class="bd">Two-way ATS sync. Pulls applicants, dedupes by email + profile.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">CV parse + ingest</span>
+          <span class="bd">Drag-and-drop or API. Work history, skills, education in a clean schema.</span>
+        </div>
+        <div class="pipe-card roadmap"><span class="badge">Next</span>
+          <span class="ti">Greenhouse + Ashby + Lever</span>
+          <span class="bd">ATS connector kit. Same contract as Workable. Unlocks US/EU mid-market.</span>
+        </div>
+        <div class="pipe-card roadmap"><span class="badge">Next</span>
+          <span class="ti">Outbound sourcing</span>
+          <span class="bd">Pull GitHub + LinkedIn signals into a passive pool, scored against open roles.</span>
+        </div>
+      </div>
+
+      <!-- 02 Pre-screen -->
+      <div class="pipe-col">
+        <div class="pipe-head"><span class="n">02</span><span>Pre-screen</span></div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Yes / no / maybe</span>
+          <span class="bd">Cheap-LLM triage in seconds. Cuts obvious mismatches before full scoring.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Must-have matching</span>
+          <span class="bd">Hard filters — location, eligibility, skills the role can't bend on.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">CV fraud detection</span>
+          <span class="bd">Catches CVs that copy-paste the job description verbatim — caps the score before paid scoring runs.</span>
+        </div>
+        <div class="pipe-card roadmap"><span class="badge">Next</span>
+          <span class="ti">Arabic + multilingual</span>
+          <span class="bd">Pre-screen and assessment in Arabic, French, Hindi. UAE → KSA → wider GCC.</span>
+        </div>
+      </div>
+
+      <!-- 03 Score & rank -->
+      <div class="pipe-col">
+        <div class="pipe-head"><span class="n">03</span><span>Score &amp; rank</span></div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">CV ↔ JD scoring</span>
+          <span class="bd">Per-dimension, evidence-grounded, per-requirement breakdown.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Calibrated p_advance</span>
+          <span class="bd">Per-candidate probability, calibrated to the role family.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Cohort signals + knowledge graph</span>
+          <span class="bd">Top-decile clustering. Priors pulled from candidates with shared work history.</span>
+        </div>
+        <div class="pipe-card roadmap"><span class="badge">Next</span>
+          <span class="ti">Cross-customer benchmarks</span>
+          <span class="bd">Anonymised "how does my pipeline compare" view. Unlocks once we hit 10+ customers.</span>
+        </div>
+      </div>
+
+      <!-- 04 Assess -->
+      <div class="pipe-col">
+        <div class="pipe-head"><span class="n">04</span><span>Assess</span></div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">In-browser IDE</span>
+          <span class="bd">Monaco + E2B sandbox + Claude side panel. The day-one workspace.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Session telemetry</span>
+          <span class="bd">Every prompt, paste, edit, test run — time-stamped to the second.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">5-axis fluency</span>
+          <span class="bd">Coding ability, working with AI, problem solving, independence, communication.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Live fraud detection</span>
+          <span class="bd">Pasted-without-reading, copy-from-elsewhere, proxy-candidate signals.</span>
+        </div>
+        <div class="pipe-card roadmap"><span class="badge">Next</span>
+          <span class="ti">Role-family rubrics</span>
+          <span class="bd">ML, data, devops, security, frontend. Each with its own task pack + axes.</span>
+        </div>
+      </div>
+
+      <!-- 05 Decide -->
+      <div class="pipe-col">
+        <div class="pipe-head"><span class="n">05</span><span>Decide</span></div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Deterministic policy</span>
+          <span class="bd">Pure-Python verdicts. Every call carries policy_revision_id + rule_path.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Approve / override</span>
+          <span class="bd">Advance and reject calls always queue for your sign-off.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Asks when stuck</span>
+          <span class="bd">Genuine gaps surface as inline questions, not silent guesses.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Override-trained retune</span>
+          <span class="bd">Nightly. Your corrections become the next pinned RubricRevision.</span>
+        </div>
+        <div class="pipe-card roadmap"><span class="badge">Next</span>
+          <span class="ti">Plain-English rubric authoring</span>
+          <span class="bd">Recruiters describe "what good looks like" in prose; agent compiles to a versioned rubric.</span>
+        </div>
+      </div>
+
+      <!-- 06 Interview -->
+      <div class="pipe-col">
+        <div class="pipe-head"><span class="n">06</span><span>Interview</span></div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Tailored interview pack</span>
+          <span class="bd">Questions per candidate, grounded in CV + assessment evidence.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">Standing report</span>
+          <span class="bd">Score, dimension breakdown, AI-usage trace, prompt-by-prompt replay.</span>
+        </div>
+        <div class="pipe-card"><span class="badge">Live</span>
+          <span class="ti">ATS write-back</span>
+          <span class="bd">Reject decisions + pipeline-stage changes flow back to Workable.</span>
+        </div>
+        <div class="pipe-card roadmap"><span class="badge">Next</span>
+          <span class="ti">Audit + compliance pack</span>
+          <span class="bd">Hiring-committee, EEOC, Emiratisation export. SSO, SOC 2, on-prem recordings for enterprise.</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="pipe-legend">
+      <span><span class="sw live"></span>Live in production with our design partner</span>
+      <span><span class="sw roadmap"></span>Next — unlocked by the raise</span>
+      <span style="margin-left: auto; text-transform: none; letter-spacing: 0; font-family: var(--font-display); color: rgba(20,15,40,0.7); font-size: 13px;"><b style="color:#1a1228;">The tech is built.</b> Raise funds GTM (2× sales) + 1× FDE for ATS / enterprise depth.</span>
+    </div>
+
+    <div class="slide-foot">
+      <span>06 / 11 · Pipeline · agent-led, end-to-end</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       07 · WEDGE / COMPETITIVE
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="wedge" data-screen-label="07 Wedge">
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">07</span><span class="dot">·</span><span>Wedge</span></div>
+      <h2 class="slide-title">Incumbents are bolting AI on. <em>Taali was built around it.</em></h2>
+    </div>
+
+    <div class="wedge-grid">
+      <div class="quad">
+        <div class="yax">
+          <span class="arr">↑ AI-native assessment</span>
+          <span>Bolts AI on ↓</span>
+        </div>
+        <div class="canvas">
+          <div class="qcell tl">
+            <span class="lbl">Assessment · adding AI features</span>
+            <span class="nm">HackerRank<br/>CodeSignal<br/>Codility · CoderPad · Karat</span>
+          </div>
+          <div class="qcell tr taali">
+            <span class="lbl">Agentic + AI-native + auditable</span>
+            <span class="nm">TAALI</span>
+          </div>
+          <div class="qcell bl">
+            <span class="lbl">ATS · automation only</span>
+            <span class="nm">Workable<br/>Greenhouse · Lever · Ashby</span>
+          </div>
+          <div class="qcell br">
+            <span class="lbl">Agentic HR — adjacent</span>
+            <span class="nm">Eightfold<br/>Paradox</span>
+          </div>
+        </div>
+        <div class="xax">
+          <span>← Manual workflows</span>
+          <span class="arr">Agentic loop →</span>
+        </div>
+      </div>
+
+      <div class="feat-tbl">
+        <div class="th">
+          <span>Capability</span>
+          <span class="col"><b>ATS</b><br/>Workable / GH</span>
+          <span class="col"><b>Assessment</b><br/>HR / CodeSignal</span>
+          <span class="col taali"><b>TAALI</b></span>
+        </div>
+        <div class="row">
+          <span>Agent works each role end-to-end, in real time</span>
+          <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
+        </div>
+        <div class="row">
+          <span>Measures AI fluency on a hands-on task</span>
+          <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
+        </div>
+        <div class="row">
+          <span>Live in-browser IDE with Claude / Cursor / Copilot</span>
+          <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
+        </div>
+        <div class="row">
+          <span>AI-CV + autopilot fraud detection</span>
+          <span class="cell partial">◐</span><span class="cell partial">◐</span><span class="cell yes">●</span>
+        </div>
+        <div class="row">
+          <span>Deterministic, rule-traced verdict</span>
+          <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
+        </div>
+        <div class="row">
+          <span>Recruiter override → policy retune overnight</span>
+          <span class="cell no">○</span><span class="cell no">○</span><span class="cell yes">●</span>
+        </div>
+        <div class="row">
+          <span>UAE-native (Emiratisation, MoHRE-aligned)</span>
+          <span class="cell partial">◐</span><span class="cell no">○</span><span class="cell yes">●</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="slide-foot">
+      <span>07 / 10 · Wedge</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       08 · MARKET & TRACTION
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="market" data-screen-label="08 Market">
+    <div class="tally-grid tg-tr"></div>
+
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">08</span><span class="dot">·</span><span>Market & traction</span></div>
+      <h2 class="slide-title">UAE-native wedge into a <em>$4.5B</em> global market.</h2>
+    </div>
+
+    <div class="market-grid">
+      <div class="mkt-stack">
+        <div class="mkt-band">
+          <span class="tag">TAM</span>
+          <div>
+            <div class="num">$4.5B</div>
+            <div class="lbl">Global recruiting software, 2028 forecast</div>
+          </div>
+          <div class="src">172,800 assessments / day on HackerRank — proves the demand surface</div>
+        </div>
+        <div class="mkt-band">
+          <span class="tag">SAM</span>
+          <div>
+            <div class="num">$1.2B</div>
+            <div class="lbl">AI-native assessment + ATS in MENA + EMEA mid-market</div>
+          </div>
+          <div class="src">Cognitive Market Research · ConnectStaff</div>
+        </div>
+        <div class="mkt-band som">
+          <span class="tag">SOM · 2026</span>
+          <div>
+            <div class="num">AED 1.12B</div>
+            <div class="lbl">UAE recruitment software — direct wedge, 27% YoY growth</div>
+          </div>
+          <div class="src">Cognitive Market Research · UAE Government — Emiratisation cohort</div>
+        </div>
+      </div>
+
+      <div class="traction">
+        <div class="th">// Traction · live now</div>
+        <div class="pilot">
+          <span class="nm">DeepLight</span>
+          <span class="ds">First design partner — UAE engineering hires running on Taali for cohort scoring + AI-fluency rubric.</span>
+          <span class="live"><span class="blip"></span>Live pilot · production</span>
+        </div>
+        <div class="stats">
+          <div class="s"><div class="n">Phase 7</div><div class="l">Cohort-planner agent shipped Apr 2026</div></div>
+          <div class="s"><div class="n">5-axis</div><div class="l">Live AI-fluency scoring on every assessment</div></div>
+          <div class="s"><div class="n">115 / 115</div><div class="l">Backend tests on agent surface · 100% pass</div></div>
+          <div class="s"><div class="n">$1.50</div><div class="l">Free credits unlock — full platform on one role, no card</div></div>
+        </div>
+        <div class="next">
+          <b>Next:</b> 5 paying UAE customers by Q2 close · 25 across GCC by Q3 · $1M ARR run-rate target by Q4 2026.
+        </div>
+      </div>
+    </div>
+
+    <div class="slide-foot">
+      <span>08 / 10 · Market & traction</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       09 · FINANCIALS / REVENUE MODEL
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="financials" data-screen-label="09 Financials">
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">09</span><span class="dot">·</span><span>Revenue model &amp; forecast</span></div>
+      <h2 class="slide-title" style="font-size:60px;">Per-seat SaaS, priced where Workable sits. <em>One enterprise tier covers the FDE pilot model.</em></h2>
+    </div>
+
+    <div class="fin-grid">
+      <div class="fin-pricing">
+        <div class="ph">// Pricing — three tiers</div>
+
+        <div class="fin-tier">
+          <span class="name">Starter</span>
+          <span class="price">$249<em> / recruiter / mo</em></span>
+          <span class="note">Up to 5 active roles. CV scoring, assessments, decision feed. Self-serve, Workable-only.</span>
+        </div>
+
+        <div class="fin-tier pri">
+          <span class="name">Team <span style="font-family:var(--font-mono); font-size:10px; letter-spacing:0.16em; color:#7f39fb; padding-left:8px;">// MOST PILOTS</span></span>
+          <span class="price">$549<em> / recruiter / mo</em></span>
+          <span class="note">Unlimited roles, full ATS sync, override-trained policy, 5-axis fluency, audit export. The Deeplight pilot tier.</span>
+        </div>
+
+        <div class="fin-tier">
+          <span class="name">Enterprise</span>
+          <span class="price">from $80k<em> / yr</em></span>
+          <span class="note">FDE-led: bespoke rubrics, on-prem assessment recordings, SSO, regulatory audit packs. Two LOIs in conversation.</span>
+        </div>
+
+        <div class="fin-tier" style="background: transparent; border: none; padding: 4px 0; grid-template-columns: 1fr;">
+          <span class="note" style="font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.1em; color: rgba(20,15,40,0.55);">Compute pass-through: $0.40 / completed assessment (Anthropic + sandbox). Margin neutral by design.</span>
+        </div>
+      </div>
+
+      <div class="fin-forecast">
+        <div class="ph" style="font-family: var(--font-mono); font-size: 12px; letter-spacing: 0.18em; text-transform: uppercase; color: rgba(20,15,40,0.55); font-weight: 600;">// 4-year forecast — bottom-up, UAE wedge first</div>
+
+        <div class="fin-table">
+          <div class="fin-row head">
+            <span></span><span>2026</span><span>2027</span><span>2028</span><span>2029</span>
+          </div>
+          <div class="fin-row">
+            <span class="lbl">Paying recruiters</span>
+            <span class="v">12</span><span class="v">85</span><span class="v">340</span><span class="v">920</span>
+          </div>
+          <div class="fin-row">
+            <span class="lbl">Enterprise contracts</span>
+            <span class="v">1</span><span class="v">4</span><span class="v">12</span><span class="v">28</span>
+          </div>
+          <div class="fin-row">
+            <span class="lbl">Net revenue retention</span>
+            <span class="v">—</span><span class="v">112%</span><span class="v">124%</span><span class="v">128%</span>
+          </div>
+          <div class="fin-row tot">
+            <span class="lbl">ARR (USD)</span>
+            <span class="v">$0.18M</span><span class="v">$1.2M</span><span class="v">$5.8M</span><span class="v">$18M</span>
+          </div>
+          <div class="fin-row">
+            <span class="lbl">Gross margin</span>
+            <span class="v">68%</span><span class="v">74%</span><span class="v">78%</span><span class="v">81%</span>
+          </div>
+          <div class="fin-row">
+            <span class="lbl">Burn / mo</span>
+            <span class="v">$48k</span><span class="v">$95k</span><span class="v">$180k</span><span class="v">break-even</span>
+          </div>
+        </div>
+
+        <div class="fin-assumptions">
+          <b>// Assumptions</b>
+          UAE TAM 5,400 active recruiters · 2.4% Y1 → 17% Y4 wedge penetration · ASP blended $6.6k/recruiter/yr · ATS integrations (Greenhouse, Ashby) ship Q2'27 unlocking US/EU mid-market · enterprise ACV held flat at $120k pending deeper rubric work. Detailed model with sensitivity bands available on request — building in Claude Code now.
+        </div>
+      </div>
+    </div>
+
+    <div class="slide-foot">
+      <span>09 / 11 · Financials · forecast in progress</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       10 · TEAM & ASK
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="team" data-screen-label="10 Team & Ask">
+    <div class="slide-head">
+      <div class="eyebrow"><span class="num">10</span><span class="dot">·</span><span>Team &amp; ask</span></div>
+      <h2 class="slide-title">Built by an operator who's <em>hired and grown engineering teams</em> — and lived the talent market we're rebuilding.</h2>
+    </div>
+
+    <div class="team-grid">
+      <div class="founder-card">
+        <div class="lbl">// Founder</div>
+        <div class="head">
+          <div class="av">SP</div>
+          <div>
+            <div class="nm">Sam Patel</div>
+            <div class="role">Founder · Taali</div>
+          </div>
+        </div>
+        <div class="bio">Data scientist by training. Spent the last decade growing engineering and analytics teams from inside the hiring funnel — running interview loops, calibrating rubrics, screening at scale. Built Taali because every assessment platform I tested in 2025 was measuring the wrong thing.</div>
+        <div class="why"><em>"I've been the recruiter, the hiring manager, and the engineer on the other side of the loop. The job has changed. The toolchain hasn't. That's the wedge."</em></div>
+        <div class="next">
+          <span class="lbl2">// Hiring next</span>
+          <span class="body">Forward-deployed engineer · GTM lead · UAE BD. Advisors being added across UAE tech, AI infra and recruiting.</span>
+        </div>
+      </div>
+
+      <div class="ask-card">
+        <div class="lbl">// The ask</div>
+        <div>
+          <div class="amt">$750K<span class="u" style="font-size: 32px;"> pre-seed</span></div>
+          <div class="stage">Rolling close · soft commits welcome</div>
+        </div>
+
+        <div class="ask-uof">
+          <div class="uh">// Use of funds — 18 months</div>
+          <div class="uof"><span class="pct">55%</span><span class="desc"><b>GTM:</b> 2 FTEs ($200k each) — UAE BD lead + GTM/marketing — convert design partners into paying customers.</span></div>
+          <div class="uof"><span class="pct">30%</span><span class="desc"><b>Forward-deployed engineer:</b> ATS integrations (Greenhouse · Ashby), customer onboarding, agent tuning per cohort.</span></div>
+          <div class="uof"><span class="pct">15%</span><span class="desc"><b>Runway + infra:</b> Anthropic spend, retune compute, security & compliance for enterprise pilots.</span></div>
+        </div>
+
+        <div class="ask-cta">
+          <span>Lead investor with conviction in agentic + AI-native + emerging-markets distribution.</span>
+          <a href="mailto:sam@taali.ai">sam@taali.ai →</a>
+        </div>
+      </div>
+    </div>
+
+    <div class="slide-foot">
+      <span>10 / 11 · Team &amp; ask</span>
+      <span class="brand">taali<span class="p">.</span></span>
+    </div>
+  </section>
+
+  <!-- ═══════════════════════════════════════════════════════════════════════
+       10 · VISION (closing)
+       ════════════════════════════════════════════════════════════════════ -->
+  <section data-slide="close" data-screen-label="10 Vision">
+    <div class="tally-grid"></div>
+
+    <div class="close-top">
+      <div class="wm">taali<span class="p">.</span></div>
+      <div class="meta">11 · Vision · where work is going</div>
+    </div>
+
+    <div class="close-body">
+      <div class="h">The CV is dead. <em>The assessment is the new resume.</em></div>
+      <div class="sub">Every signal recruiters used to trust — schools, titles, work history, the resume itself — is now AI-generated noise. The only honest signal left is watching someone do the work, with the tools they'll actually use, observed end-to-end. Taali is building the capability graph for the AI era — starting with engineers, generalizing to every role AI has rewritten.</div>
+
+      <div class="eras">
+        <div class="era">
+          <span class="yr">// Era · 2010s</span>
+          <span class="ti">CV-led hiring.</span>
+          <span class="bd">Recruiters read paper credentials. Trust = brand, school, title. Now broken: 78% AI-generated CVs, $600B in fraud, recruiter trust collapsing.</span>
+          <span class="sig">→ funnel can't self-filter</span>
+        </div>
+        <div class="era">
+          <span class="yr">// Era · 2020s</span>
+          <span class="ti">Assessment bolted on.</span>
+          <span class="bd">HackerRank, Codility, CodeSignal staple a leetcode test onto a CV pipeline. Now broken: sealed sandbox, no AI, irrelevant to how engineers actually ship work.</span>
+          <span class="sig">→ measures the wrong skill</span>
+        </div>
+        <div class="era now">
+          <span class="yr">// Era · NOW</span>
+          <span class="ti">Capability-first. <em>Agent-led.</em></span>
+          <span class="bd">The agent runs each role. The assessment <em>is</em> the resume — recorded, replayable, evidence-linked, portable. Every assessment becomes a node in a capability graph that follows the candidate, not the company.</span>
+          <span class="sig">→ Taali · the capability graph</span>
+        </div>
+      </div>
+    </div>
+
+    <div class="kicker">
+      <div class="k-line">
+        <span class="k-tag">// the wedge</span>
+        <span class="k-text">Engineering hiring + AI fluency. Live now, paying pilots, urgent pain.</span>
+      </div>
+      <div class="k-line k-now">
+        <span class="k-tag">// the company</span>
+        <span class="k-text"><b>The capability graph.</b> Every knowledge worker, every assessment, every verified skill — one portable record of what humans can actually do alongside AI.</span>
+      </div>
+    </div>
+
+    <div class="close-foot">
+      <div class="pillars">
+        <span><b>Sam Patel</b> · Founder</span>
+        <span><a href="mailto:sam@taali.ai">sam@taali.ai</a></span>
+        <span><a href="https://www.taali.ai">taali.ai</a></span>
+      </div>
+      <div>11 / 11 — thank you.</div>
+    </div>
+  </section>
+
+</deck-stage>
+
+<script src="investor-deck/deck-stage.js"></script>
+
+<!-- Speaker notes -->
+<script type="application/json" id="speaker-notes">
+[
+  "Hello — I'm Sam, founder of Taali. We're building the recruiter's agent — and the only assessment platform that scores how engineers actually work with AI. I'll walk through the problem, the wedge, the product, what's live, and what we're raising.",
+  "Hiring engineers in 2026 is broken three ways at once. The AI-CV flood — 78% of resumes now contain AI-generated content, costing $600B in fraud annually. The blindspot — engineers ship with Claude every day, but every legacy assessment still tests leetcode in a sealed sandbox. And in the UAE specifically, Emiratisation deadlines and the National AI Strategy mean recruiters are squeezed on volume, quality and compliance simultaneously.",
+  "Three tailwinds hit together in 2026. AI is now in every dev workflow — Cursor, Claude Code, Copilot are how engineers ship. The fraud crisis broke the funnel — recruiters can't trust resumes. And UAE policy lands now — 10% Emirati skilled hires by December, 10,000 AI/ML engineers needed by 2031. The window for a category-defining wedge is the next 18 months. Incumbents are bolting AI onto legacy surfaces; nobody has built around the agent and AI-native assessment from day one.",
+  "Taali's solution is one agent that runs each active role end-to-end, with three load-bearing pillars. Agentic — single LLM orchestrator, deterministic policy, picks up candidates the moment they arrive and queues high-stakes calls for you. AI-native — real IDE with Claude in the side panel, every prompt and paste captured, scored on a 5-axis fluency rubric. And auditable — pure-Python decision policy pinned to versioned rubric revisions, defensible to your hiring committee.",
+  "This is the candidate workspace. Real editor, real terminal, real repo, real Claude. Every prompt, paste, edit, file open and test run captured time-stamped to the second. We watch how they work with AI — and turn that into the only score in the market that maps to the actual job.",
+  "This is the pipeline. Apply, pre-screen, score, assess, decide, interview — the agent runs every stage. The big claim on this slide: the tech is built. Almost every card here is live in production with our pilot today — Workable sync, AI-CV fraud detection, cohort signals and the knowledge graph, the Monaco-plus-E2B-plus-Claude IDE, 5-axis fluency scoring, in-session fraud detection, deterministic policy, override-trained retune, ATS write-back. The dashed cards are what the raise unlocks, and they're not just more ATS coverage — they're the surface area that turns this from a UAE pilot into a category. Greenhouse, Ashby and Lever for US/EU mid-market. Outbound sourcing from GitHub and LinkedIn. Arabic and multilingual pre-screen for the wider GCC. Cross-customer benchmarks once we hit ten paying teams. Role-family rubrics beyond engineering — ML, data, devops, security. Plain-English rubric authoring so recruiters compile their own bar. And an audit and compliance pack — hiring committee, EEOC, Emiratisation, SOC 2 — to unlock the enterprise tier. The raise is mostly two GTM hires plus one FDE; the tech moat is already shipped.",
+  "Incumbents are bolting AI on. Workable and Greenhouse are ATS — they automate workflows but don't measure skill. HackerRank, CodeSignal, Codility add AI features to legacy assessment formats. Nobody is in the top-right quadrant — agentic plus AI-native plus auditable. That's the wedge we're building around, and the right side of the table shows the seven capabilities only Taali ships today.",
+  "Market: $4.5B global recruiting software TAM. $1.2B SAM in MENA + EMEA mid-market AI-native assessment. AED 1.12B SOM in UAE alone — our direct wedge, growing 27% YoY. Traction: live in production with our first design partner, DeepLight. Cohort-planner agent shipped, 5-axis fluency scoring on every assessment, 115 of 115 backend tests passing. Next is 5 paying UAE customers by Q2, 25 across GCC by Q3.",
+  "Revenue model is per-seat SaaS at price points where Workable already sits, so procurement is a non-issue. Starter at $249, Team at $549 — that's the tier most pilots land on — and a custom enterprise tier from $80k a year for FDE-led deployments. Compute is pass-through, margin neutral by design. The four-year forecast bottoms-up the UAE wedge first — 12 paying recruiters this year, $1.2M ARR by 2027 once ATS coverage opens US/EU mid-market, $18M ARR and break-even by 2029 at 17% UAE penetration. Net revenue retention compounds because every override teaches the policy. Detailed model with sensitivity bands available on request — building it in Claude Code right now.",
+  "I've been a data scientist who has hired and grown engineering and analytics teams for the last decade — sat on every side of the loop. Raising $750K pre-seed: 55% on two GTM hires to convert design partners into paying customers, 30% on a forward-deployed engineer for ATS integrations and customer onboarding, 15% on runway and infra. Looking for a lead with conviction in agentic, AI-native, and emerging-markets distribution.",
+  "Where this goes. The CV is dead — every signal recruiters used to trust is now AI-generated noise. The only honest signal left is watching someone do the work, with the tools they'll use on day one. Era one: CV-led hiring, broken by AI fraud. Era two: assessment bolted onto CVs, measures the wrong skill. Era three — what we're building — capability-first. The agent runs the role. The assessment is the resume — recorded, replayable, portable. Engineering hiring is the wedge: live now, paying pilots, urgent pain. The company is the capability graph — every knowledge worker, every verified skill, one portable record of what humans can actually do alongside AI. Thanks — email's on the slide."
+]
+</script>
+
+</body>
+</html>
