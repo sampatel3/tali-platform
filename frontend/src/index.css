@@ -1860,6 +1860,119 @@ html[data-theme="dark"] {
   background: var(--bg-2);
 }
 
+/* Landing pipeline diagram (HOW THE AGENT WORKS section). Horizontal
+   recruitment flow at top of each column, vertical stack of Taali
+   automation cards underneath. 6 columns on wide viewports, 3 on md,
+   2 on sm, 1 on mobile. */
+.taali-pipeline {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 1280px) {
+  .taali-pipeline {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .taali-pipeline {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 480px) {
+  .taali-pipeline {
+    grid-template-columns: 1fr;
+  }
+}
+
+.taali-pipeline-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.taali-pipeline-step {
+  position: relative;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 999px;
+  background: var(--ink);
+  color: #fff;
+}
+
+.taali-pipeline-step-n {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: color-mix(in oklab, var(--purple-lav) 80%, #fff);
+}
+
+.taali-pipeline-step-name {
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+/* Arrow between stage pills — only visible on the wide grid where
+   stages sit on the same row. Hidden on responsive collapses. */
+.taali-pipeline-arrow {
+  position: absolute;
+  right: -14px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 14px;
+  color: var(--mute);
+  pointer-events: none;
+}
+
+@media (max-width: 1280px) {
+  .taali-pipeline-arrow {
+    display: none;
+  }
+}
+
+.taali-pipeline-cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.taali-pipeline-card {
+  padding: 12px 14px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+
+.taali-pipeline-card:hover {
+  border-color: color-mix(in oklab, var(--purple) 35%, var(--line));
+  box-shadow: 0 8px 18px -12px rgba(91, 44, 168, 0.25);
+}
+
+.taali-pipeline-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.taali-pipeline-card-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
 /* Bespoke-task CTA: lives at the bottom of the catalogue rather than in
    the page header so it doesn't crowd the title. Subtle dashed
    container — discoverable but doesn't compete with the catalogue
