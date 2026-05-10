@@ -472,45 +472,101 @@ export const LandingPage = ({ onNavigate }) => {
         </div>
       </section>
 
-      {/* HOW THE AGENT WORKS — 3-step section, white surface */}
+      {/* HOW THE AGENT WORKS — pipeline-on-top diagram. Horizontal
+          recruitment flow (Apply → Pre-screen → Score → Assess →
+          Decide → Interview); vertical stack of Taali automation
+          cards under each stage so the recruiter can see exactly what
+          the agent does at every step. */}
       <section id="how-it-works" className="border-t border-[var(--line)] bg-[var(--bg-2)]">
         <div className={`${containerClass} py-20`}>
           <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.14em] text-[var(--purple)]">
             HOW THE AGENT WORKS
           </div>
           <h2 className="mt-3 max-w-[840px] font-[var(--font-display)] text-[clamp(32px,4vw,42px)] font-semibold leading-[1.1] tracking-[-0.025em] text-[var(--ink)]">
-            An autonomous agent in your pipeline. <em className="not-italic text-[var(--purple)]">Built for the AI-native hire.</em>
+            Taali on every stage of your pipeline. <em className="not-italic text-[var(--purple)]">You stay in charge of the calls that matter.</em>
           </h2>
-          <p className="mt-5 max-w-[680px] text-[15.5px] leading-[1.6] text-[var(--ink-2)]">
-            Taali runs three loops continuously — triage, assess, decide — and pauses the moment your judgment is needed.
-            Every assessment puts the candidate in a real IDE with AI in their hand, then measures how well they wield it.
+          <p className="mt-5 max-w-[760px] text-[15.5px] leading-[1.6] text-[var(--ink-2)]">
+            Recruitment used to be six tools and a spreadsheet. Taali consolidates the loop and runs it 24/7 — pre-screening, scoring, fraud detection, AI fluency measurement, decision policy, and recruiter-facing approvals — and pauses to ask you when it can't decide on its own.
           </p>
-          <div className="mt-14 grid gap-7 lg:grid-cols-3">
+
+          {/* Pipeline diagram — 6 stages. Horizontal arrow at top
+              (the recruitment pipeline); vertical stack of Taali
+              automation cards under each. Stages collapse to 3-then-2
+              column responsive grid on narrow viewports. */}
+          <div className="taali-pipeline mt-12">
             {[
               {
                 n: '01',
-                t: 'Triage — autonomously',
-                d: "Every cycle, the agent surveys the role, decides where the work is — fetch CVs, pre-screen, score, send assessments, queue advances or rejects — and pauses to ask you when it needs input it can't derive on its own. You set the criteria once; it works the pipeline 24/7 within the budget you set.",
+                stage: 'Apply',
+                cards: [
+                  { t: 'Workable / ATS sync', d: 'Pulls candidates in every 15 min, parses CVs into structured fields, dedupes by email + profile.' },
+                  { t: 'Direct upload', d: 'Drag-and-drop CVs anywhere. The agent picks them up on its next 30-min tick.' },
+                  { t: 'CV parsing', d: 'Work history, education, skills extracted into a clean schema for downstream scoring.' },
+                ],
               },
               {
                 n: '02',
-                t: 'Assess — for the AI era',
-                d: 'Hands-on, role-relevant tasks in a real IDE. We track every prompt, paste, and decision — then score AI fluency alongside craft. The only platform that tells you whether a candidate can actually ship with AI.',
+                stage: 'Pre-screen',
+                cards: [
+                  { t: 'Cheap LLM pre-screen', d: 'Yes / no / maybe in seconds. Cuts obvious mismatches before you spend on full scoring.' },
+                  { t: 'Must-have matching', d: "Filters against the role's hard requirements (location, eligibility, must-have skills)." },
+                  { t: 'Calibrated to your bar', d: 'Per-role threshold the recruiter sets once; the agent honours it on every cycle.' },
+                ],
               },
               {
                 n: '03',
-                t: 'Decide — with you in charge',
-                d: 'A standing report per candidate: score, dimension radar, AI-usage trace, interview-ready questions. The agent recommends; you approve. Every consequential call is yours.',
+                stage: 'Score & rank',
+                cards: [
+                  { t: 'CV ↔ JD matching', d: '8-axis dimension scores grounded in evidence; per-requirement breakdown.' },
+                  { t: 'Calibrated p_advance', d: 'Per-candidate probability of advancing, calibrated against the role family.' },
+                  { t: 'Cohort signals', d: 'Surfaces which skills, companies, and schools cluster among the role\'s top decile.' },
+                  { t: 'Knowledge graph', d: 'Pulls priors from candidates with shared work history when the data exists.' },
+                ],
               },
-            ].map((step) => (
-              <div key={step.n} className="border-t border-[var(--ink)] pt-7">
-                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.1em] text-[var(--purple)]">
-                  {step.n} · TAALI
+              {
+                n: '04',
+                stage: 'Assess',
+                cards: [
+                  { t: 'Live in-browser IDE', d: 'Editor, terminal, repo, AI side panel — exactly the workspace they\'d work in on day one.' },
+                  { t: 'Session telemetry', d: 'Every prompt, paste, edit, file open, test run, commit — time-stamped to the second.' },
+                  { t: 'Fraud + autopilot detection', d: 'Flags pasted-without-reading, copy-from-elsewhere, suspicious idle patterns.' },
+                  { t: 'AI fluency scoring', d: '8-axis rubric — coding ability, working with AI, debugging, communication, role fit.' },
+                ],
+              },
+              {
+                n: '05',
+                stage: 'Decide',
+                cards: [
+                  { t: 'Deterministic policy', d: 'Every recommendation traces to a named rule + revision id. No black box.' },
+                  { t: 'Asks you when stuck', d: 'Genuine gaps (missing must-have, ambiguous threshold) surface as inline questions.' },
+                  { t: 'One-click approve / override', d: 'High-stakes calls (advance / reject) always queue for your sign-off.' },
+                  { t: 'Learns from your overrides', d: 'Nightly retune absorbs your corrections into the next policy revision.' },
+                ],
+              },
+              {
+                n: '06',
+                stage: 'Interview',
+                cards: [
+                  { t: 'Tailored interview pack', d: 'Questions per candidate, grounded in their CV + assessment evidence.' },
+                  { t: 'Standing report', d: 'TAALI score, dimension breakdown, AI-usage trace, prompt-by-prompt replay.' },
+                  { t: 'ATS write-back', d: 'Decisions sync back to Workable; Greenhouse + Ashby on the roadmap.' },
+                ],
+              },
+            ].map((stage, idx, arr) => (
+              <div key={stage.n} className="taali-pipeline-stage">
+                <div className="taali-pipeline-step">
+                  <span className="taali-pipeline-step-n">{stage.n}</span>
+                  <span className="taali-pipeline-step-name">{stage.stage}</span>
+                  {idx < arr.length - 1 ? <span className="taali-pipeline-arrow" aria-hidden="true">→</span> : null}
                 </div>
-                <h3 className="mt-2.5 font-[var(--font-display)] text-[26px] font-semibold tracking-[-0.015em] text-[var(--ink)]">
-                  {step.t}
-                </h3>
-                <p className="mt-2.5 text-[14.5px] leading-[1.55] text-[var(--ink-2)]">{step.d}</p>
+                <ul className="taali-pipeline-cards">
+                  {stage.cards.map((card) => (
+                    <li key={card.t} className="taali-pipeline-card">
+                      <div className="taali-pipeline-card-title">{card.t}</div>
+                      <div className="taali-pipeline-card-desc">{card.d}</div>
+                    </li>
+                  ))}
+                </ul>
               </div>
             ))}
           </div>
