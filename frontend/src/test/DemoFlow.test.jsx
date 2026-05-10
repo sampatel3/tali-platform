@@ -96,9 +96,7 @@ describe('Demo flow redesign', () => {
     expect(screen.getByText(/CANDIDATES PROCESSED/i)).toBeInTheDocument();
     // "What your candidate actually sees" section was removed in v4 (HANDOFF chat.md)
     // — the showcase now embeds the real candidate workspace iframe instead.
-    // Section heading replaced with the new pipeline-flow section heading
-    // ("Taali on every stage of your pipeline.").
-    expect(screen.getByRole('heading', { name: /Taali on every stage of your pipeline/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /An autonomous agent in your pipeline/i })).toBeInTheDocument();
     expect(screen.getByText(/HOW THE AGENT WORKS/i)).toBeInTheDocument();
     expect(screen.getByText(/We're the only platform that measures it\./i)).toBeInTheDocument();
     // The right-column mock now renders the actual product STANDING REPORT

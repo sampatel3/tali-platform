@@ -1,0 +1,112 @@
+/* Investment-deck page — clean white surface, generous spacing,
+   screenshot-friendly. Not a public marketing page; minimal chrome. */
+
+.deck-page {
+  min-height: 100vh;
+  background: var(--bg-2);
+  color: var(--ink);
+  padding: 48px 32px 96px;
+}
+
+.deck-header {
+  max-width: 1280px;
+  margin: 0 auto 56px;
+}
+
+.deck-header-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--purple);
+  text-transform: uppercase;
+}
+
+.deck-header-title {
+  margin: 12px 0 14px;
+  font-family: var(--font-display);
+  font-size: clamp(36px, 5vw, 56px);
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+}
+
+.deck-header-sub {
+  max-width: 640px;
+  margin: 0 0 24px;
+  font-size: 15px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.deck-header-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+}
+
+.deck-header-toc a {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  color: var(--ink-2);
+  text-decoration: none;
+  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+
+.deck-header-toc a:hover {
+  border-color: var(--purple);
+  color: var(--ink);
+  background: color-mix(in oklab, var(--purple) 6%, var(--bg));
+}
+
+.deck-section {
+  max-width: 1280px;
+  margin: 0 auto 80px;
+  scroll-margin-top: 32px;
+}
+
+.deck-section-head {
+  margin-bottom: 24px;
+}
+
+.deck-section-eyebrow {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--purple);
+  text-transform: uppercase;
+}
+
+.deck-section-title {
+  margin: 10px 0 0;
+  font-family: var(--font-display);
+  font-size: clamp(28px, 3.4vw, 38px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  max-width: 880px;
+}
+
+.deck-frame {
+  overflow: hidden;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--bg-2);
+  box-shadow: 0 24px 60px -30px rgba(91, 44, 168, 0.4);
+}
+
+.deck-frame-chrome {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--line);
+}
