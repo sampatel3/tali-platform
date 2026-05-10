@@ -95,14 +95,26 @@ class Role(Base):
     # when stale (>1 hour). See the agent's get_cohort_signals tool.
     agent_cohort_signals = Column(JSON, nullable=True)
     agent_cohort_signals_at = Column(DateTime(timezone=True), nullable=True)
-    # Per-role HITL toggle for the send-assessment step. When True, the
-    # agent writes an ``agent_needs_input`` row asking for explicit
-    # recruiter approval before invites go out instead of auto-executing.
-    # Defaults to True in the cohort-planner era (migration 067) so
-    # turning agent mode on never silently spends budget on assessments
-    # the recruiter didn't approve.
-    agent_send_assessment_requires_approval = Column(
-        Boolean, nullable=False, default=True, server_default="true"
+    # Per-role HITL toggles. Both default False so every candidate-
+    # affecting action lands in the Decision Hub for human approval
+    # unless the recruiter explicitly opts into automation.
+    #
+    # ``auto_reject``: when True, reject decisions execute immediately —
+    # the pre-screen Celery auto-reject path disqualifies in Workable
+    # without queueing, and the agent's queue_reject_decision /
+    # queue_skip_assessment_reject_decision tools call the same path
+    # ``approve_decision.run`` uses on recruiter approval, instead of
+    # creating a pending AgentDecision card.
+    #
+    # ``auto_promote``: when True, the agent sends assessments and
+    # advances candidates to interview without approval. When False the
+    # agent's queue_advance_decision tool produces an AgentDecision card
+    # and ``send_assessment`` opens an ``agent_needs_input`` approval row.
+    auto_reject = Column(
+        Boolean, nullable=False, default=False, server_default="false"
+    )
+    auto_promote = Column(
+        Boolean, nullable=False, default=False, server_default="false"
     )
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())

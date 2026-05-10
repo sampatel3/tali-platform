@@ -87,9 +87,8 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
         "role_name": role.name,
         "agentic_mode_enabled": bool(role.agentic_mode_enabled),
         "agent_paused_at": role.agent_paused_at.isoformat() if role.agent_paused_at else None,
-        "send_assessment_requires_approval": bool(
-            role.agent_send_assessment_requires_approval
-        ),
+        "auto_reject": bool(getattr(role, "auto_reject", False)),
+        "auto_promote": bool(getattr(role, "auto_promote", False)),
         "monthly_usd_budget_cents": role.monthly_usd_budget_cents,
         "score_threshold": role.score_threshold,
         "counts": counts,

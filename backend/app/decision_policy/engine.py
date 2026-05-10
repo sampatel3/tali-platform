@@ -545,8 +545,12 @@ def _evaluate_decision_point(
                 rule_path=rule_path,
                 decision_point=point_name,
             )
-        # Confidence floor gates queueing actions only.
-        if confidence < point.confidence_floor:
+        # Confidence floor gates queueing actions. ``auto_reject`` is a
+        # hard rule — if a recruiter-authored rule fires it explicitly,
+        # the verdict is already certain and shouldn't be diluted by the
+        # absence of other signals (e.g. pre-screen-stage rejects fire
+        # before role_fit_score is computed).
+        if action != "auto_reject" and confidence < point.confidence_floor:
             return PolicyDecision(
                 decision_type="no_action",
                 confidence=confidence,

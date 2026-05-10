@@ -50,7 +50,8 @@ def make_world(
         agentic_mode_enabled=True,
         monthly_usd_budget_cents=5000,
         score_threshold=65,
-        agent_send_assessment_requires_approval=send_requires_approval,
+        # Existing fixture knob inverts to the new auto_promote flag.
+        auto_promote=not send_requires_approval,
     )
     db.add(role)
     db.flush()

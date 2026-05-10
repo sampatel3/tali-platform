@@ -16,7 +16,14 @@ from sqlalchemy.orm import Session
 
 from datetime import datetime, timedelta, timezone
 
-from ..actions import ask_recruiter, queue_decision, score_cv, send_assessment
+from ..actions import (
+    advance_stage,
+    ask_recruiter,
+    queue_decision,
+    reject_application,
+    score_cv,
+    send_assessment,
+)
 from ..actions.types import Actor
 from ..mcp import handlers as mcp_handlers
 from ..models.agent_needs_input import NEEDS_INPUT_KINDS
@@ -366,6 +373,28 @@ AGENT_TOOLS: list[dict[str, Any]] = [
         },
     },
     {
+        "name": "refresh_candidate_graph",
+        "description": (
+            "Re-project a candidate into the knowledge graph (Graphiti). "
+            "The graph normally auto-updates via SQLAlchemy listeners on "
+            "candidate / interview / event writes; use this tool when those "
+            "listeners failed or the candidate's graph_synced_at is stale "
+            "relative to cv_uploaded_at. Returns the number of episodes "
+            "ingested. No-op when Graphiti is not configured. Cost is "
+            "billed to the role's monthly budget under the graph_sync "
+            "feature, so use sparingly — usually only when a downstream "
+            "graph_search / graph_priors call returned empty for a "
+            "candidate that should have signal."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_id": {"type": "integer"},
+            },
+            "required": ["application_id"],
+        },
+    },
+    {
         "name": "get_cohort_signals",
         "description": (
             "Compute (or return cached) 'do high scorers cluster?' signals "
@@ -643,6 +672,67 @@ def _tool_nl_search_candidates(db: Session, *, agent_run: AgentRun, role: Role, 
     )
 
 
+def _tool_refresh_candidate_graph(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    """Re-project the candidate associated with ``application_id`` into Graphiti.
+
+    Mirrors the per-role Process-candidates "Sync graph" step but for a
+    single application. Billed to the role budget so the spend flows
+    through the same monthly cap.
+    """
+    from ..candidate_graph import client as graph_client
+    from ..candidate_graph import sync as graph_sync_module
+    from ..models.candidate import Candidate
+    from ..models.candidate_application import CandidateApplication
+
+    application_id = int(args["application_id"])
+    if not graph_client.is_configured():
+        return {
+            "status": "unconfigured",
+            "application_id": application_id,
+            "episodes_sent": 0,
+        }
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == application_id,
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+        .first()
+    )
+    if app is None or app.candidate_id is None:
+        return {
+            "status": "not_found",
+            "application_id": application_id,
+            "episodes_sent": 0,
+        }
+    candidate = (
+        db.query(Candidate)
+        .filter(Candidate.id == int(app.candidate_id))
+        .first()
+    )
+    if candidate is None:
+        return {
+            "status": "not_found",
+            "application_id": application_id,
+            "episodes_sent": 0,
+        }
+    sent = graph_sync_module.sync_candidate(
+        candidate,
+        db=db,
+        include_cv_text=True,
+        bill_organization_id=int(role.organization_id),
+        bill_role_id=int(role.id),
+    )
+    return {
+        "status": "ok" if sent > 0 else "no_episodes",
+        "application_id": application_id,
+        "candidate_id": int(candidate.id),
+        "episodes_sent": int(sent),
+    }
+
+
 def _tool_graph_search_candidates(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
     return mcp_handlers.graph_search_candidates(
         db,
@@ -706,13 +796,13 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     actor = Actor.agent(int(agent_run.id))
     application_id = int(args["application_id"])
 
-    # HITL gate per Role.agent_send_assessment_requires_approval. When
-    # set, instead of auto-sending, the agent opens an approval-style
+    # HITL gate per Role.auto_promote. When False (the default), instead
+    # of auto-sending, the agent opens an approval-style
     # ``agent_needs_input`` row keyed on (role_id, send_assessment_approval).
     # The recruiter approves on the role page; the next cycle reads the
     # response and sends. This is the OpenAI-guide "high-risk action →
     # human oversight" pattern.
-    if bool(getattr(role, "agent_send_assessment_requires_approval", False)):
+    if not bool(getattr(role, "auto_promote", False)):
         existing = ask_recruiter.open(
             db,
             actor,
@@ -728,8 +818,8 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
                 {"value": "skip", "label": "Skip this candidate"},
             ],
             rationale=(
-                "send_assessment_requires_approval is on for this role; "
-                "every send goes through the recruiter."
+                "auto_promote is off for this role; every send goes through "
+                "the recruiter."
             ),
         )
         return {
@@ -776,6 +866,70 @@ def _stamp_policy_revision_in_evidence(
     return base
 
 
+# Maps each queueable decision_type to the role attribute that controls
+# auto-execution. When the toggle is True, the agent's queue tool calls
+# the same action ``approve_decision.run`` triggers on recruiter approval
+# rather than creating a pending Decision Hub card.
+_AUTO_TOGGLE_FOR_DECISION_TYPE: dict[str, str] = {
+    "advance_to_interview": "auto_promote",
+    "reject": "auto_reject",
+    "skip_assessment_reject": "auto_reject",
+}
+
+
+def _auto_execute_decision(
+    db: Session,
+    *,
+    role: Role,
+    decision: Any,
+    decision_type: str,
+) -> None:
+    """Resolve and execute an AgentDecision immediately as a system action.
+
+    Mirrors the side effects of ``approve_decision.run`` — same
+    underlying action call, same idempotency key shape — but with
+    ``actor=system`` and a ``human_disposition`` that records the
+    auto-toggle that drove the call.
+    """
+    actor = Actor.system()
+    metadata = {
+        "agent_decision_id": int(decision.id),
+        "agent_run_id": int(decision.agent_run_id) if decision.agent_run_id else None,
+        "agent_reasoning": decision.reasoning,
+        "model_version": decision.model_version,
+        "prompt_version": decision.prompt_version,
+        "auto_toggle": _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type),
+    }
+    reason = f"Auto-approved per role.{metadata['auto_toggle']} (decision #{decision.id})"
+
+    if decision_type == "advance_to_interview":
+        advance_stage.run(
+            db,
+            actor,
+            organization_id=int(role.organization_id),
+            application_id=int(decision.application_id),
+            to_stage="technical_interview",
+            reason=reason,
+            idempotency_key=f"approve_decision:{decision.id}",
+            metadata=metadata,
+        )
+    elif decision_type in ("reject", "skip_assessment_reject"):
+        reject_application.run(
+            db,
+            actor,
+            organization_id=int(role.organization_id),
+            application_id=int(decision.application_id),
+            reason=reason,
+            idempotency_key=f"approve_decision:{decision.id}",
+            metadata={**metadata, "decision_type": decision_type},
+        )
+    decision.status = "approved"
+    decision.resolved_at = datetime.now(timezone.utc)
+    decision.resolved_by_user_id = None
+    decision.resolution_note = reason
+    decision.human_disposition = "auto_approved"
+
+
 def _queue(
     db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any], decision_type: str
 ) -> Any:
@@ -796,6 +950,11 @@ def _queue(
         model_version=str(agent_run.model_version or ""),
         prompt_version=str(agent_run.prompt_version or ""),
     )
+    auto_attr = _AUTO_TOGGLE_FOR_DECISION_TYPE.get(decision_type)
+    if auto_attr and bool(getattr(role, auto_attr, False)):
+        _auto_execute_decision(
+            db, role=role, decision=decision, decision_type=decision_type
+        )
     return {"decision_id": int(decision.id), "status": str(decision.status), "decision_type": decision_type}
 
 
@@ -1008,6 +1167,7 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "compare_applications": _tool_compare_applications,
     "nl_search_candidates": _tool_nl_search_candidates,
     "graph_search_candidates": _tool_graph_search_candidates,
+    "refresh_candidate_graph": _tool_refresh_candidate_graph,
     "get_cohort_signals": _tool_get_cohort_signals,
     "score_cv": _tool_score_cv,
     "send_assessment": _tool_send_assessment,

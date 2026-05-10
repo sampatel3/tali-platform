@@ -69,7 +69,7 @@ def _make_role(db, org: Organization) -> Role:
         monthly_usd_budget_cents=5000,
         # Phase 7: keep send_assessment auto-execute for these existing
         # tests; HITL behaviour is covered by tests/cohort_planner/.
-        agent_send_assessment_requires_approval=False,
+        auto_promote=True,
     )
     db.add(role)
     db.flush()
@@ -339,6 +339,55 @@ def test_graph_search_candidates_returns_warning_when_unconfigured(db):
 
     assert result["applications"] == []
     assert any(w["code"] == "neo4j_unavailable" for w in result["warnings"])
+
+
+def test_refresh_candidate_graph_returns_unconfigured_when_graph_off(db):
+    """Mirror of the search test: tool no-ops when Graphiti isn't configured."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, name="Cand", email="c@x.test", taali=70.0)
+    run = _make_agent_run(db, role)
+
+    with patch("app.candidate_graph.client.is_configured", return_value=False):
+        result = tool_registry.dispatch(
+            "refresh_candidate_graph",
+            {"application_id": int(app.id)},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert result["status"] == "unconfigured"
+    assert result["episodes_sent"] == 0
+    assert result["application_id"] == int(app.id)
+
+
+def test_refresh_candidate_graph_calls_sync_when_configured(db):
+    """When configured, the tool delegates to graph_sync.sync_candidate."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, name="Cand", email="c@x.test", taali=70.0)
+    run = _make_agent_run(db, role)
+
+    with patch("app.candidate_graph.client.is_configured", return_value=True), patch(
+        "app.candidate_graph.sync.sync_candidate", return_value=4
+    ) as sync_mock:
+        result = tool_registry.dispatch(
+            "refresh_candidate_graph",
+            {"application_id": int(app.id)},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    sync_mock.assert_called_once()
+    _, kwargs = sync_mock.call_args
+    assert kwargs["bill_organization_id"] == int(role.organization_id)
+    assert kwargs["bill_role_id"] == int(role.id)
+    assert kwargs["include_cv_text"] is True
+    assert result["status"] == "ok"
+    assert result["episodes_sent"] == 4
+    assert result["application_id"] == int(app.id)
 
 
 # ---------------------------------------------------------------------------

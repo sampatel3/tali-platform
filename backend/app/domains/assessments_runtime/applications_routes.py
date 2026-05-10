@@ -3713,6 +3713,7 @@ def _select_pre_screen_targets(
 
 def _run_batch_pre_screen(role_id: int, org_id: int, *, refresh: bool = False) -> None:
     """Background worker: run pre-screen LLM only on selected apps."""
+    from ...services.claude_client_resolver import get_client_for_org
     from ...services.pre_screening_service import execute_pre_screen_only
 
     db = SessionLocal()
@@ -3721,6 +3722,7 @@ def _run_batch_pre_screen(role_id: int, org_id: int, *, refresh: bool = False) -
         role = db.query(Role).filter(Role.id == role_id, Role.organization_id == org_id).first()
         if not org or not role:
             return
+        org_client = get_client_for_org(org)
         apps = _select_pre_screen_targets(
             db, role_id=role_id, organization_id=org_id, refresh=refresh
         )
@@ -3731,7 +3733,7 @@ def _run_batch_pre_screen(role_id: int, org_id: int, *, refresh: bool = False) -
 
         for idx, app in enumerate(apps):
             try:
-                result = execute_pre_screen_only(app)
+                result = execute_pre_screen_only(app, db=db, client=org_client)
                 if result.get("status") == "error":
                     progress["errors"] = progress.get("errors", 0) + 1
                 # Auto-reject hook for "Below threshold" — same as the regular
@@ -4424,6 +4426,7 @@ def _run_process(
     Updates ``_process_progress[role_id]`` in real time so the status endpoint
     can report combined progress.
     """
+    from ...services.claude_client_resolver import get_client_for_org
     from ...services.pre_screening_service import (
         application_needs_pre_screen,
         execute_pre_screen_only,
@@ -4439,6 +4442,7 @@ def _run_process(
             _set_process_progress(role_id, progress)
             return
 
+        org_client = get_client_for_org(org)
         progress["role_name"] = role.name
         progress["status"] = "running"
         progress["current_step"] = None
@@ -4535,7 +4539,7 @@ def _run_process(
                     _set_process_progress(role_id, progress)
                     return
                 try:
-                    result = execute_pre_screen_only(app)
+                    result = execute_pre_screen_only(app, db=db, client=org_client)
                     if result.get("status") == "error":
                         progress["pre_screen"]["errors"] += 1
                     run_auto_reject_if_needed(

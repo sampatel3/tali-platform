@@ -40,7 +40,7 @@ def run_auto_reject_if_needed(
     actor_id: int | None = None,
 ) -> dict[str, Any]:
     refresh_pre_screening_fields(app)
-    decision = evaluate_auto_reject_decision(app, org=org, role=role)
+    decision = evaluate_auto_reject_decision(app, org=org, role=role, db=db)
     if not decision.get("should_trigger"):
         mark_auto_reject_state(
             app,
@@ -49,6 +49,32 @@ def run_auto_reject_if_needed(
             triggered=False,
         )
         return {**decision, "performed": False}
+
+    # Per-role HITL gate. When ``auto_reject`` is False (the default),
+    # we don't disqualify in Workable directly — the agent's next cycle
+    # will queue this candidate as a Decision Hub card via its normal
+    # ``queue_skip_assessment_reject_decision`` flow, where the recruiter
+    # approves the same reject manually. This keeps "below-threshold"
+    # candidates open until a human signs off.
+    if role is not None and not bool(getattr(role, "auto_reject", False)):
+        mark_auto_reject_state(
+            app,
+            state="awaiting_recruiter_approval",
+            reason=(
+                "Below pre-screen threshold; auto_reject is off so the "
+                "candidate is left open for Decision Hub review."
+            ),
+            triggered=False,
+        )
+        return {
+            **decision,
+            "performed": False,
+            "state": "awaiting_recruiter_approval",
+            "reason": (
+                "Below pre-screen threshold; auto_reject is off — leaving "
+                "open for Decision Hub review."
+            ),
+        }
 
     if not org or not org.workable_connected or not org.workable_access_token or not org.workable_subdomain:
         reason = "Workable is not connected for auto reject write-back"
