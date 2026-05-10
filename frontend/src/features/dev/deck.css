@@ -1,79 +1,120 @@
-/* Investment-deck page — clean white surface, generous spacing,
-   screenshot-friendly. Not a public marketing page; minimal chrome. */
+/* Investment-deck page (/deck) — clean canvas for screenshot capture
+   into Sam's investor pitch deck. Sections are stand-alone visuals
+   with consistent Taali brand language (--purple accents, font-display
+   headlines, font-mono kickers). */
 
 .deck-page {
   min-height: 100vh;
   background: var(--bg-2);
   color: var(--ink);
-  padding: 48px 32px 96px;
+  padding: 56px 32px 96px;
 }
 
-.deck-header {
+/* ---------------------------------------------------------------------- */
+/* Cover                                                                   */
+/* ---------------------------------------------------------------------- */
+
+.deck-cover {
   max-width: 1280px;
-  margin: 0 auto 56px;
+  margin: 0 auto 96px;
+  padding: 56px 0 48px;
+  border-bottom: 1px solid var(--line);
 }
 
-.deck-header-eyebrow {
+.deck-cover-mark {
+  font-family: var(--font-display);
+  font-size: 32px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  margin-bottom: 32px;
+}
+
+.deck-cover-eyebrow {
   font-family: var(--font-mono);
   font-size: 11px;
   font-weight: 700;
-  letter-spacing: 0.14em;
+  letter-spacing: 0.16em;
   color: var(--purple);
   text-transform: uppercase;
+  margin-bottom: 18px;
 }
 
-.deck-header-title {
-  margin: 12px 0 14px;
+.deck-cover-title {
   font-family: var(--font-display);
-  font-size: clamp(36px, 5vw, 56px);
+  font-size: clamp(42px, 5.6vw, 72px);
   font-weight: 600;
-  letter-spacing: -0.03em;
-  line-height: 1.05;
+  letter-spacing: -0.04em;
+  line-height: 1.02;
+  margin: 0 0 24px;
+  max-width: 1040px;
 }
 
-.deck-header-sub {
-  max-width: 640px;
-  margin: 0 0 24px;
-  font-size: 15px;
-  line-height: 1.6;
+.deck-cover-sub {
+  max-width: 720px;
+  margin: 0 0 32px;
+  font-size: 18px;
+  line-height: 1.55;
   color: var(--ink-2);
 }
 
-.deck-header-toc {
+.deck-cover-badges {
   display: flex;
   flex-wrap: wrap;
   gap: 12px;
+  margin-bottom: 48px;
+}
+
+.deck-cover-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 14px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.deck-cover-toc {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
   font-family: var(--font-mono);
-  font-size: 11.5px;
+  font-size: 11px;
   letter-spacing: 0.04em;
 }
 
-.deck-header-toc a {
+.deck-cover-toc a {
   display: inline-flex;
   align-items: center;
-  padding: 6px 14px;
+  padding: 5px 11px;
   border-radius: 999px;
   border: 1px solid var(--line);
   background: var(--bg);
   color: var(--ink-2);
   text-decoration: none;
-  transition: border-color 0.12s ease, color 0.12s ease, background 0.12s ease;
+  transition: border-color 0.12s, color 0.12s, background 0.12s;
 }
 
-.deck-header-toc a:hover {
+.deck-cover-toc a:hover {
   border-color: var(--purple);
   color: var(--ink);
   background: color-mix(in oklab, var(--purple) 6%, var(--bg));
 }
 
+/* ---------------------------------------------------------------------- */
+/* Section scaffolding                                                     */
+/* ---------------------------------------------------------------------- */
+
 .deck-section {
   max-width: 1280px;
-  margin: 0 auto 80px;
+  margin: 0 auto 96px;
   scroll-margin-top: 32px;
 }
 
 .deck-section-head {
-  margin-bottom: 24px;
+  margin-bottom: 28px;
 }
 
 .deck-section-eyebrow {
@@ -88,12 +129,402 @@
 .deck-section-title {
   margin: 10px 0 0;
   font-family: var(--font-display);
-  font-size: clamp(28px, 3.4vw, 38px);
+  font-size: clamp(28px, 3.6vw, 40px);
   font-weight: 600;
   letter-spacing: -0.025em;
   line-height: 1.1;
   max-width: 880px;
 }
+
+.deck-paragraph {
+  max-width: 760px;
+  margin: 0 0 24px;
+  font-size: 15.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+.deck-callout {
+  margin: 24px 0 0;
+  padding: 18px 22px;
+  border-left: 3px solid var(--purple);
+  background: color-mix(in oklab, var(--purple) 6%, var(--bg));
+  border-radius: 0 12px 12px 0;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-width: 920px;
+}
+
+.deck-callout strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Cards (used by Problem, Solution, Team, etc.)                          */
+/* ---------------------------------------------------------------------- */
+
+.deck-card {
+  padding: 22px 22px 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg);
+}
+
+.deck-card-kicker {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  color: var(--purple);
+  text-transform: uppercase;
+  margin-bottom: 10px;
+}
+
+.deck-card-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  line-height: 1.25;
+  margin-bottom: 10px;
+  color: var(--ink);
+}
+
+.deck-card-body {
+  font-size: 13.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Problem                                                                 */
+/* ---------------------------------------------------------------------- */
+
+.deck-problem-grid {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 960px) {
+  .deck-problem-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Solution                                                                */
+/* ---------------------------------------------------------------------- */
+
+.deck-solution-lede {
+  max-width: 920px;
+  margin: 0 0 32px;
+  font-size: 16.5px;
+  line-height: 1.65;
+  color: var(--ink);
+}
+
+.deck-solution-pillars {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 960px) {
+  .deck-solution-pillars {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Why now                                                                 */
+/* ---------------------------------------------------------------------- */
+
+.deck-whynow {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-bottom: 8px;
+}
+
+.deck-whynow-row {
+  display: grid;
+  grid-template-columns: 80px 8px 1fr;
+  align-items: start;
+  gap: 18px;
+  padding: 18px 0;
+  border-top: 1px solid var(--line);
+}
+
+.deck-whynow-year {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--purple);
+  padding-top: 4px;
+}
+
+.deck-whynow-line {
+  width: 8px;
+  height: 8px;
+  margin-top: 8px;
+  border-radius: 50%;
+  background: var(--purple);
+  box-shadow: 0 0 0 4px color-mix(in oklab, var(--purple) 16%, transparent);
+}
+
+.deck-whynow-title {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  color: var(--ink);
+}
+
+.deck-whynow-text {
+  margin-top: 6px;
+  font-size: 14.5px;
+  line-height: 1.6;
+  color: var(--ink-2);
+  max-width: 720px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Market                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.deck-market {
+  display: flex;
+  flex-direction: column;
+  gap: 32px;
+}
+
+.deck-market-rings {
+  display: grid;
+  gap: 18px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 880px) {
+  .deck-market-rings {
+    grid-template-columns: 1fr;
+  }
+}
+
+.deck-market-ring {
+  padding: 24px 24px 28px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+  position: relative;
+  overflow: hidden;
+}
+
+.deck-market-ring:nth-child(1) {
+  background: color-mix(in oklab, var(--purple) 6%, var(--bg));
+  border-color: color-mix(in oklab, var(--purple) 25%, var(--line));
+}
+
+.deck-market-ring:nth-child(2) {
+  background: color-mix(in oklab, var(--purple) 12%, var(--bg));
+  border-color: color-mix(in oklab, var(--purple) 35%, var(--line));
+}
+
+.deck-market-ring:nth-child(3) {
+  background: var(--purple);
+  color: #fff;
+  border-color: var(--purple);
+}
+
+.deck-market-ring-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 12px;
+  opacity: 0.75;
+}
+
+.deck-market-ring-value {
+  font-family: var(--font-display);
+  font-size: 44px;
+  font-weight: 600;
+  letter-spacing: -0.03em;
+  line-height: 1;
+  margin-bottom: 12px;
+}
+
+.deck-market-ring-text {
+  font-size: 13.5px;
+  line-height: 1.5;
+}
+
+.deck-market-stats {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 960px) {
+  .deck-market-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .deck-market-stats {
+    grid-template-columns: 1fr;
+  }
+}
+
+.deck-stat {
+  padding: 18px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg);
+}
+
+.deck-stat-value {
+  font-family: var(--font-display);
+  font-size: 24px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.deck-stat-label {
+  margin-top: 4px;
+  font-size: 13px;
+  color: var(--ink-2);
+  line-height: 1.45;
+}
+
+.deck-stat-source {
+  margin-top: 8px;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.06em;
+  color: var(--mute);
+  text-transform: uppercase;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Agent flow                                                              */
+/* ---------------------------------------------------------------------- */
+
+.deck-agent-flow {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  align-items: stretch;
+}
+
+.deck-agent-node {
+  padding: 22px 24px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.deck-agent-node-orchestrator {
+  background: var(--purple);
+  color: #fff;
+  border-color: var(--purple);
+}
+
+.deck-agent-node-policy {
+  background: var(--ink);
+  color: #fff;
+  border-color: var(--ink);
+}
+
+.deck-agent-node-human {
+  background: color-mix(in oklab, var(--purple) 10%, var(--bg));
+  border-color: color-mix(in oklab, var(--purple) 30%, var(--line));
+}
+
+.deck-agent-node-kicker {
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  opacity: 0.85;
+  margin-bottom: 8px;
+}
+
+.deck-agent-node-title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 600;
+  letter-spacing: -0.015em;
+  margin-bottom: 8px;
+}
+
+.deck-agent-node-body {
+  font-size: 13.5px;
+  line-height: 1.55;
+  opacity: 0.9;
+  max-width: 920px;
+}
+
+.deck-agent-arrow {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  color: var(--mute);
+  text-transform: uppercase;
+  padding: 4px 0;
+}
+
+.deck-agent-subgrid {
+  display: grid;
+  gap: 10px;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+}
+
+@media (max-width: 1024px) {
+  .deck-agent-subgrid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .deck-agent-subgrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.deck-agent-subnode {
+  padding: 14px 14px 16px;
+  border-radius: 10px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+}
+
+.deck-agent-subnode-name {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+
+.deck-agent-subnode-desc {
+  margin-top: 4px;
+  font-size: 12px;
+  color: var(--mute);
+  line-height: 1.4;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Browser frame (used by Decision feed + IDE)                            */
+/* ---------------------------------------------------------------------- */
 
 .deck-frame {
   overflow: hidden;
@@ -109,4 +540,391 @@
   gap: 8px;
   padding: 10px 16px;
   border-bottom: 1px solid var(--line);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Competitive — quadrant + table                                          */
+/* ---------------------------------------------------------------------- */
+
+.deck-quad {
+  position: relative;
+  margin-bottom: 32px;
+  padding: 28px 28px 28px 56px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg);
+}
+
+.deck-quad-axis-y {
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: rotate(-90deg) translateX(50%);
+  transform-origin: left center;
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  color: var(--mute);
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.deck-quad-axis-x {
+  position: absolute;
+  bottom: 8px;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: var(--font-mono);
+  font-size: 10.5px;
+  letter-spacing: 0.14em;
+  color: var(--mute);
+  text-transform: uppercase;
+}
+
+.deck-quad-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  grid-template-rows: 200px 200px;
+  gap: 0;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.deck-quad-cell {
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 6px;
+  background: var(--bg);
+  border-right: 1px dashed var(--line);
+  border-bottom: 1px dashed var(--line);
+}
+
+.deck-quad-cell:nth-child(2),
+.deck-quad-cell:nth-child(4) {
+  border-right: 0;
+}
+
+.deck-quad-cell:nth-child(3),
+.deck-quad-cell:nth-child(4) {
+  border-bottom: 0;
+}
+
+.deck-quad-cell-tr {
+  background: color-mix(in oklab, var(--purple) 14%, var(--bg));
+}
+
+.deck-quad-tag {
+  font-family: var(--font-display);
+  font-size: 18px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.deck-quad-tag-us {
+  font-size: 28px;
+  color: var(--purple);
+}
+
+.deck-quad-cos {
+  font-size: 12.5px;
+  color: var(--mute);
+}
+
+.deck-compare {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.deck-compare th,
+.deck-compare td {
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--line);
+  vertical-align: middle;
+}
+
+.deck-compare th {
+  background: var(--bg-2);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--ink-2);
+  text-transform: uppercase;
+  font-weight: 600;
+}
+
+.deck-compare th small {
+  display: block;
+  margin-top: 2px;
+  font-family: var(--font-sans, inherit);
+  text-transform: none;
+  letter-spacing: 0;
+  color: var(--mute);
+  font-weight: 400;
+}
+
+.deck-compare tr:last-child td {
+  border-bottom: 0;
+}
+
+.deck-compare-us {
+  background: color-mix(in oklab, var(--purple) 10%, var(--bg));
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.deck-compare-yes {
+  color: var(--purple);
+  font-size: 18px;
+}
+
+.deck-compare-partial {
+  color: color-mix(in oklab, var(--purple) 50%, var(--mute));
+  font-size: 18px;
+}
+
+.deck-compare-no {
+  color: var(--line);
+  font-size: 18px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Pricing                                                                 */
+/* ---------------------------------------------------------------------- */
+
+.deck-pricing-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  margin-bottom: 8px;
+}
+
+@media (max-width: 960px) {
+  .deck-pricing-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.deck-pricing-card {
+  padding: 18px 20px 22px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: var(--bg);
+}
+
+.deck-pricing-card-label {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: var(--mute);
+  text-transform: uppercase;
+}
+
+.deck-pricing-card-price {
+  font-family: var(--font-display);
+  font-size: 36px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  margin-top: 6px;
+  color: var(--ink);
+}
+
+.deck-pricing-card-detail {
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--mute);
+}
+
+.deck-pricing-card-body {
+  margin-top: 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Traction                                                                */
+/* ---------------------------------------------------------------------- */
+
+.deck-traction-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+@media (max-width: 1080px) {
+  .deck-traction-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 560px) {
+  .deck-traction-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ---------------------------------------------------------------------- */
+/* Roadmap                                                                 */
+/* ---------------------------------------------------------------------- */
+
+.deck-roadmap {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+@media (max-width: 960px) {
+  .deck-roadmap {
+    grid-template-columns: 1fr;
+  }
+}
+
+.deck-roadmap-q {
+  padding: 22px 22px 24px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--bg);
+}
+
+.deck-roadmap-q-head {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  color: var(--purple);
+  text-transform: uppercase;
+}
+
+.deck-roadmap-q-theme {
+  margin-top: 8px;
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  color: var(--ink);
+}
+
+.deck-roadmap-q-list {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.deck-roadmap-q-list li {
+  position: relative;
+  padding-left: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink-2);
+}
+
+.deck-roadmap-q-list li::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 8px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--purple);
+}
+
+/* ---------------------------------------------------------------------- */
+/* Team & ask                                                              */
+/* ---------------------------------------------------------------------- */
+
+.deck-team-grid {
+  display: grid;
+  gap: 14px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 32px;
+}
+
+@media (max-width: 960px) {
+  .deck-team-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+.deck-ask {
+  padding: 32px 36px 36px;
+  border-radius: 18px;
+  background: linear-gradient(
+    135deg,
+    color-mix(in oklab, var(--purple) 75%, #000) 0%,
+    var(--purple) 60%,
+    var(--purple-lav) 100%
+  );
+  color: #fff;
+  position: relative;
+  overflow: hidden;
+}
+
+.deck-ask::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(600px 240px at 80% 20%, rgba(255, 255, 255, 0.16), transparent 60%);
+  pointer-events: none;
+}
+
+.deck-ask-eyebrow {
+  position: relative;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.deck-ask-headline {
+  position: relative;
+  margin-top: 12px;
+  font-family: var(--font-display);
+  font-size: clamp(28px, 3.4vw, 38px);
+  font-weight: 600;
+  letter-spacing: -0.025em;
+  line-height: 1.1;
+  max-width: 880px;
+}
+
+.deck-ask-body {
+  position: relative;
+  margin: 14px 0 0;
+  font-size: 15.5px;
+  line-height: 1.55;
+  opacity: 0.9;
+  max-width: 640px;
+}
+
+/* ---------------------------------------------------------------------- */
+/* Footer                                                                  */
+/* ---------------------------------------------------------------------- */
+
+.deck-footer {
+  max-width: 1280px;
+  margin: 96px auto 0;
+  padding-top: 24px;
+  border-top: 1px solid var(--line);
+  display: flex;
+  justify-content: space-between;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--mute);
 }
