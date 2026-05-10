@@ -126,8 +126,13 @@ const workableMemberLabel = (member) => (
   || 'Workable member'
 );
 
+// Workable's disqualification-reasons endpoint returns objects shaped
+// `{ id, description }` — `description` is the human-readable label
+// (e.g. "Lacks experience"). Earlier shapes used `name`/`title`/`label`
+// so we still check those for forwards-compat with custom integrations.
 const workableReasonLabel = (reason) => (
-  reason?.name
+  reason?.description
+  || reason?.name
   || reason?.title
   || reason?.label
   || reason?.id
