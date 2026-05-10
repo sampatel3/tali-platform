@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timezone
 from typing import Any
+
+from sqlalchemy.orm import Session
 
 from ..models.candidate_application import CandidateApplication
 from ..models.organization import Organization
@@ -13,8 +16,12 @@ from .fraud_detection import (
     build_fraud_signals_payload,
     detect_cv_copy_paste,
 )
+from .pricing_service import Feature
 from .taali_scoring import compute_role_fit_score
+from .usage_metering_service import record_event as _meter_record_event
 from .workable_actions_service import render_workable_note_template
+
+logger = logging.getLogger("taali.pre_screening_service")
 
 
 def _utcnow() -> datetime:
@@ -174,75 +181,6 @@ def resolved_auto_reject_config(org: Organization | None, role: Role | None) -> 
     }
 
 
-def evaluate_auto_reject_decision(
-    app: CandidateApplication,
-    *,
-    org: Organization | None,
-    role: Role | None,
-) -> dict[str, Any]:
-    snapshot = pre_screen_snapshot(app)
-    config = resolved_auto_reject_config(org, role)
-    score = snapshot["pre_screen_score"]
-    threshold = config["threshold_100"]
-
-    if app.application_outcome != "open":
-        return {
-            "should_trigger": False,
-            "state": "skipped",
-            "reason": "Application is already closed locally",
-            "config": config,
-            "snapshot": snapshot,
-        }
-    if not config["enabled"]:
-        return {
-            "should_trigger": False,
-            "state": "disabled",
-            "reason": "Auto reject is disabled",
-            "config": config,
-            "snapshot": snapshot,
-        }
-    if threshold is None:
-        return {
-            "should_trigger": False,
-            "state": "disabled",
-            "reason": "Auto reject threshold is not configured",
-            "config": config,
-            "snapshot": snapshot,
-        }
-    if score is None:
-        return {
-            "should_trigger": False,
-            "state": "pending_score",
-            "reason": "Pre-screen score is not available yet",
-            "config": config,
-            "snapshot": snapshot,
-        }
-    if not getattr(app, "workable_candidate_id", None):
-        return {
-            "should_trigger": False,
-            "state": "skipped",
-            "reason": "Candidate is not linked to Workable",
-            "config": config,
-            "snapshot": snapshot,
-        }
-
-    if score < threshold:
-        return {
-            "should_trigger": True,
-            "state": "eligible",
-            "reason": f"Pre-screen score {score:.1f} is below configured threshold {threshold:.1f}",
-            "config": config,
-            "snapshot": snapshot,
-        }
-    return {
-        "should_trigger": False,
-        "state": "not_triggered",
-        "reason": f"Pre-screen score {score:.1f} meets threshold {threshold:.1f}",
-        "config": config,
-        "snapshot": snapshot,
-    }
-
-
 def render_auto_reject_note(
     template: str | None,
     *,
@@ -290,17 +228,32 @@ def mark_auto_reject_state(
 # pre-screen from scoring.
 # ---------------------------------------------------------------------------
 
-def execute_pre_screen_only(app: CandidateApplication) -> dict[str, Any]:
-    """Run the pre-screen LLM for one application and persist the result.
+def execute_pre_screen_only(
+    app: CandidateApplication,
+    *,
+    db: Session | None = None,
+    client: Any = None,
+) -> dict[str, Any]:
+    """Canonical Stage 1 engine: run pre-screen LLM + fraud detection.
 
-    Returns ``{status, score, recommendation, decision, reason}`` where
-    ``status`` is one of ``ok | skipped | error``. Does NOT touch
+    This is the ONE place pre-screen scoring and fraud detection live.
+    Stage 2 (cv_score_orchestrator) calls this when a candidate hasn't
+    been pre-screened yet so fraudulent CVs are filtered before the
+    expensive v3 scoring call ever runs.
+
+    Args:
+      app: The application to pre-screen.
+      db: Optional session — when provided, usage metering is recorded.
+      client: Optional org-scoped Anthropic client for billing routing.
+
+    Returns ``{status, score, recommendation, decision, reason, ...}`` where
+    ``status`` is ``ok | skipped | error``. Does NOT touch
     ``cv_match_score`` / ``cv_match_details`` / ``cv_match_scored_at`` so
     a subsequent score job can still run cleanly.
 
     Idempotency: caller is expected to filter by ``pre_screen_run_at``
-    before invoking. This function always runs the LLM (the underlying
-    ``run_pre_screen`` has its own cache, so duplicates are cheap).
+    before invoking. The underlying ``run_pre_screen`` has its own cache,
+    so duplicates are cheap.
     """
     if app is None or app.id is None:
         return {"status": "skipped", "reason": "no_application"}
@@ -313,6 +266,7 @@ def execute_pre_screen_only(app: CandidateApplication) -> dict[str, Any]:
     if not job_spec_text:
         return {"status": "skipped", "reason": "no_job_spec"}
 
+    from ..cv_matching import MODEL_VERSION as PRE_SCREEN_MODEL_VERSION
     from ..cv_matching.runner_pre_screen import run_pre_screen
     from ..cv_matching.schemas import Priority, RequirementInput
 
@@ -341,9 +295,32 @@ def execute_pre_screen_only(app: CandidateApplication) -> dict[str, Any]:
         )
 
     try:
-        pre = run_pre_screen(cv_text, job_spec_text, requirements)
+        pre = run_pre_screen(cv_text, job_spec_text, requirements, client=client)
     except Exception as exc:  # noqa: BLE001 — guard the LLM call
         return {"status": "error", "reason": f"pre_screen_failed: {exc}"[:200]}
+
+    # Record usage metering when a session is available. Telemetry must
+    # never break pre-screen, so swallow any failure.
+    if db is not None and getattr(app, "organization_id", None):
+        try:
+            _meter_record_event(
+                db,
+                organization_id=int(app.organization_id),
+                role_id=getattr(app, "role_id", None),
+                feature=Feature.PRESCREEN,
+                model=PRE_SCREEN_MODEL_VERSION,
+                input_tokens=pre.input_tokens,
+                output_tokens=pre.output_tokens,
+                cache_read_tokens=pre.cache_read_tokens,
+                cache_creation_tokens=pre.cache_creation_tokens,
+                cache_hit=pre.cache_hit,
+                entity_id=f"application:{app.id}",
+            )
+        except Exception:  # pragma: no cover — defensive
+            logger.exception(
+                "usage_metering record_event failed for app=%s feature=prescreen",
+                app.id,
+            )
 
     # Deterministic fraud check — currently CV ↔ JD copy-paste only.
     # Always compute (so we can calibrate the threshold from real data
@@ -412,6 +389,10 @@ def execute_pre_screen_only(app: CandidateApplication) -> dict[str, Any]:
         "reason": summary or pre.reason,
         "cache_hit": pre.cache_hit,
         "fraud_capped": fraud_capped,
+        "prompt_version": pre.prompt_version,
+        "trace_id": pre.trace_id,
+        "fraud_signals": fraud_signals,
+        "llm_score_100": pre.score,
     }
 
 
@@ -435,3 +416,15 @@ def application_needs_pre_screen(app: CandidateApplication) -> bool:
     if cv_uploaded is not None and cv_uploaded > last_run:
         return True
     return False
+
+
+# Backward-compat re-export. The decider lives in the decision_policy
+# package now (engine + auto-reject sit together) but several callers
+# still import it from here. Lazy import keeps a load-time cycle from
+# forming, since auto_reject imports helpers (snapshot, config) from
+# this module.
+def evaluate_auto_reject_decision(*args: Any, **kwargs: Any) -> dict[str, Any]:
+    from ..decision_policy.auto_reject import (
+        evaluate_auto_reject_decision as _impl,
+    )
+    return _impl(*args, **kwargs)

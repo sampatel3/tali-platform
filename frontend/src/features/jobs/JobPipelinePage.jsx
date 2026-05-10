@@ -601,6 +601,7 @@ const RoleAgentSettingsTab = ({
   onSave,
   onScrollToReview,
   onSaveBudget,
+  onAutonomyChange,
 }) => {
   const total = activeApplications.length;
   const above = Math.max(0, total - belowThresholdCount);
@@ -623,13 +624,15 @@ const RoleAgentSettingsTab = ({
   const dayOfMonth = new Date().getDate();
   const daysInMonth = new Date(new Date().getFullYear(), new Date().getMonth() + 1, 0).getDate();
   const projectedCents = dayOfMonth ? Math.round((monthlySpentCents * daysInMonth) / dayOfMonth) : monthlySpentCents;
-  const [autonomy, setAutonomy] = React.useState({
-    auto_invite_above: true,
-    auto_reject_below: true,
-    auto_advance_high_score: false,
-    passive_outbound: false,
-  });
-  const setAutonomyField = (key, on) => setAutonomy((prev) => ({ ...prev, [key]: on }));
+  // Two real HITL toggles, persisted on the role record. Default off
+  // (= every candidate-affecting decision goes to the Decision Hub for
+  // human approval). Flipping on lets the agent execute that family of
+  // actions immediately and audit-log the result.
+  const autoReject = Boolean(role?.auto_reject);
+  const autoPromote = Boolean(role?.auto_promote);
+  const handleAutonomyToggle = (key, value) => {
+    if (typeof onAutonomyChange === 'function') onAutonomyChange(key, value);
+  };
 
   // Per-role monthly budget editor — HANDOFF v2 §4.3 wants
   // "Monthly cap $50 · Edit" in the budget sidebar. Falls back to
@@ -775,36 +778,28 @@ const RoleAgentSettingsTab = ({
             Autonomy <em>rules</em>
           </h2>
           <p className="mc-agent-settings-card-help" style={{ marginBottom: 14 }}>
-            What the agent can do on this role without asking.
+            By default every candidate-affecting decision the agent makes goes to your Decision Hub for approval. Flip these on to let the agent act without asking.
           </p>
           {[
             {
-              key: 'auto_invite_above',
-              title: 'Auto-invite candidates scoring ≥ 75%',
-              sub: 'Sends the assessment invite within hourly limits.',
+              key: 'auto_reject',
+              value: autoReject,
+              title: 'Auto-reject',
+              sub: 'Below-threshold candidates are rejected immediately (pre-screen, scoring, and assessment stages). Off: every reject lands in the Decision Hub for one-click approval.',
             },
             {
-              key: 'auto_reject_below',
-              title: `Auto-reject candidates scoring < ${thresholdDisplay}%`,
-              sub: 'Sends the role-specific reject template, logs to audit.',
-            },
-            {
-              key: 'auto_advance_high_score',
-              title: 'Auto-advance assessments scoring ≥ 85%',
-              sub: 'Moves to Final Review without recruiter approval.',
-            },
-            {
-              key: 'passive_outbound',
-              title: 'Outbound to passive candidates',
-              sub: 'Drafts and sends initial outreach for matched profiles.',
+              key: 'auto_promote',
+              value: autoPromote,
+              title: 'Auto-promote',
+              sub: 'Sending an assessment and advancing to interview happen without approval. Off: each invite/advance queues as a Decision Hub card.',
             },
           ].map((rule, idx) => (
             <label key={rule.key} className={`mc-agent-settings-rule ${idx === 0 ? '' : 'is-divided'}`}>
               <button
                 type="button"
-                className={`mc-switch ${autonomy[rule.key] ? 'on' : ''}`}
-                onClick={() => setAutonomyField(rule.key, !autonomy[rule.key])}
-                aria-pressed={Boolean(autonomy[rule.key])}
+                className={`mc-switch ${rule.value ? 'on' : ''}`}
+                onClick={() => handleAutonomyToggle(rule.key, !rule.value)}
+                aria-pressed={Boolean(rule.value)}
                 aria-label={rule.title}
               />
               <div>
@@ -2122,6 +2117,23 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 await loadRoleWorkspace();
               } catch (error) {
                 showToast(getErrorMessage(error, 'Failed to update budget.'), 'error');
+              }
+            }}
+            onAutonomyChange={async (key, value) => {
+              if (!Number.isFinite(numericRoleId)) return;
+              if (key !== 'auto_reject' && key !== 'auto_promote') return;
+              setRole((cur) => (cur ? { ...cur, [key]: value } : cur));
+              try {
+                await rolesApi.update(numericRoleId, { [key]: value });
+                showToast(
+                  value
+                    ? `${key === 'auto_reject' ? 'Auto-reject' : 'Auto-promote'} on — agent will execute without approval.`
+                    : `${key === 'auto_reject' ? 'Auto-reject' : 'Auto-promote'} off — every decision goes to the Decision Hub.`,
+                  'success',
+                );
+              } catch (error) {
+                setRole((cur) => (cur ? { ...cur, [key]: !value } : cur));
+                showToast(getErrorMessage(error, 'Failed to update autonomy setting.'), 'error');
               }
             }}
           />

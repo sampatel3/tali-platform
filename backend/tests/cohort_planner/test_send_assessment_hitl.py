@@ -1,4 +1,4 @@
-"""HITL gate on send_assessment when role.agent_send_assessment_requires_approval=True."""
+"""HITL gate on send_assessment when role.auto_promote=False."""
 
 from __future__ import annotations
 

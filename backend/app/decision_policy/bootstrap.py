@@ -136,6 +136,25 @@ def _default_policy_json(*, role_fit_min: float) -> dict[str, Any]:
                 },
                 "rules": [
                     {
+                        # Pre-screen-stage auto-reject. The eligibility
+                        # flag is computed by the caller (Celery
+                        # auto-reject task or the wrapper) since it
+                        # combines several preconditions — score below
+                        # the role's per-role threshold, application
+                        # outcome still open, Workable link present, no
+                        # assessment in flight. Routing the verdict
+                        # through the engine keeps the policy as the
+                        # single source of truth even though the gate
+                        # logic lives in Python.
+                        "if": "pre_screen_auto_reject_eligible",
+                        "then": "auto_reject",
+                        "priority": 70,
+                        "reason_template": (
+                            "Pre-screen score below the configured threshold; "
+                            "auto-rejecting at pre-screen stage."
+                        ),
+                    },
+                    {
                         "if": "role_fit_score <= role_fit_max AND no_pending_assessment",
                         "then": "queue_reject_decision",
                         "priority": 50,
