@@ -101,6 +101,9 @@ const SettingsPage = lazy(() =>
 const DecisionPolicyPage = lazy(() =>
   import('./features/decision_policy/DecisionPolicyPage')
 );
+const InvestmentDeckPage = lazy(() =>
+  import('./features/dev/InvestmentDeckPage')
+);
 
 const isPublicCandidateSharePath = (pathname, search = '') => {
   if (pathname.startsWith('/c/')) return true;
@@ -731,6 +734,18 @@ function AppContent() {
         element={(
           <Suspense fallback={lazyFallback}>
             <DecisionPolicyPage />
+          </Suspense>
+        )}
+      />
+
+      {/* Internal investment-deck screenshot canvas. Not linked from
+          anywhere; reach by direct URL only. See
+          features/dev/InvestmentDeckPage.jsx. */}
+      <Route
+        path="/deck"
+        element={(
+          <Suspense fallback={lazyFallback}>
+            <InvestmentDeckPage />
           </Suspense>
         )}
       />
