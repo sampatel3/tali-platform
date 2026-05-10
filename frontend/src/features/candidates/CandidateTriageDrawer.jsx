@@ -268,6 +268,16 @@ export function CandidateTriageDrawer({
         </div>
       ) : null}
 
+      {!canAct ? (
+        <div className="ctc-closed-banner">
+          <span>
+            Application <strong>{application?.application_outcome || 'closed'}</strong>
+            {application?.workable_candidate_id ? ' · disqualified in Workable' : null}
+            . No further actions can be taken.
+          </span>
+        </div>
+      ) : null}
+
       <div className="ctc-tabs" role="tablist">
         <button
           type="button"
@@ -302,6 +312,7 @@ export function CandidateTriageDrawer({
                     key={task.id}
                     type="button"
                     className={`ctc-card ${isOn ? 'on' : ''}`}
+                    disabled={!canAct}
                     onClick={() => setSelectedTaskId(String(task.id))}
                   >
                     <div className="ctc-card-title">{task.name}</div>
@@ -349,7 +360,7 @@ export function CandidateTriageDrawer({
                       key={stage.value}
                       type="button"
                       className={`ctc-card ${isOn ? 'on' : ''}`}
-                      disabled={isCurrent}
+                      disabled={!canAct || isCurrent}
                       onClick={() => setSelectedMoveAction(stage.value)}
                     >
                       <div className="ctc-card-title">{stage.label}</div>
