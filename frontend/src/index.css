@@ -4512,6 +4512,25 @@ html[data-theme="dark"] {
   font-size: 11.5px;
 }
 
+/* Banner shown above the action tabs when the application is closed
+   (rejected / withdrawn / hired). Pairs with the disabled cards/
+   buttons below — the banner explains *why* nothing is clickable so
+   recruiters don't assume the UI is broken. Deep plum tint matches
+   the "this candidate is out of pipeline" reading of the reject card. */
+.ctc-closed-banner {
+  background: color-mix(in oklab, var(--ink) 6%, var(--bg));
+  border: 1px solid color-mix(in oklab, var(--ink) 25%, var(--line));
+  border-radius: 10px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+.ctc-closed-banner strong {
+  color: var(--ink);
+  font-weight: 600;
+  text-transform: capitalize;
+}
+
 /* When the drawer renders inline within the candidates table, the
    parent <td> needs to drop the table cell padding so the drawer
    sits flush under the row. */
