@@ -21,9 +21,15 @@ export const TRIAGE_STAGE_OPTIONS = [
 ];
 
 const formatWorkableStageOption = (stage) => {
-  const slug = stage?.slug || stage?.kind || '';
-  const name = stage?.name || stage?.kind || slug || 'Stage';
-  return { value: String(slug), label: String(name) };
+  // Workable's /stages payloads come in two shapes: ``{slug, kind, name}``
+  // from the integration sync and ``{id, name}`` from a plain list call.
+  // Previously this only checked ``slug || kind``, so the second shape
+  // produced ``value: ""`` and the "Send to Workable" select couldn't
+  // resolve a non-empty selection — the hand-back stayed disabled.
+  // Fall through to ``id`` so either shape yields a stable identifier.
+  const value = stage?.slug || stage?.kind || stage?.id || '';
+  const name = stage?.name || stage?.kind || stage?.slug || (stage?.id != null ? String(stage.id) : 'Stage');
+  return { value: String(value), label: String(name) };
 };
 
 export const candidateReportHref = (application, fromRoleId = null) => {
@@ -272,7 +278,17 @@ export function CandidateTriageDrawer({
         <div className="ctc-closed-banner">
           <span>
             Application <strong>{application?.application_outcome || 'closed'}</strong>
-            {application?.workable_candidate_id ? ' · disqualified in Workable' : null}
+            {(() => {
+              // Workable status copy must match the actual outcome — a
+              // hired or withdrawn candidate isn't "disqualified in
+              // Workable", they're moved to a hired stage / dropped.
+              if (!application?.workable_candidate_id) return null;
+              const outcome = application?.application_outcome;
+              if (outcome === 'rejected') return ' · disqualified in Workable';
+              if (outcome === 'hired') return ' · moved to hired in Workable';
+              if (outcome === 'withdrawn') return ' · withdrawn in Workable';
+              return null;
+            })()}
             . No further actions can be taken.
           </span>
         </div>

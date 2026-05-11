@@ -1147,17 +1147,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     setLoading(true);
     try {
-      const [roleRes, tasksRes, applicationsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
+      // Two separate fetches (open + rejected). A single
+      // ``application_outcome=all`` call has a backend 500-row cap, so
+      // a role with hundreds of historical rejects can push out open
+      // candidates entirely. Two parallel calls give each bucket its
+      // own budget.
+      const appsQuery = (outcome) => ({ sort_by: 'pre_screen_score', sort_order: 'desc', application_outcome: outcome });
+      const [roleRes, tasksRes, openAppsRes, rejectedAppsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
         rolesApi.get(numericRoleId),
         rolesApi.listTasks(numericRoleId),
-        // Pull all outcomes (open + rejected + withdrawn + hired) so the
-        // "Rejected" tab can show closed applications without a second
-        // round-trip. Backend default is `application_outcome=open`.
-        rolesApi.listApplications(numericRoleId, {
-          sort_by: 'pre_screen_score',
-          sort_order: 'desc',
-          application_outcome: 'all',
-        }),
+        rolesApi.listApplications(numericRoleId, appsQuery('open')),
+        rolesApi.listApplications(numericRoleId, appsQuery('rejected')),
         rolesApi.batchScoreStatus(numericRoleId),
         rolesApi.fetchCvsStatus(numericRoleId),
         rolesApi.batchPreScreenStatus(numericRoleId).catch(() => ({ data: EMPTY_PRE_SCREEN_PROGRESS })),
@@ -1172,19 +1172,20 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setRole(nextRole);
       setWorkspaceCriteria(Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : []);
       setThresholdDraft(nextRole?.auto_reject_threshold_100 != null ? String(nextRole.auto_reject_threshold_100) : '');
-      // When the role is in auto-threshold mode, fetch the current
-      // recommendation up-front so the panel renders the value + rationale
-      // immediately instead of after the user touches the dropdown.
+      // Fetch the agent's threshold recommendation when the role is
+      // in auto mode so the panel shows it without waiting for click.
       if (nextRole?.auto_reject_threshold_mode === 'auto' && Number.isFinite(numericRoleId)) {
-        rolesApi
-          .suggestedAutoRejectThreshold(numericRoleId)
+        rolesApi.suggestedAutoRejectThreshold(numericRoleId)
           .then((res) => setSuggestedThreshold(res?.data || null))
           .catch(() => setSuggestedThreshold(null));
-      } else {
-        setSuggestedThreshold(null);
-      }
+      } else setSuggestedThreshold(null);
       setRoleTasks(Array.isArray(tasksRes?.data) ? tasksRes.data : []);
-      setRoleApplications(Array.isArray(applicationsRes?.data) ? applicationsRes.data : []);
+      // Dedupe by id — defensive against any backend overlap.
+      const byId = new Map();
+      for (const a of [...(openAppsRes?.data || []), ...(rejectedAppsRes?.data || [])]) {
+        if (a?.id != null && !byId.has(a.id)) byId.set(a.id, a);
+      }
+      setRoleApplications([...byId.values()]);
       // Hand off batch status to the global context — it owns display state.
       // If a batch is already running when this page loads, make the context
       // track it immediately (no waiting for the next 10s discovery poll).

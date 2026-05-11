@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Any, Literal, Optional
 
-from pydantic import BaseModel, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
 ROLE_DESCRIPTION_MAX_LENGTH = 20000
 
@@ -58,6 +58,13 @@ class ApplicationInterviewResponse(BaseModel):
 
 
 class RoleCreate(BaseModel):
+    # Reject unknown fields outright. Old callers that still POST
+    # retired keys (e.g. ``additional_requirements``, dropped in alembic
+    # 068) used to silently succeed while the server discarded their
+    # input — leaving them with roles missing the criteria they thought
+    # they wrote. ``extra='forbid'`` fails the request loud instead.
+    model_config = ConfigDict(extra="forbid")
+
     name: str = Field(min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
     # ``additional_requirements`` was retired in alembic 068. Use the
@@ -75,6 +82,9 @@ class RoleCreate(BaseModel):
 
 
 class RoleUpdate(BaseModel):
+    # Same fail-loud contract as RoleCreate — see comment there.
+    model_config = ConfigDict(extra="forbid")
+
     name: Optional[str] = Field(default=None, min_length=1, max_length=200)
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
     screening_pack_template: Optional[InterviewPack] = None

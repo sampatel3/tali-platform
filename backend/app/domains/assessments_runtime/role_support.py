@@ -226,6 +226,7 @@ def role_to_response(
         agent_token_budget_per_cycle=getattr(role, "agent_token_budget_per_cycle", None),
         agent_decision_budget_per_cycle=getattr(role, "agent_decision_budget_per_cycle", None),
         monthly_usd_budget_cents=getattr(role, "monthly_usd_budget_cents", None),
+        score_threshold=getattr(role, "score_threshold", None),
         agent_paused_at=getattr(role, "agent_paused_at", None),
         agent_paused_reason=getattr(role, "agent_paused_reason", None),
         agent_last_run_at=getattr(role, "agent_last_run_at", None),
