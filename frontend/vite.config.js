@@ -1,8 +1,9 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import staticDeckTokenPlugin from './scripts/vite-static-deck-token-plugin.mjs'
 
 export default defineConfig({
-  plugins: [react()],
+  plugins: [react(), staticDeckTokenPlugin()],
   build: {
     rollupOptions: {
       output: {
