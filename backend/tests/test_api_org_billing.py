@@ -138,7 +138,6 @@ def test_update_org_workable_and_fireflies_configs(client, db):
                 "workable_config": {
                     "default_sync_mode": "full",
                     "auto_reject_enabled": True,
-                    "auto_reject_threshold_100": 55,
                     "workable_actor_member_id": "member-1",
                     "workable_disqualify_reason_id": "reason-1",
                     "auto_reject_note_template": "Auto reject {{pre_screen_score}} below {{threshold}}.",
@@ -156,7 +155,6 @@ def test_update_org_workable_and_fireflies_configs(client, db):
         payload = resp.json()
         assert payload["workable_config"]["default_sync_mode"] == "full"
         assert payload["workable_config"]["auto_reject_enabled"] is True
-        assert payload["workable_config"]["auto_reject_threshold_100"] == 55
         assert payload["workable_config"]["workable_actor_member_id"] == "member-1"
         assert payload["workable_config"]["workable_disqualify_reason_id"] == "reason-1"
         assert payload["fireflies_config"]["has_api_key"] is True

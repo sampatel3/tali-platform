@@ -90,11 +90,7 @@ def create_role(
         description=(data.description or None),
         screening_pack_template=(data.screening_pack_template.model_dump() if data.screening_pack_template else None),
         tech_interview_pack_template=(data.tech_interview_pack_template.model_dump() if data.tech_interview_pack_template else None),
-        auto_reject_enabled=data.auto_reject_enabled,
-        auto_reject_threshold_100=data.auto_reject_threshold_100,
         workable_actor_member_id=(data.workable_actor_member_id or None),
-        workable_disqualify_reason_id=(data.workable_disqualify_reason_id or None),
-        auto_reject_note_template=(data.auto_reject_note_template or None),
         monthly_usd_budget_cents=monthly_budget_cents,
         score_threshold=score_threshold,
     )
@@ -255,18 +251,10 @@ def update_role(
     if "tech_interview_pack_template" in updates:
         template = updates["tech_interview_pack_template"]
         role.tech_interview_pack_template = template.model_dump() if template else None
-    if "auto_reject_enabled" in updates:
-        role.auto_reject_enabled = updates["auto_reject_enabled"]
-    if "auto_reject_threshold_100" in updates:
-        role.auto_reject_threshold_100 = updates["auto_reject_threshold_100"]
     if "auto_reject_threshold_mode" in updates and updates["auto_reject_threshold_mode"] is not None:
         role.auto_reject_threshold_mode = str(updates["auto_reject_threshold_mode"])
     if "workable_actor_member_id" in updates:
         role.workable_actor_member_id = updates["workable_actor_member_id"] or None
-    if "workable_disqualify_reason_id" in updates:
-        role.workable_disqualify_reason_id = updates["workable_disqualify_reason_id"] or None
-    if "auto_reject_note_template" in updates:
-        role.auto_reject_note_template = updates["auto_reject_note_template"] or None
     if "agentic_mode_enabled" in updates:
         next_enabled = bool(updates["agentic_mode_enabled"])
         if next_enabled:

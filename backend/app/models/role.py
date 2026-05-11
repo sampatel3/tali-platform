@@ -43,8 +43,6 @@ class Role(Base):
     interview_focus_generated_at = Column(DateTime(timezone=True), nullable=True)
     screening_pack_template = Column(JSON, nullable=True)
     tech_interview_pack_template = Column(JSON, nullable=True)
-    auto_reject_enabled = Column(Boolean, nullable=True)
-    auto_reject_threshold_100 = Column(Integer, nullable=True)
     # ``manual`` — recruiter sets the threshold by hand.
     # ``auto``   — agent computes a recommendation from the role's score
     # distribution + any advance/hire labels each time the threshold is
@@ -53,8 +51,6 @@ class Role(Base):
         String(length=8), nullable=False, default="manual", server_default="manual"
     )
     workable_actor_member_id = Column(String, nullable=True)
-    workable_disqualify_reason_id = Column(String, nullable=True)
-    auto_reject_note_template = Column(Text, nullable=True)
     starred_for_auto_sync = Column(
         Boolean,
         nullable=False,

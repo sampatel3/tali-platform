@@ -462,7 +462,7 @@ describe('AssessmentsPage', () => {
       data: { id: 1, name: 'Acme Labs' },
     });
     rolesApi.list.mockResolvedValue({
-      data: [{ id: 101, name: 'Backend Engineer', auto_reject_threshold_100: 60 }],
+      data: [{ id: 101, name: 'Backend Engineer', score_threshold: 60 }],
     });
     rolesApi.get.mockResolvedValue({
       data: {
@@ -470,7 +470,7 @@ describe('AssessmentsPage', () => {
         name: 'Backend Engineer',
         source: 'manual',
         additional_requirements: '',
-        auto_reject_threshold_100: 60,
+        score_threshold: 60,
         stage_counts: { applied: 0, invited: 1, in_assessment: 0, review: 0 },
         active_candidates_count: 1,
       },

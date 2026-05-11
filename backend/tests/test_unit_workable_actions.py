@@ -36,12 +36,14 @@ def _org(**overrides):
 
 
 def _role(**overrides):
+    # Per-role overrides for ``workable_disqualify_reason_id`` and
+    # ``auto_reject_note_template`` were dropped in alembic 076 — they
+    # now live only on ``org.workable_config``. ``workable_actor_member_id``
+    # keeps its per-role override.
     payload = {
         "id": 11,
         "name": "Backend Engineer",
         "workable_actor_member_id": None,
-        "workable_disqualify_reason_id": None,
-        "auto_reject_note_template": None,
     }
     payload.update(overrides)
     return SimpleNamespace(**payload)

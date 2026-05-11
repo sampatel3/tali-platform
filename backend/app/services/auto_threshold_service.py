@@ -190,4 +190,4 @@ def effective_threshold(
     mode = getattr(role, "auto_reject_threshold_mode", None) or "manual"
     if mode == "auto":
         return compute_recommended_threshold(db, role=role).value
-    return role.auto_reject_threshold_100
+    return role.score_threshold

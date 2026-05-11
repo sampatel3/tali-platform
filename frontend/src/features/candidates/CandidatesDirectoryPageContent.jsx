@@ -751,8 +751,8 @@ export const CandidatesDirectoryPage = ({
   ), [inviteRoleId, roles]);
 
   const thresholdRoleValue = useMemo(
-    () => resolveOptionalPercent(thresholdRole?.auto_reject_threshold_100),
-    [thresholdRole?.auto_reject_threshold_100]
+    () => resolveOptionalPercent(thresholdRole?.score_threshold),
+    [thresholdRole?.score_threshold]
   );
   const hasThresholdRoleValue = thresholdRoleValue != null;
   const belowThresholdCount = useMemo(() => {

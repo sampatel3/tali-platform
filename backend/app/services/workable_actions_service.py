@@ -66,6 +66,11 @@ def workable_can_write_candidates(org: Organization | None) -> bool:
 
 
 def resolved_workable_action_config(org: Organization | None, role: Role | None = None) -> dict[str, Any]:
+    # Per-role overrides for ``workable_disqualify_reason_id`` and
+    # ``auto_reject_note_template`` were dropped in alembic 076 — both
+    # now live solely on ``org.workable_config``. ``actor_member_id``
+    # keeps its per-role override (set on the role page) and falls back
+    # to the org value.
     org_config = org.workable_config if org and isinstance(org.workable_config, dict) else {}
     actor_member_id = sanitize_text_for_storage(
         str(
@@ -75,18 +80,10 @@ def resolved_workable_action_config(org: Organization | None, role: Role | None 
         ).strip()
     ) or None
     disqualify_reason_id = sanitize_text_for_storage(
-        str(
-            (role.workable_disqualify_reason_id if role and role.workable_disqualify_reason_id else None)
-            or org_config.get("workable_disqualify_reason_id")
-            or ""
-        ).strip()
+        str(org_config.get("workable_disqualify_reason_id") or "").strip()
     ) or None
     note_template = sanitize_text_for_storage(
-        str(
-            (role.auto_reject_note_template if role and role.auto_reject_note_template is not None else None)
-            or org_config.get("auto_reject_note_template")
-            or ""
-        ).strip()
+        str(org_config.get("auto_reject_note_template") or "").strip()
     ) or None
     scopes = workable_granted_scopes(org)
     return {

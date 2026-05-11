@@ -445,10 +445,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
   const handleRoleSubmit = async ({
     name,
     description,
-    additionalRequirements,
-    autoRejectEnabled,
-    autoRejectThreshold100,
-    autoRejectNoteTemplate,
     jobSpecFile,
     taskIds,
   }) => {
@@ -458,10 +454,6 @@ export const JobsPage = ({ onNavigate: rawOnNavigate, NavComponent = null }) => 
       const createRes = await rolesApi.create({
         name,
         description: trimOrUndefined(description),
-        additional_requirements: trimOrUndefined(additionalRequirements),
-        auto_reject_enabled: autoRejectEnabled || undefined,
-        auto_reject_threshold_100: autoRejectEnabled ? autoRejectThreshold100 : undefined,
-        auto_reject_note_template: autoRejectEnabled ? trimOrUndefined(autoRejectNoteTemplate) : undefined,
       });
       const createdRoleId = createRes?.data?.id;
       if (createdRoleId && jobSpecFile && rolesApi.uploadJobSpec) {
