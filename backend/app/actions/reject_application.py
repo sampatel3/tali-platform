@@ -224,33 +224,34 @@ def run(
     if notify:
         candidate = app.candidate
         candidate_email = (getattr(candidate, "email", "") or "").strip() if candidate else ""
-        if candidate_email:
-            org = (
-                db.query(Organization).filter(Organization.id == organization_id).first()
-            )
+        org = (
+            db.query(Organization).filter(Organization.id == organization_id).first()
+        )
+        # Workable-first: when the org has Workable connected and the
+        # application is linked, disqualify there regardless of whether
+        # the local candidate row has an email. ``Candidate.email`` is
+        # nullable for imported / partially-populated records, but those
+        # candidates still need their Workable status moved to rejected.
+        # Only the fallback Taali-branded email requires a local email.
+        workable_handled = _try_workable_disqualify(
+            db,
+            app=app,
+            org=org,
+            actor=actor,
+            reason=reason,
+        )
+        if not workable_handled and candidate_email:
             role = app.role
             position = (
                 getattr(role, "name", None)
                 or getattr(candidate, "position", None)
                 or "the role you applied for"
             )
-            # Workable-first: when the org has Workable connected and the
-            # application is linked, disqualify there and let Workable's
-            # stage workflow send the rejection email. Only fall back to
-            # the Taali-branded email when Workable isn't applicable.
-            workable_handled = _try_workable_disqualify(
-                db,
-                app=app,
-                org=org,
-                actor=actor,
-                reason=reason,
+            _dispatch_rejection_email(
+                candidate_email=candidate_email,
+                candidate_name=(candidate.full_name or candidate.email),
+                org_name=(org.name if org else "the hiring team"),
+                position=position,
             )
-            if not workable_handled:
-                _dispatch_rejection_email(
-                    candidate_email=candidate_email,
-                    candidate_name=(candidate.full_name or candidate.email),
-                    org_name=(org.name if org else "the hiring team"),
-                    position=position,
-                )
 
     return app

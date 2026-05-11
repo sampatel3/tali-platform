@@ -472,11 +472,14 @@ def _execute_scoring_v3(
     # its result. Recruiter manual rescores (force_full_score) bypass the
     # gate entirely.
     if settings.ENABLE_PRE_SCREEN_GATE and not force_full_score:
-        from .pre_screening_service import execute_pre_screen_only
+        from .pre_screening_service import application_needs_pre_screen, execute_pre_screen_only
 
-        # Idempotent: skip if Stage 1 already ran (e.g. via the "Pre-screen
-        # new" batch button). Otherwise run the canonical engine now.
-        if application.pre_screen_run_at is None:
+        # Idempotent: re-run Stage 1 when it's never been run OR when
+        # the candidate uploaded a newer CV after the last pre-screen.
+        # ``application_needs_pre_screen`` already encodes the
+        # "stale CV" check (cv_uploaded_at > pre_screen_run_at) used by
+        # the manual batch button, so the two entry points stay aligned.
+        if application_needs_pre_screen(application):
             execute_pre_screen_only(application, db=db, client=org_client)
 
         gated_score = application.pre_screen_score_100

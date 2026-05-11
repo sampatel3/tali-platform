@@ -29,14 +29,25 @@ def _utcnow() -> datetime:
 
 
 def normalize_score_100(value: Any) -> float | None:
+    """Coerce a score into the 0-100 range.
+
+    Auto-scales values in the (0, 1.0] range up to the 0-100 scale —
+    these are clearly 0-1 fractions. Values above 1.0 are assumed to
+    already be on the 0-100 scale. The previous heuristic auto-scaled
+    anything ``<= 10`` which collided with the fraud cap (10.0) and
+    legitimate single-digit scores: a fraud-capped candidate stored
+    ``10`` got normalised to ``100`` and rendered as a top scorer.
+    Pre-screen and cv_match fields are always 0-100 by column name, so
+    the cv-match callers don't need the auto-scale at all.
+    """
     try:
         numeric = float(value)
     except (TypeError, ValueError):
         return None
     if numeric < 0:
         return None
-    if numeric <= 10.0:
-        numeric *= 10.0
+    if 0 < numeric <= 1.0:
+        numeric *= 100.0
     return round(max(0.0, min(100.0, numeric)), 1)
 
 
