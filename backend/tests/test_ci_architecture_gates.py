@@ -102,6 +102,70 @@ def test_file_size_guard_for_api_and_service_paths() -> None:
     )
 
 
+def test_agent_mutation_tools_call_shared_action_layer() -> None:
+    """Every agent mutation tool must call into ``app.actions.<name>.run``,
+    not implement business logic inline. The same actions are called by
+    recruiter routes, so this gate enforces agent/recruiter parity at the
+    code level.
+
+    Read-only tools (``get_*``, ``search_*``, ``compare_*``, ``find_*``,
+    ``survey_*``, ``read_*``, ``nl_search_*``, ``graph_search_*``,
+    ``refresh_candidate_graph``, ``get_cohort_signals``, ``evaluate_policy``,
+    ``ask_recruiter``, ``agent_run_complete``, ``batch_score_cv``) are
+    exempt — they either delegate to ``mcp_handlers``/``cohort_tools`` or
+    are agent-only loops over an action.
+    """
+
+    registry_path = PROJECT_ROOT / "app" / "agent_runtime" / "tool_registry.py"
+    content = registry_path.read_text(encoding="utf-8")
+
+    handler_def_re = re.compile(r"^def (_tool_[a-z_]+)\(", re.MULTILINE)
+    handler_names = handler_def_re.findall(content)
+
+    read_only_or_internal = {
+        "_tool_get_application",
+        "_tool_get_candidate",
+        "_tool_get_candidate_cv",
+        "_tool_search_applications",
+        "_tool_compare_applications",
+        "_tool_nl_search_candidates",
+        "_tool_graph_search_candidates",
+        "_tool_refresh_candidate_graph",
+        "_tool_get_cohort_signals",
+        "_tool_evaluate_policy",
+        "_tool_survey_role_state",
+        "_tool_find_apps_in_state",
+        "_tool_read_pending_recruiter_inputs",
+        "_tool_batch_score_cv",
+        "_tool_ask_recruiter",
+        "_tool_agent_run_complete",
+        # Decision-queueing tools call queue_decision via the _queue() helper
+        # rather than directly. We verify _queue itself below.
+        "_tool_queue_advance_decision",
+        "_tool_queue_reject_decision",
+        "_tool_queue_skip_assessment_reject_decision",
+    }
+
+    # For each mutation handler, slice the function body and require it to
+    # mention ``<action_name>.run(`` or call ``_queue(``.
+    body_re = re.compile(
+        r"^def (_tool_[a-z_]+)\([^)]*\)[^:]*:\n((?:(?:    .*\n)|\n)+)",
+        re.MULTILINE,
+    )
+    violations: list[str] = []
+    for handler_name, body in body_re.findall(content):
+        if handler_name in read_only_or_internal:
+            continue
+        if ".run(" not in body and "_queue(" not in body:
+            violations.append(handler_name)
+
+    assert not violations, (
+        "Agent mutation tool handlers must call a shared action "
+        "(<action>.run(...) or _queue(...)). Inline business logic is "
+        f"forbidden. Violations: {violations}"
+    )
+
+
 def test_no_imports_of_removed_service_shims() -> None:
     removed_shim_names = [
         "access_control_service",

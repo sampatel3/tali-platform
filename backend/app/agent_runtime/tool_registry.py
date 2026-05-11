@@ -19,8 +19,11 @@ from datetime import datetime, timedelta, timezone
 from ..actions import (
     advance_stage,
     ask_recruiter,
+    create_application,
+    post_workable_note,
     queue_decision,
     reject_application,
+    resend_assessment_invite,
     score_cv,
     send_assessment,
 )
@@ -28,6 +31,8 @@ from ..actions.types import Actor
 from ..mcp import handlers as mcp_handlers
 from ..models.agent_needs_input import NEEDS_INPUT_KINDS
 from ..models.agent_run import AgentRun
+from ..models.assessment import Assessment
+from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..services import cohort_signals_service
 from . import cohort_tools, policy_evaluator
@@ -472,6 +477,69 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "required": ["application_id"],
         },
     },
+    {
+        "name": "resend_assessment_invite",
+        "description": (
+            "Re-dispatch the invite email for an existing assessment without "
+            "creating a new Assessment row. Use when the candidate didn't "
+            "receive the original invite, asked to be re-invited, or the link "
+            "expired. Honors the role's auto_promote toggle just like "
+            "send_assessment — when auto_promote is False, opens an "
+            "ask_recruiter card instead of resending. Returns "
+            "{assessment_id, status, detail} where status is 'resent', "
+            "'voided', 'no_candidate', or 'awaiting_recruiter_approval'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "assessment_id": {"type": "integer"},
+            },
+            "required": ["assessment_id"],
+        },
+    },
+    {
+        "name": "create_application",
+        "description": (
+            "Create a candidate application against a role. Reuses an existing "
+            "Candidate row when one matches the email; otherwise creates a new "
+            "candidate. Refuses with 400 if the candidate already has an "
+            "application for this role. Use when processing inbound Workable "
+            "webhooks or email-driven candidate ingest that aren't covered by "
+            "the automatic sync path. Returns {application_id, candidate_id, status}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "role_id": {"type": "integer"},
+                "candidate_email": {"type": "string"},
+                "candidate_name": {"type": "string"},
+                "candidate_position": {"type": "string"},
+                "notes": {"type": "string"},
+            },
+            "required": ["role_id", "candidate_email"],
+        },
+    },
+    {
+        "name": "post_workable_note",
+        "description": (
+            "Post a free-form note to a candidate's Workable activity feed. "
+            "Use to leave context that doesn't correspond to a stage change "
+            "— e.g. flagging why you queued a rejection, recording a side-"
+            "channel observation, or adding a heads-up the recruiter should "
+            "see in their Workable view. Skipped if the application has no "
+            "linked Workable candidate or the org isn't Workable-connected. "
+            "Body is capped at 8000 chars. Returns {application_id, status, "
+            "detail} where status is 'posted', 'skipped', or 'failed'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_id": {"type": "integer"},
+                "body": {"type": "string", "description": "Note text to post."},
+            },
+            "required": ["application_id", "body"],
+        },
+    },
     # ------------------------------------------------------------------
     # QUEUE — recruiter must approve before side effect
     # ------------------------------------------------------------------
@@ -796,38 +864,61 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     actor = Actor.agent(int(agent_run.id))
     application_id = int(args["application_id"])
 
-    # HITL gate per Role.auto_promote. When False (the default), instead
-    # of auto-sending, the agent opens an approval-style
-    # ``agent_needs_input`` row keyed on (role_id, send_assessment_approval).
-    # The recruiter approves on the role page; the next cycle reads the
-    # response and sends. This is the OpenAI-guide "high-risk action →
-    # human oversight" pattern.
+    # HITL gate per Role.auto_promote. When False (the default), the
+    # agent must defer to a prior recruiter approval — otherwise it
+    # opens a fresh ``agent_needs_input`` card and waits.
+    #
+    # Without the consume step here, the previous behaviour blew up
+    # into an infinite approval loop: the agent opens a card, the
+    # recruiter clicks Approve, the agent calls send_assessment again
+    # next cycle, the resolved card no longer dedupes (open dedupes
+    # only on un-resolved rows), so a *new* card opens and the send
+    # never fires. Codex flagged this on #141; this fix uses the
+    # ``subject_id`` column introduced by migration 075 so the
+    # consume/open pair is scoped per-candidate, not role-wide.
     if not bool(getattr(role, "auto_promote", False)):
-        existing = ask_recruiter.open(
+        consumed = ask_recruiter.consume_resolved(
             db,
             actor,
             organization_id=int(role.organization_id),
             role_id=int(role.id),
             kind="send_assessment_approval",
             subject_id=application_id,
-            prompt=(
-                f"Approve sending the assessment to application {application_id}? "
-                "I'll dispatch the invite as soon as you confirm."
-            ),
-            options=[
-                {"value": "approve", "label": "Approve & send"},
-                {"value": "skip", "label": "Skip this candidate"},
-            ],
-            rationale=(
-                "auto_promote is off for this role; every send goes through "
-                "the recruiter."
-            ),
         )
-        return {
-            "status": "awaiting_recruiter_approval",
-            "needs_input_id": int(existing.id),
-            "application_id": application_id,
-        }
+        if consumed is not None and consumed.choice == "approve":
+            pass  # fall through to the action
+        elif consumed is not None and consumed.choice == "skip":
+            return {
+                "status": "recruiter_declined",
+                "needs_input_id": int(consumed.row.id),
+                "application_id": application_id,
+            }
+        else:
+            existing = ask_recruiter.open(
+                db,
+                actor,
+                organization_id=int(role.organization_id),
+                role_id=int(role.id),
+                kind="send_assessment_approval",
+                subject_id=application_id,
+                prompt=(
+                    f"Approve sending the assessment to application {application_id}? "
+                    "I'll dispatch the invite as soon as you confirm."
+                ),
+                options=[
+                    {"value": "approve", "label": "Approve & send"},
+                    {"value": "skip", "label": "Skip this candidate"},
+                ],
+                rationale=(
+                    "auto_promote is off for this role; every send goes through "
+                    "the recruiter."
+                ),
+            )
+            return {
+                "status": "awaiting_recruiter_approval",
+                "needs_input_id": int(existing.id),
+                "application_id": application_id,
+            }
 
     task_id = args.get("task_id")
     duration = args.get("duration_minutes")
@@ -838,6 +929,189 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
         application_id=application_id,
         task_id=int(task_id) if task_id is not None else None,
         duration_minutes=int(duration) if duration is not None else 90,
+    )
+    return result.as_dict()
+
+
+def _tool_resend_assessment_invite(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    actor = Actor.agent(int(agent_run.id))
+    assessment_id = int(args["assessment_id"])
+
+    # Cross-role guard. The agent runs in the context of one role. An
+    # assessment can belong to a *different* role in the same org —
+    # if we gated by the running role's auto_promote and that role had
+    # auto_promote=True, we'd happily resend an invite for an
+    # assessment whose own role has auto_promote=False, bypassing that
+    # role's HITL policy. Refuse the resend entirely when the
+    # assessment doesn't belong to the running role; the agent should
+    # only resend invites for its own role's candidates.
+    assessment = (
+        db.query(Assessment)
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.organization_id == int(role.organization_id),
+        )
+        .first()
+    )
+    if assessment is None:
+        return {
+            "status": "not_found",
+            "assessment_id": assessment_id,
+            "detail": "assessment not found in this organization",
+        }
+    if assessment.role_id is None or int(assessment.role_id) != int(role.id):
+        return {
+            "status": "wrong_role",
+            "assessment_id": assessment_id,
+            "detail": (
+                f"assessment {assessment_id} belongs to role "
+                f"{assessment.role_id}, not the running role {int(role.id)}; "
+                "refusing resend to avoid bypassing the other role's HITL policy"
+            ),
+        }
+
+    # HITL gate — same auto_promote toggle that gates send_assessment.
+    # Resending an invite is a candidate-facing email, so it must
+    # respect the same recruiter approval policy. Consume any prior
+    # approval (scoped to this exact assessment via ``subject_id``)
+    # before opening a fresh card — otherwise the recruiter's approve
+    # click never actually triggers the resend. Safe to read from
+    # ``role`` here because we just verified the assessment belongs
+    # to exactly this role.
+    if not bool(getattr(role, "auto_promote", False)):
+        consumed = ask_recruiter.consume_resolved(
+            db,
+            actor,
+            organization_id=int(role.organization_id),
+            role_id=int(role.id),
+            kind="resend_assessment_invite_approval",
+            subject_id=assessment_id,
+        )
+        if consumed is not None and consumed.choice == "approve":
+            pass  # fall through to the action
+        elif consumed is not None and consumed.choice == "skip":
+            return {
+                "status": "recruiter_declined",
+                "needs_input_id": int(consumed.row.id),
+                "assessment_id": assessment_id,
+            }
+        else:
+            existing = ask_recruiter.open(
+                db,
+                actor,
+                organization_id=int(role.organization_id),
+                role_id=int(role.id),
+                kind="resend_assessment_invite_approval",
+                subject_id=assessment_id,
+                prompt=(
+                    f"Approve resending the assessment invite for assessment "
+                    f"{assessment_id}? I'll re-dispatch the invite as soon as "
+                    "you confirm."
+                ),
+                options=[
+                    {"value": "approve", "label": "Approve & resend"},
+                    {"value": "skip", "label": "Skip — don't resend"},
+                ],
+                rationale=(
+                    "auto_promote is off for this role; every candidate-facing "
+                    "send goes through the recruiter."
+                ),
+            )
+            return {
+                "status": "awaiting_recruiter_approval",
+                "needs_input_id": int(existing.id),
+                "assessment_id": assessment_id,
+            }
+
+    result = resend_assessment_invite.run(
+        db,
+        actor,
+        organization_id=int(role.organization_id),
+        assessment_id=assessment_id,
+    )
+    return result.as_dict()
+
+
+def _tool_create_application(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    actor = Actor.agent(int(agent_run.id))
+    target_role_id = int(args["role_id"])
+
+    # Single-role execution boundary. The agent runs in the context of
+    # one role; creating an application under a *different* role in the
+    # same org would let role A's agent provision candidates into role
+    # B's pipeline, mixing intent and bypassing role B's policy. Refuse
+    # cross-role creates outright. (Org boundary is enforced inside the
+    # action via get_role; this guard is the stricter intra-org check.)
+    if target_role_id != int(role.id):
+        return {
+            "status": "wrong_role",
+            "role_id": target_role_id,
+            "detail": (
+                f"create_application targets role {target_role_id}, but the "
+                f"running agent is for role {int(role.id)}; refusing to "
+                "create applications outside the running role's scope"
+            ),
+        }
+
+    result = create_application.run(
+        db,
+        actor,
+        organization_id=int(role.organization_id),
+        role_id=target_role_id,
+        candidate_email=str(args["candidate_email"]),
+        candidate_name=args.get("candidate_name"),
+        candidate_position=args.get("candidate_position"),
+        notes=args.get("notes"),
+    )
+    return result.as_dict()
+
+
+def _tool_post_workable_note(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    actor = Actor.agent(int(agent_run.id))
+    application_id = int(args["application_id"])
+
+    # Single-role execution boundary — matches the guard on
+    # resend_assessment_invite. An agent running for role A posting a
+    # note to role B's candidate would leak agent-side actions across
+    # role workflows and surface in role B's Workable feed with no
+    # corresponding pipeline event under role B's intent. Refuse.
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == application_id,
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+        .first()
+    )
+    if app is None:
+        return {
+            "status": "not_found",
+            "application_id": application_id,
+            "detail": "application not found in this organization",
+        }
+    if app.role_id is None or int(app.role_id) != int(role.id):
+        return {
+            "status": "wrong_role",
+            "application_id": application_id,
+            "detail": (
+                f"application {application_id} belongs to role {app.role_id}, "
+                f"not the running role {int(role.id)}; refusing to post a "
+                "note across roles"
+            ),
+        }
+
+    result = post_workable_note.run(
+        db,
+        actor,
+        organization_id=int(role.organization_id),
+        application_id=application_id,
+        body=str(args["body"]),
     )
     return result.as_dict()
 
@@ -1172,6 +1446,9 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "get_cohort_signals": _tool_get_cohort_signals,
     "score_cv": _tool_score_cv,
     "send_assessment": _tool_send_assessment,
+    "resend_assessment_invite": _tool_resend_assessment_invite,
+    "create_application": _tool_create_application,
+    "post_workable_note": _tool_post_workable_note,
     "queue_advance_decision": _tool_queue_advance_decision,
     "queue_reject_decision": _tool_queue_reject_decision,
     "queue_skip_assessment_reject_decision": _tool_queue_skip_assessment_reject_decision,
