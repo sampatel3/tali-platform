@@ -17,33 +17,38 @@
   // top-frame and iframe context so a wrapper page can't bypass.
   // Same security model as TokenGate: anti-indexing + share-link
   // keyhole, not a real auth boundary.
+  //
+  // Allow rule:
+  //   * iframe whose parent is same-origin /deck → trust (DeckIframe
+  //     inside a route that already passed TokenGate).
+  //   * top-frame or any other context → require the stored
+  //     localStorage value to equal the build-injected token.
+  //
+  // The plugin replaces ``__VITE_DEV_TOKEN__`` with a JSON.stringify'd
+  // token; ``typeof`` keeps dev (no substitution) from throwing a
+  // ReferenceError that the try/catch would swallow.
   (function () {
+    function bounce() {
+      var here = window.location.pathname + window.location.search;
+      window.location.replace('/deck?from=' + encodeURIComponent(here));
+    }
     try {
-      // Build-time replacement; in dev (no replacement run) the
-      // placeholder stays as the literal string below and never
-      // matches a real token, so the static path is closed in dev.
-      // Devs reach the deck via /deck which uses TokenGate directly.
-      // The plugin replaces ``__VITE_DEV_TOKEN__`` with a
-      // JSON.stringify'd token (a properly-escaped JS string literal).
-      // Using ``typeof`` here so the dev case — where the placeholder
-      // is never substituted — sees ``undefined`` and fails closed
-      // instead of throwing a ReferenceError that the outer try/catch
-      // would swallow, leaving the page open. See
-      // scripts/vite-static-deck-token-plugin.mjs.
-      var expected = (typeof __VITE_DEV_TOKEN__ !== 'undefined') ? __VITE_DEV_TOKEN__ : null;
-      if (!expected) {
-        // No token configured (likely a dev build with no env var).
-        // Fail closed: route to /deck which has its own DEV fallback.
-        var dest = '/deck?from=' + encodeURIComponent(window.location.pathname + window.location.search);
-        window.location.replace(dest);
-        return;
+      // Same-origin iframe inside /deck — DeckIframe has already
+      // passed TokenGate. Cross-origin parents throw on property
+      // access; treat that as a wrapper-page bypass attempt and fall
+      // through to enforce. This also fixes the dev fallback loop:
+      // /deck (TokenGate-permissive in DEV) renders DeckIframe →
+      // iframe sees parent.pathname === '/deck' → renders.
+      if (window !== window.top) {
+        try {
+          if (window.parent.location.pathname === '/deck') return;
+        } catch (e) { /* cross-origin parent → enforce */ }
       }
+      var expected = (typeof __VITE_DEV_TOKEN__ !== 'undefined') ? __VITE_DEV_TOKEN__ : null;
+      if (!expected) { bounce(); return; }
       var stored = '';
       try { stored = window.localStorage.getItem('tali.dev_token') || ''; } catch (e) {}
-      if (stored !== expected) {
-        var here = window.location.pathname + window.location.search;
-        window.location.replace('/deck?from=' + encodeURIComponent(here));
-      }
+      if (stored !== expected) bounce();
     } catch (e) { /* don't block render on script errors */ }
   })();
 </script>
