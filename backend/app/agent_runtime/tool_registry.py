@@ -864,38 +864,61 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     actor = Actor.agent(int(agent_run.id))
     application_id = int(args["application_id"])
 
-    # HITL gate per Role.auto_promote. When False (the default), instead
-    # of auto-sending, the agent opens an approval-style
-    # ``agent_needs_input`` row keyed on (role_id, send_assessment_approval).
-    # The recruiter approves on the role page; the next cycle reads the
-    # response and sends. This is the OpenAI-guide "high-risk action →
-    # human oversight" pattern.
+    # HITL gate per Role.auto_promote. When False (the default), the
+    # agent must defer to a prior recruiter approval — otherwise it
+    # opens a fresh ``agent_needs_input`` card and waits.
+    #
+    # Without the consume step here, the previous behaviour blew up
+    # into an infinite approval loop: the agent opens a card, the
+    # recruiter clicks Approve, the agent calls send_assessment again
+    # next cycle, the resolved card no longer dedupes (open dedupes
+    # only on un-resolved rows), so a *new* card opens and the send
+    # never fires. Codex flagged this on #141; this fix uses the
+    # ``subject_id`` column introduced by migration 075 so the
+    # consume/open pair is scoped per-candidate, not role-wide.
     if not bool(getattr(role, "auto_promote", False)):
-        existing = ask_recruiter.open(
+        consumed = ask_recruiter.consume_resolved(
             db,
             actor,
             organization_id=int(role.organization_id),
             role_id=int(role.id),
             kind="send_assessment_approval",
             subject_id=application_id,
-            prompt=(
-                f"Approve sending the assessment to application {application_id}? "
-                "I'll dispatch the invite as soon as you confirm."
-            ),
-            options=[
-                {"value": "approve", "label": "Approve & send"},
-                {"value": "skip", "label": "Skip this candidate"},
-            ],
-            rationale=(
-                "auto_promote is off for this role; every send goes through "
-                "the recruiter."
-            ),
         )
-        return {
-            "status": "awaiting_recruiter_approval",
-            "needs_input_id": int(existing.id),
-            "application_id": application_id,
-        }
+        if consumed is not None and consumed.choice == "approve":
+            pass  # fall through to the action
+        elif consumed is not None and consumed.choice == "skip":
+            return {
+                "status": "recruiter_declined",
+                "needs_input_id": int(consumed.row.id),
+                "application_id": application_id,
+            }
+        else:
+            existing = ask_recruiter.open(
+                db,
+                actor,
+                organization_id=int(role.organization_id),
+                role_id=int(role.id),
+                kind="send_assessment_approval",
+                subject_id=application_id,
+                prompt=(
+                    f"Approve sending the assessment to application {application_id}? "
+                    "I'll dispatch the invite as soon as you confirm."
+                ),
+                options=[
+                    {"value": "approve", "label": "Approve & send"},
+                    {"value": "skip", "label": "Skip this candidate"},
+                ],
+                rationale=(
+                    "auto_promote is off for this role; every send goes through "
+                    "the recruiter."
+                ),
+            )
+            return {
+                "status": "awaiting_recruiter_approval",
+                "needs_input_id": int(existing.id),
+                "application_id": application_id,
+            }
 
     task_id = args.get("task_id")
     duration = args.get("duration_minutes")
@@ -951,35 +974,56 @@ def _tool_resend_assessment_invite(
 
     # HITL gate — same auto_promote toggle that gates send_assessment.
     # Resending an invite is a candidate-facing email, so it must
-    # respect the same recruiter approval policy. Safe to read from
-    # ``role`` here because we just verified the assessment belongs to
-    # exactly this role.
+    # respect the same recruiter approval policy. Consume any prior
+    # approval (scoped to this exact assessment via ``subject_id``)
+    # before opening a fresh card — otherwise the recruiter's approve
+    # click never actually triggers the resend. Safe to read from
+    # ``role`` here because we just verified the assessment belongs
+    # to exactly this role.
     if not bool(getattr(role, "auto_promote", False)):
-        existing = ask_recruiter.open(
+        consumed = ask_recruiter.consume_resolved(
             db,
             actor,
             organization_id=int(role.organization_id),
             role_id=int(role.id),
             kind="resend_assessment_invite_approval",
-            prompt=(
-                f"Approve resending the assessment invite for assessment "
-                f"{assessment_id}? I'll re-dispatch the invite as soon as "
-                "you confirm."
-            ),
-            options=[
-                {"value": "approve", "label": "Approve & resend"},
-                {"value": "skip", "label": "Skip — don't resend"},
-            ],
-            rationale=(
-                "auto_promote is off for this role; every candidate-facing "
-                "send goes through the recruiter."
-            ),
+            subject_id=assessment_id,
         )
-        return {
-            "status": "awaiting_recruiter_approval",
-            "needs_input_id": int(existing.id),
-            "assessment_id": assessment_id,
-        }
+        if consumed is not None and consumed.choice == "approve":
+            pass  # fall through to the action
+        elif consumed is not None and consumed.choice == "skip":
+            return {
+                "status": "recruiter_declined",
+                "needs_input_id": int(consumed.row.id),
+                "assessment_id": assessment_id,
+            }
+        else:
+            existing = ask_recruiter.open(
+                db,
+                actor,
+                organization_id=int(role.organization_id),
+                role_id=int(role.id),
+                kind="resend_assessment_invite_approval",
+                subject_id=assessment_id,
+                prompt=(
+                    f"Approve resending the assessment invite for assessment "
+                    f"{assessment_id}? I'll re-dispatch the invite as soon as "
+                    "you confirm."
+                ),
+                options=[
+                    {"value": "approve", "label": "Approve & resend"},
+                    {"value": "skip", "label": "Skip — don't resend"},
+                ],
+                rationale=(
+                    "auto_promote is off for this role; every candidate-facing "
+                    "send goes through the recruiter."
+                ),
+            )
+            return {
+                "status": "awaiting_recruiter_approval",
+                "needs_input_id": int(existing.id),
+                "assessment_id": assessment_id,
+            }
 
     result = resend_assessment_invite.run(
         db,

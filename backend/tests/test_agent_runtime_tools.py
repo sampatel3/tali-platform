@@ -22,6 +22,7 @@ from app.actions.types import Actor
 from app.agent_runtime import tool_registry
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
 from app.models.agent_decision import AgentDecision
+from app.models.agent_needs_input import AgentNeedsInput
 from app.models.agent_run import AgentRun
 from app.models.assessment import Assessment
 from app.models.candidate import Candidate
@@ -33,9 +34,13 @@ from app.models.user import User
 
 
 # SQLite doesn't autoincrement BigInteger PKs (only INTEGER PKs are special-cased).
-# AgentRun and AgentDecision use BigInteger to match prod's Postgres sequences,
-# so we hand-roll an in-memory counter for the test session.
-_BIG_PK_COUNTERS: dict[str, int] = {"agent_runs": 0, "agent_decisions": 0}
+# AgentRun, AgentDecision, AgentNeedsInput all use BigInteger to match prod's
+# Postgres sequences, so we hand-roll an in-memory counter for the test session.
+_BIG_PK_COUNTERS: dict[str, int] = {
+    "agent_runs": 0,
+    "agent_decisions": 0,
+    "agent_needs_input": 0,
+}
 
 
 def _assign_big_pk(mapper, connection, target):  # pragma: no cover — fired by SQLA
@@ -47,6 +52,7 @@ def _assign_big_pk(mapper, connection, target):  # pragma: no cover — fired by
 
 event.listen(AgentRun, "before_insert", _assign_big_pk)
 event.listen(AgentDecision, "before_insert", _assign_big_pk)
+event.listen(AgentNeedsInput, "before_insert", _assign_big_pk)
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +336,230 @@ def test_resend_assessment_invite_dispatch_returns_not_found_for_unknown_id(db):
 
     assert result["status"] == "not_found"
     assert not mock_action.called
+
+
+def test_resend_assessment_invite_dispatch_consumes_prior_approval(db):
+    """HITL approval loop fix (Codex P1 follow-up on #141).
+
+    Sequence: ``auto_promote=False`` role, recruiter previously
+    approved a resend card targeting this assessment_id via the
+    ``subject_id`` column. Next dispatch must run the action (not
+    open a new card) and mark the approval consumed.
+    """
+    from datetime import datetime, timezone
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = False
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    assessment = _make_assessment(db, org=org, role=role, app=app)
+    run = _make_agent_run(db, role)
+
+    approved = AgentNeedsInput(
+        organization_id=org.id,
+        role_id=role.id,
+        kind="resend_assessment_invite_approval",
+        subject_id=int(assessment.id),
+        prompt="x",
+        resolved_at=datetime.now(timezone.utc),
+        response={"value": "approve"},
+    )
+    db.add(approved)
+    db.flush()
+
+    fake_result = type(
+        "_R",
+        (),
+        {"as_dict": lambda self: {"assessment_id": int(assessment.id), "status": "resent", "detail": None}},
+    )()
+    with patch(
+        "app.actions.resend_assessment_invite.run", return_value=fake_result
+    ) as mock_run:
+        result = tool_registry.dispatch(
+            "resend_assessment_invite",
+            {"assessment_id": int(assessment.id)},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert mock_run.called
+    assert result["status"] == "resent"
+    db.refresh(approved)
+    assert approved.dismissed_at is not None
+
+
+def test_resend_assessment_invite_dispatch_recruiter_declined_when_prior_card_skipped(db):
+    from datetime import datetime, timezone
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = False
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    assessment = _make_assessment(db, org=org, role=role, app=app)
+    run = _make_agent_run(db, role)
+
+    declined = AgentNeedsInput(
+        organization_id=org.id,
+        role_id=role.id,
+        kind="resend_assessment_invite_approval",
+        subject_id=int(assessment.id),
+        prompt="x",
+        resolved_at=datetime.now(timezone.utc),
+        response={"value": "skip"},
+    )
+    db.add(declined)
+    db.flush()
+
+    with patch(
+        "app.actions.resend_assessment_invite.run"
+    ) as mock_run, patch(
+        "app.actions.ask_recruiter.open"
+    ) as mock_ask_open:
+        result = tool_registry.dispatch(
+            "resend_assessment_invite",
+            {"assessment_id": int(assessment.id)},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert not mock_run.called
+    assert not mock_ask_open.called
+    assert result["status"] == "recruiter_declined"
+    assert result["assessment_id"] == int(assessment.id)
+
+
+def test_send_assessment_dispatch_consumes_prior_approval(db):
+    """Same fix applied symmetrically to send_assessment. Codex didn't
+    flag this one because it was latent (no test exercised the HITL
+    path), but the bug shape was identical."""
+    from datetime import datetime, timezone
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = False
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test", taali=80.0)
+    run = _make_agent_run(db, role)
+
+    approved = AgentNeedsInput(
+        organization_id=org.id,
+        role_id=role.id,
+        kind="send_assessment_approval",
+        subject_id=int(app.id),
+        prompt="x",
+        resolved_at=datetime.now(timezone.utc),
+        response={"value": "approve"},
+    )
+    db.add(approved)
+    db.flush()
+
+    fake_result = type(
+        "_R",
+        (),
+        {"as_dict": lambda self: {"assessment_id": 99, "status": "sent", "detail": None}},
+    )()
+    with patch(
+        "app.actions.send_assessment.run", return_value=fake_result
+    ) as mock_run:
+        result = tool_registry.dispatch(
+            "send_assessment",
+            {"application_id": int(app.id)},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert mock_run.called
+    assert result["status"] == "sent"
+    db.refresh(approved)
+    assert approved.dismissed_at is not None
+
+
+def test_send_assessment_dispatch_hitl_opens_new_card_when_no_prior_approval(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = False
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    run = _make_agent_run(db, role)
+
+    with patch(
+        "app.actions.send_assessment.run"
+    ) as mock_run, patch(
+        "app.actions.ask_recruiter.open",
+        return_value=type("_R", (), {"id": 555})(),
+    ) as mock_ask:
+        result = tool_registry.dispatch(
+            "send_assessment",
+            {"application_id": int(app.id)},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert not mock_run.called
+    assert mock_ask.called
+    # subject_id is passed through so per-candidate dedupe works.
+    assert mock_ask.call_args.kwargs["subject_id"] == int(app.id)
+    assert result["status"] == "awaiting_recruiter_approval"
+    assert result["needs_input_id"] == 555
+
+
+def test_consume_resolved_skips_approval_for_different_subject(db):
+    """Cross-target safety via subject_id (NOT prompt substring): a
+    prior approval for application 12346 must not be consumed when the
+    agent is processing application 1, even if application 1's id is a
+    substring of '12346'. Codex's second P1 on this PR was that the
+    earlier ``target_marker`` approach filtered the chosen row in
+    Python after ``first()``, so a later approval for a different
+    subject masked an earlier valid one. ``subject_id`` lifts the
+    discriminator into the SQL query so this can't recur.
+    """
+    from datetime import datetime, timezone
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = False
+    db.flush()
+    target_app = _make_application(db, org=org, role=role, name="T", email="t@x.test")
+    run = _make_agent_run(db, role)
+
+    other_id = int(target_app.id) + 12345
+    stale = AgentNeedsInput(
+        organization_id=org.id,
+        role_id=role.id,
+        kind="send_assessment_approval",
+        subject_id=other_id,
+        prompt="x",
+        resolved_at=datetime.now(timezone.utc),
+        response={"value": "approve"},
+    )
+    db.add(stale)
+    db.flush()
+
+    with patch(
+        "app.actions.send_assessment.run"
+    ) as mock_run, patch(
+        "app.actions.ask_recruiter.open",
+        return_value=type("_R", (), {"id": 777})(),
+    ) as mock_ask:
+        result = tool_registry.dispatch(
+            "send_assessment",
+            {"application_id": int(target_app.id)},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert not mock_run.called
+    assert mock_ask.called
+    assert result["status"] == "awaiting_recruiter_approval"
+    db.refresh(stale)
+    assert stale.dismissed_at is None
 
 
 def test_create_application_dispatch_invokes_action(db):
