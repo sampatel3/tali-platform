@@ -809,6 +809,7 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
             organization_id=int(role.organization_id),
             role_id=int(role.id),
             kind="send_assessment_approval",
+            subject_id=application_id,
             prompt=(
                 f"Approve sending the assessment to application {application_id}? "
                 "I'll dispatch the invite as soon as you confirm."

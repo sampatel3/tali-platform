@@ -66,6 +66,12 @@ class AgentNeedsInput(Base):
     # See NEEDS_INPUT_KINDS. Free-form string (no enum) so adding a kind
     # doesn't require a migration; the application layer validates.
     kind = Column(String(64), nullable=False)
+    # Optional per-subject discriminator. For ``send_assessment_approval``
+    # and other per-candidate kinds this is the application_id so the
+    # ``ask_recruiter`` idempotency key keeps one row per candidate,
+    # not one row per (role, kind). NULL keeps the legacy role-wide
+    # semantics for kinds like ``monthly_budget_missing``.
+    subject_id = Column(BigInteger, nullable=True)
     prompt = Column(Text, nullable=False)
     # Mutually exclusive: ``options`` is a list of {value, label} for
     # multiple-choice; ``schema`` describes a free-text/numeric input.

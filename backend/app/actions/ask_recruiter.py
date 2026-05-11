@@ -34,12 +34,16 @@ def open(
     options: Optional[list[dict[str, Any]]] = None,
     response_schema: Optional[dict[str, Any]] = None,
     rationale: Optional[str] = None,
+    subject_id: Optional[int] = None,
 ) -> AgentNeedsInput:
     """Agent-only: create (or return existing) open question.
 
-    Idempotent on (organization_id, role_id, kind) — re-asking the
-    same question hands back the existing row so the recruiter sees
-    one card, not a stack of duplicates.
+    Idempotent on ``(organization_id, role_id, kind, subject_id)``.
+    ``subject_id`` is the per-candidate (or per-anything) discriminator
+    so multi-candidate kinds like ``send_assessment_approval`` get one
+    row per subject instead of all collapsing onto one card. NULL
+    preserves the legacy role-wide semantic for kinds like
+    ``monthly_budget_missing`` that don't have a subject.
     """
     if actor.type != ACTOR_AGENT:
         raise HTTPException(
@@ -65,12 +69,18 @@ def open(
             detail=f"role {role_id} not found in org {organization_id}",
         )
 
+    subject_filter = (
+        AgentNeedsInput.subject_id == subject_id
+        if subject_id is not None
+        else AgentNeedsInput.subject_id.is_(None)
+    )
     existing = (
         db.query(AgentNeedsInput)
         .filter(
             AgentNeedsInput.organization_id == organization_id,
             AgentNeedsInput.role_id == role_id,
             AgentNeedsInput.kind == kind,
+            subject_filter,
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),
         )
@@ -96,6 +106,7 @@ def open(
         organization_id=organization_id,
         role_id=role_id,
         kind=kind,
+        subject_id=subject_id,
         prompt=prompt.strip(),
         options=options,
         response_schema=response_schema,

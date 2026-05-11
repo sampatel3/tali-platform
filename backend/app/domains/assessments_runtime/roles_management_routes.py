@@ -292,6 +292,14 @@ def update_role(
         role.agent_decision_budget_per_cycle = updates["agent_decision_budget_per_cycle"]
     if "monthly_usd_budget_cents" in updates:
         role.monthly_usd_budget_cents = updates["monthly_usd_budget_cents"]
+    if "score_threshold" in updates:
+        # ``score_threshold`` is the per-role override of the org default
+        # used by both the agent's send-assessment decision rule and the
+        # recruiter-facing pipeline distribution. PATCH was accepting the
+        # field in the schema but never assigning it to the model, so
+        # threshold changes from the UI silently no-op'd on existing
+        # roles. Allow ``None`` to clear back to the org default.
+        role.score_threshold = updates["score_threshold"]
     if "auto_reject" in updates and updates["auto_reject"] is not None:
         role.auto_reject = bool(updates["auto_reject"])
     if "auto_promote" in updates and updates["auto_promote"] is not None:
