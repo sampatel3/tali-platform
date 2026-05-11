@@ -23,8 +23,15 @@
       // placeholder stays as the literal string below and never
       // matches a real token, so the static path is closed in dev.
       // Devs reach the deck via /deck which uses TokenGate directly.
-      var expected = '__VITE_DEV_TOKEN__';
-      if (expected === '__' + 'VITE_DEV_TOKEN__' || !expected) {
+      // The plugin replaces ``__VITE_DEV_TOKEN__`` with a
+      // JSON.stringify'd token (a properly-escaped JS string literal).
+      // Using ``typeof`` here so the dev case — where the placeholder
+      // is never substituted — sees ``undefined`` and fails closed
+      // instead of throwing a ReferenceError that the outer try/catch
+      // would swallow, leaving the page open. See
+      // scripts/vite-static-deck-token-plugin.mjs.
+      var expected = (typeof __VITE_DEV_TOKEN__ !== 'undefined') ? __VITE_DEV_TOKEN__ : null;
+      if (!expected) {
         // No token configured (likely a dev build with no env var).
         // Fail closed: route to /deck which has its own DEV fallback.
         var dest = '/deck?from=' + encodeURIComponent(window.location.pathname + window.location.search);

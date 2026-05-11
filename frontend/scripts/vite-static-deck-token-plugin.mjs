@@ -36,11 +36,16 @@ export default function staticDeckTokenPlugin() {
         throw err;
       }
       const expected = (process.env.VITE_DEV_TOKEN || '').trim();
-      // Replace the placeholder unconditionally: if env var is empty, the
-      // replaced string is empty, and the static gate's `!expected` branch
-      // closes the page. The placeholder must not survive into prod since
-      // it would otherwise be a literal-match-only string.
-      const next = html.split(PLACEHOLDER).join(expected);
+      // Inject as a JSON-encoded JS literal so tokens containing `'`,
+      // `"`, `\`, or newlines can't break out of the string and
+      // invalidate the script. ``JSON.stringify`` produces e.g.
+      // ``"a\"b"`` for input ``a"b``; the placeholder is a bare
+      // identifier (no surrounding quotes), so the replacement becomes
+      // ``var expected = "a\"b";`` cleanly. An empty env collapses to
+      // ``""`` which the static gate's ``!expected`` branch treats as
+      // fail-closed.
+      const literal = JSON.stringify(expected);
+      const next = html.split(PLACEHOLDER).join(literal);
       if (next !== html) {
         await writeFile(outFile, next, 'utf8');
       }
