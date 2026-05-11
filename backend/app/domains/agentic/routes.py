@@ -374,6 +374,83 @@ def discard_pending_for_role(
 
 
 # ---------------------------------------------------------------------------
+# POST /agent-decisions/bulk-approve
+# ---------------------------------------------------------------------------
+
+
+class BulkApproveBody(BaseModel):
+    """Explicit IDs — caller sends only the visible / selected rows.
+
+    Refusing an implicit "match all of type X" contract here is
+    deliberate: the Hub's filters can mismatch what the recruiter sees
+    by milliseconds, and approving everything we *would have* shown is
+    a worse failure mode than the request being a no-op when the user
+    scrolls before they click.
+    """
+
+    decision_ids: list[int] = Field(min_length=1, max_length=500)
+    note: Optional[str] = None
+
+
+class BulkApproveFailure(BaseModel):
+    decision_id: int
+    error: str
+
+
+class BulkApproveResult(BaseModel):
+    requested: int
+    approved: int
+    failures: list[BulkApproveFailure] = Field(default_factory=list)
+
+
+@router.post("/agent-decisions/bulk-approve", response_model=BulkApproveResult)
+def bulk_approve(
+    body: BulkApproveBody,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Approve a list of pending decisions one-by-one.
+
+    Org-scoped: the action layer rejects decisions outside the user's
+    organization. Each decision is approved in its own try/except so a
+    single bad row (already-resolved, missing application, etc.) doesn't
+    halt the batch — callers get a per-failure summary.
+    """
+    requested = list(dict.fromkeys(int(x) for x in body.decision_ids))  # de-dupe, preserve order
+    note = (body.note or "").strip() or None
+    approved = 0
+    failures: list[BulkApproveFailure] = []
+    actor = Actor.recruiter(current_user)
+    for decision_id in requested:
+        try:
+            approve_decision_action.run(
+                db,
+                actor,
+                organization_id=current_user.organization_id,
+                decision_id=decision_id,
+                note=note,
+            )
+            db.commit()
+            approved += 1
+        except HTTPException as exc:
+            db.rollback()
+            failures.append(
+                BulkApproveFailure(
+                    decision_id=decision_id,
+                    error=str(exc.detail) if exc.detail else f"HTTP {exc.status_code}",
+                )
+            )
+        except Exception as exc:  # noqa: BLE001 — record + continue, never halt the batch
+            db.rollback()
+            failures.append(
+                BulkApproveFailure(decision_id=decision_id, error=str(exc)[:300])
+            )
+    return BulkApproveResult(
+        requested=len(requested), approved=approved, failures=failures
+    )
+
+
+# ---------------------------------------------------------------------------
 # GET /agent-runs
 # ---------------------------------------------------------------------------
 

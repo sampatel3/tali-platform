@@ -6,6 +6,11 @@ export const agent = {
   approveDecision: (decisionId, body = {}) => api.post(`/agent-decisions/${decisionId}/approve`, body),
   overrideDecision: (decisionId, body = {}) => api.post(`/agent-decisions/${decisionId}/override`, body),
   discardPending: (roleId) => api.post('/agent-decisions/discard', { role_id: roleId }),
+  // Approve a batch of pending decisions in one request. Each is
+  // executed independently server-side; the response carries a
+  // per-failure summary so the UI can surface partial successes.
+  bulkApproveDecisions: (decisionIds, note = null) =>
+    api.post('/agent-decisions/bulk-approve', { decision_ids: decisionIds, note }),
   // Hide a pending decision for 1h. Body intentionally empty — duration is
   // server-fixed; if we ever need 4h/24h we change it there, not per call.
   snoozeDecision: (decisionId) => api.post(`/agent-decisions/${decisionId}/snooze`, {}),

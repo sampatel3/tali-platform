@@ -116,6 +116,11 @@ def list_roles(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
+    # Ordering: starred roles always on top (active auto-sync roles need
+    # to surface first), then by the most recently updated — which for
+    # Workable-sourced roles tracks the last sync that touched the row.
+    # ``created_at`` is the final tie-breaker so newly-created roles win
+    # over older roles that have never been updated.
     roles = (
         db.query(Role)
         .options(joinedload(Role.tasks))
@@ -123,7 +128,11 @@ def list_roles(
             Role.organization_id == current_user.organization_id,
             Role.deleted_at.is_(None),
         )
-        .order_by(Role.created_at.desc())
+        .order_by(
+            Role.starred_for_auto_sync.desc(),
+            Role.updated_at.desc().nullslast(),
+            Role.created_at.desc(),
+        )
         .all()
     )
     if not roles:
@@ -250,6 +259,8 @@ def update_role(
         role.auto_reject_enabled = updates["auto_reject_enabled"]
     if "auto_reject_threshold_100" in updates:
         role.auto_reject_threshold_100 = updates["auto_reject_threshold_100"]
+    if "auto_reject_threshold_mode" in updates and updates["auto_reject_threshold_mode"] is not None:
+        role.auto_reject_threshold_mode = str(updates["auto_reject_threshold_mode"])
     if "workable_actor_member_id" in updates:
         role.workable_actor_member_id = updates["workable_actor_member_id"] or None
     if "workable_disqualify_reason_id" in updates:
@@ -295,6 +306,30 @@ def update_role(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update role")
     return role_to_response(role)
+
+
+# ---------------------------------------------------------------------------
+# GET /roles/{role_id}/auto-reject-threshold/suggested
+# ---------------------------------------------------------------------------
+
+
+@router.get("/roles/{role_id}/auto-reject-threshold/suggested")
+def suggested_auto_reject_threshold(
+    role_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Return the agent's recommended threshold for this role.
+
+    Used by the Agent settings UI when ``auto_reject_threshold_mode`` is
+    set to ``auto`` — the recruiter sees the computed value plus a human
+    rationale instead of guessing a number.
+    """
+    from ...services.auto_threshold_service import compute_recommended_threshold
+
+    role = get_role(role_id, current_user.organization_id, db)
+    rec = compute_recommended_threshold(db, role=role)
+    return rec.to_dict()
 
 
 # ---------------------------------------------------------------------------

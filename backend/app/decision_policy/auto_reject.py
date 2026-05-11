@@ -49,7 +49,7 @@ def evaluate_auto_reject_decision(
     )
 
     snapshot = pre_screen_snapshot(app)
-    config = resolved_auto_reject_config(org, role)
+    config = resolved_auto_reject_config(org, role, db=db)
     score = snapshot["pre_screen_score"]
     threshold = config["threshold_100"]
 

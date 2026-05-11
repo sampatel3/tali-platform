@@ -8,6 +8,11 @@ export const roles = {
   remove: (id) => api.delete(`/roles/${id}`),
   star: (id) => api.post(`/roles/${id}/star`),
   unstar: (id) => api.delete(`/roles/${id}/star`),
+  // Auto-reject threshold recommendation. Returns {value, source,
+  // rationale, sample_size}. Frontend calls this when the role's
+  // ``auto_reject_threshold_mode`` is ``auto`` to show the computed
+  // value + plain-English rationale next to the slider.
+  suggestedAutoRejectThreshold: (id) => api.get(`/roles/${id}/auto-reject-threshold/suggested`),
   // Per-role criteria chip CRUD + workspace sync.
   createCriterion: (roleId, data) => api.post(`/roles/${roleId}/criteria`, data),
   updateCriterion: (roleId, criterionId, data) =>
