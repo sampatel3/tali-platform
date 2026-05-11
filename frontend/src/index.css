@@ -9167,12 +9167,14 @@ button.eng-badge-button:focus-visible {
   position: relative;
   overflow: hidden;
   padding: 32px 32px 36px;
-  /* Strict height — every recruiter-page header lines up at exactly
-     the same y-coordinate. Sized to absorb the tallest layout
-     (Role-detail back-link + kicker + h1 + actions + 4-fact grid +
-     4-row agent panel on the right). Using `height` (not min-height)
-     so simpler pages don't shrink and richer pages don't grow. */
-  height: 320px;
+  /* Floor sized to absorb the tallest normal layout (Role-detail
+     back-link + kicker + h1 + actions + 4-fact grid + 4-row agent
+     panel on the right) so every recruiter-page header lines up at
+     the same y-coordinate in the 99% case. Kept as `min-height` (not
+     fixed `height`) so an unusually long role name — backend allows
+     up to 200 chars and we render it in both kicker and title — can
+     wrap without getting clipped by overflow: hidden. */
+  min-height: 320px;
   display: flex;
   align-items: center;
   /* Quiet base — the bright running gradient fades in on top via the
@@ -9698,10 +9700,6 @@ button.eng-badge-button:focus-visible {
 .ah-facts .f .v.purple { color: var(--purple-lav); }
 
 @media (max-width: 880px) {
-  /* On narrow viewports the right-side agent panel stacks below the
-     left content, so the strict 320px hero no longer fits. Relax to
-     a min-height and let the slab grow with stacked content. */
-  .agent-header { height: auto; min-height: 320px; }
   .agent-header-inner { grid-template-columns: 1fr; }
   .agent-panel { width: 100%; }
   .ah-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
