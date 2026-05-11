@@ -32,6 +32,7 @@ from ..mcp import handlers as mcp_handlers
 from ..models.agent_needs_input import NEEDS_INPUT_KINDS
 from ..models.agent_run import AgentRun
 from ..models.assessment import Assessment
+from ..models.candidate_application import CandidateApplication
 from ..models.role import Role
 from ..services import cohort_signals_service
 from . import cohort_tools, policy_evaluator
@@ -994,9 +995,24 @@ def _tool_create_application(
 ) -> Any:
     actor = Actor.agent(int(agent_run.id))
     target_role_id = int(args["role_id"])
-    # Org boundary: agent can only create applications under its own org's
-    # roles. Mismatched role_id results in a 404 from get_role inside the
-    # action, so no additional check here.
+
+    # Single-role execution boundary. The agent runs in the context of
+    # one role; creating an application under a *different* role in the
+    # same org would let role A's agent provision candidates into role
+    # B's pipeline, mixing intent and bypassing role B's policy. Refuse
+    # cross-role creates outright. (Org boundary is enforced inside the
+    # action via get_role; this guard is the stricter intra-org check.)
+    if target_role_id != int(role.id):
+        return {
+            "status": "wrong_role",
+            "role_id": target_role_id,
+            "detail": (
+                f"create_application targets role {target_role_id}, but the "
+                f"running agent is for role {int(role.id)}; refusing to "
+                "create applications outside the running role's scope"
+            ),
+        }
+
     result = create_application.run(
         db,
         actor,
@@ -1014,11 +1030,43 @@ def _tool_post_workable_note(
     db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
 ) -> Any:
     actor = Actor.agent(int(agent_run.id))
+    application_id = int(args["application_id"])
+
+    # Single-role execution boundary — matches the guard on
+    # resend_assessment_invite. An agent running for role A posting a
+    # note to role B's candidate would leak agent-side actions across
+    # role workflows and surface in role B's Workable feed with no
+    # corresponding pipeline event under role B's intent. Refuse.
+    app = (
+        db.query(CandidateApplication)
+        .filter(
+            CandidateApplication.id == application_id,
+            CandidateApplication.organization_id == int(role.organization_id),
+        )
+        .first()
+    )
+    if app is None:
+        return {
+            "status": "not_found",
+            "application_id": application_id,
+            "detail": "application not found in this organization",
+        }
+    if app.role_id is None or int(app.role_id) != int(role.id):
+        return {
+            "status": "wrong_role",
+            "application_id": application_id,
+            "detail": (
+                f"application {application_id} belongs to role {app.role_id}, "
+                f"not the running role {int(role.id)}; refusing to post a "
+                "note across roles"
+            ),
+        }
+
     result = post_workable_note.run(
         db,
         actor,
         organization_id=int(role.organization_id),
-        application_id=int(args["application_id"]),
+        application_id=application_id,
         body=str(args["body"]),
     )
     return result.as_dict()

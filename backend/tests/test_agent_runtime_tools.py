@@ -411,6 +411,91 @@ def test_post_workable_note_dispatch_invokes_action(db):
     assert result["status"] == "posted"
 
 
+def test_post_workable_note_dispatch_refuses_cross_role(db):
+    """Regression: an agent running for role A must not post a Workable
+    note on an application that belongs to role B in the same org.
+    (Codex P2 follow-up on #141.)
+    """
+    org = _make_org(db)
+    role_a = _make_role(db, org)
+    role_b = Role(
+        organization_id=org.id,
+        name="Other Role",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
+    db.add(role_b)
+    db.flush()
+    app_for_b = _make_application(db, org=org, role=role_b, name="B", email="b@x.test")
+    run_a = _make_agent_run(db, role_a)
+
+    with patch("app.actions.post_workable_note.run") as mock_action:
+        result = tool_registry.dispatch(
+            "post_workable_note",
+            {"application_id": int(app_for_b.id), "body": "leaked note"},
+            db=db,
+            agent_run=run_a,
+            role=role_a,
+        )
+
+    assert result["status"] == "wrong_role"
+    assert result["application_id"] == int(app_for_b.id)
+    assert not mock_action.called
+
+
+def test_post_workable_note_dispatch_returns_not_found_for_unknown_id(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    run = _make_agent_run(db, role)
+
+    with patch("app.actions.post_workable_note.run") as mock_action:
+        result = tool_registry.dispatch(
+            "post_workable_note",
+            {"application_id": 999999, "body": "x"},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert result["status"] == "not_found"
+    assert not mock_action.called
+
+
+def test_create_application_dispatch_refuses_cross_role(db):
+    """An agent running for role A must not create an application under
+    role B in the same org. Same single-role-execution-boundary that
+    resend_assessment_invite and post_workable_note enforce.
+    """
+    org = _make_org(db)
+    role_a = _make_role(db, org)
+    role_b = Role(
+        organization_id=org.id,
+        name="Other Role",
+        source="manual",
+        agentic_mode_enabled=True,
+    )
+    db.add(role_b)
+    db.flush()
+    run_a = _make_agent_run(db, role_a)
+
+    with patch("app.actions.create_application.run") as mock_action:
+        result = tool_registry.dispatch(
+            "create_application",
+            {
+                "role_id": int(role_b.id),
+                "candidate_email": "leaked@example.com",
+                "candidate_name": "Leaked",
+            },
+            db=db,
+            agent_run=run_a,
+            role=role_a,
+        )
+
+    assert result["status"] == "wrong_role"
+    assert result["role_id"] == int(role_b.id)
+    assert not mock_action.called
+
+
 def test_send_assessment_dispatch_invokes_action(db):
     """Agent tool wires through to the action and returns the action's payload shape."""
     org = _make_org(db)
