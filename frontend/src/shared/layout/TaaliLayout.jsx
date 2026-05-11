@@ -26,7 +26,6 @@ const APP_TABS = [
 const MARKETING_TABS = [
   { id: 'platform', label: 'Product' },
   { id: 'how-it-works', label: 'How it works' },
-  { id: 'pricing', label: 'Pricing' },
 ];
 
 const initialsFor = (...values) => {
