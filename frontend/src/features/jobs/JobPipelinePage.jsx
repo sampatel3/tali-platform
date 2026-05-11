@@ -1100,6 +1100,27 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [thresholdDraft, setThresholdDraft] = useState('');
   const [suggestedThreshold, setSuggestedThreshold] = useState(null);
   const [savingThresholdMode, setSavingThresholdMode] = useState(false);
+  const handleThresholdModeChange = useCallback(async (nextMode) => {
+    if (!Number.isFinite(numericRoleId)) return;
+    if (nextMode !== 'auto' && nextMode !== 'manual') return;
+    setSavingThresholdMode(true);
+    setRole((cur) => (cur ? { ...cur, auto_reject_threshold_mode: nextMode } : cur));
+    try {
+      await rolesApi.update(numericRoleId, { auto_reject_threshold_mode: nextMode });
+      if (nextMode === 'auto') {
+        try {
+          const res = await rolesApi.suggestedAutoRejectThreshold(numericRoleId);
+          setSuggestedThreshold(res?.data || null);
+        } catch { /* leave previous suggestion */ }
+      }
+      showToast(nextMode === 'auto' ? 'Threshold mode set to auto — agent will pick the cut-off.' : 'Threshold mode set to manual.', 'success');
+    } catch (error) {
+      setRole((cur) => (cur ? { ...cur, auto_reject_threshold_mode: nextMode === 'auto' ? 'manual' : 'auto' } : cur));
+      showToast(getErrorMessage(error, 'Failed to update threshold mode.'), 'error');
+    } finally {
+      setSavingThresholdMode(false);
+    }
+  }, [numericRoleId, rolesApi, showToast]);
   const [refreshTick, setRefreshTick] = useState(0);
   const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
@@ -2178,33 +2199,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
             thresholdMode={role?.auto_reject_threshold_mode || 'manual'}
             suggestedThreshold={suggestedThreshold}
             savingThresholdMode={savingThresholdMode}
-            onThresholdModeChange={async (nextMode) => {
-              if (!Number.isFinite(numericRoleId)) return;
-              const valid = nextMode === 'auto' || nextMode === 'manual';
-              if (!valid) return;
-              setSavingThresholdMode(true);
-              setRole((cur) => (cur ? { ...cur, auto_reject_threshold_mode: nextMode } : cur));
-              try {
-                await rolesApi.update(numericRoleId, { auto_reject_threshold_mode: nextMode });
-                if (nextMode === 'auto') {
-                  try {
-                    const res = await rolesApi.suggestedAutoRejectThreshold(numericRoleId);
-                    setSuggestedThreshold(res?.data || null);
-                  } catch { /* leave previous suggestion */ }
-                }
-                showToast(
-                  nextMode === 'auto'
-                    ? 'Threshold mode set to auto — agent will pick the cut-off.'
-                    : 'Threshold mode set to manual.',
-                  'success',
-                );
-              } catch (error) {
-                setRole((cur) => (cur ? { ...cur, auto_reject_threshold_mode: nextMode === 'auto' ? 'manual' : 'auto' } : cur));
-                showToast(getErrorMessage(error, 'Failed to update threshold mode.'), 'error');
-              } finally {
-                setSavingThresholdMode(false);
-              }
-            }}
+            onThresholdModeChange={handleThresholdModeChange}
           />
         ) : activeView === 'activity' ? (
           // HANDOFF v2 §4.4 / canvas jobs-detail-spec — Job spec tab is the
