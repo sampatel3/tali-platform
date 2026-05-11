@@ -9294,6 +9294,13 @@ button.eng-badge-button:focus-visible {
 .agent-header-left .back-link {
   color: rgba(255, 255, 255, 0.65);
   display: block;
+  /* `display: block` stretches the element to the column width, and
+     the onClick-variant renders as <button> which centers its text by
+     default — pin left so the breadcrumb stays aligned with the
+     kicker/title below. `width: fit-content` keeps the click target
+     tight to the label instead of spanning the whole hero. */
+  text-align: left;
+  width: fit-content;
   margin-bottom: 14px;
   font-family: var(--font-mono);
   font-size: 11px;
