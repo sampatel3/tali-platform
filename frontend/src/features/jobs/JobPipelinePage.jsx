@@ -1147,17 +1147,11 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     setLoading(true);
     try {
-      // Two separate fetches (open + rejected). The backend caps each
-      // call at 2000 rows; we pass that ceiling explicitly so a role
-      // with thousands of applicants doesn't silently truncate to the
-      // 500-row default. Splitting open vs. rejected also keeps a
-      // long reject history from crowding open candidates out.
-      const appsQuery = (outcome) => ({
-        sort_by: 'pre_screen_score',
-        sort_order: 'desc',
-        application_outcome: outcome,
-        limit: 2000,
-      });
+      // Two separate fetches (open + rejected) at the backend's 2000-row
+      // ceiling — splits the budget so a long reject history can't crowd
+      // open candidates out, and avoids the 500-row default that would
+      // silently truncate thousand-applicant roles.
+      const appsQuery = (outcome) => ({ sort_by: 'pre_screen_score', sort_order: 'desc', application_outcome: outcome, limit: 2000 });
       const [roleRes, tasksRes, openAppsRes, rejectedAppsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
         rolesApi.get(numericRoleId),
         rolesApi.listTasks(numericRoleId),
