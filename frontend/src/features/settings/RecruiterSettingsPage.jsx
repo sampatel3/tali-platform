@@ -428,7 +428,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     syncIntervalMinutes: 30,
     inviteStageName: '',
     autoRejectEnabled: false,
-    autoRejectThreshold100: '',
     workableActorMemberId: '',
     workableDisqualifyReasonId: '',
     autoRejectNoteTemplate: '',
@@ -729,7 +728,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
       syncIntervalMinutes: Number(workableConfig.sync_interval_minutes || 30),
       inviteStageName: workableConfig.invite_stage_name || '',
       autoRejectEnabled: Boolean(workableConfig.auto_reject_enabled),
-      autoRejectThreshold100: workableConfig.auto_reject_threshold_100 ?? '',
       workableActorMemberId: workableConfig.workable_actor_member_id || '',
       workableDisqualifyReasonId: workableConfig.workable_disqualify_reason_id || '',
       autoRejectNoteTemplate: workableConfig.auto_reject_note_template || '',
@@ -1156,7 +1154,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     const workableActorMemberId = String(workableForm.workableActorMemberId || '').trim();
     const workableDisqualifyReasonId = String(workableForm.workableDisqualifyReasonId || '').trim();
     const autoRejectNoteTemplate = String(workableForm.autoRejectNoteTemplate || '').trim();
-    const parsedThreshold = workableForm.autoRejectThreshold100 === '' ? null : Number(workableForm.autoRejectThreshold100);
 
     if ((emailMode === 'workable_preferred_fallback_manual' || autoRejectEnabled) && !hasWriteScope) {
       showToast('Reconnect Workable with `w_candidates` scope to enable Workable invite, reject, and reopen actions.', 'error');
@@ -1164,10 +1161,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
     }
     if (emailMode === 'workable_preferred_fallback_manual' && !inviteStageName) {
       showToast('Enter the exact Workable stage name for automated invite mode.', 'error');
-      return;
-    }
-    if (autoRejectEnabled && !Number.isFinite(parsedThreshold)) {
-      showToast('Set an auto-reject threshold between 0 and 100.', 'error');
       return;
     }
     if (hasWriteScope && !workableActorMemberId) {
@@ -1187,9 +1180,6 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
           sync_interval_minutes: Number(workableForm.syncIntervalMinutes || 30),
           invite_stage_name: emailMode === 'workable_preferred_fallback_manual' ? inviteStageName : '',
           auto_reject_enabled: autoRejectEnabled,
-          auto_reject_threshold_100: autoRejectEnabled && Number.isFinite(parsedThreshold)
-            ? Math.max(0, Math.min(100, Math.round(parsedThreshold)))
-            : null,
           workable_actor_member_id: workableActorMemberId || null,
           workable_disqualify_reason_id: workableDisqualifyReasonId || null,
           auto_reject_note_template: autoRejectNoteTemplate || null,
@@ -1749,22 +1739,12 @@ export const SettingsPage = ({ onNavigate, NavComponent = null, ConnectWorkableB
                         </span>
                       )}
                     </label>
-                    <label className="field">
-                      <span className="k">Auto-reject threshold (0-100)</span>
-                      <input
-                        type="number"
-                        min={0}
-                        max={100}
-                        value={workableForm.autoRejectThreshold100}
-                        onChange={(event) => setWorkableForm((prev) => ({ ...prev, autoRejectThreshold100: event.target.value }))}
-                      />
-                    </label>
                   </div>
 
                   <div className="settings-toggle-list settings-top-gap">
                     <ToggleCard
                       title="Enable Workable auto-reject"
-                      description="Candidates below the threshold are disqualified in Workable during full sync or re-score."
+                      description="Workspace kill-switch for the disqualify pipeline. The per-role score cutoff and HITL toggle live on the role page."
                       checked={Boolean(workableForm.autoRejectEnabled)}
                       onChange={(value) => setWorkableForm((prev) => ({ ...prev, autoRejectEnabled: value }))}
                     />

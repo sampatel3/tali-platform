@@ -72,11 +72,7 @@ class RoleCreate(BaseModel):
     # created; new roles also inherit workspace chips at create time.
     screening_pack_template: Optional[InterviewPack] = None
     tech_interview_pack_template: Optional[InterviewPack] = None
-    auto_reject_enabled: Optional[bool] = None
-    auto_reject_threshold_100: Optional[int] = Field(default=None, ge=0, le=100)
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
-    workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
-    auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
     monthly_usd_budget_cents: Optional[int] = Field(default=None, ge=0, le=10_000_000)
     score_threshold: Optional[int] = Field(default=None, ge=0, le=100)
 
@@ -89,12 +85,8 @@ class RoleUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=ROLE_DESCRIPTION_MAX_LENGTH)
     screening_pack_template: Optional[InterviewPack] = None
     tech_interview_pack_template: Optional[InterviewPack] = None
-    auto_reject_enabled: Optional[bool] = None
-    auto_reject_threshold_100: Optional[int] = Field(default=None, ge=0, le=100)
     auto_reject_threshold_mode: Optional[Literal["manual", "auto"]] = None
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
-    workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
-    auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
     # Agent-native fields
     agentic_mode_enabled: Optional[bool] = None
     agent_action_allowlist: Optional[list[str]] = None
@@ -172,12 +164,8 @@ class RoleResponse(BaseModel):
     interview_focus_generated_at: Optional[datetime] = None
     screening_pack_template: Optional[InterviewPack] = None
     tech_interview_pack_template: Optional[InterviewPack] = None
-    auto_reject_enabled: Optional[bool] = None
-    auto_reject_threshold_100: Optional[int] = None
     auto_reject_threshold_mode: Literal["manual", "auto"] = "manual"
     workable_actor_member_id: Optional[str] = None
-    workable_disqualify_reason_id: Optional[str] = None
-    auto_reject_note_template: Optional[str] = None
     starred_for_auto_sync: bool = False
     agentic_mode_enabled: bool = False
     agent_action_allowlist: Optional[list[str]] = None

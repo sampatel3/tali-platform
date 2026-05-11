@@ -54,8 +54,8 @@ def role_summary(
         "role_id": role.id,
         "name": role.name,
         "source": role.source,
-        "auto_reject_enabled": bool(role.auto_reject_enabled or False),
-        "auto_reject_threshold_100": role.auto_reject_threshold_100,
+        "auto_reject": bool(getattr(role, "auto_reject", False)),
+        "score_threshold": role.score_threshold,
         "created_at": _isoformat(role.created_at),
         "frontend_url": role_url(role.id),
     }

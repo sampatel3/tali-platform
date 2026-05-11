@@ -1170,7 +1170,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       const nextRole = roleRes?.data || null;
       setRole(nextRole);
       setWorkspaceCriteria(Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : []);
-      setThresholdDraft(nextRole?.auto_reject_threshold_100 != null ? String(nextRole.auto_reject_threshold_100) : '');
+      setThresholdDraft(nextRole?.score_threshold != null ? String(nextRole.score_threshold) : '');
       // Fetch the agent's threshold recommendation when the role is
       // in auto mode so the panel shows it without waiting for click.
       if (nextRole?.auto_reject_threshold_mode === 'auto' && Number.isFinite(numericRoleId)) {
@@ -1307,8 +1307,8 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   ), [activeApplications]);
 
   const thresholdValue = useMemo(
-    () => resolveOptionalPercent(role?.auto_reject_threshold_100),
-    [role?.auto_reject_threshold_100]
+    () => resolveOptionalPercent(role?.score_threshold),
+    [role?.score_threshold]
   );
   const belowThresholdCount = useMemo(() => {
     if (thresholdValue == null) return 0;
@@ -1577,7 +1577,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     setSavingRoleConfig(true);
     try {
       await rolesApi.update(numericRoleId, {
-        auto_reject_threshold_100: thresholdDraft === '' ? null : Number(normalizeThreshold(thresholdDraft)),
+        score_threshold: thresholdDraft === '' ? null : Number(normalizeThreshold(thresholdDraft)),
       });
       await loadRoleWorkspace();
       setRefreshTick((value) => value + 1);
@@ -1694,10 +1694,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const handleRoleSheetSubmit = async ({
     name,
     description,
-    additionalRequirements,
-    autoRejectEnabled,
-    autoRejectThreshold100,
-    autoRejectNoteTemplate,
     jobSpecFile,
     taskIds,
   }) => {
@@ -1708,10 +1704,6 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       await rolesApi.update(numericRoleId, {
         name,
         description: trimOrUndefined(description),
-        additional_requirements: trimOrUndefined(additionalRequirements),
-        auto_reject_enabled: autoRejectEnabled ? true : null,
-        auto_reject_threshold_100: autoRejectEnabled ? autoRejectThreshold100 : null,
-        auto_reject_note_template: autoRejectEnabled ? trimOrUndefined(autoRejectNoteTemplate) : null,
       });
 
       if (jobSpecFile && rolesApi.uploadJobSpec) {

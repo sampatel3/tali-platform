@@ -414,10 +414,10 @@ const getRecommendation = (score100, rejectThreshold100 = null) => {
   const numeric = toFiniteNumber(score100);
   if (!Number.isFinite(numeric)) return { label: 'Pending', variant: 'muted' };
 
-  // The recruiter-set ``auto_reject_threshold_100`` on the role is the
-  // source of truth when present. Render binary against it: at-or-above
-  // = consider, below = flag for rejection. The recruiter manages the
-  // threshold on the job page.
+  // The recruiter-set ``score_threshold`` on the role is the source of
+  // truth when present. Render binary against it: at-or-above = consider,
+  // below = flag for rejection. The recruiter manages the threshold on
+  // the job page.
   // NB: ``toFiniteNumber(null) === 0`` (because ``Number(null) === 0``)
   // so the null/undefined check has to happen BEFORE coercion — we
   // can't just rely on isFinite afterwards.
@@ -691,8 +691,8 @@ export const buildStandingCandidateReportModel = ({
   // override on application.role, top-level application field (some
   // serializers flatten it), or null.
   const rejectThreshold100 =
-    application?.role?.auto_reject_threshold_100
-    ?? application?.auto_reject_threshold_100
+    application?.role?.score_threshold
+    ?? application?.score_threshold
     ?? null;
   const recommendation = getRecommendation(summaryModel.taaliScore, rejectThreshold100);
   const recruiterSummaryText = roleFitModel.summaryText

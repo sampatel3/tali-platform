@@ -15,7 +15,6 @@ class WorkableConfigBase(BaseModel):
     sync_interval_minutes: int = Field(default=30, ge=5, le=1440)
     invite_stage_name: str = Field(default="", min_length=0, max_length=200)
     auto_reject_enabled: bool = False
-    auto_reject_threshold_100: Optional[int] = Field(default=None, ge=0, le=100)
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
     workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
     auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)
@@ -31,7 +30,6 @@ class WorkableConfigUpdate(BaseModel):
     sync_interval_minutes: Optional[int] = Field(default=None, ge=5, le=1440)
     invite_stage_name: Optional[str] = Field(default=None, min_length=0, max_length=200)
     auto_reject_enabled: Optional[bool] = None
-    auto_reject_threshold_100: Optional[int] = Field(default=None, ge=0, le=100)
     workable_actor_member_id: Optional[str] = Field(default=None, max_length=200)
     workable_disqualify_reason_id: Optional[str] = Field(default=None, max_length=200)
     auto_reject_note_template: Optional[str] = Field(default=None, max_length=4000)

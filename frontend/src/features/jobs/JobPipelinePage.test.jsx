@@ -77,7 +77,7 @@ const baseRole = {
   name: 'AI Native Engineer',
   source: 'workable',
   active_candidates_count: 2,
-  auto_reject_threshold_100: null,
+  score_threshold: null,
   stage_counts: {
     applied: 1,
     invited: 0,

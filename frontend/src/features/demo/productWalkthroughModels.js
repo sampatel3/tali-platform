@@ -715,7 +715,7 @@ export const JOBS_SHOWCASE = [
     tasks_count: 2,
     stage_counts: { applied: 12, invited: 6, in_assessment: 4, review: 2 },
     last_candidate_activity_at: '2026-04-26T16:42:00.000Z',
-    auto_reject_threshold_100: 55,
+    score_threshold: 55,
   },
   {
     id: 7002,
@@ -729,7 +729,7 @@ export const JOBS_SHOWCASE = [
     tasks_count: 1,
     stage_counts: { applied: 4, invited: 3, in_assessment: 2, review: 2 },
     last_candidate_activity_at: '2026-04-25T09:18:00.000Z',
-    auto_reject_threshold_100: 60,
+    score_threshold: 60,
   },
   {
     id: 7003,
@@ -743,7 +743,7 @@ export const JOBS_SHOWCASE = [
     tasks_count: 1,
     stage_counts: { applied: 5, invited: 1, in_assessment: 1, review: 0 },
     last_candidate_activity_at: '2026-04-24T14:55:00.000Z',
-    auto_reject_threshold_100: null,
+    score_threshold: null,
   },
   {
     id: 7004,
@@ -757,7 +757,7 @@ export const JOBS_SHOWCASE = [
     tasks_count: 0,
     stage_counts: { applied: 0, invited: 0, in_assessment: 0, review: 0 },
     last_candidate_activity_at: null,
-    auto_reject_threshold_100: null,
+    score_threshold: null,
   },
 ];
 

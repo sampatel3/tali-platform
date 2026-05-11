@@ -159,12 +159,13 @@ def resolved_auto_reject_config(
     *,
     db: Session | None = None,
 ) -> dict[str, Any]:
+    # Workspace-level switches still live in ``org.workable_config`` (the
+    # Recruiter Settings → Workable section). Per-role overrides for these
+    # four keys were dropped in alembic 076 — every role inherits the
+    # org defaults now. The canonical per-role knobs are
+    # ``role.score_threshold`` (cutoff) and ``role.auto_reject`` (HITL).
     org_config = org.workable_config if org and isinstance(org.workable_config, dict) else {}
-    enabled = (
-        role.auto_reject_enabled
-        if role is not None and role.auto_reject_enabled is not None
-        else bool(org_config.get("auto_reject_enabled"))
-    )
+    enabled = bool(org_config.get("auto_reject_enabled"))
     # ``auto`` mode delegates threshold selection to the agent's algorithm
     # (see ``services.auto_threshold_service``). Requires a session — when
     # the caller doesn't have one, fall through to the recruiter's manual
@@ -176,11 +177,7 @@ def resolved_auto_reject_config(
 
         threshold = compute_recommended_threshold(db, role=role).value
     else:
-        threshold = (
-            role.auto_reject_threshold_100
-            if role is not None and role.auto_reject_threshold_100 is not None
-            else org_config.get("auto_reject_threshold_100")
-        )
+        threshold = role.score_threshold if role is not None else None
     return {
         "enabled": bool(enabled),
         "threshold_100": normalize_score_100(threshold),
@@ -192,18 +189,10 @@ def resolved_auto_reject_config(
             ).strip()
         ) or None,
         "workable_disqualify_reason_id": sanitize_text_for_storage(
-            str(
-                (role.workable_disqualify_reason_id if role and role.workable_disqualify_reason_id else None)
-                or org_config.get("workable_disqualify_reason_id")
-                or ""
-            ).strip()
+            str(org_config.get("workable_disqualify_reason_id") or "").strip()
         ) or None,
         "auto_reject_note_template": sanitize_text_for_storage(
-            str(
-                (role.auto_reject_note_template if role and role.auto_reject_note_template is not None else None)
-                or org_config.get("auto_reject_note_template")
-                or ""
-            ).strip()
+            str(org_config.get("auto_reject_note_template") or "").strip()
         ) or None,
     }
 
