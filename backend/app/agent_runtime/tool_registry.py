@@ -31,6 +31,7 @@ from ..actions.types import Actor
 from ..mcp import handlers as mcp_handlers
 from ..models.agent_needs_input import NEEDS_INPUT_KINDS
 from ..models.agent_run import AgentRun
+from ..models.assessment import Assessment
 from ..models.role import Role
 from ..services import cohort_signals_service
 from . import cohort_tools, policy_evaluator
@@ -914,9 +915,44 @@ def _tool_resend_assessment_invite(
     actor = Actor.agent(int(agent_run.id))
     assessment_id = int(args["assessment_id"])
 
+    # Cross-role guard. The agent runs in the context of one role. An
+    # assessment can belong to a *different* role in the same org —
+    # if we gated by the running role's auto_promote and that role had
+    # auto_promote=True, we'd happily resend an invite for an
+    # assessment whose own role has auto_promote=False, bypassing that
+    # role's HITL policy. Refuse the resend entirely when the
+    # assessment doesn't belong to the running role; the agent should
+    # only resend invites for its own role's candidates.
+    assessment = (
+        db.query(Assessment)
+        .filter(
+            Assessment.id == assessment_id,
+            Assessment.organization_id == int(role.organization_id),
+        )
+        .first()
+    )
+    if assessment is None:
+        return {
+            "status": "not_found",
+            "assessment_id": assessment_id,
+            "detail": "assessment not found in this organization",
+        }
+    if assessment.role_id is None or int(assessment.role_id) != int(role.id):
+        return {
+            "status": "wrong_role",
+            "assessment_id": assessment_id,
+            "detail": (
+                f"assessment {assessment_id} belongs to role "
+                f"{assessment.role_id}, not the running role {int(role.id)}; "
+                "refusing resend to avoid bypassing the other role's HITL policy"
+            ),
+        }
+
     # HITL gate — same auto_promote toggle that gates send_assessment.
     # Resending an invite is a candidate-facing email, so it must
-    # respect the same recruiter approval policy.
+    # respect the same recruiter approval policy. Safe to read from
+    # ``role`` here because we just verified the assessment belongs to
+    # exactly this role.
     if not bool(getattr(role, "auto_promote", False)):
         existing = ask_recruiter.open(
             db,

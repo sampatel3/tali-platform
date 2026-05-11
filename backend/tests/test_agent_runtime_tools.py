@@ -23,10 +23,12 @@ from app.agent_runtime import tool_registry
 from app.candidate_search.schemas import ParsedFilter, SearchOutput
 from app.models.agent_decision import AgentDecision
 from app.models.agent_run import AgentRun
+from app.models.assessment import Assessment
 from app.models.candidate import Candidate
 from app.models.candidate_application import CandidateApplication
 from app.models.organization import Organization
 from app.models.role import Role
+from app.models.task import Task
 from app.models.user import User
 
 
@@ -121,6 +123,42 @@ def _make_agent_run(db, role: Role) -> AgentRun:
     return run
 
 
+def _make_assessment(
+    db,
+    *,
+    org: Organization,
+    role: Role,
+    app: CandidateApplication,
+    token: str = "tok",
+) -> Assessment:
+    task = Task(
+        organization_id=org.id,
+        name=f"Task for {role.name}",
+        description="x",
+        task_type="python",
+        difficulty="medium",
+        duration_minutes=60,
+        starter_code="",
+        test_code="",
+        is_active=True,
+        is_template=False,
+    )
+    db.add(task)
+    db.flush()
+    assessment = Assessment(
+        organization_id=org.id,
+        candidate_id=app.candidate_id,
+        task_id=task.id,
+        role_id=role.id,
+        application_id=app.id,
+        token=token,
+        duration_minutes=60,
+    )
+    db.add(assessment)
+    db.flush()
+    return assessment
+
+
 def _make_recruiter(db, org: Organization) -> User:
     user = User(
         email=f"recruiter-{id(db)}@example.com",
@@ -172,19 +210,21 @@ def test_resend_assessment_invite_dispatch_invokes_action(db):
     """Agent's resend tool goes through the shared action when auto_promote=True."""
     org = _make_org(db)
     role = _make_role(db, org)  # auto_promote=True by default in the helper
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    assessment = _make_assessment(db, org=org, role=role, app=app)
     run = _make_agent_run(db, role)
 
     fake_result = type(
         "_R",
         (),
-        {"as_dict": lambda self: {"assessment_id": 1234, "status": "resent", "detail": None}},
+        {"as_dict": lambda self: {"assessment_id": int(assessment.id), "status": "resent", "detail": None}},
     )()
     with patch(
         "app.actions.resend_assessment_invite.run", return_value=fake_result
     ) as mock_run:
         result = tool_registry.dispatch(
             "resend_assessment_invite",
-            {"assessment_id": 1234},
+            {"assessment_id": int(assessment.id)},
             db=db,
             agent_run=run,
             role=role,
@@ -193,8 +233,8 @@ def test_resend_assessment_invite_dispatch_invokes_action(db):
     assert mock_run.called
     kwargs = mock_run.call_args.kwargs
     assert kwargs["organization_id"] == org.id
-    assert kwargs["assessment_id"] == 1234
-    assert result == {"assessment_id": 1234, "status": "resent", "detail": None}
+    assert kwargs["assessment_id"] == int(assessment.id)
+    assert result["status"] == "resent"
 
 
 def test_resend_assessment_invite_dispatch_hitl_gate_opens_needs_input(db):
@@ -204,6 +244,8 @@ def test_resend_assessment_invite_dispatch_hitl_gate_opens_needs_input(db):
     role = _make_role(db, org)
     role.auto_promote = False
     db.flush()
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    assessment = _make_assessment(db, org=org, role=role, app=app)
     run = _make_agent_run(db, role)
 
     with patch(
@@ -214,7 +256,7 @@ def test_resend_assessment_invite_dispatch_hitl_gate_opens_needs_input(db):
     ) as mock_ask:
         result = tool_registry.dispatch(
             "resend_assessment_invite",
-            {"assessment_id": 1234},
+            {"assessment_id": int(assessment.id)},
             db=db,
             agent_run=run,
             role=role,
@@ -225,7 +267,69 @@ def test_resend_assessment_invite_dispatch_hitl_gate_opens_needs_input(db):
     assert mock_ask.call_args.kwargs["kind"] == "resend_assessment_invite_approval"
     assert result["status"] == "awaiting_recruiter_approval"
     assert result["needs_input_id"] == 777
-    assert result["assessment_id"] == 1234
+    assert result["assessment_id"] == int(assessment.id)
+
+
+def test_resend_assessment_invite_dispatch_refuses_cross_role(db):
+    """Regression: an agent running for role A must not resend an invite
+    for an assessment that belongs to role B in the same org. The
+    running role's auto_promote toggle says nothing about role B's
+    HITL policy, so we refuse the resend entirely. (Codex P1 on #141.)
+    """
+    org = _make_org(db)
+    role_a = _make_role(db, org)  # auto_promote=True via _make_role default
+    role_b = Role(
+        organization_id=org.id,
+        name="Other Role",
+        source="manual",
+        agentic_mode_enabled=True,
+        auto_promote=False,  # role B requires recruiter approval
+    )
+    db.add(role_b)
+    db.flush()
+    app_for_b = _make_application(db, org=org, role=role_b, name="B", email="b@x.test")
+    assessment_for_b = _make_assessment(
+        db, org=org, role=role_b, app=app_for_b, token="tok-b"
+    )
+    run_a = _make_agent_run(db, role_a)
+
+    with patch(
+        "app.actions.resend_assessment_invite.run"
+    ) as mock_action, patch(
+        "app.actions.ask_recruiter.open"
+    ) as mock_ask:
+        result = tool_registry.dispatch(
+            "resend_assessment_invite",
+            {"assessment_id": int(assessment_for_b.id)},
+            db=db,
+            agent_run=run_a,
+            role=role_a,
+        )
+
+    assert result["status"] == "wrong_role"
+    assert result["assessment_id"] == int(assessment_for_b.id)
+    assert not mock_action.called
+    assert not mock_ask.called
+
+
+def test_resend_assessment_invite_dispatch_returns_not_found_for_unknown_id(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    run = _make_agent_run(db, role)
+
+    with patch(
+        "app.actions.resend_assessment_invite.run"
+    ) as mock_action:
+        result = tool_registry.dispatch(
+            "resend_assessment_invite",
+            {"assessment_id": 999999},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert result["status"] == "not_found"
+    assert not mock_action.called
 
 
 def test_create_application_dispatch_invokes_action(db):
