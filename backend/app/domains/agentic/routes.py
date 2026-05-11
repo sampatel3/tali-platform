@@ -63,6 +63,9 @@ class AgentDecisionPayload(BaseModel):
     override_action: Optional[str] = None
     candidate_name: Optional[str] = None
     candidate_email: Optional[str] = None
+    # Governance: evidence-validation outcome stamped by queue_decision.
+    validation_status: Optional[str] = None
+    validation_failures: Optional[list[str]] = None
 
 
 class AgentRunPayload(BaseModel):
@@ -164,6 +167,12 @@ def _decision_to_payload(decision: AgentDecision, candidate: Optional[Candidate]
         override_action=decision.override_action,
         candidate_name=getattr(candidate, "name", None) if candidate else None,
         candidate_email=getattr(candidate, "email", None) if candidate else None,
+        validation_status=decision.validation_status,
+        validation_failures=(
+            list(decision.validation_failures)
+            if isinstance(decision.validation_failures, list)
+            else None
+        ),
     )
 
 

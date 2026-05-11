@@ -1125,3 +1125,101 @@ def test_approve_skip_assessment_reject_sets_outcome_rejected(db):
 
     db.refresh(app)
     assert app.application_outcome == "rejected"
+
+
+# ---------------------------------------------------------------------------
+# Governance: agent_action_allowlist enforcement (PR 3)
+# ---------------------------------------------------------------------------
+
+
+def test_dispatch_allowlist_none_allows_all_tools(db):
+    """When agent_action_allowlist is None (default), every tool is callable."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    assert role.agent_action_allowlist is None
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    run = _make_agent_run(db, role)
+
+    fake_result = type(
+        "_R",
+        (),
+        {"as_dict": lambda self: {"assessment_id": 1, "status": "sent", "detail": None}},
+    )()
+    with patch("app.actions.send_assessment.run", return_value=fake_result):
+        result = tool_registry.dispatch(
+            "send_assessment",
+            {"application_id": app.id},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+    assert result["status"] == "sent"
+
+
+def test_dispatch_allowlist_blocks_unlisted_mutation_tool(db):
+    """A mutation tool not on the role's allowlist must raise
+    ToolNotAllowedError."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.agent_action_allowlist = ["score_cv"]
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    run = _make_agent_run(db, role)
+
+    with patch("app.actions.send_assessment.run") as mock_run:
+        with pytest.raises(tool_registry.ToolNotAllowedError):
+            tool_registry.dispatch(
+                "send_assessment",
+                {"application_id": app.id},
+                db=db,
+                agent_run=run,
+                role=role,
+            )
+        assert not mock_run.called
+
+
+def test_dispatch_allowlist_does_not_block_read_only_tools(db):
+    """Read-only / introspection tools are always allowed because the
+    agent's planner needs them to inspect state."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.agent_action_allowlist = ["send_assessment"]
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    run = _make_agent_run(db, role)
+
+    result = tool_registry.dispatch(
+        "get_application",
+        {"application_id": app.id},
+        db=db,
+        agent_run=run,
+        role=role,
+    )
+    assert int(result["application_id"]) == int(app.id)
+
+
+def test_dispatch_allowlist_empty_list_is_treated_as_unset(db):
+    """Empty list as allowlist would lock the agent out of every
+    mutation, which is almost certainly not what a recruiter intended.
+    Treat empty as None."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.agent_action_allowlist = []
+    db.flush()
+    app = _make_application(db, org=org, role=role, name="A", email="a@x.test")
+    run = _make_agent_run(db, role)
+
+    fake_result = type(
+        "_R",
+        (),
+        {"as_dict": lambda self: {"assessment_id": 1, "status": "sent", "detail": None}},
+    )()
+    with patch("app.actions.send_assessment.run", return_value=fake_result):
+        result = tool_registry.dispatch(
+            "send_assessment",
+            {"application_id": app.id},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+    assert result["status"] == "sent"

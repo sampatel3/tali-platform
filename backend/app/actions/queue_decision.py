@@ -90,4 +90,28 @@ def run(
         if existing is not None:
             return existing
         raise
+
+    # Evidence validation (governance). Runs after the row is created.
+    # Permissive: a failed validation does not refuse the queue — it
+    # records the failure so the recruiter sees a warning badge and
+    # audit queries can pull the bad evidence out later. Import here
+    # to avoid a circular dep between actions and agent_runtime.
+    try:
+        from ..agent_runtime.decision_evidence import (
+            validate_agent_decision_evidence,
+        )
+
+        outcome = validate_agent_decision_evidence(decision, db)
+        decision.validation_status = outcome.status
+        decision.validation_failures = (
+            outcome.failures if outcome.failures else None
+        )
+        db.flush()
+    except Exception:  # pragma: no cover — validator must never crash queueing
+        import logging
+
+        logging.getLogger("taali.actions.queue_decision").exception(
+            "evidence validator raised; decision queued without validation status"
+        )
+
     return decision

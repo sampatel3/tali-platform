@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { ArrowRight, Check, ChevronDown, ChevronRight, X } from 'lucide-react';
+import { AlertTriangle, ArrowRight, Check, ChevronDown, ChevronRight, ShieldCheck, X } from 'lucide-react';
 
 import { Button, Card } from '../../../shared/ui/TaaliPrimitives';
 
@@ -13,6 +13,33 @@ const formatConfidence = (value) => {
   if (value === null || value === undefined) return null;
   const pct = Math.round(Number(value) * 100);
   return `${pct}% confident`;
+};
+
+const ValidationBadge = ({ status, failures }) => {
+  if (status === 'passed') {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded bg-purple-50 px-2 py-0.5 text-[11px] text-purple-700"
+        title="Evidence verified: cited scores and CV excerpts match the candidate's data."
+      >
+        <ShieldCheck size={11} aria-hidden /> evidence verified
+      </span>
+    );
+  }
+  if (status === 'failed') {
+    const tooltip = Array.isArray(failures) && failures.length > 0
+      ? failures.join('\n')
+      : 'One or more cited evidence items could not be verified against the candidate\'s real data.';
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded bg-purple-100 px-2 py-0.5 text-[11px] text-purple-900"
+        title={tooltip}
+      >
+        <AlertTriangle size={11} aria-hidden /> evidence unverified
+      </span>
+    );
+  }
+  return null;
 };
 
 const renderEvidence = (evidence) => {
@@ -52,6 +79,10 @@ export const AgentDecisionCard = ({ decision, onApprove, onOverride, busy = fals
                 {confidenceLabel}
               </span>
             ) : null}
+            <ValidationBadge
+              status={decision.validation_status}
+              failures={decision.validation_failures}
+            />
           </div>
           <p className="mt-1 text-sm text-taali-fg">{decision.reasoning}</p>
 

@@ -58,13 +58,17 @@ def _normalise_for_fuzzy(s: str) -> str:
     return re.sub(r"\s+", " ", (s or "").strip().lower())
 
 
-def _fuzzy_locate(quote: str, cv_text: str) -> tuple[int, int] | None:
+def fuzzy_locate_quote(quote: str, cv_text: str) -> tuple[int, int] | None:
     """Find the best fuzzy match for ``quote`` in ``cv_text``.
 
     Returns ``(start, end)`` of the best matching CV span if similarity
     >= ``_FUZZY_THRESHOLD``, else ``None``. Exact substring hits are
     fast-pathed; only quotes that miss the exact path pay the
     O(len(cv_text)) sliding-window cost.
+
+    Public entry point — reused by the AgentDecision evidence validator
+    (governance/audit) to verify cited CV excerpts the same way the
+    CV-scoring sub-agent verifies its own evidence quotes.
     """
     if not quote or not cv_text:
         return None
@@ -142,7 +146,7 @@ def validate_evidence_grounding(result: CVMatchResult, cv_text: str) -> int:
             quote = (raw_quote or "").strip()
             if not quote:
                 continue
-            located = _fuzzy_locate(quote, cv_text)
+            located = fuzzy_locate_quote(quote, cv_text)
             if located is None:
                 logger.info(
                     "Dropped unverifiable quote on requirement %s: %r",

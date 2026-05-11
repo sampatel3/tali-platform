@@ -1463,6 +1463,52 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
 }
 
 
+# Read-only tools that are always allowed regardless of allowlist. The
+# agent's planner needs these to inspect state before deciding what to
+# do; gating them would force every role's allowlist to enumerate them.
+_READ_ONLY_TOOLS: frozenset[str] = frozenset(
+    {
+        "get_application",
+        "get_candidate",
+        "get_candidate_cv",
+        "search_applications",
+        "compare_applications",
+        "nl_search_candidates",
+        "graph_search_candidates",
+        "get_cohort_signals",
+        "evaluate_policy",
+        "survey_role_state",
+        "find_apps_in_state",
+        "read_pending_recruiter_inputs",
+        "agent_run_complete",
+    }
+)
+
+
+class ToolNotAllowedError(RuntimeError):
+    """Raised when ``dispatch`` is asked to invoke a tool that is not on
+    the role's ``agent_action_allowlist``. The orchestrator catches this
+    and surfaces it as a structured run-failure rather than a hard crash.
+    """
+
+
+def _coerce_allowlist(value: Any) -> Optional[set[str]]:
+    """Accept either a list of tool names or None. Empty list is treated
+    as "no allowlist configured" — equivalent to None — because an empty
+    list would lock the agent out of every tool, which is almost
+    certainly not what a recruiter intended.
+    """
+    if not value:
+        return None
+    if isinstance(value, list):
+        names = {str(item).strip() for item in value if str(item).strip()}
+        return names or None
+    if isinstance(value, str):
+        names = {part.strip() for part in value.split(",") if part.strip()}
+        return names or None
+    return None
+
+
 def dispatch(
     name: str,
     arguments: dict[str, Any] | None,
@@ -1474,6 +1520,19 @@ def dispatch(
     handler = _HANDLER_BY_NAME.get(name)
     if handler is None:
         raise KeyError(f"unknown agent tool: {name}")
+
+    # Allowlist enforcement (governance). When ``role.agent_action_allowlist``
+    # is populated, only the listed tools (plus read-only / introspection
+    # tools) may be invoked. Mutation tools not on the list raise
+    # ToolNotAllowedError; the orchestrator records this on the run and
+    # ends the cycle gracefully.
+    allowlist = _coerce_allowlist(getattr(role, "agent_action_allowlist", None))
+    if allowlist is not None and name not in _READ_ONLY_TOOLS and name not in allowlist:
+        raise ToolNotAllowedError(
+            f"tool {name!r} is not in agent_action_allowlist for role "
+            f"{int(role.id)} (allowed: {sorted(allowlist)})"
+        )
+
     return handler(db, agent_run=agent_run, role=role, args=arguments or {})
 
 
@@ -1484,6 +1543,7 @@ def is_run_complete(result: Any) -> bool:
 __all__ = [
     "AGENT_TOOLS",
     "QUEUE_DECISION_TOOL_NAMES",
+    "ToolNotAllowedError",
     "dispatch",
     "is_run_complete",
 ]

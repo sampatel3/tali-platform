@@ -83,6 +83,16 @@ class AgentDecision(Base):
 
     idempotency_key = Column(String, nullable=False)
 
+    # Evidence validation (migration 074): set by
+    # ``validate_agent_decision_evidence`` after the row is created.
+    # ``validation_status`` is one of: passed / failed / skipped / NULL.
+    # ``validation_failures`` is a JSON list of human-readable failure
+    # descriptions when status == "failed". A failed validation does
+    # not refuse the queue — it surfaces a warning badge to the
+    # recruiter so they know cited evidence may be fabricated.
+    validation_status = Column(String, nullable=True)
+    validation_failures = Column(JSON, nullable=True)
+
     agent_run = relationship("AgentRun", back_populates="decisions")
     role = relationship("Role")
     application = relationship("CandidateApplication")
