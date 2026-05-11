@@ -1147,12 +1147,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     if (!Number.isFinite(numericRoleId)) return;
     setLoading(true);
     try {
-      // Two separate fetches (open + rejected). A single
-      // ``application_outcome=all`` call has a backend 500-row cap, so
-      // a role with hundreds of historical rejects can push out open
-      // candidates entirely. Two parallel calls give each bucket its
-      // own budget.
-      const appsQuery = (outcome) => ({ sort_by: 'pre_screen_score', sort_order: 'desc', application_outcome: outcome });
+      // Two separate fetches (open + rejected). The backend caps each
+      // call at 2000 rows; we pass that ceiling explicitly so a role
+      // with thousands of applicants doesn't silently truncate to the
+      // 500-row default. Splitting open vs. rejected also keeps a
+      // long reject history from crowding open candidates out.
+      const appsQuery = (outcome) => ({
+        sort_by: 'pre_screen_score',
+        sort_order: 'desc',
+        application_outcome: outcome,
+        limit: 2000,
+      });
       const [roleRes, tasksRes, openAppsRes, rejectedAppsRes, batchStatusRes, fetchStatusRes, preScreenStatusRes, orgCriteriaRes] = await Promise.all([
         rolesApi.get(numericRoleId),
         rolesApi.listTasks(numericRoleId),
@@ -1924,7 +1929,7 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     <div>
       {NavComponent ? <NavComponent currentPage="jobs" onNavigate={onNavigate} /> : null}
       <AgentHeader
-        kicker={`ROLE · #${role?.id || '—'}`}
+        kicker={`${role?.name || 'Role'} · #${role?.id || '—'}`}
         title={role?.name || 'Role'}
         backLink={{ label: 'All roles', onClick: () => onNavigate('jobs') }}
         actions={(

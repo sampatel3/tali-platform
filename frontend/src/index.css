@@ -9156,7 +9156,7 @@ button.eng-badge-button:focus-visible {
 /* ================================================================
    AGENT HEADER — unified V2 hero (HANDOFF unified-headers.md §2-§5)
    The single dark-purple slab at the top of every recruiter page.
-   Fixed 280px tall so every header lines up perfectly across the
+   Fixed 320px tall so every header lines up perfectly across the
    platform. The right-side agent panel (Jobs / Role detail) reserves
    208px so OFF and ON states have the same vertical footprint.
    ================================================================ */
@@ -9167,8 +9167,12 @@ button.eng-badge-button:focus-visible {
   position: relative;
   overflow: hidden;
   padding: 32px 32px 36px;
-  /* Fixed minimum — absorbs Role-detail facts grid + 4-row agent panel */
-  min-height: 280px;
+  /* Strict height — every recruiter-page header lines up at exactly
+     the same y-coordinate. Sized to absorb the tallest layout
+     (Role-detail back-link + kicker + h1 + actions + 4-fact grid +
+     4-row agent panel on the right). Using `height` (not min-height)
+     so simpler pages don't shrink and richer pages don't grow. */
+  height: 320px;
   display: flex;
   align-items: center;
   /* Quiet base — the bright running gradient fades in on top via the
@@ -9287,7 +9291,7 @@ button.eng-badge-button:focus-visible {
 
 .agent-header-left .back-link {
   color: rgba(255, 255, 255, 0.65);
-  display: inline-block;
+  display: block;
   margin-bottom: 14px;
   font-family: var(--font-mono);
   font-size: 11px;
@@ -9303,7 +9307,7 @@ button.eng-badge-button:focus-visible {
 .agent-header-left .back-link:hover { color: #fff; }
 
 .agent-header-left .ah-kicker {
-  display: inline-block;
+  display: block;
   font-family: var(--font-mono);
   font-size: 10.5px;
   letter-spacing: 0.14em;
@@ -9694,6 +9698,10 @@ button.eng-badge-button:focus-visible {
 .ah-facts .f .v.purple { color: var(--purple-lav); }
 
 @media (max-width: 880px) {
+  /* On narrow viewports the right-side agent panel stacks below the
+     left content, so the strict 320px hero no longer fits. Relax to
+     a min-height and let the slab grow with stacked content. */
+  .agent-header { height: auto; min-height: 320px; }
   .agent-header-inner { grid-template-columns: 1fr; }
   .agent-panel { width: 100%; }
   .ah-facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
