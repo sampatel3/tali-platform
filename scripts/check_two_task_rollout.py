@@ -138,7 +138,13 @@ def _summarize_task(task_key: str, assessments: list[AssessmentSnapshot]) -> dic
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="Check production readiness health for the two canonical task tracks.")
+    parser = argparse.ArgumentParser(
+        description=(
+            "Check production-readiness health for the canonical assessment tasks. "
+            "Filename retained for runbook stability; the catalog is now 5 tasks "
+            "(see CANONICAL_TASK_KEYS at the top of this file)."
+        )
+    )
     parser.add_argument("--hours", type=int, default=72, help="Lookback window in hours for assessment activity.")
     parser.add_argument("--limit", type=int, default=50, help="Maximum assessment rows per task to inspect.")
     parser.add_argument("--since", type=str, default="", help="Optional UTC ISO timestamp override, e.g. 2026-03-03T07:09:00Z.")

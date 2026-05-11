@@ -11,11 +11,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from unittest.mock import patch
 
-import pytest
-
-from app.agent_runtime import event_debounce
 from app.agent_runtime.event_debounce import (
-    DEFAULT_DEBOUNCE_SECONDS,
     clear_event_window,
     try_claim_event_window,
 )
@@ -158,38 +154,8 @@ def test_claim_only_targets_specified_role(db):
 
 
 # ---------------------------------------------------------------------------
-# Integration: on_application_created enqueues at most once per window
+# Integration: on_application_created enqueue gating
 # ---------------------------------------------------------------------------
-
-
-@pytest.mark.skip(
-    reason=(
-        "Obsolete: Phase 7 (PR #109) removed the per-application "
-        "agent_react_to_event trigger from on_application_created; the "
-        "agent now wakes via the cohort-planner beat, not per-app. The "
-        "debounce primitive is still exercised by the unit tests above."
-    )
-)
-def test_on_application_created_enqueues_only_first_event_in_window(db):
-    """Three apps for one role within the same window → one Celery enqueue."""
-    from app.services import application_events
-
-    org = _make_org(db)
-    role = _make_role(db, org)
-    apps = [_make_app(db, org=org, role=role) for _ in range(3)]
-
-    with patch(
-        "app.tasks.agent_tasks.agent_react_to_event"
-    ) as mock_task:
-        for a in apps:
-            application_events.on_application_created(a)
-
-    assert mock_task.apply_async.call_count == 1
-    # First event was the one that won the claim.
-    kwargs = mock_task.apply_async.call_args.kwargs
-    assert kwargs["kwargs"]["role_id"] == role.id
-    assert kwargs["kwargs"]["application_id"] == apps[0].id
-    assert kwargs["countdown"] == DEFAULT_DEBOUNCE_SECONDS
 
 
 def test_on_application_created_skips_when_agentic_mode_off(db):
