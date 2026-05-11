@@ -11291,13 +11291,15 @@ button.eng-badge-button:focus-visible {
 }
 
 .mc-agent-settings-slider-input {
-  position: absolute;
-  inset: 0;
+  /* Native range styling is fully drawn by ``.ce-range`` (gradient track
+     + thumb). Earlier revisions of this panel layered a custom track
+     and thumb on top via .mc-agent-settings-slider-track /
+     .mc-agent-settings-slider-thumb and hid the native input with
+     ``opacity: 0`` — but the custom divs were removed, so the
+     opacity:0 was leaving the slider invisible. Restore native
+     visibility and let ce-range own the look. */
   width: 100%;
-  height: 24px;
-  opacity: 0;
   cursor: pointer;
-  z-index: 2;
 }
 
 .mc-agent-settings-slider-track {

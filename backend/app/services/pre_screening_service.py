@@ -142,18 +142,34 @@ def refresh_pre_screening_fields(app: CandidateApplication) -> dict[str, Any]:
     return snapshot
 
 
-def resolved_auto_reject_config(org: Organization | None, role: Role | None) -> dict[str, Any]:
+def resolved_auto_reject_config(
+    org: Organization | None,
+    role: Role | None,
+    *,
+    db: Session | None = None,
+) -> dict[str, Any]:
     org_config = org.workable_config if org and isinstance(org.workable_config, dict) else {}
     enabled = (
         role.auto_reject_enabled
         if role is not None and role.auto_reject_enabled is not None
         else bool(org_config.get("auto_reject_enabled"))
     )
-    threshold = (
-        role.auto_reject_threshold_100
-        if role is not None and role.auto_reject_threshold_100 is not None
-        else org_config.get("auto_reject_threshold_100")
-    )
+    # ``auto`` mode delegates threshold selection to the agent's algorithm
+    # (see ``services.auto_threshold_service``). Requires a session — when
+    # the caller doesn't have one, fall through to the recruiter's manual
+    # value, which is still the better answer than a hard-coded number.
+    mode = getattr(role, "auto_reject_threshold_mode", None) or "manual"
+    threshold: Any
+    if mode == "auto" and role is not None and db is not None:
+        from .auto_threshold_service import compute_recommended_threshold
+
+        threshold = compute_recommended_threshold(db, role=role).value
+    else:
+        threshold = (
+            role.auto_reject_threshold_100
+            if role is not None and role.auto_reject_threshold_100 is not None
+            else org_config.get("auto_reject_threshold_100")
+        )
     return {
         "enabled": bool(enabled),
         "threshold_100": normalize_score_100(threshold),

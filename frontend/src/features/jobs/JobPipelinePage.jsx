@@ -602,6 +602,10 @@ const RoleAgentSettingsTab = ({
   onScrollToReview,
   onSaveBudget,
   onAutonomyChange,
+  thresholdMode,
+  onThresholdModeChange,
+  suggestedThreshold,
+  savingThresholdMode,
 }) => {
   const total = activeApplications.length;
   const above = Math.max(0, total - belowThresholdCount);
@@ -720,8 +724,29 @@ const RoleAgentSettingsTab = ({
               </p>
             </div>
             <div className="mc-agent-settings-threshold-display">
-              {thresholdDisplay}<span className="mc-agent-settings-threshold-pct">%</span>
+              {thresholdMode === 'auto' && suggestedThreshold?.value != null ? suggestedThreshold.value : thresholdDisplay}
+              <span className="mc-agent-settings-threshold-pct">%</span>
             </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 10 }}>
+            <label style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--ink)' }}>
+              <span className="kicker mute">MODE</span>
+              <select
+                className="rq-select"
+                value={thresholdMode}
+                onChange={(event) => onThresholdModeChange?.(event.target.value)}
+                aria-label="Threshold mode"
+                disabled={savingThresholdMode}
+              >
+                <option value="manual">Manual</option>
+                <option value="auto">Auto · agent-optimised</option>
+              </select>
+            </label>
+            {thresholdMode === 'auto' && suggestedThreshold?.rationale ? (
+              <span style={{ fontSize: 12, color: 'var(--mute)', flex: 1, minWidth: 0 }}>
+                {suggestedThreshold.rationale}
+              </span>
+            ) : null}
           </div>
           <div className="mc-agent-settings-slider">
             <input
@@ -729,11 +754,12 @@ const RoleAgentSettingsTab = ({
               min={0}
               max={100}
               step={1}
-              value={thresholdDisplay}
+              value={thresholdMode === 'auto' && suggestedThreshold?.value != null ? suggestedThreshold.value : thresholdDisplay}
               onChange={(event) => setThresholdDraft(event.target.value)}
               aria-label="Reject threshold percent"
               className="ce-range mc-agent-settings-slider-input"
-              style={{ '--ce-range-val': thresholdDisplay }}
+              style={{ '--ce-range-val': thresholdMode === 'auto' && suggestedThreshold?.value != null ? suggestedThreshold.value : thresholdDisplay }}
+              disabled={thresholdMode === 'auto'}
             />
             <div className="mc-agent-settings-slider-scale">
               <span>0%</span><span>25%</span><span>50%</span><span>75%</span><span>100%</span>
@@ -1072,6 +1098,29 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
   const [loading, setLoading] = useState(true);
   const [savingRoleConfig, setSavingRoleConfig] = useState(false);
   const [thresholdDraft, setThresholdDraft] = useState('');
+  const [suggestedThreshold, setSuggestedThreshold] = useState(null);
+  const [savingThresholdMode, setSavingThresholdMode] = useState(false);
+  const handleThresholdModeChange = useCallback(async (nextMode) => {
+    if (!Number.isFinite(numericRoleId)) return;
+    if (nextMode !== 'auto' && nextMode !== 'manual') return;
+    setSavingThresholdMode(true);
+    setRole((cur) => (cur ? { ...cur, auto_reject_threshold_mode: nextMode } : cur));
+    try {
+      await rolesApi.update(numericRoleId, { auto_reject_threshold_mode: nextMode });
+      if (nextMode === 'auto') {
+        try {
+          const res = await rolesApi.suggestedAutoRejectThreshold(numericRoleId);
+          setSuggestedThreshold(res?.data || null);
+        } catch { /* leave previous suggestion */ }
+      }
+      showToast(nextMode === 'auto' ? 'Threshold mode set to auto — agent will pick the cut-off.' : 'Threshold mode set to manual.', 'success');
+    } catch (error) {
+      setRole((cur) => (cur ? { ...cur, auto_reject_threshold_mode: nextMode === 'auto' ? 'manual' : 'auto' } : cur));
+      showToast(getErrorMessage(error, 'Failed to update threshold mode.'), 'error');
+    } finally {
+      setSavingThresholdMode(false);
+    }
+  }, [numericRoleId, rolesApi, showToast]);
   const [refreshTick, setRefreshTick] = useState(0);
   const [interviewFocusGenerating, setInterviewFocusGenerating] = useState(false);
   const [detailsExpanded, setDetailsExpanded] = useState(false);
@@ -1123,6 +1172,17 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
       setRole(nextRole);
       setWorkspaceCriteria(Array.isArray(orgCriteriaRes?.data) ? orgCriteriaRes.data : []);
       setThresholdDraft(nextRole?.auto_reject_threshold_100 != null ? String(nextRole.auto_reject_threshold_100) : '');
+      // When the role is in auto-threshold mode, fetch the current
+      // recommendation up-front so the panel renders the value + rationale
+      // immediately instead of after the user touches the dropdown.
+      if (nextRole?.auto_reject_threshold_mode === 'auto' && Number.isFinite(numericRoleId)) {
+        rolesApi
+          .suggestedAutoRejectThreshold(numericRoleId)
+          .then((res) => setSuggestedThreshold(res?.data || null))
+          .catch(() => setSuggestedThreshold(null));
+      } else {
+        setSuggestedThreshold(null);
+      }
       setRoleTasks(Array.isArray(tasksRes?.data) ? tasksRes.data : []);
       setRoleApplications(Array.isArray(applicationsRes?.data) ? applicationsRes.data : []);
       // Hand off batch status to the global context — it owns display state.
@@ -2136,6 +2196,10 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                 showToast(getErrorMessage(error, 'Failed to update autonomy setting.'), 'error');
               }
             }}
+            thresholdMode={role?.auto_reject_threshold_mode || 'manual'}
+            suggestedThreshold={suggestedThreshold}
+            savingThresholdMode={savingThresholdMode}
+            onThresholdModeChange={handleThresholdModeChange}
           />
         ) : activeView === 'activity' ? (
           // HANDOFF v2 §4.4 / canvas jobs-detail-spec — Job spec tab is the

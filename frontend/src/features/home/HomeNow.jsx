@@ -46,15 +46,15 @@ const TYPE_OPTIONS = [
   { id: 'skip_assessment_reject', label: 'Reject (no assess)' },
 ];
 
-const Toolbar = ({ filters, setFilters, roles }) => (
+const Toolbar = ({ filters, setFilters, roles, bulkAction }) => (
   <div className="rq-toolbar">
     <div className="rq-toolbar-l">
-      <span className="kicker mute" style={{ marginRight: 8 }}>FILTERS</span>
+      <span className="kicker mute" style={{ marginRight: 8 }}>ROLE</span>
       <select
         className="rq-select"
         value={filters.role_id || ''}
         onChange={(e) => setFilters((f) => ({ ...f, role_id: e.target.value || null }))}
-        aria-label="Filter by role"
+        aria-label="Select a role to scope the view"
       >
         <option value="">All roles</option>
         {roles.map((r) => (
@@ -82,7 +82,8 @@ const Toolbar = ({ filters, setFilters, roles }) => (
         ))}
       </div>
     </div>
-    <div className="rq-toolbar-r">
+    <div className="rq-toolbar-r" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+      {bulkAction}
       <span className="rq-search">
         <Search size={13} strokeWidth={2} aria-hidden="true" />
         <input
@@ -380,6 +381,67 @@ export const HomeNow = ({
     }
   };
 
+  // Pending decisions matching the current filter scope. Used by the
+  // bulk-approve action: we only ever approve what's visible, so the
+  // recruiter's confirmation matches the rows they see on screen.
+  const visiblePending = useMemo(() => decisions.filter((d) => d.status === 'pending'), [decisions]);
+
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const handleBulkApprove = async () => {
+    if (bulkBusy || visiblePending.length === 0) return;
+    const typeLabel = filters.type
+      ? (TYPE_OPTIONS.find((o) => o.id === filters.type)?.label || 'decision').toLowerCase()
+      : 'pending decision';
+    const roleScope = filters.role_id
+      ? (rolesBreakdown.find((r) => String(r.role_id) === String(filters.role_id))?.short_name
+        || rolesBreakdown.find((r) => String(r.role_id) === String(filters.role_id))?.name
+        || `role #${filters.role_id}`)
+      : 'all roles';
+    const count = visiblePending.length;
+    const sample = visiblePending
+      .slice(0, 3)
+      .map((d) => d.candidate_name || `#${d.id}`)
+      .join(', ');
+    const more = count > 3 ? ` and ${count - 3} more` : '';
+    const confirmed = window.confirm(
+      `Approve ${count} ${typeLabel}${count === 1 ? '' : 's'} on ${roleScope}?\n\n${sample}${more}\n\nThis runs each approval in turn and reports any failures.`,
+    );
+    if (!confirmed) return;
+    setBulkBusy(true);
+    try {
+      const ids = visiblePending.map((d) => Number(d.id));
+      const res = await agentApi.bulkApproveDecisions(ids);
+      const payload = res?.data || {};
+      const approved = Number(payload.approved || 0);
+      const failed = Array.isArray(payload.failures) ? payload.failures.length : 0;
+      if (failed === 0) {
+        showToast?.(`Approved ${approved} / ${count}.`, 'success');
+      } else {
+        showToast?.(`Approved ${approved} / ${count} — ${failed} failed.`, 'warning');
+      }
+      await reload?.();
+    } catch (err) {
+      showToast?.(err?.response?.data?.detail || 'Bulk approve failed', 'error');
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
+  // The action only makes sense when looking at pending rows. Hide
+  // otherwise so we don't promise to approve overridden / approved
+  // history the user is just browsing.
+  const bulkActionEl = filters.status === 'pending' && visiblePending.length > 0 ? (
+    <button
+      type="button"
+      className="btn btn-purple btn-sm"
+      onClick={handleBulkApprove}
+      disabled={bulkBusy}
+    >
+      <Check size={13} strokeWidth={2} aria-hidden="true" style={{ marginRight: 6, verticalAlign: '-2px' }} />
+      {bulkBusy ? 'Approving…' : `Approve ${visiblePending.length} visible`}
+    </button>
+  ) : null;
+
   // Keyboard shortcuts on the action bar — only fire when no modal is
   // open, no input has focus, and the user actually has a selected
   // pending decision they could act on. We intentionally don't intercept
@@ -420,7 +482,7 @@ export const HomeNow = ({
         </div>
       </div>
 
-      <Toolbar filters={filters} setFilters={setFilters} roles={rolesBreakdown} />
+      <Toolbar filters={filters} setFilters={setFilters} roles={rolesBreakdown} bulkAction={bulkActionEl} />
 
       <div className="rq-hybrid-grid">
         <PendingSidebar
