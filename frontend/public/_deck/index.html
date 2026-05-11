@@ -3,7 +3,32 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
+<meta name="robots" content="noindex,nofollow" />
 <title>Taali · Investor Deck · 2026</title>
+<script>
+  // Token-gate fence for the static deck path. The React route at
+  // /deck wraps <DeckIframe /> in <TokenGate>, but this file is served
+  // directly from /_deck/index.html so the React gate never runs for
+  // anyone who knows the URL. Match TokenGate's contract: require the
+  // ``tali.dev_token`` localStorage key to be present (set by the
+  // first valid ?k=<token> visit to /deck) before rendering. Same
+  // security model as TokenGate — anti-indexing + share-link keyhole,
+  // not a real auth boundary.
+  (function () {
+    try {
+      // Allow loading inside the /deck iframe — DeckIframe is itself
+      // gated by TokenGate. Top-frame access without the token gets
+      // bounced to /deck so the user enters the token there.
+      if (window !== window.top) return;
+      var token = '';
+      try { token = window.localStorage.getItem('tali.dev_token') || ''; } catch (e) {}
+      if (!token) {
+        var here = window.location.pathname + window.location.search;
+        window.location.replace('/deck?from=' + encodeURIComponent(here));
+      }
+    } catch (e) { /* don't block render on script errors */ }
+  })();
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600;700&display=swap">

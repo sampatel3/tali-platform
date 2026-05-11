@@ -215,6 +215,8 @@ def role_to_response(
         auto_reject_enabled=role.auto_reject_enabled,
         auto_reject_threshold_100=role.auto_reject_threshold_100,
         auto_reject_threshold_mode=getattr(role, "auto_reject_threshold_mode", "manual") or "manual",
+        auto_reject=bool(getattr(role, "auto_reject", False)),
+        auto_promote=bool(getattr(role, "auto_promote", False)),
         workable_actor_member_id=role.workable_actor_member_id,
         workable_disqualify_reason_id=role.workable_disqualify_reason_id,
         auto_reject_note_template=role.auto_reject_note_template,
