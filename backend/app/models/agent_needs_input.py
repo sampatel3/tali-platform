@@ -45,11 +45,12 @@ from ..platform.database import Base
 # UI keys card layouts off them. Add new kinds here so frontend +
 # backend stay in sync.
 NEEDS_INPUT_KINDS = (
-    "intent_slot_missing",       # role has empty must_have / preferred / etc.
-    "monthly_budget_missing",    # role.monthly_usd_budget_cents is null
-    "threshold_ambiguous",       # role.score_threshold not set + cohort spread is high
-    "send_assessment_approval",  # HITL gate: recruiter must approve a send batch
-    "candidate_tie_break",       # two near-identical candidates, recruiter picks
+    "intent_slot_missing",                  # role has empty must_have / preferred / etc.
+    "monthly_budget_missing",               # role.monthly_usd_budget_cents is null
+    "threshold_ambiguous",                  # role.score_threshold not set + cohort spread is high
+    "send_assessment_approval",             # HITL gate: recruiter must approve a send batch
+    "resend_assessment_invite_approval",    # HITL gate: recruiter must approve a re-send
+    "candidate_tie_break",                  # two near-identical candidates, recruiter picks
     "other",
 )
 

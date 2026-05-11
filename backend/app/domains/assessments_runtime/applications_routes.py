@@ -638,74 +638,30 @@ def create_application(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    role = get_role(role_id, current_user.organization_id, db)
-    if not role_has_job_spec(role):
-        raise HTTPException(status_code=400, detail="Upload job spec before adding applications")
-    candidate = db.query(Candidate).filter(
-        Candidate.organization_id == current_user.organization_id,
-        Candidate.email == str(data.candidate_email),
-    ).first()
-    if not candidate:
-        candidate = Candidate(
-            organization_id=current_user.organization_id,
-            email=str(data.candidate_email),
-            full_name=data.candidate_name or None,
-            position=data.candidate_position or None,
-        )
-        db.add(candidate)
-        db.flush()
-    else:
-        if data.candidate_name:
-            candidate.full_name = data.candidate_name
-        if data.candidate_position:
-            candidate.position = data.candidate_position
+    from ...actions import Actor, create_application as action
 
-    existing = db.query(CandidateApplication).filter(
-        CandidateApplication.organization_id == current_user.organization_id,
-        CandidateApplication.candidate_id == candidate.id,
-        CandidateApplication.role_id == role.id,
-    ).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Candidate already has an application for this role")
-
-    mapped_stage, mapped_outcome = map_legacy_status_to_pipeline(data.status)
-    pipeline_stage = data.pipeline_stage or mapped_stage
-    application_outcome = data.application_outcome or mapped_outcome
-    now = utcnow()
-    app = CandidateApplication(
-        organization_id=current_user.organization_id,
-        candidate_id=candidate.id,
-        role_id=role.id,
-        status=data.status or pipeline_stage,
-        pipeline_stage=pipeline_stage,
-        pipeline_stage_updated_at=now,
-        pipeline_stage_source="recruiter",
-        application_outcome=application_outcome,
-        application_outcome_updated_at=now,
-        version=1,
-        notes=data.notes or None,
-    )
-    db.add(app)
-    ensure_pipeline_fields(app, source="recruiter")
-    db.flush()
-    initialize_pipeline_event_if_missing(
-        db,
-        app=app,
-        actor_type="recruiter",
-        actor_id=current_user.id,
-        reason="Application created",
-    )
-    refresh_application_score_cache(app, db=db)
     try:
+        result = action.run(
+            db,
+            Actor.recruiter(current_user),
+            organization_id=int(current_user.organization_id),
+            role_id=role_id,
+            candidate_email=str(data.candidate_email),
+            candidate_name=data.candidate_name,
+            candidate_position=data.candidate_position,
+            status=data.status,
+            pipeline_stage=data.pipeline_stage,
+            application_outcome=data.application_outcome,
+            notes=data.notes,
+        )
         db.commit()
-        db.refresh(app)
     except HTTPException:
         db.rollback()
         raise
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to create application")
-    app = get_application(app.id, current_user.organization_id, db)
+    app = get_application(result.application_id, current_user.organization_id, db)
     return application_to_response(app)
 
 
@@ -1811,6 +1767,10 @@ class WorkableMoveStageRequest(BaseModel):
     reason: Optional[str] = Field(default=None, max_length=2000)
 
 
+class ApplicationWorkableNoteRequest(BaseModel):
+    body: str = Field(min_length=1, max_length=8000)
+
+
 @router.post("/applications/{application_id}/workable/move-stage", response_model=ApplicationResponse)
 def move_application_in_workable(
     application_id: int,
@@ -1899,6 +1859,34 @@ def move_application_in_workable(
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to move candidate in Workable")
     return application_to_response(app, use_cached_score_summary=True)
+
+
+@router.post("/applications/{application_id}/workable/note")
+def post_workable_candidate_note(
+    application_id: int,
+    data: ApplicationWorkableNoteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Post a free-form note to the candidate's Workable activity feed.
+
+    Mirrors the agent's ``post_workable_note`` tool — both call the same
+    action so the audit trail and side effects are identical.
+    """
+    from ...actions import Actor, post_workable_note as action
+
+    result = action.run(
+        db,
+        Actor.recruiter(current_user),
+        organization_id=int(current_user.organization_id),
+        application_id=application_id,
+        body=data.body,
+    )
+    if result.status == "failed":
+        db.rollback()
+        raise HTTPException(status_code=502, detail=result.detail)
+    db.commit()
+    return result.as_dict()
 
 
 @router.get("/applications/{application_id}/events", response_model=list[ApplicationEventResponse])

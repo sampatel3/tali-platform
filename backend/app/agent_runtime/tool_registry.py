@@ -19,8 +19,11 @@ from datetime import datetime, timedelta, timezone
 from ..actions import (
     advance_stage,
     ask_recruiter,
+    create_application,
+    post_workable_note,
     queue_decision,
     reject_application,
+    resend_assessment_invite,
     score_cv,
     send_assessment,
 )
@@ -472,6 +475,69 @@ AGENT_TOOLS: list[dict[str, Any]] = [
             "required": ["application_id"],
         },
     },
+    {
+        "name": "resend_assessment_invite",
+        "description": (
+            "Re-dispatch the invite email for an existing assessment without "
+            "creating a new Assessment row. Use when the candidate didn't "
+            "receive the original invite, asked to be re-invited, or the link "
+            "expired. Honors the role's auto_promote toggle just like "
+            "send_assessment — when auto_promote is False, opens an "
+            "ask_recruiter card instead of resending. Returns "
+            "{assessment_id, status, detail} where status is 'resent', "
+            "'voided', 'no_candidate', or 'awaiting_recruiter_approval'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "assessment_id": {"type": "integer"},
+            },
+            "required": ["assessment_id"],
+        },
+    },
+    {
+        "name": "create_application",
+        "description": (
+            "Create a candidate application against a role. Reuses an existing "
+            "Candidate row when one matches the email; otherwise creates a new "
+            "candidate. Refuses with 400 if the candidate already has an "
+            "application for this role. Use when processing inbound Workable "
+            "webhooks or email-driven candidate ingest that aren't covered by "
+            "the automatic sync path. Returns {application_id, candidate_id, status}."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "role_id": {"type": "integer"},
+                "candidate_email": {"type": "string"},
+                "candidate_name": {"type": "string"},
+                "candidate_position": {"type": "string"},
+                "notes": {"type": "string"},
+            },
+            "required": ["role_id", "candidate_email"],
+        },
+    },
+    {
+        "name": "post_workable_note",
+        "description": (
+            "Post a free-form note to a candidate's Workable activity feed. "
+            "Use to leave context that doesn't correspond to a stage change "
+            "— e.g. flagging why you queued a rejection, recording a side-"
+            "channel observation, or adding a heads-up the recruiter should "
+            "see in their Workable view. Skipped if the application has no "
+            "linked Workable candidate or the org isn't Workable-connected. "
+            "Body is capped at 8000 chars. Returns {application_id, status, "
+            "detail} where status is 'posted', 'skipped', or 'failed'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "application_id": {"type": "integer"},
+                "body": {"type": "string", "description": "Note text to post."},
+            },
+            "required": ["application_id", "body"],
+        },
+    },
     # ------------------------------------------------------------------
     # QUEUE — recruiter must approve before side effect
     # ------------------------------------------------------------------
@@ -842,6 +908,86 @@ def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args:
     return result.as_dict()
 
 
+def _tool_resend_assessment_invite(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    actor = Actor.agent(int(agent_run.id))
+    assessment_id = int(args["assessment_id"])
+
+    # HITL gate — same auto_promote toggle that gates send_assessment.
+    # Resending an invite is a candidate-facing email, so it must
+    # respect the same recruiter approval policy.
+    if not bool(getattr(role, "auto_promote", False)):
+        existing = ask_recruiter.open(
+            db,
+            actor,
+            organization_id=int(role.organization_id),
+            role_id=int(role.id),
+            kind="resend_assessment_invite_approval",
+            prompt=(
+                f"Approve resending the assessment invite for assessment "
+                f"{assessment_id}? I'll re-dispatch the invite as soon as "
+                "you confirm."
+            ),
+            options=[
+                {"value": "approve", "label": "Approve & resend"},
+                {"value": "skip", "label": "Skip — don't resend"},
+            ],
+            rationale=(
+                "auto_promote is off for this role; every candidate-facing "
+                "send goes through the recruiter."
+            ),
+        )
+        return {
+            "status": "awaiting_recruiter_approval",
+            "needs_input_id": int(existing.id),
+            "assessment_id": assessment_id,
+        }
+
+    result = resend_assessment_invite.run(
+        db,
+        actor,
+        organization_id=int(role.organization_id),
+        assessment_id=assessment_id,
+    )
+    return result.as_dict()
+
+
+def _tool_create_application(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    actor = Actor.agent(int(agent_run.id))
+    target_role_id = int(args["role_id"])
+    # Org boundary: agent can only create applications under its own org's
+    # roles. Mismatched role_id results in a 404 from get_role inside the
+    # action, so no additional check here.
+    result = create_application.run(
+        db,
+        actor,
+        organization_id=int(role.organization_id),
+        role_id=target_role_id,
+        candidate_email=str(args["candidate_email"]),
+        candidate_name=args.get("candidate_name"),
+        candidate_position=args.get("candidate_position"),
+        notes=args.get("notes"),
+    )
+    return result.as_dict()
+
+
+def _tool_post_workable_note(
+    db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]
+) -> Any:
+    actor = Actor.agent(int(agent_run.id))
+    result = post_workable_note.run(
+        db,
+        actor,
+        organization_id=int(role.organization_id),
+        application_id=int(args["application_id"]),
+        body=str(args["body"]),
+    )
+    return result.as_dict()
+
+
 def _stamp_policy_revision_in_evidence(
     db: Session, *, role: Role, evidence: dict[str, Any] | None
 ) -> dict[str, Any]:
@@ -1172,6 +1318,9 @@ _HANDLER_BY_NAME: dict[str, Callable[..., Any]] = {
     "get_cohort_signals": _tool_get_cohort_signals,
     "score_cv": _tool_score_cv,
     "send_assessment": _tool_send_assessment,
+    "resend_assessment_invite": _tool_resend_assessment_invite,
+    "create_application": _tool_create_application,
+    "post_workable_note": _tool_post_workable_note,
     "queue_advance_decision": _tool_queue_advance_decision,
     "queue_reject_decision": _tool_queue_reject_decision,
     "queue_skip_assessment_reject_decision": _tool_queue_skip_assessment_reject_decision,

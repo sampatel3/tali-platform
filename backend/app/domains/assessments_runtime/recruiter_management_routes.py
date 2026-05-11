@@ -375,59 +375,19 @@ def resend_assessment_invite(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    assessment = (
-        db.query(Assessment)
-        .options(joinedload(Assessment.candidate), joinedload(Assessment.task))
-        .filter(
-            Assessment.id == assessment_id,
-            Assessment.organization_id == current_user.organization_id,
-        )
-        .first()
-    )
-    if not assessment:
-        raise HTTPException(status_code=404, detail="Assessment not found")
-    if bool(getattr(assessment, "is_voided", False)):
-        raise HTTPException(status_code=400, detail="Voided assessments cannot be resent")
-    if not assessment.candidate:
-        raise HTTPException(status_code=400, detail="Assessment has no candidate")
+    from ...actions import Actor, resend_assessment_invite as action
 
-    org = db.query(Organization).filter(Organization.id == current_user.organization_id).first()
-    if org:
-        dispatch_assessment_invite(
-            assessment=assessment,
-            org=org,
-            candidate_email=assessment.candidate.email,
-            candidate_name=assessment.candidate.full_name or assessment.candidate.email,
-            position=(assessment.task.name if assessment.task else "Technical assessment"),
-        )
-        if assessment.application_id:
-            app = (
-                db.query(CandidateApplication)
-                .filter(
-                    CandidateApplication.id == assessment.application_id,
-                    CandidateApplication.organization_id == current_user.organization_id,
-                )
-                .first()
-            )
-            if app:
-                ensure_pipeline_fields(app)
-                initialize_pipeline_event_if_missing(
-                    db,
-                    app=app,
-                    actor_type="system",
-                    actor_id=current_user.id,
-                    reason="Pipeline initialized before invite resend",
-                )
-                append_application_event(
-                    db,
-                    app=app,
-                    event_type="assessment_invite_resent",
-                    actor_type="recruiter",
-                    actor_id=current_user.id,
-                    reason="Task invite resent",
-                    metadata={"assessment_id": assessment.id},
-                )
-        db.commit()
+    result = action.run(
+        db,
+        Actor.recruiter(current_user),
+        organization_id=int(current_user.organization_id),
+        assessment_id=assessment_id,
+    )
+    if result.status == "voided":
+        raise HTTPException(status_code=400, detail=result.detail)
+    if result.status == "no_candidate":
+        raise HTTPException(status_code=400, detail=result.detail)
+    db.commit()
     return {"success": True}
 
 

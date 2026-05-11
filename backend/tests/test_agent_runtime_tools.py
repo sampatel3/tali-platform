@@ -156,6 +156,9 @@ def test_agent_tools_catalogue_contains_expected_names():
         # execute
         "score_cv",
         "send_assessment",
+        "resend_assessment_invite",
+        "create_application",
+        "post_workable_note",
         # queue
         "queue_advance_decision",
         "queue_reject_decision",
@@ -163,6 +166,145 @@ def test_agent_tools_catalogue_contains_expected_names():
         # terminal
         "agent_run_complete",
     }.issubset(names)
+
+
+def test_resend_assessment_invite_dispatch_invokes_action(db):
+    """Agent's resend tool goes through the shared action when auto_promote=True."""
+    org = _make_org(db)
+    role = _make_role(db, org)  # auto_promote=True by default in the helper
+    run = _make_agent_run(db, role)
+
+    fake_result = type(
+        "_R",
+        (),
+        {"as_dict": lambda self: {"assessment_id": 1234, "status": "resent", "detail": None}},
+    )()
+    with patch(
+        "app.actions.resend_assessment_invite.run", return_value=fake_result
+    ) as mock_run:
+        result = tool_registry.dispatch(
+            "resend_assessment_invite",
+            {"assessment_id": 1234},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert mock_run.called
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["organization_id"] == org.id
+    assert kwargs["assessment_id"] == 1234
+    assert result == {"assessment_id": 1234, "status": "resent", "detail": None}
+
+
+def test_resend_assessment_invite_dispatch_hitl_gate_opens_needs_input(db):
+    """When auto_promote=False the tool opens an ask_recruiter card instead
+    of calling the action."""
+    org = _make_org(db)
+    role = _make_role(db, org)
+    role.auto_promote = False
+    db.flush()
+    run = _make_agent_run(db, role)
+
+    with patch(
+        "app.actions.resend_assessment_invite.run"
+    ) as mock_action, patch(
+        "app.actions.ask_recruiter.open",
+        return_value=type("_R", (), {"id": 777})(),
+    ) as mock_ask:
+        result = tool_registry.dispatch(
+            "resend_assessment_invite",
+            {"assessment_id": 1234},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert not mock_action.called
+    assert mock_ask.called
+    assert mock_ask.call_args.kwargs["kind"] == "resend_assessment_invite_approval"
+    assert result["status"] == "awaiting_recruiter_approval"
+    assert result["needs_input_id"] == 777
+    assert result["assessment_id"] == 1234
+
+
+def test_create_application_dispatch_invokes_action(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    run = _make_agent_run(db, role)
+
+    fake_result = type(
+        "_R",
+        (),
+        {
+            "as_dict": lambda self: {
+                "application_id": 42,
+                "candidate_id": 7,
+                "status": "created",
+            }
+        },
+    )()
+    with patch(
+        "app.actions.create_application.run", return_value=fake_result
+    ) as mock_run:
+        result = tool_registry.dispatch(
+            "create_application",
+            {
+                "role_id": role.id,
+                "candidate_email": "new@example.com",
+                "candidate_name": "New Candidate",
+            },
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert mock_run.called
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["organization_id"] == org.id
+    assert kwargs["role_id"] == role.id
+    assert kwargs["candidate_email"] == "new@example.com"
+    # Actor passed positionally as the 2nd arg.
+    actor = mock_run.call_args.args[1]
+    assert actor.type == "agent"
+    assert result["status"] == "created"
+
+
+def test_post_workable_note_dispatch_invokes_action(db):
+    org = _make_org(db)
+    role = _make_role(db, org)
+    app = _make_application(db, org=org, role=role, name="X", email="x@x.test")
+    run = _make_agent_run(db, role)
+
+    fake_result = type(
+        "_R",
+        (),
+        {
+            "as_dict": lambda self: {
+                "application_id": app.id,
+                "status": "posted",
+                "detail": None,
+            }
+        },
+    )()
+    with patch(
+        "app.actions.post_workable_note.run", return_value=fake_result
+    ) as mock_run:
+        result = tool_registry.dispatch(
+            "post_workable_note",
+            {"application_id": app.id, "body": "Agent flagged this candidate."},
+            db=db,
+            agent_run=run,
+            role=role,
+        )
+
+    assert mock_run.called
+    kwargs = mock_run.call_args.kwargs
+    assert kwargs["application_id"] == app.id
+    assert kwargs["body"] == "Agent flagged this candidate."
+    actor = mock_run.call_args.args[1]
+    assert actor.type == "agent"
+    assert result["status"] == "posted"
 
 
 def test_send_assessment_dispatch_invokes_action(db):
