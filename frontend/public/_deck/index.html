@@ -7,25 +7,48 @@
 <title>Taali · Investor Deck · 2026</title>
 <script>
   // Token-gate fence for the static deck path. The React route at
-  // /deck wraps <DeckIframe /> in <TokenGate>, but this file is served
-  // directly from /_deck/index.html so the React gate never runs for
-  // anyone who knows the URL. Match TokenGate's contract: require the
-  // ``tali.dev_token`` localStorage key to be present (set by the
-  // first valid ?k=<token> visit to /deck) before rendering. Same
-  // security model as TokenGate — anti-indexing + share-link keyhole,
-  // not a real auth boundary.
+  // /deck wraps <DeckIframe /> in <TokenGate>, but this file is
+  // served directly from /_deck/index.html so the React gate never
+  // runs for anyone who knows the URL. Match TokenGate's contract
+  // exactly: compare the stored localStorage value to VITE_DEV_TOKEN
+  // (injected at build time by the static-deck-token Vite plugin),
+  // not just check for key presence — otherwise anyone who sets the
+  // localStorage key to any value bypasses the gate. Runs in both
+  // top-frame and iframe context so a wrapper page can't bypass.
+  // Same security model as TokenGate: anti-indexing + share-link
+  // keyhole, not a real auth boundary.
+  //
+  // Allow rule:
+  //   * iframe whose parent is same-origin /deck → trust (DeckIframe
+  //     inside a route that already passed TokenGate).
+  //   * top-frame or any other context → require the stored
+  //     localStorage value to equal the build-injected token.
+  //
+  // The plugin replaces ``__VITE_DEV_TOKEN__`` with a JSON.stringify'd
+  // token; ``typeof`` keeps dev (no substitution) from throwing a
+  // ReferenceError that the try/catch would swallow.
   (function () {
+    function bounce() {
+      var here = window.location.pathname + window.location.search;
+      window.location.replace('/deck?from=' + encodeURIComponent(here));
+    }
     try {
-      // Allow loading inside the /deck iframe — DeckIframe is itself
-      // gated by TokenGate. Top-frame access without the token gets
-      // bounced to /deck so the user enters the token there.
-      if (window !== window.top) return;
-      var token = '';
-      try { token = window.localStorage.getItem('tali.dev_token') || ''; } catch (e) {}
-      if (!token) {
-        var here = window.location.pathname + window.location.search;
-        window.location.replace('/deck?from=' + encodeURIComponent(here));
+      // Same-origin iframe inside /deck — DeckIframe has already
+      // passed TokenGate. Cross-origin parents throw on property
+      // access; treat that as a wrapper-page bypass attempt and fall
+      // through to enforce. This also fixes the dev fallback loop:
+      // /deck (TokenGate-permissive in DEV) renders DeckIframe →
+      // iframe sees parent.pathname === '/deck' → renders.
+      if (window !== window.top) {
+        try {
+          if (window.parent.location.pathname === '/deck') return;
+        } catch (e) { /* cross-origin parent → enforce */ }
       }
+      var expected = (typeof __VITE_DEV_TOKEN__ !== 'undefined') ? __VITE_DEV_TOKEN__ : null;
+      if (!expected) { bounce(); return; }
+      var stored = '';
+      try { stored = window.localStorage.getItem('tali.dev_token') || ''; } catch (e) {}
+      if (stored !== expected) bounce();
     } catch (e) { /* don't block render on script errors */ }
   })();
 </script>
