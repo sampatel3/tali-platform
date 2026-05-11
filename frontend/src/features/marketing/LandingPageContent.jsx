@@ -653,38 +653,6 @@ export const LandingPage = ({ onNavigate }) => {
 
       {/* Trust strip removed — early product, no public customer logos. */}
 
-      {/* WALKTHROUGH TEASER — v4 (HANDOFF chat.md §1) */}
-      <section
-        id="walkthrough"
-        className="border-t border-b border-[var(--line)] bg-[var(--bg-2)]"
-      >
-        <div className={`${containerClass} py-16`}>
-          <div className="grid items-center gap-8 lg:grid-cols-[1fr_auto]">
-            <div>
-              <div className="mc-kicker" style={{ marginBottom: 12 }}>SEE EVERYTHING ELSE</div>
-              <h2
-                className="font-[var(--font-display)] font-semibold text-[var(--ink)]"
-                style={{ fontSize: 'clamp(28px,3.4vw,36px)', letterSpacing: '-0.025em', lineHeight: 1.1, margin: '0 0 12px' }}
-              >
-                Want to see how it all fits together?
-              </h2>
-              <p className="text-[15.5px] leading-[1.6] text-[var(--ink-2)]" style={{ margin: 0, maxWidth: 680 }}>
-                Triage, scoring, plain-English search, the standing report, ATS sync — there&apos;s a full product
-                walkthrough pre-loaded with a real role. No card, no installs, no sales call.
-              </p>
-            </div>
-            <button
-              type="button"
-              className="btn btn-primary"
-              style={{ height: 48, padding: '0 26px', fontSize: 14, whiteSpace: 'nowrap' }}
-              onClick={() => onNavigate('showcase')}
-            >
-              Open the walkthrough →
-            </button>
-          </div>
-        </div>
-      </section>
-
       {/* BOTTOM CTA — softened, token-based purple gradient (v4) */}
       <section className="bg-[var(--bg)]">
         <div className={`${containerClass} py-16`}>
@@ -706,120 +674,30 @@ export const LandingPage = ({ onNavigate }) => {
                 <h2 className="font-[var(--font-display)] text-[clamp(28px,3.6vw,40px)] font-semibold leading-[1.05] tracking-[-0.025em]">
                   Ready to put the agent to work?
                 </h2>
-                <p className="mt-3 max-w-[520px] text-[16px] leading-[1.55] opacity-85">
-                  20-minute demo with a founder. We&apos;ll run it on a real role of yours.
+                <p className="mt-3 max-w-[560px] text-[16px] leading-[1.55] opacity-85">
+                  Take the full product walkthrough — pre-loaded with a real role, no card, no install.
+                  Or book a 20-minute demo with a founder and we&apos;ll run it on a role of yours.
                 </p>
               </div>
-              <button
-                type="button"
-                className="inline-flex h-12 items-center gap-2 rounded-full bg-white px-7 text-[14px] font-semibold text-[var(--purple)]"
-                style={{ boxShadow: '0 10px 28px -8px rgba(0,0,0,0.3)' }}
-                onClick={() => onNavigate('demo-lead')}
-              >
-                Book a demo →
-              </button>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section id="pricing" className="border-t border-[var(--line)] bg-[var(--bg)]">
-        <div className={`${containerClass} py-20`}>
-          <div className="mb-10 max-w-[640px]">
-            <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.12em] text-[var(--mute)]">
-              Pricing
-            </div>
-            <h2 className="mt-2 font-[var(--font-display)] text-[42px] leading-[1.05] tracking-[-0.02em] text-[var(--ink)]">
-              Pay only for what you use.
-            </h2>
-            <p className="mt-4 text-[16px] leading-7 text-[var(--ink-2)]">
-              Usage-based pricing — like Anthropic, OpenAI, Cursor. New users get $1.50 of free credits to try the full
-              platform. After that, top up whenever you run out. No subscriptions, no monthly minimums.
-            </p>
-          </div>
-
-          <div className="grid gap-5 lg:grid-cols-[1fr_1fr_1fr_1fr]">
-            {/* Free tier card */}
-            <div className="rounded-lg border border-[var(--line)] bg-[var(--bg-2)] p-6">
-              <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
-                Free trial
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  className="inline-flex h-12 items-center gap-2 rounded-full px-7 text-[14px] font-semibold text-white"
+                  style={{ border: '1px solid rgba(255,255,255,0.55)', background: 'transparent' }}
+                  onClick={() => onNavigate('showcase')}
+                >
+                  Open walkthrough →
+                </button>
+                <button
+                  type="button"
+                  className="inline-flex h-12 items-center gap-2 rounded-full bg-white px-7 text-[14px] font-semibold text-[var(--purple)]"
+                  style={{ boxShadow: '0 10px 28px -8px rgba(0,0,0,0.3)' }}
+                  onClick={() => onNavigate('demo-lead')}
+                >
+                  Book a demo →
+                </button>
               </div>
-              <div className="mt-2 font-[var(--font-display)] text-[36px] leading-none tracking-[-0.02em] text-[var(--ink)]">
-                $1.50
-              </div>
-              <div className="mt-1 text-[13px] text-[var(--mute)]">credits on signup</div>
-              <ul className="mt-5 flex flex-col gap-2 text-[14px] text-[var(--ink-2)]">
-                <li>1 job spec</li>
-                <li>~100 candidates pre-screened</li>
-                <li>~30 candidates fully scored</li>
-                <li>3 assessment workspace runs</li>
-                <li>No card required</li>
-              </ul>
             </div>
-
-            {/* Pack cards */}
-            {[
-              { label: 'Starter', price: '$20', credits: '$20', bonus: null, blurb: '~1,300 scored candidates' },
-              { label: 'Growth', price: '$100', credits: '$110', bonus: '+10% bonus', blurb: '~7,300 scored candidates' },
-              { label: 'Scale', price: '$500', credits: '$600', bonus: '+20% bonus', blurb: '~40,000 scored candidates' },
-            ].map((pack) => (
-              <div key={pack.label} className="rounded-lg border border-[var(--line)] bg-[var(--bg-2)] p-6">
-                <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
-                  {pack.label}
-                </div>
-                <div className="mt-2 font-[var(--font-display)] text-[36px] leading-none tracking-[-0.02em] text-[var(--ink)]">
-                  {pack.price}
-                </div>
-                <div className="mt-1 text-[13px] text-[var(--mute)]">
-                  {pack.credits} of credits{pack.bonus ? ` • ${pack.bonus}` : ''}
-                </div>
-                <div className="mt-4 text-[14px] text-[var(--ink-2)]">{pack.blurb}</div>
-                <div className="mt-5 font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--mute)]">
-                  One-time payment • USD
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {/* What you get */}
-          <div className="mt-12 rounded-lg border border-[var(--line)] bg-[var(--bg-2)] p-8">
-            <h3 className="font-[var(--font-display)] text-[24px] tracking-[-0.02em] text-[var(--ink)]">
-              What you get on every plan
-            </h3>
-            <div className="mt-6 grid gap-6 md:grid-cols-2 lg:grid-cols-4">
-              {[
-                {
-                  title: 'Candidate ingestion',
-                  body: 'Pull from Workable or upload CVs directly. Parsed, deduped, and queued automatically.',
-                },
-                {
-                  title: 'AI pre-screening',
-                  body: 'Cheap Claude pass that filters obvious mismatches before you spend on full scoring. Priced at cost.',
-                },
-                {
-                  title: 'CV scoring',
-                  body: 'Evidence-grounded scores with per-requirement breakdown. Cached so re-runs are free.',
-                },
-                {
-                  title: 'Assessment workspace',
-                  body: 'Live Claude-Code coding sandbox per candidate, with prompt-quality scoring and fraud signals.',
-                },
-              ].map((feature) => (
-                <div key={feature.title}>
-                  <div className="font-[var(--font-mono)] text-[11px] uppercase tracking-[0.08em] text-[var(--purple)]">
-                    {feature.title}
-                  </div>
-                  <p className="mt-2 text-[14px] leading-6 text-[var(--ink-2)]">{feature.body}</p>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Pricing math note */}
-          <div className="mt-8 max-w-[760px] font-[var(--font-mono)] text-[11px] leading-6 text-[var(--mute)]">
-            Pricing math: pre-screening is billed at Anthropic's raw token cost (no markup). CV scoring and
-            assessment workspace runs are billed at 3× token cost — covers infra, support, and ongoing R&amp;D.
-            Every Claude call is itemized in your settings &gt; billing tab.
           </div>
         </div>
       </section>
