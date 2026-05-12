@@ -491,27 +491,74 @@ def graph_search_candidates(
 def _graph_topology(payload) -> dict[str, Any]:
     """Convert a GraphPayload into a thin ``{nodes, edges}`` shape for
     inline visualisation in the chat UI. Hard-cap at 60 nodes / 100 edges
-    so an over-broad query can't blow up the React renderer."""
-    nodes_out: list[dict[str, Any]] = []
-    edges_out: list[dict[str, Any]] = []
-    for node in (payload.nodes or [])[:60]:
-        nodes_out.append(
-            {
-                "id": node.id,
-                "label": node.label,
-                "name": node.name,
-                "extra": node.extra if isinstance(node.extra, dict) else {},
-            }
-        )
-    for edge in (payload.edges or [])[:100]:
-        edges_out.append(
-            {
-                "source": edge.source,
-                "target": edge.target,
-                "label": edge.label,
-                "fact": (edge.extra or {}).get("fact") if isinstance(edge.extra, dict) else None,
-            }
-        )
+    so an over-broad query can't blow up the React renderer.
+
+    The two slices are NOT independent — slicing nodes and edges by
+    position lets through edges that reference nodes outside the kept
+    set, and cytoscape throws synchronously when that happens (which
+    React then surfaces as the global "Something went wrong" error
+    boundary). We guarantee referential integrity here:
+
+    1. Take the first 100 edges.
+    2. Collect every node id those edges reference, plus the first 60
+       payload nodes, capped at 60 total.
+    3. Drop any edge whose source/target isn't in the kept node set.
+    """
+    raw_nodes = payload.nodes or []
+    raw_edges = payload.edges or []
+
+    # Step 1: pick edges first so we know which nodes we MUST keep.
+    candidate_edges = list(raw_edges[:100])
+
+    # Step 2: build the kept-nodes set, prioritising endpoints of the
+    # chosen edges (so the graph is connected) over the head-of-list
+    # fallback nodes.
+    nodes_by_id = {n.id: n for n in raw_nodes}
+    kept_ids: list[str] = []
+    seen_kept: set[str] = set()
+
+    def _try_add(node_id: str) -> None:
+        if not node_id or node_id in seen_kept:
+            return
+        node = nodes_by_id.get(node_id)
+        if node is None:
+            return
+        if len(kept_ids) >= 60:
+            return
+        seen_kept.add(node_id)
+        kept_ids.append(node_id)
+
+    for edge in candidate_edges:
+        _try_add(edge.source)
+        _try_add(edge.target)
+    # Fill remaining capacity with head-of-list nodes so an empty-edge
+    # payload still surfaces something.
+    for node in raw_nodes:
+        if len(kept_ids) >= 60:
+            break
+        _try_add(node.id)
+
+    nodes_out = [
+        {
+            "id": nodes_by_id[node_id].id,
+            "label": nodes_by_id[node_id].label,
+            "name": nodes_by_id[node_id].name,
+            "extra": nodes_by_id[node_id].extra if isinstance(nodes_by_id[node_id].extra, dict) else {},
+        }
+        for node_id in kept_ids
+    ]
+
+    # Step 3: keep only edges whose endpoints survived the node cap.
+    edges_out = [
+        {
+            "source": edge.source,
+            "target": edge.target,
+            "label": edge.label,
+            "fact": (edge.extra or {}).get("fact") if isinstance(edge.extra, dict) else None,
+        }
+        for edge in candidate_edges
+        if edge.source in seen_kept and edge.target in seen_kept
+    ]
     return {"nodes": nodes_out, "edges": edges_out}
 
 
