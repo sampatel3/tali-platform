@@ -2114,13 +2114,21 @@ html[data-theme="dark"] {
   border-color: color-mix(in oklab, #2d8cff 25%, var(--line));
 }
 
+/* Mirrors the bright agent-running hero overlay (.ah-bright-overlay) —
+   same two radial glows + breathing pulse — at ~50% intensity and laid
+   over the card's light base so it reads as a tinted white card rather
+   than a dark slab. */
 .job-card.agent-on {
-  background: color-mix(in oklab, var(--purple) 5%, var(--bg-2));
-  border-color: color-mix(in oklab, var(--purple) 22%, var(--line));
+  background:
+    radial-gradient(ellipse 80% 60% at 75% 0%,  rgba(196,165,253,0.35) 0%, transparent 60%),
+    radial-gradient(ellipse 70% 80% at 10% 100%, rgba(180,80,255,0.27) 0%, transparent 65%),
+    var(--bg-2);
+  border-color: color-mix(in oklab, var(--purple) 30%, var(--line));
+  animation: agentHeaderPulse 6s ease-in-out infinite;
 }
 
 .job-card.agent-on:hover {
-  border-color: color-mix(in oklab, var(--purple) 40%, var(--line));
+  border-color: color-mix(in oklab, var(--purple) 50%, var(--line));
 }
 
 .job-head {
