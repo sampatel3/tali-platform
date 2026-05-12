@@ -69,7 +69,12 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
     for state in COHORT_STATES:
         counts[state] = _count_in_state(db, organization_id=organization_id, role_id=role_id, state=state)
 
-    intent_gaps = _intent_gaps(role)
+    intent_gaps = _intent_gaps(
+        role,
+        recent_answers=_recent_resolved_answers(
+            db, organization_id=organization_id, role_id=role_id
+        ),
+    )
 
     open_questions = (
         db.query(AgentNeedsInput)
@@ -83,6 +88,35 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
         .all()
     )
 
+    # The recruiter's most recent answer to a threshold_ambiguous question
+    # is the effective threshold for this cycle when role.score_threshold
+    # is unset. We surface it via ``effective_score_threshold`` (and the
+    # similar treatment for monthly budget) so the agent can use the
+    # recruiter's number without us having to rewrite their role config
+    # behind their back. role.score_threshold remains a recruiter-owned
+    # setting they can change on the role page.
+    effective_threshold = role.score_threshold
+    effective_budget = role.monthly_usd_budget_cents
+    if effective_threshold is None or effective_budget is None:
+        recent = _recent_resolved_answers(
+            db, organization_id=organization_id, role_id=role_id
+        )
+        if effective_threshold is None:
+            t = recent.get("threshold_ambiguous")
+            if t is not None:
+                try:
+                    effective_threshold = max(0, min(100, int(float(str(t)))))
+                except (TypeError, ValueError):
+                    pass
+        if effective_budget is None:
+            b = recent.get("monthly_budget_missing")
+            if b is not None:
+                try:
+                    n = float(str(b).strip().lstrip("$").replace(",", ""))
+                    effective_budget = int(n * 100) if n <= 1000 else int(n)
+                except (TypeError, ValueError):
+                    pass
+
     return {
         "role_id": int(role.id),
         "role_name": role.name,
@@ -92,6 +126,11 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
         "auto_promote": bool(getattr(role, "auto_promote", False)),
         "monthly_usd_budget_cents": role.monthly_usd_budget_cents,
         "score_threshold": role.score_threshold,
+        # Effective values fold in the recruiter's latest answer when the
+        # role config column is null. The agent should triage against
+        # these, not the raw column.
+        "effective_score_threshold": effective_threshold,
+        "effective_monthly_budget_cents": effective_budget,
         "counts": counts,
         "intent_gaps": intent_gaps,
         "open_recruiter_questions": [
@@ -106,7 +145,43 @@ def survey_role_state(db: Session, *, organization_id: int, role_id: int) -> dic
     }
 
 
-def _intent_gaps(role: Role) -> list[str]:
+def _recent_resolved_answers(
+    db: Session, *, organization_id: int, role_id: int
+) -> dict[str, Any]:
+    """Latest resolved answer value per config-gap kind for this role.
+
+    Returns ``{kind: value}`` for the most-recently-resolved
+    AgentNeedsInput row of each canonical kind. Lets the survey expose
+    "effective" config that folds in a recruiter answer when the role
+    column itself is still null.
+    """
+    rows = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.organization_id == organization_id,
+            AgentNeedsInput.role_id == role_id,
+            AgentNeedsInput.resolved_at.isnot(None),
+            AgentNeedsInput.kind.in_(("threshold_ambiguous", "monthly_budget_missing")),
+        )
+        .order_by(AgentNeedsInput.resolved_at.desc())
+        .all()
+    )
+    out: dict[str, Any] = {}
+    for r in rows:
+        if r.kind in out:
+            continue
+        if not isinstance(r.response, dict):
+            continue
+        v = r.response.get("value")
+        if v is None:
+            continue
+        out[r.kind] = v
+    return out
+
+
+def _intent_gaps(
+    role: Role, *, recent_answers: dict[str, Any] | None = None
+) -> list[str]:
     """Return human-readable list of role-config gaps the agent should
     ask the recruiter about before running cycles in earnest.
 
@@ -115,13 +190,19 @@ def _intent_gaps(role: Role) -> list[str]:
     ``Role.additional_requirements``. "no must-have requirements" means
     the role has zero non-derived criteria in the must bucket — the
     agent can't apply hard requirements without them.
+
+    A gap is considered closed if the recruiter has answered the
+    corresponding question, even when the role column itself is still
+    null — the answer is the working value for this cycle. Without this
+    the agent re-asks the same question forever.
     """
     from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 
+    answers = recent_answers or {}
     gaps: list[str] = []
-    if role.monthly_usd_budget_cents is None or role.monthly_usd_budget_cents <= 0:
+    if (role.monthly_usd_budget_cents is None or role.monthly_usd_budget_cents <= 0) and "monthly_budget_missing" not in answers:
         gaps.append("monthly_usd_budget_cents is unset")
-    if role.score_threshold is None:
+    if role.score_threshold is None and "threshold_ambiguous" not in answers:
         gaps.append("score_threshold is unset")
     if not (role.job_spec_text or "").strip() and not (role.description or "").strip():
         gaps.append("no job spec attached")
