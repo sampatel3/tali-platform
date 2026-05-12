@@ -238,62 +238,8 @@ def answer(
     row.resolved_at = datetime.now(timezone.utc)
     row.response = response
     row.resolved_by_user_id = actor.user_id
-    # Apply the answer to the role's config for the standard config-gap
-    # kinds. Without this the answer just sits as a record and the next
-    # agent cycle has to read it via read_pending_recruiter_inputs and
-    # decide what to do with it — meanwhile the recruiter sees their
-    # answer "vanish" because role.score_threshold etc. are still null
-    # and the UI keeps falling back to the auto-suggested value.
-    _apply_resolved_answer_to_role_config(db, row=row, response=response)
     db.flush()
     return row
-
-
-def _apply_resolved_answer_to_role_config(
-    db: Session, *, row: AgentNeedsInput, response: dict[str, Any]
-) -> None:
-    """Persist the recruiter's answer to the role row for known kinds.
-
-    Only the config-gap kinds map cleanly to a single role column. Other
-    kinds (candidate_tie_break, other) stay as advisory records — the
-    agent reads them next cycle and acts.
-    """
-    raw_value = response.get("value") if isinstance(response, dict) else None
-    if raw_value is None or (isinstance(raw_value, str) and not raw_value.strip()):
-        return
-    role = (
-        db.query(Role)
-        .filter(
-            Role.id == row.role_id,
-            Role.organization_id == row.organization_id,
-        )
-        .one_or_none()
-    )
-    if role is None:
-        return
-    if row.kind == "threshold_ambiguous":
-        try:
-            n = int(float(str(raw_value)))
-        except (TypeError, ValueError):
-            return
-        # Clamp to a sane band — same floor/ceiling auto_threshold_service uses.
-        role.score_threshold = max(0, min(100, n))
-        db.add(role)
-    elif row.kind == "monthly_budget_missing":
-        # Recruiter can answer in dollars ("$50", "50") or cents ("5000").
-        # Treat ≤ 1000 as dollars (typical monthly caps are $10–$1000), else cents.
-        try:
-            n = float(str(raw_value).strip().lstrip("$").replace(",", ""))
-        except (TypeError, ValueError):
-            return
-        cents = int(n * 100) if n <= 1000 else int(n)
-        if cents > 0:
-            role.monthly_usd_budget_cents = cents
-            db.add(role)
-    # intent_slot_missing arrives as free text. Persisting it would require
-    # parsing structured must-haves out of prose — defer to the agent's
-    # next-cycle read via read_pending_recruiter_inputs. The answer is
-    # still stored on the row for that lookup.
 
 
 @dataclass(frozen=True)
