@@ -1501,11 +1501,17 @@ def _tool_ask_recruiter(
 
 
 # Decision tools that count against role.agent_decision_budget_per_cycle.
+# send_assessment / resend_assessment_invite are HITL gates that now flow
+# through the same decisions queue as advance/reject (see PR #176) — they
+# must count here too, otherwise the per-cycle decision budget doesn't
+# bind them and ``decisions_emitted`` on the agent_run row under-reports.
 QUEUE_DECISION_TOOL_NAMES: frozenset[str] = frozenset(
     {
         "queue_advance_decision",
         "queue_reject_decision",
         "queue_skip_assessment_reject_decision",
+        "send_assessment",
+        "resend_assessment_invite",
     }
 )
 
