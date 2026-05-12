@@ -165,6 +165,75 @@ def test_subgraph_assembles_with_person_id_format():
     assert payload.edges[0].source == "person:42"
 
 
+def test_subgraph_dedupes_edges_seen_via_multiple_episodes():
+    # Same (s, t, fact) reachable from a profile episode AND an interview
+    # episode would otherwise produce duplicate GraphEdge entries.
+    record = {
+        "s_uuid": "p-uuid-aaa",
+        "s_name": "Alice",
+        "s_props": {"taali_id": 42},
+        "t_uuid": "c-uuid-acme",
+        "t_name": "Acme Corp",
+        "t_props": {"kind": "Company"},
+        "e_uuid": "edge-uuid-1",
+        "e_name": None,
+        "e_fact": "Alice worked at Acme Corp",
+        "e_valid_at": None,
+        "e_invalid_at": None,
+    }
+    fake_result = SimpleNamespace(records=[record, record, record])
+    fake_graphiti = SimpleNamespace(
+        search=lambda **kw: None,
+        driver=SimpleNamespace(execute_query=lambda *a, **kw: None),
+    )
+    with patch.object(graph_search.graph_client, "is_configured", return_value=True), \
+         patch.object(graph_search.graph_client, "run_async", return_value=fake_result), \
+         patch.object(graph_search.graph_client, "get_graphiti", return_value=fake_graphiti):
+        payload = graph_search.subgraph_for_candidates(
+            organization_id=1, candidate_ids=[42]
+        )
+    assert len(payload.edges) == 1
+
+
+def test_episode_prefixes_includes_interview_and_event_when_db_present():
+    # When a Session is supplied we expand the prefix list with one entry
+    # per interview and per pipeline event for the candidate.
+    class FakeQuery:
+        def __init__(self, rows):
+            self._rows = rows
+        def join(self, *a, **kw):
+            return self
+        def filter(self, *a, **kw):
+            return self
+        def all(self):
+            return self._rows
+
+    class FakeSession:
+        def __init__(self):
+            self._calls = 0
+        def query(self, col):
+            self._calls += 1
+            # First call: interviews, second: events
+            if self._calls == 1:
+                return FakeQuery([(101,), (102,)])
+            return FakeQuery([(201,), (202,), (203,)])
+
+    prefixes = graph_search._episode_prefixes_for_candidates(
+        FakeSession(), [42]
+    )
+    assert "candidate-42-" in prefixes
+    assert "interview-101-" in prefixes
+    assert "interview-102-" in prefixes
+    assert "event-201" in prefixes
+    assert "event-202" in prefixes
+    assert "event-203" in prefixes
+
+
+def test_episode_prefixes_falls_back_to_candidate_only_without_db():
+    prefixes = graph_search._episode_prefixes_for_candidates(None, [7, 8])
+    assert prefixes == ["candidate-7-", "candidate-8-"]
+
+
 def test_colleague_neighbourhood_groups_by_company():
     facts = [
         _fact(
