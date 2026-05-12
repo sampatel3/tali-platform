@@ -1,7 +1,6 @@
 /* eslint-disable react/prop-types */
 import { useMemo, useState } from 'react';
 
-import { SingleSelect } from './TaaliPrimitives';
 import './CriteriaEditor.css';
 
 const BUCKETS = [
@@ -9,18 +8,6 @@ const BUCKETS = [
   { key: 'preferred', label: 'Preferred', columnLabel: 'Preferred' },
   { key: 'constraint', label: 'Constraint', columnLabel: 'Constraint' },
 ];
-
-const BUCKET_OPTIONS = BUCKETS.map((b) => ({ value: b.key, label: b.label }));
-
-const renderBucketOption = (option) => (
-  <span className="ce-bucket-option">
-    <span
-      className={`ce-bucket-option-swatch ce-bucket-option-swatch--${option.value}`}
-      aria-hidden
-    />
-    {option.label}
-  </span>
-);
 
 const isActive = (chip) => !chip.deleted_at;
 
@@ -37,17 +24,25 @@ const Composer = ({ onAdd, disabled }) => {
 
   return (
     <div className="ce-composer">
-      <SingleSelect
-        className="ce-composer-bucket"
-        triggerClassName="ce-composer-bucket-trigger"
-        options={BUCKET_OPTIONS}
-        value={bucket}
-        onChange={setBucket}
-        disabled={disabled}
-        ariaLabel="Bucket"
-        renderValue={renderBucketOption}
-        renderOption={renderBucketOption}
-      />
+      <div className="ce-composer-bucket-segment" role="radiogroup" aria-label="Bucket">
+        {BUCKETS.map((b) => {
+          const active = bucket === b.key;
+          return (
+            <button
+              key={b.key}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              className={`ce-bucket-pill ce-bucket-pill--${b.key}${active ? ' is-active' : ''}`}
+              onClick={() => setBucket(b.key)}
+              disabled={disabled}
+            >
+              <span className={`ce-bucket-option-swatch ce-bucket-option-swatch--${b.key}`} aria-hidden />
+              {b.label}
+            </button>
+          );
+        })}
+      </div>
       <input
         type="text"
         className="ce-composer-input"
