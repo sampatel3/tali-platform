@@ -234,6 +234,13 @@ class ApplicationResponse(BaseModel):
     candidate_email: str
     candidate_name: Optional[str] = None
     candidate_position: Optional[str] = None
+    # The role this application is for. Populated from the joined Role
+    # row so the global search dropdown can show "Senior API Developer"
+    # next to the candidate's name (without it the UI fell back to
+    # candidate_position, which is the candidate's *current* job — same
+    # for every application a candidate makes, leaving duplicate rows
+    # visually indistinguishable).
+    role_name: Optional[str] = None
     cv_filename: Optional[str] = None
     cv_uploaded_at: Optional[datetime] = None
     cv_match_score: Optional[float] = None
