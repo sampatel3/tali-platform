@@ -1,4 +1,17 @@
-"""``rubric_revisions`` — immutable history of rubric weight + threshold changes.
+"""``rubric_revisions`` — versioning for the rule-driven retuner (DEPRECATED).
+
+DEPRECATED for new versions (May 2026 single-version cleanup): per §6 of
+``recruitment_system_architecture.md`` the canonical policy-versioning
+surface is ``policy_versions`` (fitted models promoted via the Phase 5
+gate). This table remains active for the heuristic-retuner legacy
+path (also deprecated). Existing rows stay queryable as audit history.
+
+Sunset target: same as ``HeuristicRetuner`` — when the fitted policy
+has been live for ≥60 days and no new revisions are being written.
+
+----------------------------------------------
+
+Original docstring:
 
 Every retune the agent applies (whether triggered by a feedback batch or a
 manual admin edit) writes one row here. Each row links back to the
@@ -8,8 +21,7 @@ Hub's SIGNAL section can show the cause-and-effect chain:
     decision_feedback (n rows) → rubric_revision (1 row) → next agent decisions
 
 Old decisions are *not* re-scored — historical decisions stay tied to the
-revision they were scored under, which is what makes the audit trail
-meaningful.
+revision they were scored under.
 """
 
 from __future__ import annotations

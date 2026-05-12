@@ -105,7 +105,7 @@ def test_registry_dependencies_are_all_known():
 
 def test_registry_has_no_dependency_cycles():
     # Topological sort would also detect this; this iterative version
-    # is enough at 13 nodes.
+    # is sufficient at the canonical-4 capability size.
     def walk(name, visiting):
         if name in visiting:
             return False
@@ -137,9 +137,10 @@ _PACKAGE_DIR = Path(cap_registry.__file__).parent
 
 
 def test_every_capability_has_a_scaffold_folder():
-    # The 13 capabilities each have a folder under app/capabilities/.
-    # The folder contains agent.py + README.md, and the __init__.py
-    # imports something callable named per spec.
+    # Per §12 of recruitment_system_architecture.md the canonical
+    # capability set is exactly 4: portfolio_agent, capability_auditor,
+    # bias_monitor_continuous, causal_mode. Each has a folder under
+    # app/capabilities/ with agent.py + README.md.
     for name in ALL_CAPABILITIES:
         folder = _PACKAGE_DIR / name
         assert folder.is_dir(), f"missing folder {folder}"
@@ -339,39 +340,45 @@ def test_percentage_full_enables_everyone(db):
 
 
 def test_dependency_blocks_when_dep_not_active(db):
+    """The canonical 4 capabilities have no inter-deps, but the flag
+    client's requires-walking mechanism is general — exercise it with
+    a synthetic edge between two canonical capabilities so the test
+    still covers the contract.
+    """
     org = _seed_org(db, "dep")
-    # ``bidirectional_subagents`` requires ``reasoning_orchestrator``.
-    # Only enable the parent — dep is unset → off.
+    # Synthetic edge: capability_auditor requires causal_mode. Only
+    # enable the parent — dep is unset → off.
     _make_flag(
-        db, capability="bidirectional_subagents", organization_id=org.id, enabled=True,
-        requires=["reasoning_orchestrator"],
+        db, capability="capability_auditor", organization_id=org.id, enabled=True,
+        requires=["causal_mode"],
     )
     db.commit()
     client = CapabilityFlags()
     assert client.is_active(
-        "bidirectional_subagents",
+        "capability_auditor",
         db=db, organization_id=org.id, decision_id="x:1:y",
     ) is False
 
 
 def test_dependency_satisfied_when_dep_active(db):
     org = _seed_org(db, "depsat")
-    # reasoning_orchestrator itself requires drift_monitor — set both.
+    # Two-hop synthetic dep chain: capability_auditor → causal_mode →
+    # portfolio_agent. All three enabled; the walk completes.
     _make_flag(
-        db, capability="drift_monitor", organization_id=org.id, enabled=True,
+        db, capability="portfolio_agent", organization_id=org.id, enabled=True,
     )
     _make_flag(
-        db, capability="reasoning_orchestrator", organization_id=org.id, enabled=True,
-        requires=["drift_monitor"],
+        db, capability="causal_mode", organization_id=org.id, enabled=True,
+        requires=["portfolio_agent"],
     )
     _make_flag(
-        db, capability="bidirectional_subagents", organization_id=org.id, enabled=True,
-        requires=["reasoning_orchestrator"],
+        db, capability="capability_auditor", organization_id=org.id, enabled=True,
+        requires=["causal_mode"],
     )
     db.commit()
     client = CapabilityFlags()
     assert client.is_active(
-        "bidirectional_subagents",
+        "capability_auditor",
         db=db, organization_id=org.id, decision_id="x:1:y",
     ) is True
 
@@ -384,7 +391,7 @@ def test_dependency_satisfied_when_dep_active(db):
 def test_snapshot_returns_dict_with_every_listed_capability(db):
     org = _seed_org(db, "snap")
     _make_flag(
-        db, capability="drift_monitor", organization_id=org.id, enabled=True,
+        db, capability="capability_auditor", organization_id=org.id, enabled=True,
     )
     db.commit()
     client = CapabilityFlags()
@@ -393,7 +400,7 @@ def test_snapshot_returns_dict_with_every_listed_capability(db):
         db=db, organization_id=org.id, decision_id="x:1:y",
     )
     assert set(snap.keys()) == set(ALL_CAPABILITIES)
-    assert snap["drift_monitor"] is True
+    assert snap["capability_auditor"] is True
     # Everything else should be off.
     assert snap["portfolio_agent"] is False
 
@@ -454,7 +461,7 @@ def test_queue_decision_persists_snapshot_with_no_flags(db):
 def test_queue_decision_snapshot_reflects_active_flag(db):
     s = _seed_queue_context(db)
     _make_flag(
-        db, capability="drift_monitor", organization_id=s.org.id, enabled=True,
+        db, capability="capability_auditor", organization_id=s.org.id, enabled=True,
     )
     db.commit()
     # Force the shared client to re-read.
@@ -474,5 +481,5 @@ def test_queue_decision_snapshot_reflects_active_flag(db):
     )
     db.commit()
     db.refresh(decision)
-    assert decision.active_capabilities["drift_monitor"] is True
+    assert decision.active_capabilities["capability_auditor"] is True
     assert decision.active_capabilities["portfolio_agent"] is False

@@ -1,4 +1,31 @@
-"""Intent-parser sub-agent — single tight Claude call.
+"""Intent-parser — Workable-note slot extractor (DEPRECATED as a sub-agent).
+
+DEPRECATION (single-version cleanup, May 2026)
+----------------------------------------------
+Per §2 of ``recruitment_system_architecture.md`` the canonical
+sub-agent set is exactly five: pre_screen, cv_scoring, graph_priors,
+task_selection, assessment_scoring. ``intent_parser`` is no longer
+one of them and is **no longer auto-registered** in
+``app.sub_agents.__init__``.
+
+Why this module still exists:
+  - The ``IntentDirectives`` Pydantic shape and the slot-extraction
+    helper are consumed by ``decision_policy.intent.apply_intent_overrides``,
+    which the rule engine still calls.
+  - The Workable-note → directives translation is a useful internal
+    helper that nothing on the new spec replaces.
+
+Recruiter intent — the canonical surface — is captured manually as
+``RoleIntent`` (Amendment A1) and read by every sub-agent at score
+time via ``app.agent_runtime.role_intent.fetch_active_intent``.
+
+Sunset target: when no caller depends on ``parsed_intent`` and the
+engine's strictness-threshold overlay either moves into ``RoleIntent``
+fields or is retired, this module can be deleted.
+
+----------------------------------------------
+
+Original docstring follows.
 
 Recruiter intent is supplied (per spec) as four already-categorised
 free-text slots:
