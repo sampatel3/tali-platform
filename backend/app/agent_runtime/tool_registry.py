@@ -291,7 +291,7 @@ AGENT_TOOLS: list[dict[str, Any]] = [
                 },
                 "pipeline_stage": {
                     "type": "string",
-                    "enum": ["applied", "invited", "in_assessment", "review", "technical_interview"],
+                    "enum": ["applied", "invited", "in_assessment", "review", "advanced"],
                 },
                 "application_outcome": {
                     "type": "string",
@@ -1183,7 +1183,7 @@ def _auto_execute_decision(
             actor,
             organization_id=int(role.organization_id),
             application_id=int(decision.application_id),
-            to_stage="technical_interview",
+            to_stage="advanced",
             reason=reason,
             idempotency_key=f"approve_decision:{decision.id}",
             metadata=metadata,

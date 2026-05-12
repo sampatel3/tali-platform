@@ -83,7 +83,7 @@ const STAGE_OPTIONS = [
   { value: 'invited', label: 'Invited' },
   { value: 'in_assessment', label: 'In assessment' },
   { value: 'review', label: 'Review' },
-  { value: 'technical_interview', label: 'Technical interview' },
+  { value: 'advanced', label: 'Advanced' },
 ];
 const OUTCOME_OPTIONS = [
   { value: 'open', label: 'Open' },

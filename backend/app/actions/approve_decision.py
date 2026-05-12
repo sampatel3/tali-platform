@@ -64,7 +64,7 @@ def run(
             actor,
             organization_id=organization_id,
             application_id=int(decision.application_id),
-            to_stage="technical_interview",
+            to_stage="advanced",
             reason=reason,
             idempotency_key=f"approve_decision:{decision.id}",
             metadata=metadata,

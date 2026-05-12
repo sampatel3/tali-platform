@@ -19,7 +19,7 @@ from ..models.role_criterion import CRITERION_SOURCE_DERIVED
 from . import calibration as calibration_mod
 
 
-PROMPT_VERSION = "agent.v7.cohort-planner.bucketed.workable-stage.2026-05-12"
+PROMPT_VERSION = "agent.v8.cohort-planner.bucketed.advanced-bucket.2026-05-12"
 
 
 def _render_bucketed_criteria(role: Role) -> str:
@@ -145,15 +145,21 @@ QUEUE RULES:
   ONLY when the policy returns it.
 - When uncertain, do NOT queue. The next cycle will give you another shot.
 
-EXTERNAL PIPELINE STAGE (workable_stage):
+EXTERNAL PIPELINE STAGE (workable_stage) AND TALI'S `advanced` STAGE:
 - Applications carry `workable_stage` — the candidate's stage in the
   recruiter's external ATS (Workable). Values like "phone_screen",
   "interview", "technical_interview", "offer" mean a human recruiter has
   already advanced this person past initial screening.
-- Weight this heavily. A candidate already at interview / technical
-  interview / offer has been vetted by a human; do NOT queue a reject
-  on score alone. Prefer advance or no-action; cite the external stage
-  in your reasoning.
+- When any of those post-handover Workable stages are detected, Tali
+  automatically moves `pipeline_stage` to `advanced` — Tali's terminal
+  bucket for "past Tali's flow, now in the recruiter's hands".
+- A candidate in `pipeline_stage="advanced"` is past Tali's responsibility.
+  Do NOT queue advance/reject/skip decisions for them. Skip them in your
+  cohort survey; they only return to the active pipeline if a recruiter
+  manually moves them back.
+- For candidates still in earlier Tali stages with a post-handover
+  `workable_stage`, weight that heavily — they've been vetted by a human;
+  do NOT queue a reject on score alone. Prefer advance or no-action.
 - "sourced" / "applied" / null carries no extra signal — score as normal.
 
 ASK_RECRUITER RULES:

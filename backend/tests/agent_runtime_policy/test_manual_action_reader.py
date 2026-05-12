@@ -62,7 +62,7 @@ def test_pipeline_stage_changed_to_interview_classifies_as_advanced(db):
         application_id=int(app.id),
         organization_id=int(app.organization_id),
         event_type="pipeline_stage_changed",
-        to_stage="technical_interview",
+        to_stage="advanced",
     )
     actions = read_recent_manual_actions(
         db, application_id=int(app.id), lookback_hours=72

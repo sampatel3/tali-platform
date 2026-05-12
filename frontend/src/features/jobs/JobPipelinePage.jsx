@@ -46,6 +46,7 @@ const PIPELINE_STAGE_ORDER = [
   { key: 'invited', label: 'Invited', countLabel: 'awaiting' },
   { key: 'in_assessment', label: 'In assessment', countLabel: 'live' },
   { key: 'review', label: 'Review', countLabel: 'decision' },
+  { key: 'advanced', label: 'Advanced', countLabel: 'with recruiter' },
 ];
 
 const normalizeThreshold = (value) => {
@@ -2318,10 +2319,9 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
                     return { key: stage.key, label: stage.label, count: items.length };
                   }),
                   // Rejected is an *outcome* not a *stage*; it lives at
-                  // the right of the strip so the active-pipeline tabs
-                  // (All / Applied / Invited / In assessment / Review)
-                  // read left-to-right as a recruiter would walk the
-                  // funnel.
+                  // the right so the active-pipeline tabs (All / Applied /
+                  // Invited / In assessment / Review / Advanced) read
+                  // left-to-right as a recruiter would walk the funnel.
                   { key: 'rejected', label: 'Rejected', count: rejectedApplications.length },
                 ].map((seg) => (
                   <button
