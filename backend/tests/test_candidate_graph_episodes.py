@@ -151,34 +151,107 @@ def test_interview_with_no_text_or_summary_yields_no_episodes():
     assert episode_module.build_interview_episodes(interview) == []
 
 
+def _event(**overrides):
+    """Build a SimpleNamespace shaped like the real CandidateApplicationEvent
+    SQLAlchemy model: from_stage / to_stage / from_outcome / to_outcome /
+    reason are the load-bearing fields. Tests must use these names — using
+    `notes`, `from_value`, etc. silently mocks past the production bug
+    that this fixture is here to prevent."""
+    cand = _candidate()
+    application = SimpleNamespace(candidate=cand, organization_id=1)
+    base = dict(
+        id=1,
+        application=application,
+        event_type="pipeline_stage_changed",
+        from_stage=None,
+        to_stage=None,
+        from_outcome=None,
+        to_outcome=None,
+        reason=None,
+        created_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+    )
+    base.update(overrides)
+    return SimpleNamespace(**base)
+
+
 def test_event_episode_drops_pure_state_transitions():
-    cand = _candidate()
-    application = SimpleNamespace(candidate=cand, organization_id=1)
-    event = SimpleNamespace(
-        id=1,
-        application=application,
-        event_type="stage_changed",
-        from_value=None,
-        to_value=None,
-        notes=None,
-        comment=None,
-        created_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
-    )
-    assert episode_module.build_event_episode(event) is None
+    # No stage / outcome change, no reason → not worth an LLM call.
+    assert episode_module.build_event_episode(_event()) is None
 
 
-def test_event_episode_keeps_notes_when_present():
-    cand = _candidate()
-    application = SimpleNamespace(candidate=cand, organization_id=1)
-    event = SimpleNamespace(
-        id=1,
-        application=application,
-        event_type="rejected",
-        from_value="review",
-        to_value="rejected",
-        notes="Comp expectations did not align.",
-        created_at=datetime(2024, 5, 1, tzinfo=timezone.utc),
+def test_event_episode_keeps_reason_when_present():
+    ep = episode_module.build_event_episode(
+        _event(
+            event_type="application_outcome_changed",
+            from_outcome="open",
+            to_outcome="rejected",
+            reason="Comp expectations did not align.",
+        )
     )
-    ep = episode_module.build_event_episode(event)
     assert ep is not None
     assert "Comp expectations did not align." in ep.body
+    # Outcome transition rendered semantically so the LLM can extract it.
+    assert "open" in ep.body and "rejected" in ep.body
+
+
+def test_event_episode_renders_workable_stage_advance():
+    # The 646 real Workable advance events in production look like this:
+    # event_type='pipeline_stage_changed', from_stage='applied',
+    # to_stage='advanced', reason='Recruiter advance'.
+    ep = episode_module.build_event_episode(
+        _event(
+            event_type="pipeline_stage_changed",
+            from_stage="applied",
+            to_stage="advanced",
+            reason="Recruiter advance",
+        )
+    )
+    assert ep is not None
+    assert "applied" in ep.body and "advanced" in ep.body
+    assert "Recruiter advance" in ep.body
+
+
+def test_event_episode_renders_hired_outcome():
+    # Forward-looking: hired/offered events should land in Graphiti as
+    # outcome-change facts the LLM can extract.
+    ep = episode_module.build_event_episode(
+        _event(
+            event_type="application_outcome_changed",
+            from_outcome="offered",
+            to_outcome="hired",
+            reason="Candidate accepted offer",
+        )
+    )
+    assert ep is not None
+    assert "hired" in ep.body
+    assert "Candidate accepted offer" in ep.body
+
+
+def test_event_episode_skips_noise_event_types():
+    # pipeline_initialized + cv_scored together account for ~99% of events
+    # in production. Both carry no facts beyond what's already in Postgres,
+    # so we skip them rather than burn LLM calls on them.
+    for noisy in ("pipeline_initialized", "cv_scored"):
+        ep = episode_module.build_event_episode(
+            _event(event_type=noisy, reason="CV scored: scored (46%)")
+        )
+        assert ep is None, f"expected {noisy} to be skipped"
+
+
+def test_event_episode_suppresses_no_op_stage_transition():
+    # Outcome-only events often have from_stage == to_stage (e.g. an
+    # 'applied → applied' stage with outcome going open → rejected).
+    # Don't render the redundant stage line in that case.
+    ep = episode_module.build_event_episode(
+        _event(
+            event_type="application_outcome_changed",
+            from_stage="applied",
+            to_stage="applied",
+            from_outcome="open",
+            to_outcome="rejected",
+            reason="Recruiter reject",
+        )
+    )
+    assert ep is not None
+    assert "Pipeline stage:" not in ep.body
+    assert "Application outcome:" in ep.body

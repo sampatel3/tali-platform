@@ -256,13 +256,29 @@ def build_interview_episodes(interview: ApplicationInterview) -> list[Episode]:
     return out
 
 
-def build_event_episode(event: CandidateApplicationEvent) -> Episode | None:
-    """Pipeline-stage transitions and recruiter notes as a single episode.
+# System-bookkeeping event types that carry no qualitative facts beyond
+# what's already on the candidate / application record. Skipping these
+# keeps the per-org episode count (and Graphiti LLM bill) sane — they
+# represent ~99% of candidate_application_events in production.
+#   - pipeline_initialized: just "this row exists" (implied by the Person)
+#   - cv_scored: the score itself lives on candidate_applications; the
+#     reason field is templated ("CV scored: scored (46%)") with no facts
+#     for the LLM to extract.
+_NOISE_EVENT_TYPES = {"pipeline_initialized", "cv_scored"}
 
-    Lower-priority source: most events are pure state transitions with
-    no extractable facts. We ingest them anyway so queries like "rejected
-    due to comp mismatch" can pick up note text.
+
+def build_event_episode(event: CandidateApplicationEvent) -> Episode | None:
+    """Workable / pipeline events as a single episode.
+
+    Captures the recruiter-meaningful signals: stage transitions
+    (advanced, invited, hired), outcome changes (offered, hired,
+    rejected), Workable disqualifications, and any free-text reason
+    the recruiter or system wrote. Skips system-bookkeeping types
+    (``pipeline_initialized``, ``cv_scored``) because they have no
+    extractable facts.
     """
+    if event.event_type in _NOISE_EVENT_TYPES:
+        return None
     if not event.application:
         return None
     candidate = event.application.candidate
@@ -271,20 +287,31 @@ def build_event_episode(event: CandidateApplicationEvent) -> Episode | None:
     org = int(event.application.organization_id or 0)
     if org <= 0:
         return None
-    note = (getattr(event, "notes", None) or getattr(event, "comment", None) or "").strip()
+
+    note = (getattr(event, "reason", None) or "").strip()
     body_lines = [
         _candidate_subject_header(candidate),
         f"Pipeline event: {event.event_type}",
     ]
-    if hasattr(event, "from_value") and event.from_value:
-        body_lines.append(f"From: {event.from_value}")
-    if hasattr(event, "to_value") and event.to_value:
-        body_lines.append(f"To: {event.to_value}")
+    from_stage = getattr(event, "from_stage", None) or None
+    to_stage = getattr(event, "to_stage", None) or None
+    if (from_stage or to_stage) and from_stage != to_stage:
+        body_lines.append(
+            f"Pipeline stage: {from_stage or '(none)'} → {to_stage or '(none)'}"
+        )
+    from_outcome = getattr(event, "from_outcome", None) or None
+    to_outcome = getattr(event, "to_outcome", None) or None
+    if (from_outcome or to_outcome) and from_outcome != to_outcome:
+        body_lines.append(
+            f"Application outcome: {from_outcome or '(none)'} → {to_outcome or '(none)'}"
+        )
     if note:
         body_lines.append("")
         body_lines.append(f"Note: {note[:1500]}")
+
+    # Skip if we ended up with just the header + event_type line and no
+    # note — pure no-op (e.g. "applied → applied" with no commentary).
     if len(body_lines) <= 2 and not note:
-        # Pure stage transition with no commentary — not worth an LLM call.
         return None
     return Episode(
         name=f"event-{event.id}",
