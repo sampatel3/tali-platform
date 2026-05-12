@@ -1,10 +1,14 @@
-// Inline panel on the role page showing the orchestrator's open
-// questions for this role. Recruiters answer inline; the next agent
-// cycle picks the response up and unblocks itself.
+// Inline panel showing the orchestrator's open questions. Recruiters
+// answer inline; the next agent cycle picks the response up and
+// unblocks itself.
 //
 // Data flows through /api/v1/agent-needs-input (listing + answer +
 // dismiss). The card hides itself entirely when there are no open
-// rows, so a healthy role doesn't show an empty container.
+// rows, so a healthy queue doesn't show an empty container.
+//
+// `roleId` is optional: when set, the card scopes to one role (used by
+// the role-page deeplink); when unset, it shows every open question
+// across the org (the default on Home).
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { CheckCircle2, MessageSquareWarning, X } from 'lucide-react';
@@ -13,10 +17,11 @@ import api from '../../shared/api/httpClient';
 
 const STATUS_OPEN = 'open';
 
-const fetchOpen = (roleId) =>
-  api
-    .get('/agent-needs-input', { params: { role_id: roleId, status: STATUS_OPEN } })
-    .then((r) => r.data || []);
+const fetchOpen = (roleId) => {
+  const params = { status: STATUS_OPEN };
+  if (roleId != null) params.role_id = roleId;
+  return api.get('/agent-needs-input', { params }).then((r) => r.data || []);
+};
 
 export default function AgentNeedsInputCard({ roleId }) {
   const [rows, setRows] = useState([]);
@@ -25,7 +30,6 @@ export default function AgentNeedsInputCard({ roleId }) {
   const [busyId, setBusyId] = useState(null);
 
   const reload = useCallback(() => {
-    if (!roleId) return;
     setLoading(true);
     fetchOpen(roleId)
       .then((data) => {
