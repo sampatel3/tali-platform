@@ -230,6 +230,8 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
   // counts so the strip never shows blanks on first paint.
   const kpis = orgStatus || {
     pending: pendingOrdered.length,
+    pending_decisions: pendingOrdered.length,
+    pending_questions: 0,
     today: decisions.filter((d) => {
       const dt = d.created_at ? new Date(d.created_at) : null;
       if (!dt) return false;
@@ -287,7 +289,7 @@ export const HomePage = ({ onNavigate, NavComponent }) => {
             <div className="l">Decisions today</div>
             <div className="v">{kpis.today}</div>
             <div className="d">
-              {kpis.auto_applied_today} auto-applied · {kpis.pending} pending
+              {kpis.auto_applied_today} auto-applied · {kpis.pending_decisions ?? kpis.pending} pending
             </div>
           </div>
           <div className="rq-kpi">
