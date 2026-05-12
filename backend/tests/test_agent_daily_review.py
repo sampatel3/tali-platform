@@ -273,3 +273,60 @@ def test_initial_user_message_does_not_use_proactive_sweep_for_event_trigger():
 
     msg = _initial_user_message(trigger="event", application_id=None)
     assert "Proactive sweep" not in msg
+
+
+# ---------------------------------------------------------------------------
+# Watchdog: agent_expire_stuck_runs marks long-running runs as failed
+# ---------------------------------------------------------------------------
+
+
+def test_agent_expire_stuck_runs_marks_long_runs_failed(db):
+    """A run stuck in status='running' past the timeout becomes 'failed'
+    with a watchdog reason. Fresh runs are untouched."""
+    from datetime import datetime, timedelta, timezone
+
+    from app.tasks import agent_tasks
+    from sqlalchemy.orm import sessionmaker
+    from sqlalchemy.pool import StaticPool
+
+    org = _make_org(db)
+    role = _make_role(db, org)
+
+    stuck = AgentRun(
+        organization_id=org.id,
+        role_id=role.id,
+        trigger="cron",
+        status="running",
+        model_version="m",
+        prompt_version="p",
+        started_at=datetime.now(timezone.utc) - timedelta(minutes=30),
+    )
+    fresh = AgentRun(
+        organization_id=org.id,
+        role_id=role.id,
+        trigger="cron",
+        status="running",
+        model_version="m",
+        prompt_version="p",
+        started_at=datetime.now(timezone.utc),
+    )
+    db.add(stuck)
+    db.add(fresh)
+    db.commit()
+
+    TestingSessionLocal = sessionmaker(
+        bind=db.bind, autocommit=False, autoflush=False, expire_on_commit=False
+    )
+    with patch("app.platform.database.SessionLocal", new=TestingSessionLocal):
+        result = agent_tasks.agent_expire_stuck_runs.run()
+
+    assert result["status"] == "ok"
+    assert result["expired_count"] == 1
+    assert result["agent_run_ids"] == [int(stuck.id)]
+    db.refresh(stuck)
+    db.refresh(fresh)
+    assert stuck.status == "failed"
+    assert "watchdog" in (stuck.error or "")
+    assert stuck.finished_at is not None
+    assert fresh.status == "running"  # not touched
+    assert fresh.error is None
