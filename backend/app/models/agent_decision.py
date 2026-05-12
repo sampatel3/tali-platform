@@ -93,6 +93,14 @@ class AgentDecision(Base):
     # ``queue_decision.run`` reading from ``app.capabilities.flags``.
     active_capabilities = Column(JSON, nullable=False, default=dict, server_default="{}")
 
+    # Discipline §8.5: per-decision token roll-up populated by
+    # ``token_spend_aggregator.aggregate`` at queue time. Shape:
+    #   {input_tokens, output_tokens, cache_read_tokens,
+    #    cache_creation_tokens, total_micro_usd, by_agent: {...}}
+    # Empty dict ≡ "no usage events found for this agent_run_id at
+    # queue time" (defensive default, never raises).
+    token_spend = Column(JSON, nullable=False, default=dict, server_default="{}")
+
     idempotency_key = Column(String, nullable=False)
 
     agent_run = relationship("AgentRun", back_populates="decisions")
