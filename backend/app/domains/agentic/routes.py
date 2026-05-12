@@ -163,7 +163,7 @@ def _decision_to_payload(decision: AgentDecision, candidate: Optional[Candidate]
         resolved_by_user_id=decision.resolved_by_user_id,
         resolution_note=decision.resolution_note,
         override_action=decision.override_action,
-        candidate_name=getattr(candidate, "name", None) if candidate else None,
+        candidate_name=getattr(candidate, "full_name", None) if candidate else None,
         candidate_email=getattr(candidate, "email", None) if candidate else None,
     )
 
@@ -581,7 +581,7 @@ def agent_status(
             reason=event.reason,
             actor_type=str(event.actor_type),
             application_id=int(event.application_id),
-            candidate_name=getattr(candidate, "name", None) if candidate else None,
+            candidate_name=getattr(candidate, "full_name", None) if candidate else None,
             created_at=event.created_at,
         )
 
