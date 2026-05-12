@@ -261,7 +261,9 @@ def test_initial_user_message_emits_proactive_sweep_variant_for_cron_trigger():
     assert "survey_role_state" in msg
     assert "batch_score_cv" in msg
     assert "agent_run_complete" in msg
-    assert "ONE queued decision" in msg or "one queued decision" in msg.lower()
+    # Per-cycle decision caps split by risk: 1 send/advance, 5 rejects.
+    assert "≤ 1 send_assessment" in msg or "1 send_assessment" in msg
+    assert "≤ 5 reject" in msg or "5 reject" in msg
 
 
 def test_initial_user_message_does_not_use_proactive_sweep_for_event_trigger():
