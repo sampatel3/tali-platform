@@ -1,0 +1,52 @@
+# Graph writeback blocklist (D5).
+#
+# **REQUIRES COMPLIANCE / LEGAL SIGN-OFF BEFORE WRITEBACK PIPELINE GOES LIVE.**
+# Starting values come from section_10_decisions.md §D5. Jurisdictional
+# additions are likely.
+#
+# Read by: app.graph_writeback.sensitivity.classify_hint()
+#
+# Any hint that targets a node label in this list — or any edge type
+# tagged here — is blocked at validation time (Phase 6). Co-sign cannot
+# override.
+
+# Node labels that touch protected attributes. Hints from/to nodes with
+# these labels are rejected.
+blocked_node_labels:
+  - Gender
+  - Race
+  - AgeBand
+  - Nationality
+  - Disability
+  - Religion
+  - MaritalStatus
+  - SexualOrientation
+  - PregnancyStatus
+  - VeteranStatus
+  # Possible jurisdictional additions (uncomment after legal review):
+  # - Caste
+  # - CitizenshipStatus
+
+# Edge types treated as inherently high-risk (e.g. assertions ABOUT
+# protected status). Blocked regardless of endpoint labels.
+blocked_edge_types:
+  - HAS_PROTECTED_ATTR
+  - HAS_GENDER
+  - HAS_RACE
+  - HAS_RELIGION
+
+# Properties that, if present on any hint's ``properties`` dict, block
+# the write. Catches proxy attempts via property bags.
+blocked_properties:
+  - gender
+  - race
+  - ethnicity
+  - age
+  - age_band
+  - nationality
+  - religion
+  - disability
+  - marital_status
+  - sexual_orientation
+  - pregnancy_status
+  - veteran_status

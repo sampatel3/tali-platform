@@ -1,0 +1,42 @@
+# Data retention windows (D7).
+#
+# **REQUIRES PRIVACY / DPO / LEGAL SIGN-OFF BEFORE PRODUCTION DEPLOYMENT.**
+# Starting values come from section_10_decisions.md §D7.
+#
+# Read by: app.platform.retention.load_retention_policy() (added when
+# the deletion workflow ships).
+
+# Episodic graph nodes (cycle starts, agent score events, recruiter
+# actions): full-fidelity retention then community-subgraph compaction.
+episodic_nodes:
+  retention_days_full: 540  # 18 months
+  retention_action_after: compact_to_community_subgraph
+
+# Semantic entities (Candidate, Role, Skill, Company, Referrer, Recruiter):
+# kept indefinitely unless a subject-deletion request lands.
+semantic_entities:
+  retention_action: keep_indefinite
+
+# HiringOutcome — irreplaceable training data. Never compact.
+hiring_outcomes:
+  retention_action: keep_indefinite
+
+# Sub-agent score events: 18 months full, then drop individual scores
+# but keep aggregate summary statistics (per role).
+agent_score_events:
+  retention_days_full: 540
+  retention_action_after: aggregate_only
+
+# Subject deletion (GDPR / similar). Workflow gates the actual delete.
+subject_deletion:
+  workflow: subject_deletion_request
+  # On verified deletion:
+  hard_delete:
+    - Candidate
+    - Application
+    - HAS_SKILL
+    - WORKED_AT
+  # Outcomes keyed off an anonymised hash of the candidate ID stay
+  # for training. The hash must not be reversible.
+  retain_for_training_anonymised:
+    - HiringOutcome

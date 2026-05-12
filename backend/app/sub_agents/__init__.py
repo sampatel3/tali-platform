@@ -13,11 +13,16 @@ from .base import SubAgent, SubAgentRequest, SubAgentResult
 from .registry import all_sub_agents, get_sub_agent, register_sub_agent
 
 
-# Auto-register the v1 sub-agents on import. Phase 4 adds graph_priors.
+# Auto-register the canonical sub-agents on import. ``graph_priors``
+# went live in the multi-agent upgrade (Phase 2) — it falls back to a
+# legacy heuristic when Graphiti is sparse, so registering it
+# unconditionally is safe.
 from . import assessment_scoring  # noqa: F401, E402
 from . import cv_scoring  # noqa: F401, E402
+from . import graph_priors  # noqa: F401, E402
 from . import intent_parser  # noqa: F401, E402
 from . import pre_screen  # noqa: F401, E402
+from . import task_selection  # noqa: F401, E402
 
 
 __all__ = [

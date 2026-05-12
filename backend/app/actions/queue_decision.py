@@ -22,6 +22,33 @@ from ..models.agent_decision import AGENT_DECISION_TYPES, AgentDecision
 from .types import ACTOR_AGENT, Actor
 
 
+def _capture_active_capabilities(
+    db: Session,
+    *,
+    organization_id: int,
+    decision_id: str,
+    role_id: int | None,
+) -> dict[str, bool]:
+    """Snapshot every registered v10 capability for this decision.
+
+    Captured at the moment the decision is queued — the resulting dict
+    is what the audit query later relies on to reconstruct the runtime
+    state. Failures here NEVER block decision queueing; an empty dict
+    is the safe-degrade ("treat as v1/v2 era").
+    """
+    try:
+        from ..capabilities import ALL_CAPABILITIES, get_shared
+        return get_shared().snapshot(
+            ALL_CAPABILITIES,
+            db=db,
+            organization_id=organization_id,
+            decision_id=decision_id,
+            role_id=role_id,
+        )
+    except Exception:
+        return {}
+
+
 def run(
     db: Session,
     actor: Actor,
@@ -61,6 +88,12 @@ def run(
         )
 
     idempotency_key = f"{actor.agent_run_id}:{application_id}:{decision_type}"
+    active_capabilities = _capture_active_capabilities(
+        db,
+        organization_id=organization_id,
+        decision_id=idempotency_key,
+        role_id=role_id,
+    )
 
     decision = AgentDecision(
         organization_id=organization_id,
@@ -76,6 +109,7 @@ def run(
         model_version=model_version,
         prompt_version=prompt_version,
         idempotency_key=idempotency_key,
+        active_capabilities=active_capabilities,
     )
     db.add(decision)
     try:

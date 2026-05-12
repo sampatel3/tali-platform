@@ -33,6 +33,14 @@ const TYPE_BADGE = {
     color: 'var(--red)',
     Icon: X,
   },
+  // Phase 4 abstention — sub-agents disagreed or were too uncertain.
+  // Distinct purple treatment so it doesn't read as a confident
+  // recommendation; the recruiter must adjudicate from scratch.
+  escalate_low_confidence: {
+    label: 'ESCALATE',
+    color: 'var(--purple)',
+    Icon: CircleHelp,
+  },
   budget: {
     label: 'BUDGET',
     color: 'var(--amber)',

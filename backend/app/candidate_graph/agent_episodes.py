@@ -1,0 +1,289 @@
+"""Episode writers for the multi-agent system events.
+
+Phase 2 (§6.7 of the architecture spec): every cycle / score / decision /
+recruiter action / hiring outcome gets written as a Graphiti episode so
+the graph carries a reconstructable history. This module is the *narrow*
+writeback API for those events — episode bodies follow stable templates
+so Graphiti's extractor consistently produces the typed nodes/edges
+defined in ``candidate_graph.schema``.
+
+Why episodes and not direct Cypher: Graphiti's extractor merges entities
+across episodes by name + group_id. Writing AgentScoreEvent /
+DecisionEvent / HiringOutcome via episodes means the same entity-merge
+machinery that handles candidate-profile ingestion also handles the
+decision history — one fewer code path to maintain.
+
+Failures here are logged and ignored. The Postgres tables (agent_decisions,
+decision_feedback) are the source of truth; the graph is a derived index.
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+from . import client as graph_client
+from . import schema
+from .episodes import Episode, dispatch
+
+
+logger = logging.getLogger("taali.candidate_graph.agent_episodes")
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+# ---------------------------------------------------------------------------
+# Score events — one per (application, sub-agent) per cycle
+# ---------------------------------------------------------------------------
+
+
+def build_agent_score_episode(
+    *,
+    organization_id: int,
+    candidate_full_name: str | None,
+    candidate_taali_id: int,
+    application_id: int,
+    role_id: int,
+    agent_name: str,
+    score: float,
+    uncertainty: float,
+    structured_evidence_summary: str,
+    model_version: str,
+    scored_at: datetime,
+) -> Episode | None:
+    """Compose an episode capturing a single sub-agent score.
+
+    The body uses ``schema.NODE_AGENT_SCORE_EVENT`` and
+    ``schema.EDGE_SCORED_BY`` strings so Graphiti's LLM extractor
+    consistently produces the same labels.
+    """
+    if organization_id <= 0:
+        return None
+    group_id = graph_client.group_id_for_org(organization_id)
+    name = candidate_full_name or f"Candidate {candidate_taali_id}"
+
+    body = "\n".join(
+        [
+            f"Subject candidate: {name} (taali_id={candidate_taali_id})",
+            f"Application taali_id={application_id}, role taali_id={role_id}.",
+            f"{schema.NODE_AGENT_SCORE_EVENT}: sub-agent {agent_name} produced "
+            f"a score of {score:.3f} with uncertainty {uncertainty:.3f} "
+            f"(model version {model_version}).",
+            f"This application is {schema.EDGE_SCORED_BY} the "
+            f"{schema.NODE_AGENT_SCORE_EVENT} above.",
+            "",
+            "Structured evidence summary:",
+            structured_evidence_summary[:1500] if structured_evidence_summary else "(none)",
+        ]
+    )
+    return Episode(
+        name=f"agent-score-app-{application_id}-{agent_name}-{int(scored_at.timestamp())}",
+        body=body,
+        source_description=schema.EPISODE_SOURCE_AGENT_SCORE,
+        reference_time=scored_at,
+        group_id=group_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Decision events — one per AgentDecision
+# ---------------------------------------------------------------------------
+
+
+def build_decision_episode(
+    *,
+    organization_id: int,
+    candidate_full_name: str | None,
+    candidate_taali_id: int,
+    application_id: int,
+    role_id: int,
+    decision_id: int,
+    recommended_action: str,
+    confidence: float,
+    policy_revision_id: int | None,
+    reasoning: str,
+    created_at: datetime,
+) -> Episode | None:
+    if organization_id <= 0:
+        return None
+    group_id = graph_client.group_id_for_org(organization_id)
+    name = candidate_full_name or f"Candidate {candidate_taali_id}"
+    body = "\n".join(
+        [
+            f"Subject candidate: {name} (taali_id={candidate_taali_id})",
+            f"{schema.NODE_DECISION}: decision id D-{decision_id} on application "
+            f"taali_id={application_id} for role taali_id={role_id}.",
+            f"Recommended action: {recommended_action}.",
+            f"Policy revision id: {policy_revision_id}.",
+            f"Confidence: {confidence:.3f}.",
+            (
+                f"All {schema.NODE_AGENT_SCORE_EVENT} entries for application "
+                f"{application_id} {schema.EDGE_FED_INTO} this "
+                f"{schema.NODE_DECISION}."
+            ),
+            "",
+            "Reasoning:",
+            (reasoning or "")[:1500],
+        ]
+    )
+    return Episode(
+        name=f"agent-decision-{decision_id}",
+        body=body,
+        source_description=schema.EPISODE_SOURCE_DECISION,
+        reference_time=created_at,
+        group_id=group_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Recruiter action events (approve / override / teach)
+# ---------------------------------------------------------------------------
+
+
+def build_recruiter_action_episode(
+    *,
+    organization_id: int,
+    decision_id: int,
+    recruiter_id: int,
+    action: str,
+    reason: str | None,
+    happened_at: datetime,
+) -> Episode | None:
+    if organization_id <= 0:
+        return None
+    group_id = graph_client.group_id_for_org(organization_id)
+    body = "\n".join(
+        [
+            f"Recruiter id={recruiter_id} {action} decision D-{decision_id}.",
+            (
+                f"This {schema.NODE_DECISION} is "
+                f"{schema.EDGE_REVIEWED_BY} the {schema.NODE_RECRUITER} above."
+            ),
+            f"Action timestamp: {happened_at.isoformat()}.",
+            "Reason:",
+            (reason or "(no reason recorded)")[:1500],
+        ]
+    )
+    return Episode(
+        name=f"recruiter-action-{action}-{decision_id}",
+        body=body,
+        source_description=f"{schema.EPISODE_SOURCE_RECRUITER_ACTION}.{action}",
+        reference_time=happened_at,
+        group_id=group_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Hiring outcome events
+# ---------------------------------------------------------------------------
+
+
+def build_hiring_outcome_episode(
+    *,
+    organization_id: int,
+    candidate_full_name: str | None,
+    candidate_taali_id: int,
+    decision_id: int,
+    outcome_type: str,
+    quality_signal: float | None,
+    observed_at: datetime,
+) -> Episode | None:
+    if organization_id <= 0:
+        return None
+    group_id = graph_client.group_id_for_org(organization_id)
+    name = candidate_full_name or f"Candidate {candidate_taali_id}"
+    qsig = (
+        f"quality signal {quality_signal:.2f}"
+        if quality_signal is not None
+        else "no quality signal recorded"
+    )
+    body = "\n".join(
+        [
+            f"Subject candidate: {name} (taali_id={candidate_taali_id})",
+            (
+                f"{schema.NODE_HIRING_OUTCOME}: outcome '{outcome_type}' for "
+                f"decision D-{decision_id} ({qsig})."
+            ),
+            (
+                f"Decision D-{decision_id} {schema.EDGE_RESULTED_IN} this "
+                f"{schema.NODE_HIRING_OUTCOME}."
+            ),
+            f"Observed at: {observed_at.isoformat()}.",
+        ]
+    )
+    return Episode(
+        name=f"hiring-outcome-{decision_id}-{outcome_type}",
+        body=body,
+        source_description=schema.EPISODE_SOURCE_OUTCOME,
+        reference_time=observed_at,
+        group_id=group_id,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Public dispatch helpers — fire-and-forget, swallow errors
+# ---------------------------------------------------------------------------
+
+
+def emit_score_event(**kwargs: Any) -> bool:
+    """Write a single agent-score episode. Returns True if dispatched."""
+    episode = build_agent_score_episode(**kwargs)
+    if episode is None:
+        return False
+    try:
+        sent = dispatch([episode])
+        return bool(sent)
+    except Exception as exc:
+        logger.warning("emit_score_event failed: %s", exc)
+        return False
+
+
+def emit_decision_event(**kwargs: Any) -> bool:
+    episode = build_decision_episode(**kwargs)
+    if episode is None:
+        return False
+    try:
+        sent = dispatch([episode])
+        return bool(sent)
+    except Exception as exc:
+        logger.warning("emit_decision_event failed: %s", exc)
+        return False
+
+
+def emit_recruiter_action_event(**kwargs: Any) -> bool:
+    episode = build_recruiter_action_episode(**kwargs)
+    if episode is None:
+        return False
+    try:
+        sent = dispatch([episode])
+        return bool(sent)
+    except Exception as exc:
+        logger.warning("emit_recruiter_action_event failed: %s", exc)
+        return False
+
+
+def emit_hiring_outcome_event(**kwargs: Any) -> bool:
+    episode = build_hiring_outcome_episode(**kwargs)
+    if episode is None:
+        return False
+    try:
+        sent = dispatch([episode])
+        return bool(sent)
+    except Exception as exc:
+        logger.warning("emit_hiring_outcome_event failed: %s", exc)
+        return False
+
+
+__all__ = [
+    "build_agent_score_episode",
+    "build_decision_episode",
+    "build_hiring_outcome_episode",
+    "build_recruiter_action_episode",
+    "emit_decision_event",
+    "emit_hiring_outcome_event",
+    "emit_recruiter_action_event",
+    "emit_score_event",
+]

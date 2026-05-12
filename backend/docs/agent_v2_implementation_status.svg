@@ -1,0 +1,344 @@
+<svg width="100%" viewBox="0 0 820 1240" xmlns="http://www.w3.org/2000/svg" role="img" font-family="-apple-system, system-ui, 'Segoe UI', sans-serif">
+<title>Recruiter agent — implementation status as of branch claude/strange-swartz-44fe95</title>
+<desc>Implementation status overlay on the v10 target architecture. Solid boxes are built with tests. Dashed boxes are scaffolded with capability-flag stubs (ready to flip on per-org). Dim boxes are future work. Bands top to bottom: partnership layer, intent capture, orchestration, cheap scorers, task selection gate, assessment stage, decision and learning, decision queue, shared action layer, realized outcomes, Graphiti memory, meta-agents, background loops.</desc>
+
+<defs>
+<marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+  <path d="M2 1L8 5L2 9" fill="none" stroke="rgb(156,154,146)" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+<marker id="arrow-dim" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+  <path d="M2 1L8 5L2 9" fill="none" stroke="rgba(222,220,209,0.25)" stroke-width="1.2" stroke-linecap="round" stroke-linejoin="round"/>
+</marker>
+</defs>
+
+<style>
+  .band-label { fill: rgb(194,192,182); font-size: 12px; }
+  .band-line { stroke: rgba(222,220,209,0.15); stroke-width: 0.5; stroke-dasharray: 3 3; }
+  .box { stroke-width: 0.5; }
+  .built { fill: rgb(8,80,65); stroke: rgb(93,202,165); }
+  .built-text-1 { fill: rgb(159,225,203); font-size: 14px; font-weight: 500; }
+  .built-text-2 { fill: rgb(93,202,165); font-size: 11.5px; }
+  .a1a2 { fill: rgb(99,56,6); stroke: rgb(239,159,39); }
+  .a1a2-text-1 { fill: rgb(250,199,117); font-size: 14px; font-weight: 500; }
+  .a1a2-text-2 { fill: rgb(239,159,39); font-size: 11.5px; }
+  .human { fill: rgb(68,68,65); stroke: rgb(180,178,169); }
+  .human-text-1 { fill: rgb(211,209,199); font-size: 14px; font-weight: 500; }
+  .human-text-2 { fill: rgb(180,178,169); font-size: 11.5px; }
+  .graph { fill: rgb(60,52,137); stroke: rgb(175,169,236); }
+  .graph-text-1 { fill: rgb(206,203,246); font-size: 14px; font-weight: 500; }
+  .graph-text-2 { fill: rgb(175,169,236); font-size: 11.5px; }
+  .meta { fill: rgb(99,56,6); stroke: rgb(239,159,39); }
+  .meta-text-1 { fill: rgb(250,199,117); font-size: 13.5px; font-weight: 500; }
+  .meta-text-2 { fill: rgb(239,159,39); font-size: 11px; }
+  .scaffold { opacity: 0.45; stroke-dasharray: 4 3; }
+  .future { opacity: 0.25; stroke-dasharray: 4 3; }
+  .badge-built { fill: rgb(93,202,165); }
+  .badge-scaffold { fill: rgb(239,159,39); }
+  .badge-future { fill: rgb(140,138,131); }
+  .badge-text { fill: rgb(20,20,20); font-size: 9.5px; font-weight: 700; text-anchor: middle; dominant-baseline: central; }
+  .title-text { fill: rgb(232,230,222); font-size: 18px; font-weight: 600; }
+  .subtitle-text { fill: rgb(180,178,169); font-size: 12px; }
+  .legend-text { fill: rgb(194,192,182); font-size: 11.5px; }
+  text { text-anchor: middle; dominant-baseline: central; }
+</style>
+
+<!-- Header -->
+<text x="40" y="22" class="title-text" text-anchor="start">Recruiter agent — implementation status</text>
+<text x="40" y="42" class="subtitle-text" text-anchor="start">branch claude/strange-swartz-44fe95 · 260 tests passing · v1 phases 1–6 + capabilities + A1 + A2</text>
+
+<!-- Legend -->
+<g transform="translate(540,12)">
+  <rect width="240" height="44" rx="6" fill="rgb(28,28,26)" stroke="rgba(180,178,169,0.3)" stroke-width="0.5"/>
+  <circle cx="14" cy="14" r="6" class="badge-built"/>
+  <text x="14" y="14" class="badge-text">✓</text>
+  <text x="28" y="14" class="legend-text" text-anchor="start">built + tested</text>
+  <circle cx="14" cy="32" r="6" class="badge-scaffold"/>
+  <text x="14" y="32" class="badge-text">○</text>
+  <text x="28" y="32" class="legend-text" text-anchor="start">scaffold + flag</text>
+  <circle cx="140" cy="14" r="6" class="badge-future"/>
+  <text x="140" y="14" class="badge-text">·</text>
+  <text x="154" y="14" class="legend-text" text-anchor="start">future</text>
+  <text x="154" y="32" class="legend-text" text-anchor="start">14 / 26 / 0</text>
+</g>
+
+<!-- ============================ BAND 1: Partnership ============================ -->
+<text x="40" y="72" class="band-label" text-anchor="start">Partnership layer</text>
+<line x1="40" y1="78" x2="780" y2="78" class="band-line"/>
+
+<g>
+  <rect x="40" y="88" width="240" height="58" rx="8" class="box human"/>
+  <circle cx="262" cy="100" r="7" class="badge-built"/>
+  <text x="262" y="100" class="badge-text">✓</text>
+  <text x="160" y="108" class="human-text-1">Recruiter collaboration</text>
+  <text x="160" y="128" class="human-text-2">approve · override · teach (attributed)</text>
+</g>
+<g class="scaffold">
+  <rect x="290" y="88" width="240" height="58" rx="8" class="box human"/>
+  <circle cx="512" cy="100" r="7" class="badge-scaffold"/>
+  <text x="512" y="100" class="badge-text">○</text>
+  <text x="410" y="108" class="human-text-1">Hiring manager dialog</text>
+  <text x="410" y="128" class="human-text-2">capability flag · stub</text>
+</g>
+<g class="scaffold">
+  <rect x="540" y="88" width="240" height="58" rx="8" class="box human"/>
+  <circle cx="762" cy="100" r="7" class="badge-scaffold"/>
+  <text x="762" y="100" class="badge-text">○</text>
+  <text x="660" y="108" class="human-text-1">Candidate experience</text>
+  <text x="660" y="128" class="human-text-2">capability flag · stub</text>
+</g>
+
+<!-- ============================ BAND 2: Intent ============================ -->
+<text x="40" y="174" class="band-label" text-anchor="start">Intent capture (Amendment A1)</text>
+<line x1="40" y1="180" x2="780" y2="180" class="band-line"/>
+
+<g>
+  <rect x="200" y="190" width="420" height="58" rx="8" class="box a1a2"/>
+  <circle cx="602" cy="202" r="7" class="badge-built"/>
+  <text x="602" y="202" class="badge-text">✓</text>
+  <text x="410" y="210" class="a1a2-text-1">Role intent (versioned, bi-temporal)</text>
+  <text x="410" y="230" class="a1a2-text-2">soft signals · context · weighting · drift detector (UI: next)</text>
+</g>
+<line x1="160" y1="146" x2="160" y2="298" marker-end="url(#arrow)" stroke="rgb(156,154,146)" stroke-width="1.5" fill="none"/>
+<line x1="410" y1="146" x2="410" y2="190" marker-end="url(#arrow)" stroke="rgb(156,154,146)" stroke-width="1.5" fill="none"/>
+
+<!-- ============================ BAND 3: Orchestration ============================ -->
+<text x="40" y="274" class="band-label" text-anchor="start">Orchestration</text>
+<line x1="40" y1="280" x2="780" y2="280" class="band-line"/>
+
+<g>
+  <rect x="60" y="290" width="440" height="56" rx="8" class="box built"/>
+  <circle cx="482" cy="302" r="7" class="badge-built"/>
+  <text x="482" y="302" class="badge-text">✓</text>
+  <text x="280" y="310" class="built-text-1">Orchestrator (v1)</text>
+  <text x="280" y="330" class="built-text-2">parallel cheap scorers + task gate (wire-up: orchestrator refactor)</text>
+</g>
+<g class="scaffold">
+  <rect x="520" y="290" width="260" height="56" rx="8" class="box built"/>
+  <circle cx="762" cy="302" r="7" class="badge-scaffold"/>
+  <text x="762" y="302" class="badge-text">○</text>
+  <text x="650" y="310" class="built-text-1">Reasoning orchestrator</text>
+  <text x="650" y="330" class="built-text-2">capability flag · falls back to v1</text>
+</g>
+
+<!-- ============================ BAND 4: Cheap scorers ============================ -->
+<text x="40" y="374" class="band-label" text-anchor="start">Stage 1 — cheap scorers in parallel</text>
+<line x1="40" y1="380" x2="780" y2="380" class="band-line"/>
+
+<g>
+  <rect x="40" y="390" width="170" height="58" rx="8" class="box built"/>
+  <circle cx="192" cy="402" r="7" class="badge-built"/>
+  <text x="192" y="402" class="badge-text">✓</text>
+  <text x="125" y="412" class="built-text-1">Pre-screen</text>
+  <text x="125" y="431" class="built-text-2">+ intent must-haves</text>
+</g>
+<g>
+  <rect x="220" y="390" width="170" height="58" rx="8" class="box built"/>
+  <circle cx="372" cy="402" r="7" class="badge-built"/>
+  <text x="372" y="402" class="badge-text">✓</text>
+  <text x="305" y="412" class="built-text-1">CV scoring</text>
+  <text x="305" y="431" class="built-text-2">+ exemplar retrieval</text>
+</g>
+<g>
+  <rect x="400" y="390" width="170" height="58" rx="8" class="box built"/>
+  <circle cx="552" cy="402" r="7" class="badge-built"/>
+  <text x="552" y="402" class="badge-text">✓</text>
+  <text x="485" y="412" class="built-text-1">Intent parser</text>
+  <text x="485" y="431" class="built-text-2">Workable notes → directives</text>
+</g>
+<g>
+  <rect x="580" y="390" width="200" height="58" rx="8" class="box built"/>
+  <circle cx="762" cy="402" r="7" class="badge-built"/>
+  <text x="762" y="402" class="badge-text">✓</text>
+  <text x="680" y="412" class="built-text-1">Graph priors (GraphRAG)</text>
+  <text x="680" y="431" class="built-text-2">multi-hop Cypher + synthesis</text>
+</g>
+
+<line x1="280" y1="346" x2="280" y2="390" marker-end="url(#arrow)" stroke="rgb(156,154,146)" stroke-width="1.5" fill="none"/>
+<line x1="400" y1="248" x2="400" y2="290" marker-end="url(#arrow)" stroke="rgb(156,154,146)" stroke-width="1.5" fill="none"/>
+
+<!-- ============================ BAND 5: Task selection ============================ -->
+<text x="40" y="474" class="band-label" text-anchor="start">Stage 2 — task selection gate (Amendment A2)</text>
+<line x1="40" y1="480" x2="780" y2="480" class="band-line"/>
+
+<g>
+  <rect x="220" y="490" width="380" height="58" rx="8" class="box a1a2"/>
+  <circle cx="582" cy="502" r="7" class="badge-built"/>
+  <text x="582" y="502" class="badge-text">✓</text>
+  <text x="410" y="512" class="a1a2-text-1">Task selection agent</text>
+  <text x="410" y="532" class="a1a2-text-2">send · skip · request_artifacts · calibration-weighted</text>
+</g>
+
+<line x1="410" y1="448" x2="410" y2="490" marker-end="url(#arrow)" stroke="rgb(156,154,146)" stroke-width="1.5" fill="none"/>
+
+<!-- ============================ BAND 6: Assessment + portfolio + intervention ============================ -->
+<text x="40" y="574" class="band-label" text-anchor="start">Stage 3 — assessment + cohort agents</text>
+<line x1="40" y1="580" x2="780" y2="580" class="band-line"/>
+
+<g>
+  <rect x="40" y="590" width="230" height="58" rx="8" class="box built"/>
+  <circle cx="252" cy="602" r="7" class="badge-built"/>
+  <text x="252" y="602" class="badge-text">✓</text>
+  <text x="155" y="612" class="built-text-1">Assessment scoring</text>
+  <text x="155" y="632" class="built-text-2">existing rubric path</text>
+</g>
+<g class="scaffold">
+  <rect x="290" y="590" width="230" height="58" rx="8" class="box built"/>
+  <circle cx="502" cy="602" r="7" class="badge-scaffold"/>
+  <text x="502" y="602" class="badge-text">○</text>
+  <text x="405" y="612" class="built-text-1">Portfolio agent</text>
+  <text x="405" y="632" class="built-text-2">capability flag · stub</text>
+</g>
+<g class="scaffold">
+  <rect x="540" y="590" width="240" height="58" rx="8" class="box built"/>
+  <circle cx="762" cy="602" r="7" class="badge-scaffold"/>
+  <text x="762" y="602" class="badge-text">○</text>
+  <text x="660" y="612" class="built-text-1">Intervention agent</text>
+  <text x="660" y="632" class="built-text-2">capability flag · stub</text>
+</g>
+
+<line x1="280" y1="548" x2="155" y2="590" marker-end="url(#arrow)" stroke="rgb(156,154,146)" stroke-width="1.5" fill="none"/>
+
+<!-- ============================ BAND 7: Decision & learning ============================ -->
+<text x="40" y="674" class="band-label" text-anchor="start">Decision &amp; learning</text>
+<line x1="40" y1="680" x2="780" y2="680" class="band-line"/>
+
+<g>
+  <rect x="40" y="690" width="360" height="58" rx="8" class="box built"/>
+  <circle cx="382" cy="702" r="7" class="badge-built"/>
+  <text x="382" y="702" class="badge-text">✓</text>
+  <text x="220" y="712" class="built-text-1">Fitted policy engine</text>
+  <text x="220" y="732" class="built-text-2">pure-Python logistic + sqrt(n) pooling + isotonic</text>
+</g>
+<g class="scaffold">
+  <rect x="420" y="690" width="200" height="58" rx="8" class="box built"/>
+  <circle cx="602" cy="702" r="7" class="badge-scaffold"/>
+  <text x="602" y="702" class="badge-text">○</text>
+  <text x="520" y="712" class="built-text-1">Causal policy</text>
+  <text x="520" y="732" class="built-text-2">capability flag · stub</text>
+</g>
+<g class="scaffold">
+  <rect x="640" y="690" width="140" height="58" rx="8" class="box built"/>
+  <circle cx="762" cy="702" r="7" class="badge-scaffold"/>
+  <text x="762" y="702" class="badge-text">○</text>
+  <text x="710" y="712" class="built-text-1">Online learning</text>
+  <text x="710" y="732" class="built-text-2">flag · stub</text>
+</g>
+
+<g>
+  <rect x="40" y="760" width="360" height="56" rx="8" class="box human"/>
+  <circle cx="382" cy="772" r="7" class="badge-built"/>
+  <text x="382" y="772" class="badge-text">✓</text>
+  <text x="220" y="782" class="human-text-1">Decision queue + recruiter review</text>
+  <text x="220" y="800" class="human-text-2">+ escalate_low_confidence · + active_capabilities snapshot</text>
+</g>
+<g>
+  <rect x="420" y="760" width="360" height="56" rx="8" class="box human"/>
+  <circle cx="762" cy="772" r="7" class="badge-built"/>
+  <text x="762" y="772" class="badge-text">✓</text>
+  <text x="600" y="782" class="human-text-1">Shared action layer</text>
+  <text x="600" y="800" class="human-text-2">approve · override · teach · queue · request_artifacts</text>
+</g>
+<line x1="400" y1="748" x2="220" y2="760" marker-end="url(#arrow)" stroke="rgb(156,154,146)" stroke-width="1.5" fill="none"/>
+<line x1="400" y1="788" x2="420" y2="788" marker-end="url(#arrow)" stroke="rgb(156,154,146)" stroke-width="1.5" fill="none"/>
+
+<g>
+  <rect x="220" y="828" width="380" height="48" rx="8" class="box human"/>
+  <circle cx="582" cy="840" r="7" class="badge-built"/>
+  <text x="582" y="840" class="badge-text">✓</text>
+  <text x="410" y="852" class="human-text-1">Realized + longitudinal outcomes</text>
+</g>
+<line x1="600" y1="816" x2="500" y2="828" marker-end="url(#arrow)" stroke="rgb(156,154,146)" stroke-width="1.5" fill="none"/>
+
+<!-- ============================ BAND 8: Graphiti memory ============================ -->
+<text x="40" y="900" class="band-label" text-anchor="start">Memory · federated</text>
+<line x1="40" y1="906" x2="780" y2="906" class="band-line"/>
+
+<g>
+  <rect x="40" y="916" width="360" height="86" rx="8" class="box graph"/>
+  <circle cx="382" cy="928" r="7" class="badge-built"/>
+  <text x="382" y="928" class="badge-text">✓</text>
+  <text x="220" y="938" class="graph-text-1">Local Graphiti</text>
+  <text x="220" y="958" class="graph-text-2">vocabulary frozen · episode writers</text>
+  <text x="220" y="976" class="graph-text-2">RoleIntent · Tasks · AgentScoreEvent · HiringOutcome</text>
+  <text x="220" y="993" class="graph-text-2">bi-temporal · GraphRAG queries · org-private</text>
+</g>
+<g class="scaffold">
+  <rect x="420" y="916" width="360" height="86" rx="8" class="box graph"/>
+  <circle cx="762" cy="928" r="7" class="badge-scaffold"/>
+  <text x="762" y="928" class="badge-text">○</text>
+  <text x="600" y="938" class="graph-text-1">Federated graph</text>
+  <text x="600" y="958" class="graph-text-2">capability flag · stub</text>
+  <text x="600" y="976" class="graph-text-2">DP-bounded · contract-gated</text>
+  <text x="600" y="993" class="graph-text-2">blocked on legal/privacy/infosec</text>
+</g>
+<line x1="582" y1="876" x2="220" y2="916" marker-end="url(#arrow)" stroke="rgb(156,154,146)" stroke-width="1.5" fill="none"/>
+
+<!-- ============================ BAND 9: Meta-agents ============================ -->
+<text x="40" y="1024" class="band-label" text-anchor="start">Meta-agents</text>
+<line x1="40" y1="1030" x2="780" y2="1030" class="band-line"/>
+
+<g class="scaffold">
+  <rect x="40" y="1040" width="172" height="58" rx="8" class="box meta"/>
+  <circle cx="194" cy="1052" r="7" class="badge-scaffold"/>
+  <text x="194" y="1052" class="badge-text">○</text>
+  <text x="120" y="1062" class="meta-text-1">Drift &amp; OOD</text>
+  <text x="120" y="1082" class="meta-text-2">flag · stub</text>
+</g>
+<g>
+  <rect x="222" y="1040" width="172" height="58" rx="8" class="box meta"/>
+  <circle cx="376" cy="1052" r="7" class="badge-built"/>
+  <text x="376" y="1052" class="badge-text">✓</text>
+  <text x="305" y="1062" class="meta-text-1">Bias audit (gated)</text>
+  <text x="305" y="1082" class="meta-text-2">promotion-gate check · DIR / ECE</text>
+</g>
+<g class="scaffold">
+  <rect x="404" y="1040" width="172" height="58" rx="8" class="box meta"/>
+  <circle cx="558" cy="1052" r="7" class="badge-scaffold"/>
+  <text x="558" y="1052" class="badge-text">○</text>
+  <text x="485" y="1062" class="meta-text-1">Causal validator</text>
+  <text x="485" y="1082" class="meta-text-2">flag · stub</text>
+</g>
+<g class="scaffold">
+  <rect x="586" y="1040" width="194" height="58" rx="8" class="box meta"/>
+  <circle cx="762" cy="1052" r="7" class="badge-scaffold"/>
+  <text x="762" y="1052" class="badge-text">○</text>
+  <text x="680" y="1062" class="meta-text-1">Capability auditor</text>
+  <text x="680" y="1082" class="meta-text-2">flag · stub</text>
+</g>
+
+<!-- ============================ BAND 10: Background loops ============================ -->
+<text x="40" y="1124" class="band-label" text-anchor="start">Background loops (nightly)</text>
+<line x1="40" y1="1130" x2="780" y2="1130" class="band-line"/>
+
+<g>
+  <rect x="40" y="1140" width="172" height="58" rx="8" class="box human"/>
+  <circle cx="194" cy="1152" r="7" class="badge-built"/>
+  <text x="194" y="1152" class="badge-text">✓</text>
+  <text x="120" y="1162" class="human-text-1">Exemplar stores</text>
+  <text x="120" y="1182" class="human-text-2">cosine · D4 eviction</text>
+</g>
+<g>
+  <rect x="222" y="1140" width="172" height="58" rx="8" class="box human"/>
+  <circle cx="376" cy="1152" r="7" class="badge-built"/>
+  <text x="376" y="1152" class="badge-text">✓</text>
+  <text x="305" y="1162" class="human-text-1">Policy fitter</text>
+  <text x="305" y="1182" class="human-text-2">nightly · candidate row</text>
+</g>
+<g>
+  <rect x="404" y="1140" width="172" height="58" rx="8" class="box human"/>
+  <circle cx="558" cy="1152" r="7" class="badge-built"/>
+  <text x="558" y="1152" class="badge-text">✓</text>
+  <text x="485" y="1162" class="human-text-1">Promotion gate</text>
+  <text x="485" y="1182" class="human-text-2">gold + bias + shadow</text>
+</g>
+<g>
+  <rect x="586" y="1140" width="194" height="58" rx="8" class="box human"/>
+  <circle cx="762" cy="1152" r="7" class="badge-built"/>
+  <text x="762" y="1152" class="badge-text">✓</text>
+  <text x="680" y="1162" class="human-text-1">Graph writeback queue</text>
+  <text x="680" y="1182" class="human-text-2">low / medium-cosign / blocked</text>
+</g>
+
+<!-- ============================ Footer ============================ -->
+<text x="400" y="1218" class="band-label">v1 phases 1–6 · capability substrate · A1 recruiter intent · A2 task selection — flag any v10 capability per-org when ready</text>
+</svg>
