@@ -211,6 +211,13 @@ def build_hiring_outcome_episode(
                 f"Decision D-{decision_id} {schema.EDGE_RESULTED_IN} this "
                 f"{schema.NODE_HIRING_OUTCOME}."
             ),
+            # Direct Candidate→Outcome edge so the read queries can walk a
+            # single canonical path. Lets graph_priors match outcomes via
+            # the candidate without requiring a DecisionEvent middle hop.
+            (
+                f"This Candidate {schema.EDGE_RESULTED_IN} this "
+                f"{schema.NODE_HIRING_OUTCOME}."
+            ),
             f"Observed at: {observed_at.isoformat()}.",
         ]
     )

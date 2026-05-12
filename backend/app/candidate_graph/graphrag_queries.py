@@ -191,13 +191,15 @@ def referrer_signal(
     *, group_id: str, referrer_id: str, t: dt.datetime
 ) -> dict[str, Any]:
     """Aggregate referrer track record up to time ``t``."""
+    # Walks Candidate→Outcome directly so the backfill path (no
+    # DecisionEvent) and the live path are both matched. Both writers
+    # emit the direct Candidate-[:RESULTED_IN]->HiringOutcome edge.
     rows = _execute(
         """
         MATCH (ref:Referrer {referrer_id: $referrer_id, group_id: $group_id})
-              <-[:REFERRED_BY]-(c:Candidate)
-              <-[:FOR_CANDIDATE]-(d:DecisionEvent)
-              -[:RESULTED_IN]->(o:HiringOutcome)
-        WHERE (d.created_at IS NULL OR d.created_at <= $t)
+              <-[:REFERRED_BY]-(c:Candidate {group_id: $group_id})
+              -[:RESULTED_IN]->(o:HiringOutcome {group_id: $group_id})
+        WHERE (o.observed_at IS NULL OR o.observed_at <= $t)
         RETURN
             count(DISTINCT c) AS total_referrals,
             sum(CASE WHEN o.outcome_type = 'hired' THEN 1 ELSE 0 END) AS hires,
@@ -229,19 +231,21 @@ def company_overlap_with_top_performers(
     limit: int = 10,
 ) -> list[dict[str, Any]]:
     """2-hop: candidate's companies that also hosted top performers in this role family."""
+    # Walks Candidate→Outcome directly (no DecisionEvent middle hop).
+    # Backfilled hires from Workable history match the same way as live
+    # Tali-driven hires.
     return _execute(
         """
         MATCH (target:Role {role_id: $role_id, group_id: $group_id})
         MATCH (cand:Candidate {candidate_id: $candidate_id, group_id: $group_id})
               -[:WORKED_AT]->(co:Company)
         MATCH (co)<-[:WORKED_AT]-(top:Candidate {group_id: $group_id})
-        MATCH (top)<-[:FOR_CANDIDATE]-(d:DecisionEvent)-[:RESULTED_IN]->(o:HiringOutcome)
+        MATCH (top)-[:RESULTED_IN]->(o:HiringOutcome {group_id: $group_id})
         MATCH (top)-[:APPLIED_FOR]->(role:Role)
         WHERE (coalesce(role.role_family, role.role_id) =
                coalesce(target.role_family, target.role_id))
           AND o.outcome_type = 'hired'
-          AND coalesce(o.quality_signal, 0) >= 0.7
-          AND (d.created_at IS NULL OR d.created_at <= $t)
+          AND (o.observed_at IS NULL OR o.observed_at <= $t)
           AND top.candidate_id <> cand.candidate_id
         RETURN co.name AS company,
                count(DISTINCT top) AS overlap_top_performers,
@@ -265,6 +269,8 @@ def similar_past_candidates(
     top_n: int = 10,
 ) -> list[dict[str, Any]]:
     """Graph-based similarity by shared skills + companies, with outcomes."""
+    # Outcome lookup walks Candidate→Outcome directly; backfilled hires
+    # from Workable history match the same way as live Tali-driven hires.
     return _execute(
         """
         MATCH (cand:Candidate {candidate_id: $candidate_id, group_id: $group_id})
@@ -273,8 +279,8 @@ def similar_past_candidates(
         WITH cand, other, count(DISTINCT s) AS shared_skills
         OPTIONAL MATCH (cand)-[:WORKED_AT]->(co:Company)<-[:WORKED_AT]-(other)
         WITH other, shared_skills, count(DISTINCT co) AS shared_companies
-        OPTIONAL MATCH (other)<-[:FOR_CANDIDATE]-(d:DecisionEvent)-[:RESULTED_IN]->(o:HiringOutcome)
-        WHERE (d.created_at IS NULL OR d.created_at <= $t)
+        OPTIONAL MATCH (other)-[:RESULTED_IN]->(o:HiringOutcome {group_id: $group_id})
+        WHERE (o.observed_at IS NULL OR o.observed_at <= $t)
         RETURN other.candidate_id AS candidate_id,
                shared_skills,
                shared_companies,
@@ -300,6 +306,8 @@ def skill_to_outcome_paths(
     limit: int = 15,
 ) -> list[dict[str, Any]]:
     """3-hop aggregate: candidate's skills → other candidates → role family → outcomes."""
+    # Outcome lookup walks Candidate→Outcome directly; backfilled hires
+    # from Workable history match the same way as live Tali-driven hires.
     return _execute(
         """
         MATCH (target:Role {role_id: $role_id, group_id: $group_id})
@@ -309,8 +317,8 @@ def skill_to_outcome_paths(
               -[:APPLIED_FOR]->(role:Role)
         WHERE coalesce(role.role_family, role.role_id) =
               coalesce(target.role_family, target.role_id)
-        MATCH (other)<-[:FOR_CANDIDATE]-(d:DecisionEvent)-[:RESULTED_IN]->(o:HiringOutcome)
-        WHERE (d.created_at IS NULL OR d.created_at <= $t)
+        MATCH (other)-[:RESULTED_IN]->(o:HiringOutcome {group_id: $group_id})
+        WHERE (o.observed_at IS NULL OR o.observed_at <= $t)
         RETURN s.name AS skill,
                count(DISTINCT other) AS candidates_with_skill,
                avg(CASE WHEN o.outcome_type = 'hired' THEN 1.0 ELSE 0.0 END) AS hire_rate,
