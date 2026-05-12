@@ -5,8 +5,13 @@ implementation so callers (the search runner, the rerank step, the
 endpoint) need only re-import:
 
 - ``candidate_ids_matching_all(organization_id, predicates) -> list[int]``
-- ``subgraph_for_candidates(organization_id, candidate_ids) -> GraphPayload``
+- ``subgraph_for_candidates(organization_id, candidate_ids, db=None) -> GraphPayload``
 - ``colleague_neighbourhood(organization_id, candidate_id) -> dict``
+
+When ``subgraph_for_candidates`` is called with a SQLAlchemy ``Session``
+it expands the episode prefix list to cover interview transcripts /
+summaries and pipeline-event notes, so the graph view shows everything
+Graphiti knows about the candidate — not just the profile/CV facts.
 
 All three are sync; they call Graphiti through ``client.run_async``.
 ``candidate_id`` is the Postgres id stored in the Graphiti node's
@@ -32,7 +37,10 @@ logger = logging.getLogger("taali.candidate_graph.search")
 # How many top-ranked Graphiti nodes/edges we pull per query. Caps blast
 # radius if a query is unexpectedly broad ("everyone in tech").
 DEFAULT_SEARCH_LIMIT = 50
-SUBGRAPH_LIMIT = 200
+# Per-candidate subgraph cap. Raised from 200 so a senior candidate's full
+# Graphiti footprint (profile + skills + 20 jobs + interview transcripts +
+# pipeline events) is not silently clipped in the graph view.
+SUBGRAPH_LIMIT = 500
 NEIGHBOURHOOD_LIMIT = 60
 
 
@@ -97,13 +105,21 @@ def candidate_ids_matching_all(
 
 
 def subgraph_for_candidates(
-    *, organization_id: int, candidate_ids: Iterable[int]
+    *,
+    organization_id: int,
+    candidate_ids: Iterable[int],
+    db: "Session | None" = None,  # type: ignore[name-defined]
 ) -> GraphPayload:
     """Return a graph payload for specific candidates via direct Cypher.
 
-    Looks up Episode nodes by the stable episode-name pattern
-    ``candidate-{id}-*`` and returns all edges connected to the entities
-    those episodes introduced. Falls back to an empty payload on error.
+    Pulls every episode that belongs to the candidate, regardless of
+    source: profile, CV, skills, experience, **interview transcripts and
+    summaries, and pipeline-event notes**. When ``db`` is provided we
+    look up the candidate's interview and event ids in Postgres and
+    extend the episode-prefix list to cover them; without ``db`` we fall
+    back to ``candidate-{id}-*`` only (CV/profile/skills/experience).
+
+    Falls back to an empty payload on error.
     """
     ids = list({int(c) for c in candidate_ids})
     if not ids or not graph_client.is_configured():
@@ -113,21 +129,88 @@ def subgraph_for_candidates(
     group_id = graph_client.group_id_for_org(organization_id)
     nodes: dict[str, GraphNode] = {}
     edges: list[GraphEdge] = []
+    seen_edge_keys: set[tuple] = set()
 
-    # Build episode-name prefixes for the requested candidates.
-    # Each candidate contributes episodes named "candidate-{id}-profile",
-    # "candidate-{id}-cv", etc.  We match via STARTS WITH so all episode
-    # types are covered without enumerating them.
+    # Cap to 50 candidates per call so the prefix list (and the resulting
+    # Cypher) stays bounded even if a caller asks for a huge set.
+    capped_ids = ids[:50]
+    prefixes = _episode_prefixes_for_candidates(db, capped_ids)
     try:
         result = graph_client.run_async(
-            _cypher_subgraph_by_episodes(graphiti.driver, group_id, ids[:50]),
+            _cypher_subgraph_by_prefixes(graphiti.driver, group_id, prefixes),
             timeout=8.0,
         )
-        _merge_neo4j_records(result, nodes, edges)
+        _merge_neo4j_records(result, nodes, edges, seen_edge_keys=seen_edge_keys)
     except Exception as exc:
         logger.exception("subgraph_for_candidates cypher failed: %s", exc)
 
     return GraphPayload(nodes=list(nodes.values())[:SUBGRAPH_LIMIT], edges=edges)
+
+
+def _episode_prefixes_for_candidates(
+    db: "Session | None",  # type: ignore[name-defined]
+    candidate_ids: list[int],
+) -> list[str]:
+    """Build the full set of Graphiti episode-name prefixes for these
+    candidates.
+
+    Always includes ``candidate-{id}-`` (covers profile / skills-education
+    / experience / cv). When ``db`` is supplied, also adds:
+
+    - ``interview-{iid}-`` for every ApplicationInterview tied to one of
+      the candidates' applications (transcript + summary episodes).
+    - ``event-{eid}`` for every CandidateApplicationEvent on those
+      applications (pipeline transitions + recruiter notes).
+
+    Without ``db`` we degrade gracefully to candidate-only prefixes —
+    callers like the runner always have ``db`` so this is just a safety
+    net for ad-hoc usage.
+    """
+    prefixes: list[str] = [f"candidate-{cid}-" for cid in candidate_ids]
+    if db is None or not candidate_ids:
+        return prefixes
+    try:
+        # Lazy imports to avoid a hard dep on SQLAlchemy at import time
+        # (search.py is also reachable from the worker which uses a thinner
+        # bootstrap).
+        from ..models.application_interview import ApplicationInterview
+        from ..models.candidate_application import CandidateApplication
+        from ..models.candidate_application_event import CandidateApplicationEvent
+
+        interview_ids = (
+            db.query(ApplicationInterview.id)
+            .join(
+                CandidateApplication,
+                CandidateApplication.id == ApplicationInterview.application_id,
+            )
+            .filter(CandidateApplication.candidate_id.in_(candidate_ids))
+            .all()
+        )
+        for (iid,) in interview_ids:
+            if iid is not None:
+                prefixes.append(f"interview-{int(iid)}-")
+
+        event_ids = (
+            db.query(CandidateApplicationEvent.id)
+            .join(
+                CandidateApplication,
+                CandidateApplication.id == CandidateApplicationEvent.application_id,
+            )
+            .filter(CandidateApplication.candidate_id.in_(candidate_ids))
+            .all()
+        )
+        for (eid,) in event_ids:
+            if eid is not None:
+                # Event episodes are named exactly "event-{id}" (no trailing
+                # dash, no suffix) — STARTS WITH still matches.
+                prefixes.append(f"event-{int(eid)}")
+    except Exception as exc:
+        logger.warning(
+            "Could not expand episode prefixes for candidates %s: %s",
+            candidate_ids,
+            exc,
+        )
+    return prefixes
 
 
 def subgraph_for_query(*, organization_id: int, query: str) -> GraphPayload:
@@ -191,26 +274,31 @@ async def _cypher_subgraph_by_query(
     return await driver.execute_query(cypher)
 
 
-async def _cypher_subgraph_by_episodes(
-    driver, group_id: str, candidate_ids: list[int]
+async def _cypher_subgraph_by_prefixes(
+    driver, group_id: str, prefixes: list[str]
 ):
-    """Edges introduced by episodes for the given Postgres candidate IDs.
+    """Edges introduced by every episode whose name starts with one of
+    ``prefixes`` (covers ``candidate-{id}-*``, ``interview-{iid}-*``,
+    ``event-{eid}`` for one or more candidates).
 
     Uses string formatting instead of parameterized queries (same reason as
     _cypher_subgraph_by_query above).
 
     Safety:
-    - ``candidate_ids`` are Python ints — safe to interpolate directly.
+    - ``prefixes`` are server-built strings of the form ``"candidate-N-"``
+      / ``"interview-N-"`` / ``"event-N"`` where N is a Python int — safe
+      to interpolate. We still single-quote-escape defensively.
     - ``group_id`` is always ``org-{int}`` — no user-controlled chars.
 
     We do NOT filter Episode nodes by group_id property because it may not
     be stored on Episode nodes in this Graphiti version. Instead we rely on:
-    - The ``candidate-{id}-`` STARTS WITH prefix on ep.name (candidate-scoped).
+    - The episode-name prefix on ``ep.name`` (candidate-scoped).
     - The ``e.group_id`` filter on the RELATES_TO edge (org-scoped).
     """
-    # Episode names are stable: "candidate-{id}-profile", "candidate-{id}-cv", …
-    # Build a Cypher list literal of prefix strings.
-    prefix_list = ", ".join(f"'candidate-{int(cid)}-'" for cid in candidate_ids)
+    if not prefixes:
+        return None
+    safe_prefixes = [p.replace("'", "\\'") for p in prefixes]
+    prefix_list = ", ".join(f"'{p}'" for p in safe_prefixes)
     cypher = f"""
         WITH [{prefix_list}] AS prefixes
         UNWIND prefixes AS prefix
@@ -223,13 +311,21 @@ async def _cypher_subgraph_by_episodes(
           t.uuid AS t_uuid, t.name AS t_name, properties(t) AS t_props,
           e.uuid AS e_uuid, e.name AS e_name, e.fact AS e_fact,
           e.valid_at AS e_valid_at, e.invalid_at AS e_invalid_at
-        LIMIT 200
+        LIMIT {int(SUBGRAPH_LIMIT)}
         """
     return await driver.execute_query(cypher)
 
 
-def _merge_neo4j_records(result, nodes: dict, edges: list) -> None:
-    """Build GraphNode/GraphEdge objects from raw Cypher records."""
+def _merge_neo4j_records(
+    result, nodes: dict, edges: list, *, seen_edge_keys: set | None = None
+) -> None:
+    """Build GraphNode/GraphEdge objects from raw Cypher records.
+
+    ``seen_edge_keys`` (when provided) deduplicates RELATES_TO edges that
+    surface multiple times — e.g. when the same fact is reachable via
+    different episodes (a profile episode + an interview episode that
+    both mention the same job).
+    """
     if result is None:
         return
     for record in result.records or []:
@@ -267,6 +363,14 @@ def _merge_neo4j_records(result, nodes: dict, edges: list) -> None:
                 name=t_name,
                 extra={"uuid": t_uuid},
             )
+
+        if seen_edge_keys is not None:
+            # Edge uuid is the canonical identity; fall back to the
+            # (source, target, fact) triple if uuid is missing.
+            key = record.get("e_uuid") or (s_id, t_id, e_fact)
+            if key in seen_edge_keys:
+                continue
+            seen_edge_keys.add(key)
 
         edges.append(
             GraphEdge(

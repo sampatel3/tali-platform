@@ -166,6 +166,7 @@ def run_search(
             subgraph = graph_search.subgraph_for_candidates(
                 organization_id=organization_id,
                 candidate_ids=candidate_ids,
+                db=db,
             )
             # Fallback: if none of the matched candidates are in the graph yet
             # (partial backfill), do a broad query so the graph view shows
