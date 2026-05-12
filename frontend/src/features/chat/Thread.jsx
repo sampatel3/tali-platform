@@ -17,12 +17,15 @@ const ToolResultRender = ({ part }) => {
   if (part.toolName === 'search_applications') {
     if (Array.isArray(part.result)) return <CandidateGrid rows={part.result} />;
   }
-  if (part.toolName === 'nl_search_candidates') {
-    if (Array.isArray(part.result.applications)) {
-      return <CandidateGrid rows={part.result.applications} />;
-    }
-  }
-  if (part.toolName === 'graph_search_candidates') {
+  // Both search tools share the same payload shape: ``applications`` (the
+  // candidate grid) plus an optional ``graph`` (the inline subgraph from
+  // Graphiti). nl_search_candidates returns the matched candidates'
+  // subgraph; graph_search_candidates returns the query-anchored
+  // subgraph. Render the same way for both.
+  if (
+    part.toolName === 'nl_search_candidates' ||
+    part.toolName === 'graph_search_candidates'
+  ) {
     return (
       <>
         {Array.isArray(part.result.applications) ? (

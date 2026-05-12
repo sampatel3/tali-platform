@@ -380,7 +380,11 @@ def nl_search_candidates(
         nl_query=text,
         base_query=base,
         rerank_enabled=bool(rerank),
-        include_subgraph=False,
+        # Always pull the matched candidates' Graphiti subgraph so the
+        # chat UI can render an inline graph alongside the candidate
+        # grid — the user expects "search this person" to surface their
+        # graph, not just their card.
+        include_subgraph=True,
     )
 
     capped_ids = result.application_ids[: max(1, min(int(limit), 100))]
@@ -395,6 +399,7 @@ def nl_search_candidates(
         "rerank_applied": bool(result.rerank_applied),
         "parsed_filter": result.parsed_filter.model_dump(mode="json"),
         "warnings": [w.model_dump(mode="json") for w in result.warnings],
+        "graph": _graph_topology(result.subgraph) if result.subgraph else None,
     }
 
 
