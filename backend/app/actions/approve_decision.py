@@ -15,7 +15,7 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from ..models.agent_decision import AgentDecision
-from . import advance_stage, reject_application
+from . import advance_stage, reject_application, resend_assessment_invite, send_assessment
 from .types import ACTOR_RECRUITER, Actor
 
 
@@ -78,6 +78,36 @@ def run(
             reason=reason,
             idempotency_key=f"approve_decision:{decision.id}",
             metadata={**metadata, "decision_type": decision.decision_type},
+        )
+    elif decision.decision_type == "send_assessment":
+        # Evidence (set when the agent queued the decision) may carry the
+        # task_id / duration_minutes the agent picked. Fall back to the
+        # send_assessment defaults when absent.
+        ev = decision.evidence or {}
+        send_assessment.run(
+            db,
+            actor,
+            organization_id=organization_id,
+            application_id=int(decision.application_id),
+            task_id=int(ev["task_id"]) if ev.get("task_id") is not None else None,
+            duration_minutes=int(ev.get("duration_minutes") or 90),
+        )
+    elif decision.decision_type == "resend_assessment_invite":
+        ev = decision.evidence or {}
+        assessment_id = ev.get("assessment_id")
+        if assessment_id is None:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"resend_assessment_invite decision {decision.id} is missing "
+                    "evidence.assessment_id — cannot dispatch."
+                ),
+            )
+        resend_assessment_invite.run(
+            db,
+            actor,
+            organization_id=organization_id,
+            assessment_id=int(assessment_id),
         )
     else:
         raise HTTPException(

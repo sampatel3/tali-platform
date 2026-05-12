@@ -9,6 +9,14 @@ AGENT_DECISION_TYPES = (
     "advance_to_interview",
     "reject",
     "skip_assessment_reject",
+    # Per-candidate HITL gates that used to live as ``agent_needs_input``
+    # rows (kinds ``send_assessment_approval`` / ``resend_assessment_invite_approval``).
+    # They're per-candidate verdicts on a candidate-facing action, not
+    # role-level clarifying questions, so they belong in the decisions
+    # queue alongside advance/reject. Approving routes through
+    # ``approve_decision.run`` which calls the underlying action.
+    "send_assessment",
+    "resend_assessment_invite",
     # Multi-agent upgrade (§6.3): the policy may emit
     # ``escalate_low_confidence`` instead of a confident verdict when
     # sub-agent uncertainties exceed thresholds or scores disagree

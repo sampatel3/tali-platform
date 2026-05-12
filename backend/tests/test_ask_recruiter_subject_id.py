@@ -1,9 +1,11 @@
 """ask_recruiter.open distinguishes by subject_id.
 
 Codex #109: previously the idempotency key was ``(role_id, kind)`` so
-multiple ``send_assessment_approval`` requests in the same cycle
-overwrote each other. The subject_id parameter scopes the key per
-candidate.
+multiple per-candidate questions overwrote each other in the same cycle.
+The subject_id parameter scopes the key per subject (candidate /
+assessment / etc.). Uses ``candidate_tie_break`` here as a per-candidate
+kind that still lives in NEEDS_INPUT_KINDS — the original example used
+the send_assessment_approval kind, which now flows through agent_decisions.
 """
 
 from __future__ import annotations
@@ -63,7 +65,7 @@ def test_different_subject_ids_create_separate_rows(db):
         actor,
         organization_id=org.id,
         role_id=role.id,
-        kind="send_assessment_approval",
+        kind="candidate_tie_break",
         prompt="Approve send for app 1?",
         subject_id=1,
     )
@@ -72,7 +74,7 @@ def test_different_subject_ids_create_separate_rows(db):
         actor,
         organization_id=org.id,
         role_id=role.id,
-        kind="send_assessment_approval",
+        kind="candidate_tie_break",
         prompt="Approve send for app 2?",
         subject_id=2,
     )
@@ -84,7 +86,7 @@ def test_different_subject_ids_create_separate_rows(db):
         db.query(AgentNeedsInput)
         .filter(
             AgentNeedsInput.role_id == role.id,
-            AgentNeedsInput.kind == "send_assessment_approval",
+            AgentNeedsInput.kind == "candidate_tie_break",
             AgentNeedsInput.resolved_at.is_(None),
             AgentNeedsInput.dismissed_at.is_(None),
         )
@@ -111,7 +113,7 @@ def test_same_subject_id_returns_existing_row_with_refreshed_prompt(db):
         actor,
         organization_id=org.id,
         role_id=role.id,
-        kind="send_assessment_approval",
+        kind="candidate_tie_break",
         prompt="First framing.",
         subject_id=42,
     )
@@ -120,7 +122,7 @@ def test_same_subject_id_returns_existing_row_with_refreshed_prompt(db):
         actor,
         organization_id=org.id,
         role_id=role.id,
-        kind="send_assessment_approval",
+        kind="candidate_tie_break",
         prompt="Refined framing.",
         subject_id=42,
     )

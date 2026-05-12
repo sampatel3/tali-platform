@@ -29,6 +29,7 @@ from ..actions import (
 )
 from ..actions.types import Actor
 from ..mcp import handlers as mcp_handlers
+from ..models.agent_decision import AgentDecision
 from ..models.agent_needs_input import NEEDS_INPUT_KINDS
 from ..models.agent_run import AgentRun
 from ..models.assessment import Assessment
@@ -860,65 +861,101 @@ def _tool_score_cv(db: Session, *, agent_run: AgentRun, role: Role, args: dict[s
     return {"job_id": int(job.id), "status": str(job.status)}
 
 
+def _existing_decision_for_subject(
+    db: Session,
+    *,
+    role: Role,
+    application_id: int,
+    decision_type: str,
+) -> Any:
+    """Latest non-discarded AgentDecision for this (role, app, type).
+
+    Used by the send_assessment / resend_assessment_invite HITL gates so
+    repeated agent calls don't pile up duplicate cards in the recruiter's
+    queue. Returns the row or None.
+    """
+    return (
+        db.query(AgentDecision)
+        .filter(
+            AgentDecision.organization_id == int(role.organization_id),
+            AgentDecision.role_id == int(role.id),
+            AgentDecision.application_id == application_id,
+            AgentDecision.decision_type == decision_type,
+            AgentDecision.status != "discarded",
+        )
+        .order_by(AgentDecision.created_at.desc())
+        .first()
+    )
+
+
 def _tool_send_assessment(db: Session, *, agent_run: AgentRun, role: Role, args: dict[str, Any]) -> Any:
     actor = Actor.agent(int(agent_run.id))
     application_id = int(args["application_id"])
 
-    # HITL gate per Role.auto_promote. When False (the default), the
-    # agent must defer to a prior recruiter approval — otherwise it
-    # opens a fresh ``agent_needs_input`` card and waits.
+    # HITL gate per Role.auto_promote.
     #
-    # Without the consume step here, the previous behaviour blew up
-    # into an infinite approval loop: the agent opens a card, the
-    # recruiter clicks Approve, the agent calls send_assessment again
-    # next cycle, the resolved card no longer dedupes (open dedupes
-    # only on un-resolved rows), so a *new* card opens and the send
-    # never fires. Codex flagged this on #141; this fix uses the
-    # ``subject_id`` column introduced by migration 075 so the
-    # consume/open pair is scoped per-candidate, not role-wide.
+    # auto_promote=True  → dispatch the send immediately as a system action.
+    # auto_promote=False → queue an AgentDecision(decision_type='send_assessment').
+    #                      Recruiter approves/overrides on the Home page; the
+    #                      approve path calls send_assessment.run directly.
+    #                      The agent never has to ``consume`` an answer — once
+    #                      the decision is approved, the action ran; the
+    #                      next agent cycle sees the candidate already moved.
     if not bool(getattr(role, "auto_promote", False)):
-        consumed = ask_recruiter.consume_resolved(
+        existing = _existing_decision_for_subject(
             db,
-            actor,
-            organization_id=int(role.organization_id),
-            role_id=int(role.id),
-            kind="send_assessment_approval",
-            subject_id=application_id,
+            role=role,
+            application_id=application_id,
+            decision_type="send_assessment",
         )
-        if consumed is not None and consumed.choice == "approve":
-            pass  # fall through to the action
-        elif consumed is not None and consumed.choice == "skip":
+        if existing is not None:
             return {
-                "status": "recruiter_declined",
-                "needs_input_id": int(consumed.row.id),
+                "status": (
+                    "awaiting_recruiter_approval"
+                    if existing.status == "pending"
+                    else existing.status
+                ),
+                "decision_id": int(existing.id),
                 "application_id": application_id,
             }
-        else:
-            existing = ask_recruiter.open(
-                db,
-                actor,
-                organization_id=int(role.organization_id),
-                role_id=int(role.id),
-                kind="send_assessment_approval",
-                subject_id=application_id,
-                prompt=(
-                    f"Approve sending the assessment to application {application_id}? "
-                    "I'll dispatch the invite as soon as you confirm."
-                ),
-                options=[
-                    {"value": "approve", "label": "Approve & send"},
-                    {"value": "skip", "label": "Skip this candidate"},
-                ],
-                rationale=(
-                    "auto_promote is off for this role; every send goes through "
-                    "the recruiter."
-                ),
-            )
-            return {
-                "status": "awaiting_recruiter_approval",
-                "needs_input_id": int(existing.id),
-                "application_id": application_id,
-            }
+
+        # Preserve task_id / duration_minutes in evidence so the approve
+        # path can dispatch with the same params the agent chose.
+        task_id = args.get("task_id")
+        duration = args.get("duration_minutes")
+        evidence: dict[str, Any] = {}
+        if task_id is not None:
+            evidence["task_id"] = int(task_id)
+        if duration is not None:
+            evidence["duration_minutes"] = int(duration)
+
+        queue_args = {
+            "application_id": application_id,
+            "reasoning": str(
+                args.get("reasoning")
+                or "Agent recommends sending the assessment based on the candidate's score and stage."
+            ),
+            "evidence": evidence or None,
+            "confidence": float(args.get("confidence") or 0.85),
+        }
+        result = _queue(
+            db,
+            agent_run=agent_run,
+            role=role,
+            args=queue_args,
+            decision_type="send_assessment",
+        )
+        # _queue returns {decision_id, status, decision_type}; the agent
+        # reads ``status`` to decide whether to retry or move on.
+        return {
+            "status": (
+                "awaiting_recruiter_approval"
+                if result["status"] == "pending"
+                else result["status"]
+            ),
+            "decision_id": result["decision_id"],
+            "application_id": application_id,
+        }
 
     task_id = args.get("task_id")
     duration = args.get("duration_minutes")
@@ -974,56 +1011,69 @@ def _tool_resend_assessment_invite(
 
     # HITL gate — same auto_promote toggle that gates send_assessment.
     # Resending an invite is a candidate-facing email, so it must
-    # respect the same recruiter approval policy. Consume any prior
-    # approval (scoped to this exact assessment via ``subject_id``)
-    # before opening a fresh card — otherwise the recruiter's approve
-    # click never actually triggers the resend. Safe to read from
-    # ``role`` here because we just verified the assessment belongs
-    # to exactly this role.
+    # respect the same recruiter approval policy.
+    #
+    # auto_promote=True  → resend immediately as a system action.
+    # auto_promote=False → queue an AgentDecision(decision_type='resend_assessment_invite')
+    #                      anchored to the assessment's application_id (decisions
+    #                      are per-application). evidence.assessment_id tells the
+    #                      approve path which assessment to resend.
     if not bool(getattr(role, "auto_promote", False)):
-        consumed = ask_recruiter.consume_resolved(
+        if assessment.application_id is None:
+            return {
+                "status": "misconfigured",
+                "assessment_id": assessment_id,
+                "detail": (
+                    f"assessment {assessment_id} has no application_id; cannot "
+                    "anchor a decision row to it."
+                ),
+            }
+        application_id = int(assessment.application_id)
+        existing = _existing_decision_for_subject(
             db,
-            actor,
-            organization_id=int(role.organization_id),
-            role_id=int(role.id),
-            kind="resend_assessment_invite_approval",
-            subject_id=assessment_id,
+            role=role,
+            application_id=application_id,
+            decision_type="resend_assessment_invite",
         )
-        if consumed is not None and consumed.choice == "approve":
-            pass  # fall through to the action
-        elif consumed is not None and consumed.choice == "skip":
+        # Resend gates can stack across distinct assessment_ids for the
+        # same application, so the existing-row check also filters on
+        # evidence.assessment_id to keep them separate.
+        if existing is not None and (existing.evidence or {}).get("assessment_id") == assessment_id:
             return {
-                "status": "recruiter_declined",
-                "needs_input_id": int(consumed.row.id),
+                "status": (
+                    "awaiting_recruiter_approval"
+                    if existing.status == "pending"
+                    else existing.status
+                ),
+                "decision_id": int(existing.id),
                 "assessment_id": assessment_id,
             }
-        else:
-            existing = ask_recruiter.open(
-                db,
-                actor,
-                organization_id=int(role.organization_id),
-                role_id=int(role.id),
-                kind="resend_assessment_invite_approval",
-                subject_id=assessment_id,
-                prompt=(
-                    f"Approve resending the assessment invite for assessment "
-                    f"{assessment_id}? I'll re-dispatch the invite as soon as "
-                    "you confirm."
-                ),
-                options=[
-                    {"value": "approve", "label": "Approve & resend"},
-                    {"value": "skip", "label": "Skip — don't resend"},
-                ],
-                rationale=(
-                    "auto_promote is off for this role; every candidate-facing "
-                    "send goes through the recruiter."
-                ),
-            )
-            return {
-                "status": "awaiting_recruiter_approval",
-                "needs_input_id": int(existing.id),
-                "assessment_id": assessment_id,
-            }
+
+        queue_args = {
+            "application_id": application_id,
+            "reasoning": str(
+                args.get("reasoning")
+                or f"Agent recommends resending the invite for assessment {assessment_id}."
+            ),
+            "evidence": {"assessment_id": assessment_id},
+            "confidence": float(args.get("confidence") or 0.8),
+        }
+        result = _queue(
+            db,
+            agent_run=agent_run,
+            role=role,
+            args=queue_args,
+            decision_type="resend_assessment_invite",
+        )
+        return {
+            "status": (
+                "awaiting_recruiter_approval"
+                if result["status"] == "pending"
+                else result["status"]
+            ),
+            "decision_id": result["decision_id"],
+            "assessment_id": assessment_id,
+        }
 
     result = resend_assessment_invite.run(
         db,
@@ -1149,6 +1199,12 @@ _AUTO_TOGGLE_FOR_DECISION_TYPE: dict[str, str] = {
     "advance_to_interview": "auto_promote",
     "reject": "auto_reject",
     "skip_assessment_reject": "auto_reject",
+    # send_assessment / resend_assessment_invite share the same
+    # auto_promote toggle: it gates every candidate-facing send the
+    # agent originates. Off → queue an AgentDecision for recruiter
+    # approval. On → dispatch immediately as a system action.
+    "send_assessment": "auto_promote",
+    "resend_assessment_invite": "auto_promote",
 }
 
 
@@ -1198,6 +1254,26 @@ def _auto_execute_decision(
             idempotency_key=f"approve_decision:{decision.id}",
             metadata={**metadata, "decision_type": decision_type},
         )
+    elif decision_type == "send_assessment":
+        ev = decision.evidence or {}
+        send_assessment.run(
+            db,
+            actor,
+            organization_id=int(role.organization_id),
+            application_id=int(decision.application_id),
+            task_id=int(ev["task_id"]) if ev.get("task_id") is not None else None,
+            duration_minutes=int(ev.get("duration_minutes") or 90),
+        )
+    elif decision_type == "resend_assessment_invite":
+        ev = decision.evidence or {}
+        assessment_id = ev.get("assessment_id")
+        if assessment_id is not None:
+            resend_assessment_invite.run(
+                db,
+                actor,
+                organization_id=int(role.organization_id),
+                assessment_id=int(assessment_id),
+            )
     decision.status = "approved"
     decision.resolved_at = datetime.now(timezone.utc)
     decision.resolved_by_user_id = None
