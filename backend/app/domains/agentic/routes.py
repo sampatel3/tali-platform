@@ -26,6 +26,7 @@ from ...actions.types import Actor
 from ...agent_runtime import budget_guard
 from ...deps import get_current_user
 from ...models.agent_decision import AGENT_DECISION_STATUSES, AgentDecision
+from ...models.agent_needs_input import AgentNeedsInput
 from ...models.agent_run import AgentRun
 from ...models.candidate import Candidate
 from ...models.candidate_application import CandidateApplication
@@ -506,7 +507,10 @@ def agent_status(
         raise HTTPException(status_code=404, detail=f"role {role_id} not found")
 
     now = datetime.now(timezone.utc)
-    pending = (
+    # "pending" rolls up both decisions awaiting recruiter approve/override
+    # and open orchestrator questions awaiting an answer. The Review queue
+    # UI surfaces both kinds in one place — counts must follow.
+    pending_decisions_count = (
         db.query(AgentDecision)
         .filter(
             AgentDecision.organization_id == current_user.organization_id,
@@ -519,6 +523,17 @@ def agent_status(
         )
         .count()
     )
+    open_needs_input_count = (
+        db.query(AgentNeedsInput)
+        .filter(
+            AgentNeedsInput.organization_id == current_user.organization_id,
+            AgentNeedsInput.role_id == role_id,
+            AgentNeedsInput.resolved_at.is_(None),
+            AgentNeedsInput.dismissed_at.is_(None),
+        )
+        .count()
+    )
+    pending = int(pending_decisions_count) + int(open_needs_input_count)
 
     current_run_row = (
         db.query(AgentRun)
