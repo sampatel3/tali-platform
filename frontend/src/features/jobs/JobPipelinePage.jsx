@@ -1375,10 +1375,13 @@ export const JobPipelinePage = ({ onNavigate, onViewCandidate, NavComponent = nu
     ];
   }, [activeApplications.length, agentStatus, belowThresholdCount, role, thresholdValue, unscoredApplications.length]);
 
-  const groupedApplications = useMemo(() => PIPELINE_STAGE_ORDER.map((stage) => ({
-    ...stage,
-    items: activeApplications.filter((application) => String(application?.pipeline_stage || '').toLowerCase() === stage.key),
-  })), [activeApplications]);
+  const groupedApplications = useMemo(() => [
+    ...PIPELINE_STAGE_ORDER.map((stage) => ({
+      ...stage,
+      items: activeApplications.filter((application) => String(application?.pipeline_stage || '').toLowerCase() === stage.key),
+    })),
+    { key: 'rejected', label: 'Rejected', countLabel: 'closed', items: rejectedApplications },
+  ], [activeApplications, rejectedApplications]);
 
   // Recruiter chips on this role (excludes derived_from_spec entries — those
   // come from the job spec parser and are managed separately).
