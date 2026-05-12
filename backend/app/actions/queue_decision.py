@@ -22,6 +22,21 @@ from ..models.agent_decision import AGENT_DECISION_TYPES, AgentDecision
 from .types import ACTOR_AGENT, Actor
 
 
+def _capture_token_spend(
+    db: Session, *, agent_run_id: int | None
+) -> dict:
+    """Discipline §8.5: roll up usage_events for this agent_run_id.
+
+    Defers to ``token_spend_aggregator.aggregate`` which returns an
+    empty dict on any failure or when no events match.
+    """
+    try:
+        from ..agent_runtime import token_spend_aggregator
+        return token_spend_aggregator.aggregate(db, agent_run_id=agent_run_id)
+    except Exception:
+        return {}
+
+
 def _capture_active_capabilities(
     db: Session,
     *,
@@ -94,6 +109,10 @@ def run(
         decision_id=idempotency_key,
         role_id=role_id,
     )
+    # Discipline §8.5: roll up usage_events for this agent_run_id into
+    # a single token_spend JSON blob on the decision row. Empty dict on
+    # any failure — never blocks the queue.
+    token_spend = _capture_token_spend(db, agent_run_id=actor.agent_run_id)
 
     decision = AgentDecision(
         organization_id=organization_id,
@@ -110,6 +129,7 @@ def run(
         prompt_version=prompt_version,
         idempotency_key=idempotency_key,
         active_capabilities=active_capabilities,
+        token_spend=token_spend,
     )
     db.add(decision)
     try:

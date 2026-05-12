@@ -1,0 +1,65 @@
+# Per-agent model tier + max_tokens — discipline §8.1 + §8.4 from
+# recruitment_system_architecture.md.
+#
+# Hot-reloaded by app.agent_runtime.model_config every 30 seconds. Swappable
+# without a code change. The agents read their config via
+# get_model_for_agent("<name>") and pass the returned (model, max_tokens)
+# straight into the Anthropic call.
+#
+# Defaults below are based on the cost-model review:
+#   - pre_screen        Haiku  (structured rule-check, low reasoning ceiling)
+#   - cv_scoring        Sonnet (messy CV text, transferable-skill credit)
+#   - graph_priors      Haiku  (synthesises pre-computed paths — NOT messy
+#                       text reasoning; spec says Sonnet but path-synthesis
+#                       doesn't justify the Sonnet premium; current impl
+#                       is pure Python anyway. Haiku is the right floor
+#                       when/if we go LLM here)
+#   - task_selection    Haiku  (decision tree; rule-driven today)
+#   - assessment_scoring Sonnet (rubric grading needs reasoning depth)
+#   - intent_parser     Haiku  (slot extraction from Workable notes)
+#
+# max_tokens chosen per spec §8.4 to match the natural JSON output size.
+# Output tokens are ~5× more expensive than input — verbose outputs are
+# the most expensive failure mode.
+
+# Global default — used when an agent isn't listed here. Matches the
+# project's existing settings.CLAUDE_MODEL fallback so the file is purely
+# additive.
+default:
+  model: claude-haiku-4-5
+  max_tokens: 512
+
+# Per-agent overrides. Add a row to bump a specific agent's tier or
+# max_tokens. Comments document the rationale so the file is reviewable.
+agents:
+  pre_screen:
+    model: claude-haiku-4-5
+    max_tokens: 256
+
+  cv_scoring:
+    # Sonnet justifies its cost here — transferable-skill credit and
+    # gap analysis are the main wins.
+    model: claude-sonnet-4-6
+    max_tokens: 512
+
+  graph_priors:
+    # Downshifted from the spec's Sonnet default. Reasoning is
+    # weighted-average synthesis of pre-formatted Cypher rows, not
+    # interpretation of unstructured text. See cost-model review in
+    # the PR description.
+    model: claude-haiku-4-5
+    max_tokens: 512
+
+  task_selection:
+    # Rule-driven today (no LLM call). Configured here so when the
+    # LLM-driven version lands, it inherits Haiku.
+    model: claude-haiku-4-5
+    max_tokens: 256
+
+  assessment_scoring:
+    model: claude-sonnet-4-6
+    max_tokens: 1024
+
+  intent_parser:
+    model: claude-haiku-4-5
+    max_tokens: 512
