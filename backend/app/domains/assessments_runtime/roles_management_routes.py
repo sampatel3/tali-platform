@@ -255,8 +255,10 @@ def update_role(
         role.auto_reject_threshold_mode = str(updates["auto_reject_threshold_mode"])
     if "workable_actor_member_id" in updates:
         role.workable_actor_member_id = updates["workable_actor_member_id"] or None
+    agent_activated_now = False
     if "agentic_mode_enabled" in updates:
         next_enabled = bool(updates["agentic_mode_enabled"])
+        was_enabled = bool(role.agentic_mode_enabled)
         if next_enabled:
             # Activating requires a monthly USD budget so the agent can't
             # quietly run up costs. Allow either a value already on the role
@@ -272,6 +274,7 @@ def update_role(
         if role.agentic_mode_enabled and role.agent_paused_at is not None:
             role.agent_paused_at = None
             role.agent_paused_reason = None
+        agent_activated_now = next_enabled and not was_enabled
     if "agent_action_allowlist" in updates:
         role.agent_action_allowlist = updates["agent_action_allowlist"]
     if "agent_token_budget_per_cycle" in updates:
@@ -301,6 +304,17 @@ def update_role(
     except Exception:
         db.rollback()
         raise HTTPException(status_code=500, detail="Failed to update role")
+    # Flipping agent mode on should kick a daily-review-style cycle so the
+    # agent immediately triages existing applied/scored-no-decision
+    # candidates instead of waiting up to 24h for the next beat-scheduled
+    # sweep. Failures here are logged but do not fail the PATCH — the
+    # daily sweep will still catch up.
+    if agent_activated_now:
+        try:
+            from ...tasks.agent_tasks import agent_daily_review_role
+            agent_daily_review_role.delay(int(role.id))
+        except Exception:
+            logger.exception("Failed to enqueue activation cycle for role_id=%s", role.id)
     return role_to_response(role)
 
 
