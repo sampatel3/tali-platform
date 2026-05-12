@@ -33,9 +33,13 @@ celery_app.conf.update(
             "task": "app.tasks.assessment_tasks.sync_workable_orgs",
             "schedule": 1800.0,
         },
-        "sync-starred-roles-every-15-minutes": {
+        # Starred roles are the ones the recruiter is actively piloting Tali
+        # on — we keep them in lockstep with Workable so stage changes (e.g.,
+        # candidate moved to Technical Interview by the recruiter) reflect in
+        # Tali within a few minutes rather than the 15-min default.
+        "sync-starred-roles-every-5-minutes": {
             "task": "app.tasks.assessment_tasks.sync_starred_roles",
-            "schedule": 900.0,
+            "schedule": 300.0,
         },
         "assessment-expiry-reminders-daily": {
             "task": "app.tasks.assessment_tasks.send_assessment_expiry_reminders",

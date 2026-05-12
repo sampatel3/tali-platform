@@ -3266,8 +3266,12 @@ html[data-theme="dark"] {
 
 .kanban {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 14px;
+}
+
+@media (max-width: 1380px) {
+  .kanban { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 
 .kanban-col {
