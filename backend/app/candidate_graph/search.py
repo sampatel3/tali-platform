@@ -299,10 +299,15 @@ async def _cypher_subgraph_by_prefixes(
         return None
     safe_prefixes = [p.replace("'", "\\'") for p in prefixes]
     prefix_list = ", ".join(f"'{p}'" for p in safe_prefixes)
+    # Graphiti's episode nodes carry the label ``:Episodic`` (see
+    # graphiti_core.nodes.EpisodicNode). Earlier this query used
+    # ``:Episode``, which silently matches nothing and produces a Neo4j
+    # UnknownLabelWarning rather than an error — the per-candidate
+    # subgraph fetch was a no-op until this was corrected.
     cypher = f"""
         WITH [{prefix_list}] AS prefixes
         UNWIND prefixes AS prefix
-        MATCH (ep:Episode)
+        MATCH (ep:Episodic)
         WHERE ep.name STARTS WITH prefix
         MATCH (ep)-[:MENTIONS]->(s:Entity)-[e:RELATES_TO]->(t:Entity)
         WHERE e.group_id = '{group_id}'
