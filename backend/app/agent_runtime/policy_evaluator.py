@@ -69,11 +69,22 @@ def _gather_sub_agent_outputs(
 ) -> dict[str, SubAgentResult]:
     """Run all four sub-agents in sequence.
 
-    ``role_intent_extra`` (when present) is injected into each
-    ``SubAgentRequest.extra`` under the ``role_intent`` key. Sub-agents
-    that opt in to the overlay read it from there; sub-agents that
-    don't are unaffected (existing behaviour preserved).
+    Per-agent ``SubAgentRequest.extra`` is populated with two keys when
+    available:
+
+      ``role_intent``     — Amendment A1 overlay, read at score time.
+      ``exemplars_text``  — formatted few-shot block from the agent's
+                            exemplar store. Empty when no past teach
+                            attribution exists for this agent (the
+                            common pre-pilot case). Cost-guarded so a
+                            cold store doesn't trigger a similarity
+                            walk on every call.
+
+    Sub-agents that opt in to either overlay read from ``req.extra``;
+    sub-agents that don't are unaffected.
     """
+    from . import exemplar_store
+
     out: dict[str, SubAgentResult] = {}
     for name in PRE_EVAL_SUB_AGENT_NAMES:
         try:
@@ -84,6 +95,30 @@ def _gather_sub_agent_outputs(
         extra: dict[str, Any] = {}
         if role_intent_extra:
             extra["role_intent"] = role_intent_extra
+        # Exemplar overlay — cheap pre-check inside the helper avoids
+        # cosine work on a cold store. The empty string is the no-op.
+        try:
+            exemplars_text = exemplar_store.render_exemplars_for_prompt(
+                db,
+                agent_name=name,
+                organization_id=organization_id,
+                role_id=role_id,
+                # Query features come from the candidate's prior signals
+                # if available; we default to an empty dict here because
+                # the policy_evaluator runs sub-agents in parallel and
+                # doesn't have per-candidate features pre-computed.
+                # When sub-agents pick this up, they should re-call
+                # retrieve_top_k with their own feature vector for a
+                # tighter match. The render_exemplars_for_prompt path
+                # is still useful for the "recent broadly-similar
+                # teach events" overlay.
+                query_features={},
+                k=2,
+            )
+            if exemplars_text:
+                extra["exemplars_text"] = exemplars_text
+        except Exception:
+            pass
         req = SubAgentRequest(
             organization_id=organization_id,
             application_id=application_id,

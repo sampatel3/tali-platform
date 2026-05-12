@@ -135,7 +135,57 @@ def author_new_version(
     )
     db.add(row)
     db.flush()
+
+    # Mirror the row into Graphiti so the graph carries the canonical
+    # RoleIntent entity alongside Postgres. Fire-and-forget; failures
+    # are logged and don't roll back the Postgres write.
+    _emit_role_intent_episode_safe(db, row=row)
     return row
+
+
+def _emit_role_intent_episode_safe(db: Session, *, row: RoleIntent) -> None:
+    """Mirror a freshly authored RoleIntent into Graphiti. Never raises."""
+    try:
+        from ..candidate_graph import agent_episodes
+        from ..models.role import Role
+        from .contracts import StructuredIntent
+
+        structured = StructuredIntent.model_validate(row.structured_fields or {})
+        summary_parts: list[str] = []
+        if structured.soft_signals:
+            summary_parts.append(f"Soft signals: {', '.join(structured.soft_signals)}")
+        if structured.deal_breakers:
+            summary_parts.append(f"Deal-breakers: {', '.join(structured.deal_breakers)}")
+        if structured.growth_expectations:
+            summary_parts.append(f"Growth: {structured.growth_expectations}")
+        if structured.context_for_opening:
+            summary_parts.append(f"Context: {structured.context_for_opening}")
+        if structured.weighting_notes:
+            summary_parts.append(f"Weighting: {structured.weighting_notes}")
+        if structured.must_haves_missing_from_spec:
+            summary_parts.append(
+                f"Must-haves missing from spec: "
+                f"{', '.join(structured.must_haves_missing_from_spec)}"
+            )
+        role = db.query(Role).filter(Role.id == int(row.role_id)).one_or_none()
+        agent_episodes.emit_role_intent_event(
+            organization_id=int(row.organization_id),
+            role_id=int(row.role_id),
+            role_name=str(role.name) if role else None,
+            intent_version=int(row.version),
+            structured_summary=" · ".join(summary_parts) or "(no structured fields)",
+            free_text=row.free_text,
+            authored_by_user_id=(
+                int(row.authored_by_user_id) if row.authored_by_user_id else None
+            ),
+            authored_at=row.authored_at,
+        )
+    except Exception:
+        logger.warning(
+            "role intent episode emit failed for role_id=%s v%s",
+            getattr(row, "role_id", None),
+            getattr(row, "version", None),
+        )
 
 
 # ---------------------------------------------------------------------------

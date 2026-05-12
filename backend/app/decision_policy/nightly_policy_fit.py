@@ -113,7 +113,39 @@ def _features_for_decision(decision: AgentDecision) -> dict[str, float]:
 def _collect_training_data(
     db: Session, *, organization_id: int, since: datetime
 ) -> list[TrainingExample]:
+    """Pull (features, label, weight) examples from Graphiti where it
+    has outcome edges, falling back to Postgres for the rest.
+
+    Two-stage strategy:
+      1. Query Graphiti for ``DecisionEvent → RESULTED_IN → HiringOutcome``
+         paths in the time window. Each path yields a strong training
+         example (label = 1 for hired, 0 for rejected_late; weight 1.0).
+         The features come from the decision's evidence JSON which the
+         orchestrator already mirrors when emitting the decision episode.
+      2. Walk Postgres for any AgentDecision that doesn't have a
+         matching graph outcome yet but DOES have a recruiter approve /
+         override resolution — those get the weaker labels (0.3 / 0.8)
+         per §6.
+
+    Graphiti is the canonical substrate; Postgres covers the gap until
+    every outcome has been mirrored into the graph.
+    """
     rows: list[TrainingExample] = []
+    graph_seen_decision_ids: set[int] = set()
+    try:
+        graph_examples = _collect_from_graphiti(
+            organization_id=organization_id, since=since
+        )
+        for ex, decision_id in graph_examples:
+            rows.append(ex)
+            if decision_id is not None:
+                graph_seen_decision_ids.add(int(decision_id))
+    except Exception as exc:
+        logger.warning(
+            "graphiti training-data fetch failed; falling through to Postgres: %s",
+            exc,
+        )
+
     decisions = (
         db.query(AgentDecision, CandidateApplication)
         .outerjoin(
@@ -127,6 +159,11 @@ def _collect_training_data(
         .all()
     )
     for decision, app in decisions:
+        # Don't double-count: if Graphiti already gave us a strong
+        # outcome label for this decision, skip the weaker Postgres
+        # label for the same decision_id.
+        if int(decision.id) in graph_seen_decision_ids:
+            continue
         label, weight = _label_for_decision(decision, app=app)
         if label is None or weight <= 0:
             continue
@@ -142,6 +179,76 @@ def _collect_training_data(
             )
         )
     return rows
+
+
+def _collect_from_graphiti(
+    *, organization_id: int, since: datetime
+) -> list[tuple[TrainingExample, int | None]]:
+    """Query Graphiti for DecisionEvent → RESULTED_IN → HiringOutcome paths.
+
+    Returns a list of ``(training_example, decision_id)`` tuples — the
+    caller dedupes Postgres rows against these. Returns ``[]`` on any
+    failure (graph unavailable, no matches, parse error).
+
+    Pre-pilot graph state: most decisions don't yet have an outcome
+    edge written, so this query often returns []. The Postgres
+    fallback in the caller covers the gap.
+    """
+    out: list[tuple[TrainingExample, int | None]] = []
+    try:
+        from ..candidate_graph import client as graph_client
+        from ..candidate_graph import graphrag_queries
+    except Exception:
+        return out
+    if not graph_client.is_configured():
+        return out
+    group_id = graph_client.group_id_for_org(organization_id)
+    # Cypher: pull every DecisionEvent linked to a HiringOutcome since
+    # the training window opened. The orchestrator's decision episode
+    # writer stamps decision_id + recommended_action + reasoning into
+    # the episode body, which the extractor binds to DecisionEvent
+    # properties. The training features come from the same evidence
+    # blob the Postgres path reads — but here we get the outcome label
+    # straight from the graph rather than inferring it.
+    query = """
+        MATCH (d:DecisionEvent {group_id: $group_id})
+              -[:RESULTED_IN]->(o:HiringOutcome {group_id: $group_id})
+        WHERE coalesce(d.created_at, $since) >= $since
+        RETURN d.decision_id AS decision_id,
+               d.role_id AS role_id,
+               d.features_json AS features_json,
+               o.outcome_type AS outcome_type,
+               coalesce(o.quality_signal, 0.0) AS quality_signal
+        LIMIT 5000
+    """
+    rows = graphrag_queries._execute(query, group_id=group_id, since=since)
+    for r in rows or []:
+        outcome = (r.get("outcome_type") or "").lower()
+        if outcome == "hired":
+            label, weight = 1.0, 1.0
+        elif outcome in ("rejected_late", "rejected"):
+            label, weight = 0.0, 1.0
+        else:
+            # Pending / withdrawn / interview-only — not a strong label.
+            continue
+        feats = r.get("features_json") or {}
+        if not isinstance(feats, dict) or not feats:
+            # No features serialised on the graph node — caller's
+            # Postgres pass will pick this decision up via its
+            # evidence JSON.
+            continue
+        role_id = r.get("role_id")
+        decision_id = r.get("decision_id")
+        out.append((
+            TrainingExample(
+                features={k: float(v) for k, v in feats.items() if isinstance(v, (int, float))},
+                label=label,
+                weight=weight,
+                role_id=int(role_id) if role_id is not None else None,
+            ),
+            int(decision_id) if decision_id is not None else None,
+        ))
+    return out
 
 
 def fit_for_org(
