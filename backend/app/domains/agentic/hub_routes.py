@@ -36,6 +36,7 @@ from ._hub_shared import (
 )
 from ...deps import get_current_user
 from ...models.agent_decision import AgentDecision
+from ...models.agent_needs_input import AgentNeedsInput
 from ...models.role import Role
 from ...models.usage_event import UsageEvent
 from ...models.user import User
@@ -56,16 +57,37 @@ def _compute_kpis(db: Session, *, organization_id: int, range_days: int = 7) -> 
     range_start = now - timedelta(days=range_days)
     month_start = month_start_utc()
 
-    # Pending (snooze-aware) + oldest pending age.
+    # Pending (snooze-aware) + oldest pending age. "Pending" includes
+    # both agent decisions awaiting approve/override and open orchestrator
+    # questions awaiting a recruiter answer — the Review queue UI surfaces
+    # both, so the KPI must count both.
     pending_q = db.query(AgentDecision).filter(
         AgentDecision.organization_id == organization_id,
         pending_filter(now),
     )
-    pending = pending_q.count()
+    pending_decisions = pending_q.count()
     oldest_pending_row = pending_q.order_by(AgentDecision.created_at.asc()).first()
+
+    open_needs_input_q = db.query(AgentNeedsInput).filter(
+        AgentNeedsInput.organization_id == organization_id,
+        AgentNeedsInput.resolved_at.is_(None),
+        AgentNeedsInput.dismissed_at.is_(None),
+    )
+    open_needs_input = open_needs_input_q.count()
+    oldest_needs_input_row = (
+        open_needs_input_q.order_by(AgentNeedsInput.created_at.asc()).first()
+    )
+    pending = int(pending_decisions) + int(open_needs_input)
+
+    # Oldest-pending age compares the oldest of either kind.
+    oldest_candidates = [
+        row.created_at
+        for row in (oldest_pending_row, oldest_needs_input_row)
+        if row is not None and row.created_at is not None
+    ]
     oldest_pending_age = (
-        int((now - oldest_pending_row.created_at).total_seconds())
-        if oldest_pending_row is not None and oldest_pending_row.created_at is not None
+        int((now - min(oldest_candidates)).total_seconds())
+        if oldest_candidates
         else None
     )
 
@@ -243,7 +265,10 @@ def roles_breakdown(
 
     # Pre-compute per-role aggregates in three single queries to avoid
     # N+1 across the role list.
-    pending_by_role = dict(
+    # "Pending" per role = pending decisions + open needs-input. Counted
+    # in two queries and summed in Python so the per-role table reflects
+    # the same union the KPI / status endpoints use.
+    pending_decisions_by_role: dict[int, int] = dict(
         db.query(AgentDecision.role_id, func.count(AgentDecision.id))
         .filter(
             AgentDecision.organization_id == current_user.organization_id,
@@ -252,6 +277,21 @@ def roles_breakdown(
         .group_by(AgentDecision.role_id)
         .all()
     )
+    open_needs_input_by_role: dict[int, int] = dict(
+        db.query(AgentNeedsInput.role_id, func.count(AgentNeedsInput.id))
+        .filter(
+            AgentNeedsInput.organization_id == current_user.organization_id,
+            AgentNeedsInput.resolved_at.is_(None),
+            AgentNeedsInput.dismissed_at.is_(None),
+        )
+        .group_by(AgentNeedsInput.role_id)
+        .all()
+    )
+    pending_by_role: dict[int, int] = {}
+    for rid, n in pending_decisions_by_role.items():
+        pending_by_role[int(rid)] = pending_by_role.get(int(rid), 0) + int(n)
+    for rid, n in open_needs_input_by_role.items():
+        pending_by_role[int(rid)] = pending_by_role.get(int(rid), 0) + int(n)
     today_by_role = dict(
         db.query(AgentDecision.role_id, func.count(AgentDecision.id))
         .filter(

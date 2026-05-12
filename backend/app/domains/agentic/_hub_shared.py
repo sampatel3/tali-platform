@@ -17,6 +17,7 @@ from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session
 
 from ...models.agent_decision import AgentDecision
+from ...models.agent_needs_input import AgentNeedsInput
 from ...models.decision_feedback import DecisionFeedback
 from ...models.role import Role
 from ...models.user import User
@@ -76,6 +77,19 @@ def pending_filter(now: datetime):
             AgentDecision.snoozed_until.is_(None),
             AgentDecision.snoozed_until <= now,
         ),
+    )
+
+
+def open_needs_input_filter():
+    """Open recruiter question = resolved_at IS NULL AND dismissed_at IS NULL.
+
+    Used by every "pending" counter so questions the agent is asking
+    show up in the same KPI as decisions the agent has made — the UI
+    surfaces them in the same Review queue, so the count must too.
+    """
+    return and_(
+        AgentNeedsInput.resolved_at.is_(None),
+        AgentNeedsInput.dismissed_at.is_(None),
     )
 
 
@@ -290,6 +304,7 @@ __all__ = [
     "month_start_utc",
     "short_role_name",
     "pending_filter",
+    "open_needs_input_filter",
     "OrgKpiPayload",
     "OrgStatusPayload",
     "RoleBreakdownRow",
