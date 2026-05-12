@@ -82,9 +82,15 @@ class Role(Base):
     agent_last_run_at = Column(DateTime(timezone=True), nullable=True)
     agent_calibration = Column(JSON, nullable=True)
     # Per-role Anthropic model override. Null = use settings.resolved_claude_model
-    # (Haiku by default). Set to e.g. ``claude-sonnet-4-5`` for roles where
-    # borderline-judgment cycles are worth Sonnet's cost — recruiter-tunable
-    # cost/quality knob without touching env vars.
+    # DEPRECATED (May 2026 single-version cleanup): per §8.1 of
+    # recruitment_system_architecture.md the canonical model-selection
+    # surface is ``config/agent_models.yaml`` (loaded by
+    # ``app.agent_runtime.model_config``). This per-role override
+    # remains as a runtime escape hatch for the orchestrator agent's
+    # own model only; the five sub-agents resolve their model via
+    # ``get_model_for_agent("<name>")``. Sunset target: when all
+    # remaining callers route through model_config and the
+    # orchestrator's model is also moved into agent_models.yaml.
     agent_model = Column(String, nullable=True)
     # Event-debounce window. When set and in the future, an event-triggered
     # agent cycle is already scheduled for this role and additional events

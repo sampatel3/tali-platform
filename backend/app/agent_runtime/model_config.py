@@ -5,9 +5,13 @@ agent X use?". Loads ``config/agent_models.yaml`` with a 30s in-process
 cache. Defaults fall back to ``settings.CLAUDE_MODEL`` when the YAML is
 missing or PyYAML isn't installed (some environments don't have it).
 
-The agent ID space follows the sub-agent registry names:
+The agent ID space follows the canonical five sub-agents per §2 of
+``recruitment_system_architecture.md``:
   pre_screen · cv_scoring · graph_priors · task_selection ·
-  assessment_scoring · intent_parser
+  assessment_scoring
+
+The ``intent_parser`` module is preserved as an internal helper but is
+not a canonical sub-agent — it's not listed in agent_models.yaml.
 
 Adding a new agent: drop a row in the YAML; no code change needed.
 """

@@ -60,6 +60,10 @@ agents:
     model: claude-sonnet-4-6
     max_tokens: 1024
 
-  intent_parser:
-    model: claude-haiku-4-5
-    max_tokens: 512
+  # ``intent_parser`` is intentionally NOT listed — per §2 of
+  # recruitment_system_architecture.md the canonical sub-agent set is
+  # exactly five (pre_screen, cv_scoring, graph_priors, task_selection,
+  # assessment_scoring). The intent_parser module remains as an
+  # internal Workable-note slot extractor helper; recruiter intent is
+  # captured manually as RoleIntent (A1) and read by every sub-agent
+  # at score time.

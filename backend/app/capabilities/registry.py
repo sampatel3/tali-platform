@@ -1,21 +1,19 @@
-"""Static capability registry — Section 4 of capability_flags_addendum.md.
+"""Capability registry — single source of truth per §12 of
+``recruitment_system_architecture.md``.
 
-Adding a new capability is a code change with a PR review; no dynamic
-loading. The registry tells every consumer:
-  - what each capability does
-  - which v1/v2 modules it extends or replaces
-  - what other capabilities it requires
-  - whether it can be disabled mid-cycle (rollback_safe)
-  - what sign-offs are needed before enabling
+The spec is explicit: v10 adds **four** capabilities to the v1 spine —
+portfolio_agent, capability_auditor, bias_monitor_continuous, and
+causal_mode (a toggle on the policy model, not a separate folder).
 
-The v1/v2 surfaces this is built on top of:
-  - ``orchestrator``         the existing run_cycle (app.agent_runtime.orchestrator)
-  - ``policy_engine``        decision_policy.engine.evaluate
-  - ``policy_fitter``        decision_policy.nightly_policy_fit
-  - ``promotion_gate``       decision_policy.promotion_gate
-  - ``pre_screen`` / ``cv_scoring`` / ``assessment_scoring`` / ``graph_priors``
-  - ``shared_action_layer``  app.actions.*
-  - ``recruiter_review``     domains.agentic.* (approve / override / teach)
+Two earlier scaffolds the spec **argues against** (LLM-driven
+orchestrator, federated cross-org graph) are NOT included. Eight more
+capabilities from the earlier capability-flags addendum that don't
+appear in the final spec have been deleted along with their folders
+in the same change-set — there is one version of this system; the
+registry is the source of truth.
+
+Adding a new capability is a code change with PR review; the static
+dict here is loaded once at import time by the flag client.
 """
 
 from __future__ import annotations
@@ -35,10 +33,15 @@ class Capability:
     rollback_safe: bool
 
 
+# §12: the canonical v10 capability set.
 CAPABILITIES: dict[str, Capability] = {
     "portfolio_agent": Capability(
         name="portfolio_agent",
-        description="Cohort-level reasoning: team shape, balance, pipeline composition.",
+        description=(
+            "Stage-4 cohort-level reasoning: team shape, balance, "
+            "pipeline composition. Contributes a cohort adjustment to "
+            "the policy-engine recommendation."
+        ),
         extends=("policy_engine",),
         replaces=(),
         requires=(),
@@ -46,89 +49,29 @@ CAPABILITIES: dict[str, Capability] = {
         review_required=(),
         rollback_safe=True,
     ),
-    "intervention_agent": Capability(
-        name="intervention_agent",
-        description="Proposes role-spec tweaks and outreach actions based on pipeline patterns.",
-        extends=("recruiter_review",),
-        replaces=(),
-        requires=(),
-        risk="low",
-        review_required=(),
-        rollback_safe=True,
-    ),
-    "candidate_experience": Capability(
-        name="candidate_experience",
-        description="Generates candidate-facing explanations and transparency artifacts.",
-        extends=("shared_action_layer",),
-        replaces=(),
-        requires=(),
-        risk="medium",
-        review_required=("legal_communications",),
-        rollback_safe=True,
-    ),
-    "reasoning_orchestrator": Capability(
-        name="reasoning_orchestrator",
-        description="LLM-driven orchestration: routes by uncertainty, plans workflow, admits OOD.",
-        extends=(),
-        replaces=("orchestrator",),
-        requires=("drift_monitor",),
-        risk="medium",
-        review_required=(),
-        rollback_safe=True,
-    ),
-    "bidirectional_subagents": Capability(
-        name="bidirectional_subagents",
-        description="Sub-agents request artifacts, propose counterfactuals, explain themselves.",
-        extends=("pre_screen", "cv_scoring", "assessment_scoring", "graph_priors"),
-        replaces=(),
-        requires=("reasoning_orchestrator",),
-        risk="medium",
-        review_required=(),
-        rollback_safe=True,
-    ),
-    "causal_policy": Capability(
-        name="causal_policy",
-        description="Causal policy engine: tracks causal claims, validates downstream.",
-        extends=("policy_engine",),
-        replaces=(),
-        requires=(),
-        risk="medium",
-        review_required=(),
-        rollback_safe=True,
-    ),
-    "online_learning": Capability(
-        name="online_learning",
-        description="Policy updates within minutes of outcomes/overrides, within safety bounds.",
-        extends=("policy_fitter",),
-        replaces=(),
-        requires=("causal_policy", "drift_monitor", "bias_monitor_continuous"),
-        risk="high",
-        review_required=("compliance",),
-        rollback_safe=True,
-    ),
-    "federated_graph": Capability(
-        name="federated_graph",
-        description="Anonymized cross-org signal exchange under DP and contractual bounds.",
-        extends=("graph_priors",),
-        replaces=(),
-        requires=(),
-        risk="high",
-        review_required=("legal", "privacy_dpo", "infosec"),
-        rollback_safe=True,
-    ),
-    "drift_monitor": Capability(
-        name="drift_monitor",
-        description="Detects distribution shift and OOD candidates/roles.",
+    "capability_auditor": Capability(
+        name="capability_auditor",
+        description=(
+            "Weekly meta-agent. Finds blind spots: role families where "
+            "calibration is poor, profiles where overrides cluster, "
+            "task templates whose predictive quality has decayed. "
+            "Reads from Graphiti, outputs structured reports."
+        ),
         extends=(),
         replaces=(),
         requires=(),
-        risk="low",
+        risk="medium",
         review_required=(),
         rollback_safe=True,
     ),
     "bias_monitor_continuous": Capability(
         name="bias_monitor_continuous",
-        description="Continuous fairness audit — v1's gated audit becomes a meta-agent.",
+        description=(
+            "Continuous fairness audit. v1's bias audit fires only at "
+            "promotion time; this runs on every decision. Same shape "
+            "as the capability auditor — outside the spine, reading "
+            "from Graphiti."
+        ),
         extends=("promotion_gate",),
         replaces=(),
         requires=(),
@@ -136,33 +79,19 @@ CAPABILITIES: dict[str, Capability] = {
         review_required=(),
         rollback_safe=True,
     ),
-    "causal_validator": Capability(
-        name="causal_validator",
-        description="Tests whether the system's causal claims hold up against realized outcomes.",
-        extends=(),
-        replaces=(),
-        requires=("causal_policy",),
-        risk="low",
-        review_required=(),
-        rollback_safe=True,
-    ),
-    "capability_auditor": Capability(
-        name="capability_auditor",
-        description="Adversarial meta-agent identifying what the system is bad at.",
-        extends=(),
+    "causal_mode": Capability(
+        name="causal_mode",
+        description=(
+            "Toggle on the policy model: track 'we advanced X because "
+            "of Y' as a structured causal claim and validate against "
+            "downstream outcomes. Same stage; different math. Not a "
+            "separate component — the flag flips a mode on the fitted "
+            "policy."
+        ),
+        extends=("policy_engine",),
         replaces=(),
         requires=(),
         risk="medium",
-        review_required=(),
-        rollback_safe=True,
-    ),
-    "hiring_manager_dialog": Capability(
-        name="hiring_manager_dialog",
-        description="Interactive role-spec shaping with the hiring manager.",
-        extends=(),
-        replaces=(),
-        requires=(),
-        risk="low",
         review_required=(),
         rollback_safe=True,
     ),

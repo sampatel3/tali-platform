@@ -1,4 +1,25 @@
-"""Heuristic retuner — produces a proposed policy_json from aggregated signals.
+"""Heuristic retuner — DEPRECATED. Replaced by the fitted policy model (§6).
+
+DEPRECATION (single-version cleanup, May 2026)
+----------------------------------------------
+Per §6 + §9 of ``recruitment_system_architecture.md`` the fitted policy
+model (``app.decision_policy.fitted_policy``) is the canonical
+replacement. The fitted model handles signal composition and threshold
+adaptation through learned coefficients with isotonic calibration —
+the pattern shifts in this module are subsumed.
+
+Sunset target: when at least one ``PolicyVersion`` has been promoted
+(``status='live'``) for ≥60 days via the promotion gate, this module
+and ``nightly_retune.py`` can be deleted. Until then it remains the
+ONLY active learning path — the fitted-policy nightly fit produces
+candidate rows but nothing has been promoted yet.
+
+DO NOT add new pattern shifts here. New learning logic belongs in
+``fitted_policy.py``.
+
+----------------------------------------------
+
+Original docstring follows.
 
 Public surface:
 

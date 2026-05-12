@@ -18,14 +18,23 @@ state transitions:
 - Application outcome moves to ``rejected`` after an approved reject
   decision → outcome="rejected_confirmed"
 
-The recorded outcomes flow into ``role.agent_calibration["outcomes"]``
-(bounded FIFO list) and surface in the next cycle's system prompt as a
-"track record" line. The agent reads this and can update its priors
-("my advances aren't reaching interview — I should be more
-conservative" / "my rejects are being confirmed — confidence is well
-calibrated").
+The recorded outcomes flow into TWO places:
 
-No schema migration: stored entirely in the existing JSON column.
+  1. (canonical, per spec §3) ``HiringOutcome`` episodes in Graphiti,
+     emitted by ``_emit_outcome_episode_safe`` below. Bi-temporal,
+     auditable, the substrate every other stage reads from.
+
+  2. (DEPRECATED — sunset when Graphiti is the only consumer)
+     ``role.agent_calibration["outcomes"]`` bounded FIFO list,
+     surfaced in the next cycle's system prompt via
+     ``calibration_mod.render_summary``. Replaced by Graphiti outcome
+     queries the system_prompt builder will read once the cycle's
+     prompt-builder is migrated. Sunset target: when the system
+     prompt's "track record" line is sourced from Graphiti outcome
+     aggregates rather than this JSON FIFO.
+
+No schema migration for the JSON path: stored entirely in the existing
+``role.agent_calibration`` JSON column.
 """
 
 from __future__ import annotations

@@ -53,23 +53,23 @@ event.listen(AgentRun, "before_insert", _assign)
 
 
 def test_agent_models_yaml_overrides_global_default():
+    """Per the canonical five sub-agents in §2 of
+    recruitment_system_architecture.md + the cost-model review on
+    graph_priors (downshifted from spec's Sonnet → Haiku).
+    """
     model_config.invalidate()
     pre = model_config.get_model_for_agent("pre_screen")
     cv = model_config.get_model_for_agent("cv_scoring")
     gp = model_config.get_model_for_agent("graph_priors")
     ts = model_config.get_model_for_agent("task_selection")
     asx = model_config.get_model_for_agent("assessment_scoring")
-    ip = model_config.get_model_for_agent("intent_parser")
-    # Spec defaults + cost-model review.
     assert pre.model.startswith("claude-haiku")
     assert cv.model.startswith("claude-sonnet")
-    # Cost-model review: graph_priors downshifted from spec's Sonnet.
     assert gp.model.startswith("claude-haiku"), (
         f"graph_priors should be on Haiku per cost-model review; got {gp.model}"
     )
     assert ts.model.startswith("claude-haiku")
     assert asx.model.startswith("claude-sonnet")
-    assert ip.model.startswith("claude-haiku")
 
 
 def test_max_tokens_bounded_per_agent():
